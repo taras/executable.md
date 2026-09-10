@@ -96,8 +96,8 @@ import { installWebComponents, installWebElicitation } from "@executablemd/web";
 import { timebox } from "@effectionx/timebox";
 import { timeout as runTimeout } from "@executablemd/runtime";
 import { installRunAgentStack, resolveAgentStack, resolvePlanWriterStack } from "./agent-stack.ts";
-import { unsupportedTerminalGrid } from "./grid-host.ts";
-import type { TerminalGridInstaller } from "./grid-host.ts";
+import { unsupportedGrid } from "./grid-host.ts";
+import type { GridInstaller } from "./grid-host.ts";
 import { planComponentDeclaration } from "./plan-component.ts";
 import { planAgentContext } from "./plan-writer-profile.ts";
 import { useVerboseComponent } from "./verbose-component.ts";
@@ -783,9 +783,9 @@ function* underRunDeadline(timeouts: RunTimeouts, body: () => Operation<void>): 
 function* settleAgentStack(
   flags: AgentFlags,
   sessions: MachineSessionAssembly | undefined,
-  installTerminalGrid: TerminalGridInstaller,
+  installGrid: GridInstaller,
 ): Operation<AgentStack | undefined> {
-  const stack = yield* resolveAgentStack(flags, sessions, installTerminalGrid);
+  const stack = yield* resolveAgentStack(flags, sessions, installGrid);
   if (!stack.ok) {
     console.error(stack.error.message);
     yield* exit(1);
@@ -2371,7 +2371,7 @@ function* dispatch(
   readStandardInput: StandardInputReader,
   workflowHost: WorkflowHost | undefined,
   sessions: MachineSessionAssembly | undefined,
-  installTerminalGrid: TerminalGridInstaller,
+  installGrid: GridInstaller,
 ): Operation<void> {
   // Before the props phase, and before the help short-circuit below. `--help`
   // is lifted out of argv early enough that a command's own grammar never sees
@@ -2470,7 +2470,7 @@ function* dispatch(
           denyAll: config.denyAll,
         },
         sessions,
-        installTerminalGrid,
+        installGrid,
       );
       if (runStack === undefined) {
         break;
@@ -2841,10 +2841,10 @@ export function* runXmd(
   // owns the session or which build it belongs to. A caller that names none
   // gets no machine sessions at all, which is the ordinary ACP behaviour.
   sessions?: MachineSessionAssembly,
-  // What presents a terminal grid on this host. Deno and the compiled binary
+  // What presents a grid on this host. Deno and the compiled binary
   // supply the tmux provider; Node and Bun supply the one that installs none,
   // so those runtimes describe and validate the same grids and open none.
-  installTerminalGrid: TerminalGridInstaller = unsupportedTerminalGrid,
+  installGrid: GridInstaller = unsupportedGrid,
 ): Operation<void> {
   // Before every scanner, before command selection, and before anything reads a
   // path. `prompt` names no command, and a first token that names none is a
@@ -2914,7 +2914,7 @@ export function* runXmd(
       readStandardInput,
       workflowHost,
       sessions,
-      installTerminalGrid,
+      installGrid,
     );
   }
 
@@ -2937,7 +2937,7 @@ export function* runXmd(
       readStandardInput,
       workflowHost,
       sessions,
-      installTerminalGrid,
+      installGrid,
     ),
   );
 }

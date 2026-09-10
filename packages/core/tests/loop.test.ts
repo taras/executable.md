@@ -1349,7 +1349,7 @@ describe("Tier LOOP — replay validates the terminal record", () => {
       // No generic catch sits above the component, so the wrapper reaches the
       // loop intact — which is what makes this observable. Registered rather
       // than stubbed through importComponent: execute() installs its own
-      // terminal provider at { at: "min" }, so an outer stub is never asked.
+      // grid provider at { at: "min" }, so an outer stub is never asked.
       yield* registerComponents([
         {
           name: "Wrapped",

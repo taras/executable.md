@@ -24,7 +24,7 @@ import { sessionPlacement } from "./session-request.ts";
 import type { ComponentInvocation, FunctionComponent } from "../types.ts";
 import type { IdentityClaimant } from "../invocation-identity.ts";
 import { cwd, parseDuration } from "@executablemd/runtime";
-import { flushOutput, reserveTerminal } from "@executablemd/terminal";
+import { flushOutput, reserveTerminal } from "@executablemd/grid";
 import type { Json, PropsSchema } from "../types.ts";
 import type { Expansion } from "../expansion.ts";
 import { Agent } from "./agent-api.ts";

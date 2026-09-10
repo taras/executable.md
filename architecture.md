@@ -108,10 +108,10 @@ Existing documents and code get aligned to this section retroactively.
 | session materialization | the transition that makes a placement's chosen route and its backend history resumable. ACP-first materialization happens only when the backend reports that it accepted the session's first turn; client-native materialization is the native launch's existing retained construction. Nothing else promotes a placement — not a returning ensure, a first output, a terminal result, a checkpoint token, an error code or a diagnostic |
 | established session | a placement whose immutable construction route and durable provider or native identity both already exist, and which is therefore validated eagerly: reattached, compared against its retained history, and refused when either is missing or names another conversation |
 | instruction layer | the provider-native session, system or developer instructions a launch installs before the native UI accepts its first user turn. It is not a user message, and it is not conversation history |
-| foreground-terminal lease | the one exclusive claim on a document execution's foreground experience. A root native launch holds it for one inherited terminal; a terminal grid holds it for one composite presentation. A host with no terminal refuses it, and no second root launch or grid can hold it concurrently |
-| terminal grid | one provider-neutral foreground region whose direct terminal panes begin concurrently, remain independently interactive, and settle under one scope after complete provider and pane teardown |
-| terminal pane | one authored position in a terminal grid, identified structurally by its grid and ordinal and presented by its authored title. It owns one interactive terminal at a time; a paired pane expands its own document flow and a self-closing pane runs the host's default shell |
-| pane-terminal lease | the exclusive claim one live interactive operation holds on one terminal pane. Claims in different panes do not contend; two claims in one pane do. It is minted and validated by the host's terminal authority and grants no authority over an Agent session |
+| foreground-terminal lease | the one exclusive claim on a document execution's foreground experience. A root native launch holds it for one inherited terminal; a grid holds it for one composite presentation. A host with no terminal refuses it, and no second root launch or grid can hold it concurrently |
+| grid | one provider-neutral foreground presentation whose direct panes begin concurrently, remain independently usable, and settle under one scope after complete provider and pane teardown |
+| pane | one authored position in a grid, identified structurally by its grid and ordinal and presented by its authored title. A paired pane expands its own document flow and a self-closing pane runs the host's default shell; a pane acquires an interactive terminal only when its content requires one |
+| pane-terminal lease | the exclusive claim one live interactive operation holds on one pane's terminal capability. Claims in different panes do not contend; two claims in one pane do. It is minted and validated by the host's terminal authority and grants no authority over an Agent session |
 | native launcher | the host-owned seam that reserves the foreground terminal or the current pane terminal, flushes what that terminal has pending, starts one native UI there, and reports its terminal status and nothing else. It is not `exec`, whose children are piped, captured and journaled |
 | launch request | the frozen, one-use value public launch middleware routes. It carries the facts of one launch and `with()`, and nothing that can settle one. Identity is object identity: a rebuilt look-alike describes the same ask and authorizes none of it |
 | provider authority | what core delivers to the provider factory it installs, as an argument that factory closes over. It validates the routed request, runs each absent phase once, cross-checks and retains what comes back, and derives the result. There is no reader for one, no context holding one, and no request member carrying one |
@@ -3406,47 +3406,46 @@ inside the run's existing deadline rather than opening a lifecycle of its own,
 and a waiting read is cancellable: cancellation tears the reader down and stays
 cancellation, never a read failure.
 
-## Interactive terminal grids
+## Interactive grids
 
-An executable document can replace its one foreground terminal with one
-provider-neutral grid of independently interactive terminal panes:
+An executable document can replace its one foreground presentation with one
+provider-neutral grid of independently usable panes:
 
 ```md
-<Terminal.Grid columns={2}>
-  <Terminal title="Implementor">
+<Grid columns={2}>
+  <Pane title="Implementor">
     <Agent name="claude">
       <Session.Launch session="implementor">
         Implement the accepted plan.
       </Session.Launch>
     </Agent>
-  </Terminal>
-  <Terminal title="Planner">
+  </Pane>
+  <Pane title="Planner">
     <Agent name="codex">
       <Session.Launch session="planner">
         Review the implementation against the plan.
       </Session.Launch>
     </Agent>
-  </Terminal>
-  <Terminal title="Shell" />
-</Terminal.Grid>
+  </Pane>
+  <Pane title="Shell" />
+</Grid>
 ```
 
-`Terminal` names the interactive endpoint the document requires. It does not
-name the presentation technology: a tmux integration, another terminal
-multiplexer, and a host-native composite UI are providers for the same
-contract. A component that elicits values through a terminal UI is a different
-abstraction, just as `<WebForm>` is one presentation for `<Elicit>`; it does not
-change what an interactive process requires here.
+`Grid` and `Pane` name the presentation structure the document requires. They
+do not name its technology: a tmux integration, another multiplexer, and a
+host-native composite UI are providers for the same contract. Terminal is a
+capability a pane acquires when an interactive process or shell requires a PTY;
+it is not the identity of the grid or every cell.
 
-The grid and its panes are core-owned structural syntax. `<Terminal.Grid>` is
-paired, requires a positive integer `columns`, and contains at least one direct
-`<Terminal>` child. Whitespace may separate those children, but ordinary text,
+The grid and its panes are core-owned structural syntax. `<Grid>` is paired,
+requires a positive integer `columns`, and contains at least one direct
+`<Pane>` child. Whitespace may separate those children, but ordinary text,
 dynamic control structures, and every other direct element are invalid. A
 pane requires a non-empty `title`; titles are display labels and need not be
 unique. Its ordinal among the direct children is its structural identity.
 Rows are derived in row-major order from the pane count and columns. A paired
 pane expands ordinary document flow; a self-closing pane runs the host's
-default shell. A nested grid and a `<Terminal>` outside a grid are invalid.
+default shell. A nested grid and a `<Pane>` outside a grid are invalid.
 Neither form accepts a provider, executable, shell, layout identifier, or
 `as`, and neither renders or returns document content.
 
@@ -3466,159 +3465,121 @@ observes the pane outcome and applies the grid's settlement rule after close.
 
 ### Package ownership
 
-The terminal domain is independent of both the document engine that invokes it
-and the presentation provider that implements it. Two publishable workspace
+The grid domain is independent of both the document engine that invokes it and
+the presentation provider that implements it. Two publishable workspace
 packages make those boundaries explicit:
 
-- `@executablemd/terminal` owns native foreground-launch routing and
+- `@executablemd/grid` owns native foreground-launch routing and terminal
   reservation; provider-neutral grid and pane requests, composites, states,
-  errors, and row-major layout; `TerminalGrids` and `TerminalProviders` routing;
-  provider registration and direct authority delivery; grid and pane claims,
-  readiness, stale-authority refusal, lifecycle, reader-close settlement,
-  retained outcomes, and replay; pane-scoped launch routing; the
-  `TerminalProcesses` observation contract and quiescence operations; and the
-  controlled launcher, composite, and log fixtures used to prove the contract.
-- `@executablemd/terminal-tmux` owns tmux capability probing and commands, the
+  errors, and row-major layout; `Grids` and `GridProviders` routing; provider
+  registration and direct authority delivery; claims, readiness,
+  stale-authority refusal, lifecycle, reader-close settlement, retained
+  outcomes, replay, pane-scoped launch routing, terminal process observation,
+  quiescence, and controlled test surfaces.
+- `@executablemd/grid-tmux` owns tmux capability probing and commands, the
   hidden server and control clients, explicit layout and pane swaps, visible
   attach, authenticated Unix-socket channels and their protocol, the persistent
   pane worker and its child, worker invocation, and the provider's one ordered
   teardown. No tmux command, type, identifier, protocol value, or host probe is
   part of the neutral package.
 
-`@executablemd/terminal` exports its ordinary domain surface from the package
-root. Its `./lifecycle` entrypoint exports authority creation, provider
-installation, claims, readiness, grid execution, retained outcomes, and the
-reader-close boundary. Its `./processes` entrypoint exports
-`TerminalProcesses`, process facts and signals, snapshots, and quiescence. Its
-`./posix` entrypoint exports the POSIX process and terminal probes and the
-foreground-child adapter. Its `./test` entrypoint exports only controlled
-launchers, composites, logs, and signals. These entrypoints are facets of one
-package, not independent definitions: anything exported from more than one is
-the same object.
+`@executablemd/grid` exports its ordinary domain surface from the package root.
+Its `./lifecycle` entrypoint exports authority creation, provider installation,
+claims, readiness, grid execution, retained outcomes, and reader close. Its
+`./processes` entrypoint exports `TerminalProcesses`, process facts and signals,
+snapshots, and quiescence. Its `./posix` entrypoint exports the POSIX process and
+terminal probes and foreground-child adapter. Its `./test` entrypoint exports
+only controlled launchers, composites, logs, and signals. Anything exported
+from more than one facet is the same object.
 
-`@executablemd/terminal-tmux` exports `TMUX_PROVIDER`,
+`@executablemd/grid-tmux` exports `TMUX_PROVIDER`,
 `TmuxProviderDependencies`, `tmuxGridProvider`, `installTmuxGridProvider`, the
 unchanged `PANE_WORKER_COMMAND`, the hidden pane-worker invocation parser, the
 pane-worker process runner, and the provider's documented refusal errors from
-its root. Protocol frames, channel
-handles, tmux process wrappers, layout mechanics, and teardown hooks stay
-private. Controlled low-level seams needed by the adapter's own tests are
-available only from its `./test` entrypoint and are not a second provider API.
+its root. Protocol frames, channel handles, tmux process wrappers, layout
+mechanics, and teardown hooks stay private. Controlled low-level seams exist
+only at its `./test` entrypoint.
 
 The dependency graph points toward the neutral domain:
 
 ```text
-@executablemd/terminal-tmux ──> @executablemd/terminal
-@executablemd/core          ──> @executablemd/terminal
-@executablemd/cli           ──> core + runtime + terminal + terminal-tmux
+@executablemd/grid-tmux ──> @executablemd/grid
+@executablemd/core      ──> @executablemd/grid
+@executablemd/cli       ──> core + runtime + grid + grid-tmux
 ```
 
-The terminal package may depend on durable streams, Effection, and EffectionX;
-it never imports runtime, core, CLI, or terminal-tmux. The tmux package never
-imports runtime, core, or CLI. Moving the native-launch descriptor into the
-neutral package is load-bearing: leaving it in runtime would either reverse the
-domain dependency or make terminal depend on runtime. Core remains the owner of
-Markdown parse and expansion, `SourcePosition` journal descriptions,
-execution-profile installation, and Agent session behavior. Its
-`src/terminal/journal.ts` and `src/terminal/profile.ts` therefore stay in core;
-the neutral authority, provider API, layout, grid lifecycle, pane claim, and
-pane-launcher modules move. Runtime's launcher, terminal composite, process
-observation, and POSIX observer modules move. CLI's attach client, tmux layout,
-pane channel, child, protocol and worker, provider, grid, and tmux command
-modules move to terminal-tmux; CLI retains only entrypoint and execution
+The grid package may depend on durable streams, Effection, and EffectionX; it
+never imports runtime, core, CLI, or grid-tmux. Grid-tmux never imports runtime,
+core, or CLI. Runtime has no grid dependency. Core remains the owner of Markdown
+parsing and expansion, `SourcePosition` journal descriptions,
+execution-profile installation, and Agent session behavior. Its grid journal
+and profile adapters stay in core. CLI retains only entrypoint and execution
 composition.
 
-The extraction applies to the current modules as follows:
-
-| Current module | Destination and responsibility |
-|---|---|
-| `packages/runtime/launcher.ts` | Split between terminal's neutral root, POSIX foreground-child adapter, and controlled test entrypoint |
-| `packages/runtime/terminal.ts` | Split between terminal's neutral root and controlled test entrypoint |
-| `packages/runtime/terminal-processes.ts` | `@executablemd/terminal/processes` |
-| `packages/runtime/deno-terminal-processes.ts` | `@executablemd/terminal/posix`; delete the old module after moving it |
-| `packages/core/src/terminal/authority.ts` | `@executablemd/terminal/lifecycle` |
-| `packages/core/src/terminal/provider-api.ts` | Terminal root and lifecycle entrypoints |
-| `packages/core/src/terminal/grid.ts` | `@executablemd/terminal/lifecycle` |
-| `packages/core/src/terminal/pane-launcher.ts` and `pane.ts` | Terminal's neutral pane and launcher surface |
-| `packages/core/src/terminal-grid.ts` | Split so neutral layout and grid lifecycle move to terminal while authored element scanning, expansion and source integration stay in core |
-| `packages/core/src/terminal/journal.ts` and `profile.ts` | Stay in core; they adapt terminal lifecycle to core journal descriptions and `Execution` |
-| `packages/cli/src/terminal/{attach-client,layout,pane-channel,pane-child,pane-protocol,pane-worker,provider,tmux-grid,tmux}.ts` | Move to `@executablemd/terminal-tmux` |
-| `packages/cli/src/terminal/host.ts` | Split: reusable provider and POSIX pieces move to their packages; the core `Execution` wrapper and entrypoint composition stay in a genuinely non-terminal CLI module, and the old terminal path is deleted |
-
-Tests follow the code whose contract they prove: neutral routing, authority,
-layout, lifecycle, replay and process-quiescence suites live under terminal;
-tmux topology, protocol, worker, host-process and teardown suites live under
-terminal-tmux; syntax, source integration and durable journal descriptions stay
-under core; cross-package Agent composition stays with test-agent; entrypoint
-selection and compiled-host evidence stay under CLI.
-
-The former `@executablemd/runtime` and `@executablemd/core` terminal exports and
-old `packages/cli/src/terminal` implementation paths are deleted. This stack is
-unmerged, so none is a compatibility surface. Every repository consumer imports
-the canonical terminal or terminal-tmux package entrypoint, and no forwarding
-barrel or alias preserves an old path. Each contextual API and error constructor
-therefore has one canonical definition and import path; stable contextual API
-names and `instanceof` behavior remain unchanged within that surface.
+The unmerged `packages/terminal` and `packages/terminal-tmux` trees become
+`packages/grid` and `packages/grid-tmux`. Their manifests, exports, tests,
+workspace declarations, generated publication entries, and consumers move with
+them. The former runtime and core terminal exports, old CLI terminal
+implementation paths, rejected package names, and old authored syntax are
+deleted. No compatibility component, package, module, alias, forwarding barrel,
+wrapper, subclass, or duplicate descriptor remains. Every repository import is
+canonical, and each contextual API and public error constructor has one
+definition and import path.
 
 POSIX process-table, process-group, signal, reachability, and terminal-holder
-observation lives behind `@executablemd/terminal/posix`, not in the tmux
-adapter. A different POSIX presentation provider can reuse the same proof
-without depending on tmux. The Deno and compiled CLI entrypoints remain the
-host-composition boundary: they choose tmux, resolve self-reinvocation, terminal
-size and environment, translate host `SIGHUP` into structured cancellation, and
-install the POSIX observer both in the supervising run and inside each pane
-worker because contextual state does not cross a process boundary. Node and Bun
-continue to install neither observer nor grid provider.
+observation lives behind `@executablemd/grid/posix`, not in the tmux adapter. A
+different POSIX presentation provider can reuse the same proof without tmux.
+The Deno and compiled CLI entrypoints choose tmux, resolve self-reinvocation,
+terminal size and environment, translate host `SIGHUP` into structured
+cancellation, and install the POSIX observer in both the supervising run and
+each pane worker. Node and Bun install neither observer nor grid provider.
 
-This extraction changes ownership, not behavior. It preserves the authored
-syntax, provider name `tmux`, hidden worker verb `terminal-worker`, worker
-protocol and authentication, durable records and identities, diagnostic text
-and normalization, readiness, close and replay semantics, and every provider
-identity. Event registrations remain owned by the Effection scope whose
-resource they observe and are removed when that scope settles. Both packages
-are ordinary lockstep-versioned workspace members. The
-generated publication graph places terminal after durable-streams,
-terminal-tmux and core after terminal, and CLI after terminal-tmux, terminal,
-core, and runtime. Runtime remains independent of terminal. Workspace,
-JSR, npm, compiled-host, and runtime-test discovery treat them like every other
+This boundary change preserves the provider name `tmux`, hidden worker verb
+`terminal-worker`, worker protocol and authentication, durable behavior and
+identities, readiness, close and replay semantics, terminal capability, and
+every provider identity. It deliberately changes the authored names, canonical
+package and import paths, public grid descriptors and errors, and diagnostics
+that identify those authored constructs. Event registrations remain owned by
+the Effection scope whose resource they observe and are removed when that scope
+settles.
+
+Both packages are ordinary lockstep-versioned workspace members. The generated
+publication graph places grid after durable-streams, grid-tmux and core after
+grid, and CLI after grid-tmux, grid, core, and runtime. Workspace, JSR, npm,
+compiled-host, and runtime-test discovery treat them like every other
 publishable package.
 
-The final extraction story is complete when this finite evidence passes:
+The final boundary is established by finite evidence:
 
-1. A static dependency test walks production imports and proves the four arrows
-   above, including the absence of terminal-to-runtime/core/CLI/tmux and
-   terminal-tmux-to-runtime/core/CLI edges.
-2. A package-boundary test proves the old runtime, core, and CLI terminal paths
-   and exports are absent, every repository terminal import uses a canonical
-   package surface, and each public contextual descriptor and error constructor
-   has one definition.
-3. Relocated neutral tests prove foreground launching, provider routing and
-   direct authority, claims and readiness, layout, close/cancellation/replay,
-   process observation, and quiescence without tmux.
-4. Core tests prove the unchanged grammar, structural validation, source
-   diagnostics, pane scope, durable identities and records, retained outcomes,
-   and provider-neutral replay.
-5. Terminal-tmux tests prove exact authenticated worker transport, concurrent
-   panes, sequential reuse, spawn readiness, display isolation, job control,
-   explicit row-major layout, atomic attach, the three close signals, SIGHUP,
-   scope-owned event registration, cancellation phases, and ordered bounded
-   teardown with real workers and sockets under the existing fake-tmux host.
-6. The cross-package test Agent proves a pane-native launch reaches its physical
-   endpoint while root launch and natural-key Agent session ownership remain
-   unchanged.
-7. CLI evidence proves Deno and compiled hosts select tmux and dispatch the
-   hidden worker with POSIX observation in both processes; Node, Bun, non-TTY,
-   and missing-tmux paths install no partial provider and retain their exact
-   refusals.
-8. Workspace and release evidence proves discovery of both packages, valid
-   runtime exclusions, freshly measured corpus weights, generated dependency
-   order, JSR publishability, a local-sibling npm CLI build, the compiled binary
-   and hidden worker, and dependency-state cleanliness.
+1. A static dependency test proves the graph above and the absence of
+   grid-to-runtime/core/CLI/tmux and grid-tmux-to-runtime/core/CLI edges.
+2. A package-boundary test proves the rejected component names, packages,
+   runtime and core exports, and CLI implementation paths absent; all grid
+   imports are canonical; and every public contextual descriptor and error
+   constructor has one definition.
+3. Relocated neutral tests retain foreground launch, routing, authority,
+   readiness, layout, close, cancellation, replay, process observation, and
+   quiescence without tmux.
+4. Core tests retain grammar, structural validation, source diagnostics, pane
+   scope, durable identities and records, outcomes, and provider-neutral replay
+   under `<Grid>` and `<Pane>`.
+5. Grid-tmux tests retain exact authenticated transport, concurrent panes,
+   sequential reuse, spawn readiness, display isolation, job control, explicit
+   row-major layout, atomic attach, distinct close signals, SIGHUP, scope-owned
+   listeners, cancellation phases, and ordered bounded teardown.
+6. Cross-package Agent tests retain pane-native physical routing, root launch,
+   and natural-key Agent session ownership.
+7. CLI evidence retains Deno and compiled tmux assembly and hidden-worker POSIX
+   observation; Node, Bun, non-TTY, and missing-tmux paths install no partial
+   provider and keep their refusal boundaries.
+8. Workspace and release evidence proves both packages discovered and published
+   in dependency order, JSR and local-sibling npm consumption, compiled binary
+   and hidden worker, runtime-test discovery, and dependency-state cleanliness.
 
 Tests use controlled signals and observable settlement for lifecycle success;
-elapsed time is not evidence. The focused feedback commit runs the smallest
-explicit tests that discriminate these boundaries. Runtime-wide matrices,
-lint, typecheck, JSR and clean composability remain delivery gates.
+elapsed time is not evidence. Focused feedback uses the smallest explicit tests
+that discriminate the boundary, while runtime matrices, lint, typecheck, JSR,
+and clean composability remain delivery gates.
 
 ### Terminal authority
 
@@ -3816,7 +3777,7 @@ observable ownership mechanism of its own instead of severing all three links.
 
 ### Durability and replay
 
-A terminal grid is a core-owned structured durable region. Its layout identity
+A grid is a core-owned structured durable region. Its layout identity
 contains the columns and the ordered pane forms and titles, never a provider or
 live terminal identifier. Each pane is a deterministic durable child coroutine,
 so effects in paired content retain and replay under the same rules they use
@@ -5211,8 +5172,8 @@ Status is measured against main.
 | testing harness (`<Execution>`) | runs another document as a real root under a production host profile, authorized by canonical `<Test>` alone: declarations installed before the root import, child output displayed progressively and collected only when asked, journal retention selected independently of observation, and the outcome published by the invocation's own terminal through a request public middleware composes around but cannot answer | built on the #454 stack for `host="run"`; the workflow profile and `<WorkflowRun>` are unbuilt, and a host that offers no workflow profile refuses them |
 | nested run-profile Agent and elicitation declarations | lets one `<Execution host="run">` declare one child-scoped `<TestAgent>` scenario set and one non-delegating `<Answers>` matcher set; only frozen test data crosses the harness request, the trusted host constructs both providers inside the isolated child, siblings share no session or provider state, ordinary component shadowing remains in force, and the child journal retains only the selected Prompt and Elicit components' ordinary results. A controlled `<Plan>` may author an exact scenario label that this host alone maps to Plan's derived conversation identity; declaration selection uses the label while runtime state stays keyed by the opaque identity and child, with no matcher or fallback added to ordinary TestAgent sessions | built on the #641 stack; controlled Plan routing added on the #728 stack |
 | `Config` run deadline / exec default / Fetch default / verbosity | three independently owned contextual timeouts, absent unless configured, each read by exactly one consumer, and contextual verbosity — a boolean that is false unless configured, seeded by the command line and overridable for a lexical subtree, bounding nothing and owning no authority | built on this stack |
-| terminal grid (`<Terminal.Grid>` / `<Terminal>`) | replaces the root foreground terminal with one provider-neutral composite whose statically declared direct panes begin concurrently, stay independently interactive, preserve their final statuses until the reader closes the composite, and tear down completely before document execution continues. A paired pane expands isolated document flow; a self-closing pane runs the host's default shell. The grid owns one foreground-terminal lease, each pane owns a separate pane-terminal lease, and a pane-scoped native launcher lets `<Session.Launch>` use that pane without weakening the independent Agent session coordinator. The launcher terminates at the composite's required provider-neutral pane-execution operation; the authored ordinal stays in core's live closure, and the native request carries no pane identity. Core validates the complete row-major layout before provider contact, attaches only after every pane is ready, contains post-attach pane failures until close, and records the ordered provider-neutral outcomes. Completed replay contacts no terminal or Agent provider; partial replay rebuilds a fresh composite, restores completed panes as statuses, and continues incomplete pane effects under their existing durable identities. Provider commands, sockets, process topology and layout identifiers remain live-only inside the provider closure | defined for #717; #726 proves the persistent tmux pane-worker topology and its observable teardown boundary on macOS; structure and layout built in #729, provider-neutral execution and durability in #730, pane claim admission and native-launch middleware in #731; the required composite pane-execution endpoint is specified and implemented in #732, which is what gives a pane's `<Session.Launch>` that pane's terminal rather than the root's; the controlled non-tmux provider remains the authority for core lifecycle semantics; the tmux provider is built in #732 for the Deno and compiled foreground hosts — one invocation-private server per grid, authenticated persistent pane workers carrying exact argv, cwd and environment outside tmux parsing, explicit row-major layout imposed by pane swaps, a required composite `launch()` that gives a pane's `<Session.Launch>` its own terminal rather than the root's, and one ordered teardown that proves worker quiescence, channel closure and server disappearance before the document continues; its evidence uses a fake tmux with real workers and real sockets, and real tmux behaviour on macOS remains #726's; Node and Bun catalog and validate the same grids and install neither the provider nor the process observer, refusing before pane start; DEC-016 specifies the final behavior-preserving extraction into `@executablemd/terminal` and `@executablemd/terminal-tmux`, with every repository import moved to the canonical packages and the unshipped old terminal paths deleted |
-| native session launch (`<Session.Launch>` / `launchAgentSession()`) | prepares one durable coding-agent session from the rendered body of `<Session.Launch>` and hands the provider's native UI the terminal for that exact session, then continues the document after it exits. The body renders completely first and only what it rendered crosses as the instruction layer; the launch performs no model turn; at the root it takes the run's foreground-terminal lease before an agent is resolved, while a launch inside `<Terminal>` takes that pane's lease through its pane-scoped native launcher. A host with no applicable terminal refuses without probing for an installed CLI. A session is constructed once, by one of two mechanisms, and its create-once construction route says which. Where the provider returns the identity, the ACPX provider creates the session, installs the layer at creation, releases ACP ownership before the spawn, and marks its handle stale so a later `<Prompt>` reattaches. Where the adapter names its own sessions, it allocates the identity inside ownership before any process exists, the native process creates the session under that name from a private mode-0600 instruction file, and ACP creates nothing — the instruction text reaches neither argv nor environment, and the file is removed on success, failure and cancellation alike while ownership is still held. Neither route converts into the other, and which one governs is chosen by the first operation that consumes the placement rather than by the `<Session>` that made it: a fresh `<Session>` publishes no route and establishes nothing, so a `<Session.Launch>` nested inside one constructs the session it placed, while a first subscribed `<Prompt>` publishes ACP-first before it ensures and keeps that account even if the turn that follows is never accepted. An established route is validated eagerly by a later `<Session>`, and a launch meeting a published ACP-first route refuses before an identity exists. A `<Session>` or `<Prompt>` meeting a bound client-allocated route attaches under the route's exact identity; a legacy unbound route or an unavailable attachment capability refuses before a turn and creates no substitute conversation. Phases are retained as `agent_session_launch` records under one expansion identity — `prepared` before ownership is released, then `detached`, then `exited` — so a completed replay launches nothing, a replay holding only `prepared` proves the handoff never began and may still create under the retained identity, and one holding `detached` resumes and never falls back. The public route carries an opaque one-use launch request and answers nothing; authority to run and retain a phase is delivered to the installed provider directly, so neither a returned completion nor a rebuilt request authors a launch. Every operation that can act on an advertised session takes exclusive ownership under one natural key first, through a coordinator the host built and passed in; contention refuses instead of queueing, and an owner that never proved it stopped leaves a recovery tombstone. A host that cannot say who owns a session refuses every advertised operation, and one that cannot say how a session was constructed additionally refuses an agent that names its own — before any provider effect. Every private setup or child-creation failure is normalized to `process-creation-failed` with fixed provider-owned text, carrying no path, argv, environment or host message. No launch path discards persistent provider state. A client-allocated session is bound to one executable build: the build is observed inside ownership before an identity is allocated, the binding is published with the V2 route and retained beside the prepared record, the native child runs the exact observed path in place of the launcher name, and every later create, resume, attachment and incomplete replay reobserves and compares before a process, an ensure or a turn. A `<Session>` or `<Prompt>` meeting a bound client-native route attaches to it: it reobserves the build, requires any retained provider arrangement to assert that same conversation, calls ensure with the route identity as `resumeSessionId`, and requires the provider to report that identity before a turn — refusing on missing capability, build drift, missing history or a differing assertion without creating a substitute conversation. ACP runtimes are partitioned by resolved agent command and binding, each handle is closed by the partition that created it, and a bound partition is torn down when its last handle closes. A legacy V1 client-native route keeps exactly the released native-only behavior and never attaches | built on the #517 stack, extended by the #519 and #561 stacks; Deno and the compiled binary assemble the host — coordinator, route store and executable observer — and Node and Bun keep the same advertised names while assembling none of it, so every advertised operation refuses before provider work; `claude` is advertised for native launch after passing the client-allocated gate at Claude Code 2.1.241 on macOS arm64 (#520) and separately for client-native attachment after passing the native-to-ACP marker gate (#561), and Codex remains unadvertised because nothing has run its provider-returned claims against an installed Codex; `Agent.AddDir` is unbuilt |
+| grid (`<Grid>` / `<Pane>`) | replaces the root foreground presentation with one provider-neutral composite whose statically declared direct panes begin concurrently, stay independently usable, preserve their final statuses until the reader closes the composite, and tear down completely before document execution continues. A paired pane expands isolated document flow; a self-closing pane runs the host's default shell. The grid owns one foreground-terminal lease when its content requires terminal presentation, each interactive pane owns a separate pane-terminal lease, and a pane-scoped native launcher lets `<Session.Launch>` use that pane without weakening the independent Agent session coordinator. The launcher terminates at the composite's required provider-neutral pane-execution operation; the authored ordinal stays in core's live closure, and the native request carries no pane identity. Core validates the complete row-major layout before provider contact, attaches only after every pane is ready, contains post-attach pane failures until close, and records the ordered provider-neutral outcomes. Completed replay contacts no grid, terminal, or Agent provider; partial replay rebuilds a fresh composite, restores completed panes as statuses, and continues incomplete pane effects under their existing durable identities. Provider commands, sockets, process topology and layout identifiers remain live-only inside the provider closure | defined for #717 and renamed before delivery by #781; #726 proves the persistent tmux pane-worker topology and its observable teardown boundary on macOS; structure and layout built in #729, provider-neutral execution and durability in #730, pane claim admission and native-launch middleware in #731; the required composite pane-execution endpoint is specified and implemented in #732, which is what gives a pane's `<Session.Launch>` that pane's terminal rather than the root's; the controlled non-tmux provider remains the authority for core lifecycle semantics; the tmux provider is built in #732 for the Deno and compiled foreground hosts — one invocation-private server per grid, authenticated persistent pane workers carrying exact argv, cwd and environment outside tmux parsing, explicit row-major layout imposed by pane swaps, a required composite `launch()` that gives a pane's `<Session.Launch>` its own terminal rather than the root's, and one ordered teardown that proves worker quiescence, channel closure and server disappearance before the document continues; its evidence uses a fake tmux with real workers and real sockets, and real tmux behaviour on macOS remains #726's; Node and Bun catalog and validate the same grids and install neither the provider nor the process observer, refusing before pane start; DEC-016 specifies the final extraction into `@executablemd/grid` and `@executablemd/grid-tmux`, with every repository import moved to the canonical packages and all rejected unshipped names and paths deleted |
+| native session launch (`<Session.Launch>` / `launchAgentSession()`) | prepares one durable coding-agent session from the rendered body of `<Session.Launch>` and hands the provider's native UI the terminal for that exact session, then continues the document after it exits. The body renders completely first and only what it rendered crosses as the instruction layer; the launch performs no model turn; at the root it takes the run's foreground-terminal lease before an agent is resolved, while a launch inside `<Pane>` takes that pane's lease through its pane-scoped native launcher. A host with no applicable terminal refuses without probing for an installed CLI. A session is constructed once, by one of two mechanisms, and its create-once construction route says which. Where the provider returns the identity, the ACPX provider creates the session, installs the layer at creation, releases ACP ownership before the spawn, and marks its handle stale so a later `<Prompt>` reattaches. Where the adapter names its own sessions, it allocates the identity inside ownership before any process exists, the native process creates the session under that name from a private mode-0600 instruction file, and ACP creates nothing — the instruction text reaches neither argv nor environment, and the file is removed on success, failure and cancellation alike while ownership is still held. Neither route converts into the other, and which one governs is chosen by the first operation that consumes the placement rather than by the `<Session>` that made it: a fresh `<Session>` publishes no route and establishes nothing, so a `<Session.Launch>` nested inside one constructs the session it placed, while a first subscribed `<Prompt>` publishes ACP-first before it ensures and keeps that account even if the turn that follows is never accepted. An established route is validated eagerly by a later `<Session>`, and a launch meeting a published ACP-first route refuses before an identity exists. A `<Session>` or `<Prompt>` meeting a bound client-allocated route attaches under the route's exact identity; a legacy unbound route or an unavailable attachment capability refuses before a turn and creates no substitute conversation. Phases are retained as `agent_session_launch` records under one expansion identity — `prepared` before ownership is released, then `detached`, then `exited` — so a completed replay launches nothing, a replay holding only `prepared` proves the handoff never began and may still create under the retained identity, and one holding `detached` resumes and never falls back. The public route carries an opaque one-use launch request and answers nothing; authority to run and retain a phase is delivered to the installed provider directly, so neither a returned completion nor a rebuilt request authors a launch. Every operation that can act on an advertised session takes exclusive ownership under one natural key first, through a coordinator the host built and passed in; contention refuses instead of queueing, and an owner that never proved it stopped leaves a recovery tombstone. A host that cannot say who owns a session refuses every advertised operation, and one that cannot say how a session was constructed additionally refuses an agent that names its own — before any provider effect. Every private setup or child-creation failure is normalized to `process-creation-failed` with fixed provider-owned text, carrying no path, argv, environment or host message. No launch path discards persistent provider state. A client-allocated session is bound to one executable build: the build is observed inside ownership before an identity is allocated, the binding is published with the V2 route and retained beside the prepared record, the native child runs the exact observed path in place of the launcher name, and every later create, resume, attachment and incomplete replay reobserves and compares before a process, an ensure or a turn. A `<Session>` or `<Prompt>` meeting a bound client-native route attaches to it: it reobserves the build, requires any retained provider arrangement to assert that same conversation, calls ensure with the route identity as `resumeSessionId`, and requires the provider to report that identity before a turn — refusing on missing capability, build drift, missing history or a differing assertion without creating a substitute conversation. ACP runtimes are partitioned by resolved agent command and binding, each handle is closed by the partition that created it, and a bound partition is torn down when its last handle closes. A legacy V1 client-native route keeps exactly the released native-only behavior and never attaches | built on the #517 stack, extended by the #519 and #561 stacks; Deno and the compiled binary assemble the host — coordinator, route store and executable observer — and Node and Bun keep the same advertised names while assembling none of it, so every advertised operation refuses before provider work; `claude` is advertised for native launch after passing the client-allocated gate at Claude Code 2.1.241 on macOS arm64 (#520) and separately for client-native attachment after passing the native-to-ACP marker gate (#561), and Codex remains unadvertised because nothing has run its provider-returned claims against an installed Codex; `Agent.AddDir` is unbuilt |
 | `<Fetch>` | performs one XMD-mediated HTTP read through contextual `API.Fetch`, admitting the whole request before transport, and retains the normalized request and the detached response as one `fetch` durable observation; capture decides whether a status is data or a failure, and the trusted host's destination ceiling sits below the component | built on the #456 stack; a generated fragment may name the pinned identity only for a request the trusted host stated exactly, on the #369 stack |
 | `API.Files` | routes every document filesystem operation to the installed provider, with no host default and structural failure data. Its mandatory semantic operations include `ensureDirectory`, which recursively creates or adopts one directory and returns Unit; separately loaded copies compose through the stable Api name | built on the #227 stack; directory ensure added by #643 |
 | `<File.Delete path>` | removes one file the document names, inside the contextual working directory. An ordinary overridable core default with a closed schema of one required non-empty `path`, **self-closing only** — a paired spelling never enters its body, because the component declares its one form and canonical invocation-form dispatch enters that body only for the form the scan recorded, before `Env.cwd` is read and before the provider is reached. Neither the composable `Component.hasContent()` chain nor a method on whatever object a caller handed over takes part. It renders the empty string, declares no `returns` and hands back no receipt, so an ordinary `as` captures that empty string; absence is the same success, so deleting a path twice succeeds twice. One regular file or one final symbolic link goes — the link rather than its target, inside or outside — and every directory is refused, an empty one included. Empty, absolute, lexically escaping and parent-link-escaping paths are refused before any removal, and a printed error names only the path the document wrote. One semantic `API.Files.deleteFile` call and no filesystem access of its own; under a workflow run it is one `workspace_file` effect retaining `{ kind: "deleted" }`. The standard Deno workflow profile admits it to generated XMD as the exact self-closing identity `@executablemd/core#File.Delete`, third in the write table, where it performs that same ordinary effect and contributes no evaluator result | built on the #567 stack |

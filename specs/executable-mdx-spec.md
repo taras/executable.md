@@ -2655,7 +2655,7 @@ A component name is resolved in tiers, and the first tier that answers wins:
 1. **structural syntax** — `<Content>`, `<Output>`, `<Return>`, `<Let>`,
    `<Each>`, `<If>`/`<Else>`, `<Switch>`/`<Case>`, `<Loop>`/`<Break>`,
    `<PrintErrors>`, `<Answers>`/`<Answer>`, and
-   `<Terminal.Grid>`/`<Terminal>`. These are the language's own constructs.
+   `<Grid>`/`<Pane>`. These are the language's own constructs.
    They are reserved: a registration cannot claim one, and a repository file
    named after one never stands in for it. A structural name written where its
    construct gives it no meaning is a printed error, not a missing component.
@@ -9199,36 +9199,36 @@ Its skipped body is absence, not a retained decision. Replay of a completed root
 is unchanged, and a live or partial expansion reads the value that applies to
 that execution.
 
-### 6.21 Opening concurrent terminal panes: `<Terminal.Grid>` and `<Terminal>`
+### 6.21 Opening concurrent panes: `<Grid>` and `<Pane>`
 
-Use a terminal grid when several interactive tools must remain available at the
+Use a grid when several interactive tools must remain available at the
 same time in one foreground view:
 
 ```md
-<Terminal.Grid columns={2}>
-  <Terminal title="Implementor">
+<Grid columns={2}>
+  <Pane title="Implementor">
     <Agent name="claude">
       <Session.Launch session="implementor">
         Implement the accepted plan.
       </Session.Launch>
     </Agent>
-  </Terminal>
-  <Terminal title="Reviewer">
+  </Pane>
+  <Pane title="Reviewer">
     <Agent name="codex">
       <Session.Launch session="reviewer">
         Review the implementation.
       </Session.Launch>
     </Agent>
-  </Terminal>
-  <Terminal title="Tests">
+  </Pane>
+  <Pane title="Tests">
     <Agent name="claude">
       <Session.Launch session="tests">
         Run the focused verification and repair failures.
       </Session.Launch>
     </Agent>
-  </Terminal>
-  <Terminal title="Shell" />
-</Terminal.Grid>
+  </Pane>
+  <Pane title="Shell" />
+</Grid>
 ```
 
 The example opens a two-column, two-row foreground grid. The first three panes
@@ -9238,8 +9238,10 @@ grid does not proxy prompts or replace it with an XMD chat surface. Each pane
 can finish while the others keep running, and its final status stays visible
 until the reader closes the grid.
 
-`Terminal` names an interactive terminal endpoint, not tmux. The document asks
-for panes and their authored layout; the host chooses the presentation provider.
+`Grid` and `Pane` name presentation structure, not tmux or a terminal. The
+document asks for panes and their authored layout; the host chooses the
+presentation provider. Terminal is a technical capability that a pane acquires
+when an interactive process or shell requires a PTY.
 There is no provider, multiplexer, executable, shell, socket, session, window,
 pane-ID, attach-key, or teardown prop. A terminal-native input component may be
 a presentation for `<Elicit>` in its own right; it does not change this process
@@ -9247,14 +9249,14 @@ terminal contract.
 
 #### Forms and props
 
-`<Terminal.Grid>` has exactly one paired form:
+`<Grid>` has exactly one paired form:
 
 ```md
-<Terminal.Grid columns={3}>
-  <Terminal title="One" />
-  <Terminal title="Two" />
-  <Terminal title="Three" />
-</Terminal.Grid>
+<Grid columns={3}>
+  <Pane title="One" />
+  <Pane title="Two" />
+  <Pane title="Three" />
+</Grid>
 ```
 
 Its closed props schema contains one required `columns` value, which must
@@ -9263,11 +9265,11 @@ not have to divide the pane count; rows are derived by placing direct panes in
 authored row-major order and leaving unused positions at the end of the last
 row.
 
-`<Terminal>` has two forms and one required prop:
+`<Pane>` has two forms and one required prop:
 
 ```md
-<Terminal title="Agent">...</Terminal>
-<Terminal title="Shell" />
+<Pane title="Agent">...</Pane>
+<Pane title="Shell" />
 ```
 
 `title` must resolve to a non-empty string. It is a display label rather than
@@ -9291,11 +9293,11 @@ repository-overridable components. A function component receives rendered
 content after its effects have happened and therefore cannot define this
 concurrent direct-child boundary.
 
-Only direct `<Terminal>` children may appear in a grid. Whitespace between panes
+Only direct `<Pane>` children may appear in a grid. Whitespace between panes
 is allowed; ordinary Markdown text and every other direct element are refused.
 A control structure such as `<If>` or `<Each>` cannot dynamically produce the
-direct panes. Put control flow inside a paired pane instead. `<Terminal>` outside
-a grid, a nested `<Terminal.Grid>`, a self-closing grid, paired content on the
+direct panes. Put control flow inside a paired pane instead. `<Pane>` outside a
+grid, a nested `<Grid>`, a self-closing grid, paired content on the
 self-closing pane form, and a grid with no pane are invalid.
 
 Syntax validation checks the two names, closed props, authored forms, placement,
@@ -9336,7 +9338,7 @@ sibling render to the root again.
 Opening a grid is atomic from the reader's perspective:
 
 1. Core validates the whole layout and acquires the root foreground-terminal
-   lease. Another root native launch or terminal grid cannot hold it at the same
+   lease. Another root native launch or grid cannot hold it at the same
    time.
 2. The provider validates its live prerequisites and prepares every terminal
    endpoint in a hidden composite. It presents nothing yet.
@@ -9563,49 +9565,52 @@ exercises the same core contract in tests.
 
 #### Package and host boundary
 
-`@executablemd/terminal` is the canonical provider-neutral package for this
-contract. Its root exports native launch requests, outcomes and routing;
-terminal grid and pane requests, composites and states; `TerminalGrids` and
-`TerminalProviders`; provider registration; public errors; and the neutral pane
-surface. `@executablemd/terminal/lifecycle` exports the direct authority,
+`@executablemd/grid` is the canonical provider-neutral package for this
+contract. Its root exports native launch requests, outcomes and routing; grid
+and pane requests, composites and states; `Grids` and `GridProviders`; provider
+registration; public errors; and the neutral pane surface.
+`@executablemd/grid/lifecycle` exports the direct authority,
 installation, claim, readiness, row-major layout, grid lifecycle, retained
-outcome, reader-close and replay operations. `@executablemd/terminal/processes`
+outcome, reader-close and replay operations. `@executablemd/grid/processes`
 exports `TerminalProcesses`, process facts, signals, snapshots and quiescence.
-`@executablemd/terminal/posix` exports POSIX process and terminal probes and the
-foreground-child adapter. `@executablemd/terminal/test` exports the controlled
+`@executablemd/grid/posix` exports POSIX process and terminal probes and the
+foreground-child adapter. `@executablemd/grid/test` exports the controlled
 launcher, composite, log and signal surfaces; production code imports none of
 them.
 
-`@executablemd/terminal-tmux` is the first provider. Its root exports only the
+`@executablemd/grid-tmux` is the first provider. Its root exports only the
 provider name, dependency contract, provider factory and installer, unchanged
 `PANE_WORKER_COMMAND`, hidden worker invocation parser and runner, and
 documented refusal errors. Its tmux
 process wrapper, layout mechanics, private protocol, channel handles and
 teardown controls remain internal; its tests reach controlled low-level seams
-through `@executablemd/terminal-tmux/test`.
+through `@executablemd/grid-tmux/test`.
 
-The neutral package imports neither runtime, core, CLI nor terminal-tmux. Core
-imports terminal for the lifecycle it invokes and retains only authored
+The neutral package imports neither runtime, core, CLI nor grid-tmux. Core
+imports grid for the lifecycle it invokes and retains only authored
 parsing, expansion, source-position journal descriptions, profile composition,
-and Agent behavior. Terminal-tmux imports terminal and imports neither runtime,
-core nor CLI. CLI imports the domain and provider to compose the Deno and
-compiled hosts. Runtime owns no terminal module, export, or dependency.
+and Agent behavior. Grid-tmux imports grid and imports neither runtime, core nor
+CLI. CLI imports the domain and provider to compose the Deno and compiled hosts.
+Runtime owns no grid module, export, or dependency.
 
-The previous `@executablemd/runtime` and `@executablemd/core` terminal exports
-and the old CLI terminal implementation paths are deleted. They have not
-shipped and are not compatibility surfaces. Every repository import names
-`@executablemd/terminal`, one of its documented subpaths, or
-`@executablemd/terminal-tmux`; no alias or forwarding barrel keeps an old path
-reachable. Each contextual API and public error constructor consequently has
-one canonical definition.
+The unmerged `packages/terminal` and `packages/terminal-tmux` trees become
+`packages/grid` and `packages/grid-tmux`. The previous runtime and core terminal
+exports, old CLI terminal implementation paths, rejected package names, and old
+authored component names are deleted. They have not shipped and are not
+compatibility surfaces. Every repository import names `@executablemd/grid`, one
+of its documented subpaths, or `@executablemd/grid-tmux`; no alias or forwarding
+barrel keeps an old path reachable. Each contextual API and public error
+constructor consequently has one canonical definition.
 
 The Deno and compiled CLI entrypoints select tmux, supply self-reinvocation,
 environment and terminal dimensions, translate `SIGHUP`, and install POSIX
 observation in the supervising host. The hidden pane-worker entrypoint installs
 the same observation inside its own process; contextual installation in the
 parent cannot cross that boundary. Node and Bun install neither the process
-observer nor a grid provider. The extraction changes no syntax, provider name,
-worker invocation, protocol, durable value, diagnostic, or lifecycle outcome.
+observer nor a grid provider. The boundary change preserves the provider name,
+worker invocation, protocol, durable behavior and identity, and lifecycle
+outcome. It deliberately changes the authored names, package and import paths,
+public grid descriptors and errors, and diagnostics that name those constructs.
 
 
 ## 7. Entry point
@@ -11604,7 +11609,7 @@ Each row names the derivation it kills.
 | AF24 | A Session pins the exact value it was issued | A fresh `<Session>` calls `session()` once and hands the same object — by identity, not by key — to every `<Prompt>` nested inside it. A provider decides whether a session may be acted on by that identity, so a rebuilt look-alike is a value nobody issued |
 | AF25 | A fresh Session performs no provider effect | A self-closing `<Session />` places one and renders nothing: no prompt is started, and nothing about the placement appears in the document where the element stood |
 
-### Tier TG — Terminal grids (§6.21)
+### Tier TG — Grids (§6.21)
 
 Core lifecycle rows use a controlled provider that is not tmux. Production
 adapter rows use fake tmux processes and exact invocation-private handles; no
@@ -11612,7 +11617,7 @@ test derives a core result from a provider identifier.
 
 | # | Test | Verify |
 |---|------|--------|
-| TG1 | Frozen grammar | `Terminal.Grid` accepts only paired form with a positive integer `columns`; `Terminal` accepts paired and self-closing forms with a non-empty `title`; both reject unknown props and `as` |
+| TG1 | Frozen grammar | `Grid` accepts only paired form with a positive integer `columns`; `Pane` accepts paired and self-closing forms with a non-empty `title`; both reject unknown props and `as` |
 | TG2 | Structural placement | An empty grid, direct text or non-pane element, a dynamically produced direct pane, a nested grid, and a pane outside a grid are refused before a provider call or body effect; whitespace between direct panes is inert |
 | TG3 | Catalog and validation are inert | Both reserved entries and exact forms appear under structural syntax on every runtime; syntax and document validation contact no terminal provider, tmux, shell, Agent registry, or session coordinator |
 | TG4 | Row-major layout | One through five authored panes under two and three columns produce the exact derived positions, keep duplicate titles, and derive identity from ordinal rather than title or scheduling |
@@ -11632,7 +11637,7 @@ test derives a core result from a provider identifier.
 | TG18 | Provider neutrality | The controlled non-tmux provider passes TG1–TG17 and TG19; the tmux adapter prepares one hidden invocation-private server with authenticated persistent pane workers, transmits exact child creation outside tmux parsing, applies explicit row-major layout, distinguishes visible detach from control loss and server stop, attaches only after runtime spawn readiness, and satisfies TG14 without leaking provider identifiers; Node and Bun validate the same document and refuse before pane start with no provider installed |
 | TG19 | Reader close crossed with parent cancellation | A controlled live pane enters a signal-held finalizer after reader close takes effect. Parent cancellation begins while teardown is blocked; releasing the finalizer lets pane and provider teardown complete, retains the pane as `closed` and the grid with its reader-close result, and only then delivers cancellation to the parent. A continuation neither contacts the provider nor enters pane work, does not hang, and proceeds from the retained grid outcome. Provider-resource and following-sibling observations prove both sides of the ordering; no elapsed duration is evidence |
 | TG20 | Pane-native physical endpoint | A paired pane's native launch passes through nearer launcher middleware and then the required composite operation for its authored ordinal. Production tmux evidence observes the exact argv, cwd, and environment at that pane's authenticated worker while a root-foreground-launcher sentinel is never entered. Distinct pane workers accept concurrent launches. Cancellation settles only after worker-reported child settlement and pane-terminal quiescence. A root launch still enters the root foreground launcher unchanged, and a composite unable to execute a pane launch refuses without fallback |
-| TG21 | Package boundary and canonical imports | Static dependency evidence proves terminal imports neither runtime, core, CLI nor terminal-tmux; terminal-tmux imports terminal and none of runtime, core or CLI; runtime has no terminal dependency; and CLI alone composes the document engine with the provider and host. The old runtime, core and CLI terminal modules and exports are absent, every repository terminal import names a canonical package surface, and each contextual descriptor and public error constructor has one definition. The relocated neutral, tmux, cross-package Agent and Deno/compiled host suites retain TG1–TG20 without changing syntax, provider identity, hidden-worker grammar, protocol, durable records or diagnostics; Node and Bun still install neither observer nor provider |
+| TG21 | Package boundary and canonical imports | Static dependency evidence proves grid imports neither runtime, core, CLI nor grid-tmux; grid-tmux imports grid and none of runtime, core or CLI; runtime has no grid dependency; and CLI alone composes the document engine with the provider and host. The rejected package names and old runtime, core and CLI terminal modules and exports are absent, every repository grid import names a canonical package surface, and each contextual descriptor and public error constructor has one definition. The relocated neutral, tmux, cross-package Agent and Deno/compiled host suites retain TG2–TG20 and the behaviors in TG1 under `Grid` and `Pane`, preserving provider identity, hidden-worker grammar, protocol and durable records while allowing diagnostics to name the new constructs; Node and Bun still install neither observer nor provider |
 
 ### Tier CR — Component registration and resolution
 
@@ -11672,7 +11677,7 @@ so the include-boundary rows are the same on every host. Defined in §5.3.
 | # | Test | Verify |
 |---|------|--------|
 | SY1/SY2 | Versioned shape | `version` is 1, the categories are the fixed tuple, and one structural, one registered and one repository entry appear together |
-| SY3/SY4 | Structural vocabulary | The declarations are exactly the reserved names, each with authored forms and a description; `Let`, `Content`, `Else`, `Break`, `Answers`, `Answer`, `Terminal.Grid` and `Terminal` carry the frozen forms, and `as` applies to `Let` and `Each` alone |
+| SY3/SY4 | Structural vocabulary | The declarations are exactly the reserved names, each with authored forms and a description; `Let`, `Content`, `Else`, `Break`, `Answers`, `Answer`, `Grid` and `Pane` carry the frozen forms, and `as` applies to `Let` and `Each` alone |
 | SY5 | Structural stays structural | A repository file named after a construct never moves it out of the structural category |
 | SY6/SY7 | Repository mapping | Direct `.md`/`.ts`, direct `index`, nested dotted and nested index paths describe names; a lowercase segment, an empty stem, a dotted stem and a dotted directory describe none, and the inversion is held to the single-segment grammar directly |
 | SY7c | Pruning | A lower-case, hidden or dotted directory is never read — at the top level or deeper — while the direct, nested and index candidates beside it stay discoverable; every skipped directory throws if it is read, and the recorded reads name only the ones a name reaches |

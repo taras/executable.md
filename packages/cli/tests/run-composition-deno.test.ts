@@ -22,7 +22,7 @@ import { spawnSync } from "node:child_process";
 import { join } from "node:path";
 import process from "node:process";
 import { API, useHostFiles } from "@executablemd/runtime";
-import { NativeLauncher } from "@executablemd/terminal";
+import { NativeLauncher } from "@executablemd/grid";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import {
   Agent,

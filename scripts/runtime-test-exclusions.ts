@@ -625,7 +625,7 @@ const DENO_ONLY_REPOSITORY_PROVIDER: RuntimeExclusion[] = [
 ];
 
 /**
- * Tests whose subject is the tmux terminal-grid provider.
+ * Tests whose subject is the tmux grid provider.
  *
  * A pane's worker is this executable re-invoked under a hidden
  * `terminal-worker` subcommand, and only the hosts that present grids register
@@ -637,19 +637,19 @@ const DENO_ONLY_REPOSITORY_PROVIDER: RuntimeExclusion[] = [
  * forever.
  *
  * That a runtime without a provider refuses a grid instead of half-presenting
- * one is covered portably by TG9 in `packages/core/tests/terminal-grid.test.ts`,
+ * one is covered portably by TG9 in `packages/core/tests/grid.test.ts`,
  * which runs everywhere. The excluded file's own TH3 makes the same claim, but
  * it is excluded along with the rest of it and proves nothing here.
  */
 const DENO_ONLY_TERMINAL_GRID: RuntimeExclusion[] = [
   {
-    path: "packages/terminal-tmux/tests/terminal-grid-tmux.test.ts",
+    path: "packages/grid-tmux/tests/grid-tmux.test.ts",
     reason:
       "the subject is the tmux provider, whose panes are this executable re-invoked as `terminal-worker` — a subcommand only the grid-presenting entrypoints register; under Node and Bun that vector names a document instead, so the worker exits with ENOENT and the pane's admission never completes",
     issue: DERIVED_SCOPE,
   },
   {
-    path: "packages/cli/tests/terminal-host.test.ts",
+    path: "packages/cli/tests/grid-host.test.ts",
     reason:
       "the host rows open a real grid through the tmux provider, so they spawn the same `terminal-worker` re-invocation; on Node and Bun that vector names a document and the pane never reports, exactly as for the adapter's own suite",
     issue: DERIVED_SCOPE,

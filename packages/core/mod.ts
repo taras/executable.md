@@ -152,12 +152,12 @@ export { DocumentOutput } from "./src/api.ts";
 export type { DocumentOutputApi } from "./src/api.ts";
 export { useNormalizedOutput } from "./src/output/normalize.ts";
 export { useTerminalOutput } from "./src/output/terminal.ts";
-// The terminal domain is `@executablemd/terminal`'s, and a caller names it
+// The terminal domain is `@executablemd/grid`'s, and a caller names it
 // directly (DEC-016). What core exports here is only what core owns: the
 // profile that composes a grid into an `Execution`, adapting the terminal
 // lifecycle to this engine's journal descriptions and installation.
-export { installTerminalGridProfile } from "./src/terminal/profile.ts";
-export type { TerminalGridProfileOptions } from "./src/terminal/profile.ts";
+export { installGridProfile } from "./src/grid/profile.ts";
+export type { GridProfileOptions } from "./src/grid/profile.ts";
 
 export { execute, Execution } from "./src/execute.ts";
 export type {

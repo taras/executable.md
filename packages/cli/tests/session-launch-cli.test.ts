@@ -123,19 +123,17 @@ const ROLES = [
 
 /** One authored grid, whose pane content must never run without a provider. */
 const GRID = [
-  "<Terminal.Grid columns={2}>",
-  '<Terminal title="Left">',
+  "<Grid columns={2}>",
+  '<Pane title="Left">',
   "PANE_MARKER",
-  "</Terminal>",
-  '<Terminal title="Right" />',
-  "</Terminal.Grid>",
+  "</Pane>",
+  '<Pane title="Right" />',
+  "</Grid>",
   "",
 ].join("\n");
 
 /** A grid the grammar refuses, wherever it is written. */
-const BAD_GRID = ["<Terminal.Grid>", '<Terminal title="Only" />', "</Terminal.Grid>", ""].join(
-  "\n",
-);
+const BAD_GRID = ["<Grid>", '<Pane title="Only" />', "</Grid>", ""].join("\n");
 
 const NO_LAUNCH = "PLAIN_MARKER\n\nThis document launches nothing.\n";
 
@@ -240,12 +238,12 @@ describe(
       // The concrete structural refusal, named and located — not merely the
       // absence of a provider message, which an unrelated failure would also
       // satisfy.
-      expect(reported).toContain('<Terminal.Grid> requires a "columns" prop');
+      expect(reported).toContain('<Grid> requires a "columns" prop');
       expect(reported).toContain("bad.md:1:1");
       // And it is the grammar's refusal, reached wherever the document is read
       // rather than at a provider.
-      expect(reported).not.toContain("cannot open a terminal grid");
-      expect(reported).not.toContain("no terminal provider is installed");
+      expect(reported).not.toContain("cannot open a grid");
+      expect(reported).not.toContain("no grid provider is installed");
     });
 
     it("CL5: no behavior is keyed to the filename", function* () {

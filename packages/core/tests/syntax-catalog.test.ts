@@ -348,55 +348,54 @@ describe("Tier SY: structural vocabulary", () => {
     expect(find(entries, "Case").as).toBeUndefined();
   });
 
-  it("TG3: freezes the <Terminal.Grid> and <Terminal> entries the catalog publishes", function* () {
+  it("TG3: freezes the <Grid> and <Pane> entries the catalog publishes", function* () {
     const catalog = yield* catalogFor({}, []);
     const entries = structural(catalog);
 
-    expect(catalog.version).toBe(1);
-    expect(find(entries, "Terminal.Grid")).toEqual({
+    expect(catalog.version).toBe(2);
+    expect(find(entries, "Grid")).toEqual({
       kind: "structural",
-      name: "Terminal.Grid",
-      origin: { kind: "structural", construct: "Terminal.Grid" },
-      syntax: ["<Terminal.Grid columns={2}>…</Terminal.Grid>"],
+      name: "Grid",
+      origin: { kind: "structural", construct: "Grid" },
+      syntax: ["<Grid columns={2}>…</Grid>"],
       description:
-        "Open several terminals in one view. " +
-        '`<Terminal.Grid columns={2}><Terminal title="Agent">…</Terminal></Terminal.Grid>`',
-      context: "The `<Terminal>` panes the grid lays out.",
+        "Open several panes in one view. " +
+        '`<Grid columns={2}><Pane title="Agent">…</Pane></Grid>`',
+      context: "The `<Pane>` panes the grid lays out.",
     });
-    expect(find(entries, "Terminal")).toEqual({
+    expect(find(entries, "Pane")).toEqual({
       kind: "structural",
-      name: "Terminal",
-      origin: { kind: "structural", construct: "Terminal" },
-      syntax: ['<Terminal title="Agent">…</Terminal>', '<Terminal title="Shell" />'],
+      name: "Pane",
+      origin: { kind: "structural", construct: "Pane" },
+      syntax: ['<Pane title="Agent">…</Pane>', '<Pane title="Shell" />'],
       description:
         "Expand Markdown or open a shell in a pane. " +
-        '`<Terminal title="Agent">…</Terminal>` runs content; ' +
-        '`<Terminal title="Shell" />` opens a shell.',
+        '`<Pane title="Agent">…</Pane>` runs content; ' +
+        '`<Pane title="Shell" />` opens a shell.',
       context: "Markdown the pane runs, in the paired form.",
     });
     // Neither construct binds, so neither carries an `as` sentence at all.
-    expect(find(entries, "Terminal.Grid").as).toBeUndefined();
-    expect(find(entries, "Terminal").as).toBeUndefined();
+    expect(find(entries, "Grid").as).toBeUndefined();
+    expect(find(entries, "Pane").as).toBeUndefined();
   });
 
   it("TG3: a repository file cannot supply the grid or a pane, and neither can a registration", function* () {
     const catalog = yield* catalogFor(
       {
         components: { kind: "directory" },
-        "components/Terminal.md": markdown("a repository terminal\n"),
-        "components/Terminal": { kind: "directory" },
-        "components/Terminal/Grid.md": markdown("a repository grid\n"),
+        "components/Grid.md": markdown("a repository grid\n"),
+        "components/Pane.md": markdown("a repository pane\n"),
       },
       ["components"],
     );
 
-    for (const name of ["Terminal.Grid", "Terminal"]) {
+    for (const name of ["Grid", "Pane"]) {
       expect(names(structural(catalog))).toContain(name);
       expect(names(userProvided(catalog))).not.toContain(name);
       expect(names(builtIn(catalog))).not.toContain(name);
     }
 
-    for (const name of ["Terminal.Grid", "Terminal"]) {
+    for (const name of ["Grid", "Pane"]) {
       let refused: unknown;
       yield* scoped(function* () {
         try {

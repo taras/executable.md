@@ -57,24 +57,19 @@ import {
   strayCaseMessage,
   strayElseMessage,
   strayStructuralMessage,
-  strayTerminalMessage,
+  strayPaneMessage,
   switchStructure,
-  terminalColumns,
-  terminalColumnsMissingMessage,
-  terminalGridStructure,
-  terminalTitle,
-  terminalTitleMissingMessage,
+  gridColumns,
+  gridColumnsMissingMessage,
+  gridStructure,
+  paneTitle,
+  paneTitleMissingMessage,
 } from "./structural-rules.ts";
-import type { StructuralViolation, SwitchCase, TerminalPane } from "./structural-rules.ts";
-import {
-  durableGrid,
-  openTerminalGrid,
-  terminalGridLayout,
-  toRequest,
-} from "@executablemd/terminal/lifecycle";
-import type { PaneWork, PlacedPane } from "@executablemd/terminal/lifecycle";
-import { usePaneNativeLauncher, usePaneTerminal } from "@executablemd/terminal";
-import { recordGridLayout } from "./terminal/journal.ts";
+import type { StructuralViolation, SwitchCase, Pane } from "./structural-rules.ts";
+import { durableGrid, openGrid, gridLayout, toRequest } from "@executablemd/grid/lifecycle";
+import type { PaneWork, PlacedPane } from "@executablemd/grid/lifecycle";
+import { usePaneNativeLauncher, usePaneTerminal } from "@executablemd/grid";
+import { recordGridLayout } from "./grid/journal.ts";
 import {
   asBindingViolation,
   asExpressionViolation,
@@ -1189,10 +1184,10 @@ function* expandListSegments(
           break;
         }
 
-        if (segment.name === "Terminal.Grid") {
-          // No raise() here, like the branches above: expandTerminalGrid
+        if (segment.name === "Grid") {
+          // No raise() here, like the branches above: expandGrid
           // reports every error it creates.
-          yield* expandTerminalGrid(segment, result, {
+          yield* expandGrid(segment, result, {
             parentMeta,
             parentProps,
             hideSet,
@@ -1203,16 +1198,16 @@ function* expandListSegments(
           break;
         }
 
-        if (segment.name === "Terminal") {
-          // A well-placed <Terminal> is consumed by its <Terminal.Grid> and
+        if (segment.name === "Pane") {
+          // A well-placed <Pane> is consumed by its <Grid> and
           // never expanded on its own. Reaching this branch means the pane sits
           // outside every grid, so it names no component and is diagnosed
           // rather than resolved from the filesystem.
           result.push(
             yield* raise({
               type: "error",
-              message: positioned(strayTerminalMessage(), segment),
-              source: "Terminal",
+              message: positioned(strayPaneMessage(), segment),
+              source: "Pane",
             }),
           );
           break;
@@ -2073,16 +2068,16 @@ function* expandSwitch(
   );
 }
 
-function terminalGridError(segment: ComponentElement, message: string): ErrorSegment {
-  return { type: "error", message: positioned(message, segment), source: "Terminal.Grid" };
+function gridError(segment: ComponentElement, message: string): ErrorSegment {
+  return { type: "error", message: positioned(message, segment), source: "Grid" };
 }
 
-function terminalPaneError(segment: ComponentElement, message: string): ErrorSegment {
-  return { type: "error", message: positioned(message, segment), source: "Terminal" };
+function paneError(segment: ComponentElement, message: string): ErrorSegment {
+  return { type: "error", message: positioned(message, segment), source: "Pane" };
 }
 
 /**
- * The value one prop of a terminal-grid construct produced, or why evaluating
+ * The value one prop of a grid construct produced, or why evaluating
  * it failed. A missing prop is `undefined`, which is also what an expression
  * evaluating to `undefined` leaves behind (§6.5) — absence either way, and the
  * caller says what its construct requires instead.
@@ -2130,12 +2125,8 @@ interface GridSite {
   readonly authority: ExpansionAuthority | undefined;
 }
 
-function* expandTerminalGrid(
-  segment: ComponentElement,
-  owner: Segment[],
-  site: GridSite,
-): Operation<void> {
-  const structure = terminalGridStructure(segment);
+function* expandGrid(segment: ComponentElement, owner: Segment[], site: GridSite): Operation<void> {
+  const structure = gridStructure(segment);
   if (structure.violations.length > 0) {
     for (const violation of structure.violations) {
       owner.push(yield* raise(structuralErrorSegment(violation, segment)));
@@ -2143,18 +2134,18 @@ function* expandTerminalGrid(
     return;
   }
 
-  const columnsValue = yield* resolveStructuralProp(segment, "Terminal.Grid", "columns");
+  const columnsValue = yield* resolveStructuralProp(segment, "Grid", "columns");
   if (!columnsValue.ok) {
-    owner.push(yield* raise(terminalGridError(segment, columnsValue.error.message)));
+    owner.push(yield* raise(gridError(segment, columnsValue.error.message)));
     return;
   }
   if (columnsValue.value === undefined) {
-    owner.push(yield* raise(terminalGridError(segment, terminalColumnsMissingMessage())));
+    owner.push(yield* raise(gridError(segment, gridColumnsMissingMessage())));
     return;
   }
-  const columns = terminalColumns(columnsValue.value);
+  const columns = gridColumns(columnsValue.value);
   if (!columns.ok) {
-    owner.push(yield* raise(terminalGridError(segment, columns.error.message)));
+    owner.push(yield* raise(gridError(segment, columns.error.message)));
     return;
   }
 
@@ -2162,15 +2153,15 @@ function* expandTerminalGrid(
   for (const pane of structure.panes) {
     const title = yield* resolvePaneTitle(pane);
     if (!title.ok) {
-      owner.push(yield* raise(terminalPaneError(pane.element, title.error.message)));
+      owner.push(yield* raise(paneError(pane.element, title.error.message)));
       return;
     }
     placed.push({ title: title.value, form: pane.form });
   }
 
-  const layout = terminalGridLayout(columns.value, placed);
+  const layout = gridLayout(columns.value, placed);
   // The grid renders nothing into the document: what a pane shows belongs to
-  // that pane, and the sibling after `</Terminal.Grid>` renders to the root
+  // that pane, and the sibling after `</Grid>` renders to the root
   // again only once the provider has restored it.
   const identity = {
     path: site.path,
@@ -2188,18 +2179,16 @@ function* expandTerminalGrid(
       const work = structure.panes.map((pane, index) =>
         paneWork(pane, layout.cells[index]!.title, site),
       );
-      return yield* openTerminalGrid(layout, work, boundary);
+      return yield* openGrid(layout, work, boundary);
     });
 
     const failed = retained.panes.find((pane) => pane.status === "failed");
     if (failed !== undefined) {
-      owner.push(yield* raise(terminalGridError(segment, failed.reason)));
+      owner.push(yield* raise(gridError(segment, failed.reason)));
     }
   } catch (error) {
     owner.push(
-      yield* raise(
-        terminalGridError(segment, error instanceof Error ? error.message : String(error)),
-      ),
+      yield* raise(gridError(segment, error instanceof Error ? error.message : String(error))),
     );
   }
 }
@@ -2215,7 +2204,7 @@ function* expandTerminalGrid(
  * enclosing body, and a checked failure settles the pane rather than poisoning
  * the root or a sibling.
  */
-function paneWork(pane: TerminalPane, title: string, site: GridSite): PaneWork {
+function paneWork(pane: Pane, title: string, site: GridSite): PaneWork {
   if (pane.form === "self-closing") {
     return {
       ordinal: pane.ordinal,
@@ -2297,15 +2286,15 @@ function paneWork(pane: TerminalPane, title: string, site: GridSite): PaneWork {
 }
 
 /** The label one pane displays, from the value its own `title` prop produced. */
-function* resolvePaneTitle(pane: TerminalPane): Operation<Result<string>> {
-  const value = yield* resolveStructuralProp(pane.element, "Terminal", "title");
+function* resolvePaneTitle(pane: Pane): Operation<Result<string>> {
+  const value = yield* resolveStructuralProp(pane.element, "Pane", "title");
   if (!value.ok) {
     return value;
   }
   if (value.value === undefined) {
-    return Err(new Error(terminalTitleMissingMessage()));
+    return Err(new Error(paneTitleMissingMessage()));
   }
-  return terminalTitle(value.value);
+  return paneTitle(value.value);
 }
 
 function loopError(segment: ComponentElement, message: string): ErrorSegment {

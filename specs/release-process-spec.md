@@ -49,8 +49,8 @@ sequenceDiagram
 ## 2. Version lockstep
 
 Every publishable package (`packages/core`, `packages/cli`,
-`packages/durable-streams`, `packages/runtime`, `packages/terminal`,
-`packages/terminal-tmux`, `packages/testing`, `packages/code-review-agent`,
+`packages/durable-streams`, `packages/runtime`, `packages/grid`,
+`packages/grid-tmux`, `packages/testing`, `packages/code-review-agent`,
 `packages/test-agent`, `packages/acp`, `packages/web`, `packages/workflow`)
 declares the same version in its `deno.json` and `package.json`. A member marked
 `"private": true` is outside the lockstep
@@ -78,26 +78,26 @@ the checked-out revision with `deno task setup` and `deno task build`, then run
 install the latest published release, so a review always understands the
 documents at the revision it checks.
 
-### Terminal package order
+### Grid package order
 
-The terminal packages follow the same manifest-derived publication graph as
-every other workspace member. `@executablemd/terminal` depends on
+The grid packages follow the same manifest-derived publication graph as every
+other workspace member. `@executablemd/grid` depends on
 `@executablemd/durable-streams` and the external Effection packages, not on
-runtime, core, CLI, or terminal-tmux. `@executablemd/terminal-tmux` depends on
-terminal. Runtime has no terminal dependency. Core depends on terminal as well
-as its existing runtime and durable-stream dependencies. CLI depends on
-terminal-tmux, terminal, core, and runtime.
+runtime, core, CLI, or grid-tmux. `@executablemd/grid-tmux` depends on grid.
+Runtime has no grid dependency. Core depends on grid as well as its existing
+runtime and durable-stream dependencies. CLI depends on grid-tmux, grid, core,
+and runtime.
 
-The generated npm jobs consequently publish durable-streams before terminal;
-terminal before terminal-tmux and core; and terminal-tmux, terminal, core and
-runtime before CLI. Runtime remains an independent leaf. The
-workspace package names and versions are also recorded in `bun.lock`. Adding
-the two manifests or changing these sibling dependencies requires
+The generated npm jobs consequently publish durable-streams before grid; grid
+before grid-tmux and core; and grid-tmux, grid, core and runtime before CLI.
+Runtime remains an independent leaf. The
+workspace package names and versions are also recorded in `bun.lock`. Changing
+these manifests or sibling dependencies requires
 `deno install --frozen=false`, the repository's normal setup, and
 `deno task gen:publish-workflow`; `publish-packages.yml` remains generated and
 is never edited by hand.
 
-Moving terminal tests between workspace members changes test-corpus paths. The
+Moving grid tests between workspace members changes test-corpus paths. The
 runtime exclusions continue to name every deliberately excluded file, and
 `test-weights.json` is remeasured by the Measure test weights workflow on the
 exact implementation head. No timing value is copied, renamed, or edited by

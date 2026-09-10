@@ -737,7 +737,7 @@ journal- and root-publication-stability snapshots in
 count is explicitly not once-only evidence — document re-expansion legitimately
 enters that boundary before the durable effect underneath restores.
 
-## DEC-016: Terminal domain and tmux adapter are separate workspace packages
+## DEC-016: Grid domain and tmux adapter are separate workspace packages
 
 **Status:** Decided
 
@@ -745,61 +745,71 @@ enters that boundary before the durable effect underneath restores.
 
 ### Context
 
-The terminal-grid delivery proved one provider-neutral lifecycle and one tmux
-implementation, but their modules remained distributed across runtime, core,
-and CLI. That placement makes a second presentation provider depend on CLI
-internals and makes the neutral terminal authority appear to be core-specific.
-Keeping the lifecycle in core would preserve that coupling. Putting the neutral
-domain and tmux in one package would remove the CLI dependency but make every
-provider consumer acquire tmux-specific code and host assumptions.
+The grid delivery proved one provider-neutral lifecycle and one tmux
+implementation. Its first public vocabulary called the structure
+`Terminal.Grid` and every cell `Terminal`, and extracted the neutral domain as
+`@executablemd/terminal`. That makes a physical terminal the identity of every
+presentation cell. A read-only Agent session view is pane content without being
+the terminal capability itself, and another multiplexer must not require a
+second document language.
 
-The terminal stack has not merged, so its temporary exports from runtime, core,
-and CLI are not compatibility surfaces. Preserving them would leave the
-ownership ambiguity this extraction removes and would add runtime as a
-dependency only to keep an unreleased path alive.
+The stack has not merged or shipped. Its component names, package names, and
+temporary exports are therefore not compatibility surfaces. Preserving them
+would make the rejected vocabulary permanent and leave a second provider
+coupled to a terminal-specific public domain.
 
 ### Decision
 
-Terminal ownership is divided between two publishable workspace packages:
+`Grid` and `Pane` are the provider-neutral presentation concepts. Core owns the
+authored `<Grid>` and `<Pane>` structural syntax, source-position journal
+descriptions, execution-profile composition, Agent sessions, and expansion
+integration. A paired pane contains isolated document flow; a self-closing pane
+retains the host's default-shell behavior.
 
-- `@executablemd/terminal` owns the provider-neutral terminal domain: native
-  launch routing, terminal requests and composites, provider registration and
-  direct authority delivery, claims and readiness, row-major layout, the live
-  and durable grid lifecycle, pane routing, retained outcomes, process
-  observation contracts, quiescence, and controlled test surfaces.
-- `@executablemd/terminal-tmux` implements that domain with tmux: capability
+Terminal remains the technical capability used where a PTY,
+foreground-terminal lease, terminal process observation, native interactive
+process, or shell requires it. It does not name the grid or every pane.
+
+Ownership is divided between two publishable workspace packages:
+
+- `@executablemd/grid` owns native foreground-launch routing and terminal
+  reservation; provider-neutral grid and pane requests, composites, states,
+  errors, row-major layout, provider registration and direct authority;
+  readiness, live and durable lifecycle, replay, pane launch routing, terminal
+  process observation, quiescence, and controlled test surfaces.
+- `@executablemd/grid-tmux` implements that domain with tmux: capability
   probing, private server and client control, explicit pane placement,
   authenticated worker channels and protocol, worker child creation, display,
   close-signal distinction, and ordered teardown.
 
-Core continues to own the authored `Terminal.Grid` and `Terminal` syntax,
-source-position journal descriptions, execution-profile composition, Agent
-sessions, and expansion integration. Runtime continues to own unrelated host
-APIs. CLI chooses and wires the provider for each entrypoint; it does not own a
-terminal provider implementation.
-
-The canonical descriptors, functions, types, constants, and errors move to the
-new packages. Their former runtime and core exports and the old CLI terminal
-implementation paths are deleted, and every repository import is updated to
-the canonical package surface. No compatibility module, alias, forwarding
-barrel, wrapper, subclass, or duplicate descriptor remains.
+The canonical descriptors, functions, types, constants, and errors live in
+those packages. The former runtime and core terminal exports, old CLI terminal
+implementation paths, `@executablemd/terminal`, and
+`@executablemd/terminal-tmux` are deleted. Every repository import uses the
+canonical grid surface. No compatibility component, package, module, alias,
+forwarding barrel, wrapper, subclass, or duplicate descriptor remains.
 
 The neutral package has no dependency on runtime, core, CLI, or the tmux
-package. Core depends on terminal. The tmux package depends on terminal and
-does not depend on runtime, core, or CLI. CLI depends on both packages and on
-core and runtime. Runtime has no terminal dependency. Host-specific POSIX
-observation is an explicit terminal adapter;
-Deno and compiled entrypoints install it in the supervising host and the pane
-worker, while Node and Bun continue to install neither observer nor provider.
+package. Core depends on grid. Grid-tmux depends on grid and does not depend on
+runtime, core, or CLI. CLI depends on both packages and on core and runtime.
+Runtime has no grid dependency. Host-specific POSIX terminal observation is an
+explicit grid adapter; Deno and compiled entrypoints install it in the
+supervising host and pane worker, while Node and Bun continue to install neither
+observer nor provider.
 
 ### Consequences
 
-Any terminal provider implements the public neutral contract without importing
-CLI or tmux. Repository consumers use only the canonical package names. This
-removal is non-breaking because none of the temporary terminal paths has
-shipped. The extraction changes no authored syntax, provider name, hidden worker
-invocation, durable record, private tmux protocol, diagnostic text, terminal
-behavior, or provider identity.
+Any grid provider implements the public neutral contract without importing CLI
+or tmux. The tmux provider remains an `xmd run` facility and adds nothing to
+Workflow. This removal is non-breaking because none of the rejected names has
+shipped.
+
+The rename preserves the provider name `tmux`, hidden worker invocation,
+durable behavior, private tmux protocol, terminal capability, launch routing,
+layout, readiness, cancellation, replay, teardown, and provider identity. It
+changes the authored syntax, canonical package and import names, public grid
+descriptors and errors, documentation, diagnostics that name the authored
+constructs, and the evidence that enforces those surfaces.
 
 Both packages participate in workspace version lockstep, npm and JSR
 publication, generated dependency ordering, package discovery, runtime test

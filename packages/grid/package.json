@@ -1,0 +1,21 @@
+{
+  "name": "@executablemd/grid",
+  "version": "0.11.0",
+  "description": "The provider-neutral grid domain for executable.md documents.",
+  "type": "module",
+  "exports": {
+    ".": "./mod.ts",
+    "./lifecycle": "./lifecycle.ts",
+    "./processes": "./processes.ts",
+    "./posix": "./posix.ts",
+    "./test": "./testing.ts"
+  },
+  "dependencies": {
+    "@effectionx/context-api": "0.6.0",
+    "@effectionx/fs": "0.3.0",
+    "@effectionx/node": "0.2.4",
+    "@effectionx/process": "0.8.1",
+    "@executablemd/durable-streams": "workspace:*",
+    "effection": "4.1.0"
+  }
+}
