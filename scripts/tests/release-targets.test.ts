@@ -4,6 +4,7 @@ import { expect } from "@executablemd/test-support/expect";
 import type { Operation } from "effection";
 import { readTextFile } from "@effectionx/fs";
 
+import { compileArguments } from "../lib/compile.ts";
 import {
   preparationArguments,
   RELEASE_ENTRYPOINT,
@@ -13,6 +14,9 @@ import {
 import { RELEASE_TARGETS as PUBLISHED_TARGETS } from "../../packages/cli/src/release-targets.ts";
 
 const RELEASE_WORKFLOW = new URL("../../.github/workflows/release.yml", import.meta.url);
+
+/** The one command every compile site goes through, as a workflow spells it. */
+const COMPILE_COMMAND = "scripts/compile.ts";
 
 /** The reviewed immutable commit for `actions/attest` v4.2.2. */
 const ATTEST_ACTION = "actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6";
@@ -278,23 +282,70 @@ describe("release.yml", () => {
       (yield* commands())
         .join("\n")
         .split(/^  \w[\w-]*:$/m)
-        .find((section) => section.includes("deno compile")) ?? "";
+        .find((section) => section.includes(COMPILE_COMMAND)) ?? "";
 
     const prepare = job.indexOf("deno task deps:target");
-    const compile = job.indexOf("deno compile");
+    const compile = job.indexOf(COMPILE_COMMAND);
 
     expect(prepare).toBeGreaterThan(-1);
     expect(prepare).toBeLessThan(compile);
   });
 
-  it("compiles for the matrix target under the isolation flags", function* () {
+  /**
+   * The matrix supplies the target and the artifact name; every other compile
+   * input comes from `scripts/lib/compile.ts`. Held here as the two halves they
+   * are — a workflow that passed no `--target` would compile the runner's own
+   * platform and upload it under another platform's name, and one that spelled
+   * out its own flags would be a second answer to what a binary contains.
+   */
+  it("hands the matrix target to the shared compile command", function* () {
     const invocation = (yield* commands()).join("\n");
-    const compile = invocation.slice(invocation.indexOf("deno compile"));
-    const flags = compile.slice(0, compile.indexOf(RELEASE_ENTRYPOINT));
 
-    for (const flag of ["--node-modules-dir=none", "--cached-only", "--frozen", "--target"]) {
-      expect({ flag, present: flags.includes(flag) }).toEqual({ flag, present: true });
+    expect(invocation).toContain(COMPILE_COMMAND);
+    expect(invocation).toContain("--target ${{ matrix.target }}");
+    expect(invocation).toContain("--output dist/${{ matrix.artifact }}");
+    // Not through `deno compile` directly, and not through `deno task build`,
+    // which compiles for the host.
+    expect(invocation).not.toContain("deno compile");
+    expect(invocation).not.toContain("deno task build\n");
+  });
+
+  it("compiles that target under the isolation flags", function* () {
+    const argv = compileArguments({ target: RELEASE_TARGET, output: "dist/xmd-release" });
+
+    for (const flag of ["--node-modules-dir=none", "--cached-only", "--frozen"]) {
+      expect({ flag, present: argv.includes(flag) }).toEqual({ flag, present: true });
     }
+    expect(argv[argv.indexOf("--target") + 1]).toBe(RELEASE_TARGET);
+    expect(argv[argv.length - 1]).toBe(RELEASE_ENTRYPOINT);
+  });
+
+  /**
+   * The runnable member is the only one whose binary this runner can execute,
+   * and the probe is what tells a shipped-documentation build from one that
+   * lists every component and can document none. Placed before the attestation
+   * so an unprovable binary never becomes an attested subject.
+   */
+  it("smokes the packaged documentation before it attests", function* () {
+    const build = jobOf(yield* releaseWorkflow(), "build");
+    const smoke = build.steps.findIndex(
+      (step) => step.run?.includes("scripts/smoke-documentation.ts") === true,
+    );
+    const compile = build.steps.findIndex((step) => step.run?.includes(COMPILE_COMMAND) === true);
+    const attest = build.steps.findIndex(
+      (step) => step.uses?.startsWith("actions/attest@") === true,
+    );
+
+    expect(smoke).toBeGreaterThan(compile);
+    expect(smoke).toBeLessThan(attest);
+    expect(build.steps[smoke]?.if).toBe("matrix.target == 'x86_64-unknown-linux-gnu'");
+    // The binary this job produced, not whatever `dist/xmd` a task left behind.
+    expect(build.steps[smoke]?.run).toContain("dist/${{ matrix.artifact }}");
+  });
+
+  it("smokes exactly one matrix member, and it is a target the matrix has", function* () {
+    expect(RELEASE_TARGETS["x86_64-unknown-linux-gnu"]).toEqual({ os: "linux", arch: "x64" });
+    expect(yield* matrixTargets()).toContain("x86_64-unknown-linux-gnu");
   });
 });
 
@@ -348,7 +399,7 @@ describe("release.yml binary attestation", () => {
    */
   it("attests after the compile and before the upload", function* () {
     const build = jobOf(yield* releaseWorkflow(), "build");
-    const compile = build.steps.findIndex((step) => step.run?.includes("deno compile") === true);
+    const compile = build.steps.findIndex((step) => step.run?.includes(COMPILE_COMMAND) === true);
     const attest = build.steps.findIndex(
       (step) => step.uses?.startsWith("actions/attest@") === true,
     );

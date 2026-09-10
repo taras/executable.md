@@ -63,6 +63,7 @@ import type { PreparedState } from "./lib/prepared-state.ts";
 import { trackedState } from "./lib/tracked-fingerprint.ts";
 import { movedOwned } from "./lib/verify.ts";
 import type { OwnedState } from "./lib/verify.ts";
+import { compileArguments } from "./lib/compile.ts";
 import { RELEASE_TARGET } from "./lib/release-targets.ts";
 import { useTempDirectory } from "./lib/temp-directory.ts";
 
@@ -136,21 +137,10 @@ export function phases(binary: string): Phase[] {
     { label: "build", arguments: ["task", "build"] },
     {
       label: "release compile",
-      arguments: [
-        "compile",
-        "--node-modules-dir=none",
-        "--cached-only",
-        "--frozen",
-        "--exclude-unused-npm",
-        "--allow-all",
-        "--include",
-        "packages/code-review-agent",
-        "--target",
-        RELEASE_TARGET,
-        "--output",
-        `dist/${binary}`,
-        "packages/cli/src/compiled.ts",
-      ],
+      // The release's own argv, not a narrower one that happens to compile:
+      // this phase's whole claim is that what a release does fetches nothing,
+      // and a compile embedding fewer assets walks fewer module graphs.
+      arguments: compileArguments({ target: RELEASE_TARGET, output: `dist/${binary}` }),
     },
   ];
 }

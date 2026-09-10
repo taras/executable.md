@@ -91,12 +91,17 @@ documents at the revision it checks.
   the Releases page — caution note in the notes, a failed title, and the
   prerelease marker — so a forgotten bump is visible where the release was
   made, then refuses to build. On a valid tag it compiles
-  `packages/cli/src/compiled.ts` per target with
-  `--include packages/code-review-agent --include packages/cli/src/documents`
-  and attaches the binaries and
+  `packages/cli/src/compiled.ts` per target through `scripts/compile.ts`, which
+  supplies every embedded asset from the one canonical list (§10), and attaches
+  the binaries and
   sha256 checksums to the tag's GitHub Release. That module is the
   compiled-binary entrypoint: it installs the `API.Env.command` adapter that
-  relaunches the binary as itself, which a source entrypoint cannot do. Between
+  relaunches the binary as itself, which a source entrypoint cannot do. The
+  matrix supplies only what differs per job: `--target ${{ matrix.target }}` and
+  `--output dist/${{ matrix.artifact }}`. On the one member the runner can
+  execute — `x86_64-unknown-linux-gnu` — the job then runs
+  `scripts/smoke-documentation.ts` against the binary it just built, before it
+  attests (§10). Between
   that compile and the upload, each matrix job attests its
   `dist/${{ matrix.artifact }}` with a commit-pinned `actions/attest`, so GitHub
   publishes build provenance for the exact bytes the job produced — one attested
@@ -424,11 +429,13 @@ proves this with live readers rather than by inspection.
 
 A build installs nothing: `deno task build:web` runs under node-modules and
 cache modes that cannot create, relink, or fetch, and refuses on an unprepared
-worktree (`scripts/preflight.ts`). `release.yml` compiles the binaries with
-`deno compile` directly rather than through `deno task build`, so that
-invocation carries the same `--node-modules-dir=none --cached-only --frozen`;
-`scripts/tests/publish-workflow-membership.test.ts` asserts it for every
-workflow that compiles.
+worktree (`scripts/preflight.ts`). `release.yml` compiles the binaries without
+going through `deno task build`, which compiles for the host — so the same
+`--node-modules-dir=none --cached-only --frozen` travels with the shared compile
+command instead (§10). `scripts/tests/publish-workflow-membership.test.ts`
+asserts those flags on that command, asserts that no workflow names the `xmd`
+entrypoint on a `deno compile` line of its own, and keeps the original
+per-invocation flag scan for every *other* entrypoint a workflow compiles.
 
 Preparation comes in two kinds, and only one of them is anybody's routine.
 **Host preparation** — `deno task deps`, and `deno task setup` around it — caches
@@ -451,8 +458,9 @@ cache and neither replaces nor relinks `node_modules`. The target-to-platform
 mapping is contractual and lives in `scripts/lib/release-targets.ts`;
 `scripts/tests/release-targets.test.ts` holds it to the workflow matrix by exact
 set equality, checks the preparation argv per target, requires preparation to
-precede compilation inside the build job, and requires the compile to keep
-`--target`, `--cached-only`, and `--frozen`.
+precede compilation inside the build job, requires the compile to keep
+`--target`, `--cached-only`, and `--frozen`, and requires the documentation
+smoke to sit between the compile and the attestation on the runnable member.
 
 `deno task verify:clean` exercises that same sequence against a prepared clone,
 offline, for the representative `x86_64-unknown-linux-gnu` — proving the compile
@@ -606,7 +614,8 @@ path:
 
 - **source checkout** — the file as committed;
 - **`deno compile`** — embedded by one `--include packages/<name>/src/documents`
-  per package, in `deno task build` and in `release.yml`'s matrix compile;
+  per package, named once in `scripts/lib/compile.ts` and therefore present at
+  every compile site (§10);
 - **npm (dnt)** — copied by `scripts/build-npm.ts`, which copies each package's
   `src/documents/` into `esm/src/documents/`, preserving relative location. dnt
   emits the module graph and nothing else, so an asset no TypeScript imports is
@@ -631,12 +640,77 @@ The checks that hold this together, each proving a different build:
 - `scripts/tests/plan-component-compiled.test.ts` asks the same question of the
   compiled binary, which has no checkout to fall back to. It runs in the `smoke`
   job, beside the other suites whose subject is `dist/xmd`.
-- `scripts/tests/packaged-document.test.ts` holds the two `deno compile` sites
+- `scripts/tests/packaged-document.test.ts` holds the canonical compile inputs
   to the document *directories* that exist and are not empty, because which
   packages ship documents is the one thing no build discovers for itself.
 
 Adding another packaged document to a package that already ships one needs no
-build change at all: `build-npm.ts` copies the directory and each `deno compile`
-site names it. A package that ships its *first* document adds one `--include` to
-`deno task build` and to `release.yml`, which
+build change at all: `build-npm.ts` copies the directory and the canonical
+inputs name it. A package that ships its *first* document adds one entry to
+`PACKAGED_DOCUMENTS` in `scripts/lib/compile.ts`, which
 `scripts/tests/packaged-document.test.ts` enforces.
+
+## 10. Canonical compile inputs
+
+`deno compile` embeds what `--include` names and nothing else, and reports no
+omission: the binary compiles, runs, and fails at the moment a person asks it
+for the asset that was left out. Three sites compile the `xmd` entrypoint —
+`deno task build`, `release.yml`'s matrix, and `verify:clean`'s release phase —
+and while each carried its own copy of the list they disagreed. The release's
+copy named no `components.md`, so every published binary through v0.12.0 lists
+every component and answers `xmd syntax TempDir` with a missing-asset error;
+`verify:clean`'s copy also omitted `packages/cli/src/documents`, so it proved a
+binary narrower than the one a release publishes.
+
+`scripts/lib/compile.ts` is therefore the one source. It owns the entrypoint,
+the flags, and every embedded asset, in three lists that differ in how they are
+maintained:
+
+- `EMBEDDED_PACKAGES` — a whole package the binary executes Markdown out of
+  (`packages/code-review-agent`). A decision rather than a file layout, so
+  nothing discovers it.
+- `PACKAGED_DOCUMENTS` — each package's `src/documents/`, embedded whole (§9).
+- `PACKAGED_DOCUMENTATION` — each package's `components.md`, named individually
+  because the directories they sit in are package source, and embedding those
+  whole would carry the TypeScript into the binary a second time.
+
+`compileArguments()` builds the complete argv from them and refuses an unknown
+`--target` before anything is spawned. `scripts/compile.ts` is the command a
+task or a workflow invokes; it supplies only `--output` and an optional
+`--target`, and refuses an argument it does not define, because a silently
+dropped `--target` would compile the runner's own platform and upload it under
+another platform's artifact name. `verify:clean` builds the same argv from the
+module directly, since it spawns its phases inside a clone of `HEAD`.
+
+`scripts/tests/packaged-document.test.ts` walks the repository for both
+discoverable kinds and holds the lists to what it finds in **both** directions —
+a missing entry ships a binary without its asset, and a stale one embeds nothing
+while reading as coverage.
+
+### The documentation smoke
+
+Metadata and documentation come from different places: a component's forms,
+props and origin come from the registry in the module graph, and its long-form
+prose comes from the packaged `components.md`. A binary that shipped the graph
+and none of the assets therefore lists every component and prints every
+component's metadata — which is why nothing short of asking for documentation
+detects it.
+
+`scripts/smoke-documentation.ts` asks, from a temporary directory that is not
+the checkout and with a component search path of its own, so neither the working
+directory nor `--include` can answer for the product's own documentation:
+
+- `xmd syntax TempDir` renders the registry metadata *and* the long-form prose;
+- `xmd syntax TemdDir` reaches the ordinary unknown-name refusal with empty
+  stdout — the half that makes the probe evidence, because a binary missing its
+  assets fails both lookups the same way, so a passing first case alone would
+  not distinguish the two;
+- `<Syntax names={["Elicit", "File"]} />` renders both packaged descriptions.
+
+It runs in two places against one script. `ci.yml`'s `smoke` job runs it against
+the `dist/xmd` the README's Build target produced, so a dropped include fails a
+pull request. `release.yml` runs it against `dist/${{ matrix.artifact }}` on the
+runnable `x86_64-unknown-linux-gnu` member — a cross-compiled binary cannot be
+run by the job that produced it — after the compile and **before** the
+attestation, so a build that cannot document its own components never becomes an
+attested subject and never reaches the artifact set `release` downloads.

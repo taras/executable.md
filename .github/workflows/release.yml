@@ -89,19 +89,31 @@ jobs:
       - name: Prepare the ${{ matrix.target }} dependency graph
         run: deno task deps:target ${{ matrix.target }}
 
+      # Through `scripts/compile.ts` rather than `deno compile` directly, so the
+      # entrypoint, the isolation flags and every embedded asset come from
+      # `scripts/lib/compile.ts` — the same list `deno task build` and
+      # `verify:clean` compile from. While each site kept its own copy, this one
+      # named no `components.md` and shipped binaries that could document no
+      # component at all.
       - name: Compile ${{ matrix.target }}
         run: |
-          deno compile \
+          deno run \
+            --allow-all \
             --node-modules-dir=none \
             --cached-only \
             --frozen \
-            --exclude-unused-npm \
-            --allow-all \
-            --include packages/code-review-agent \
-            --include packages/cli/src/documents \
+            scripts/compile.ts \
             --target ${{ matrix.target }} \
-            --output dist/${{ matrix.artifact }} \
-            packages/cli/src/compiled.ts
+            --output dist/${{ matrix.artifact }}
+
+      # A cross-compiled binary cannot be run by the job that produced it, so
+      # the Linux x64 member is the one place a release can ask a binary it just
+      # built whether its packaged assets are there. Before the attestation:
+      # a build that cannot document its own components should never become an
+      # attested subject, and the whole matrix is `needs:` of `release`.
+      - name: Smoke test the packaged documentation
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        run: deno run --allow-all --frozen scripts/smoke-documentation.ts dist/${{ matrix.artifact }}
 
       # Between the compile and the upload, so the provenance covers the bytes
       # this job produced and an unattested binary never enters the artifact set

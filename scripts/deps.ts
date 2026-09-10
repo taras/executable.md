@@ -44,6 +44,7 @@ const ENTRYPOINTS = [
   "scripts/build-web-client.ts",
   "packages/web/client/main.tsx",
   "packages/cli/src/compiled.ts",
+  "scripts/compile.ts",
   "scripts/verify-clean.ts",
 ];
 

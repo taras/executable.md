@@ -222,6 +222,16 @@ jobs:
       - name: The <Plan> Component the compiled binary carries
         run: deno test --allow-all --frozen scripts/tests/plan-component-compiled.test.ts
 
+      # Each package's `components.md` is a packaged asset on the same footing,
+      # and the long-form documentation is the only thing that reports whether
+      # one shipped — a binary missing them still lists every component and
+      # prints every component's registry metadata. `release.yml` runs this
+      # against its own Linux x64 binary before attesting; here it runs against
+      # the one the README's Build target produced, so a dropped include fails a
+      # pull request rather than a release.
+      - name: Smoke test the packaged component documentation
+        run: deno run --allow-all --frozen scripts/smoke-documentation.ts
+
       # The ordinary repository provider is assembled at a runtime-named
       # entrypoint and holds managed checkouts with a kernel-released advisory
       # lock, so only the binary shows both surviving `deno compile`. The script

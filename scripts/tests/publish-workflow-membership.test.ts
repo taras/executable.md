@@ -3,10 +3,15 @@ import { expect } from "@executablemd/test-support/expect";
 import type { Operation } from "effection";
 import { readdir, readTextFile } from "@effectionx/fs";
 
+import { compileArguments, COMPILE_ENTRYPOINT } from "../lib/compile.ts";
+import { RELEASE_TARGET } from "../lib/release-targets.ts";
 import { listWorkspacePaths } from "../lib/workspace.ts";
 
 const RELEASE_WORKFLOW = new URL("../../.github/workflows/release.yml", import.meta.url);
 const PUBLISH_ONE_WORKFLOW = new URL("../../.github/workflows/publish-one.yml", import.meta.url);
+
+/** The one command every compile site goes through, as a workflow spells it. */
+const COMPILE_COMMAND = "scripts/compile.ts";
 
 const SCOPE = "@executablemd/";
 const repoRoot = new URL("../../", import.meta.url);
@@ -63,11 +68,12 @@ describe("release.yml binary compilation", () => {
   it("builds the browser bundle before compiling", function* () {
     const workflow = yield* readTextFile(RELEASE_WORKFLOW);
 
-    // Executable lines only: the comment beside the build step names
-    // `deno compile` too, and matching prose would compare the wrong positions.
+    // Executable lines only: the comment beside the build step names the
+    // compile command too, and matching prose would compare the wrong
+    // positions.
     const steps = workflow.split("\n").filter((line) => !line.trim().startsWith("#"));
     const build = steps.findIndex((line) => line.includes("deno task build:web"));
-    const compile = steps.findIndex((line) => line.includes("deno compile"));
+    const compile = steps.findIndex((line) => line.includes(COMPILE_COMMAND));
 
     expect(build).toBeGreaterThan(-1);
     expect(compile).toBeGreaterThan(-1);
@@ -75,14 +81,21 @@ describe("release.yml binary compilation", () => {
   });
 
   /**
-   * The compile that produces published binaries is invoked directly rather
+   * A compile that produces published binaries is invoked directly rather
    * than through `deno task build`, so it carries its own isolation. Without
    * it, a release could fetch a dependency the lock does not name and rewrite
    * the lock while doing it — at tag time, from a tagged commit.
+   *
+   * The `xmd` binary reaches those flags through `scripts/lib/compile.ts` now,
+   * and the case below holds it there. This one still covers every *other*
+   * entrypoint a workflow compiles — `scripts/files-contract-probe.ts` is one —
+   * because those carry their flags on the command line and nothing else reads
+   * them.
    */
   it("compiles under the isolation flags, wherever a workflow compiles", function* () {
     const workflows = new URL("../../.github/workflows/", import.meta.url);
     const compiles: string[] = [];
+    let invocations = 0;
 
     for (const entry of yield* readdir(workflows)) {
       // Executable lines only: several of these files name `deno compile` in a
@@ -102,6 +115,7 @@ describe("release.yml binary compilation", () => {
       // ends it — the first `.ts` path after the flags — so line breaks and
       // continuations do not matter.
       for (const invocation of commands.split("deno compile").slice(1)) {
+        invocations += 1;
         const entrypoint = invocation.search(/\S+\.ts\b/);
         const flags = entrypoint === -1 ? invocation : invocation.slice(0, entrypoint);
         for (const flag of ["--node-modules-dir=none", "--cached-only", "--frozen"]) {
@@ -113,6 +127,53 @@ describe("release.yml binary compilation", () => {
     }
 
     expect(compiles).toEqual([]);
+    // Non-vacuous: with no direct invocation left anywhere, the sweep above
+    // would pass by reading nothing.
+    expect(invocations).toBeGreaterThan(0);
+  });
+
+  /**
+   * The `xmd` entrypoint is the one a release publishes, and it is compiled
+   * through the shared command everywhere. A workflow that named it on a
+   * `deno compile` line of its own would be a second answer to what a binary
+   * contains — which is exactly how the release came to ship no packaged
+   * component documentation while `deno task build` embedded all of it.
+   */
+  it("compiles the published binary only through the shared command", function* () {
+    const workflows = new URL("../../.github/workflows/", import.meta.url);
+    const direct: string[] = [];
+    const shared: string[] = [];
+
+    for (const entry of yield* readdir(workflows)) {
+      const commands = (yield* readTextFile(new URL(entry, workflows)))
+        .split("\n")
+        .filter((line) => !line.trim().startsWith("#"))
+        .join("\n");
+      if (commands.includes(COMPILE_ENTRYPOINT)) {
+        direct.push(`${entry} names ${COMPILE_ENTRYPOINT} instead of ${COMPILE_COMMAND}`);
+      }
+      if (commands.includes(COMPILE_COMMAND)) {
+        shared.push(entry);
+      }
+    }
+
+    expect(direct).toEqual([]);
+    // Non-vacuous: a rename that took the command out of every workflow would
+    // otherwise satisfy the check above by compiling the binary nowhere.
+    expect(shared).toEqual(["release.yml"]);
+  });
+
+  /**
+   * And the flags themselves, at the one place the published binary's are now
+   * written. This is what the per-workflow scan used to prove for it by reading
+   * the release's command line.
+   */
+  it("keeps the isolation on the command the release reaches", function* () {
+    const argv = compileArguments({ target: RELEASE_TARGET, output: "dist/xmd-release" });
+
+    for (const flag of ["--node-modules-dir=none", "--cached-only", "--frozen"]) {
+      expect({ flag, present: argv.includes(flag) }).toEqual({ flag, present: true });
+    }
   });
 
   /**
