@@ -16,6 +16,8 @@ import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import type { Operation } from "effection";
 
+import { compileArguments } from "../lib/compile.ts";
+import { RELEASE_TARGET } from "../lib/release-targets.ts";
 import { interferenceProof, phases } from "../verify-clean.ts";
 import type { OwnedState } from "../lib/verify.ts";
 import type { TrackedEntry, TrackedState } from "../lib/tracked.ts";
@@ -198,5 +200,23 @@ describe("CP11 — the offline build phases are unchanged", () => {
   it("names no site phase", function* () {
     const everything = JSON.stringify(phases("xmd-release"));
     expect(everything).not.toContain("site");
+  });
+
+  /**
+   * The release phase compiles what a release compiles, argv for argv.
+   *
+   * Equality rather than containment: this phase's whole claim is that what a
+   * release does fetches nothing and moves no dependency state, and a compile
+   * embedding fewer assets walks fewer module graphs than the one it stands
+   * for. It used to embed neither the packaged documents nor any
+   * `components.md`, so it was proving a narrower binary than the one a release
+   * publishes.
+   */
+  it("compiles the release's own argument list", function* () {
+    const release = phases("xmd-release").find((phase) => phase.label === "release compile");
+
+    expect(release?.arguments).toEqual(
+      compileArguments({ target: RELEASE_TARGET, output: "dist/xmd-release" }),
+    );
   });
 });

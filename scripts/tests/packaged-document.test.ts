@@ -35,8 +35,6 @@ import {
   PACKAGED_DOCUMENTATION,
   PACKAGED_DOCUMENTS,
 } from "../lib/compile.ts";
-import { RELEASE_TARGET } from "../lib/release-targets.ts";
-import { phases } from "../verify-clean.ts";
 
 const ROOT = fileURLToPath(new URL("../../", import.meta.url));
 
@@ -162,14 +160,9 @@ describe("every compile site", () => {
     expect(commands).not.toContain("deno compile");
   });
 
-  it("proves the release argv in verify:clean, whole", function* () {
-    const release = phases("xmd-release").find((phase) => phase.label === "release compile");
-
-    // Equality rather than containment: this phase's claim is that what a
-    // release does fetches nothing, and a compile embedding fewer assets walks
-    // fewer module graphs than the one it stands for.
-    expect(release?.arguments).toEqual(
-      compileArguments({ target: RELEASE_TARGET, output: "dist/xmd-release" }),
-    );
-  });
+  // The third site, `verify:clean`'s release phase, is asserted in
+  // `scripts/tests/verify-clean.test.ts`. This suite runs under all three
+  // runtimes, and the module carrying that phase list reaches for `Deno.env`
+  // and `Deno.execPath` at import time — so the claim lives with the other
+  // phase assertions, in the suite already scoped to Deno for that reason.
 });
