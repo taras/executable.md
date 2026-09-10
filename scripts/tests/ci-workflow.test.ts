@@ -13,6 +13,10 @@ import type { Runtime } from "../runtime-test-exclusions.ts";
 
 const ROOT = new URL("../../", import.meta.url);
 const CI_WORKFLOW = new URL("../../.github/workflows/ci.yml", import.meta.url);
+const RELEASE_WORKFLOW = new URL("../../.github/workflows/release.yml", import.meta.url);
+
+/** The probe as the smoke job invokes it: no argument, so `dist/xmd` is the subject. */
+const SMOKE_DOCUMENTATION = "deno run --allow-all --frozen scripts/smoke-documentation.ts";
 
 interface Step {
   env?: Record<string, string>;
@@ -271,9 +275,33 @@ describe("the CI smoke job", () => {
       "scripts/smoke-loaded-copy.ts",
       "scripts/smoke-fetch.ts",
       "scripts/smoke-run-composition.ts",
+      "scripts/smoke-documentation.ts",
     ]) {
       expect(commands).toContain(script);
     }
+  });
+
+  /**
+   * The documentation probe is the one smoke script a release runs too, against
+   * its own binary and before it attests. Here it runs on every pull request,
+   * so a dropped `--include` fails a branch rather than a tag — and the two
+   * cannot become different probes, because there is one script.
+   */
+  it("runs the same documentation probe the release gate runs", function* () {
+    const smoke = (yield* workflow()).smoke;
+    if (smoke === undefined) {
+      throw new Error("workflow.jobs.smoke is missing");
+    }
+
+    const release = (yield* readTextFile(RELEASE_WORKFLOW))
+      .split("\n")
+      .filter((line) => !line.trim().startsWith("#"))
+      .join("\n");
+
+    expect(release).toContain("scripts/smoke-documentation.ts");
+    // Against the binary the README's Build target produced, which is the one
+    // this job has: no argument, so the script's own default names it.
+    expect(smoke.steps.some((step) => step.run?.trim() === SMOKE_DOCUMENTATION)).toBe(true);
   });
 });
 
