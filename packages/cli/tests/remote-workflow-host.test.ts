@@ -539,7 +539,8 @@ describe("the configured remote workflow host", () => {
       // The same anchored prefix, read again now that the journal has run past
       // it. An owner answers the prefix a reader anchored — not the history
       // that arrived afterwards — and refuses to answer at all for an anchor it
-      // never minted or a cursor outside that prefix.
+      // never minted, or for a cursor that is not inside the snapshot that
+      // anchor names: at the anchor is already outside it.
       const terminal = String(prefix.at(-1)?.eventId);
       const reread = {
         head: ask(owner, { command: "journal", anchorEventId: terminal, afterEventId: null }),
@@ -548,7 +549,7 @@ describe("the configured remote workflow host", () => {
           anchorEventId: terminal,
           afterEventId: prefix[1]?.eventId ?? null,
         }),
-        atEnd: ask(owner, {
+        atAnchor: ask(owner, {
           command: "journal",
           anchorEventId: terminal,
           afterEventId: terminal,
@@ -633,9 +634,12 @@ describe("the configured remote workflow host", () => {
       outcome.retained.slice(2).map((entry) => entry.eventId),
     );
     expect(member(outcome.reread.rest["value"], "done")).toBe(true);
-    expect(listed(outcome.reread.atEnd)).toEqual([]);
-    expect(member(outcome.reread.atEnd["value"], "done")).toBe(true);
-    expect(String(outcome.reread.beyond["raised"])).toContain("beyond the prefix it anchored");
+    // A cursor at the anchor and a cursor past it are the same refusal, and it
+    // is the owner's own: `readJournalPage()` refuses a cursor whose sequence
+    // is at or after the anchor's. Answering either with an empty page would be
+    // a fixture admitting a cursor state the real boundary rejects.
+    expect(String(outcome.reread.atAnchor["raised"])).toContain("outside its anchored snapshot");
+    expect(String(outcome.reread.beyond["raised"])).toContain("outside its anchored snapshot");
     expect(String(outcome.reread.unknown["raised"])).toContain("never minted");
 
     // The recorded creation restored rather than cloning again — the remote it

@@ -151,22 +151,28 @@ export function scriptedOwner(captured: CapturedWorkspace, retained: ScriptedRet
       // and the page is capped at it however far the journal has since run:
       // a page that ran past the anchor would hand a reader history that was
       // not there when it decided where the end was.
+      //
+      // A cursor is admitted only where the real owner admits one — strictly
+      // before the anchor, which `readJournalPage()` enforces by refusing
+      // `afterSequence >= anchorSequence`. A cursor *at* the anchor is a reader
+      // asking for a page after the end of its own snapshot, and answering it
+      // with an empty page here would let a client pass this suite while the
+      // owner it will actually talk to refuses.
       const anchorEventId = String(request["anchorEventId"] ?? "");
       const afterEventId = request["afterEventId"] ?? null;
       const anchor = journal.findIndex((entry) => entry.eventId === anchorEventId);
       if (anchor === -1) {
         throw new Error("the runner anchored a read to an event this owner never minted");
       }
-      const from =
-        afterEventId === null
-          ? 0
-          : journal.findIndex((entry) => entry.eventId === afterEventId) + 1;
-      if (from === 0 && afterEventId !== null) {
+      const after =
+        afterEventId === null ? -1 : journal.findIndex((entry) => entry.eventId === afterEventId);
+      if (afterEventId !== null && after === -1) {
         throw new Error("the runner asked to continue from an event this owner never minted");
       }
-      if (from > anchor + 1) {
-        throw new Error("the runner asked to continue from beyond the prefix it anchored");
+      if (after >= anchor) {
+        throw new Error("a journal cursor is outside its anchored snapshot");
       }
+      const from = after + 1;
       const page = journal.slice(from, Math.min(from + JOURNAL_PAGE, anchor + 1));
       return {
         outcome: "performed",
