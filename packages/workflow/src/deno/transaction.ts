@@ -61,14 +61,17 @@ export function* holdsTransactionOn(path: string): Operation<boolean> {
   return false;
 }
 
-import { Transaction } from "../workspace/savepoint.ts";
+import { Transaction } from "../workspace/undoable.ts";
 
+// The shared contract calls it an undo, because a savepoint is this host's own
+// answer to it rather than the question. Inside this adapter it is a savepoint,
+// which is what it is here.
 export {
   NoOpenTransactionError,
-  savepoint,
   Transaction,
   type TransactionApi,
-} from "../workspace/savepoint.ts";
+  undoable as savepoint,
+} from "../workspace/undoable.ts";
 
 /** What the open transaction installs so `savepoint()` can answer. */
 export function useTransactionSavepoints(
@@ -77,7 +80,7 @@ export function useTransactionSavepoints(
 ): Operation<void> {
   return Transaction.around(
     {
-      *savepoint<T>([body]: [Operation<T>]): Operation<T> {
+      *undoable<T>([body]: [Operation<T>]): Operation<T> {
         return yield* savepoints.operation(transaction, body);
       },
     },

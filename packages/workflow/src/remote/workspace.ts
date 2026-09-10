@@ -56,7 +56,7 @@ import type { WorkspaceAttachmentView } from "../workspace/effects.ts";
 import { activeWorkspaceRoute, type WorkspaceRoute } from "./database.ts";
 import { createInvocationMappings } from "./mappings.ts";
 import type { RetainedMapping } from "./publication.ts";
-import { Transaction } from "../workspace/savepoint.ts";
+import { Transaction } from "../workspace/undoable.ts";
 import {
   type Attempt,
   type Materialization,
@@ -567,14 +567,14 @@ function* coordinateTransaction(
     let result: DurableResult;
     try {
       const value = yield* scoped(function* () {
-        // The savepoint the shared rules ask for when part of one mutation
-        // cannot be finished. The attempt is disposable by construction, so
-        // undoing that part is restoring the attempt from the accepted root —
+        // The undo the shared rules ask for when part of one mutation cannot
+        // be finished. The attempt is disposable by construction, so undoing
+        // that part is restoring the attempt from the accepted root —
         // correct because one effect performs one mutation, so nothing else in
         // this body has changed anything a caller still needs.
         yield* Transaction.around(
           {
-            *savepoint<T>([body]: [Operation<T>]): Operation<T> {
+            *undoable<T>([body]: [Operation<T>]): Operation<T> {
               try {
                 return yield* body;
               } catch (error) {
