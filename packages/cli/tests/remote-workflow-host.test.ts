@@ -506,10 +506,7 @@ describe("the configured remote workflow host", () => {
             );
             return { output: String(rendered), failure: "" };
           } catch (error) {
-            return {
-              output: "",
-              failure: error instanceof Error ? error.message : "other",
-            };
+            return { output: "", failure: chain(error) };
           }
         });
       }
@@ -539,6 +536,35 @@ describe("the configured remote workflow host", () => {
       yield* remote.remove();
       const again = yield* runThrough(source, owner.socket);
 
+      // The same anchored prefix, read again now that the journal has run past
+      // it. An owner answers the prefix a reader anchored — not the history
+      // that arrived afterwards — and refuses to answer at all for an anchor it
+      // never minted or a cursor outside that prefix.
+      const terminal = String(prefix.at(-1)?.eventId);
+      const reread = {
+        head: ask(owner, { command: "journal", anchorEventId: terminal, afterEventId: null }),
+        rest: ask(owner, {
+          command: "journal",
+          anchorEventId: terminal,
+          afterEventId: prefix[1]?.eventId ?? null,
+        }),
+        atEnd: ask(owner, {
+          command: "journal",
+          anchorEventId: terminal,
+          afterEventId: terminal,
+        }),
+        beyond: ask(owner, {
+          command: "journal",
+          anchorEventId: terminal,
+          afterEventId: owner.entries()[prefix.length]?.eventId ?? null,
+        }),
+        unknown: ask(owner, {
+          command: "journal",
+          anchorEventId: "owner-event-nothing",
+          afterEventId: null,
+        }),
+      };
+
       return {
         withheld,
         again,
@@ -547,6 +573,7 @@ describe("the configured remote workflow host", () => {
         creation: owner.commits.slice(0, accepted),
         continuation: owner.commits.slice(accepted),
         replayed: owner.sent.slice(asked),
+        reread,
         owner,
       };
     });
@@ -582,9 +609,7 @@ describe("the configured remote workflow host", () => {
       retaining[0]?.["publication"] ?? {},
       "proposedWorkspaceRootId",
     );
-    const repositoryEvent = outcome.retained.find((entry) =>
-      entry.record.includes('"type":"workspace_repository"'),
-    );
+    const repositoryEvent = outcome.retained.find((entry) => isRepositoryEffect(entry.record));
     expect(repositoryEvent?.workspaceRootId).toBe(creationRoot);
     expect(
       outcome.retained.filter((entry) => entry.record.includes('"type":"workspace_git_switch"')),
@@ -596,6 +621,22 @@ describe("the configured remote workflow host", () => {
     const pages = outcome.replayed.filter((request) => request["command"] === "journal");
     expect(pages.length > 0).toBe(true);
     expect(pages[0]?.["anchorEventId"]).toBe(outcome.retained.at(-1)?.eventId);
+    // And the prefix a reader anchors is the prefix it gets, however far the
+    // journal has run since: the whole of it in pages, nothing that arrived
+    // after it, and no answer at all for an anchor this owner never minted or
+    // a cursor outside that prefix.
+    expect(listed(outcome.reread.head)).toEqual(
+      outcome.retained.slice(0, 2).map((entry) => entry.eventId),
+    );
+    expect(member(outcome.reread.head["value"], "done")).toBe(false);
+    expect(listed(outcome.reread.rest)).toEqual(
+      outcome.retained.slice(2).map((entry) => entry.eventId),
+    );
+    expect(member(outcome.reread.rest["value"], "done")).toBe(true);
+    expect(listed(outcome.reread.atEnd)).toEqual([]);
+    expect(member(outcome.reread.atEnd["value"], "done")).toBe(true);
+    expect(String(outcome.reread.beyond["raised"])).toContain("beyond the prefix it anchored");
+    expect(String(outcome.reread.unknown["raised"])).toContain("never minted");
 
     // The recorded creation restored rather than cloning again — the remote it
     // was cloned from no longer exists — and the checkout the Git mutation
@@ -616,7 +657,7 @@ describe("the configured remote workflow host", () => {
     expect(only(read)).toContain('"content":"release');
     expect(outcome.again.output).toContain("switched to: release");
 
-    // Two transactions and no third: only the work the cancellation left
+    // Two publications and no third: only the work the cancellation left
     // undone. The mutation's own journal row carries the root it published,
     // and that root is the run's — a read moves nothing, so the switch is the
     // last thing that moved it.
@@ -627,15 +668,24 @@ describe("the configured remote workflow host", () => {
       .find((entry) => entry.record.includes('"type":"workspace_git_switch"'));
     expect(gitEvent?.workspaceRootId).toBe(mutationRoot);
     expect(outcome.owner.currentRoot).toBe(mutationRoot);
-    // Nothing retained a second Repository, and the ambient host filesystem was
-    // asked for nothing by either execution.
-    const recreated = mutation.filter((intent) => {
-      const mappings = intent["mappings"];
-      return (
-        Array.isArray(mappings) && mappings.some((m) => Reflect.get(m, "kind") === "repository")
-      );
-    });
-    expect(recreated).toEqual([]);
+
+    // And the creation restored rather than running again, which is a claim
+    // about *every* commit the continuation made rather than about the two
+    // that published. A Repository effect that executed a second time while
+    // the owner already held a compatible mapping would neither clone nor
+    // publish a root — it would return that mapping and append its own event
+    // — so a check that looked only at publications could not see it. This
+    // one looks at the whole sequence, and at what the owner ends up holding:
+    // one Repository effect row in the journal, the one already in the
+    // retained prefix, and no Repository mapping proposed again.
+    expect(records(outcome.continuation).filter(isRepositoryEffect)).toEqual([]);
+    expect(mappingsOf(outcome.continuation, "repository")).toEqual([]);
+    const repositoryRows = outcome.owner
+      .entries()
+      .filter((entry) => isRepositoryEffect(entry.record));
+    expect(repositoryRows).toHaveLength(1);
+    expect(repositoryRows[0]?.eventId).toBe(repositoryEvent?.eventId);
+    // The ambient host filesystem was asked for nothing by either execution.
     expect(outcome.ambient).toEqual([]);
   });
 
@@ -693,6 +743,7 @@ describe("the configured remote workflow host", () => {
         created,
         asserted,
         marks,
+        enlisted: enlistment(owner),
         establishedFirst: established(live),
         promptedFirst: [...live.prompts],
         again,
@@ -716,6 +767,13 @@ describe("the configured remote workflow host", () => {
     expect([String(member(member(outcome.created[0], "assertion"), "value"))]).toEqual(
       outcome.asserted,
     );
+    // It crossed as a mappings-only intent — one mapping, no event and no
+    // publication — and the owner answered it with no minted identity at all.
+    // One identity per proposed event is the client's rule, and a transaction
+    // that proposed none is answered with none.
+    expect(outcome.enlisted?.publication).toBe(null);
+    expect(outcome.enlisted?.events).toEqual([]);
+    expect(outcome.enlisted?.journalEventIds).toEqual([]);
     // The order is the whole of it, sampled at the owner: the conversation
     // existed, the owner then accepted which one it was, and only then did
     // anything prompt it.
@@ -808,59 +866,93 @@ describe("the configured remote workflow host", () => {
     expect(cancelled.asserted).toEqual([]);
   });
 
-  it("refuses a conversation the provider replaced, before prompting or retaining", function* () {
-    const captured = yield* startingTree();
+  it("refuses a conversation the provider replaced, and leaves the run as it was", function* () {
     const root = yield* useTempDirectory("xmd-remote-agent-conflict-");
     const source = yield* readTextFile(join(FIXTURES, "claude-session.md"));
 
     const outcome = yield* scoped(function* () {
-      // One run that established a session, so what the owner below retains is
-      // a mapping this stack actually wrote rather than one this test composed.
-      const establishedRun = scriptedOwner(captured);
+      const captured = yield* startingTree();
+      const owner = scriptedOwner(captured);
       const store = makeStore();
-      const live = createFakeAcp();
-      live.script({ reply: "the reviewer saw the release notes" });
-      live.script({ reply: "and they recommended shipping it" });
-      const first = yield* attaching(establishedRun.socket, root, source, {
-        createRuntime: live.create,
-        sessionStore: store,
-      });
-      const record = retained(establishedRun);
 
-      // The same run as an owner holds it, and a provider whose store now
-      // asserts a different conversation under the same placement.
-      const owner = scriptedOwner(captured, { agentSessions: record });
-      const replacement = makeStore();
+      // One run, one owner, and the state that run actually left there. The
+      // session is established through the shipped profile and the execution
+      // is cancelled with its first Prompt genuinely in flight: the mapping
+      // commits before that Prompt begins, so what this owner is holding is
+      // the conversation, the root and the journal prefix of the transaction
+      // that put it there — with a turn still unfinished, which is what gives
+      // the attachment below something to continue.
+      const live = createFakeAcp();
+      live.script({ reply: "", manual: true });
+      const attempt = yield* spawn(() =>
+        attaching(owner.socket, root, source, {
+          createRuntime: live.create,
+          sessionStore: store,
+        }),
+      );
+      yield* live.startedTurns(1);
+      yield* attempt.halt();
+
+      const before = {
+        root: owner.currentRoot,
+        journal: owner.entries(),
+        mappings: owner.agentSessions(),
+        commits: owner.commits.length,
+      };
+
+      // The provider comes back holding a different conversation under the
+      // same placement. Nothing else changes: the same owner, the same run,
+      // the same store, the same configured host.
       for (const [key, held] of store.records) {
-        replacement.records.set(key, {
-          ...held,
-          agentSessionId: "another-conversation",
-        });
+        store.records.set(key, { ...held, agentSessionId: "another-conversation" });
       }
       const provider = createFakeAcp();
+      provider.script({ reply: "a turn nothing may reach" });
       const refused = yield* attaching(owner.socket, root, source, {
         createRuntime: provider.create,
-        sessionStore: replacement,
+        sessionStore: store,
       });
+
       return {
-        first,
-        record,
+        before,
         refused,
-        ensured: provider.ensured.length,
+        established: provider.ensured.length,
+        started: provider.started,
         prompts: provider.prompts.length,
-        proposed: retained(owner),
+        continuation: owner.commits.slice(before.commits),
+        after: {
+          root: owner.currentRoot,
+          journal: owner.entries(),
+          mappings: owner.agentSessions(),
+        },
       };
     });
 
-    expect(outcome.first).toBe("attached");
-    expect(outcome.record).toHaveLength(1);
-    // Refused where the decision belongs: before a replacement session is
-    // established and before anything is prompted. The owner was asked to
-    // retain nothing, so what it holds is still the conversation this run had.
+    // The interrupted run really did leave a conversation, a root and a
+    // journal behind — otherwise there is nothing here to conflict with.
+    expect(outcome.before.mappings).toHaveLength(1);
+    expect(outcome.before.journal.length > 0).toBe(true);
+    // The refusal is the shipped policy's own. A continuation that stops before
+    // its retained history is exhausted is a divergence, and this one carries
+    // the refusal as its cause: what the run refused about is still what the
+    // failure says.
+    expect(outcome.refused).toContain("Divergence");
     expect(outcome.refused).toContain("different durable identity");
-    expect(outcome.ensured).toBe(0);
+    // It happened where the decision belongs: before a replacement session was
+    // established — the provider was never started at all — and before
+    // anything was prompted.
+    expect(outcome.established).toBe(0);
+    expect(outcome.started).toBe(false);
     expect(outcome.prompts).toBe(0);
-    expect(outcome.proposed).toEqual([]);
+    // And before any mapping proposal — before any commit at all: this owner
+    // was not asked to retain, replace or forget anything.
+    expect(mappingsOf(outcome.continuation, "agent-session")).toEqual([]);
+    expect(outcome.continuation).toEqual([]);
+    // What it holds is what it held: the same mapping, the same root, and the
+    // same journal, entry for entry.
+    expect(outcome.after.mappings).toEqual(outcome.before.mappings);
+    expect(outcome.after.root).toBe(outcome.before.root);
+    expect(outcome.after.journal).toEqual(outcome.before.journal);
   });
 
   it("attaches nothing it did not open", function* () {
@@ -900,6 +992,113 @@ const FIXTURES = join(dirname(fileURLToPath(import.meta.url)), "fixtures", "work
 function only(intent: Record<string, unknown> | undefined): string {
   const events = intent?.["events"];
   return (Array.isArray(events) ? events : []).map((event) => String(event)).join("");
+}
+
+/**
+ * Every journal record a sequence of commits proposed, in order.
+ *
+ * The whole sequence, not the publications in it: durable work that restores
+ * from a compatible mapping publishes nothing and still appends its own event,
+ * so a claim about what a continuation did has to be a claim about every commit
+ * it made.
+ */
+function records(commits: readonly Record<string, unknown>[]): string[] {
+  return commits.flatMap((intent) => {
+    const events = intent["events"];
+    return (Array.isArray(events) ? events : []).map((event) => String(event));
+  });
+}
+
+/** Every mapping of one kind a sequence of commits proposed, in order. */
+function mappingsOf(commits: readonly Record<string, unknown>[], kind: string): unknown[] {
+  return commits.flatMap((intent) => {
+    const mappings = intent["mappings"];
+    return (Array.isArray(mappings) ? mappings : []).filter(
+      (mapping) => member(mapping, "kind") === kind,
+    );
+  });
+}
+
+/**
+ * The mappings-only commit this run enlisted its Agent session through, and
+ * what the owner answered it.
+ *
+ * Read out of the wire traffic rather than reconstructed: what is being checked
+ * is the shape of an intent that carries a mapping and nothing else, and the
+ * shape of the answer to it.
+ */
+function enlistment(owner: {
+  readonly sent: readonly Record<string, unknown>[];
+  readonly answered: readonly Record<string, unknown>[];
+}): { publication: unknown; events: unknown; journalEventIds: unknown } | undefined {
+  const intent = owner.sent.find(
+    (request) =>
+      request["command"] === "commit" && mappingsOf([request], "agent-session").length > 0,
+  );
+  if (intent === undefined) {
+    return undefined;
+  }
+  const given = owner.answered.find((answer) => answer["id"] === intent["id"]);
+  return {
+    publication: intent["publication"],
+    events: intent["events"],
+    journalEventIds: member(given?.["value"], "journalEventIds"),
+  };
+}
+
+/**
+ * One request straight to an owner, answered the way it answers the client.
+ *
+ * The scripted owner answers inside `send`, so this is its own answer to
+ * exactly this request rather than a reconstruction of one. A request it
+ * refuses to answer at all comes back as what it raised.
+ */
+function ask(
+  owner: { readonly socket: OwnerSocket },
+  request: Record<string, unknown>,
+): Record<string, unknown> {
+  let answer: Record<string, unknown> = {};
+  const listener: SocketListener = (event) => {
+    answer = JSON.parse(String(event.data));
+  };
+  owner.socket.addEventListener("message", listener);
+  try {
+    owner.socket.send(JSON.stringify({ id: "read-1", ...request }));
+  } catch (error) {
+    return { raised: chain(error) };
+  } finally {
+    owner.socket.removeEventListener("message", listener);
+  }
+  return answer;
+}
+
+/** The event identities one journal answer listed, in order. */
+function listed(answer: Record<string, unknown>): string[] {
+  const entries = member(answer["value"], "entries");
+  return (Array.isArray(entries) ? entries : []).map((entry) => String(member(entry, "eventId")));
+}
+
+/**
+ * One failure and everything it was caused by, in order.
+ *
+ * A failure this stack reports is often a wrapper over the decision that caused
+ * it — a run that refuses before its retained history is exhausted is reported
+ * as a divergence carrying that refusal — and a test asserting on the outermost
+ * message alone would be asserting on the wrapper.
+ */
+function chain(error: unknown): string {
+  const messages: string[] = [];
+  let current: unknown = error;
+  while (current instanceof Error && messages.length < 8) {
+    messages.push(current.message);
+    current = current.cause;
+  }
+  return messages.length === 0 ? String(error) : messages.join(" <- ");
+}
+
+/** Whether one journal record is a Repository effect's own result. */
+function isRepositoryEffect(record: string): boolean {
+  return record.includes('"type":"workspace_repository"');
 }
 
 /** One member of a value nothing has checked. */
@@ -1102,7 +1301,7 @@ function attaching(
       yield* built.attach(begun.value.database, prompting(source, begun.value.database));
       return "attached";
     } catch (error) {
-      return error instanceof Error ? `raised:${error.message}` : "raised:other";
+      return `raised:${chain(error)}`;
     }
   });
 }

@@ -43,6 +43,7 @@ export interface ScriptedRetention {
 
 export function scriptedOwner(captured: CapturedWorkspace, retained: ScriptedRetention = {}) {
   const sent: Record<string, unknown>[] = [];
+  const answered: Record<string, unknown>[] = [];
   const commits: Record<string, unknown>[] = [];
   let currentRoot = captured.root.rootId;
   let currentManifest = captured.root.manifest;
@@ -146,11 +147,16 @@ export function scriptedOwner(captured: CapturedWorkspace, retained: ScriptedRet
     }
     if (command === "journal") {
       // One anchored page per request, continuing exactly where the client
-      // says it is. The anchor is the terminal event the frontier named, so a
-      // page that ran past it or stopped short of it would be a history no
-      // reader could assemble.
-      const anchorEventId = request["anchorEventId"];
+      // says it is. The anchor is the terminal event the reader started from,
+      // and the page is capped at it however far the journal has since run:
+      // a page that ran past the anchor would hand a reader history that was
+      // not there when it decided where the end was.
+      const anchorEventId = String(request["anchorEventId"] ?? "");
       const afterEventId = request["afterEventId"] ?? null;
+      const anchor = journal.findIndex((entry) => entry.eventId === anchorEventId);
+      if (anchor === -1) {
+        throw new Error("the runner anchored a read to an event this owner never minted");
+      }
       const from =
         afterEventId === null
           ? 0
@@ -158,7 +164,10 @@ export function scriptedOwner(captured: CapturedWorkspace, retained: ScriptedRet
       if (from === 0 && afterEventId !== null) {
         throw new Error("the runner asked to continue from an event this owner never minted");
       }
-      const page = journal.slice(from, from + JOURNAL_PAGE);
+      if (from > anchor + 1) {
+        throw new Error("the runner asked to continue from beyond the prefix it anchored");
+      }
+      const page = journal.slice(from, Math.min(from + JOURNAL_PAGE, anchor + 1));
       return {
         outcome: "performed",
         value: {
@@ -170,7 +179,7 @@ export function scriptedOwner(captured: CapturedWorkspace, retained: ScriptedRet
             record: entry.record,
             workspaceRootId: entry.workspaceRootId,
           })),
-          done: from + page.length >= journal.length,
+          done: from + page.length >= anchor + 1,
         },
       };
     }
@@ -266,21 +275,20 @@ export function scriptedOwner(captured: CapturedWorkspace, retained: ScriptedRet
     }
     staged.clear();
     // Appended in the same step that moved the root and merged the mappings:
-    // the events, each carrying the root this transaction selected.
+    // the events, each carrying the root this transaction selected. What is
+    // answered is what this transaction minted and nothing else — one identity
+    // per proposed event, in order, and an empty list for a commit that
+    // proposed none, which is what a mappings-only intent is.
+    const appended: string[] = [];
     for (const record of events) {
       minted += 1;
-      journal.push({
-        eventId: `owner-event-${minted}`,
-        record: String(record),
-        workspaceRootId: currentRoot,
-      });
+      const eventId = `owner-event-${minted}`;
+      appended.push(eventId);
+      journal.push({ eventId, record: String(record), workspaceRootId: currentRoot });
     }
     return {
       outcome: "performed",
-      value: {
-        workspaceRootId: currentRoot,
-        journalEventIds: journal.slice(journal.length - events.length).map((e) => e.eventId),
-      },
+      value: { workspaceRootId: currentRoot, journalEventIds: appended },
     };
   }
 
@@ -290,6 +298,9 @@ export function scriptedOwner(captured: CapturedWorkspace, retained: ScriptedRet
       const request: Record<string, unknown> = JSON.parse(data);
       sent.push(request);
       const response = answer(request);
+      // What it answered, beside what it was asked. A test asserting on the
+      // shape of an answer should read the answer rather than re-derive it.
+      answered.push({ id: request["id"], command: request["command"], ...response });
       if (response["outcome"] === "lost") {
         for (const listener of listeners.get("close") ?? []) {
           listener({});
@@ -314,9 +325,14 @@ export function scriptedOwner(captured: CapturedWorkspace, retained: ScriptedRet
   return {
     socket,
     sent,
+    answered,
     commits,
     get currentRoot(): string {
       return currentRoot;
+    },
+    /** The Agent-session mappings this owner retains, as it would report them. */
+    agentSessions(): readonly Record<string, unknown>[] {
+      return [...sessions.values()].map((record) => ({ ...record }));
     },
     /** The filtered journal this owner retains, as it would answer a read. */
     entries(): readonly { eventId: string; record: string; workspaceRootId: string }[] {
