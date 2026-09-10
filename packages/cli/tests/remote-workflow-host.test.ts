@@ -41,8 +41,24 @@ import {
   startingTree,
   useHostSpy,
 } from "../../workflow/tests/support/remote-owner-script.ts";
+import { useBareRemote } from "../../workflow/tests/support/git-remotes.ts";
+import {
+  agentSessionKey,
+  resolveAgentSession,
+  transactAgentSessions,
+} from "@executablemd/workflow/deno";
+import type { ProviderAssertion } from "@executablemd/workflow/deno";
 
 const RUN_ID = "5cktgrv2zyutngh7bbddr2tyg2b5a567cg725hu5e7u42orerxaa";
+
+/** The session this run's Agent profile is about. */
+const IDENTITY = {
+  provider: "acpx",
+  agentCommand: "/usr/bin/claude",
+  sessionIdentity: "expansion-1",
+};
+const POLICY = "policy-1";
+const ASSERTED: ProviderAssertion = { kind: "acp", value: "conversation-1" };
 const OTHER_RUN = "4bxsfqu1yxtsmfg6aaccq1sxf1a4z456bf614gt4d6t31nqdqwzz";
 const ENDPOINT = "https://owner.example/workflow";
 const RELEASE = "factory-2026.09.10-abcdef";
@@ -147,6 +163,40 @@ function* host(
 /** What reading a handle nothing opened would do, if anything read one. */
 function refuse(): never {
   throw new Error("PLANTED-FOREIGN-DATABASE-USED");
+}
+
+/** The configured public host, over a scripted owner's socket. */
+function hostFor(
+  owner: { readonly socket: OwnerSocket },
+  capabilities?: NonNullable<RemoteWorkflowConfiguration["capabilities"]>,
+): Operation<WorkflowHost> {
+  return useRemoteWorkflowHost({
+    ...(capabilities === undefined ? {} : { capabilities }),
+    runId: RUN_ID,
+    endpoint: ENDPOINT,
+    release: RELEASE,
+    // deno-lint-ignore require-yield
+    *token(): Operation<string> {
+      return "token-1";
+    },
+    scratchRoot: "/tmp/xmd-remote-public-host",
+    transport: {
+      // deno-lint-ignore require-yield
+      *request(): Operation<OwnerHttpResponse> {
+        throw new Error("PLANTED-REQUEST-PLANE-REACHED");
+      },
+      connect(): Operation<OwnerSocket> {
+        return resource(function* (provide) {
+          yield* provide(owner.socket);
+        });
+      },
+    },
+  });
+}
+
+/** One authored document, executed as this run's root. */
+function documentOf(source: string, database: WorkflowRunDatabase): Operation<unknown> {
+  return document(source, database);
 }
 
 /** A storage handle nothing opened: shaped like one, and one nothing may use. */
@@ -352,27 +402,7 @@ describe("the configured remote workflow host", () => {
       // The configured public host, over a transport whose socket is that
       // scripted owner. Everything between the two is production code: the
       // client, its three planes, the runner and the attachment.
-      const built = yield* useRemoteWorkflowHost({
-        runId: RUN_ID,
-        endpoint: ENDPOINT,
-        release: RELEASE,
-        // deno-lint-ignore require-yield
-        *token(): Operation<string> {
-          return "token-1";
-        },
-        scratchRoot: "/tmp/xmd-remote-public-host",
-        transport: {
-          // deno-lint-ignore require-yield
-          *request(): Operation<OwnerHttpResponse> {
-            throw new Error("PLANTED-REQUEST-PLANE-REACHED");
-          },
-          connect(): Operation<OwnerSocket> {
-            return resource(function* (provide) {
-              yield* provide(owner.socket);
-            });
-          },
-        },
-      });
+      const built = yield* hostFor(owner);
       const transitions = yield* built.useRunHost();
       const taken = yield* WorkflowLifecycle.operations.acquireExecutor(RUN_ID);
       if (!taken.ok || taken.value.kind !== "acquired") {
@@ -410,6 +440,281 @@ describe("the configured remote workflow host", () => {
     expect(proposals).toHaveLength(1);
     expect(proposals[0]?.["expectedWorkspaceRootId"]).toBe(outcome.before);
     expect(JSON.stringify(proposals[0]?.["publication"])).toContain("/NOTES.md");
+  });
+
+  it("clones, retains and reattaches a Repository, then publishes a Git mutation", function* () {
+    const outcome = yield* scoped(function* () {
+      const remote = yield* useBareRemote({
+        commits: [
+          {
+            message: "first",
+            entries: [
+              { path: "which.txt", content: "main\n" },
+              { path: "nested/note.md", content: "note\n" },
+            ],
+          },
+          {
+            message: "release",
+            branch: "release",
+            entries: [{ path: "which.txt", content: "release\n" }],
+          },
+        ],
+      });
+      const captured = yield* startingTree();
+      const owner = scriptedOwner(captured);
+      const source = [
+        "# Remote",
+        "",
+        `<Repository name="project" url="${remote.locator}">`,
+        '<Git.Switch branch="release" />',
+        '<File path="which.txt" as="which" />',
+        "",
+        "switched to: {which}",
+        "</Repository>",
+      ].join("\n");
+
+      /** One document execution through the configured public host. */
+      function* runThrough(authored: string): Operation<{ output: string; ambient: unknown[] }> {
+        return yield* scoped(function* () {
+          const built = yield* hostFor(owner);
+          const transitions = yield* built.useRunHost();
+          const taken = yield* WorkflowLifecycle.operations.acquireExecutor(RUN_ID);
+          if (!taken.ok || taken.value.kind !== "acquired") {
+            throw new Error("expected the configured host to take the acquisition");
+          }
+          const begun = yield* transitions.begin(taken.value.lock, {
+            runId: RUN_ID,
+            action: "resume",
+          });
+          if (!begun.ok) {
+            throw begun.error;
+          }
+          const ambient = yield* useHostSpy();
+          const rendered = yield* built.attach(
+            begun.value.database,
+            documentOf(authored, begun.value.database),
+          );
+          return { output: String(rendered), ambient };
+        });
+      }
+
+      const first = yield* runThrough(source);
+      const afterFirst = owner.commits.length;
+
+      // The remote is gone before the continuation runs. A replay that cloned
+      // again would have nowhere to clone from, which is the point.
+      yield* remote.remove();
+      const again = yield* runThrough(source);
+      const continuation = owner.commits.slice(afterFirst);
+
+      return { first, again, continuation, owner };
+    });
+
+    // The document cloned on the runner, switched the checkout and read the
+    // branch's own file back — all against runner-owned materialization.
+    expect(outcome.first.output).toContain("switched to: release");
+    expect(outcome.first.ambient).toEqual([]);
+    // The owner retained the Repository identity with the root that holds its
+    // checkout: one transaction carrying the mapping and the publication.
+    const proposals = published(outcome.owner.commits);
+    const retaining = proposals.filter((intent) => {
+      const mappings = intent["mappings"];
+      return (
+        Array.isArray(mappings) && mappings.some((m) => Reflect.get(m, "kind") === "repository")
+      );
+    });
+    expect(retaining).toHaveLength(1);
+    expect(JSON.stringify(retaining[0]?.["publication"])).toContain("/project");
+    // The retained *record* names the checkout by its logical Workspace path
+    // and the remote by a fingerprint. No locator and no host path is in it:
+    // the locator travels beside the record, which is where a reattachment
+    // reads it from and where it is not part of retained identity.
+    const retainedMappings = retaining[0]?.["mappings"];
+    const proposed = Array.isArray(retainedMappings) ? retainedMappings[0] : undefined;
+    const record = JSON.stringify(Reflect.get(proposed ?? {}, "record"));
+    expect(record).toContain("locatorFingerprint");
+    expect(record).toContain('"checkoutPath":"/repositories/');
+    expect(record).not.toContain("/tmp");
+    expect(record).not.toContain("/var/folders");
+    expect(record).not.toContain("xmd-remote-");
+    expect(record).not.toContain('locator"');
+    // The Git mutation is its own owner transaction, and it starts from the
+    // root the Repository creation published: one atomic step after another,
+    // never one proposal carrying both.
+    const gitProposal = proposals.find((intent) => {
+      const held = intent["mappings"];
+      return Array.isArray(held) && !held.some((m) => Reflect.get(m, "kind") === "repository");
+    });
+    expect(gitProposal).not.toBe(undefined);
+    expect(gitProposal?.["expectedWorkspaceRootId"]).toBe(
+      Reflect.get(retaining[0]?.["publication"] ?? {}, "proposedWorkspaceRootId"),
+    );
+    expect(Array.isArray(gitProposal?.["events"]) && gitProposal?.["events"]).toHaveLength(1);
+
+    // The continuation reconstructed the retained checkout from the owner's
+    // committed frontier, with no remote left to clone from.
+    expect(outcome.again.output).toContain("switched to: release");
+    expect(outcome.again.ambient).toEqual([]);
+    // And it retained no second Repository: the recorded creation restored
+    // rather than cloning again.
+    const recreated = outcome.continuation.filter((intent) => {
+      const mappings = intent["mappings"];
+      return (
+        Array.isArray(mappings) && mappings.some((m) => Reflect.get(m, "kind") === "repository")
+      );
+    });
+    expect(recreated).toEqual([]);
+  });
+
+  it("installs a configured Agent profile, retains its mapping and reattaches it", function* () {
+    /**
+     * The profile this host configures, driving the shipped session policy.
+     *
+     * The provider itself stands in — establishing a conversation needs an
+     * agent process, and what is under test is which durable identity this run
+     * accepts. Everything around it is production code: the same
+     * `resolveAgentSession` the shipped profile calls, inside the same
+     * `transactAgentSessions` it commits through, reached through the
+     * configured host's own `capabilities.agent`.
+     */
+    function profile(
+      log: string[],
+      asserted: ProviderAssertion,
+      failBeforeCommit = false,
+    ): (attachment: { readonly database: WorkflowRunDatabase }) => Operation<void> {
+      return ({ database }) =>
+        (function* (): Operation<void> {
+          log.push("installed");
+          const key = agentSessionKey(IDENTITY);
+          const committed = yield* transactAgentSessions(database, function* (sessions) {
+            const retained = sessions.read(key);
+            // The provider is asked here, outside the owner's transaction —
+            // this stands in for that — and the policy decides what the run
+            // accepts.
+            log.push(retained === undefined ? "provider:create" : "provider:assert");
+            const resolution = resolveAgentSession(retained, POLICY, [asserted], IDENTITY);
+            if (failBeforeCommit) {
+              throw new Error("PlantedProfileFailure");
+            }
+            if (retained === undefined && resolution.kind === "reattach") {
+              sessions.commit(resolution.record);
+              log.push("committed");
+            } else {
+              log.push("reattached");
+            }
+          });
+          if (!committed.ok) {
+            throw committed.error;
+          }
+          // Only after the mapping is the run's does the profile speak to the
+          // conversation at all.
+          log.push("prompt");
+        })();
+    }
+
+    const outcome = yield* scoped(function* () {
+      const captured = yield* startingTree();
+      const owner = scriptedOwner(captured);
+
+      /** One attachment with this profile configured, reporting what it did. */
+      function* attaching(
+        log: string[],
+        asserted: ProviderAssertion,
+        failBeforeCommit = false,
+      ): Operation<string> {
+        return yield* scoped(function* () {
+          const built = yield* hostFor(owner, {
+            agent: profile(log, asserted, failBeforeCommit),
+          });
+          const transitions = yield* built.useRunHost();
+          const taken = yield* WorkflowLifecycle.operations.acquireExecutor(RUN_ID);
+          if (!taken.ok || taken.value.kind !== "acquired") {
+            throw new Error("expected the configured host to take the acquisition");
+          }
+          const begun = yield* transitions.begin(taken.value.lock, {
+            runId: RUN_ID,
+            action: "resume",
+          });
+          if (!begun.ok) {
+            throw begun.error;
+          }
+          try {
+            yield* built.attach(
+              begun.value.database,
+              documentOf("# Remote\n", begun.value.database),
+            );
+            return "attached";
+          } catch (error) {
+            return error instanceof Error ? `raised:${error.message}` : "raised:other";
+          }
+        });
+      }
+
+      const mapped = (): number =>
+        owner.commits.filter((intent) => {
+          const mappings = intent["mappings"];
+          return (
+            Array.isArray(mappings) &&
+            mappings.some((mapping) => Reflect.get(mapping, "kind") === "agent-session")
+          );
+        }).length;
+
+      // A profile that fails before its mapping commits.
+      const failing: string[] = [];
+      const refused = yield* attaching(failing, ASSERTED, true);
+      const afterFailure = mapped();
+
+      // Then one that establishes and commits.
+      const first: string[] = [];
+      const created = yield* attaching(first, ASSERTED);
+      const afterCreate = mapped();
+
+      // A later attachment, from what the owner now retains.
+      const second: string[] = [];
+      const again = yield* attaching(second, ASSERTED);
+      const afterReattach = mapped();
+
+      // And one whose provider asserts a different conversation.
+      const conflicting: string[] = [];
+      const replaced = yield* attaching(conflicting, {
+        kind: ASSERTED.kind,
+        value: "another-conversation",
+      });
+
+      return {
+        refused,
+        failing,
+        afterFailure,
+        created,
+        first,
+        afterCreate,
+        again,
+        second,
+        afterReattach,
+        replaced,
+        conflicting,
+      };
+    });
+
+    // The installer ran inside the attachment, and a failure before the commit
+    // retained nothing.
+    expect(outcome.failing).toEqual(["installed", "provider:create"]);
+    expect(outcome.refused).toContain("raised:");
+    expect(outcome.afterFailure).toBe(0);
+    // The next attachment establishes it: policy, then commit, then the first
+    // prompt — in that order, and one mapping at the owner.
+    expect(outcome.created).toBe("attached");
+    expect(outcome.first).toEqual(["installed", "provider:create", "committed", "prompt"]);
+    expect(outcome.afterCreate).toBe(1);
+    // A later attachment reattaches the exact retained assertion, and neither
+    // creates a session nor retains a second mapping.
+    expect(outcome.again).toBe("attached");
+    expect(outcome.second).toEqual(["installed", "provider:assert", "reattached", "prompt"]);
+    expect(outcome.afterReattach).toBe(1);
+    // A different conversation under the same identity is refused before any
+    // replacement, and still nothing more is retained.
+    expect(outcome.replaced).toContain("raised:");
+    expect(outcome.conflicting).toEqual(["installed", "provider:assert"]);
   });
 
   it("attaches nothing it did not open", function* () {

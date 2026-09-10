@@ -13,7 +13,7 @@ import { collect, execute, inlineSource } from "@executablemd/core";
 import { API, useHostFiles } from "@executablemd/runtime";
 import type { HostFilesEvent } from "@executablemd/runtime";
 import type { Json } from "@executablemd/durable-streams";
-import { encodeBase64 } from "../../src/cloudflare/encoding.ts";
+import { decodeBase64, encodeBase64 } from "../../src/cloudflare/encoding.ts";
 import type { OwnerSocket, SocketListener } from "../../src/remote/client.ts";
 import { captureWorkspace, type CapturedWorkspace } from "../../src/remote/materialize.ts";
 import { runnerFiles, useRunnerTrees } from "../../src/deno/remote-files.ts";
@@ -42,8 +42,31 @@ export function scriptedOwner(captured: CapturedWorkspace, retained: ScriptedRet
   const sent: Record<string, unknown>[] = [];
   const commits: Record<string, unknown>[] = [];
   let currentRoot = captured.root.rootId;
+  let currentManifest = captured.root.manifest;
   let refusal: string | undefined;
   let lost = false;
+  // What this owner has accepted, as it would then hold it. A commit that is
+  // performed moves the root, keeps the bytes it was staged, and merges the
+  // mappings it validated — so a later coherent snapshot answers with what the
+  // run actually became rather than with what it started as.
+  const blobs = new Map<string, Uint8Array>(captured.blobs);
+  const manifests = new Map<string, Uint8Array>();
+  for (const [digest, content] of captured.contents) {
+    manifests.set(digest, content.manifestBytes);
+  }
+  const staged = new Map<string, Uint8Array>();
+  const repositories = new Map<string, Record<string, unknown>>();
+  const worktrees = new Map<string, Record<string, unknown>>();
+  const sessions = new Map<string, Record<string, unknown>>();
+  for (const stored of retained.repositories ?? []) {
+    const record = stored["record"];
+    if (record !== null && typeof record === "object") {
+      repositories.set(String(Reflect.get(record, "name")), stored);
+    }
+  }
+  for (const record of retained.agentSessions ?? []) {
+    sessions.set(String(record["sessionKey"]), record);
+  }
 
   function frontier(): Record<string, unknown> {
     return {
@@ -101,24 +124,21 @@ export function scriptedOwner(captured: CapturedWorkspace, retained: ScriptedRet
         value: {
           workspaceRootId: currentRoot,
           journalEventId: null,
-          repositories: retained.repositories ?? [],
-          worktrees: [],
-          agentSessions: retained.agentSessions ?? [],
+          repositories: [...repositories.values()],
+          worktrees: [...worktrees.values()],
+          agentSessions: [...sessions.values()],
         },
       };
     }
     if (command === "root") {
       return {
         outcome: "performed",
-        value: { workspaceRootId: currentRoot, manifest: captured.root.manifest },
+        value: { workspaceRootId: currentRoot, manifest: currentManifest },
       };
     }
     if (command === "content") {
       const digest = String(request["digest"]);
-      const bytes =
-        request["kind"] === "manifest"
-          ? captured.contents.get(digest)?.manifestBytes
-          : captured.blobs.get(digest);
+      const bytes = request["kind"] === "manifest" ? manifests.get(digest) : blobs.get(digest);
       if (bytes === undefined) {
         throw new Error("asked for content this owner does not hold");
       }
@@ -134,14 +154,13 @@ export function scriptedOwner(captured: CapturedWorkspace, retained: ScriptedRet
     }
     if (command === "stage") {
       const encoded = String(request["bytes"] ?? "");
-      const padding = encoded.endsWith("==") ? 2 : encoded.endsWith("=") ? 1 : 0;
+      const bytes = decodeBase64(encoded);
+      // Held until a commit adopts them, exactly as staged bytes are: a
+      // proposal that is refused leaves nothing behind.
+      staged.set(`${String(request["kind"])}:${String(request["digest"])}`, bytes);
       return {
         outcome: "performed",
-        value: {
-          kind: request["kind"],
-          digest: request["digest"],
-          size: (encoded.length / 4) * 3 - padding,
-        },
+        value: { kind: request["kind"], digest: request["digest"], size: bytes.length },
       };
     }
     if (command === "settle") {
@@ -160,10 +179,48 @@ export function scriptedOwner(captured: CapturedWorkspace, retained: ScriptedRet
       return { outcome: "refused", refusal };
     }
     const events = Array.isArray(request["events"]) ? request["events"] : [];
-    // The owner publishes what it validated, and the frontier moves with it.
+    // The owner publishes what it validated, and everything moves with it: the
+    // pointer, the content it was staged, and the mappings it accepted. A
+    // later snapshot then answers with the run as it now is.
     if (publication !== null && publication !== undefined) {
       currentRoot = String(Reflect.get(publication, "proposedWorkspaceRootId"));
+      currentManifest = String(Reflect.get(publication, "proposedManifest"));
+      const held = Reflect.get(publication, "content");
+      for (const piece of Array.isArray(held) ? held : []) {
+        const kind = String(Reflect.get(piece, "kind"));
+        const digest = String(Reflect.get(piece, "digest"));
+        const bytes = staged.get(`${kind}:${digest}`);
+        if (bytes === undefined) {
+          throw new Error(`the runner published ${kind} ${digest} without staging it`);
+        }
+        (kind === "manifest" ? manifests : blobs).set(digest, bytes);
+      }
     }
+    for (const mapping of Array.isArray(request["mappings"]) ? request["mappings"] : []) {
+      const kind = String(Reflect.get(mapping, "kind"));
+      const record = Reflect.get(mapping, "record");
+      if (record === null || typeof record !== "object") {
+        throw new Error("the runner proposed a mapping with no record");
+      }
+      if (kind === "repository") {
+        // Retained the way a snapshot reports one: the record, and the locator
+        // beside it, which the owner keeps out of the record itself.
+        repositories.set(String(Reflect.get(record, "name")), {
+          record,
+          locator: Reflect.get(mapping, "locator") ?? null,
+        });
+      }
+      if (kind === "worktree") {
+        worktrees.set(
+          `${String(Reflect.get(record, "repositoryName"))}/${String(Reflect.get(record, "name"))}`,
+          record as Record<string, unknown>,
+        );
+      }
+      if (kind === "agent-session") {
+        sessions.set(String(Reflect.get(record, "sessionKey")), record as Record<string, unknown>);
+      }
+    }
+    staged.clear();
     return {
       outcome: "performed",
       value: {
