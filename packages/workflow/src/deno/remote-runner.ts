@@ -30,6 +30,7 @@
  */
 
 import type { Operation, Result } from "effection";
+import type { DurableEffect, EffectDescription, Json } from "@executablemd/durable-streams";
 import type { WorkflowExecutionTransitions } from "../lifecycle/execution.ts";
 import type { WorkflowRunDatabase } from "../storage/api.ts";
 import {
@@ -43,10 +44,14 @@ import type { RemoteReadPlane } from "../remote/read.ts";
 import { installRemoteInputDelivery } from "../remote/delivery.ts";
 import { useRemoteLifecycleReads } from "../remote/inspection.ts";
 import {
+  createRemoteWorkspaceEffect,
   useRemoteRun,
   useRemoteWorkspaceEffects,
   withRemoteWorkspaceEffects,
 } from "../remote/workspace.ts";
+import { useWorkspaceEffects, type WorkspaceMutation } from "../workspace/effects.ts";
+import { withDocumentCapabilities } from "./workspace/host.ts";
+import type { WorkflowWorkspaceOptions } from "./workspace/host.ts";
 import { WorkflowRequestError } from "../storage/errors.ts";
 import { installRemoteWorkflowLifecycle } from "./remote-host.ts";
 import { createRemoteWorkspaceFilesystem } from "./remote-workspace-files.ts";
@@ -75,6 +80,17 @@ export interface RemoteWorkflowRunnerOptions {
    * process may write, supplied explicitly rather than read from anywhere.
    */
   readonly scratchRoot: string;
+  /**
+   * What a live or partial attachment installs beyond the run's own Workspace.
+   *
+   * The host-owned inputs the optional capabilities need — the credential
+   * helper, the Issue and pull-request configuration, and the Agent profile
+   * installer — supplied explicitly by whoever assembled this runner. Nothing
+   * here is read from a flag, an environment variable, a prop or a global, and
+   * an absent member installs the capability's unconfigured behavior rather
+   * than a different one.
+   */
+  readonly capabilities?: WorkflowWorkspaceOptions;
 }
 
 /** What a host installs for a run whose storage is somewhere else. */
@@ -158,7 +174,24 @@ export function* useRemoteWorkflowRunner(
         createFilesystem: (at, authorize) => createRemoteWorkspaceFilesystem(at, authorize),
       });
       yield* useRemoteWorkspaceEffects(run);
-      return yield* withRemoteWorkspaceEffects(run, operation);
+      // The document's own capabilities, over this exact binding. Installed
+      // together because either half alone is wrong: the rules without the
+      // binding would reach whatever filesystem an entrypoint left in scope,
+      // and the binding without the rules would be a coordinator nothing asks.
+      yield* useWorkspaceEffects(database, {
+        create<Value extends Json>(
+          description: EffectDescription,
+          mutate: WorkspaceMutation<Value>,
+        ): DurableEffect<Value> {
+          return createRemoteWorkspaceEffect(run, description, (filesystem, metadata) =>
+            mutate(filesystem, metadata),
+          );
+        },
+      });
+      return yield* withRemoteWorkspaceEffects(
+        run,
+        withDocumentCapabilities(database, operation, options.capabilities ?? {}),
+      );
     },
   };
 }

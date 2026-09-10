@@ -92,6 +92,13 @@ export interface RunnerFiles {
   /** The same, for a link's own permissions. `undefined` where unsupported. */
   readonly setLinkMode: ((path: string, mode: number) => Operation<void>) | undefined;
   readFile(path: string): Operation<Uint8Array>;
+  /**
+   * Remove one tree this invocation owns, and everything under it.
+   *
+   * What an attempt is put back with. Only ever called with a directory this
+   * invocation materialized, and only by the attempt that owns it.
+   */
+  removeTree(path: string): Operation<void>;
   /** One directory's entries, described without following a link. */
   list(path: string): Operation<RunnerNode[]>;
   /** One path, described without following a link. */

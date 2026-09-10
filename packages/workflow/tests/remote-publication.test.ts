@@ -469,9 +469,12 @@ describe("what the production runner publishes", () => {
       yield* until(writeFile(attempt.at("/NOTES.md"), "never published\n", { mode: 0o644 }));
 
       // Everything a caller can reach by name. Reading where the Workspace is,
-      // reading what an attempt holds — and nothing that moves either.
+      // reading what an attempt holds, and putting an attempt back to the
+      // accepted root — and nothing that moves either. `restore` throws this
+      // attempt's own work away; it publishes nothing, and the accepted
+      // materialization it restores from is what the owner already confirmed.
       expect(Object.keys(materialization).toSorted()).toEqual(["at", "workspaceRootId"]);
-      expect(Object.keys(attempt).toSorted()).toEqual(["at", "capture"]);
+      expect(Object.keys(attempt).toSorted()).toEqual(["at", "capture", "restore"]);
       const reachable = [
         ...Object.getOwnPropertyNames(attempt),
         ...Object.getOwnPropertyNames(materialization),

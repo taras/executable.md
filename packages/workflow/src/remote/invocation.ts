@@ -85,6 +85,15 @@ export interface Attempt extends SealableAttempt {
   readonly at: HostPath;
   /** What the attempt describes right now, captured and checked locally. */
   capture(): Operation<CapturedWorkspace>;
+  /**
+   * Put this attempt back to the accepted root it started from.
+   *
+   * What a savepoint means on a tree. One mutation performs one change, so a
+   * part of it that cannot be finished leaves nothing to keep — and the
+   * accepted materialization is still exactly what the owner confirmed, so the
+   * attempt is rebuilt from it rather than repaired.
+   */
+  restore(): Operation<void>;
 }
 
 /**
@@ -180,6 +189,18 @@ export function useAttempt(
       at: at(root),
       *capture(): Operation<CapturedWorkspace> {
         return yield* captureWorkspace(files, at(root), reject);
+      },
+
+      *restore(): Operation<void> {
+        yield* files.removeTree(root);
+        yield* files.makeDirectory(root, 0o700);
+        yield* materializeWorkspaceRoot(
+          files,
+          reads,
+          at(root),
+          materialization.workspaceRootId,
+          reject,
+        );
       },
 
       /**

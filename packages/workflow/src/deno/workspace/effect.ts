@@ -23,6 +23,10 @@ import { isJournaledEffectFailure } from "./errors.ts";
 import type { DenoWorkspaceFilesystem } from "./filesystem.ts";
 import type { WorkspaceMetadata } from "./repositories.ts";
 import {
+  useWorkspaceEffects as bindWorkspaceEffects,
+  type WorkspaceMutation,
+} from "../../workspace/effects.ts";
+import {
   type PrivateWorkspaceTransaction,
   withPrivateWorkspaceTransaction,
   workflowRunTransactionToken,
@@ -227,6 +231,17 @@ export function withWorkspaceEffects<T>(
       return unavailable();
     }
     connections.validateLease(database);
+    // The lease this host just validated, as the one binding the shared
+    // document rules build their effects through. It closes with this scope,
+    // so an effect created afterwards finds no binding at all.
+    yield* bindWorkspaceEffects(database, {
+      create<Value extends Json>(
+        description: EffectDescription,
+        mutate: WorkspaceMutation<Value>,
+      ): DurableEffect<Value> {
+        return createWorkspaceEffect(database, description, mutate);
+      },
+    });
     return yield* withWorkspaceCoordinationProvider(coordinator(connections, database), operation);
   });
 }

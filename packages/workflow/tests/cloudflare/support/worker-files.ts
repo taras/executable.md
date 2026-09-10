@@ -119,6 +119,17 @@ export function createWorkerFiles(): {
     },
 
     // deno-lint-ignore require-yield
+    *removeTree(path): Operation<void> {
+      // Every node at or under this path, so what a savepoint restores into is
+      // an empty directory rather than one holding part of a failed attempt.
+      for (const held of Array.from(nodes.keys())) {
+        if (held === path || held.startsWith(`${path}/`)) {
+          nodes.delete(held);
+        }
+      }
+    },
+
+    // deno-lint-ignore require-yield
     *writeFile(path, bytes, mode): Operation<void> {
       requireParent(path);
       identities += 1;

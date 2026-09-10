@@ -15,9 +15,7 @@
  * database, so nothing above this boundary can reach SQLite through it.
  */
 
-import { type Api, createApi } from "@effectionx/context-api";
 import { type Context, createContext, type Operation } from "effection";
-import { WorkflowTransactionError } from "../storage/errors.ts";
 import type { RunTransaction } from "./connections.ts";
 import type { SavepointManager } from "./savepoints.ts";
 
@@ -63,41 +61,14 @@ export function* holdsTransactionOn(path: string): Operation<boolean> {
   return false;
 }
 
-export interface TransactionApi {
-  /**
-   * Run `body` inside a savepoint, discarding its work if it fails.
-   *
-   * Answers with what the body answered. A failure rolls the savepoint back
-   * and propagates, leaving the surrounding transaction open and free to
-   * continue or to fail on its own terms.
-   */
-  savepoint<T>(body: Operation<T>): Operation<T>;
-}
+import { Transaction } from "../workspace/savepoint.ts";
 
-/** No transaction is open in this scope, so there is nothing to nest inside. */
-export class NoOpenTransactionError extends WorkflowTransactionError {
-  override name = "NoOpenTransactionError";
-
-  constructor() {
-    super(
-      "a savepoint needs a transaction to be inside, and this scope is not inside one. " +
-        "Take savepoints within the body a transaction hands you.",
-    );
-  }
-}
-
-export const Transaction: Api<TransactionApi> = createApi<TransactionApi>(
-  "executablemd.workflow.deno.savepoint",
-  {
-    // deno-lint-ignore require-yield
-    *savepoint<T>(_body: Operation<T>): Operation<T> {
-      throw new NoOpenTransactionError();
-    },
-  },
-);
-
-/** The savepoint operation, for whoever is inside a transaction. */
-export const savepoint: TransactionApi["savepoint"] = Transaction.operations.savepoint;
+export {
+  NoOpenTransactionError,
+  savepoint,
+  Transaction,
+  type TransactionApi,
+} from "../workspace/savepoint.ts";
 
 /** What the open transaction installs so `savepoint()` can answer. */
 export function useTransactionSavepoints(

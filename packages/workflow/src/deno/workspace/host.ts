@@ -143,45 +143,65 @@ export interface WorkflowAgentAttachment {
 
 export type WorkflowAgentInstaller = (attachment: WorkflowAgentAttachment) => Operation<void>;
 
+/**
+ * Run `operation` with the document's own capabilities installed for this run.
+ *
+ * Everything an authored document reaches, and nothing about where the run's
+ * storage lives. The caller has already bound this run's Workspace effects —
+ * locally to a validated lease, on a runner to the exact remote run its own
+ * acquisition opened — and every rule below builds its effects through that one
+ * binding. Which means both hosts get the same `<File>`, `<Repository>`,
+ * `<Worktree>`, `<Dir>` and Git behavior, with authority staying in whichever
+ * binding was attached.
+ *
+ * The set is inseparable for the reason the module note above gives: the Files
+ * provider alone would resolve a document's paths against whatever working
+ * directory the surrounding host adapter answers with.
+ */
+export function withDocumentCapabilities<T>(
+  database: WorkflowRunDatabase,
+  operation: Operation<T>,
+  options: WorkflowWorkspaceOptions = {},
+): Operation<T> {
+  return scoped(function* () {
+    yield* useLogicalWorkspaceCwd();
+    yield* useWorkflowFiles(database);
+    const composition = {
+      ...options.composition,
+      ...(options.helper === undefined ? {} : { helper: options.helper }),
+    };
+    yield* useRepositoryComposition(database, composition);
+    yield* useGitComposition(database, composition);
+    if (options.gitHubIssues !== undefined) {
+      yield* useGitHubIssues(options.gitHubIssues);
+    }
+    yield* useCompositionComponents();
+    // Ordinary middleware, installed the way the Issue adapter is: it owns
+    // the URLs it recognizes and delegates the rest.
+    // Installed on every live or partial attachment, configured or not: the
+    // configuration governs URL reads, and `<PullRequest>` must keep working
+    // on a host that authorizes none.
+    yield* useGitHubPullRequests(
+      database,
+      composition.host ?? denoRepositoryHost(),
+      options.gitHubPullRequests ?? {},
+    );
+    // After the composition components and inside this attachment: a
+    // completed replay never reaches here, so it registers no second `Elicit`
+    // and installs no provider for work that is not going to happen.
+    yield* useWorkflowElicitation();
+    if (options.agent !== undefined) {
+      yield* options.agent({ runId: database.record.runId, database });
+    }
+    return yield* operation;
+  });
+}
+
 /** Run `operation` with this run's Workspace attached to the document. */
 export function withWorkflowWorkspace<T>(
   database: WorkflowRunDatabase,
   operation: Operation<T>,
   options: WorkflowWorkspaceOptions = {},
 ): Operation<T> {
-  return withWorkspaceEffects(
-    database,
-    scoped(function* () {
-      yield* useLogicalWorkspaceCwd();
-      yield* useWorkflowFiles(database);
-      const composition = {
-        ...options.composition,
-        ...(options.helper === undefined ? {} : { helper: options.helper }),
-      };
-      yield* useRepositoryComposition(database, composition);
-      yield* useGitComposition(database, composition);
-      if (options.gitHubIssues !== undefined) {
-        yield* useGitHubIssues(options.gitHubIssues);
-      }
-      yield* useCompositionComponents();
-      // Ordinary middleware, installed the way the Issue adapter is: it owns
-      // the URLs it recognizes and delegates the rest.
-      // Installed on every live or partial attachment, configured or not: the
-      // configuration governs URL reads, and `<PullRequest>` must keep working
-      // on a host that authorizes none.
-      yield* useGitHubPullRequests(
-        database,
-        composition.host ?? denoRepositoryHost(),
-        options.gitHubPullRequests ?? {},
-      );
-      // After the composition components and inside this attachment: a
-      // completed replay never reaches here, so it registers no second `Elicit`
-      // and installs no provider for work that is not going to happen.
-      yield* useWorkflowElicitation();
-      if (options.agent !== undefined) {
-        yield* options.agent({ runId: database.record.runId, database });
-      }
-      return yield* operation;
-    }),
-  );
+  return withWorkspaceEffects(database, withDocumentCapabilities(database, operation, options));
 }

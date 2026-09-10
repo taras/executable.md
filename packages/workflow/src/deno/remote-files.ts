@@ -103,6 +103,10 @@ export function runnerFiles(): RunnerFiles {
       yield* until(mkdir(path, { recursive: false, mode }));
     },
 
+    *removeTree(path: string): Operation<void> {
+      yield* until(rm(path, { recursive: true, force: true }));
+    },
+
     *writeFile(path: string, bytes: Uint8Array, mode: number): Operation<void> {
       yield* until(writeFile(path, bytes, { mode }));
     },

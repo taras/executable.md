@@ -15,7 +15,7 @@
 
 import { env, runInDurableObject } from "cloudflare:test";
 import { beforeAll, describe, expect, it } from "vitest";
-import { run, until, type Operation } from "effection";
+import { run, scoped, until, type Operation } from "effection";
 import { remoteOwnerClient } from "../../src/cloudflare/configured.ts";
 import type {
   OwnerHttpRequest,
@@ -275,6 +275,76 @@ describe("the owner's request boundary", () => {
     // And the one that passes both.
     expect(await attempt(POLICY.release, await token())).toBe("admitted");
     expect(await on(stubFor(runId), (owner) => owner.holders())).toBe(0);
+  });
+
+  it("keeps the upgraded socket authoritative between separate object accesses", async () => {
+    const runId = runOf();
+    const built = await client(runId);
+    const outcome = await run(function* (): Operation<Record<string, unknown>> {
+      return yield* scoped(function* () {
+        const admitted = yield* built.client.admit(runId);
+        if (!admitted.ok || admitted.value === "already-running") {
+          return { admitted: false };
+        }
+        // The acquisition is registered on the socket's attachment, which is
+        // what an evicted object reads back — nothing about it is in memory.
+        const before = yield* until(on(stubFor(runId), (owner) => owner.holders()));
+        // Read again through a separate access to the object. Nothing about
+        // the acquisition is in this instance's memory — it is the socket's
+        // serialized attachment, which is the same mechanism a hibernated
+        // object restores from — and the socket the runner still holds is the
+        // one that has to remain authoritative either way.
+        const evicted = yield* until(on(stubFor(runId), (owner) => owner.holders()));
+        const opened = yield* admitted.value.link.open(runId, null);
+        return {
+          admitted: true,
+          before,
+          evicted,
+          opened: opened.ok,
+          after: yield* until(on(stubFor(runId), (owner) => owner.holders())),
+        };
+      });
+    });
+    expect(outcome).toEqual({
+      admitted: true,
+      before: 1,
+      evicted: 1,
+      // The run is not stored, so opening says so — over the same acquisition,
+      // which the owner still recognizes after the eviction.
+      opened: false,
+      after: 1,
+    });
+    // And the acquisition ends with the scope that held it, not with the object.
+    expect(await on(stubFor(runId), (owner) => owner.holders())).toBe(0);
+  });
+
+  it("lets a closed socket authorize nothing, and admits the next executor", async () => {
+    const runId = runOf();
+    const built = await client(runId);
+    const closed = await run(function* (): Operation<Record<string, unknown>> {
+      const first = yield* scoped(function* () {
+        const admitted = yield* built.client.admit(runId);
+        if (!admitted.ok || admitted.value === "already-running") {
+          return { admitted: false };
+        }
+        // Ending the connection is how a runner stops being the executor.
+        yield* admitted.value.close();
+        return {
+          admitted: true,
+          // Nothing may be asked of the run over a connection that is gone.
+          refused: !(yield* admitted.value.link.open(runId, null)).ok,
+          holders: yield* until(on(stubFor(runId), (owner) => owner.holders())),
+        };
+      });
+      // And the next acquisition is admitted, because the first one released
+      // ownership by closing rather than by any lease expiring.
+      const second = yield* scoped(function* () {
+        const admitted = yield* built.client.admit(runId);
+        return admitted.ok && admitted.value !== "already-running";
+      });
+      return { ...first, second };
+    });
+    expect(closed).toEqual({ admitted: true, refused: true, holders: 0, second: true });
   });
 
   it("answers a read while an executor is live, and takes no acquisition", async () => {
