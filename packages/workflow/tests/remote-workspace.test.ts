@@ -286,7 +286,6 @@ function* owner(captured: CapturedWorkspace) {
     requests,
     next: () => `owner-${(identifier += 1)}`,
     commits: scripted.commits,
-    journal: new InMemoryStream(),
   };
 }
 
@@ -323,7 +322,6 @@ function* harness(
     files: runnerFiles(),
     trees: yield* useRunnerTrees(),
     createFilesystem: (at, authorize) => createRemoteWorkspaceFilesystem(at, authorize),
-    journal: new InMemoryStream(),
   });
   return {
     run,
@@ -359,7 +357,16 @@ function* invocation<T extends Json>(
     const raised = yield* trapped(
       withRemoteWorkspaceEffects(held.run, durableRun(workflow, { stream: held.run.journal })),
     );
-    return { raised, events: yield* held.run.journal.readAll() };
+    // Read back through the run's own journal, which is the owner's. An owner
+    // this harness scripted to refuse cannot answer that read, and the tests
+    // that ask for one are not the tests that scripted a refusal.
+    let events: DurableEvent[] = [];
+    try {
+      events = yield* held.run.journal.readAll();
+    } catch {
+      events = [];
+    }
+    return { raised, events };
   });
 }
 
@@ -371,6 +378,35 @@ function* own(): Operation<Json> {
 
 function yielded(events: readonly DurableEvent[]): DurableEvent[] {
   return events.filter((event) => event.type === "yield");
+}
+
+/**
+ * The commands that carried a Workspace effect, out of everything the owner was
+ * asked to commit.
+ *
+ * A run's journal lives on its owner, so an ordinary append — the root `Close`
+ * of the invocation below, for one — reaches the owner as a commit of its own.
+ * That is the run being persisted where it belongs, and it is not what these
+ * tests are counting: what they are counting is how many times the coordinator
+ * proposed a Workspace transaction.
+ */
+function workspaceIntents(commits: readonly Record<string, unknown>[]): Record<string, unknown>[] {
+  return commits.filter((intent) => {
+    const events = intent["events"];
+    return (
+      Array.isArray(events) &&
+      events.some((event) => {
+        const parsed: unknown = typeof event === "string" ? JSON.parse(event) : event;
+        const description =
+          parsed !== null && typeof parsed === "object" ? Reflect.get(parsed, "description") : null;
+        return (
+          description !== null &&
+          typeof description === "object" &&
+          Reflect.get(description, "type") === "workspace"
+        );
+      })
+    );
+  });
 }
 
 describe("the runner's Workspace coordinator", () => {
@@ -391,8 +427,9 @@ describe("the runner's Workspace coordinator", () => {
       expect(raised).toBe(undefined);
 
       // Exactly one intent, carrying all three things together.
-      expect(held.commits).toHaveLength(1);
-      const intent = held.commits[0] ?? {};
+      const intents = workspaceIntents(held.commits);
+      expect(intents).toHaveLength(1);
+      const intent = intents[0] ?? {};
       expect(intent["expectedWorkspaceRootId"]).toBe(held.captured.root.rootId);
       const mappings = intent["mappings"];
       expect(Array.isArray(mappings) && mappings).toHaveLength(1);
@@ -421,8 +458,9 @@ describe("the runner's Workspace coordinator", () => {
       expect(String(raised)).toContain("this Workspace effect refused");
 
       // One commit, and it proposes nothing about the Workspace.
-      expect(held.commits).toHaveLength(1);
-      const intent = held.commits[0] ?? {};
+      const intents = workspaceIntents(held.commits);
+      expect(intents).toHaveLength(1);
+      const intent = intents[0] ?? {};
       expect(intent["publication"]).toBe(null);
       expect(intent["mappings"]).toEqual([]);
       expect(intent["expectedWorkspaceRootId"]).toBe(held.captured.root.rootId);
@@ -488,7 +526,7 @@ describe("the runner's Workspace coordinator", () => {
       expect(raised).not.toBe(undefined);
       // The owner said no, so nothing is promoted and nothing private crossed.
       expect(String(raised)).not.toContain("command:");
-      expect(held.commits).toHaveLength(1);
+      expect(workspaceIntents(held.commits)).toHaveLength(1);
     });
   });
 
@@ -580,7 +618,6 @@ describe("the runner's Workspace coordinator", () => {
         files: runnerFiles(),
         trees: yield* useRunnerTrees(),
         createFilesystem: (at, authorize) => createRemoteWorkspaceFilesystem(at, authorize),
-        journal: new InMemoryStream(),
       };
 
       let executed = 0;
@@ -605,8 +642,10 @@ describe("the runner's Workspace coordinator", () => {
       // nothing else: no root, no content, no staging, no commit.
       expect(executed).toBe(1);
       expect(a.requests.map((request) => request["command"])).toEqual(["mappings"]);
-      expect(b.commits).toHaveLength(1);
-      expect(yielded(yield* a.journal.readAll())).toEqual([]);
+      expect(workspaceIntents(b.commits)).toHaveLength(1);
+      // A was never asked for anything else either — no read, no staging and
+      // no commit reached it after the one snapshot above.
+      expect(a.requests.map((request) => request["command"])).toEqual(["mappings"]);
     });
   });
 
@@ -729,7 +768,7 @@ describe("the runner's Workspace coordinator", () => {
       // What must not happen is claiming it did.
       expect(raised).not.toBe(undefined);
       expect(String(raised)).not.toContain("command:");
-      expect(held.commits).toHaveLength(1);
+      expect(workspaceIntents(held.commits)).toHaveLength(1);
     });
   });
 

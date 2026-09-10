@@ -140,3 +140,51 @@ export type {
   SuspensionControllerOptions,
   SuspensionNotice,
 } from "./src/deno/suspension.ts";
+
+/**
+ * One runner for a run whose storage is somewhere else.
+ *
+ * The same four things this entrypoint's local host installs, composed over a
+ * configured owner client instead of a directory: the executor lifecycle and
+ * its transitions, the no-acquisition read and delivery planes, and the
+ * Workspace attachment for a live or partial execution. Native Git, evidence
+ * processes and Agent clients stay on this side, as they do locally; the owner
+ * runs none of them.
+ *
+ * Which owner, which release and which token are the caller's to supply — this
+ * reads no flag, environment variable or prop for any of them.
+ */
+export { useRemoteWorkflowRunner } from "./src/deno/remote-runner.ts";
+export type {
+  RemoteRunnerOwner,
+  RemoteWorkflowRunner,
+  RemoteWorkflowRunnerOptions,
+} from "./src/deno/remote-runner.ts";
+
+/**
+ * One configured client for one run's owner, for a trusted runner.
+ *
+ * Published here as well as from `./cloudflare` because a runner is where one
+ * is constructed and `./cloudflare` is the owner's entrypoint: it names the
+ * Durable Object runtime, so it resolves inside a Worker and nowhere else. The
+ * module is the same one either way.
+ *
+ * The minimum a host supplies is an already-selected run id, one
+ * credential-free endpoint, the exact release identity, an operation that mints
+ * a short-lived token, and the HTTP and WebSocket I/O to perform. Endpoint,
+ * release and token stay in the client's closure; the route shapes, private
+ * commands and refusal spellings stay inside the adapter.
+ */
+export { remoteOwnerClient } from "./src/cloudflare/configured.ts";
+export type {
+  OwnerHttpRequest,
+  OwnerHttpResponse,
+  OwnerTransport,
+  OwnerUpgrade,
+  OwnerUpgradeRefused,
+  RemoteOwnerClient,
+  RemoteOwnerConfiguration,
+} from "./src/cloudflare/configured.ts";
+export { OwnerEndpointError } from "./src/cloudflare/endpoint.ts";
+export type { EndpointRefusal } from "./src/cloudflare/endpoint.ts";
+export type { OwnerSocket, SocketListener } from "./src/remote/client.ts";

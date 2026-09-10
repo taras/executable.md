@@ -42,3 +42,43 @@ export type { OwnerNamespace, RunIdRefusal } from "./src/cloudflare/routing.ts";
 
 export { WorkflowObjectStorageError } from "./src/cloudflare/recognition.ts";
 export type { RecognitionFailure } from "./src/cloudflare/recognition.ts";
+
+/**
+ * The supported request boundary, for the Worker in front of these owners.
+ *
+ * A gateway routes and forwards; it does not parse a private command, verify a
+ * token, or report that either was already checked. `ownerFor` selects the
+ * object arithmetically from the public run id, and the owner it reaches makes
+ * every decision itself.
+ */
+export { ownerRoute } from "./src/cloudflare/gateway.ts";
+
+/**
+ * One configured client for one run's owner, for a trusted runner.
+ *
+ * The minimum a host must supply is an already-selected run id, one
+ * credential-free endpoint, the exact release identity, a token operation, and
+ * the HTTP and WebSocket I/O to perform. Endpoint, release and token stay in
+ * the client's closure; the private commands, refusal spellings and route
+ * shapes stay inside the adapter.
+ */
+export { remoteOwnerClient } from "./src/cloudflare/configured.ts";
+export type {
+  OwnerHttpRequest,
+  OwnerHttpResponse,
+  OwnerTransport,
+  OwnerUpgrade,
+  OwnerUpgradeRefused,
+  RemoteOwnerClient,
+  RemoteOwnerConfiguration,
+} from "./src/cloudflare/configured.ts";
+export { OwnerEndpointError } from "./src/cloudflare/endpoint.ts";
+export type { EndpointRefusal } from "./src/cloudflare/endpoint.ts";
+
+/**
+ * The socket shape a host's `connect` provides.
+ *
+ * Part of the transport contract rather than of the protocol: a runtime's own
+ * `WebSocket` satisfies it, and what travels over it stays private.
+ */
+export type { OwnerSocket, SocketListener } from "./src/remote/client.ts";

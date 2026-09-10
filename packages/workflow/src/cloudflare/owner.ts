@@ -18,10 +18,15 @@
  * Delivery and inspection arrive over ordinary requests, take no acquisition,
  * and cannot move the lifecycle — which is why they are separate methods here
  * rather than commands on the socket.
+ *
+ * `fetch` is where those three meet an actual request. It reads which plane was
+ * addressed and nothing else: the upgrade, the admission order and every
+ * decision stay in the three methods below, so a gateway in front of this
+ * routes bytes and cannot pre-approve any of it.
  */
 
 import { DurableObject } from "cloudflare:workers";
-import type { Operation } from "effection";
+import { run, type Operation } from "effection";
 import { OwnerTransactions } from "./owner-transaction.ts";
 import {
   acquireExecutor,
@@ -51,6 +56,13 @@ import { crossSecretGate } from "./owner-gate.ts";
 import { dispatchCommand } from "./dispatcher.ts";
 import { WorkflowRecordMalformedError } from "../storage/errors.ts";
 import { discardPriorAcquisitions, PRIVATE_OBJECT_NAMES } from "./private-schema.ts";
+import {
+  RELEASE_HEADER,
+  routeOf,
+  selectedProtocol,
+  upgradeAdmission,
+  type RouteAdmission,
+} from "./routes.ts";
 import {
   declaredObjects,
   holdsNoRun,
@@ -322,6 +334,85 @@ export abstract class WorkflowOwnerObject extends DurableObject {
    * other state — foreign, damaged, a version this build does not implement —
    * is recognition's to refuse rather than initialization's to overwrite.
    */
+  /**
+   * Answer one request on one of this owner's three planes.
+   *
+   * The runtime callback boundary this host adapts at, so the Effection scope
+   * is opened here and closed before a response leaves: every plane below is an
+   * operation, and none of them may outlive the request that asked.
+   *
+   * Which plane is decided by the path, and the run id it names is admitted by
+   * the plane rather than here — a path that says nothing this build writes is
+   * refused before an admission exists at all.
+   */
+  override async fetch(request: Request): Promise<Response> {
+    const url = new URL(request.url);
+    const route = routeOf(url.pathname);
+    if (route === undefined) {
+      return new Response("route", { status: 404 });
+    }
+    if (route.plane === "executor") {
+      return await this.#upgrade(request, route.runId);
+    }
+    const admission: RouteAdmission = {
+      release: request.headers.get(RELEASE_HEADER),
+      token: bearer(request.headers.get("authorization")),
+      runId: route.runId,
+    };
+    const body = await request.text();
+    const answered = await run(() =>
+      route.plane === "read" ? this.read(admission, body) : this.deliver(admission, body),
+    );
+    // Both planes answer rather than raise, so the status says only that this
+    // owner answered; what it answered is the envelope, and a refusal category
+    // is the same word on either plane.
+    return new Response(JSON.stringify(answered), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  }
+
+  /**
+   * Take one executor connection, or refuse the upgrade.
+   *
+   * The socket the owner accepts is the runtime's own server half, created
+   * here; the client half is handed back with the 101 and is the only end the
+   * caller ever holds. A refusal closes nothing because nothing was accepted:
+   * `admit()` takes the acquisition last, so a release, token or run-id
+   * refusal leaves this object exactly as it was.
+   */
+  async #upgrade(request: Request, runId: string): Promise<Response> {
+    if (request.headers.get("upgrade")?.toLowerCase() !== "websocket") {
+      return new Response("upgrade", { status: 400 });
+    }
+    const admission = upgradeAdmission(request.headers.get("sec-websocket-protocol"), runId);
+    const pair = new WebSocketPair();
+    const client = pair[0];
+    const server = pair[1];
+    if (client === undefined || server === undefined) {
+      return new Response("internal", { status: 500 });
+    }
+    try {
+      await run(() =>
+        this.admit(
+          { runId: admission.runId, release: admission.release, token: admission.token },
+          server,
+        ),
+      );
+    } catch (error) {
+      // The refusal category, and nothing else. A caller learns which of the
+      // ordered checks said no; it learns nothing about this object's state.
+      return new Response(refusalOf(error), { status: 403 });
+    }
+    return new Response(null, {
+      status: 101,
+      webSocket: client,
+      // Selected explicitly: a handshake that offered a subprotocol and got
+      // none back is one a standard client fails.
+      headers: { "sec-websocket-protocol": selectedProtocol() },
+    });
+  }
+
   open(runId: string, initializeRun: () => void): void {
     admitRunId(runId);
     if (isPristine(declaredObjects(this.owned))) {
@@ -330,6 +421,15 @@ export abstract class WorkflowOwnerObject extends DurableObject {
     }
     recognizeObject(this.owned);
   }
+}
+
+/** The token one `Authorization` header carries, if it carries one. */
+function bearer(header: string | null): string | null {
+  if (header === null) {
+    return null;
+  }
+  const [scheme, value] = header.split(" ");
+  return scheme?.toLowerCase() === "bearer" && value !== undefined && value !== "" ? value : null;
 }
 
 /**

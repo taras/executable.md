@@ -26,6 +26,7 @@ import {
   STAGING_TABLE,
 } from "../../../src/cloudflare/private-schema.ts";
 import { MARKER_TABLE } from "../../../src/cloudflare/marker.ts";
+import { routeOf } from "../../../src/cloudflare/routes.ts";
 
 /** The identities this owner is configured to admit. */
 export const POLICY: AdmissionPolicy = {
@@ -773,7 +774,18 @@ export class ExecutorObject extends WorkflowOwnerObject {
     }
   }
 
-  async fetch(request: Request): Promise<Response> {
+  /**
+   * The legacy upgrade these suites were written against, and the real one.
+   *
+   * A request on one of the supported routes goes to the base object, which is
+   * where the production boundary lives. Everything else keeps the header shape
+   * the suites here already use — they are about admission and acquisition
+   * rather than about how a request is addressed.
+   */
+  override async fetch(request: Request): Promise<Response> {
+    if (routeOf(new URL(request.url).pathname) !== undefined) {
+      return await super.fetch(request);
+    }
     const pair = new WebSocketPair();
     const client = pair[0];
     const server = pair[1];

@@ -10051,6 +10051,8 @@ malformed-input permutation without a distinct structural consequence.
 
 Most of what they name is **specified; implementation unbuilt**, so those tiers name the scenarios an implementation is accepted against rather than tests that exist. Tier WRH is the exception: rows WRH1-WRH16 are implemented and have committed evidence, listed with the tier, while WRH17-WRH22 remain unbuilt with the machine-wait work they belong to. Nothing in the other six tiers is built.
 
+WRH14 covers the configured host as well as the boundary it satisfies: `packages/cli/tests/remote-workflow-host.test.ts` proves that the explicit installer has exactly the four methods, that it is bound to one run and refuses another before a token is minted, that reads and deliveries take no acquisition while execution takes one socket, and that a storage handle it did not open cannot be attached; `packages/workflow/tests/remote-runner.test.ts` proves the lifecycle-to-attachment handoff, including that two clients holding handles which agree about run id, root and anchor still cannot attach each other's; and `packages/workflow/tests/cloudflare/remote-owner-routes.vitest.ts` proves the request boundary against a real Durable Object — namespace routing, an actual upgrade whose subprotocol is selected, the admission order as a status, and a read and a delivery answered while an executor is live. No selector chooses that host: the shipped Deno and compiled entrypoints install the local one and Node and Bun remain unsupported.
+
 ### Tier WRH — Remote host, executor and delivery separation
 
 Defined in [Workflow workspaces](./workflow-workspace-spec.md) §3.8 and §13.2

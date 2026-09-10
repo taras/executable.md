@@ -33,7 +33,13 @@ import {
   type Result,
   resource,
 } from "effection";
-import type { DurableEvent, DurableStream, Json } from "@executablemd/durable-streams";
+import {
+  establishJournalProvenance,
+  type DurableEvent,
+  type DurableStream,
+  type JournalProvenance,
+  type Json,
+} from "@executablemd/durable-streams";
 import type { JournalEntry, WorkflowRunDatabase, WorkflowRunTransaction } from "../storage/api.ts";
 import {
   WorkflowDatabaseClosedError,
@@ -55,6 +61,7 @@ import type { RemoteRetainedAnswer } from "./answer-link.ts";
 import type { RemoteInvocationSnapshot } from "./records.ts";
 import type { CreateWorkflowRunRequest } from "../storage/api.ts";
 import type { WorkspaceRootManifest } from "../workspace/root-manifest.ts";
+import { routeRemoteRunJournal } from "./journal-route.ts";
 
 /** What a remote handle needs to answer everything the interface asks. */
 export interface RemoteRunLink extends OwnerLink {
@@ -242,6 +249,44 @@ function createTurns(): Turns {
   };
 }
 
+/** What one handle was opened from, for a host that has to prove it was. */
+export interface RemoteRunOrigin {
+  /** The exact link this handle reads, writes and commits through. */
+  readonly link: RemoteRunLink;
+  /** The provenance taken over this handle's routed journal. */
+  readonly provenance: JournalProvenance;
+}
+
+/**
+ * What each handle was opened from.
+ *
+ * Held beside the handle rather than on it: `WorkflowRunDatabase` is the same
+ * interface both hosts implement, and a link or a witness on it would be a
+ * capability every caller of either could reach. A `WeakMap` keyed by the exact
+ * handle answers only for a handle this module built, and a second loaded copy
+ * cannot answer for one of these at all.
+ *
+ * What a host does with the answer is compare it — by object identity, to the
+ * connection it holds — so a handle from another client, or a look-alike with
+ * the same run id and root, is refused before an effect exists.
+ */
+const origins = (() => {
+  const held = new WeakMap<WorkflowRunDatabase, RemoteRunOrigin>();
+  return {
+    remember(database: WorkflowRunDatabase, origin: RemoteRunOrigin): void {
+      held.set(database, origin);
+    },
+    of(database: WorkflowRunDatabase): RemoteRunOrigin | undefined {
+      return held.get(database);
+    },
+  };
+})();
+
+/** What this handle was opened from, if this module opened it. */
+export function remoteRunOrigin(database: WorkflowRunDatabase): RemoteRunOrigin | undefined {
+  return origins.of(database);
+}
+
 /** Open one scope-owned lease on a run whose storage is somewhere else. */
 export function useRemoteRunDatabase(
   link: RemoteRunLink,
@@ -366,7 +411,7 @@ export function useRemoteRunDatabase(
       },
 
       get journal(): DurableStream {
-        return ordinary;
+        return routed;
       },
 
       transact,
@@ -420,6 +465,18 @@ export function useRemoteRunDatabase(
         return yield* turn(() => link.readExecutions());
       },
     };
+
+    // The same shape the local handle has: what a caller runs its document on
+    // is the routed journal, so a Workspace effect's publication lands inside
+    // the transaction that made the change rather than beside it, and the
+    // provenance a coordinator compares is taken over that exact stream. Built
+    // here because here is where the handle exists — a caller that assembled
+    // the pair itself could pair one run's journal with another's storage.
+    const routed: DurableStream = routeRemoteRunJournal(handle, ordinary);
+    origins.remember(
+      handle,
+      Object.freeze({ link, provenance: establishJournalProvenance(routed) }),
+    );
 
     yield* ensure(() => {
       closed = true;

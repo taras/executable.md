@@ -9,6 +9,6 @@
     "./credential-helper": "./src/deno/composition/credential-helper.ts"
   },
   "publish": {
-    "exclude": ["!vendor/cloudflare-computer-dofs/generated/**/*.d.ts"]
+    "exclude": ["!vendor/cloudflare-computer-dofs/generated/**/*.d.ts", "!src/cloudflare"]
   }
 }

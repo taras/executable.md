@@ -927,6 +927,8 @@ only then may execution continue past the wait.
 
 **Fork copies from one selected source, or does nothing.** A fork names one source prefix and root and produces one destination run and one lineage. The destination commits whole or not at all, its copied prefix outlives the source, and an incompatible selection or a failure part-way mutates neither the source nor the destination.
 
+**The planes are three requests, and one client carries them.** Which plane a request is for is its path, and the run id in that path is what selects the owner — arithmetically, through the namespace's own naming, with a gateway that forwards on that id and decides nothing else. A trusted host reaches all three through one configured client bound to one run: it holds an already-selected run id, one credential-free endpoint parsed before anything is sent, the exact release identity, and an operation that mints a short-lived token for the immediate request. Every plane requires the configured run id before a token exists, a URL is built or any I/O happens; the endpoint, the release and the token stay in the host's closure and reach no record, event or diagnostic; and the request shapes, header names and refusal spellings stay private to one release, save for the one category that is a fact about the run — another live executor holds it.
+
 **A handle's authority ends with its scope.** Teardown closes the handle and, for an executor, releases ownership; it rolls back nothing already committed and settles nothing that was not settled. Closing the connection is the only staleness proof a remote host needs, and a closed one authorizes nothing while leaving every committed transaction exactly as it was.
 
 ### 9.9 A retained terminal, and what may be concluded from it

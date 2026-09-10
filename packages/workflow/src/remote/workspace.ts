@@ -65,10 +65,9 @@ import type { RemoteReadLink } from "./read.ts";
 import type { RemoteInvocationSnapshot } from "./records.ts";
 import { withRemoteJournalRoute } from "./journal-route.ts";
 import { resource } from "effection";
-import { establishJournalProvenance, type DurableStream } from "@executablemd/durable-streams";
-import { useRemoteRunDatabase, type RemoteWorkspaceLink } from "./database.ts";
+import type { DurableStream } from "@executablemd/durable-streams";
+import { remoteRunOrigin, useRemoteRunDatabase, type RemoteWorkspaceLink } from "./database.ts";
 import { installRemoteSuspensionAnswers } from "./answers.ts";
-import { routeRemoteRunJournal } from "./journal-route.ts";
 
 import type { TemporaryTrees } from "./invocation.ts";
 
@@ -203,28 +202,44 @@ export interface RemoteRunOptions {
    * and an invocation admitted from one run would commit to the other.
    */
   readonly link: RemoteWorkspaceLink;
+  /**
+   * The handle that link produced, or nothing to open one now.
+   *
+   * A host whose lifecycle already opened this run passes the exact handle its
+   * begin transition returned, so the document, its journal and this
+   * coordinator are one association rather than two views of one run. The
+   * handle has to be one this build opened from a link — its routed journal
+   * and the provenance taken over it are what a coordinator compares — and a
+   * foreign or fabricated one is refused here, before any effect exists.
+   */
+  readonly database?: WorkflowRunDatabase;
   readonly files: RunnerFiles;
   readonly trees: TemporaryTrees;
   createFilesystem(at: HostPath, authorize: () => void): WorkspaceFilesystem;
-  /** The run's ordinary journal, which this routes and takes provenance over. */
-  readonly journal: DurableStream;
 }
 
 /**
  * Open one remote run: its database, its routed journal and its provenance.
  *
- * The database is created here from the same link the runtime reads through, so
+ * The handle carries all three. It is opened from the same link the runtime
+ * reads through — here, or by the lifecycle that began this execution — so
  * "this runtime belongs to this handle" is true by construction rather than by
  * a check that could be passed with another handle.
  */
 export function useRemoteRun(options: RemoteRunOptions): Operation<RemoteRun> {
   return resource(function* (provide) {
-    const database = yield* useRemoteRunDatabase(
-      options.link,
-      yield* options.link.frontierSnapshot(),
-    );
-    const journal = routeRemoteRunJournal(database, options.journal);
-    const provenance = establishJournalProvenance(journal);
+    const database =
+      options.database ??
+      (yield* useRemoteRunDatabase(options.link, yield* options.link.frontierSnapshot()));
+    const journal = database.journal;
+    const origin = remoteRunOrigin(database);
+    // The handle has to be one this build opened, and opened from this exact
+    // link. A handle another client opened describes the same run and answers
+    // to another owner, and that is the pairing this refuses.
+    if (origin === undefined || origin.link !== options.link) {
+      unavailable("this is not a remote run handle this build opened from this link.");
+    }
+    const provenance = origin.provenance;
     // Installed here because here is where a run's three halves exist at once:
     // the acquisition it is reached through, the handle its execution transacts
     // on, and the witness over the exact journal an answer would be published

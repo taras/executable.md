@@ -18,7 +18,7 @@
 
 import { env, runInDurableObject } from "cloudflare:test";
 import { beforeAll, describe, expect, it } from "vitest";
-import { InMemoryStream, type Workflow, type Json } from "@executablemd/durable-streams";
+import { type Workflow, type Json } from "@executablemd/durable-streams";
 import { run, type Operation } from "effection";
 import type { ExecutorObject } from "./support/executor-object.ts";
 import { POLICY, RUN_ID, VALID_CLAIMS } from "./support/executor-object.ts";
@@ -138,7 +138,6 @@ function* opened(socket: WebSocket): Operation<RemoteRun> {
     files: host.files,
     trees: host.trees,
     createFilesystem: (at) => host.workspace(at("/")),
-    journal: new InMemoryStream(),
   });
 }
 
@@ -171,9 +170,11 @@ describe("the coordinator against a real owner", () => {
       yield* withRemoteWorkspaceEffects(opening, durableRun(workflow, { stream: opening.journal }));
       return yield* opening.journal.readAll();
     });
-    // The result travelled inside the commit, so the ordinary journal never
-    // saw it.
-    expect(outcome.filter((event) => event.type === "yield")).toHaveLength(0);
+    // The result travelled inside the commit rather than beside it: the run's
+    // journal — which is this owner's — holds the effect's row exactly once,
+    // and the owner's own row below shows it was written by the transaction
+    // that moved the root.
+    expect(outcome.filter((event) => event.type === "yield")).toHaveLength(1);
 
     const after = await on(stub, (owner) => owner.published());
     // Content, root, references, mapping, pointer and the journal row moved
@@ -181,7 +182,11 @@ describe("the coordinator against a real owner", () => {
     expect(after["currentRootId"]).not.toBe(before["currentRootId"]);
     expect(after["roots"]).toBe(2);
     expect(after["repositories"]).toEqual([{ name: "app", checkout_path: "/app" }]);
+    // Both rows the run wrote name the published root: the effect's own result,
+    // committed by the transaction that moved the pointer, and the terminal the
+    // completed run appended afterwards against the root it ended on.
     expect(after["events"]).toEqual([
+      expect.objectContaining({ workspace_root_id: after["currentRootId"] }),
       expect.objectContaining({ workspace_root_id: after["currentRootId"] }),
     ]);
 
@@ -258,8 +263,11 @@ describe("the coordinator against a real owner", () => {
     expect(after["currentRootId"]).toBe(before["currentRootId"]);
     expect(after["roots"]).toBe(before["roots"]);
     expect(after["repositories"]).toEqual([]);
-    // One row, and it names the root the run is still on.
+    // Two rows, and both name the root the run is still on: the effect's own
+    // filtered failure, committed in its transaction, and the terminal the
+    // failed run appended afterwards. Neither moved the Workspace.
     expect(after["events"]).toEqual([
+      expect.objectContaining({ workspace_root_id: before["currentRootId"] }),
       expect.objectContaining({ workspace_root_id: before["currentRootId"] }),
     ]);
   });
