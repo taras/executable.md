@@ -9,6 +9,7 @@
     "scripts/tests/fixtures/**",
     "**/npm/**",
     "packages/workflow/vendor/cloudflare-computer-dofs/**",
-    "packages/acp/vendor/acpx/**"
+    "packages/acp/vendor/acpx/**",
+    "packages/cli/vendor/configliere-pr30/**"
   ]
 }

@@ -79,7 +79,7 @@
     "npm:acpx@0.12.0": "0.12.0",
     "npm:ajv@8.20.0": "8.20.0",
     "npm:ajv@^8.17.1": "8.20.0",
-    "npm:configliere@0.4": "0.4.0",
+    "npm:configliere@~0.4.0-pr": "0.4.0-pr+dbd7d191ab8aff37c71cc03bc4688ad372ec7e23",
     "npm:effection@4.1.0": "4.1.0",
     "npm:esbuild-wasm@~0.25.11": "0.25.12",
     "npm:esbuild@0.25.7": "0.25.7",
@@ -2431,8 +2431,7 @@
     "commander@15.0.0": {
       "integrity": "sha512-z67u4ZhzCL/Tydu1lJARtEZYWbWaN7oYLHbsuzocr6y4N6WZAagG3RQ4FW61V1/0+jImpj293XfrcYnd1qxtPg=="
     },
-    "configliere@0.4.0": {
-      "integrity": "sha512-4bxK3+L+FHr9Xm/d69Syvvpvkj7lj7a4zz3B+tchuohg5WKeudyBS+4Oob5Zdgoh8I7+n2lj0lfa8I6cUXfcEg==",
+    "configliere@0.4.0-pr+dbd7d191ab8aff37c71cc03bc4688ad372ec7e23": {
       "dependencies": [
         "@standard-schema/spec"
       ]
@@ -3983,7 +3982,7 @@
       "npm:@secretlint/types@13.0.4",
       "npm:@types/node@^24.5.2",
       "npm:ajv@^8.17.1",
-      "npm:configliere@0.4",
+      "npm:configliere@~0.4.0-pr",
       "npm:effection@4.1.0",
       "npm:expect@30",
       "npm:mdast-util-to-string@4",
@@ -4054,7 +4053,6 @@
           "dependencies": [
             "npm:@effectionx/stream-helpers@0.8.3",
             "npm:@standard-schema/spec@1",
-            "npm:configliere@0.4",
             "npm:effection@4.1.0",
             "npm:semver@^7.8.5",
             "npm:zod@^4.3.6"
@@ -4228,6 +4226,13 @@
           "npm:preact@^10.29.1",
           "npm:tailwindcss@^4.1.10",
           "npm:vite@^7.1.3"
+        ]
+      }
+    },
+    "links": {
+      "npm:configliere@0.4.0-pr+dbd7d191ab8aff37c71cc03bc4688ad372ec7e23": {
+        "dependencies": [
+          "npm:@standard-schema/spec@^1.1.0"
         ]
       }
     }

@@ -7,9 +7,11 @@
     "packages/workflow/vendor/cloudflare-computer-dofs/upstream",
     "packages/workflow/vendor/cloudflare-computer-dofs/generated/**/*.d.ts",
     "packages/acp/vendor/acpx/upstream",
-    "packages/acp/vendor/acpx/generated/**/*.d.ts"
+    "packages/acp/vendor/acpx/generated/**/*.d.ts",
+    "packages/cli/vendor/configliere-pr30"
   ],
   "nodeModulesDir": "auto",
+  "links": ["./packages/cli/vendor/configliere-pr30"],
   "lock": {
     "frozen": true
   },
@@ -38,7 +40,7 @@
     "@effectionx/scope-eval": "npm:@effectionx/scope-eval@0.1.3",
     "@effectionx/stream-helpers": "npm:@effectionx/stream-helpers@0.8.3",
     "@effectionx/timebox": "npm:@effectionx/timebox@0.4.3",
-    "configliere": "npm:configliere@^0.4.0",
+    "configliere": "npm:configliere@^0.4.0-pr",
     "expect": "npm:expect@^30",
     "@std/encoding/base64": "jsr:@std/encoding@^1/base64",
     "@std/expect": "npm:expect@^30",

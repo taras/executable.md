@@ -190,8 +190,8 @@ importers:
         specifier: ^1.0.0
         version: 1.1.0
       configliere:
-        specifier: ^0.4.0
-        version: 0.4.0
+        specifier: https://pkg.pr.new/configliere@30
+        version: https://pkg.pr.new/configliere@30
       effection:
         specifier: 4.1.0
         version: 4.1.0
@@ -1915,8 +1915,9 @@ packages:
     resolution: {integrity: sha512-z67u4ZhzCL/Tydu1lJARtEZYWbWaN7oYLHbsuzocr6y4N6WZAagG3RQ4FW61V1/0+jImpj293XfrcYnd1qxtPg==}
     engines: {node: '>=22.12.0'}
 
-  configliere@0.4.0:
-    resolution: {integrity: sha512-4bxK3+L+FHr9Xm/d69Syvvpvkj7lj7a4zz3B+tchuohg5WKeudyBS+4Oob5Zdgoh8I7+n2lj0lfa8I6cUXfcEg==}
+  configliere@https://pkg.pr.new/configliere@30:
+    resolution: {tarball: https://pkg.pr.new/configliere@30}
+    version: 0.4.0-pr
     engines: {node: '>= 16'}
 
   cross-spawn@7.0.6:
@@ -3716,7 +3717,7 @@ snapshots:
 
   commander@15.0.0: {}
 
-  configliere@0.4.0:
+  configliere@https://pkg.pr.new/configliere@30:
     dependencies:
       '@standard-schema/spec': 1.1.0
 
