@@ -78,7 +78,7 @@
     "test:deno": "deno task test",
     "lint": "oxlint -c .oxlintrc.json --ignore-pattern 'scripts/tests/fixtures/**' --ignore-pattern '**/npm/**' --ignore-pattern 'packages/workflow/vendor/cloudflare-computer-dofs/**' --ignore-pattern 'packages/acp/vendor/acpx/**' packages scripts .reviews/components && oxfmt --check packages scripts .reviews/components/*.ts",
     "fmt": "oxfmt --write packages scripts .reviews/components/*.ts",
-    "test:cloudflare": "vitest run --config vitest.config.ts",
+    "test:cloudflare": "node ./node_modules/vitest/vitest.mjs run --config vitest.config.ts",
     "check:cloudflare": "tsc -p packages/workflow/tsconfig.cloudflare.json"
   },
   "workspaces": [
