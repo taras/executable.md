@@ -22,6 +22,9 @@ import type { WorkflowRunDatabase } from "../../src/storage/api.ts";
 /** The run every scripted owner here answers about. */
 export const RUN_ID = "5cktgrv2zyutngh7bbddr2tyg2b5a567cg725hu5e7u42orerxaa";
 
+/** How many entries one anchored page carries, so paging is exercised at all. */
+const JOURNAL_PAGE = 2;
+
 /**
  * One owner, scripted at the wire.
  *
@@ -55,6 +58,17 @@ export function scriptedOwner(captured: CapturedWorkspace, retained: ScriptedRet
     manifests.set(digest, content.manifestBytes);
   }
   const staged = new Map<string, Uint8Array>();
+  /**
+   * The filtered journal, as the owner keeps it.
+   *
+   * Each entry carries the id this owner minted for it and the Workspace root
+   * the transaction that appended it selected — the publication's proposed root
+   * when it published one, and the root the transaction expected when it did
+   * not. A root and a mapping beside an empty journal is not a state a real
+   * owner can reach, so this keeps all three or none.
+   */
+  const journal: { eventId: string; record: string; workspaceRootId: string }[] = [];
+  let minted = 0;
   const repositories = new Map<string, Record<string, unknown>>();
   const worktrees = new Map<string, Record<string, unknown>>();
   const sessions = new Map<string, Record<string, unknown>>();
@@ -87,7 +101,7 @@ export function scriptedOwner(captured: CapturedWorkspace, retained: ScriptedRet
       },
       retrieval: null,
       workspaceRootId: currentRoot,
-      journalEventId: null,
+      journalEventId: journal.at(-1)?.eventId ?? null,
     };
   }
 
@@ -123,10 +137,40 @@ export function scriptedOwner(captured: CapturedWorkspace, retained: ScriptedRet
         outcome: "performed",
         value: {
           workspaceRootId: currentRoot,
-          journalEventId: null,
+          journalEventId: journal.at(-1)?.eventId ?? null,
           repositories: [...repositories.values()],
           worktrees: [...worktrees.values()],
           agentSessions: [...sessions.values()],
+        },
+      };
+    }
+    if (command === "journal") {
+      // One anchored page per request, continuing exactly where the client
+      // says it is. The anchor is the terminal event the frontier named, so a
+      // page that ran past it or stopped short of it would be a history no
+      // reader could assemble.
+      const anchorEventId = request["anchorEventId"];
+      const afterEventId = request["afterEventId"] ?? null;
+      const from =
+        afterEventId === null
+          ? 0
+          : journal.findIndex((entry) => entry.eventId === afterEventId) + 1;
+      if (from === 0 && afterEventId !== null) {
+        throw new Error("the runner asked to continue from an event this owner never minted");
+      }
+      const page = journal.slice(from, from + JOURNAL_PAGE);
+      return {
+        outcome: "performed",
+        value: {
+          anchorEventId,
+          afterEventId,
+          entries: page.map((entry, index) => ({
+            eventId: entry.eventId,
+            previousEventId: index === 0 ? afterEventId : (page[index - 1]?.eventId ?? null),
+            record: entry.record,
+            workspaceRootId: entry.workspaceRootId,
+          })),
+          done: from + page.length >= journal.length,
         },
       };
     }
@@ -221,11 +265,21 @@ export function scriptedOwner(captured: CapturedWorkspace, retained: ScriptedRet
       }
     }
     staged.clear();
+    // Appended in the same step that moved the root and merged the mappings:
+    // the events, each carrying the root this transaction selected.
+    for (const record of events) {
+      minted += 1;
+      journal.push({
+        eventId: `owner-event-${minted}`,
+        record: String(record),
+        workspaceRootId: currentRoot,
+      });
+    }
     return {
       outcome: "performed",
       value: {
         workspaceRootId: currentRoot,
-        journalEventIds: events.map((_entry, index) => `event-${index}`),
+        journalEventIds: journal.slice(journal.length - events.length).map((e) => e.eventId),
       },
     };
   }
@@ -263,6 +317,10 @@ export function scriptedOwner(captured: CapturedWorkspace, retained: ScriptedRet
     commits,
     get currentRoot(): string {
       return currentRoot;
+    },
+    /** The filtered journal this owner retains, as it would answer a read. */
+    entries(): readonly { eventId: string; record: string; workspaceRootId: string }[] {
+      return journal.map((entry) => ({ ...entry }));
     },
     refuse(reason: string): void {
       refusal = reason;

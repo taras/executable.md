@@ -18,7 +18,18 @@
 
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { ensure, type Operation, resource, scoped } from "effection";
+import { ensure, type Operation, resource, scoped, sleep, spawn, withResolvers } from "effection";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { readTextFile } from "@effectionx/fs";
+import { agentIdentityComponents, collect, retainedSource } from "@executablemd/core";
+import { executeInstalled } from "@executablemd/core/host";
+import type {
+  AcpRuntimeDoctorReport,
+  AcpRuntimeHandle,
+  AcpRuntimeOptions,
+  ProbeCapableRuntime,
+} from "@executablemd/acp";
 import { WorkflowInputDelivery, WorkflowLifecycle } from "@executablemd/workflow";
 import type { WorkflowRunDatabase } from "@executablemd/workflow";
 import type {
@@ -42,23 +53,14 @@ import {
   useHostSpy,
 } from "../../workflow/tests/support/remote-owner-script.ts";
 import { useBareRemote } from "../../workflow/tests/support/git-remotes.ts";
-import {
-  agentSessionKey,
-  resolveAgentSession,
-  transactAgentSessions,
-} from "@executablemd/workflow/deno";
-import type { ProviderAssertion } from "@executablemd/workflow/deno";
+import { useWorkflowAgentProfile, workflowSessionPolicyDigest } from "../src/workflow-agent.ts";
+import type { WorkflowAgentProfileOptions } from "../src/workflow-agent.ts";
+import { createFakeAcp, makeStore, tripwireAcp } from "./support/fake-acp.ts";
+import type { FakeAcp } from "./support/fake-acp.ts";
+import { useTempDirectory } from "@executablemd/test-support/temp";
 
 const RUN_ID = "5cktgrv2zyutngh7bbddr2tyg2b5a567cg725hu5e7u42orerxaa";
 
-/** The session this run's Agent profile is about. */
-const IDENTITY = {
-  provider: "acpx",
-  agentCommand: "/usr/bin/claude",
-  sessionIdentity: "expansion-1",
-};
-const POLICY = "policy-1";
-const ASSERTED: ProviderAssertion = { kind: "acp", value: "conversation-1" };
 const OTHER_RUN = "4bxsfqu1yxtsmfg6aaccq1sxf1a4z456bf614gt4d6t31nqdqwzz";
 const ENDPOINT = "https://owner.example/workflow";
 const RELEASE = "factory-2026.09.10-abcdef";
@@ -442,7 +444,7 @@ describe("the configured remote workflow host", () => {
     expect(JSON.stringify(proposals[0]?.["publication"])).toContain("/NOTES.md");
   });
 
-  it("clones, retains and reattaches a Repository, then publishes a Git mutation", function* () {
+  it("clones and retains a Repository, then continues its Git mutation from that history", function* () {
     const outcome = yield* scoped(function* () {
       const remote = yield* useBareRemote({
         commits: [
@@ -462,6 +464,11 @@ describe("the configured remote workflow host", () => {
       });
       const captured = yield* startingTree();
       const owner = scriptedOwner(captured);
+      // Installed around both executions, at the position a runtime entrypoint
+      // installs it and with a working directory a workflow run must never
+      // resolve against: anything either execution let fall through to the
+      // caller's filesystem is visible here rather than silent.
+      const ambient = yield* useHostSpy();
       const source = [
         "# Remote",
         "",
@@ -474,158 +481,12 @@ describe("the configured remote workflow host", () => {
       ].join("\n");
 
       /** One document execution through the configured public host. */
-      function* runThrough(authored: string): Operation<{ output: string; ambient: unknown[] }> {
+      function* runThrough(
+        authored: string,
+        socket: OwnerSocket,
+      ): Operation<{ output: string; failure: string }> {
         return yield* scoped(function* () {
-          const built = yield* hostFor(owner);
-          const transitions = yield* built.useRunHost();
-          const taken = yield* WorkflowLifecycle.operations.acquireExecutor(RUN_ID);
-          if (!taken.ok || taken.value.kind !== "acquired") {
-            throw new Error("expected the configured host to take the acquisition");
-          }
-          const begun = yield* transitions.begin(taken.value.lock, {
-            runId: RUN_ID,
-            action: "resume",
-          });
-          if (!begun.ok) {
-            throw begun.error;
-          }
-          const ambient = yield* useHostSpy();
-          const rendered = yield* built.attach(
-            begun.value.database,
-            documentOf(authored, begun.value.database),
-          );
-          return { output: String(rendered), ambient };
-        });
-      }
-
-      const first = yield* runThrough(source);
-      const afterFirst = owner.commits.length;
-
-      // The remote is gone before the continuation runs. A replay that cloned
-      // again would have nowhere to clone from, which is the point.
-      yield* remote.remove();
-      const again = yield* runThrough(source);
-      const continuation = owner.commits.slice(afterFirst);
-
-      return { first, again, continuation, owner };
-    });
-
-    // The document cloned on the runner, switched the checkout and read the
-    // branch's own file back — all against runner-owned materialization.
-    expect(outcome.first.output).toContain("switched to: release");
-    expect(outcome.first.ambient).toEqual([]);
-    // The owner retained the Repository identity with the root that holds its
-    // checkout: one transaction carrying the mapping and the publication.
-    const proposals = published(outcome.owner.commits);
-    const retaining = proposals.filter((intent) => {
-      const mappings = intent["mappings"];
-      return (
-        Array.isArray(mappings) && mappings.some((m) => Reflect.get(m, "kind") === "repository")
-      );
-    });
-    expect(retaining).toHaveLength(1);
-    expect(JSON.stringify(retaining[0]?.["publication"])).toContain("/project");
-    // The retained *record* names the checkout by its logical Workspace path
-    // and the remote by a fingerprint. No locator and no host path is in it:
-    // the locator travels beside the record, which is where a reattachment
-    // reads it from and where it is not part of retained identity.
-    const retainedMappings = retaining[0]?.["mappings"];
-    const proposed = Array.isArray(retainedMappings) ? retainedMappings[0] : undefined;
-    const record = JSON.stringify(Reflect.get(proposed ?? {}, "record"));
-    expect(record).toContain("locatorFingerprint");
-    expect(record).toContain('"checkoutPath":"/repositories/');
-    expect(record).not.toContain("/tmp");
-    expect(record).not.toContain("/var/folders");
-    expect(record).not.toContain("xmd-remote-");
-    expect(record).not.toContain('locator"');
-    // The Git mutation is its own owner transaction, and it starts from the
-    // root the Repository creation published: one atomic step after another,
-    // never one proposal carrying both.
-    const gitProposal = proposals.find((intent) => {
-      const held = intent["mappings"];
-      return Array.isArray(held) && !held.some((m) => Reflect.get(m, "kind") === "repository");
-    });
-    expect(gitProposal).not.toBe(undefined);
-    expect(gitProposal?.["expectedWorkspaceRootId"]).toBe(
-      Reflect.get(retaining[0]?.["publication"] ?? {}, "proposedWorkspaceRootId"),
-    );
-    expect(Array.isArray(gitProposal?.["events"]) && gitProposal?.["events"]).toHaveLength(1);
-
-    // The continuation reconstructed the retained checkout from the owner's
-    // committed frontier, with no remote left to clone from.
-    expect(outcome.again.output).toContain("switched to: release");
-    expect(outcome.again.ambient).toEqual([]);
-    // And it retained no second Repository: the recorded creation restored
-    // rather than cloning again.
-    const recreated = outcome.continuation.filter((intent) => {
-      const mappings = intent["mappings"];
-      return (
-        Array.isArray(mappings) && mappings.some((m) => Reflect.get(m, "kind") === "repository")
-      );
-    });
-    expect(recreated).toEqual([]);
-  });
-
-  it("installs a configured Agent profile, retains its mapping and reattaches it", function* () {
-    /**
-     * The profile this host configures, driving the shipped session policy.
-     *
-     * The provider itself stands in — establishing a conversation needs an
-     * agent process, and what is under test is which durable identity this run
-     * accepts. Everything around it is production code: the same
-     * `resolveAgentSession` the shipped profile calls, inside the same
-     * `transactAgentSessions` it commits through, reached through the
-     * configured host's own `capabilities.agent`.
-     */
-    function profile(
-      log: string[],
-      asserted: ProviderAssertion,
-      failBeforeCommit = false,
-    ): (attachment: { readonly database: WorkflowRunDatabase }) => Operation<void> {
-      return ({ database }) =>
-        (function* (): Operation<void> {
-          log.push("installed");
-          const key = agentSessionKey(IDENTITY);
-          const committed = yield* transactAgentSessions(database, function* (sessions) {
-            const retained = sessions.read(key);
-            // The provider is asked here, outside the owner's transaction —
-            // this stands in for that — and the policy decides what the run
-            // accepts.
-            log.push(retained === undefined ? "provider:create" : "provider:assert");
-            const resolution = resolveAgentSession(retained, POLICY, [asserted], IDENTITY);
-            if (failBeforeCommit) {
-              throw new Error("PlantedProfileFailure");
-            }
-            if (retained === undefined && resolution.kind === "reattach") {
-              sessions.commit(resolution.record);
-              log.push("committed");
-            } else {
-              log.push("reattached");
-            }
-          });
-          if (!committed.ok) {
-            throw committed.error;
-          }
-          // Only after the mapping is the run's does the profile speak to the
-          // conversation at all.
-          log.push("prompt");
-        })();
-    }
-
-    const outcome = yield* scoped(function* () {
-      const captured = yield* startingTree();
-      const owner = scriptedOwner(captured);
-
-      /** One attachment with this profile configured, reporting what it did. */
-      function* attaching(
-        log: string[],
-        asserted: ProviderAssertion,
-        failBeforeCommit = false,
-      ): Operation<string> {
-        return yield* scoped(function* () {
-          const built = yield* hostFor(owner, {
-            agent: profile(log, asserted, failBeforeCommit),
-          });
+          const built = yield* hostFor({ socket });
           const transitions = yield* built.useRunHost();
           const taken = yield* WorkflowLifecycle.operations.acquireExecutor(RUN_ID);
           if (!taken.ok || taken.value.kind !== "acquired") {
@@ -639,82 +500,367 @@ describe("the configured remote workflow host", () => {
             throw begun.error;
           }
           try {
-            yield* built.attach(
+            const rendered = yield* built.attach(
               begun.value.database,
-              documentOf("# Remote\n", begun.value.database),
+              documentOf(authored, begun.value.database),
             );
-            return "attached";
+            return { output: String(rendered), failure: "" };
           } catch (error) {
-            return error instanceof Error ? `raised:${error.message}` : "raised:other";
+            return {
+              output: "",
+              failure: error instanceof Error ? error.message : "other",
+            };
           }
         });
       }
 
-      const mapped = (): number =>
-        owner.commits.filter((intent) => {
-          const mappings = intent["mappings"];
-          return (
-            Array.isArray(mappings) &&
-            mappings.some((mapping) => Reflect.get(mapping, "kind") === "agent-session")
-          );
-        }).length;
+      // The first execution clones, retains the Repository, and is cancelled
+      // with the Git mutation's proposal still in flight. So the owner decided
+      // the creation and never decided the mutation, and what it holds is the
+      // prefix it accepted rather than a history nobody wrote.
+      const withheld: Record<string, unknown>[] = [];
+      const proposing = withResolvers<void>();
+      const attempt = yield* spawn(() =>
+        runThrough(
+          source,
+          withholding(owner.socket, withheld, () => proposing.resolve()),
+        ),
+      );
+      yield* proposing.operation;
+      yield* attempt.halt();
 
-      // A profile that fails before its mapping commits.
-      const failing: string[] = [];
-      const refused = yield* attaching(failing, ASSERTED, true);
-      const afterFailure = mapped();
+      const accepted = owner.commits.length;
+      const asked = owner.sent.length;
+      const prefix = owner.entries();
 
-      // Then one that establishes and commits.
-      const first: string[] = [];
-      const created = yield* attaching(first, ASSERTED);
-      const afterCreate = mapped();
-
-      // A later attachment, from what the owner now retains.
-      const second: string[] = [];
-      const again = yield* attaching(second, ASSERTED);
-      const afterReattach = mapped();
-
-      // And one whose provider asserts a different conversation.
-      const conflicting: string[] = [];
-      const replaced = yield* attaching(conflicting, {
-        kind: ASSERTED.kind,
-        value: "another-conversation",
-      });
+      // The remote is gone before the continuation runs, so nothing it does
+      // can involve the network — and what it continues from is the journal the
+      // owner retained beside the root and the mapping.
+      yield* remote.remove();
+      const again = yield* runThrough(source, owner.socket);
 
       return {
-        refused,
-        failing,
-        afterFailure,
-        created,
-        first,
-        afterCreate,
+        withheld,
         again,
-        second,
-        afterReattach,
-        replaced,
-        conflicting,
+        ambient,
+        retained: prefix,
+        creation: owner.commits.slice(0, accepted),
+        continuation: owner.commits.slice(accepted),
+        replayed: owner.sent.slice(asked),
+        owner,
       };
     });
 
-    // The installer ran inside the attachment, and a failure before the commit
-    // retained nothing.
-    expect(outcome.failing).toEqual(["installed", "provider:create"]);
-    expect(outcome.refused).toContain("raised:");
-    expect(outcome.afterFailure).toBe(0);
-    // The next attachment establishes it: policy, then commit, then the first
-    // prompt — in that order, and one mapping at the owner.
-    expect(outcome.created).toBe("attached");
-    expect(outcome.first).toEqual(["installed", "provider:create", "committed", "prompt"]);
-    expect(outcome.afterCreate).toBe(1);
-    // A later attachment reattaches the exact retained assertion, and neither
-    // creates a session nor retains a second mapping.
+    // One proposal reached the owner, carrying the Repository mapping and the
+    // root that holds its checkout; the mutation's proposal reached it never.
+    const retaining = published(outcome.creation);
+    expect(retaining).toHaveLength(1);
+    expect(JSON.stringify(retaining[0]?.["publication"])).toContain("/project");
+    expect(outcome.withheld).toHaveLength(1);
+    expect(only(outcome.withheld[0])).toContain('"type":"workspace_git_switch"');
+    // The retained *record* names the checkout by its logical Workspace path
+    // and the remote by a fingerprint. No locator and no host path is in it:
+    // the locator travels beside the record, which is where a reattachment
+    // reads it from and where it is not part of retained identity.
+    const retainedMappings = retaining[0]?.["mappings"];
+    const proposed = Array.isArray(retainedMappings) ? retainedMappings[0] : undefined;
+    const record = JSON.stringify(Reflect.get(proposed ?? {}, "record"));
+    expect(record).toContain("locatorFingerprint");
+    expect(record).toContain('"checkoutPath":"/repositories/');
+    expect(record).not.toContain("/tmp");
+    expect(record).not.toContain("/var/folders");
+    expect(record).not.toContain("xmd-remote-");
+    expect(record).not.toContain('locator"');
+
+    // What the owner holds is one coherent prefix: the creation's own journal
+    // row, carrying the root that transaction published, and nothing from the
+    // transaction it never decided. A root and a mapping beside a journal
+    // missing the transaction that created them is not a state this owner can
+    // be in, and neither is a journal holding a transaction the owner refused
+    // to decide.
+    const creationRoot = Reflect.get(
+      retaining[0]?.["publication"] ?? {},
+      "proposedWorkspaceRootId",
+    );
+    const repositoryEvent = outcome.retained.find((entry) =>
+      entry.record.includes('"type":"workspace_repository"'),
+    );
+    expect(repositoryEvent?.workspaceRootId).toBe(creationRoot);
+    expect(
+      outcome.retained.filter((entry) => entry.record.includes('"type":"workspace_git_switch"')),
+    ).toEqual([]);
+    expect(outcome.retained.at(-1)?.workspaceRootId).toBe(creationRoot);
+
+    // The continuation read that prefix — anchored pages, from the terminal
+    // event the frontier named.
+    const pages = outcome.replayed.filter((request) => request["command"] === "journal");
+    expect(pages.length > 0).toBe(true);
+    expect(pages[0]?.["anchorEventId"]).toBe(outcome.retained.at(-1)?.eventId);
+
+    // The recorded creation restored rather than cloning again — the remote it
+    // was cloned from no longer exists — and the checkout the Git mutation
+    // needed was reconstructed from the root that replayed record selected.
+    // The live switch started from exactly that root and moved a checkout that
+    // really was on `main`, which is what a checkout rebuilt from the recorded
+    // Workspace and proved against the record looks like.
+    expect(outcome.again.failure).toBe("");
+    const mutation = published(outcome.continuation);
+    const switched = mutation.find((intent) =>
+      only(intent).includes('"type":"workspace_git_switch"'),
+    );
+    expect(switched?.["expectedWorkspaceRootId"]).toBe(creationRoot);
+    expect(only(switched)).toContain('"before":{"branch":"main"');
+    expect(only(switched)).toContain('"after":{"branch":"release"');
+    // And then the branch's own file, read live from that same checkout.
+    const read = mutation.find((intent) => only(intent).includes('"type":"workspace_file"'));
+    expect(only(read)).toContain('"content":"release');
+    expect(outcome.again.output).toContain("switched to: release");
+
+    // Two transactions and no third: only the work the cancellation left
+    // undone. The mutation's own journal row carries the root it published,
+    // and that root is the run's — a read moves nothing, so the switch is the
+    // last thing that moved it.
+    expect(mutation).toHaveLength(2);
+    const mutationRoot = Reflect.get(switched?.["publication"] ?? {}, "proposedWorkspaceRootId");
+    const gitEvent = outcome.owner
+      .entries()
+      .find((entry) => entry.record.includes('"type":"workspace_git_switch"'));
+    expect(gitEvent?.workspaceRootId).toBe(mutationRoot);
+    expect(outcome.owner.currentRoot).toBe(mutationRoot);
+    // Nothing retained a second Repository, and the ambient host filesystem was
+    // asked for nothing by either execution.
+    const recreated = mutation.filter((intent) => {
+      const mappings = intent["mappings"];
+      return (
+        Array.isArray(mappings) && mappings.some((m) => Reflect.get(m, "kind") === "repository")
+      );
+    });
+    expect(recreated).toEqual([]);
+    expect(outcome.ambient).toEqual([]);
+  });
+
+  it("prompts through the shipped Agent profile, and retains the conversation it got", function* () {
+    const root = yield* useTempDirectory("xmd-remote-agent-");
+    const source = yield* readTextFile(join(FIXTURES, "claude-session.md"));
+
+    const outcome = yield* scoped(function* () {
+      const captured = yield* startingTree();
+      const owner = scriptedOwner(captured);
+      // One provider store across every attachment below: a provider keeps its
+      // sessions across processes, so a fresh one would be a provider that
+      // forgot rather than a run that came back.
+      const store = makeStore();
+
+      // The first attachment is cancelled while the second prompt's turn is in
+      // flight. The session has been established and its mapping has committed
+      // by then, so what the cancellation leaves unfinished is the turn rather
+      // than the retention — which is what gives the restart below something
+      // to resolve from.
+      const live = createFakeAcp();
+      live.script({ reply: "the reviewer saw the release notes" });
+      live.script({ reply: "", manual: true });
+      const marks: Mark[] = [];
+      const interrupted = yield* spawn(() =>
+        attaching(sampled(owner.socket, live, marks), root, source, {
+          createRuntime: live.create,
+          sessionStore: store,
+        }),
+      );
+      yield* live.startedTurns(2);
+      yield* interrupted.halt();
+      const created = retained(owner);
+      const asserted = storeAssertions(store);
+
+      // The restart: the same run, the same provider store, and a provider that
+      // answers the turn the first attempt never finished.
+      const resumed = createFakeAcp();
+      resumed.script({ reply: "and they recommended shipping it" });
+      const again = yield* attaching(owner.socket, root, source, {
+        createRuntime: resumed.create,
+        sessionStore: store,
+      });
+
+      // And once the document has finished, a further attachment restores it
+      // from what the owner retains and reaches no provider at all — not even
+      // to create a runtime.
+      const reached: string[] = [];
+      const replayed = yield* attaching(owner.socket, root, source, {
+        createRuntime: tripwireAcp((what) => reached.push(what)),
+        sessionStore: store,
+      });
+
+      return {
+        created,
+        asserted,
+        marks,
+        establishedFirst: established(live),
+        promptedFirst: [...live.prompts],
+        again,
+        establishedAgain: established(resumed),
+        promptedAgain: [...resumed.prompts],
+        reattached: retained(owner),
+        held: storeAssertions(store),
+        replayed,
+        reached,
+      };
+    });
+
+    // One session, established on the runner, and one mapping at the owner
+    // carrying exactly what the provider asserted about it — under the shipped
+    // session policy rather than a digest this test invented.
+    expect(outcome.establishedFirst).toHaveLength(1);
+    expect(outcome.created).toHaveLength(1);
+    expect(member(outcome.created[0], "provider")).toBe("acpx");
+    expect(member(outcome.created[0], "policy")).toBe(workflowSessionPolicyDigest());
+    expect(member(member(outcome.created[0], "assertion"), "kind")).toBe("acpx.agentSessionId");
+    expect([String(member(member(outcome.created[0], "assertion"), "value"))]).toEqual(
+      outcome.asserted,
+    );
+    // The order is the whole of it, sampled at the owner: the conversation
+    // existed, the owner then accepted which one it was, and only then did
+    // anything prompt it.
+    expect(outcome.marks).toEqual([{ ensured: 1, prompts: 0 }]);
+    expect(outcome.promptedFirst).toHaveLength(2);
+    expect(outcome.promptedFirst[0]).toContain("What did the reviewer see?");
+
+    // The restart reattaches the exact conversation: the same placement, the
+    // same provider-native identity, no second session and no second mapping.
     expect(outcome.again).toBe("attached");
-    expect(outcome.second).toEqual(["installed", "provider:assert", "reattached", "prompt"]);
-    expect(outcome.afterReattach).toBe(1);
-    // A different conversation under the same identity is refused before any
-    // replacement, and still nothing more is retained.
-    expect(outcome.replaced).toContain("raised:");
-    expect(outcome.conflicting).toEqual(["installed", "provider:assert"]);
+    expect(outcome.establishedAgain).toEqual(outcome.establishedFirst);
+    expect(outcome.held).toEqual(outcome.asserted);
+    expect(outcome.reattached).toEqual(outcome.created);
+    // And it prompted only the work the cancellation left unfinished.
+    expect(outcome.promptedAgain).toHaveLength(1);
+    expect(outcome.promptedAgain[0]).toContain("And what did they recommend?");
+
+    // A completed document restores without a provider.
+    expect(outcome.replayed).toBe("attached");
+    expect(outcome.reached).toEqual([]);
+  });
+
+  it("proposes no mapping for a session that never became one", function* () {
+    const captured = yield* startingTree();
+    const root = yield* useTempDirectory("xmd-remote-agent-window-");
+    const source = yield* readTextFile(join(FIXTURES, "claude-session.md"));
+
+    // A provider whose establishment fails outright.
+    const failed = yield* scoped(function* () {
+      const owner = scriptedOwner(captured);
+      const outcome = yield* attaching(owner.socket, root, source, {
+        createRuntime: establishing(
+          () => {},
+          () => Promise.reject(new Error("PlantedEstablishFailure")),
+          [],
+        ),
+        sessionStore: makeStore(),
+      });
+      return { outcome, proposed: retained(owner) };
+    });
+
+    // And one cancelled with the establishment still in flight — a real
+    // Effection cancellation of the attachment, in the window between asking a
+    // provider for a conversation and retaining which one it is.
+    const cancelled = yield* scoped(function* () {
+      const owner = scriptedOwner(captured);
+      const store = makeStore();
+      const asking = withResolvers<void>();
+      const closed: string[] = [];
+      let answer: (handle: AcpRuntimeHandle) => void = () => {};
+      const attempt = yield* spawn(() =>
+        attaching(owner.socket, root, source, {
+          createRuntime: establishing(
+            () => asking.resolve(),
+            () =>
+              new Promise<AcpRuntimeHandle>((resolve) => {
+                answer = resolve;
+              }),
+            closed,
+          ),
+          sessionStore: store,
+        }),
+      );
+      yield* asking.operation;
+      const halting = yield* spawn(() => attempt.halt());
+      // Cancellation is delivered on microtasks, so by the next macrotask the
+      // provider's own cleanup is what is waiting for this answer rather than
+      // the run. `closed` below is what confirms this stood in that window: a
+      // provider that answers a cancelled establishment has a live session to
+      // give back, and giving it back is the only thing left to do with it.
+      yield* sleep(0);
+      answer(ESTABLISHED_LATE);
+      yield* halting;
+      return {
+        closed,
+        proposed: retained(owner),
+        asserted: storeAssertions(store),
+      };
+    });
+
+    expect(failed.outcome).toContain("raised:");
+    expect(failed.proposed).toEqual([]);
+    // The cancellation landed where it was aimed, and what the provider
+    // answered afterwards was closed rather than adopted.
+    expect(cancelled.closed).toEqual(["cancelled before the session was established"]);
+    // Nothing was retained and nothing was asserted, so a later attachment
+    // resolves from an empty run rather than from a conversation nobody can
+    // name.
+    expect(cancelled.proposed).toEqual([]);
+    expect(cancelled.asserted).toEqual([]);
+  });
+
+  it("refuses a conversation the provider replaced, before prompting or retaining", function* () {
+    const captured = yield* startingTree();
+    const root = yield* useTempDirectory("xmd-remote-agent-conflict-");
+    const source = yield* readTextFile(join(FIXTURES, "claude-session.md"));
+
+    const outcome = yield* scoped(function* () {
+      // One run that established a session, so what the owner below retains is
+      // a mapping this stack actually wrote rather than one this test composed.
+      const establishedRun = scriptedOwner(captured);
+      const store = makeStore();
+      const live = createFakeAcp();
+      live.script({ reply: "the reviewer saw the release notes" });
+      live.script({ reply: "and they recommended shipping it" });
+      const first = yield* attaching(establishedRun.socket, root, source, {
+        createRuntime: live.create,
+        sessionStore: store,
+      });
+      const record = retained(establishedRun);
+
+      // The same run as an owner holds it, and a provider whose store now
+      // asserts a different conversation under the same placement.
+      const owner = scriptedOwner(captured, { agentSessions: record });
+      const replacement = makeStore();
+      for (const [key, held] of store.records) {
+        replacement.records.set(key, {
+          ...held,
+          agentSessionId: "another-conversation",
+        });
+      }
+      const provider = createFakeAcp();
+      const refused = yield* attaching(owner.socket, root, source, {
+        createRuntime: provider.create,
+        sessionStore: replacement,
+      });
+      return {
+        first,
+        record,
+        refused,
+        ensured: provider.ensured.length,
+        prompts: provider.prompts.length,
+        proposed: retained(owner),
+      };
+    });
+
+    expect(outcome.first).toBe("attached");
+    expect(outcome.record).toHaveLength(1);
+    // Refused where the decision belongs: before a replacement session is
+    // established and before anything is prompted. The owner was asked to
+    // retain nothing, so what it holds is still the conversation this run had.
+    expect(outcome.refused).toContain("different durable identity");
+    expect(outcome.ensured).toBe(0);
+    expect(outcome.prompts).toBe(0);
+    expect(outcome.proposed).toEqual([]);
   });
 
   it("attaches nothing it did not open", function* () {
@@ -740,4 +886,265 @@ describe("the configured remote workflow host", () => {
 // deno-lint-ignore require-yield
 function* never(): Operation<void> {
   throw new Error("PLANTED-ATTACHED-OPERATION-RAN");
+}
+
+/** Where the workflow Agent documents this suite drives live. */
+const FIXTURES = join(dirname(fileURLToPath(import.meta.url)), "fixtures", "workflow-agent");
+
+/**
+ * The journal records one proposal carries, as the owner receives them.
+ *
+ * Read out of the intent rather than re-encoded, because a record is a string
+ * on the wire and searching its JSON encoding would be searching the escaping.
+ */
+function only(intent: Record<string, unknown> | undefined): string {
+  const events = intent?.["events"];
+  return (Array.isArray(events) ? events : []).map((event) => String(event)).join("");
+}
+
+/** One member of a value nothing has checked. */
+function member(value: unknown, name: string): unknown {
+  return value !== null && typeof value === "object" ? Reflect.get(value, name) : undefined;
+}
+
+/**
+ * The Agent-session mapping records this owner was asked to retain, in order.
+ *
+ * Read back out of the intents it received, so what is counted is what crossed
+ * rather than what this process believes it staged.
+ */
+function retained(owner: {
+  readonly commits: readonly Record<string, unknown>[];
+}): Record<string, unknown>[] {
+  return owner.commits.flatMap((intent) => {
+    const proposed = intent["mappings"];
+    return (Array.isArray(proposed) ? proposed : [])
+      .filter((mapping) => member(mapping, "kind") === "agent-session")
+      .map((mapping) => JSON.parse(JSON.stringify(member(mapping, "record"))));
+  });
+}
+
+/** The distinct sessions this provider was asked to establish. */
+function established(fake: FakeAcp): string[] {
+  return [...new Set(fake.ensured.map((input) => input.sessionKey))].sort();
+}
+
+/** Every provider-native identity the substituted store currently holds. */
+function storeAssertions(store: ReturnType<typeof makeStore>): string[] {
+  return [...store.records.values()]
+    .flatMap((record) => (record.agentSessionId === undefined ? [] : [record.agentSessionId]))
+    .sort();
+}
+
+/** What the provider had done by the time the owner accepted a mapping. */
+interface Mark {
+  readonly ensured: number;
+  readonly prompts: number;
+}
+
+/**
+ * The owner's socket, with the provider sampled at each mapping commit.
+ *
+ * The scripted owner answers inside `send`, so what is read after it returns is
+ * what the provider had done at the moment the mapping was accepted. That is
+ * the only place the order between establishing a conversation, retaining which
+ * one it is, and prompting it can be observed at all — afterwards, all three
+ * have happened.
+ */
+function sampled(socket: OwnerSocket, fake: FakeAcp, marks: Mark[]): OwnerSocket {
+  return {
+    send(data: string): void {
+      const intent: Record<string, unknown> = JSON.parse(data);
+      const proposed = intent["mappings"];
+      const carries = (Array.isArray(proposed) ? proposed : []).some(
+        (mapping) => member(mapping, "kind") === "agent-session",
+      );
+      socket.send(data);
+      if (carries) {
+        marks.push({
+          ensured: fake.ensured.length,
+          prompts: fake.prompts.length,
+        });
+      }
+    },
+    close(): void {
+      socket.close();
+    },
+    addEventListener(type: "message" | "close" | "error", listener: SocketListener): void {
+      socket.addEventListener(type, listener);
+    },
+    removeEventListener(type: "message" | "close" | "error", listener: SocketListener): void {
+      socket.removeEventListener(type, listener);
+    },
+  };
+}
+
+/** What a turn against a session that was never established would do. */
+function tooEarly(): never {
+  throw new Error("PLANTED-TURN-WITHOUT-A-SESSION");
+}
+
+/**
+ * A provider whose establishment does one thing: what a case here tells it to.
+ *
+ * Two of the cases are about the window between asking a provider for a
+ * conversation and retaining which one it is. Nothing is retained inside it, so
+ * what has to be driven is the provider's own answer — one that fails, and one
+ * that never comes.
+ */
+function establishing(
+  asking: () => void,
+  answer: () => Promise<AcpRuntimeHandle>,
+  closed: string[],
+): (options: AcpRuntimeOptions) => ProbeCapableRuntime {
+  return function create(): ProbeCapableRuntime {
+    return {
+      doctor(): Promise<AcpRuntimeDoctorReport> {
+        return Promise.resolve({ ok: true, message: "fake agent ready" });
+      },
+      ensureSession(): Promise<AcpRuntimeHandle> {
+        asking();
+        return answer();
+      },
+      startTurn: tooEarly,
+      runTurn: tooEarly,
+      cancel(): Promise<void> {
+        return Promise.resolve();
+      },
+      close(input: { readonly handle: AcpRuntimeHandle; readonly reason: string }): Promise<void> {
+        closed.push(input.reason);
+        return Promise.resolve();
+      },
+    };
+  };
+}
+
+/**
+ * The session a cancelled establishment answers with, too late to be used.
+ *
+ * A provider asked for a conversation answers whether or not anybody is still
+ * waiting, so this is a live session with nothing left to do with it but give
+ * it back.
+ */
+const ESTABLISHED_LATE: AcpRuntimeHandle = {
+  sessionKey: "cancelled-session",
+  backend: "acpx",
+  runtimeSessionName: "cancelled-session",
+  acpxRecordId: "cancelled-session",
+  backendSessionId: "acp:cancelled-session",
+  agentSessionId: "agent-session:cancelled-session",
+};
+
+/**
+ * One authored Agent document, executed as this run's root inside the
+ * attachment.
+ *
+ * Installed the way `xmd` itself installs it: `<Session>` names durable work
+ * after its own invocation, so the execution is told about the identity
+ * components rather than having them registered around it.
+ */
+function prompting(source: string, database: WorkflowRunDatabase): Operation<unknown> {
+  return scoped(function* () {
+    return yield* collect(
+      yield* executeInstalled(
+        {
+          ...retainedSource("workflows/claude-session.md", source),
+          stream: database.journal,
+        },
+        [{ components: agentIdentityComponents() }],
+      ),
+    );
+  });
+}
+
+/**
+ * One attachment with the shipped Agent profile configured, and what it did.
+ *
+ * The profile is `useWorkflowAgentProfile()` itself, passed through the public
+ * configuration's `capabilities.agent`; only the agent process and the store it
+ * keeps its own sessions in are substituted.
+ */
+function attaching(
+  socket: OwnerSocket,
+  root: string,
+  source: string,
+  provider: {
+    readonly createRuntime: WorkflowAgentProfileOptions["createRuntime"];
+    readonly sessionStore: WorkflowAgentProfileOptions["sessionStore"];
+  },
+): Operation<string> {
+  return scoped(function* () {
+    const built = yield* hostFor(
+      { socket },
+      {
+        agent: (attachment) =>
+          useWorkflowAgentProfile({
+            root,
+            attachment,
+            defaultAgent: "claude",
+            ...provider,
+          }),
+      },
+    );
+    const transitions = yield* built.useRunHost();
+    const taken = yield* WorkflowLifecycle.operations.acquireExecutor(RUN_ID);
+    if (!taken.ok || taken.value.kind !== "acquired") {
+      throw new Error("expected the configured host to take the acquisition");
+    }
+    const begun = yield* transitions.begin(taken.value.lock, {
+      runId: RUN_ID,
+      action: "resume",
+    });
+    if (!begun.ok) {
+      throw begun.error;
+    }
+    try {
+      yield* built.attach(begun.value.database, prompting(source, begun.value.database));
+      return "attached";
+    } catch (error) {
+      return error instanceof Error ? `raised:${error.message}` : "raised:other";
+    }
+  });
+}
+
+/**
+ * The owner's socket, with one Workspace proposal held back.
+ *
+ * How a partial history is produced without inventing one. The Repository
+ * creation commits whole — root, staged content, mapping and its own journal
+ * row — and the proposal after it is still in flight when the run is
+ * cancelled: it never reaches the owner, so the owner never decides it and
+ * appends nothing for it. What is left is a prefix an owner can actually be
+ * holding, with real live work after it.
+ */
+function withholding(
+  socket: OwnerSocket,
+  withheld: Record<string, unknown>[],
+  reached: () => void,
+): OwnerSocket {
+  return {
+    send(data: string): void {
+      const intent: Record<string, unknown> = JSON.parse(data);
+      const publication = intent["publication"];
+      const mappings = intent["mappings"];
+      const creation = (Array.isArray(mappings) ? mappings : []).some(
+        (mapping) => member(mapping, "kind") === "repository",
+      );
+      if (withheld.length === 0 && publication !== null && publication !== undefined && !creation) {
+        withheld.push(intent);
+        reached();
+        return;
+      }
+      socket.send(data);
+    },
+    close(): void {
+      socket.close();
+    },
+    addEventListener(type: "message" | "close" | "error", listener: SocketListener): void {
+      socket.addEventListener(type, listener);
+    },
+    removeEventListener(type: "message" | "close" | "error", listener: SocketListener): void {
+      socket.removeEventListener(type, listener);
+    },
+  };
 }
