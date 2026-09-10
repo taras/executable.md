@@ -38,6 +38,15 @@ const ROOT_ID = "a".repeat(64);
 const COMMIT = "0".repeat(40);
 const SOURCE = "# Retained\n\ndone.\n";
 
+/**
+ * The same document, with a section in it.
+ *
+ * An exact target is verified against the retained document, so a fixture that
+ * records one has to record a document that offers it. `SOURCE` offers none —
+ * which is what makes it the right document for a recorded selection *failure*.
+ */
+const SECTIONED = "# Retained\n\ndone.\n\n## Stage\n\nstaged.\n";
+
 function record(
   overrides: {
     readonly status?: WorkflowRunStatus;
@@ -179,14 +188,19 @@ describe("the root a completed run replays on", () => {
   it("carries the exact target the import resolved to", function* () {
     const history = [
       entry(
-        rootImport({ kind: "repository", path: "flows/root.md", content: SOURCE, target: "Stage" }),
+        rootImport({
+          kind: "repository",
+          path: "flows/root.md",
+          content: SECTIONED,
+          target: "Stage",
+        }),
       ),
       entry(rootClose({ status: "ok", output: "", value: "" })),
     ];
 
     expect(admitted(retainedReplay(record(), history)).root).toEqual({
       path: "flows/root.md",
-      source: SOURCE,
+      source: SECTIONED,
       retained: true,
       target: "Stage",
     });
@@ -200,7 +214,9 @@ describe("the root a completed run replays on", () => {
           kind: "target-failure",
           path: "flows/root.md",
           content: SOURCE,
-          failure: { kind: "no-match", selector: "Missing*", matches: [], available: ["Retained"] },
+          // The record as the selector actually fails against this document:
+          // it offers no targets at all, so the catalog is empty.
+          failure: { kind: "no-match", selector: "Missing*", matches: [], available: [] },
         }),
       ),
       entry(rootClose(documentFailure())),
@@ -806,6 +822,180 @@ describe("what the root recorded, as one outcome", () => {
     ];
     expect(rootOutcome(failed)?.kind).toBe("damaged");
     expect(retainedReplay(record(), failed).ok).toBe(false);
+  });
+
+  // deno-lint-ignore require-yield
+  it("verifies a recorded selection against the document it recorded", function* () {
+    const succeeded = { status: "ok", output: "done.\n", value: "done.\n" };
+    const unreadable: { says: string; selection: Json }[] = [
+      // An exact target the retained document does not offer. Well-formed, and
+      // a selection that never happened.
+      {
+        says: "a target this document has none of",
+        selection: {
+          kind: "repository",
+          path: "flows/root.md",
+          content: SECTIONED,
+          target: "Missing",
+        },
+      },
+      // The same target, spelled a way canonical encoding does not use.
+      {
+        says: "a target that is not canonically encoded",
+        selection: {
+          kind: "repository",
+          path: "flows/root.md",
+          content: SECTIONED,
+          target: "stage",
+        },
+      },
+      {
+        says: "a target carrying an encoding the canonical form never has",
+        selection: {
+          kind: "repository",
+          path: "flows/root.md",
+          content: SECTIONED,
+          target: "Stage%20",
+        },
+      },
+    ];
+
+    for (const { says, selection } of unreadable) {
+      const entries = [entry(rootImport(selection)), entry(rootClose(succeeded))];
+      expect([says, rootOutcome(entries)?.kind]).toEqual([says, "damaged"]);
+      expect([says, reason(retainedReplay(record(), entries)).includes("cannot be read")]).toEqual([
+        says,
+        true,
+      ]);
+    }
+
+    // Markdown the canonical parser refuses is a document nothing could have
+    // been selected in. Each boundary gets its own copy of it: `gray-matter`
+    // caches an empty parse for a source whose frontmatter it just threw on, so
+    // the refusal is what the *first* read of those bytes answers, and two
+    // reads of one document would not be two reads of one refusal.
+    const unparsed = (frontmatter: string): JournalEntry[] => [
+      entry(
+        rootImport({
+          kind: "repository",
+          path: "flows/root.md",
+          content: `---\n${frontmatter}\n---\n\n# Root\n`,
+        }),
+      ),
+      entry(rootClose(succeeded)),
+    ];
+    expect(rootOutcome(unparsed("returns: [lifecycle"))?.kind).toBe("damaged");
+    expect(reason(retainedReplay(record(), unparsed("returns: [admission")))).toContain(
+      "cannot be read",
+    );
+
+    // And the exact target this document does offer, still admitted.
+    const resolved = [
+      entry(
+        rootImport({
+          kind: "repository",
+          path: "flows/root.md",
+          content: SECTIONED,
+          target: "Stage",
+        }),
+      ),
+      entry(rootClose(succeeded)),
+    ];
+    expect(rootOutcome(resolved)?.kind).toBe("outcome");
+    expect(admitted(retainedReplay(record(), resolved)).root).toEqual({
+      path: "flows/root.md",
+      source: SECTIONED,
+      retained: true,
+      target: "Stage",
+    });
+  });
+
+  // deno-lint-ignore require-yield
+  it("holds a recorded selection failure to the failure it re-derives", function* () {
+    /** The record `"Missing"` actually produces against `SECTIONED`. */
+    const derived = { kind: "no-match", selector: "Missing", matches: [], available: ["Stage"] };
+
+    function failed(failure: Json): JournalEntry[] {
+      return [
+        entry(
+          rootImport({
+            kind: "target-failure",
+            path: "flows/root.md",
+            content: SECTIONED,
+            failure,
+          }),
+        ),
+        entry(rootClose(documentFailure())),
+      ];
+    }
+
+    const forged: { says: string; failure: Json }[] = [
+      // A selector is not a failure record, however plausible.
+      { says: "the selector alone", failure: { selector: "Missing" } },
+      { says: "a member short", failure: { kind: "no-match", selector: "Missing", matches: [] } },
+      {
+        says: "a member more",
+        failure: { ...derived, type: "executablemd.document-target-failure" },
+      },
+      // The document does fail this selector, but not this way.
+      { says: "another kind", failure: { ...derived, kind: "invalid-selector" } },
+      { says: "another catalog", failure: { ...derived, available: ["Stage", "Other"] } },
+      { says: "an emptied catalog", failure: { ...derived, available: [] } },
+      { says: "matches nothing matched", failure: { ...derived, matches: ["Stage"] } },
+      // A selector whose real outcome is not a failure at all.
+      { says: "a selector that resolves", failure: { ...derived, selector: "Stage" } },
+    ];
+
+    for (const { says, failure } of forged) {
+      const entries = failed(failure);
+      expect([says, rootOutcome(entries)?.kind]).toEqual([says, "damaged"]);
+      expect([says, reason(retainedReplay(record(), entries)).includes("cannot be read")]).toEqual([
+        says,
+        true,
+      ]);
+    }
+
+    // The re-derived record, admitted, and replayed as the same request.
+    const coherent = failed(derived);
+    expect(rootOutcome(coherent)).toEqual({ kind: "outcome", status: "failed", reason: HOST });
+    expect(
+      admitted(retainedReplay(record({ status: "failed", stopReason: HOST }), coherent)).root,
+    ).toEqual({
+      path: "flows/root.md",
+      source: SECTIONED,
+      retained: true,
+      target: "Missing",
+    });
+  });
+
+  // deno-lint-ignore require-yield
+  it("agrees only with the terminal a failed selection can reach", function* () {
+    const failure = {
+      kind: "no-match",
+      selector: "Missing",
+      matches: [],
+      available: ["Stage"],
+    };
+    const selection: Json = {
+      kind: "target-failure",
+      path: "flows/root.md",
+      content: SECTIONED,
+      failure,
+    };
+
+    // A selection that named no target is raised out of the root import, so the
+    // document never ran. A successful result over it is two histories.
+    const succeeded = [
+      entry(rootImport(selection)),
+      entry(rootClose({ status: "ok", output: "done.\n", value: "done.\n" })),
+    ];
+    expect(rootOutcome(succeeded)?.kind).toBe("damaged");
+    expect(retainedReplay(record(), succeeded).ok).toBe(false);
+
+    // The failed terminal it can reach, with the reason that exact row names.
+    const failedRun = [entry(rootImport(selection)), entry(rootClose(documentFailure()))];
+    expect(rootOutcome(failedRun)).toEqual({ kind: "outcome", status: "failed", reason: HOST });
+    expect(retainedReplay(record({ status: "failed", stopReason: HOST }), failedRun).ok).toBe(true);
   });
 
   // deno-lint-ignore require-yield

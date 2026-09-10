@@ -14,6 +14,8 @@
  */
 
 import type { DurableEvent } from "@executablemd/durable-streams";
+import { recordedRootImport } from "@executablemd/core/host";
+import type { SelectionOutcome } from "@executablemd/core/host";
 import { WorkflowRequestError } from "../storage/errors.ts";
 import type {
   DocumentExecutionCompletion,
@@ -127,9 +129,16 @@ export function rootOutcome(entries: readonly JournalEntry[]): RetainedTerminal 
   if (imported.kind !== "one") {
     return { kind: "damaged" };
   }
-  return document.kind === "ok"
-    ? { kind: "outcome", status: "completed", reason: undefined }
-    : { kind: "outcome", status: "failed", reason: retainedFailureReason(entries) };
+  if (document.kind === "ok") {
+    // The selection has to be able to lead to the result beside it. A recorded
+    // selection failure is a document that never ran: canonical execution
+    // raises it out of the root import, so the only terminal it can reach is a
+    // failed one. A successful result over it is two histories, not one.
+    return imported.selection.failed
+      ? { kind: "damaged" }
+      : { kind: "outcome", status: "completed", reason: undefined };
+  }
+  return { kind: "outcome", status: "failed", reason: retainedFailureReason(entries) };
 }
 
 /** The outcome a run that failed before importing anything recorded. */
@@ -182,65 +191,73 @@ function namesRootImport(event: DurableEvent): boolean {
 /**
  * The document one retained root import selected, as its own record holds it.
  *
- * The shapes canonical execution writes for a root and no others: the whole
- * document, one exact target, and a selector the document offered no single
- * target for. A settlement that failed recorded no selection at all, and a
- * successful one that does not hold a complete selection is a root import this
- * build cannot read — which is a fact about the history, not about the caller
- * asking, so it is decided here rather than by whoever asks next.
+ * Enough of the parsed record to make the same request again, and no more: the
+ * document itself, the selector it was asked with, and whether that selector
+ * named a target at all. What proved the record — the outline it was verified
+ * against — stays with the parser.
  */
 export interface RetainedRootSelection {
   readonly path: string;
   readonly content: string;
+  /**
+   * The selector to replay the run's request with: the exact target it ran, or
+   * the selector whose failure it recorded. Absent for a whole document.
+   */
   readonly target: string | undefined;
-}
-
-function rootSelection(event: DurableEvent): RetainedRootSelection | undefined {
-  const settlement = plain(event.type === "yield" ? event.result : undefined);
-  if (settlement === undefined || settlement["status"] !== "ok") {
-    return undefined;
-  }
-  const selection = plain(settlement["value"]);
-  if (selection === undefined) {
-    return undefined;
-  }
-  const path = selection["path"];
-  const content = selection["content"];
-  const kind = selection["kind"];
-  const members = Object.keys(selection).length;
-  if (typeof path !== "string" || typeof content !== "string") {
-    return undefined;
-  }
-
-  if (kind === "repository") {
-    const target = selection["target"];
-    if (target === undefined) {
-      return members === 3 ? { path, content, target: undefined } : undefined;
-    }
-    return members === 4 && typeof target === "string" ? { path, content, target } : undefined;
-  }
-
-  if (kind === "target-failure") {
-    // The selector as the run was asked for it. Handing it back is what makes
-    // the replayed request the same request: canonical execution resolves it
-    // against the recorded document again and finds the same failure.
-    const failure = plain(selection["failure"]);
-    const selector = failure?.["selector"];
-    return members === 4 && typeof selector === "string"
-      ? { path, content, target: selector }
-      : undefined;
-  }
-
-  return undefined;
+  /** Whether the recorded selection is one that named no single target. */
+  readonly failed: boolean;
 }
 
 /**
- * The document a terminal written before any import was about.
+ * The selection one retained root import recorded, read the way canonical
+ * execution reads it.
  *
- * Read from the binding `readPreRootTerminal()` above has already held to its
- * exact closed form, so this only takes what that admitted: nothing decides
- * here that was not decided there.
+ * Not read here at all, in fact: `recordedRootImport()` is the parser canonical
+ * `admitRootSelection()` admits a partial history through, and this asks it the
+ * same question about the same event. A record it calls malformed is malformed
+ * for the lifecycle too, so an unparseable document, a target the retained
+ * document does not offer, a noncanonical target, and a failure record the same
+ * selector would not re-derive cannot publish an outcome here after the
+ * executor refused them there.
+ *
+ * What comes back is that parser's own copy of the record, so the document a
+ * replay is built from is never the object the journal still holds.
  */
+function rootSelection(event: DurableEvent): RetainedRootSelection | undefined {
+  if (event.type !== "yield") {
+    return undefined;
+  }
+  const recorded = recordedRootImport(event);
+  if (recorded.kind !== "read") {
+    return undefined;
+  }
+  return {
+    path: recorded.path,
+    content: recorded.content,
+    target: selector(recorded.selection),
+    failed: recorded.selection.kind === "failed",
+  };
+}
+
+/**
+ * What a replay asks for to make the same request again.
+ *
+ * A recorded failure hands back the selector rather than nothing: canonical
+ * execution resolves it against the same retained document, finds the same
+ * failure, and fails the same way. Handing back nothing would ask for the whole
+ * document instead — a different request that would succeed.
+ */
+function selector(selection: SelectionOutcome): string | undefined {
+  switch (selection.kind) {
+    case "whole":
+      return undefined;
+    case "exact":
+      return selection.target;
+    case "failed":
+      return selection.failure.selector;
+  }
+}
+
 export function preRootSelection(
   entries: readonly JournalEntry[],
 ): RetainedRootSelection | undefined {
@@ -260,7 +277,15 @@ export function preRootSelection(
   if (typeof path !== "string" || typeof source !== "string") {
     return undefined;
   }
-  return { path, content: source, target: typeof target === "string" ? target : undefined };
+  return {
+    path,
+    content: source,
+    target: typeof target === "string" ? target : undefined,
+    // A binding is what a run that failed *before* importing recorded, so it
+    // holds the document it was asked for rather than the outcome of selecting
+    // in it. There is no recorded selection failure to disagree with.
+    failed: false,
+  };
 }
 
 /** The coroutine a document execution's own records belong to. */

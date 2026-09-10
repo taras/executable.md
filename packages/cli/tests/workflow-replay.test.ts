@@ -1398,7 +1398,7 @@ describe("what a completed run reaches when it is asked to run again", () => {
     expect(attached).toEqual([]);
   });
 
-  it("WRP18: refuses a root import it cannot hold to one readable selection", function* () {
+  it("WRP18: refuses a root import it cannot hold to one verified selection", function* () {
     const asked: string[] = [];
     const attached: string[] = [];
 
@@ -1446,6 +1446,37 @@ describe("what a completed run reaches when it is asked to run again", () => {
             coroutineId: "root",
             description: { type: "import_component", name: "__root__" },
             result: { status: "ok", value: { kind: "repository", path } },
+          },
+          settled,
+        ],
+        // A failure record reduced to the selector it was asked for.
+        forged: (path) => [
+          {
+            type: "yield",
+            coroutineId: "root",
+            description: { type: "import_component", name: "__root__" },
+            result: {
+              status: "ok",
+              value: {
+                kind: "target-failure",
+                path,
+                content: source,
+                failure: { selector: "Missing" },
+              },
+            },
+          },
+          settled,
+        ],
+        // An exact target the retained document does not offer.
+        absent: (path) => [
+          {
+            type: "yield",
+            coroutineId: "root",
+            description: { type: "import_component", name: "__root__" },
+            result: {
+              status: "ok",
+              value: { kind: "repository", path, content: source, target: "Missing" },
+            },
           },
           settled,
         ],

@@ -142,3 +142,18 @@ export type {
  */
 export { AGENT_PROMPT, parsePromptRecord } from "./src/agent/journal.ts";
 export type { PromptRecord } from "./src/agent/journal.ts";
+
+/**
+ * The retained root-import protocol, for a host that reads a retained journal.
+ *
+ * Same reasoning as the Prompt record above, with more at stake. A workflow run
+ * decides from its own retained events whether a completed history may publish
+ * an outcome and be replayed, and which document that history was about — and
+ * the only thing that can answer that is the parser canonical execution admits
+ * partial histories through. Read a second way, the same record would answer to
+ * a second, weaker protocol: a selection the executor would refuse could
+ * publish a terminal outcome and authorize a replay. So the parser crosses the
+ * boundary rather than being described again.
+ */
+export { recordedRootImport } from "./src/root-selection.ts";
+export type { RootImportRecord, SelectionOutcome } from "./src/root-selection.ts";

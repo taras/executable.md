@@ -781,6 +781,94 @@ describe("a completed run replayed through its own owner", () => {
     expect(await on(stub, (owner) => owner.holders())).toBe(0);
   });
 
+  it("refuses a recorded selection the retained document does not bear out", async () => {
+    /** Selections that are well formed and that no execution could have made. */
+    const forged: Record<string, Json> = {
+      absentTarget: {
+        kind: "repository",
+        path: "README.md",
+        content: DOCUMENT,
+        target: "Missing",
+      },
+      selectorOnly: {
+        kind: "target-failure",
+        path: "README.md",
+        content: DOCUMENT,
+        failure: { selector: "Missing" },
+      },
+    };
+
+    for (const [says, selection] of Object.entries(forged)) {
+      const stub = executor();
+      const host = lifecycleHost(stub);
+
+      await run(function* () {
+        return yield* scoped(function* () {
+          const transitions: WorkflowExecutionTransitions = yield* useRemoteLifecycle(host);
+          const lock = yield* acquired();
+          const begun = yield* transitions.begin(lock, {
+            runId: RUN_ID,
+            action: "start",
+            creation: CREATION,
+          });
+          if (!begun.ok) {
+            throw begun.error;
+          }
+          const appended = yield* begun.value.database.transact(function* (transaction) {
+            yield* transaction.journal.append({
+              type: "yield",
+              coroutineId: "root",
+              description: { type: "import_component", name: "__root__" },
+              result: { status: "ok", value: selection },
+            });
+            yield* transaction.journal.append({
+              type: "close",
+              coroutineId: "root",
+              result: {
+                status: "ok",
+                value: { status: "ok", output: "done.\n", value: "done.\n" },
+              },
+            });
+          });
+          if (!appended.ok) {
+            throw appended.error;
+          }
+        });
+      });
+
+      const before = await ownerState(stub);
+      expect([says, before.run?.["status"]]).toEqual([says, "running"]);
+      const heldBefore = await on(stub, (owner) => owner.executionRows());
+
+      const refusals = await run(function* (): Operation<Record<string, string>> {
+        return yield* scoped(function* () {
+          const transitions: WorkflowExecutionTransitions = yield* useRemoteLifecycle(host);
+          const lock = yield* acquired();
+          const started = yield* transitions.begin(lock, {
+            runId: RUN_ID,
+            action: "start",
+            creation: CREATION,
+          });
+          const resumed = yield* transitions.begin(lock, { runId: RUN_ID, action: "resume" });
+          return {
+            started: started.ok ? "admitted" : started.error.message,
+            resumed: resumed.ok ? "admitted" : resumed.error.message,
+          };
+        });
+      });
+
+      for (const said of Object.values(refusals)) {
+        expect([says, String(said).includes("cannot read")]).toEqual([says, true]);
+      }
+
+      // Recovery published nothing and no envelope was inserted for a run whose
+      // own record does not say what it selected.
+      expect([says, await ownerState(stub)]).toEqual([says, before]);
+      expect([says, await on(stub, (owner) => owner.executionRows())]).toEqual([says, heldBefore]);
+      expect([says, await on(stub, (owner) => owner.holders())]).toEqual([says, 0]);
+    }
+  });
+
   it("refuses a root import no single execution recorded, and moves nothing", async () => {
     const stub = executor();
     const host = lifecycleHost(stub);
