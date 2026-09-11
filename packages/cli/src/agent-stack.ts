@@ -22,6 +22,8 @@ import {
 } from "@executablemd/core";
 import type { AgentProviderFactory, PermissionMode } from "@executablemd/core";
 import { installForegroundLauncher, env as readEnv } from "@executablemd/runtime";
+import { unsupportedTerminalGrid } from "./terminal/host.ts";
+import type { TerminalGridInstaller } from "./terminal/host.ts";
 import { createAcpxProvider, DEFAULT_AGENT_NAME } from "@executablemd/acp";
 import type { AcpxProviderDependencies } from "@executablemd/acp";
 // A separate entrypoint because the embedded adapters are temporary (#636) and
@@ -67,6 +69,14 @@ export interface PlanWriterStack {
   adapters: EmbeddedAdapters;
   /** What this host states about machine-wide agent sessions, if anything. */
   sessions?: MachineSessionAssembly;
+  /**
+   * What presents this host's terminal grids.
+   *
+   * Deno and the compiled binary supply the tmux provider; Node and Bun supply
+   * the one that installs none, so those runtimes describe and validate the
+   * same grids and open none of them.
+   */
+  installTerminalGrid?: TerminalGridInstaller;
 }
 
 /** Everything one `xmd run` invocation settled about agents, resolved once. */
@@ -106,6 +116,7 @@ export function* resolvePlanWriterStack(
 export function* resolveAgentStack(
   flags: AgentFlags,
   sessions: MachineSessionAssembly | undefined,
+  installTerminalGrid?: TerminalGridInstaller,
 ): Operation<Result<AgentStack>> {
   const config = resolveAgentConfig(flags);
   if ("error" in config) {
@@ -118,7 +129,11 @@ export function* resolveAgentStack(
   if (!planWriter.ok) {
     return planWriter;
   }
-  return Ok({ ...planWriter.value, permissionMode: config.permissionMode });
+  return Ok({
+    ...planWriter.value,
+    permissionMode: config.permissionMode,
+    ...(installTerminalGrid === undefined ? {} : { installTerminalGrid }),
+  });
 }
 
 /**
@@ -179,4 +194,8 @@ export function* installRunAgentStack(stack: AgentStack): Operation<void> {
   // document inspection and `xmd test` install no launcher, so a document that
   // reaches <Session.Launch> under any of them refuses instead of spawning.
   yield* installForegroundLauncher();
+  // And whatever presents this host's terminal grids, which on a host that
+  // presents none still opens the installation so a grid is validated — the
+  // refusal a document meets there is core's own.
+  yield* (stack.installTerminalGrid ?? unsupportedTerminalGrid)();
 }
