@@ -22,6 +22,7 @@
 
 import {
   createChannel,
+  createScope,
   ensure,
   Err,
   Ok,
@@ -2756,24 +2757,57 @@ function* useAcpxProviderState(
             // the reader's terminal while offering no way to reach the owner it
             // was waiting for. It refuses instead, and the coordinator is what
             // refuses it.
-            yield* authority.perform(request, {
-              prepare: () =>
-                withSessionRoute(context, () =>
-                  prepareLaunch(invocation, agentName, callerCwd, request.instructions, placement),
-                ),
-              detach: (prepared) => detachSession(invocation, prepared, agentCommandOf(placement)),
-              exit: (prepared) => runNativeUi(invocation, prepared, agentCommandOf(placement)),
+            //
+            // The launch runs in a scope of its own so that this owner can bring
+            // it down deliberately and watch how that goes. A cancelled launch —
+            // the reader closing a terminal grid is one — unwinds past every
+            // statement after it, so a decision written down here would never be
+            // reached; written as this scope's cleanup, it is reached on every
+            // path there is.
+            const [running, stop] = createScope(yield* useScope());
+            let stopped = false;
+
+            yield* ensure(function* () {
+              // Registered after the scope exists, so it runs before the scope
+              // is destroyed on its own: the launch comes down here, and
+              // `destroy()` carries the outcome of its teardown. A child that
+              // could not be proven stopped, or a cleanup that failed, throws
+              // out of it — and is not quiescence, and is still a failure.
+              try {
+                yield* until(stop());
+                stopped = true;
+              } finally {
+                // Everything this owner started has to be finished with the
+                // session, and that is two facts rather than one: the native
+                // child and its cleanup settled, and this provider holds no
+                // handle for the session — a detach that failed, or a session
+                // prepared and never handed over, leaves one. Either one
+                // missing leaves the session owned rather than looking
+                // finished, which is what the next owner is told to recover
+                // deliberately.
+                if (stopped && !holding(placement.sessionKey)) {
+                  ownership.quiesced();
+                }
+              }
             });
 
-            // Only here, and only once this provider is holding nothing. By the
-            // time `perform` returns the native child has exited and been reaped,
-            // so what is left to check is the ACP handle: a handoff that released
-            // it quiesces, and one that could not — a detach that failed, a
-            // session prepared but never handed over — leaves the session owned
-            // rather than looking finished.
-            if (!holding(placement.sessionKey)) {
-              ownership.quiesced();
-            }
+            yield* running.run(() =>
+              authority.perform(request, {
+                prepare: () =>
+                  withSessionRoute(context, () =>
+                    prepareLaunch(
+                      invocation,
+                      agentName,
+                      callerCwd,
+                      request.instructions,
+                      placement,
+                    ),
+                  ),
+                detach: (prepared) =>
+                  detachSession(invocation, prepared, agentCommandOf(placement)),
+                exit: (prepared) => runNativeUi(invocation, prepared, agentCommandOf(placement)),
+              }),
+            );
           },
         );
       } catch (error) {
