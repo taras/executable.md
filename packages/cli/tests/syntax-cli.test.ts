@@ -11,7 +11,13 @@
 
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { cliShellCommand, runCli, runShell, shellQuote } from "@executablemd/test-support/launch";
+import {
+  cliRuntime,
+  cliShellCommand,
+  runCli,
+  runShell,
+  shellQuote,
+} from "@executablemd/test-support/launch";
 import { ensureDir, readTextFile, rm, writeTextFile } from "@effectionx/fs";
 import { ensure, scoped, until } from "effection";
 import type { Operation } from "effection";
@@ -615,6 +621,42 @@ describe(
       });
     });
 
+    it("SX18: a run's own output arrives whole, and equals a file redirect", function* () {
+      // The same boundary, reached by the other command that writes a whole
+      // result in one call: `xmd run` collects a piped document's output and
+      // hands it over at the end, so an oversize document truncates exactly
+      // where an oversize catalog did.
+      yield* useWorkspace({ ...OVERSIZE, "catalog.md": "<Syntax />\n" }, function* (cwd) {
+        const { redirected, piped } = yield* pipeDeliveries(["run", "catalog.md"], cwd);
+
+        expect(piped).toBe(redirected);
+        expect(piped.lastIndexOf("### `<ZBeyondTheBuffer>`")).toBeGreaterThan(PIPE_BUFFER);
+      });
+    });
+
+    it("SX19: a consumer that closes a run's output early is not raised", function* () {
+      yield* useWorkspace({ ...OVERSIZE, "catalog.md": "<Syntax />\n" }, function* (cwd) {
+        const { stdout, stderr } = yield* runShell(
+          `{ ${cliShellCommand(["run", "catalog.md"])}; echo "xmd-exit=$?" >&2; } | head -c 100`,
+          { cwd },
+        ).join();
+
+        expect(stdout.length).toBe(100);
+        // However the runtime reports the broken pipe, it is reported and not
+        // raised: an unwatched write failure ends the process with one of these.
+        expect(stderr).not.toContain("Unhandled 'error' event");
+        expect(stderr).not.toContain("Uncaught");
+        // Bun accepts a whole oversize write to a pipe whose reader has gone,
+        // calling back without an error and leaving the stream neither errored
+        // nor destroyed, so there is nothing for the run to report. Deno and
+        // Node surface the refusal, and there the run fails on it rather than
+        // passing a truncated document off as a whole one.
+        if (cliRuntime() !== "bun") {
+          expect(stderr).toContain("xmd-exit=1");
+        }
+      });
+    });
+
     it("SX15: a consumer that closes early fails the command", function* () {
       yield* useWorkspace(OVERSIZE, function* (cwd) {
         // A pipeline reports its last stage's status, so the command's own
@@ -674,7 +716,15 @@ function* deliveries(
   form: string[],
   cwd: string,
 ): Operation<{ redirected: string; piped: string }> {
-  const command = cliShellCommand(["syntax", ...form]);
+  return yield* pipeDeliveries(["syntax", ...form], cwd);
+}
+
+/** The same, for any invocation whose whole result goes to stdout. */
+function* pipeDeliveries(
+  argv: string[],
+  cwd: string,
+): Operation<{ redirected: string; piped: string }> {
+  const command = cliShellCommand(argv);
   const direct = join(cwd, "direct.out");
   const through = join(cwd, "piped.out");
 

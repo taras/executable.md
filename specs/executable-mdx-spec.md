@@ -10077,10 +10077,21 @@ function* run(/* ... config params ... */) {
   }, execution.output);
 
   if (!process.stdout.isTTY) {
-    process.stdout.write(fullOutput);
+    // Delivered, not written: see the guarantee below.
+    yield* deliverWhole(fullOutput, process.stdout);
   }
 }
 ```
+
+**A run has not succeeded until stdout has taken every byte.** The whole output
+of a piped run is handed over in one call, so it meets a pipe buffer exactly as
+a rendered catalog does, and the same delivery guarantee governs it: a slow
+reader receives what a regular-file redirect receives, and a sink that closes or
+refuses the write fails the run rather than letting a truncated document pass
+for a whole one, on every runtime that surfaces a refused write: Bun accepts an
+oversize write to a pipe whose reader has gone and reports no failure, so there
+the run has nothing to fail on. The value-root result and the program `xmd plan`
+writes are delivered on the same terms.
 
 #### The value-root result on the command line
 
@@ -11412,6 +11423,7 @@ would bind differently — belongs to `EP`, where profile capture is tested.
 | SX16 | Named lookup | `xmd syntax Elicit` renders that component's metadata and long-form documentation through the same selection, index and renderer `<Syntax names={…}>` uses; the compact symbols are unchanged and an unknown name refuses whole |
 | SX12 | A package tree | Bare `xmd syntax` succeeds with the default includes in a repository whose `node_modules` holds directory links |
 | SX13–SX15 | Delivery | A real pipeline reading symbols larger than one pipe buffer receives the bytes a regular-file redirect receives, in both forms; a consumer that closes early leaves the command reporting on stderr with exit 1 rather than an unhandled write failure |
+| SX18–SX19 | Run delivery | A real pipeline reading a run's output larger than one pipe buffer receives the bytes a regular-file redirect receives; a consumer that closes early is reported rather than raised, and on the runtimes that surface a refused write the run exits 1 |
 
 ### Tier SDL — Delivering a rendered result
 

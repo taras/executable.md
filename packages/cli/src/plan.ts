@@ -110,6 +110,19 @@ export interface PlanDependencies {
    */
   progress: ProgressOutput;
   /**
+   * Where the approved program goes.
+   *
+   * The entrypoint's fact about its own `process.stdout`, exactly as `progress`
+   * is its fact about `process.stderr`. This module writes a program and never
+   * reaches for a stream to put it on, so a caller that captures one replaces
+   * this rather than the process's.
+   *
+   * A `Result` for the same reason progress uses one: a destination that stops
+   * taking bytes is an outcome this command reports, not an exception raised
+   * somewhere past the point the program was approved.
+   */
+  deliver(program: string): Operation<Result<void>>;
+  /**
    * Create the diagnostic journal `--journal` named, or refuse.
    *
    * Absent is {@link createPlanJournal}, which exclusively creates the path and
@@ -278,7 +291,16 @@ export function* runPlan(command: PlanCommand, deps: PlanDependencies): Operatio
   // so a caller can pipe it into `xmd run -`, a file, a diff or another
   // program. A caller who named `--output` already has it, and gets a quiet
   // command instead.
-  process.stdout.write(source);
+  // Handed to the entrypoint's sink rather than written at a stream: the
+  // pipeline this comment describes is the one that loses bytes without a
+  // delivery that waits, because a pipe takes the source asynchronously and the
+  // command would exit with the tail still buffered (#715). An approved Plan
+  // that arrives truncated is not a program.
+  const delivered = yield* deps.deliver(source);
+  if (!delivered.ok) {
+    console.error(`xmd plan: stdout did not accept the whole program: ${delivered.error.message}`);
+    return 1;
+  }
   return 0;
 }
 
