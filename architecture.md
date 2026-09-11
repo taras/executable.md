@@ -3492,20 +3492,49 @@ provider grid coming into existence; releasing it is the provider grid going
 away, exactly once, whether the grid succeeded, failed to start, was closed by
 the reader, was failed by the provider, or was cancelled. There is no destroy
 operation to call, and so no way to call one twice or forget one. The host
-exposes the effects a neutral grid can require — show the prepared grid, launch
-an exact native request in one live cell, and start the host's default shell in
-one live cell — together with a read-only `closed` operation that settles when
-the reader leaves. Reader close is lifecycle input, not an imperative close
-action on the grid.
+exposes the effects a neutral grid can require — converge state, show the
+prepared grid, launch an exact native request in one live cell, and start the
+host's default shell in one live cell — together with independent read-only
+`closed` and `failed` operations. Reader close is lifecycle input, not an
+imperative close action on the grid, and a background provider failure cannot
+hide until another action happens to call the provider.
 
 Nothing owns a grid but the expansion that submitted it. The private
 `terminalGrid()` resource runs the whole grid beneath that operation: the
-durable grid child, live state, provider resource, cell children, close
-commitment, and complete teardown. It returns the grid's running task, so its
-caller awaits the computational unit directly:
+layout reconciliation, durable grid child, foreground-terminal lease and root
+output flush, live state, provider resource, cell children, close commitment,
+and complete teardown. It returns the grid's running task, so its caller awaits
+the computational unit directly:
 
 ```ts
-const grid = yield* terminalGrid(layout, cellWork);
+interface TerminalCellWork {
+  readonly cellId: TerminalCellId;
+  readonly operation: Operation<void>;
+}
+
+interface RetainedCellOutcome {
+  readonly status: "succeeded" | "failed" | "closed";
+  readonly reason: string;
+}
+
+interface TerminalGridJournal {
+  reconcileLayout(layout: RetainedGrid["layout"]): Operation<void>;
+  retainGrid(operation: Operation<RetainedGrid>): Operation<RetainedGrid>;
+  retainCell(
+    position: number,
+    operation: Operation<RetainedCellOutcome>,
+  ): Operation<RetainedCellOutcome>;
+}
+
+function terminalGrid(
+  layout: TerminalGridLayout,
+  cells: readonly TerminalCellWork[],
+  journal: TerminalGridJournal,
+): Resource<Task<RetainedGrid>>;
+
+function appendTerminalCellOutput(text: string): Operation<void>;
+
+const grid = yield* terminalGrid(layout, cellWork, journal);
 const outcome = yield* grid;
 ```
 
@@ -3515,6 +3544,37 @@ down whenever its submitting expansion unwinds and keeps each durable child in
 the expansion context that authored it. The installation retains only the
 minimum admission state that lets one exact submitted request and its provider
 presentation converge.
+
+Core constructs each cell's generator as a lazy `Operation<void>` and mints its
+fresh live `cellId`; constructing the operation performs no expansion, shell,
+Agent, provider, or journal work. The terminal lifecycle validates that the
+ordered cell work matches the layout, runs each operation exactly once inside
+the corresponding position-derived durable child, and installs that cell's
+issued `TerminalCellUI` and a closure-bound cell-output sink in the operation's
+scope before interpreting it. The paired operation expands authored content;
+at each completed output boundary core appends those rendered bytes through the
+sink with `appendTerminalCellOutput()` and awaits the resulting private store
+commit before expansion continues. Empty text is a no-op; every other call
+appends in call order, so the aggregate's `content` remains the complete output
+produced so far. The sink is an integration facet of `./lifecycle`, not a member
+of either UI or the provider view, and it exposes no store, dispatch, title,
+status, identity, or host authority. Its operation is inert outside the issued
+cell scope. The self-closing operation invokes the contextual cell's shell
+action. No lifecycle callback receives a scope or resource.
+
+Core also constructs the `TerminalGridJournal` for the grid's source expansion.
+The adapter closes over core's source-aware journal descriptions and implements
+layout reconciliation plus the grid and position-derived cell durable
+boundaries. It receives only provider-neutral retained values and lazy
+operations. The neutral package defines and calls this interface but never
+imports core. `reconcileLayout()` runs before provider admission;
+`retainGrid()` may return a completed retained outcome without interpreting its
+live operation; and `retainCell()` does the same for one completed cell. This is
+how completed replay creates no live state while incomplete replay preserves
+the exact durable identities core supplied. The core adapter creates each
+source-described durable grid or cell child when the terminal lifecycle invokes
+the corresponding retention operation; the terminal lifecycle owns the live
+tasks produced by those children and never creates a competing durable lineage.
 
 An incomplete grid creates one live, immutable `TerminalGridState` and a
 `TerminalGridUI` action object. The neutral terminal package owns a private
@@ -3538,7 +3598,6 @@ interface TerminalGridUI {
 
 interface TerminalCellUI {
   readonly state: TerminalCellState;
-  setTitle(title: string): Operation<void>;
   launch(request: NativeLaunchRequest): Operation<NativeLaunchOutcome>;
   shell(): Operation<TerminalShellOutcome>;
 }
@@ -3548,40 +3607,63 @@ The provider side is separate:
 
 ```ts
 interface TerminalGridView {
-  readonly state: TerminalGridState;
-  readonly changes: Stream<TerminalGridState>;
+  readonly states: Stream<TerminalGridState>;
+}
+
+interface TerminalGridProvider {
+  host(
+    request: TerminalGridRequest,
+    view: TerminalGridView,
+  ): Resource<TerminalGridHost>;
 }
 
 interface TerminalGridHost {
   readonly closed: Operation<void>;
-  show(): Operation<void>;
+  readonly failed: Operation<Error>;
+  show(requiredRevision: TerminalGridRevision): Operation<void>;
+  converge(requiredRevision: TerminalGridRevision): Operation<void>;
   launch(
     cellId: TerminalCellId,
     request: NativeLaunchRequest,
   ): TerminalActivity<NativeLaunchOutcome>;
   shell(cellId: TerminalCellId): TerminalActivity<TerminalShellOutcome>;
 }
+
+type PresentTerminalGrid = (
+  request: TerminalGridRequest,
+  provider: TerminalGridProvider,
+) => Operation<void>;
 ```
 
+The provider route hands its `TerminalGridProvider` directly to the
+non-contextual presentation authority with the exact routed request. Admission
+happens before `provider.host()` is called. The terminal lifecycle then creates
+the state and view and acquires the returned host resource in the grid's scope.
+A provider object is implementation, not authority: it cannot present another
+request, choose another generation, mutate state, or settle the grid by its
+return value.
+
 Core supplies one fresh live identity per authored cell. The terminal lifecycle
-creates one stable `TerminalCellUI` handle for it, and core installs that exact
-handle in the paired cell's scope. The handle closes over its live
-cell identity, so a component calls `setTitle()`, `launch()`, or `shell()`
-without passing an index or identifier. Each `state` property reads the current
-immutable snapshot; a previously read snapshot never changes. Only the cell UI,
-not the grid UI, enters the paired cell's context. The canonical stable
-contextual API returns it through
-`useTerminalCellUI(): Operation<TerminalCellUI | undefined>`; absence means the
-caller is outside a grid cell. The required `<Terminal title>` prop seeds state
-before presentation. `setTitle()` accepts the same non-empty string and replaces
-that title until another update or grid teardown. It completes once that state
-transition commits and does not wait for rendering. A title update owns no
-resource and has no cleanup action. It is live presentation state, not a durable
-effect: a fresh incomplete presentation starts from the retained grid's resolved
-authored title, and only cell work that runs again can update it again. Rendered
-paired-cell content enters the same state through a private controller; no
-public `setContent()`, status setter, success action, or failure action exists.
-The cell's durable child alone publishes its final outcome.
+creates one stable `TerminalCellUI` handle for it and installs that exact handle
+while it interprets the corresponding cell operation. The handle closes over
+its live cell identity, so a component calls `launch()` or `shell()` without passing an index or
+identifier. Each `state` property reads the current immutable snapshot; a
+previously read snapshot never changes. Only the cell UI, not the grid UI,
+enters the paired cell's context. The canonical stable contextual API returns it
+through `useTerminalCellUI(): Operation<TerminalCellUI | undefined>`; absence means the
+caller is outside a grid cell. The required non-empty `<Terminal title>` prop is
+the only title input in this Story and seeds state before presentation. Title is
+not mutable through `TerminalGridUI`, `TerminalCellUI`, context, or a generic
+state action. Title mutation is outside this contract.
+Rendered paired-cell content enters state through a private controller; no
+public title or content setter, generic dispatch, status setter, success action,
+or failure action exists. The cell's durable child alone publishes its final
+outcome. Core reaches that controller only through the issued cell-output sink
+installed while its lazy operation is interpreted. Each append completes after
+the immutable aggregate commit and before the next authored effect; it does not
+wait for provider rendering. This makes every earlier completed output emission
+causally prior to a later `launch()` or `shell()` controller without exposing an
+imperative presentation API to authors, components, or providers.
 
 Context makes the exact issued cell handle available for composition; it is not
 provider authority. A replacement context can intercept or refuse work but
@@ -3592,21 +3674,65 @@ the issued cell's `launch()` action rather than falling through to the root
 foreground launcher. This changes no native request, Agent-session identity, or
 session-coordinator authority.
 
-The provider receives a separate read-only `TerminalGridView`: its current
-immutable state and a scope-bound stream of subsequent snapshots. It never
-receives `TerminalGridUI`, a cell action handle, the StarFX store, or mutation
-authority. It may coalesce intermediate snapshots while converging on the most
-recent one, but it never intentionally renders an older snapshot after a newer
-one. Ordinary state actions do not await rendering. `show()` is different: it
-sets the desired grid phase to visible and awaits the provider effect that
-presents the complete latest grid. A rendering, setup, show, launch, shell, or
-close-observation failure is fatal to that grid; the provider is never silently
-restarted underneath the same live state.
+The provider receives a separate read-only `TerminalGridView`. Its `states`
+stream is the only provider observation surface. Starting a subscription
+atomically captures and emits one current snapshot, then emits only snapshots
+with strictly greater revisions. Registering that subscriber and capturing the
+first snapshot happen in the same serialized store step, so no state commit can
+land between a separate read and subscription. Every subscription has this
+property; the provider never combines `ui.state` with a later subscription.
+The view exposes neither `TerminalGridUI`, a cell action handle, the StarFX
+store, nor mutation authority.
+
+The state is complete desired presentation, not a delta or command log. The
+provider runs one scope-owned renderer lane and applies revisions serially. If
+several snapshots arrive while one is being applied, it may discard the
+intermediate snapshots and next apply the greatest pending revision because
+that snapshot subsumes them. It never starts two renders concurrently, never
+applies a revision at or below the greatest one it has completed, and advances
+its private applied revision only after every provider effect for the chosen
+snapshot succeeds. A request to converge through revision `r` completes when a
+complete snapshot with revision at least `r` has been applied; coalescing to a
+later revision therefore satisfies earlier waiters without rendering old state
+after new state.
+
+Ordinary private state commits do not await rendering. `TerminalGridUI.show()`
+is different: its blocking controller commits `visible`, captures that
+resulting revision, and calls `host.show(requiredRevision)`. The host first
+converges through that captured revision and only then atomically presents the
+prepared grid. A later state commit may be included but cannot make `show()`
+return before the captured requirement is visible.
+
+Before `TerminalCellUI.launch()` or `shell()` asks the host to transfer the
+cell's terminal, its blocking controller admits the action, commits `launching`,
+and captures the resulting revision after all causally prior cell output. It
+awaits `host.converge(requiredRevision)` before calling `host.launch()` or
+`host.shell()`. A later applied aggregate revision satisfies that requirement
+only because it contains the complete desired state, including that cell's
+earlier output. Cancellation or failure while convergence is pending invokes no
+host launch or shell operation, acquires no terminal activity, and establishes
+no readiness.
+
+The host's `failed` operation is distinct from reader `closed`. The grid
+lifecycle observes it from host acquisition until release, including while no
+action is awaiting the renderer. It remains pending during ordinary operation
+and yields the provider error when background work fails; the lifecycle raises
+that exact error. Unexpected termination of the state subscription or renderer
+while the host remains acquired is failure, not successful convergence or
+reader close. A background subscription, renderer, setup, show, convergence,
+launch, shell, or close-observation failure is fatal to that grid, fails every
+pending convergence waiter, and enters the same complete structured teardown.
+Reader departure settles only `closed`; ordinary resource release settles
+neither signal as a false event. The provider is never silently restarted
+underneath the same live state.
 
 The live state is one fixed aggregate:
 
 ```ts
+type TerminalGridRevision = number;
+
 interface TerminalGridState {
+  readonly revision: TerminalGridRevision;
   readonly phase: "preparing" | "visible" | "closing" | "closed";
   readonly columns: number;
   readonly rows: number;
@@ -3629,14 +3755,30 @@ interface TerminalCellState {
 }
 ```
 
+Revision is a live-only, per-grid, non-negative safe integer. The initial
+snapshot is revision zero. Each atomic state commit that changes the desired
+aggregate creates a new immutable snapshot and increments the revision exactly
+once; a no-op creates neither a revision nor an emission. Store commits are
+serialized even while action effects in distinct cells run concurrently. A
+revision is never authored, retained, replayed, diagnosed, or passed to an Agent
+or native-launch request. Partial replay starts a new live sequence at zero;
+completed replay creates none. An attempted increment past
+`Number.MAX_SAFE_INTEGER` fails the grid before publishing an ambiguous
+revision.
+
+`content` is the complete rendered Markdown display desired for that cell, not
+an output event. A later snapshot therefore includes all earlier cell output
+that remains part of the presentation. Native Agent and shell terminal bytes
+never enter this state.
+
 `cellId` is minted by core for one live grid. It keeps a cell handle, state
 updates, provider effects, and a provider's private pane binding together even
-if a later feature changes positions. It is not authored, retained, replayed,
+when positions change. It is not authored, retained, replayed,
 diagnosed, placed in a native or Agent request, or used as provider identity.
 The `cells` arrays remain in authored order; row and column say where a cell is
 currently presented. Incomplete replay mints fresh live cell identities. The
-identity is the seam a later Story may use for live movement or resizing; this
-contract adds no move, resize, reorder, or durable-layout action.
+identity permits movement or resizing without changing cell identity; this
+contract exposes no move, resize, reorder, or durable-layout action.
 
 A cell begins `starting`. Admitting `launch()` or `shell()` publishes
 `launching`; acquiring the provider's terminal activity at the actual child
@@ -3647,8 +3789,8 @@ work settles. Sequential launches may therefore move `running` back through
 `launching` while the cell flow remains active. Distinct cells act concurrently.
 Overlapping terminal activities in one cell fail immediately as busy rather
 than entering a hidden queue, and the next activity is admitted only after the
-prior cleanup and quiescence proof. `setTitle()` may run while an activity is
-live. Once close commitment stops admission, every new public action refuses.
+prior cleanup and quiescence proof. Once close commitment stops admission,
+every new public action refuses.
 
 Readiness is not something anybody acknowledges. A terminal activity is a
 resource whose acquisition happens only once its child has actually spawned, and
@@ -3693,36 +3835,43 @@ becomes `closed` rather than failed.
 
 The grid runs as one structured scope:
 
-1. Core validates the whole structural layout, takes the foreground-terminal
-   lease, and flushes root output.
+1. Core validates the whole structural layout, creates the lazy cell operations
+   and source-aware journal adapter, and acquires `terminalGrid()`. Its task
+   reconciles the layout before live work, then a non-replayed grid takes the
+   foreground-terminal lease and flushes root output through terminal's
+   contextual host boundary.
 2. The terminal lifecycle admits the presentation — exact request, generation,
    not already used — and only then creates the live UI state and acquires the
    provider's host resource with its read-only view. Acquisition prepares the
-   entire hidden
-   grid: every pane endpoint and its supervision. No grid is visible yet, and a
-   refused presentation creates no store and acquires nothing at all.
-3. Core starts the pane child operations concurrently, using deterministic
-   durable child identities derived from the grid expansion and authored array
-   position. A paired pane begins its document flow and a self-closing pane
-   begins its shell.
+   entire hidden grid: its gap-free state subscription, single renderer lane,
+   every pane endpoint, provider-failure observation, and supervision. No grid
+   is visible yet, and a refused presentation creates no store and acquires
+   nothing at all.
+3. The terminal lifecycle starts the lazy cell operations concurrently, using
+   the core-supplied journal adapter to establish deterministic durable child
+   identities derived from the grid expansion and authored array position. It
+   interprets each operation under that cell's issued `TerminalCellUI`. A paired
+   pane begins its document flow and a self-closing pane begins its shell.
 4. A pane is ready only when its terminal activity is acquired, which happens
    only once its child has actually spawned. Reserving an endpoint, allocating a
    process identifier, or receiving output is not acquisition. A child that
    starts and exits immediately can be both ready and settled.
 5. Only after every cell reaches readiness does the grid controller run
-   `TerminalGridUI.show()`. The action publishes `visible` and awaits the host's
-   atomic presentation of the complete latest state. Any acquisition or
-   cell-start failure before this
-   barrier cancels every cell, awaits complete teardown, releases the hidden
-   grid, and fails without exposing a partial grid. Agent preparation or
-   retained route work that occurred before a failed native spawn remains
+   `TerminalGridUI.show()`. The action publishes `visible`, captures that
+   revision, and awaits the host's convergence and atomic presentation through
+   it. Any acquisition, convergence, background-render, or cell-start failure
+   before this barrier cancels every cell, awaits complete teardown, releases
+   the hidden grid, and fails without exposing a partial grid. Agent preparation
+   or retained route work that occurred before a failed native spawn remains
    durable; atomicity covers terminal presentation and lifecycle, not rollback
    of earlier provider effects.
 6. Once attached, each pane settles independently and keeps its final status
    visible while siblings continue. The grid remains present after all panes
    settle until the reader closes or leaves it.
-7. The host's `closed` operation first crosses the private live close boundary,
-   then the controller publishes `closing` and begins ordered teardown: prevent
+7. The lifecycle observes the host's independent `closed` and `failed`
+   operations for its whole acquired lifetime. `closed` first crosses the
+   private live close boundary, then the controller publishes `closing` and
+   begins ordered teardown: prevent
    new cell actions, ask live cell children to close, await every child and
    finalizer, release the provider's host resource — which is what destroys it,
    once — restore the root terminal, publish `closed`, and only then release the
@@ -3732,10 +3881,28 @@ The grid runs as one structured scope:
    document never continues while an observable cell child or provider-owned
    process can still act through the grid.
 
+The task returned by `terminalGrid()` settles only after the selected grid
+outcome is retained, every cell and renderer task has settled, the provider host
+resource has been released, the root terminal has been restored, and the
+foreground lease has been released. Releasing the outer resource before that
+settlement cancels the task and waits for the same complete teardown; it does
+not detach the computation.
+
+An action cancelled while waiting for convergence never transfers a terminal.
+Before reader-close acknowledgement, parent cancellation cancels the cell action
+and the whole grid scope, fails its pending waiters through resource teardown,
+and awaits the renderer, cell, and host finalizers before it propagates. Reader
+close follows the established cooperative close handshake; it prevents new
+actions and cancels any admitted cell work still waiting for convergence before
+a provider child exists. After close acknowledgement, parent cancellation
+remains deferred by the existing rule. A background provider failure wins as
+the fatal grid result under the existing failure and cleanup precedence, even
+when no foreground action is currently waiting on the renderer.
+
 The provider host's read-only `closed` settlement proposes the live close
 boundary. The boundary is crossed when the grid owner has entered a
-cancellation-deferred
-await of the grid's durable child and acknowledges that proposal; only then may
+cancellation-deferred await of the grid's durable child and acknowledges that
+proposal; only then may
 the child signal pane close. That await ends only when the task has settled and
 its durable `Close` has been acknowledged, not when the grid body has merely
 chosen an outcome. This handshake has no provider identity and is not itself
@@ -3859,7 +4026,8 @@ should be refused rather than ignored belongs to a versioned root boundary that
 does not exist yet. Until it does, the grid's obligation is the narrower one it
 can actually discharge: retain the complete authored structure, and open the
 structure it retained rather than the one the file now shows. It creates fresh
-live state and cell identities and acquires a fresh provider host: completed
+live state at revision zero and fresh cell identities and acquires a fresh
+provider host: completed
 cell children are restored as settled statuses without re-running their effects,
 while incomplete children replay or start their remaining work. An incomplete
 `<Session.Launch>` preserves the prepared/detached identity rules of its own
@@ -3873,13 +4041,16 @@ a journal.
 
 The package boundary follows the provider boundary. `@executablemd/terminal`
 owns the provider-neutral state, UI, view, host and cell action types; the
-private StarFX store and controllers; presentation admission, terminal
-activities, errors, grid lifecycle and replay; POSIX process observation and
-quiescence; and the controlled evidence provider. `@executablemd/terminal-tmux`
-owns tmux commands, workers, private IPC, rendering convergence, and the tmux
-host resource. Core imports the neutral package and keeps structural expansion,
-source-aware journal descriptions, execution-profile integration, and Agent
-session behavior. The Deno and compiled CLI entrypoints install the POSIX
+private StarFX store and controllers; monotonic revisions, atomic observation
+and convergence contracts; presentation admission, terminal activities, errors,
+grid lifecycle and replay; POSIX process observation and quiescence; and the
+controlled evidence provider. `@executablemd/terminal-tmux` owns tmux commands,
+workers, private IPC, the serialized renderer, applied-revision tracking, and
+the tmux host resource. Core imports the neutral package and keeps structural
+expansion, source-aware journal descriptions, execution-profile integration,
+and Agent session behavior. It supplies the neutral `TerminalGridJournal`
+adapter and lazy cell operations without the terminal package importing core.
+The Deno and compiled CLI entrypoints install the POSIX
 observer and tmux provider for an ordinary foreground `xmd run`; Node, Bun and
 every workflow profile install neither. A terminal grid is run presentation,
 not workflow orchestration.
@@ -3911,9 +4082,11 @@ The extraction applies to the stack's implementation modules as follows:
 | `packages/cli/src/terminal/host.ts` | Split: reusable provider and POSIX pieces move to their packages; the core `Execution` wrapper and entrypoint composition stay in a non-terminal CLI module |
 
 The neutral package root exports the provider-neutral launch, state, UI, view,
-host, activity, layout, routing and error contracts together with
-`useTerminalCellUI()`. Its `./lifecycle` entrypoint
-exports grid execution, presentation installation and replay; `./processes`
+host, activity, layout, routing, journal-adapter and error contracts together
+with `useTerminalCellUI()`. Its `./lifecycle` entrypoint
+exports grid execution, presentation installation, replay, and the
+integration-only cell-output sink core invokes while expanding paired content;
+`./processes`
 exports process facts, snapshots and quiescence; `./posix` exports reusable
 POSIX observation and foreground-child adapters; and `./test` exports only
 controlled providers, launchers, logs and signals. These are facets of one
@@ -3936,6 +4109,14 @@ selection evidence. Both terminal packages are ordinary lockstep-versioned
 workspace members. Publication places terminal after durable streams,
 terminal-tmux and core after terminal, and CLI after terminal-tmux, terminal,
 core and runtime.
+
+Issue #781 later changes the unshipped authored names to `<Grid>` and `<Pane>`
+and the package names to `@executablemd/grid` and
+`@executablemd/grid-tmux`. That semantic restack preserves this exact resource,
+state revision, atomic observation, convergence, failure, journal-adapter,
+replay, cancellation, and teardown contract. It does not restore a mutable title
+action, a split current-state/changes provider API, a callback-shaped lifecycle,
+or any compatibility export for the names it replaces.
 
 ### tmux provider
 
@@ -5275,7 +5456,7 @@ Status is measured against main.
 | testing harness (`<Execution>`) | runs another document as a real root under a production host profile, authorized by canonical `<Test>` alone: declarations installed before the root import, child output displayed progressively and collected only when asked, journal retention selected independently of observation, and the outcome published by the invocation's own terminal through a request public middleware composes around but cannot answer | built on the #454 stack for `host="run"`; the workflow profile and `<WorkflowRun>` are unbuilt, and a host that offers no workflow profile refuses them |
 | nested run-profile Agent and elicitation declarations | lets one `<Execution host="run">` declare one child-scoped `<TestAgent>` scenario set and one non-delegating `<Answers>` matcher set; only frozen test data crosses the harness request, the trusted host constructs both providers inside the isolated child, siblings share no session or provider state, ordinary component shadowing remains in force, and the child journal retains only the selected Prompt and Elicit components' ordinary results. A controlled `<Plan>` may author an exact scenario label that this host alone maps to Plan's derived conversation identity; declaration selection uses the label while runtime state stays keyed by the opaque identity and child, with no matcher or fallback added to ordinary TestAgent sessions | built on the #641 stack; controlled Plan routing added on the #728 stack |
 | `Config` run deadline / exec default / Fetch default / verbosity | three independently owned contextual timeouts, absent unless configured, each read by exactly one consumer, and contextual verbosity — a boolean that is false unless configured, seeded by the command line and overridable for a lexical subtree, bounding nothing and owning no authority | built on this stack |
-| terminal grid (`<Terminal.Grid>` / `<Terminal>`) | replaces the root foreground terminal with one provider-neutral grid whose statically declared direct cells begin concurrently, stay independently interactive, preserve their final statuses until the reader closes the grid, and tear down completely before document execution continues. One scope-owned `TerminalGrid` task owns the whole durable computation. Incomplete work creates a per-grid immutable StarFX state, stable contextual `TerminalCellUI` action handles and one resource-owned `TerminalGridHost`; the provider observes a read-only view and cannot mutate state. The title prop seeds state, later title actions update it, native and shell actions are exclusive within one cell but concurrent across cells, and `show()` presents the complete latest grid after readiness. Reader close is an implicit host lifecycle signal rather than a public action. Completed replay creates none of the live state or provider objects; partial replay mints fresh live cell identities and continues incomplete effects under their existing position-derived durable identities. `@executablemd/terminal` owns the neutral live contract, lifecycle, replay and reusable POSIX observation; `@executablemd/terminal-tmux` owns tmux rendering, IPC and workers; core owns structural syntax, source-aware journal descriptions and profile integration; and runtime-named entrypoints install host wiring with no compatibility exports from old terminal paths | defined for #717; #726 proves the persistent tmux pane-worker topology and its observable teardown boundary on macOS; controlled non-tmux evidence proves the provider-neutral state, action, lifecycle and replay contract; implementation unbuilt |
+| terminal grid (`<Terminal.Grid>` / `<Terminal>`) | replaces the root foreground terminal with one provider-neutral grid whose statically declared direct cells begin concurrently, stay independently interactive, preserve their final statuses until the reader closes the grid, and tear down completely before document execution continues. One scope-owned `TerminalGrid` task owns the whole durable computation. Incomplete work creates private immutable StarFX state with monotonic live revisions, stable contextual `TerminalCellUI` action handles and one resource-owned `TerminalGridHost`; the provider observes an atomic current-and-newer stream, serializes and coalesces rendering, and cannot mutate state. The authored title is fixed for this contract. Native and shell actions await convergence of preceding cell output before transferring the terminal, remain exclusive within one cell and concurrent across cells, and `show()` awaits its captured visible revision before atomic presentation. Reader close and background provider failure are distinct observed lifecycle inputs. Core supplies lazy cell operations and a source-aware journal adapter without creating a package cycle. Completed replay creates none of the live state or provider objects; partial replay starts a fresh revision sequence and cell identities while continuing incomplete effects under their existing position-derived durable identities. `@executablemd/terminal` owns the neutral live contract, lifecycle, replay and reusable POSIX observation; `@executablemd/terminal-tmux` owns tmux rendering, IPC and workers; core owns structural syntax, source-aware journal descriptions and profile integration; and runtime-named entrypoints install host wiring with no compatibility exports from old terminal paths | defined for #717; #726 proves the persistent tmux pane-worker topology and its observable teardown boundary on macOS; controlled non-tmux evidence proves the provider-neutral state, convergence, lifecycle and replay contract; implementation unbuilt |
 | native session launch (`<Session.Launch>` / `launchAgentSession()`) | prepares one durable coding-agent session from the rendered body of `<Session.Launch>` and hands the provider's native UI the terminal for that exact session, then continues the document after it exits. The body renders completely first and only what it rendered crosses as the instruction layer; the launch performs no model turn; at the root it takes the run's foreground-terminal lease before an agent is resolved, while a launch inside `<Terminal>` takes that cell's lease through its contextual `TerminalCellUI`. A host with no applicable terminal refuses without probing for an installed CLI. A session is constructed once, by one of two mechanisms, and its create-once construction route says which. Where the provider returns the identity, the ACPX provider creates the session, installs the layer at creation, releases ACP ownership before the spawn, and marks its handle stale so a later `<Prompt>` reattaches. Where the adapter names its own sessions, it allocates the identity inside ownership before any process exists, the native process creates the session under that name from a private mode-0600 instruction file, and ACP creates nothing — the instruction text reaches neither argv nor environment, and the file is removed on success, failure and cancellation alike while ownership is still held. Neither route converts into the other, and which one governs is chosen by the first operation that consumes the placement rather than by the `<Session>` that made it: a fresh `<Session>` publishes no route and establishes nothing, so a `<Session.Launch>` nested inside one constructs the session it placed, while a first subscribed `<Prompt>` publishes ACP-first before it ensures and keeps that account even if the turn that follows is never accepted. An established route is validated eagerly by a later `<Session>`, and a launch meeting a published ACP-first route refuses before an identity exists. A `<Session>` or `<Prompt>` meeting a bound client-allocated route attaches under the route's exact identity; a legacy unbound route or an unavailable attachment capability refuses before a turn and creates no substitute conversation. Phases are retained as `agent_session_launch` records under one expansion identity — `prepared` before ownership is released, then `detached`, then `exited` — so a completed replay launches nothing, a replay holding only `prepared` proves the handoff never began and may still create under the retained identity, and one holding `detached` resumes and never falls back. The public route carries an opaque one-use launch request and answers nothing; authority to run and retain a phase is delivered to the installed provider directly, so neither a returned completion nor a rebuilt request authors a launch. Every operation that can act on an advertised session takes exclusive ownership under one natural key first, through a coordinator the host built and passed in; contention refuses instead of queueing, and an owner that never proved it stopped leaves a recovery tombstone. A host that cannot say who owns a session refuses every advertised operation, and one that cannot say how a session was constructed additionally refuses an agent that names its own — before any provider effect. Every private setup or child-creation failure is normalized to `process-creation-failed` with fixed provider-owned text, carrying no path, argv, environment or host message. No launch path discards persistent provider state. A client-allocated session is bound to one executable build: the build is observed inside ownership before an identity is allocated, the binding is published with the V2 route and retained beside the prepared record, the native child runs the exact observed path in place of the launcher name, and every later create, resume, attachment and incomplete replay reobserves and compares before a process, an ensure or a turn. A `<Session>` or `<Prompt>` meeting a bound client-native route attaches to it: it reobserves the build, requires any retained provider arrangement to assert that same conversation, calls ensure with the route identity as `resumeSessionId`, and requires the provider to report that identity before a turn — refusing on missing capability, build drift, missing history or a differing assertion without creating a substitute conversation. ACP runtimes are partitioned by resolved agent command and binding, each handle is closed by the partition that created it, and a bound partition is torn down when its last handle closes. A legacy V1 client-native route keeps exactly the released native-only behavior and never attaches | built on the #517 stack, extended by the #519 and #561 stacks; Deno and the compiled binary assemble the host — coordinator, route store and executable observer — and Node and Bun keep the same advertised names while assembling none of it, so every advertised operation refuses before provider work; `claude` is advertised for native launch after passing the client-allocated gate at Claude Code 2.1.241 on macOS arm64 (#520) and separately for client-native attachment after passing the native-to-ACP marker gate (#561), and Codex remains unadvertised because nothing has run its provider-returned claims against an installed Codex; `Agent.AddDir` is unbuilt |
 | `<Fetch>` | performs one XMD-mediated HTTP read through contextual `API.Fetch`, admitting the whole request before transport, and retains the normalized request and the detached response as one `fetch` durable observation; capture decides whether a status is data or a failure, and the trusted host's destination ceiling sits below the component | built on the #456 stack; a generated fragment may name the pinned identity only for a request the trusted host stated exactly, on the #369 stack |
 | `API.Files` | routes every document filesystem operation to the installed provider, with no host default and structural failure data. Its mandatory semantic operations include `ensureDirectory`, which recursively creates or adopts one directory and returns Unit; separately loaded copies compose through the stable Api name | built on the #227 stack; directory ensure added by #643 |

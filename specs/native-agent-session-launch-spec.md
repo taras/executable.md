@@ -444,8 +444,10 @@ Given `xmd AGENTS.md#Implementor`:
    cell's lease through the cell-scoped native launcher. A host with no
    applicable terminal refuses here — before an agent is resolved, so learning
    that this invocation cannot launch anything costs no availability probe.
-7. The host flushes what that terminal has pending, so the native UI does not
-   open over half-written output.
+7. At the root, the host flushes what that terminal has pending. In a grid cell,
+   the cell action commits `launching`, captures that live state revision after
+   all causally prior Markdown output, and awaits provider convergence through
+   it. In either case the native UI cannot open over pending document output.
 8. The provider resolves the logical Agent and Session against the contextual
    cwd, and takes exclusive ownership of that session.
 
@@ -733,8 +735,9 @@ session coordinator
 The grid owns the root foreground-terminal lease. Its lifecycle creates one
 stable `TerminalCellUI` per authored cell, closes that handle over a fresh
 live-only `cellId`, and owns the private state that admits work, observes
-readiness, and stops admission at close. Core installs that exact cell UI in the
-paired cell's scope. `Session.Launch` uses the launcher already in scope; it
+readiness, and stops admission at close. Core supplies lazy cell operations; the
+terminal lifecycle installs the exact cell UI while interpreting each one in
+its position-derived durable child. `Session.Launch` uses the launcher already in scope; it
 receives no cell prop, token, identifier, or mode. Context is composition rather
 than authority: a constructed lookalike cannot reach a live provider host, and
 the issued cell UI admits nothing after its grid closes.
@@ -773,19 +776,29 @@ the other panes become ready has nevertheless crossed readiness and retains its
 ordinary exit outcome.
 
 A native launch runs through `TerminalCellUI.launch()`. The private controller
-asks the provider host for a terminal activity: a resource whose acquisition
-happens only once the child has actually spawned. Acquisition is readiness, so
-nobody is handed an acknowledgement to call — allocating a PID or observing
-output is not acquisition, and a preparation, reservation or spawn error fails
-before it. The controller publishes `running` only after acquisition, awaits
-the acquired operation, and does not complete the action until the activity's
-cleanup has swept whatever the launch still holds. A root launch has no cell
-activity at all. Readiness is not added to `AgentLaunchRequest`,
+first admits the cell, commits `launching`, captures the resulting live grid
+revision after all causally prior cell output, and awaits provider convergence
+through it. Only then does it ask the provider host for a terminal activity: a
+resource whose acquisition happens only once the child has actually spawned.
+Core publishes paired Markdown at each completed output boundary through the
+issued integration-only cell-output sink and awaits that private store commit,
+not rendering, before expansion continues. Therefore output written before the
+launch invocation is already in the complete snapshot whose revision the
+controller captures; no public content setter or provider mutation participates.
+Acquisition is readiness, so nobody is handed an acknowledgement to call —
+allocating a PID or observing output is not acquisition, and preparation,
+convergence, reservation, or spawn failure occurs before it. Cancellation while
+convergence is blocked invokes no provider launch and creates no native child.
+The controller publishes `running` only after acquisition, awaits the acquired
+operation, and does not complete the action until the activity's cleanup has
+swept whatever the launch still holds. A root launch has no cell activity at
+all. Readiness is not added to `AgentLaunchRequest`,
 `AgentLaunchResult`, the public Agent Api, a retained launch phase, or a process
 handle, so it changes neither the launch's authored nor its durable contract.
 
 The provider-neutral terminal package exports the cell UI action contract and
-the host activity boundary, not readiness, busy-state, or closing authority.
+the host convergence and activity boundaries, not readiness, busy-state, or
+closing authority.
 Pane work receives its issued contextual cell UI; the grid lifecycle alone
 waits for readiness, publishes final cell status, and closes admission. The
 provider receives only the live `cellId` needed to select its physical endpoint;
@@ -1201,9 +1214,9 @@ starts Claude, Codex, or a model.
 
 Terminal-grid tests additionally install a controlled provider that is not
 tmux. It exposes readiness, independent pane settlement, reader close, provider
-failure, parent cancellation, and teardown completion as test-controlled
-operations while using the same core terminal authority and cell-scoped native
-launchers. Separate tmux integration evidence exercises the production adapter;
+failure, revision convergence, parent cancellation, and teardown completion as
+test-controlled operations while using the same core terminal authority and
+cell-scoped native launchers. Separate tmux integration evidence exercises the production adapter;
 core semantics are not inferred from tmux identifiers or process behavior. The
 tmux evidence covers exact argv over private IPC, the runtime spawn boundary,
 display that cannot become child input, real terminal job control, explicit
@@ -1266,9 +1279,11 @@ Focused tests prove:
     zero or several without repeating the output; and
 24. launches in distinct terminal cells run concurrently while launches in one
     cell remain exclusive, the same logical Agent session still contends across
-    cells, cell readiness occurs only after successful native-child start, grid
-    close awaits launch cancellation and session quiescence, and completed and
-    partial grid replay preserve the launch's existing identity rules.
+    cells, a launch invokes no provider child until the captured cell-output
+    revision has converged, cancellation during that wait launches nothing,
+    cell readiness occurs only after successful native-child start, grid close
+    awaits launch cancellation and session quiescence, and completed and partial
+    grid replay preserve the launch's existing identity rules.
 
 The authored half of this is one executable Markdown document,
 `packages/test-agent/src/NativeSessionLaunch.test.md`, run whole. It authors the
