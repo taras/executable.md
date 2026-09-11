@@ -47,7 +47,6 @@ import { flushOutput, reserveTerminal, TerminalGrids } from "@executablemd/runti
 import type { TerminalComposite, TerminalGridRequest } from "@executablemd/runtime";
 
 import { TerminalAuthorityError, terminalInstallation } from "./authority.ts";
-import type { LiveGrid } from "./authority.ts";
 import type { PaneTerminal } from "./pane.ts";
 import type { TerminalGridLayout } from "../terminal-grid.ts";
 
@@ -346,19 +345,17 @@ export function openTerminalGrid(
     const request = toRequest(layout);
     let settled: RetainedGrid | undefined;
 
-    const grid: LiveGrid = {
+    // Submitted, not started. The supervisor holds the request and this work
+    // until a provider presents a composite for this exact object, and the grid
+    // runs beneath this operation's own scope so its panes keep the durable
+    // identity of the expansion that wrote them.
+    const submission = yield* installation.supervisor.submit({
       request,
       generation: installation.generation,
-      used: false,
-      settled: false,
+      scope: yield* useScope(),
       *run(composite) {
         settled = yield* presentGrid(request, composite, work, boundary);
-        grid.settled = true;
       },
-    };
-    installation.registry.add(grid);
-    yield* ensure(() => {
-      installation.registry.remove(grid);
     });
 
     // The one foreground-terminal lease, taken before any provider is asked for
@@ -372,7 +369,7 @@ export function openTerminalGrid(
     // Routed, and the answer thrown away.
     yield* TerminalGrids.operations.open(request);
 
-    if (!grid.settled || settled === undefined) {
+    if (!submission.settled || settled === undefined) {
       throw new TerminalAuthorityError(
         "no terminal provider opened this grid — a handler answered without delivering the " +
           "request to a registered provider",

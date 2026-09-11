@@ -22,8 +22,8 @@
  * lifecycle owns that, and hands each pane the one `PaneTerminal` it runs on.
  */
 
-import { createContext } from "effection";
-import type { Context, Operation } from "effection";
+import { createContext, createScope, ensure, resource, until } from "effection";
+import type { Context, Operation, Scope, Task } from "effection";
 import type { TerminalComposite, TerminalGridRequest } from "@executablemd/runtime";
 
 export class TerminalAuthorityError extends Error {
@@ -44,79 +44,202 @@ export interface TerminalGridAuthority {
   present(request: TerminalGridRequest, composite: TerminalComposite): Operation<void>;
 }
 
-/** One grid this execution issued, from the authority's side. */
-export interface LiveGrid {
+/**
+ * One grid the supervisor has been asked to run, before a composite exists.
+ *
+ * The scope is the submitting operation's own. A grid keeps the contexts of the
+ * expansion that wrote it — its durable child above all, which is what gives its
+ * panes their identities — so the supervisor owns when a grid stops, never what
+ * it runs under.
+ */
+export interface SubmittedGrid {
   /** The exact request object core issued. Compared by identity, never shape. */
   readonly request: TerminalGridRequest;
   /** The installation this grid belongs to. */
   readonly generation: object;
-  /** Run the grid on a presented composite, and keep what it settled to. */
+  /** Where the grid runs: a scope of its own, beneath the submitter's. */
+  readonly scope: Scope;
+  /** Run the grid on a presented composite. */
   run(composite: TerminalComposite): Operation<void>;
-  /** Whether this request has already been presented. */
-  used: boolean;
-  /** Whether the grid actually ran to a settlement. */
+}
+
+/** What the submitting operation can ask about its own grid afterwards. */
+export interface GridSubmission {
+  /** Whether a provider presented for this request and the grid ran through. */
+  readonly settled: boolean;
+}
+
+/** One submitted grid, and whatever of it is currently live. */
+interface Entry extends SubmittedGrid, GridSubmission {
+  presented: boolean;
   settled: boolean;
+  task?: Task<void>;
+  destroy?: () => Promise<void>;
 }
 
-/** Every grid this execution has issued and not yet finished. */
-export interface GridRegistry {
-  live(): readonly LiveGrid[];
-  add(grid: LiveGrid): void;
-  remove(grid: LiveGrid): void;
+/**
+ * Who owns the grids one terminal installation has issued.
+ *
+ * Two things have to meet before a grid exists: the document submits the
+ * authored request and the work its panes do, and a provider presents a
+ * composite for that exact request. Neither alone starts anything — a
+ * registration that never routes and a presentation of a request nobody
+ * submitted both open nothing — and the supervisor is what makes them converge
+ * by object identity and installation generation rather than by shape.
+ *
+ * It holds what it starts. Each grid runs as a task the supervisor keeps, in a
+ * scope of its own beneath the operation that submitted it — beneath, because a
+ * pane's durable identity and the bindings its content reads are the
+ * expansion's, and a grid parented anywhere else is a grid whose panes belong
+ * to nobody in particular.
+ *
+ * That parentage is also what makes a grid impossible to strand: the submitting
+ * operation unwinds whenever the call that routed it does, and takes the grid
+ * with it. The supervisor stopping its own entries at installation teardown,
+ * and stopping one whose presenting call was cancelled, is therefore belt and
+ * braces rather than the mechanism — deliberately so, because the mechanism is
+ * a structural property nobody reading this file can see.
+ *
+ * Private to core: nothing reachable by importing this package can submit a
+ * grid, present for one, or ask what is live.
+ */
+export interface GridSupervisor {
+  /**
+   * Register one authored request and its work.
+   *
+   * The entry is removed when the submitting operation unwinds — after that
+   * operation's own finalizers, so the foreground-terminal lease is released
+   * before the grid stops being something a provider could present for.
+   */
+  submit(grid: SubmittedGrid): Operation<GridSubmission>;
+  /** Run the grid this exact request names, under this exact generation. */
+  present(
+    request: TerminalGridRequest,
+    composite: TerminalComposite,
+    generation: object,
+  ): Operation<void>;
 }
 
-export function createGridRegistry(): GridRegistry {
-  const grids = new Set<LiveGrid>();
-  return {
-    live: () => [...grids],
-    add: (grid) => {
-      grids.add(grid);
-    },
-    remove: (grid) => {
-      grids.delete(grid);
-    },
-  };
+/**
+ * Stop one grid and wait for all of it.
+ *
+ * Halting the task settles its panes, runs their finalizers and destroys the
+ * composite; destroying the scope is what releases everything the grid itself
+ * established. Both are idempotent here, because a grid may be stopped by the
+ * presenting call that was cancelled, by installation teardown, or by neither.
+ */
+function* stopGrid(entry: Entry): Operation<void> {
+  const task = entry.task;
+  entry.task = undefined;
+  if (task !== undefined) {
+    yield* task.halt();
+  }
+  const destroy = entry.destroy;
+  entry.destroy = undefined;
+  if (destroy !== undefined) {
+    yield* until(destroy());
+  }
+}
+
+/** Open the supervisor one execution's grids belong to. */
+export function useGridSupervisor(): Operation<GridSupervisor> {
+  return resource(function* (provide) {
+    const entries = new Set<Entry>();
+
+    // Installation teardown. Every grid still live is stopped here and waited
+    // for. Scope parentage already reaches each one, so this is the supervisor
+    // saying so itself rather than the only thing that says it.
+    yield* ensure(function* () {
+      for (const entry of [...entries]) {
+        yield* stopGrid(entry);
+      }
+    });
+
+    yield* provide({
+      *submit(grid: SubmittedGrid): Operation<GridSubmission> {
+        const entry: Entry = { ...grid, presented: false, settled: false };
+        entries.add(entry);
+        yield* ensure(() => {
+          entries.delete(entry);
+        });
+        return entry;
+      },
+      *present(
+        request: TerminalGridRequest,
+        composite: TerminalComposite,
+        generation: object,
+      ): Operation<void> {
+        const entry = [...entries].find((candidate) => Object.is(candidate.request, request));
+        if (entry === undefined) {
+          throw new TerminalAuthorityError(
+            "this grid request is not live: it was copied, rebuilt, kept from another grid, or " +
+              "belongs to an execution that has finished",
+          );
+        }
+        if (!Object.is(entry.generation, generation)) {
+          throw new TerminalAuthorityError(
+            "this grid request belongs to another terminal provider installation",
+          );
+        }
+        if (entry.presented) {
+          throw new TerminalAuthorityError(
+            "this grid request has already been presented — one request opens one grid",
+          );
+        }
+        entry.presented = true;
+
+        // A scope of its own beneath the submitter's: the grid inherits the
+        // expansion's contexts, and the supervisor still holds the task.
+        const [scope, destroy] = createScope(entry.scope);
+        entry.destroy = destroy;
+        entry.task = scope.run(() => entry.run(composite));
+
+        // A presenting call that unwinds takes its grid with it. The submitter
+        // unwinding would too, which is why removing this changes no test —
+        // it is here so the supervisor's ownership does not depend on a
+        // structural coincidence holding forever.
+        yield* ensure(function* () {
+          yield* stopGrid(entry);
+        });
+
+        yield* entry.task;
+        entry.settled = true;
+        // Settled, so nothing is owed: the scope goes now rather than waiting
+        // for the provider's own call to end.
+        entry.task = undefined;
+        yield* until(destroy());
+        entry.destroy = undefined;
+      },
+    });
+  });
 }
 
 /**
  * Build the authority one provider installation is given.
  *
- * It closes over the installation's generation and its registry, so a factory
- * that kept an authority from a superseded installation presents into a
- * generation that no longer has the grid it names.
+ * It closes over the installation's generation, so a factory that kept an
+ * authority from a superseded installation presents under a generation the
+ * supervisor no longer has the grid for. Deciding that is the supervisor's, and
+ * this is the seam that carries the generation to it.
  */
 export function createTerminalAuthority(
   generation: object,
-  live: () => readonly LiveGrid[],
+  present: (
+    request: TerminalGridRequest,
+    composite: TerminalComposite,
+    generation: object,
+  ) => Operation<void>,
 ): TerminalGridAuthority {
   return {
     *present(request, composite) {
-      const grid = live().find((candidate) => Object.is(candidate.request, request));
-      if (grid === undefined) {
-        throw new TerminalAuthorityError(
-          "this grid request is not live: it was copied, rebuilt, kept from another grid, or " +
-            "belongs to an execution that has finished",
-        );
-      }
-      if (!Object.is(grid.generation, generation)) {
-        throw new TerminalAuthorityError(
-          "this grid request belongs to another terminal provider installation",
-        );
-      }
-      if (grid.used) {
-        throw new TerminalAuthorityError(
-          "this grid request has already been presented — one request opens one grid",
-        );
-      }
-      grid.used = true;
-      yield* grid.run(composite);
+      yield* present(request, composite, generation);
     },
   };
 }
 
-/** One execution's terminal installation: its registry and its generation. */
+/** One execution's terminal installation: its supervisor and its generation. */
 export interface TerminalInstallation {
-  readonly registry: GridRegistry;
+  readonly supervisor: GridSupervisor;
   /** Identifies this execution's provider installation, and nothing else. */
   readonly generation: object;
 }
@@ -136,10 +259,10 @@ const Installation: Context<TerminalInstallation | undefined> = createContext<
  * refusal rather than a way in.
  */
 export function* useTerminalInstallation(): Operation<TerminalGridAuthority> {
-  const registry = createGridRegistry();
+  const supervisor = yield* useGridSupervisor();
   const generation = {};
-  yield* Installation.set({ registry, generation });
-  return createTerminalAuthority(generation, () => registry.live());
+  yield* Installation.set({ supervisor, generation });
+  return createTerminalAuthority(generation, supervisor.present);
 }
 
 /** This execution's terminal installation, or `undefined` outside one. */
