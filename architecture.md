@@ -109,10 +109,11 @@ Existing documents and code get aligned to this section retroactively.
 | established session | a placement whose immutable construction route and durable provider or native identity both already exist, and which is therefore validated eagerly: reattached, compared against its retained history, and refused when either is missing or names another conversation |
 | instruction layer | the provider-native session, system or developer instructions a launch installs before the native UI accepts its first user turn. It is not a user message, and it is not conversation history |
 | foreground-terminal lease | the one exclusive claim on a document execution's foreground experience. A root native launch holds it for one inherited terminal; a terminal grid holds it for one grid presentation. A host with no terminal refuses it, and no second root launch or grid can hold it concurrently |
-| terminal grid | one provider-neutral foreground region whose direct terminal panes begin concurrently, remain independently interactive, and settle under one scope after complete provider and pane teardown |
-| terminal pane | one authored position in a terminal grid, identified structurally by its grid and ordinal and presented by its authored title. It owns one interactive terminal at a time; a paired pane expands its own document flow and a self-closing pane runs the host's default shell |
-| pane-terminal lease | the exclusive ownership one live interactive operation holds through a pane's concrete `PaneTerminal`. Different panes do not contend; a second operation in one pane does. The grid lifecycle closes admission when that pane is closing, and terminal ownership grants no authority over an Agent session |
-| native launcher | the host-owned seam that reserves the foreground terminal or the current pane terminal, flushes what that terminal has pending, starts one native UI there, and reports its terminal status and nothing else. It is not `exec`, whose children are piped, captured and journaled |
+| terminal grid | one provider-neutral foreground region whose direct terminal cells begin concurrently, remain independently interactive, and settle under one scope after complete provider and cell teardown |
+| terminal cell | one authored position in a terminal grid, identified durably by its position in the ordered grid and presented by its current title. It owns one interactive terminal at a time; a paired cell expands its own document flow and a self-closing cell runs the host's default shell |
+| terminal pane | the provider-owned interactive terminal endpoint bound to one live terminal cell; a tmux pane is one implementation, and its identity is never an authored or durable cell identity |
+| terminal-cell lease | the exclusive ownership one live interactive operation holds in a terminal cell. Different cells do not contend; a second operation in one cell does. The grid lifecycle closes admission when that cell is closing, and terminal ownership grants no authority over an Agent session |
+| native launcher | the host-owned seam that reserves the foreground terminal or the current terminal cell, flushes what that terminal has pending, starts one native UI there, and reports its terminal status and nothing else. It is not `exec`, whose children are piped, captured and journaled |
 | launch request | the frozen, one-use value public launch middleware routes. It carries the facts of one launch and `with()`, and nothing that can settle one. Identity is object identity: a rebuilt look-alike describes the same ask and authorizes none of it |
 | provider authority | what core delivers to the provider factory it installs, as an argument that factory closes over. It validates the routed request, runs each absent phase once, cross-checks and retains what comes back, and derives the result. There is no reader for one, no context holding one, and no request member carrying one |
 | session coordinator | the host-built capability that answers who owns one logical agent session right now, across processes. It is passed directly into the provider that needs it and is deliberately not contextual: a decision document middleware could replace is not one. Acquisition never waits |
@@ -3431,21 +3432,22 @@ provider-neutral grid of independently interactive terminal panes:
 </Terminal.Grid>
 ```
 
-`Terminal` names the interactive endpoint the document requires. It does not
+`Terminal` names the interactive cell the document requires. It does not
 name the presentation technology: a tmux integration, another terminal
 multiplexer, and a host-native grid UI are providers for the same
 contract. A component that elicits values through a terminal UI is a different
 abstraction, just as `<WebForm>` is one presentation for `<Elicit>`; it does not
 change what an interactive process requires here.
 
-The grid and its panes are core-owned structural syntax. `<Terminal.Grid>` is
+The grid and its cells are core-owned structural syntax. `<Terminal.Grid>` is
 paired, requires a positive integer `columns`, and contains at least one direct
 `<Terminal>` child. Whitespace may separate those children, but ordinary text,
 dynamic control structures, and every other direct element are invalid. A
-pane requires a non-empty `title`; titles are display labels and need not be
-unique. Its ordinal among the direct children is its structural identity.
-Rows are derived in row-major order from the pane count and columns. A paired
-pane expands ordinary document flow; a self-closing pane runs the host's
+cell requires a non-empty `title`; titles are display labels and need not be
+unique. Its position in the ordered direct children is its durable structural
+identity; no separately stored ordinal or key duplicates that fact. Rows are
+derived in row-major order from the cell count and columns. A paired cell
+expands ordinary document flow; a self-closing cell runs the host's
 default shell. A nested grid and a `<Terminal>` outside a grid are invalid.
 Neither form accepts a provider, executable, shell, layout identifier, or
 `as`, and neither renders or returns document content.
@@ -3454,7 +3456,7 @@ Core ownership is necessary here. An ordinary function component receives its
 content as one rendered string, after the effects in that content have already
 run; it cannot inspect direct authored children or begin them concurrently.
 Core instead validates the complete static grid before any provider contact,
-then creates one durable child operation per pane in authored order. Each pane
+then creates one durable child operation per cell in authored order. Each cell
 gets an isolated binding and evaluation scope. It inherits the bindings,
 contextual providers, working directory, and configuration visible at the grid
 site, while bindings and contextual changes made in one pane remain there and
@@ -3480,52 +3482,173 @@ terminal.
 The host owns one non-contextual presentation function, `PresentTerminalGrid`,
 built and delivered directly to the installed provider. It validates the exact
 grid request, the provider installation generation, and that the request has not
-already been presented — and it decides all of that *before* the provider's grid
-is acquired, so a refused presentation costs the provider nothing and produces
-no side effect. No context value, prop, binding, provider result, retained
-record, diagnostic, or structurally similar request carries it.
+already been presented before any provider resource is acquired. A refused
+presentation therefore costs the provider nothing and produces no side effect.
+No context value, prop, binding, provider result, retained record, diagnostic,
+or structurally similar request carries this authority.
 
-A provider supplies its grid as a resource rather than an object with a
-teardown method. Acquiring it is the grid coming into existence; releasing it is
-the grid going away, exactly once, whether the grid succeeded, failed to start,
-was closed by the reader, was failed by the provider, or was cancelled. There is
-no destroy to call, and so no way to call one twice or to forget one.
+A provider supplies one `TerminalGridHost` as a resource. Acquiring it is the
+provider grid coming into existence; releasing it is the provider grid going
+away, exactly once, whether the grid succeeded, failed to start, was closed by
+the reader, was failed by the provider, or was cancelled. There is no destroy
+operation to call, and so no way to call one twice or forget one. The host
+exposes the effects a neutral grid can require — show the prepared grid, launch
+an exact native request in one live cell, and start the host's default shell in
+one live cell — together with a read-only `closed` operation that settles when
+the reader leaves. Reader close is lifecycle input, not an imperative close
+action on the grid.
 
-Nothing owns a grid but the expansion that submitted it. A grid runs beneath
-that operation, which is what keeps its panes' durable identities and inherited
-bindings those of the document position that wrote them, and what takes the grid
-down whenever that operation unwinds. There is no execution-wide holder of live
-grid tasks; what the installation keeps is the smallest lookup that lets a
-submitted request and a presentation converge — the request object, its
-generation, whether it has been presented, and the operation that runs it.
+Nothing owns a grid but the expansion that submitted it. The private
+`terminalGrid()` resource runs the whole grid beneath that operation: the
+durable grid child, live state, provider resource, cell children, close
+commitment, and complete teardown. It returns the grid's running task, so its
+caller awaits the computational unit directly:
 
-The stable contextual terminal API is request routing only. Middleware may
-observe, narrow, refuse, wrap, or delegate a one-use request. A handler's
-return value is ignored, and answering without delegation authorizes and
-settles nothing. Core supplies the one request for the exact expansion; the
-provider factory closes over the delivered presentation function and must
-present that same request to act. This preserves provider composition without letting a document
-or replacement context mint terminal ownership.
+```ts
+const grid = yield* terminalGrid(layout, cellWork);
+const outcome = yield* grid;
+```
 
-The grid lifecycle creates one concrete `PaneTerminal` for each authored ordinal
-and passes it to that pane's work. It carries one operation, `use()`, and no
-identity: core already knows which ordinal it built each one for, and a pane
-that could name itself would be a pane something else could name. `use()` runs
-one terminal activity as that pane's owner, refuses a concurrent use in the same
-pane, permits sequential uses after settlement, and awaits the activity's own
-cleanup before the pane is free again. Different `PaneTerminal` values do not
-contend. Closing the grid prevents every pane terminal from admitting new work
-before it asks live work to stop; retaining a pane terminal after its grid closes
-grants nothing.
+There is no callback-shaped lifecycle API, public close boundary, grid registry,
+or execution-wide owner of live grid tasks. Scope parentage takes the whole grid
+down whenever its submitting expansion unwinds and keeps each durable child in
+the expansion context that authored it. The installation retains only the
+minimum admission state that lets one exact submitted request and its provider
+presentation converge.
 
-Core installs that same `PaneTerminal` in the paired pane's scope. A
-pane-scoped native launcher reads it and `<Session.Launch>` consequently
-reserves, flushes, and launches on the pane terminal instead of competing for
-the root lease. The provider starts a self-closing pane's host-configured
-default shell as a terminal activity through the same operation. Sequential work in one pane remains
-ordinary composition. The session coordinator is unchanged and independently
-authoritative, so two panes attempting to own the same logical Agent session
-still contend and one is refused.
+An incomplete grid creates one live, immutable `TerminalGridState` and a
+`TerminalGridUI` action object. The neutral terminal package owns a private
+per-grid StarFX store and its blocking controllers inside the current Effection
+scope; it creates no independent root and does not put provider resources under
+StarFX's retrying resource management. The store is presentation state only.
+The durable journal remains the source of replay and recovery. Every
+correctness-bearing action runs its controller synchronously through StarFX's
+blocking operation form, so its caller may await all state transitions and host
+effects owned by that action. Raw non-blocking dispatch never launches, shows,
+closes, or settles terminal work.
+
+The action surface is intentionally small:
+
+```ts
+interface TerminalGridUI {
+  readonly state: TerminalGridState;
+  readonly cells: readonly TerminalCellUI[];
+  show(): Operation<void>;
+}
+
+interface TerminalCellUI {
+  readonly state: TerminalCellState;
+  setTitle(title: string): Operation<void>;
+  launch(request: NativeLaunchRequest): Operation<NativeLaunchOutcome>;
+  shell(): Operation<TerminalShellOutcome>;
+}
+```
+
+The provider side is separate:
+
+```ts
+interface TerminalGridView {
+  readonly state: TerminalGridState;
+  readonly changes: Stream<TerminalGridState>;
+}
+
+interface TerminalGridHost {
+  readonly closed: Operation<void>;
+  show(): Operation<void>;
+  launch(
+    cellId: TerminalCellId,
+    request: NativeLaunchRequest,
+  ): TerminalActivity<NativeLaunchOutcome>;
+  shell(cellId: TerminalCellId): TerminalActivity<TerminalShellOutcome>;
+}
+```
+
+Core supplies one fresh live identity per authored cell. The terminal lifecycle
+creates one stable `TerminalCellUI` handle for it, and core installs that exact
+handle in the paired cell's scope. The handle closes over its live
+cell identity, so a component calls `setTitle()`, `launch()`, or `shell()`
+without passing an index or identifier. Each `state` property reads the current
+immutable snapshot; a previously read snapshot never changes. Only the cell UI,
+not the grid UI, enters the paired cell's context. The canonical stable
+contextual API returns it through
+`useTerminalCellUI(): Operation<TerminalCellUI | undefined>`; absence means the
+caller is outside a grid cell. The required `<Terminal title>` prop seeds state
+before presentation. `setTitle()` accepts the same non-empty string and replaces
+that title until another update or grid teardown. It completes once that state
+transition commits and does not wait for rendering. A title update owns no
+resource and has no cleanup action. It is live presentation state, not a durable
+effect: a fresh incomplete presentation starts from the retained grid's resolved
+authored title, and only cell work that runs again can update it again. Rendered
+paired-cell content enters the same state through a private controller; no
+public `setContent()`, status setter, success action, or failure action exists.
+The cell's durable child alone publishes its final outcome.
+
+Context makes the exact issued cell handle available for composition; it is not
+provider authority. A replacement context can intercept or refuse work but
+cannot construct an issued handle, admit a provider presentation, or reach the
+host effects. Native-launch middleware keeps its ordinary ability to observe,
+narrow, wrap, refuse, or delegate a request. The cell-scoped endpoint invokes
+the issued cell's `launch()` action rather than falling through to the root
+foreground launcher. This changes no native request, Agent-session identity, or
+session-coordinator authority.
+
+The provider receives a separate read-only `TerminalGridView`: its current
+immutable state and a scope-bound stream of subsequent snapshots. It never
+receives `TerminalGridUI`, a cell action handle, the StarFX store, or mutation
+authority. It may coalesce intermediate snapshots while converging on the most
+recent one, but it never intentionally renders an older snapshot after a newer
+one. Ordinary state actions do not await rendering. `show()` is different: it
+sets the desired grid phase to visible and awaits the provider effect that
+presents the complete latest grid. A rendering, setup, show, launch, shell, or
+close-observation failure is fatal to that grid; the provider is never silently
+restarted underneath the same live state.
+
+The live state is one fixed aggregate:
+
+```ts
+interface TerminalGridState {
+  readonly phase: "preparing" | "visible" | "closing" | "closed";
+  readonly columns: number;
+  readonly rows: number;
+  readonly cells: readonly TerminalCellState[];
+}
+
+interface TerminalCellState {
+  readonly cellId: TerminalCellId;
+  readonly title: string;
+  readonly row: number;
+  readonly column: number;
+  readonly status:
+    | "starting"
+    | "launching"
+    | "running"
+    | "succeeded"
+    | "failed"
+    | "closed";
+  readonly content: string;
+}
+```
+
+`cellId` is minted by core for one live grid. It keeps a cell handle, state
+updates, provider effects, and a provider's private pane binding together even
+if a later feature changes positions. It is not authored, retained, replayed,
+diagnosed, placed in a native or Agent request, or used as provider identity.
+The `cells` arrays remain in authored order; row and column say where a cell is
+currently presented. Incomplete replay mints fresh live cell identities. The
+identity is the seam a later Story may use for live movement or resizing; this
+contract adds no move, resize, reorder, or durable-layout action.
+
+A cell begins `starting`. Admitting `launch()` or `shell()` publishes
+`launching`; acquiring the provider's terminal activity at the actual child
+spawn publishes `running`. The action waits for child settlement and the
+provider's terminal-quiescence proof. The surrounding durable cell child, not
+an individual launch, publishes `succeeded` or `failed` when all authored cell
+work settles. Sequential launches may therefore move `running` back through
+`launching` while the cell flow remains active. Distinct cells act concurrently.
+Overlapping terminal activities in one cell fail immediately as busy rather
+than entering a hidden queue, and the next activity is admitted only after the
+prior cleanup and quiescence proof. `setTitle()` may run while an activity is
+live. Once close commitment stops admission, every new public action refuses.
 
 Readiness is not something anybody acknowledges. A terminal activity is a
 resource whose acquisition happens only once its child has actually spawned, and
@@ -3537,11 +3660,10 @@ a PID and the child's first output are not acquisition. Nothing about readiness
 enters a request, a provider result, a process handle or a durable record, and a
 root launch has no pane activity at all.
 
-Readiness, live-use tracking, and closing admission are private state of the grid
-lifecycle, not a second public capability model. There is no pane-claim or
-readiness interface, no pane controller, no aggregate object, and no factory or
-sealing operation for another package to coordinate. The lifecycle passes only
-the concrete `PaneTerminal` across the pane-work boundary.
+Readiness, live-use tracking, and closing admission remain private controller
+state rather than a second public capability model. The `TerminalCellUI` is a
+domain action handle over that state, not a resource owner or an independently
+recoverable cell. Holding one after its grid closes grants nothing.
 
 A provider whose pane endpoint is owned by a persistent process routes child
 creation through that process. The launch's exact argv vector, working
@@ -3549,8 +3671,9 @@ directory, and environment cross a provider-private authenticated channel;
 they never pass through the presentation provider's command language. The pane
 owner creates the child with all three standard streams inherited from the pane
 terminal, provides the activity once that child is running, and remains only the
-lifecycle and display owner. It writes provider display messages to the terminal but never
-reads terminal input, so interactive input belongs to the foreground child.
+lifecycle and display owner. It writes provider display messages to the terminal
+but never reads terminal input, so interactive input belongs to the foreground
+child.
 It admits one live launch at a time and releases the pane only after that
 launch's observable terminal ownership has been swept. Sequential launches use
 the same pane owner and endpoint rather than replacing the pane.
@@ -3558,13 +3681,13 @@ the same pane owner and endpoint rather than replacing the pane.
 Provider-specific commands, socket paths, session names, window identifiers,
 pane identifiers, attach keys, and process topology remain private inside the
 provider closure. They appear in no authored surface, durable identity, result,
-or diagnostic. Provider-neutral diagnostics identify a grid expansion and pane
-ordinal or title only. A provider may show sanitized pane status, but core owns
-the operation result; presentation never decides whether a pane or grid
-succeeded. Core sends the provider only the closed presentation states
-`starting`, `running`, `succeeded`, `failed`, and `closed`: readiness moves a
-pane to `running`, pane settlement supplies `succeeded` or `failed`, and a live
-pane cancelled solely by reader close becomes `closed` rather than failed.
+or diagnostic. Provider-neutral diagnostics identify a grid expansion and a
+cell's authored position or title only. The provider observes the closed
+presentation states `starting`, `launching`, `running`, `succeeded`, `failed`,
+and `closed`; it cannot set them. Admission selects `launching`, terminal
+activity acquisition selects `running`, cell-flow settlement supplies
+`succeeded` or `failed`, and a live cell cancelled solely by reader close
+becomes `closed` rather than failed.
 
 ### Atomic presentation and settlement
 
@@ -3572,51 +3695,59 @@ The grid runs as one structured scope:
 
 1. Core validates the whole structural layout, takes the foreground-terminal
    lease, and flushes root output.
-2. Core admits the presentation — exact request, generation, not already used —
-   and only then acquires the provider's grid resource. Acquisition prepares the
-   entire hidden grid: every pane endpoint and its supervision. No grid is
-   attached yet, and a refused presentation acquires nothing at all.
+2. The terminal lifecycle admits the presentation — exact request, generation,
+   not already used — and only then creates the live UI state and acquires the
+   provider's host resource with its read-only view. Acquisition prepares the
+   entire hidden
+   grid: every pane endpoint and its supervision. No grid is visible yet, and a
+   refused presentation creates no store and acquires nothing at all.
 3. Core starts the pane child operations concurrently, using deterministic
-   durable child identities derived from the grid expansion and authored
-   ordinal. A paired pane begins its document flow and a self-closing pane
+   durable child identities derived from the grid expansion and authored array
+   position. A paired pane begins its document flow and a self-closing pane
    begins its shell.
 4. A pane is ready only when its terminal activity is acquired, which happens
    only once its child has actually spawned. Reserving an endpoint, allocating a
    process identifier, or receiving output is not acquisition. A child that
    starts and exits immediately can be both ready and settled.
-5. Only after every pane reaches readiness does the provider attach the one
-   grid. Any acquisition or pane-start failure before this barrier cancels every
-   pane, awaits complete teardown, releases the hidden grid, and fails without
-   exposing a partial grid. Agent preparation or
+5. Only after every cell reaches readiness does the grid controller run
+   `TerminalGridUI.show()`. The action publishes `visible` and awaits the host's
+   atomic presentation of the complete latest state. Any acquisition or
+   cell-start failure before this
+   barrier cancels every cell, awaits complete teardown, releases the hidden
+   grid, and fails without exposing a partial grid. Agent preparation or
    retained route work that occurred before a failed native spawn remains
    durable; atomicity covers terminal presentation and lifecycle, not rollback
    of earlier provider effects.
 6. Once attached, each pane settles independently and keeps its final status
    visible while siblings continue. The grid remains present after all panes
    settle until the reader closes or leaves it.
-7. Reader close first crosses a live close boundary, then begins an ordered
-   teardown: prevent new pane launches, ask live pane children to close, await
-   every child and finalizer, release the provider's grid resource — which is
-   what destroys it, once — restore the root terminal, and only then release the
-   foreground lease and settle the grid. Reader close, pane failure and parent
+7. The host's `closed` operation first crosses the private live close boundary,
+   then the controller publishes `closing` and begins ordered teardown: prevent
+   new cell actions, ask live cell children to close, await every child and
+   finalizer, release the provider's host resource — which is what destroys it,
+   once — restore the root terminal, publish `closed`, and only then release the
+   foreground lease and settle the grid. Reader close, cell failure and parent
    cancellation each decide the durable outcome before disposal begins; cleanup
    enforces quiescence and never invents or rewrites a retained outcome. The
-   document never continues while an observable pane child or provider-owned
+   document never continues while an observable cell child or provider-owned
    process can still act through the grid.
 
-The provider's `closed()` settlement proposes the live close boundary. The
-boundary is crossed when the grid owner has entered a cancellation-deferred
+The provider host's read-only `closed` settlement proposes the live close
+boundary. The boundary is crossed when the grid owner has entered a
+cancellation-deferred
 await of the grid's durable child and acknowledges that proposal; only then may
 the child signal pane close. That await ends only when the task has settled and
 its durable `Close` has been acknowledged, not when the grid body has merely
 chosen an outcome. This handshake has no provider identity and is not itself
 journaled.
 
-Reader-close intent becomes durable only as that completed grid `Close`, after
-pane and provider teardown. There is no standalone durable "closing" state. The
-gap between observing close and committing it is safe because ordinary parent
-cancellation is held pending across the whole gap. A cancellation that arrives
-before the owner acknowledges the close boundary cancels the active grid. One that arrives
+There is no public `close()` action. Reader-close intent becomes durable only as
+that completed grid `Close`, after cell and provider teardown. There is no
+standalone durable "closing" state. The live UI phase named `closing` reports
+teardown progress and is not retained intent. The gap between observing close
+and committing it is safe because ordinary parent cancellation is held pending
+across the whole gap. A cancellation that arrives before the owner acknowledges
+the close boundary cancels the active grid. One that arrives
 afterward does not rewrite grid or pane outcomes: panes already settled keep
 their outcomes, each then-live pane completes its own scope and retains
 `closed`, and the grid retains the same `reader` or `failed` result it would
@@ -3630,7 +3761,7 @@ scope. Reader close is cooperative at the durable boundary: it asks the pane to
 close and awaits it; it never halts the pane's durable task. The pane may stop
 its live nested work as part of its own scope teardown, but its durable child
 does not settle as `closed` or write `Close(ok)` until that work and its finalizers
-have settled. This preserves the pane's ordinal-derived identity and never
+have settled. This preserves the pane's position-derived identity and never
 turns a deliberate reader close into a caller-cancelled durable child that a
 later run could revive or wait on forever.
 
@@ -3675,19 +3806,23 @@ observable ownership mechanism of its own instead of severing all three links.
 ### Durability and replay
 
 A terminal grid is a core-owned structured durable region. Its layout identity
-contains the columns and the ordered pane forms and titles, never a provider or
-live terminal identifier. Each pane is a deterministic durable child coroutine,
-so effects in paired content retain and replay under the same rules they use
-outside a grid. A self-closing shell is a terminal child effect that retains
-only provider-neutral start and exit status; its executable, argv, environment,
-terminal bytes, and conversation history are live-only.
+contains the columns and the ordered cell forms and titles, never an explicit
+index, live `cellId`, provider identity, or terminal identifier. Array position
+is the durable structural identity. Each cell is a deterministic durable child
+coroutine derived from that position, so effects in paired content retain and
+replay under the same rules they use outside a grid. A self-closing shell is a
+terminal child effect that retains only provider-neutral start and exit status;
+its executable, argv, environment, terminal bytes, and conversation history are
+live-only. The pre-merge retained shape with explicit ordinal fields has no
+migration reader.
 
 The completed grid record retains the provider-neutral layout, close kind, and
-ordered pane outcomes after the normal secret gate. Completed replay claims the
+ordered cell outcomes after the normal secret gate. Completed replay claims the
 whole region and returns its retained outcome without installing or contacting
-a terminal provider, starting a shell, expanding pane content, acquiring an
-Agent session, or launching a native UI. The structured durable boundary owns
-that short circuit; a public replay context does not.
+a terminal provider, creating a StarFX store, UI object, cell handle, state
+stream, or host, starting a shell, expanding cell content, acquiring an Agent
+session, or launching a native UI. The structured durable boundary owns that
+short circuit; a public replay context does not.
 
 The reader-close handshake makes cancellation during teardown a completed-grid
 case rather than a new partial-replay state. When a pane finalizer delays close
@@ -3723,8 +3858,9 @@ the retained root stays authoritative, and deciding whether a changed source
 should be refused rather than ignored belongs to a versioned root boundary that
 does not exist yet. Until it does, the grid's obligation is the narrower one it
 can actually discharge: retain the complete authored structure, and open the
-structure it retained rather than the one the file now shows. It acquires a fresh provider grid: completed pane
-children are restored as settled statuses without re-running their effects,
+structure it retained rather than the one the file now shows. It creates fresh
+live state and cell identities and acquires a fresh provider host: completed
+cell children are restored as settled statuses without re-running their effects,
 while incomplete children replay or start their remaining work. An incomplete
 `<Session.Launch>` preserves the prepared/detached identity rules of its own
 contract; placing it in a pane neither allocates a replacement session nor
@@ -3732,6 +3868,76 @@ weakens session ownership. An incomplete self-closing shell starts the current
 authorized default shell and makes no claim to resume its prior terminal
 history. Provider identifiers are recreated live and are never reconciled with
 a journal.
+
+### Package ownership
+
+The package boundary follows the provider boundary. `@executablemd/terminal`
+owns the provider-neutral state, UI, view, host and cell action types; the
+private StarFX store and controllers; presentation admission, terminal
+activities, errors, grid lifecycle and replay; POSIX process observation and
+quiescence; and the controlled evidence provider. `@executablemd/terminal-tmux`
+owns tmux commands, workers, private IPC, rendering convergence, and the tmux
+host resource. Core imports the neutral package and keeps structural expansion,
+source-aware journal descriptions, execution-profile integration, and Agent
+session behavior. The Deno and compiled CLI entrypoints install the POSIX
+observer and tmux provider for an ordinary foreground `xmd run`; Node, Bun and
+every workflow profile install neither. A terminal grid is run presentation,
+not workflow orchestration.
+
+Dependencies point from core and the tmux adapter into the neutral terminal
+package, and from runtime-named CLI entrypoints into the tmux adapter. The
+neutral package imports neither core, the tmux adapter, runtime, nor CLI; the
+tmux adapter imports neither core, runtime, nor CLI. StarFX remains a private
+dependency of the neutral package, and no StarFX type crosses its public or
+provider surface. Reusable POSIX observation stays behind
+`@executablemd/terminal/posix` so another POSIX provider need not depend on tmux.
+The old runtime, core, and CLI terminal implementation modules and exports are
+deleted, and repository imports use the two canonical package surfaces directly.
+This stack is unmerged, so no compatibility re-export or migration path
+preserves those experimental module locations.
+
+The extraction applies to the stack's implementation modules as follows:
+
+| Current module | Destination |
+| --- | --- |
+| `packages/runtime/launcher.ts` | Split among terminal's neutral root, POSIX foreground-child adapter, and controlled test entrypoint |
+| `packages/runtime/terminal.ts` | Split between terminal's neutral root and controlled test entrypoint |
+| `packages/runtime/terminal-processes.ts` | `@executablemd/terminal/processes` |
+| `packages/runtime/deno-terminal-processes.ts` | `@executablemd/terminal/posix` |
+| `packages/core/src/terminal/{grid,pane,presentation,provider-api}.ts` | `@executablemd/terminal/lifecycle`, with UI state and controllers replacing the imperative grid and pane surfaces |
+| `packages/core/src/terminal-grid.ts` | Split: neutral layout moves to terminal; authored scanning, expansion and source integration stay in core |
+| `packages/core/src/terminal/{journal,profile}.ts` | Stay in core as adapters from terminal lifecycle to core journal descriptions and `Execution` |
+| `packages/cli/src/terminal/{attach-client,layout,pane-channel,pane-child,pane-protocol,pane-worker,provider,tmux-grid,tmux}.ts` | `@executablemd/terminal-tmux` |
+| `packages/cli/src/terminal/host.ts` | Split: reusable provider and POSIX pieces move to their packages; the core `Execution` wrapper and entrypoint composition stay in a non-terminal CLI module |
+
+The neutral package root exports the provider-neutral launch, state, UI, view,
+host, activity, layout, routing and error contracts together with
+`useTerminalCellUI()`. Its `./lifecycle` entrypoint
+exports grid execution, presentation installation and replay; `./processes`
+exports process facts, snapshots and quiescence; `./posix` exports reusable
+POSIX observation and foreground-child adapters; and `./test` exports only
+controlled providers, launchers, logs and signals. These are facets of one
+package: a value exported from more than one entrypoint is object-identical.
+`@executablemd/terminal-tmux` exports its provider name, dependency contract,
+provider factory and installer, pane-worker command and invocation parser, pane
+worker runner, and documented provider errors from its root. Protocol frames,
+channels, tmux process wrappers, layout mechanics and teardown hooks remain
+private; controlled low-level seams exist only under its `./test` entrypoint.
+Every contextual API descriptor and public error constructor has one canonical
+definition. Re-exporting it from another canonical entrypoint preserves object
+identity; no package rebuilds a structurally similar descriptor or error.
+
+Tests move with the contract they prove. Terminal owns neutral state, action,
+authority, lifecycle, replay, process-observation and quiescence evidence;
+terminal-tmux owns renderer, protocol, worker and teardown evidence; core keeps
+syntax, source integration and journal-description evidence; test-agent keeps
+cross-package Agent composition; and CLI keeps entrypoint and compiled-host
+selection evidence. Both terminal packages are ordinary lockstep-versioned
+workspace members. Publication places terminal after durable streams,
+terminal-tmux and core after terminal, and CLI after terminal-tmux, terminal,
+core and runtime.
+
+### tmux provider
 
 The first production provider uses tmux where the Deno or compiled host has a
 foreground terminal and the required tmux capability. It prepares one private
@@ -5069,8 +5275,8 @@ Status is measured against main.
 | testing harness (`<Execution>`) | runs another document as a real root under a production host profile, authorized by canonical `<Test>` alone: declarations installed before the root import, child output displayed progressively and collected only when asked, journal retention selected independently of observation, and the outcome published by the invocation's own terminal through a request public middleware composes around but cannot answer | built on the #454 stack for `host="run"`; the workflow profile and `<WorkflowRun>` are unbuilt, and a host that offers no workflow profile refuses them |
 | nested run-profile Agent and elicitation declarations | lets one `<Execution host="run">` declare one child-scoped `<TestAgent>` scenario set and one non-delegating `<Answers>` matcher set; only frozen test data crosses the harness request, the trusted host constructs both providers inside the isolated child, siblings share no session or provider state, ordinary component shadowing remains in force, and the child journal retains only the selected Prompt and Elicit components' ordinary results. A controlled `<Plan>` may author an exact scenario label that this host alone maps to Plan's derived conversation identity; declaration selection uses the label while runtime state stays keyed by the opaque identity and child, with no matcher or fallback added to ordinary TestAgent sessions | built on the #641 stack; controlled Plan routing added on the #728 stack |
 | `Config` run deadline / exec default / Fetch default / verbosity | three independently owned contextual timeouts, absent unless configured, each read by exactly one consumer, and contextual verbosity — a boolean that is false unless configured, seeded by the command line and overridable for a lexical subtree, bounding nothing and owning no authority | built on this stack |
-| terminal grid (`<Terminal.Grid>` / `<Terminal>`) | replaces the root foreground terminal with one provider-neutral grid whose statically declared direct panes begin concurrently, stay independently interactive, preserve their final statuses until the reader closes the grid, and tear down completely before document execution continues. A paired pane expands isolated document flow; a self-closing pane runs the host's default shell. The grid owns one foreground-terminal lease, each pane owns a separate pane-terminal lease, and a pane-scoped native launcher lets `<Session.Launch>` use that pane without weakening the independent Agent session coordinator. Core validates the complete row-major layout before provider contact, attaches only after every pane is ready, contains post-attach pane failures until close, and records the ordered provider-neutral outcomes. Completed replay contacts no terminal or Agent provider; partial replay acquires a fresh provider grid, restores completed panes as statuses, and continues incomplete pane effects under their existing durable identities. Provider commands, sockets, process topology and layout identifiers remain live-only inside the provider closure | defined for #717; #726 proves the persistent tmux pane-worker topology and its observable teardown boundary on macOS; first production provider is tmux in the Deno and compiled foreground hosts; controlled non-tmux provider proves the core contract; implementation unbuilt |
-| native session launch (`<Session.Launch>` / `launchAgentSession()`) | prepares one durable coding-agent session from the rendered body of `<Session.Launch>` and hands the provider's native UI the terminal for that exact session, then continues the document after it exits. The body renders completely first and only what it rendered crosses as the instruction layer; the launch performs no model turn; at the root it takes the run's foreground-terminal lease before an agent is resolved, while a launch inside `<Terminal>` takes that pane's lease through its pane-scoped native launcher. A host with no applicable terminal refuses without probing for an installed CLI. A session is constructed once, by one of two mechanisms, and its create-once construction route says which. Where the provider returns the identity, the ACPX provider creates the session, installs the layer at creation, releases ACP ownership before the spawn, and marks its handle stale so a later `<Prompt>` reattaches. Where the adapter names its own sessions, it allocates the identity inside ownership before any process exists, the native process creates the session under that name from a private mode-0600 instruction file, and ACP creates nothing — the instruction text reaches neither argv nor environment, and the file is removed on success, failure and cancellation alike while ownership is still held. Neither route converts into the other, and which one governs is chosen by the first operation that consumes the placement rather than by the `<Session>` that made it: a fresh `<Session>` publishes no route and establishes nothing, so a `<Session.Launch>` nested inside one constructs the session it placed, while a first subscribed `<Prompt>` publishes ACP-first before it ensures and keeps that account even if the turn that follows is never accepted. An established route is validated eagerly by a later `<Session>`, and a launch meeting a published ACP-first route refuses before an identity exists. A `<Session>` or `<Prompt>` meeting a bound client-allocated route attaches under the route's exact identity; a legacy unbound route or an unavailable attachment capability refuses before a turn and creates no substitute conversation. Phases are retained as `agent_session_launch` records under one expansion identity — `prepared` before ownership is released, then `detached`, then `exited` — so a completed replay launches nothing, a replay holding only `prepared` proves the handoff never began and may still create under the retained identity, and one holding `detached` resumes and never falls back. The public route carries an opaque one-use launch request and answers nothing; authority to run and retain a phase is delivered to the installed provider directly, so neither a returned completion nor a rebuilt request authors a launch. Every operation that can act on an advertised session takes exclusive ownership under one natural key first, through a coordinator the host built and passed in; contention refuses instead of queueing, and an owner that never proved it stopped leaves a recovery tombstone. A host that cannot say who owns a session refuses every advertised operation, and one that cannot say how a session was constructed additionally refuses an agent that names its own — before any provider effect. Every private setup or child-creation failure is normalized to `process-creation-failed` with fixed provider-owned text, carrying no path, argv, environment or host message. No launch path discards persistent provider state. A client-allocated session is bound to one executable build: the build is observed inside ownership before an identity is allocated, the binding is published with the V2 route and retained beside the prepared record, the native child runs the exact observed path in place of the launcher name, and every later create, resume, attachment and incomplete replay reobserves and compares before a process, an ensure or a turn. A `<Session>` or `<Prompt>` meeting a bound client-native route attaches to it: it reobserves the build, requires any retained provider arrangement to assert that same conversation, calls ensure with the route identity as `resumeSessionId`, and requires the provider to report that identity before a turn — refusing on missing capability, build drift, missing history or a differing assertion without creating a substitute conversation. ACP runtimes are partitioned by resolved agent command and binding, each handle is closed by the partition that created it, and a bound partition is torn down when its last handle closes. A legacy V1 client-native route keeps exactly the released native-only behavior and never attaches | built on the #517 stack, extended by the #519 and #561 stacks; Deno and the compiled binary assemble the host — coordinator, route store and executable observer — and Node and Bun keep the same advertised names while assembling none of it, so every advertised operation refuses before provider work; `claude` is advertised for native launch after passing the client-allocated gate at Claude Code 2.1.241 on macOS arm64 (#520) and separately for client-native attachment after passing the native-to-ACP marker gate (#561), and Codex remains unadvertised because nothing has run its provider-returned claims against an installed Codex; `Agent.AddDir` is unbuilt |
+| terminal grid (`<Terminal.Grid>` / `<Terminal>`) | replaces the root foreground terminal with one provider-neutral grid whose statically declared direct cells begin concurrently, stay independently interactive, preserve their final statuses until the reader closes the grid, and tear down completely before document execution continues. One scope-owned `TerminalGrid` task owns the whole durable computation. Incomplete work creates a per-grid immutable StarFX state, stable contextual `TerminalCellUI` action handles and one resource-owned `TerminalGridHost`; the provider observes a read-only view and cannot mutate state. The title prop seeds state, later title actions update it, native and shell actions are exclusive within one cell but concurrent across cells, and `show()` presents the complete latest grid after readiness. Reader close is an implicit host lifecycle signal rather than a public action. Completed replay creates none of the live state or provider objects; partial replay mints fresh live cell identities and continues incomplete effects under their existing position-derived durable identities. `@executablemd/terminal` owns the neutral live contract, lifecycle, replay and reusable POSIX observation; `@executablemd/terminal-tmux` owns tmux rendering, IPC and workers; core owns structural syntax, source-aware journal descriptions and profile integration; and runtime-named entrypoints install host wiring with no compatibility exports from old terminal paths | defined for #717; #726 proves the persistent tmux pane-worker topology and its observable teardown boundary on macOS; controlled non-tmux evidence proves the provider-neutral state, action, lifecycle and replay contract; implementation unbuilt |
+| native session launch (`<Session.Launch>` / `launchAgentSession()`) | prepares one durable coding-agent session from the rendered body of `<Session.Launch>` and hands the provider's native UI the terminal for that exact session, then continues the document after it exits. The body renders completely first and only what it rendered crosses as the instruction layer; the launch performs no model turn; at the root it takes the run's foreground-terminal lease before an agent is resolved, while a launch inside `<Terminal>` takes that cell's lease through its contextual `TerminalCellUI`. A host with no applicable terminal refuses without probing for an installed CLI. A session is constructed once, by one of two mechanisms, and its create-once construction route says which. Where the provider returns the identity, the ACPX provider creates the session, installs the layer at creation, releases ACP ownership before the spawn, and marks its handle stale so a later `<Prompt>` reattaches. Where the adapter names its own sessions, it allocates the identity inside ownership before any process exists, the native process creates the session under that name from a private mode-0600 instruction file, and ACP creates nothing — the instruction text reaches neither argv nor environment, and the file is removed on success, failure and cancellation alike while ownership is still held. Neither route converts into the other, and which one governs is chosen by the first operation that consumes the placement rather than by the `<Session>` that made it: a fresh `<Session>` publishes no route and establishes nothing, so a `<Session.Launch>` nested inside one constructs the session it placed, while a first subscribed `<Prompt>` publishes ACP-first before it ensures and keeps that account even if the turn that follows is never accepted. An established route is validated eagerly by a later `<Session>`, and a launch meeting a published ACP-first route refuses before an identity exists. A `<Session>` or `<Prompt>` meeting a bound client-allocated route attaches under the route's exact identity; a legacy unbound route or an unavailable attachment capability refuses before a turn and creates no substitute conversation. Phases are retained as `agent_session_launch` records under one expansion identity — `prepared` before ownership is released, then `detached`, then `exited` — so a completed replay launches nothing, a replay holding only `prepared` proves the handoff never began and may still create under the retained identity, and one holding `detached` resumes and never falls back. The public route carries an opaque one-use launch request and answers nothing; authority to run and retain a phase is delivered to the installed provider directly, so neither a returned completion nor a rebuilt request authors a launch. Every operation that can act on an advertised session takes exclusive ownership under one natural key first, through a coordinator the host built and passed in; contention refuses instead of queueing, and an owner that never proved it stopped leaves a recovery tombstone. A host that cannot say who owns a session refuses every advertised operation, and one that cannot say how a session was constructed additionally refuses an agent that names its own — before any provider effect. Every private setup or child-creation failure is normalized to `process-creation-failed` with fixed provider-owned text, carrying no path, argv, environment or host message. No launch path discards persistent provider state. A client-allocated session is bound to one executable build: the build is observed inside ownership before an identity is allocated, the binding is published with the V2 route and retained beside the prepared record, the native child runs the exact observed path in place of the launcher name, and every later create, resume, attachment and incomplete replay reobserves and compares before a process, an ensure or a turn. A `<Session>` or `<Prompt>` meeting a bound client-native route attaches to it: it reobserves the build, requires any retained provider arrangement to assert that same conversation, calls ensure with the route identity as `resumeSessionId`, and requires the provider to report that identity before a turn — refusing on missing capability, build drift, missing history or a differing assertion without creating a substitute conversation. ACP runtimes are partitioned by resolved agent command and binding, each handle is closed by the partition that created it, and a bound partition is torn down when its last handle closes. A legacy V1 client-native route keeps exactly the released native-only behavior and never attaches | built on the #517 stack, extended by the #519 and #561 stacks; Deno and the compiled binary assemble the host — coordinator, route store and executable observer — and Node and Bun keep the same advertised names while assembling none of it, so every advertised operation refuses before provider work; `claude` is advertised for native launch after passing the client-allocated gate at Claude Code 2.1.241 on macOS arm64 (#520) and separately for client-native attachment after passing the native-to-ACP marker gate (#561), and Codex remains unadvertised because nothing has run its provider-returned claims against an installed Codex; `Agent.AddDir` is unbuilt |
 | `<Fetch>` | performs one XMD-mediated HTTP read through contextual `API.Fetch`, admitting the whole request before transport, and retains the normalized request and the detached response as one `fetch` durable observation; capture decides whether a status is data or a failure, and the trusted host's destination ceiling sits below the component | built on the #456 stack; a generated fragment may name the pinned identity only for a request the trusted host stated exactly, on the #369 stack |
 | `API.Files` | routes every document filesystem operation to the installed provider, with no host default and structural failure data. Its mandatory semantic operations include `ensureDirectory`, which recursively creates or adopts one directory and returns Unit; separately loaded copies compose through the stable Api name | built on the #227 stack; directory ensure added by #643 |
 | `<File.Delete path>` | removes one file the document names, inside the contextual working directory. An ordinary overridable core default with a closed schema of one required non-empty `path`, **self-closing only** — a paired spelling never enters its body, because the component declares its one form and canonical invocation-form dispatch enters that body only for the form the scan recorded, before `Env.cwd` is read and before the provider is reached. Neither the composable `Component.hasContent()` chain nor a method on whatever object a caller handed over takes part. It renders the empty string, declares no `returns` and hands back no receipt, so an ordinary `as` captures that empty string; absence is the same success, so deleting a path twice succeeds twice. One regular file or one final symbolic link goes — the link rather than its target, inside or outside — and every directory is refused, an empty one included. Empty, absolute, lexically escaping and parent-link-escaping paths are refused before any removal, and a printed error names only the path the document wrote. One semantic `API.Files.deleteFile` call and no filesystem access of its own; under a workflow run it is one `workspace_file` effect retaining `{ kind: "deleted" }`. The standard Deno workflow profile admits it to generated XMD as the exact self-closing identity `@executablemd/core#File.Delete`, third in the write table, where it performs that same ordinary effect and contributes no evaluator result | built on the #567 stack |
