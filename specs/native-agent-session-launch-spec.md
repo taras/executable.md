@@ -730,28 +730,27 @@ session coordinator
   └─ natural key for logical session B
 ```
 
-The grid owns the root foreground-terminal lease. The terminal authority mints
-one private one-use claim per authored pane ordinal, and core installs a native
-launcher in each pane scope that closes over that claim. `Session.Launch` uses
-the launcher already in scope; it receives no pane prop, token, identifier, or
-mode. The launcher validates the claim through the host's direct terminal
-authority and reserves that pane for the launch. A claim from another grid,
-provider installation generation, pane ordinal, or completed invocation
-authorizes nothing.
+The grid owns the root foreground-terminal lease. Its lifecycle creates one
+concrete `PaneTerminal` per authored pane ordinal, passes it to that pane's
+work, and owns the private state that admits work, observes readiness, and stops
+admission at close. Core installs that same pane terminal in the paired pane's
+scope. `Session.Launch` uses the launcher already in scope; it receives no pane
+prop, token, identifier, or mode. A constructed lookalike cannot reach a live
+pane, and the genuine terminal admits nothing after its grid closes.
 
-Different pane claims do not contend, so native launches in different panes can
-hold their terminals concurrently. One pane remains exclusive: a second launch
-cannot begin while the first is live there, and sequential launches work after
-the first releases it. Release requires the child, its observable descendants
-and process-group members, and every other holder of that pane terminal to be
-gone; the pane remains busy if the launcher cannot establish those facts. A
-root launch and a terminal grid contend for the root foreground lease, so
-neither can overlap the other.
+Different pane terminals do not contend, so native launches in different panes
+can hold their terminals concurrently. `PaneTerminal.interactive()` keeps one
+pane exclusive: a second launch cannot begin while the first is live there, and
+sequential launches work after the first releases it. Release requires the
+child, its observable descendants and process-group members, and every other
+holder of that pane terminal to be gone; the pane remains busy if the launcher
+cannot establish those facts. A root launch and a terminal grid contend for the
+root foreground lease, so neither can overlap the other.
 
 None of that changes the coordinator key or acquisition. Two panes naming the
 same provider, agent, and logical session still ask for one natural-key owner;
 one succeeds and the other receives `session-busy` without waiting. Two distinct
-sessions may be owned concurrently. A terminal claim grants no permission to
+sessions may be owned concurrently. A pane terminal grants no permission to
 ensure, detach, create, resume, prompt, or attach to an Agent session, and a
 session lease grants no terminal.
 
@@ -771,13 +770,19 @@ not roll those phases back. A child that successfully starts and exits before
 the other panes become ready has nevertheless crossed readiness and retains its
 ordinary exit outcome.
 
-The pane claim carries a private one-use readiness latch. The native launcher
-acknowledges it from the runtime's child-spawn event and before waiting for
-exit; allocating a PID or observing output is not readiness, and a startup error
-never acknowledges. A root launch carries no such latch. It is not added to
-`AgentLaunchRequest`, `AgentLaunchResult`, the public Agent Api, a retained
-launch phase, or a process handle, so readiness composition changes neither the
-launch's authored nor durable contract.
+`PaneTerminal.interactive()` supplies the native launch with a one-use
+`spawned` acknowledgement backed by the grid lifecycle's private readiness
+latch. The launcher calls it from the runtime's child-spawn event and before
+waiting for exit; allocating a PID or observing output is not readiness, and a
+startup error never acknowledges. A root launch receives no such callback. It
+is not added to `AgentLaunchRequest`, `AgentLaunchResult`, the public Agent Api,
+a retained launch phase, or a process handle, so readiness composition changes
+neither the launch's authored nor durable contract.
+
+The provider-neutral lifecycle exports `PaneTerminal`, not its readiness,
+busy-state, or closing machinery. There is no public pane-claim or readiness
+interface and no aggregate grid-claims object. Pane work receives the terminal;
+the grid lifecycle alone waits for readiness and closes admission.
 
 Under the tmux provider the pane-scoped launcher sends exact argv, cwd, and
 environment values over a private authenticated socket to the persistent pane

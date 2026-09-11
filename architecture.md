@@ -111,7 +111,7 @@ Existing documents and code get aligned to this section retroactively.
 | foreground-terminal lease | the one exclusive claim on a document execution's foreground experience. A root native launch holds it for one inherited terminal; a terminal grid holds it for one composite presentation. A host with no terminal refuses it, and no second root launch or grid can hold it concurrently |
 | terminal grid | one provider-neutral foreground region whose direct terminal panes begin concurrently, remain independently interactive, and settle under one scope after complete provider and pane teardown |
 | terminal pane | one authored position in a terminal grid, identified structurally by its grid and ordinal and presented by its authored title. It owns one interactive terminal at a time; a paired pane expands its own document flow and a self-closing pane runs the host's default shell |
-| pane-terminal lease | the exclusive claim one live interactive operation holds on one terminal pane. Claims in different panes do not contend; two claims in one pane do. It is minted and validated by the host's terminal authority and grants no authority over an Agent session |
+| pane-terminal lease | the exclusive ownership one live interactive operation holds through a pane's concrete `PaneTerminal`. Different panes do not contend; a second operation in one pane does. The grid lifecycle closes admission when that pane is closing, and terminal ownership grants no authority over an Agent session |
 | native launcher | the host-owned seam that reserves the foreground terminal or the current pane terminal, flushes what that terminal has pending, starts one native UI there, and reports its terminal status and nothing else. It is not `exec`, whose children are piped, captured and journaled |
 | launch request | the frozen, one-use value public launch middleware routes. It carries the facts of one launch and `with()`, and nothing that can settle one. Identity is object identity: a rebuilt look-alike describes the same ask and authorizes none of it |
 | provider authority | what core delivers to the provider factory it installs, as an argument that factory closes over. It validates the routed request, runs each absent phase once, cross-checks and retains what comes back, and derives the result. There is no reader for one, no context holding one, and no request member carrying one |
@@ -3479,10 +3479,10 @@ terminal.
 
 The host owns one non-contextual terminal authority, built and delivered
 directly to the installed provider. It validates the exact grid request and
-provider installation generation, mints one-use claims for the authored pane
-ordinals, and is the only capability that can take or release the root and pane
-terminal leases. No context value, prop, binding, provider result, retained
-record, diagnostic, or structurally similar request carries that authority.
+provider installation generation and permits only that provider to present the
+grid core issued. No context value, prop, binding, provider result, retained
+record, diagnostic, or structurally similar request carries that presentation
+authority.
 
 The stable contextual terminal API is request routing only. Middleware may
 observe, narrow, refuse, wrap, or delegate a one-use request. A handler's
@@ -3492,26 +3492,35 @@ provider factory closes over the direct authority and must present that same
 request to act. This preserves provider composition without letting a document
 or replacement context mint terminal ownership.
 
-A pane claim grants one interactive terminal at that ordinal, not an Agent
-session. Core installs a pane-scoped native launcher that closes over the claim.
-`<Session.Launch>` in that pane consequently reserves, flushes, and launches on
-the pane terminal instead of competing for the root lease. Launches in
-different panes may run concurrently; two interactive launches in one pane
-cannot. Sequential launches in one paired pane remain ordinary composition.
-The session coordinator is unchanged and independently authoritative, so two
-panes attempting to own the same logical Agent session still contend and one
-is refused. The provider starts a self-closing pane's host-configured default
-shell under the same kind of pane claim.
+The grid lifecycle creates one concrete `PaneTerminal` for each authored
+ordinal and passes it to that pane's work. Its `interactive()` operation owns
+the pane terminal for one live operation, refuses a concurrent operation in the
+same pane, and supplies that operation with the one-use `spawned`
+acknowledgement that makes the pane ready. Different `PaneTerminal` values do
+not contend. Closing the grid prevents every pane terminal from admitting new
+work before it asks live work to stop; retaining a pane terminal after its grid
+closes grants nothing.
 
-Each claim also closes over one host-owned readiness latch. The pane-scoped
-native launcher acknowledges it from the runtime's successful child-spawn event
-and before it waits for exit; failed preparation, reservation, or spawn never
-acknowledges it. Allocation of a PID and the child's first output are not this
-event. The self-closing shell path acknowledges the same boundary. The latch is
-not a request member, contextual value, provider return, public event, or
-process handle, and acknowledging it twice has no effect. A root launch has no
-grid readiness latch. This is how the grid observes successful interactive
-start without changing `Session.Launch`'s result or exposing a child process.
+Core installs that same `PaneTerminal` in the paired pane's scope. A
+pane-scoped native launcher reads it and `<Session.Launch>` consequently
+reserves, flushes, and launches on the pane terminal instead of competing for
+the root lease. The provider starts a self-closing pane's host-configured
+default shell through the same operation. Sequential work in one pane remains
+ordinary composition. The session coordinator is unchanged and independently
+authoritative, so two panes attempting to own the same logical Agent session
+still contend and one is refused.
+
+Readiness, live-operation tracking, and closing admission are private state of
+the grid lifecycle, not a second public capability model. There is no public
+pane-claim or readiness interface, no aggregate grid-claims object, and no
+factory or sealing operation for another package to coordinate. The lifecycle
+passes only the concrete `PaneTerminal` across the pane-work boundary. Its
+`spawned` acknowledgement resolves the private readiness latch from the
+runtime's successful child-spawn event and before the launcher waits for exit;
+failed preparation, reservation, or spawn never acknowledges it. Allocation of
+a PID and the child's first output are not this event. The acknowledgement is
+idempotent, a root launch receives none, and neither the callback nor the latch
+enters a request, provider result, process handle, or durable record.
 
 A provider whose pane endpoint is owned by a persistent process routes child
 creation through that process. The launch's exact argv vector, working

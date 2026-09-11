@@ -9350,12 +9350,19 @@ Opening a grid is atomic from the reader's perspective:
    that starts and immediately exits is both ready and settled.
 5. The provider attaches the complete composite only after every pane is ready.
 
-Successful child start is acknowledged through a private one-use latch held by
-the pane terminal claim. The pane-scoped launcher acknowledges from the
-runtime's spawn event and before waiting for exit; a startup error never
-acknowledges. The self-closing shell does the same. The latch is absent for a
-root launch and appears in no prop, binding, contextual API, public request,
-provider return, process result, or durable record.
+The grid lifecycle owns one private readiness latch for each pane. It passes
+that pane's work one concrete `PaneTerminal`; `PaneTerminal.interactive()`
+supplies the live operation with a one-use `spawned` acknowledgement. The
+pane-scoped launcher calls it from the runtime's spawn event and before waiting
+for exit; a startup error never acknowledges. The self-closing shell does the
+same. The latch is absent for a root launch and appears in no prop, binding,
+public request, provider return, process result, or durable record.
+
+The same private lifecycle state admits at most one interactive operation in a
+pane and stops admitting new work when the grid closes. Different pane
+terminals do not contend. No pane-claim, readiness, aggregate claims, or sealing
+API crosses the lifecycle boundary; those are implementation details rather
+than provider-neutral concepts.
 
 When a persistent process owns a pane endpoint, the launcher sends the exact
 argv vector, working directory, and environment over the provider's private
