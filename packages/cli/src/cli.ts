@@ -2548,6 +2548,9 @@ function* dispatch(
             terminal: process.stderr.isTTY === true,
             write: (chunk) => deliverWhole(chunk, process.stderr),
           },
+          // And the other one: the approved program's own destination, stated
+          // here so nothing downstream has to find a stream for it.
+          deliver: (approved) => deliverWhole(approved, process.stdout),
           // `<Elicit>` reaches a person through the browser form, and the
           // review question is asked by the command rather than by a document.
           // A host that answers installs a provider; one that does not installs

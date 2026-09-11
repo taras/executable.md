@@ -82,6 +82,13 @@ export interface PlanHarness {
    * could not tell progressive delivery from one buffered summary.
    */
   progress: string[];
+  /**
+   * Every approved program the stated stdout accepted, in arrival order.
+   *
+   * The command delivers at most one, so a case that ran to approval has
+   * exactly one entry and one that ended any other way has none.
+   */
+  delivered: string[];
   /** Review answers, taken in order. Running out is a test defect, not a case. */
   script(review: ScriptedReview): void;
   /** The dependencies `runPlan` is driven with. */
@@ -120,12 +127,21 @@ export function createPlanHarness(options: {
    * recorded as accepted.
    */
   refuseProgress?: (chunk: string, index: number) => Operation<Error | undefined>;
+  /**
+   * Refuse the approved program, standing where a closed stdout would.
+   *
+   * The delivery half of {@link refuseProgress}: a case proving what a command
+   * does when the program itself cannot be handed over supplies this, and the
+   * program is not recorded as accepted.
+   */
+  refuseDelivery?: (program: string) => Operation<Error | undefined>;
 }): PlanHarness {
   const fake = createFakeAcp();
   const symbolCalls: string[][] = [];
   const reviews: ElicitationRequest[] = [];
   const answers: ScriptedReview[] = [];
   const progress: string[] = [];
+  const delivered: string[] = [];
   let offered = 0;
 
   const harness: PlanHarness = {
@@ -133,6 +149,7 @@ export function createPlanHarness(options: {
     symbolCalls,
     reviews,
     progress,
+    delivered,
     script(review) {
       answers.push(review);
     },
@@ -152,6 +169,15 @@ export function createPlanHarness(options: {
           progress.push(chunk);
           return Ok(undefined);
         },
+      },
+      *deliver(program) {
+        const refusal =
+          options.refuseDelivery === undefined ? undefined : yield* options.refuseDelivery(program);
+        if (refusal !== undefined) {
+          return Err(refusal);
+        }
+        delivered.push(program);
+        return Ok(undefined);
       },
       acp: {
         createRuntime: fake.create,

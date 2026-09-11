@@ -198,21 +198,21 @@ function* reported<T>(body: () => Operation<T>): Operation<{ value: T; lines: st
   return { value, lines };
 }
 
-/** What the command wrote to stdout, exactly, chunk by chunk. */
-function* delivered<T>(body: () => Operation<T>): Operation<{ value: T; chunks: string[] }> {
-  const original = process.stdout.write.bind(process.stdout);
-  const chunks: string[] = [];
-  const value = yield* scoped(function* (): Operation<T> {
-    yield* ensure(() => {
-      process.stdout.write = original;
-    });
-    process.stdout.write = ((chunk: string | Uint8Array) => {
-      chunks.push(typeof chunk === "string" ? chunk : new TextDecoder().decode(chunk));
-      return true;
-    }) as typeof process.stdout.write;
-    return yield* body();
-  });
-  return { value, chunks };
+/**
+ * What the command delivered as the approved program, in arrival order.
+ *
+ * Read back from the harness's own stdout sink rather than by replacing this
+ * process's: the command states where a program goes, so a case that wants to
+ * see one supplies that destination instead of mutating the environment every
+ * other case is also running in.
+ */
+function* delivered<T>(
+  harness: PlanHarness,
+  body: () => Operation<T>,
+): Operation<{ value: T; chunks: string[] }> {
+  const before = harness.delivered.length;
+  const value = yield* body();
+  return { value, chunks: harness.delivered.slice(before) };
 }
 
 /**
@@ -611,7 +611,9 @@ describe(
         harness.fake.script({ reply: EFFECT_AND_FAILURE });
         harness.script({ decision: "Approve" });
 
-        const { value, chunks } = yield* delivered(() => runPlan(planning(dir), harness.deps));
+        const { value, chunks } = yield* delivered(harness, () =>
+          runPlan(planning(dir), harness.deps),
+        );
 
         // The approved program writes a file and then exits 3. Success is
         // therefore the first half of the proof: nothing interpreted it.
@@ -654,7 +656,9 @@ describe(
           );
         };
 
-        const { value, chunks } = yield* delivered(() => runPlan(planning(dir, out), harness.deps));
+        const { value, chunks } = yield* delivered(harness, () =>
+          runPlan(planning(dir, out), harness.deps),
+        );
 
         expect(value).toBe(0);
         expect(events).toEqual(["review", "teardown"]);
@@ -691,7 +695,9 @@ describe(
         harness.fake.script({ reply: REQUIRES_NAME });
         harness.script({ decision: "Approve" });
 
-        const { value, chunks } = yield* delivered(() => runPlan(planning(dir), harness.deps));
+        const { value, chunks } = yield* delivered(harness, () =>
+          runPlan(planning(dir), harness.deps),
+        );
 
         // The command has no property source to resolve `name` from — the value
         // belongs to whoever runs the program later — so a gate that validated
@@ -717,7 +723,7 @@ describe(
           const harness = createPlanHarness({ planWriterRoot });
           yield* arrange(harness, dir);
 
-          const { value, chunks } = yield* delivered(() =>
+          const { value, chunks } = yield* delivered(harness, () =>
             reported(() => runPlan(planning(dir, out), harness.deps)),
           );
 
@@ -849,7 +855,7 @@ describe(
             harness.fake.script({ reply: EFFECT_AND_FAILURE });
             harness.script({ decision: "Approve" });
 
-            const { value, chunks } = yield* delivered(() =>
+            const { value, chunks } = yield* delivered(harness, () =>
               runPlan(planning(dir, undefined, "release-notes"), harness.deps),
             );
 
@@ -1024,7 +1030,7 @@ describe(
         piped.fake.script({ reply: EFFECT_AND_FAILURE });
         piped.script({ decision: "Approve" });
 
-        const { value, chunks } = yield* delivered(() => runPlan(planning(dir), piped.deps));
+        const { value, chunks } = yield* delivered(piped, () => runPlan(planning(dir), piped.deps));
 
         expect(value).toBe(0);
         // Stdout carries the approved source and nothing else — no phase, no
@@ -1053,7 +1059,7 @@ describe(
           harness.fake.script({ reply: EFFECT_AND_FAILURE });
           harness.script({ decision: "Approve" });
 
-          const { value, chunks } = yield* delivered(() =>
+          const { value, chunks } = yield* delivered(harness, () =>
             runPlan(planning(dir, out, undefined, { verbose: true }), harness.deps),
           );
 
@@ -1227,7 +1233,7 @@ describe(
         harness.fake.script({ reply: PLAIN });
         harness.script({ decision: "Approve" });
 
-        const { value } = yield* delivered(() => runPlan(planning(dir), harness.deps));
+        const { value } = yield* delivered(harness, () => runPlan(planning(dir), harness.deps));
 
         expect(value).toBe(0);
         expect(yield* until(readdir(dir))).toEqual([]);
@@ -1260,7 +1266,7 @@ describe(
           );
         };
 
-        const { value, chunks } = yield* delivered(() =>
+        const { value, chunks } = yield* delivered(harness, () =>
           runPlan(planning(dir, undefined, undefined, { journal }), harness.deps),
         );
 
@@ -1354,7 +1360,7 @@ describe(
         harness.fake.script({ reply: CLEAN_DRAFT });
         harness.script({ decision: "Approve" });
 
-        const { value } = yield* delivered(() =>
+        const { value } = yield* delivered(harness, () =>
           runPlan(planning(dir, undefined, undefined, { journal, verbose: true }), harness.deps),
         );
 
@@ -1368,7 +1374,7 @@ describe(
         const harness = createPlanHarness({ planWriterRoot });
         harness.fake.script({ reply: canaryDraft() });
 
-        const { value, chunks } = yield* delivered(() =>
+        const { value, chunks } = yield* delivered(harness, () =>
           reported(() =>
             runPlan(
               planning(dir, join(dir, "release.md"), undefined, { journal, verbose: true }),
@@ -1414,7 +1420,7 @@ describe(
         harness.fake.script({ reply: CLEAN_DRAFT });
         harness.script({ decision: "Approve" });
 
-        const { value } = yield* delivered(() =>
+        const { value } = yield* delivered(harness, () =>
           runPlan(planning(dir, undefined, undefined, { journal, verbose: true }), harness.deps),
         );
 
@@ -1452,7 +1458,7 @@ describe(
         harness.fake.script({ reply: CLEAN_DRAFT });
         harness.script({ decision: "Approve" });
 
-        const { value, chunks } = yield* delivered(() =>
+        const { value, chunks } = yield* delivered(harness, () =>
           reported(() =>
             runPlan(
               planning(dir, join(dir, "release.md"), undefined, { journal, verbose: true }),
@@ -1531,7 +1537,7 @@ describe(
         harness.deps.validate = refusing(canary());
         harness.fake.script({ reply: PLAIN });
 
-        const { value, chunks } = yield* delivered(() =>
+        const { value, chunks } = yield* delivered(harness, () =>
           reported(() =>
             runPlan(
               planning(dir, join(dir, "release.md"), undefined, { journal, verbose: true }),
@@ -1589,7 +1595,7 @@ describe(
           );
         };
 
-        const { value, chunks } = yield* delivered(() =>
+        const { value, chunks } = yield* delivered(harness, () =>
           reported(() =>
             runPlan(planning(dir, join(dir, "release.md"), undefined, { journal }), harness.deps),
           ),
@@ -1630,7 +1636,7 @@ describe(
         // it was offered, and authorship ended for a reason of its own.
         harness.fake.script({ reply: PLAIN, stopReason: "refusal" });
 
-        const { value, chunks } = yield* delivered(() =>
+        const { value, chunks } = yield* delivered(harness, () =>
           reported(() =>
             runPlan(planning(dir, join(dir, "release.md"), undefined, { journal }), harness.deps),
           ),
@@ -1688,7 +1694,7 @@ describe(
         // cancellation the failed write causes.
         harness.fake.script({ reply: PLAIN, manual: true });
 
-        const { value, chunks } = yield* delivered(() =>
+        const { value, chunks } = yield* delivered(harness, () =>
           runPlan(planning(dir, join(dir, "release.md")), harness.deps),
         );
 
@@ -1742,7 +1748,9 @@ describe(
           );
         };
 
-        const { value, chunks } = yield* delivered(() => runPlan(planning(dir, out), harness.deps));
+        const { value, chunks } = yield* delivered(harness, () =>
+          runPlan(planning(dir, out), harness.deps),
+        );
 
         expect(value).toBe(0);
         expect(events).toEqual(["review", "teardown"]);
@@ -1795,7 +1803,7 @@ describe(
           return yield* catalog(includes);
         };
 
-        const { value } = yield* delivered(() => runPlan(planning(dir), harness.deps));
+        const { value } = yield* delivered(harness, () => runPlan(planning(dir), harness.deps));
 
         expect(value).toBe(0);
         expect(harness.symbolCalls).toEqual([[dir]]);
