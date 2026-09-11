@@ -311,7 +311,7 @@ describe("Tier SX — the run profile the command describes", () => {
           throw new Error(`describing the syntax ran ${JSON.stringify(options.command)}`);
         },
       });
-      return yield* syntaxCatalog([]);
+      return yield* syntaxSymbols([]);
     });
     const [structural, builtIn] = catalog.categories;
 
@@ -579,7 +579,7 @@ describe("Tier SX — the command line", { sanitizeOps: false, sanitizeResources
       expect(markdown.stdout).toContain('<Terminal title="Shell" />');
 
       const json = yield* runCli(["syntax", "--json"], { cwd }).expect();
-      const structural = parseCatalog(json.stdout).categories[0].entries;
+      const structural = parseSymbols(json.stdout).categories[0].entries;
       expect(names(structural)).toContain("Terminal.Grid");
       expect(names(structural)).toContain("Terminal");
     });
