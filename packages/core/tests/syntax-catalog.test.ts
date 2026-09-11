@@ -352,7 +352,7 @@ describe("Tier SY: structural vocabulary", () => {
     const catalog = yield* catalogFor({}, []);
     const entries = structural(catalog);
 
-    expect(catalog.version).toBe(1);
+    expect(catalog.version).toBe(2);
     expect(find(entries, "Terminal.Grid")).toEqual({
       kind: "structural",
       name: "Terminal.Grid",
