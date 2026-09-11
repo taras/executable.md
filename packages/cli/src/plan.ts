@@ -55,6 +55,7 @@ import {
 } from "./plan-writer-profile.ts";
 import type { ProgressOutput } from "./plan-writer-profile.ts";
 import { createPlanJournal, journalRefusal } from "./plan-journal.ts";
+import { deliverWhole } from "./stdout-delivery.ts";
 import {
   planComponentDeclaration,
   planComponentDescription,
@@ -278,7 +279,15 @@ export function* runPlan(command: PlanCommand, deps: PlanDependencies): Operatio
   // so a caller can pipe it into `xmd run -`, a file, a diff or another
   // program. A caller who named `--output` already has it, and gets a quiet
   // command instead.
-  process.stdout.write(source);
+  // Delivered rather than written: the pipeline this comment describes is the
+  // one that loses bytes without it, because a pipe takes the source
+  // asynchronously and the command would exit with the tail still buffered
+  // (#715). An approved Plan that arrives truncated is not a program.
+  const delivered = yield* deliverWhole(source, process.stdout);
+  if (!delivered.ok) {
+    console.error(`xmd plan: stdout did not accept the whole program: ${delivered.error.message}`);
+    return 1;
+  }
   return 0;
 }
 

@@ -1207,8 +1207,15 @@ function* runDocument(
   }, execution.output);
 
   // When piped (not TTY), write the full output at the end.
+  //
+  // Through delivery rather than a bare `write`: a pipe accepts the text
+  // asynchronously, so a run that handed over more than the pipe holds and then
+  // exited would lose everything past that — silently, and with a successful
+  // status. This is the same lifetime defect `xmd syntax` was given delivery
+  // for (#715); the output of a run reaches a pipe buffer just as readily.
+  let delivered: Result<void> = Ok(undefined);
   if (!valueRoot && !discarded && !process.stdout.isTTY) {
-    process.stdout.write(fullOutput);
+    delivered = yield* deliverWhole(fullOutput, process.stdout);
   }
 
   // Close the signal so the writer drains remaining events and exits.
@@ -1224,10 +1231,18 @@ function* runDocument(
     return result;
   }
 
+  // A document that failed says more about the run than the sink that would not
+  // take its output, so the delivery verdict is read only once the run itself
+  // has succeeded — and a sink that refused fails the command rather than
+  // letting a partial document pass for a whole one.
+  if (!delivered.ok) {
+    return delivered;
+  }
+
   // Written straight to stdout, so the result never passes through markdown
   // normalization or terminal formatting.
   if (valueRoot) {
-    process.stdout.write(`${JSON.stringify(result.value)}\n`);
+    return yield* deliverWhole(`${JSON.stringify(result.value)}\n`, process.stdout);
   }
 
   return Ok(undefined);
@@ -2598,7 +2613,17 @@ function* dispatch(
         },
       });
       if (!interactive) {
-        process.stdout.write(piped.join(""));
+        // One call, one pipe, the same lifetime defect as every other whole
+        // result this CLI hands over (#715): the report is collected precisely
+        // because nothing is watching it arrive.
+        const written = yield* deliverWhole(piped.join(""), process.stdout);
+        if (!written.ok) {
+          console.error(
+            `xmd upgrade: stdout did not accept the whole report: ${describeError(written.error)}`,
+          );
+          yield* exit(1);
+          break;
+        }
       }
       if (!upgraded.ok) {
         reportFailure(upgraded.error);
@@ -2669,9 +2694,8 @@ function* dispatch(
         yield* exit(1);
         break;
       }
-      // Only this command's rendering goes through delivery today, because it
-      // is the one output written in a single call and the only one already
-      // past a pipe buffer.
+      // Delivery, like every other whole result this CLI writes in one call:
+      // the catalog was simply the first one observed past a pipe buffer.
       const written = yield* deliverWhole(rendered, process.stdout);
       if (!written.ok) {
         console.error(
