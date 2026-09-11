@@ -23,6 +23,7 @@
  */
 
 import {
+  all,
   createScope,
   Err,
   ensure,
@@ -45,14 +46,132 @@ import type { Json, Workflow } from "@executablemd/durable-streams";
 import { flushOutput, reserveTerminal, TerminalGrids } from "@executablemd/runtime";
 import type { TerminalComposite, TerminalGridRequest } from "@executablemd/runtime";
 
-import {
-  awaitReadiness,
-  createTerminalGridClaims,
-  TerminalAuthorityError,
-  terminalInstallation,
-} from "./authority.ts";
-import type { LiveGrid, TerminalPaneClaim } from "./authority.ts";
+import { TerminalAuthorityError, terminalInstallation } from "./authority.ts";
+import type { LiveGrid } from "./authority.ts";
+import type { PaneTerminal } from "./pane.ts";
 import type { TerminalGridLayout } from "../terminal-grid.ts";
+
+/**
+ * One pane's terminal, and the state only the grid lifecycle may touch.
+ *
+ * The terminal is the whole of what crosses into pane work. Everything else
+ * here answers a question the lifecycle asks about a pane — has it started,
+ * may it still start anything — and is deliberately not reachable from the
+ * pane, from a provider, or from a document: a second capability model beside
+ * `PaneTerminal` would be a second way to own a pane.
+ */
+interface LivePane {
+  /** What this pane's work runs on. */
+  readonly terminal: PaneTerminal;
+  /** Settles once this pane has reported its child-spawn event. */
+  spawnReported(): Operation<void>;
+  /** Whether that event has been reported. */
+  readonly hasSpawned: boolean;
+  /**
+   * Report the event without entering the pane's work.
+   *
+   * A pane restored from its retained outcome did start — on the run that
+   * recorded it — so the barrier is satisfied without a child existing now.
+   */
+  recordSpawn(): void;
+  /** Refuse any further interactive work in this pane. */
+  closeAdmission(): void;
+}
+
+/**
+ * Build one pane terminal per authored ordinal.
+ *
+ * The request is validated against the ordinals it declares before a single
+ * terminal exists: a request whose panes are not exactly `0..n-1` in order
+ * describes a grid core did not derive, and answering it would be answering for
+ * a layout nobody authored.
+ */
+function livePanes(request: TerminalGridRequest): LivePane[] {
+  validateOrdinals(request);
+
+  return request.panes.map((pane) => {
+    const reported = withResolvers<void>();
+    let hasSpawned = false;
+    let live = false;
+    let closed = false;
+
+    return {
+      terminal: {
+        ordinal: pane.ordinal,
+        *interactive<T>(body: (spawned: () => void) => Operation<T>): Operation<T> {
+          if (closed) {
+            throw new TerminalAuthorityError(
+              `pane ${pane.ordinal} is closed: its grid has stopped admitting interactive work`,
+            );
+          }
+          if (live) {
+            throw new TerminalAuthorityError(
+              `pane ${pane.ordinal} already has a live interactive operation — one owns a pane ` +
+                `terminal at a time`,
+            );
+          }
+          live = true;
+          try {
+            return yield* body(() => {
+              // Idempotent by construction: readiness is a fact about the pane,
+              // and a provider that reported the same spawn twice has not
+              // started two panes.
+              if (hasSpawned) {
+                return;
+              }
+              hasSpawned = true;
+              reported.resolve();
+            });
+          } finally {
+            // Released on every ending, so a pane that settled admits the next
+            // operation written after it.
+            live = false;
+          }
+        },
+      },
+      spawnReported: () => reported.operation,
+      get hasSpawned() {
+        return hasSpawned;
+      },
+      recordSpawn() {
+        if (hasSpawned) {
+          return;
+        }
+        hasSpawned = true;
+        reported.resolve();
+      },
+      closeAdmission() {
+        closed = true;
+      },
+    };
+  });
+}
+
+function validateOrdinals(request: TerminalGridRequest): void {
+  if (request.panes.length === 0) {
+    throw new TerminalAuthorityError("a terminal grid request names no panes");
+  }
+  for (const [index, pane] of request.panes.entries()) {
+    if (pane.ordinal !== index) {
+      throw new TerminalAuthorityError(
+        `a terminal grid request names pane ordinal ${pane.ordinal} at position ${index}: ` +
+          `a pane's ordinal is its position among the grid's panes`,
+      );
+    }
+  }
+}
+
+/**
+ * Settle once every pane has reported its spawn event.
+ *
+ * Deliberately not a timeout: a grid has no implicit deadline, and an enclosing
+ * run deadline or parent cancellation is what bounds it. A pane that fails to
+ * start never reports, so the caller races this against pane failure rather
+ * than asking the barrier to know about failure.
+ */
+function* everyPaneStarted(panes: readonly LivePane[]): Operation<void> {
+  yield* all(panes.map((pane) => pane.spawnReported()));
+}
 
 /**
  * The live boundary reader close crosses (architecture.md §Atomic presentation
@@ -61,7 +180,7 @@ import type { TerminalGridLayout } from "../terminal-grid.ts";
  * The provider settling `closed()` only *proposes* the boundary. It is crossed
  * when the owner awaiting the grid's durable child acknowledges that proposal
  * from inside its own cancellation-deferred await — and only then may the grid
- * seal admission and ask its panes to close.
+ * close admission and ask its panes to close.
  *
  * Nothing here is journaled and nothing here names a provider: it is one live
  * rendezvous between a durable child and the owner waiting on it. What it buys
@@ -139,16 +258,16 @@ export interface RetainedGrid extends Record<string, Json> {
 }
 
 /**
- * What one pane does once its claim exists.
+ * What one pane does once its terminal exists.
  *
  * The caller supplies this because a pane's work is the document's: a paired
  * pane expands its authored content, and a self-closing one runs the host's
- * default shell. Both run as the pane's admitted owner, and both are expected
- * to report a spawn through the claim before anything can attach.
+ * default shell. Both run through `terminal.interactive()`, and both are
+ * expected to report a spawn from inside it before anything can attach.
  */
 export interface PaneWork {
   readonly ordinal: number;
-  run(claim: TerminalPaneClaim, composite: TerminalComposite): Operation<void>;
+  run(terminal: PaneTerminal, composite: TerminalComposite): Operation<void>;
 }
 
 /**
@@ -282,11 +401,11 @@ function presentGrid(
     // owed a destroy even if the next line is what fails.
     yield* ensure(() => composite.destroy());
 
-    const grid = createTerminalGridClaims(request);
+    const panes = livePanes(request);
     // Nothing new is admitted once teardown begins, so a pane that was about to
     // start an interactive child is refused rather than racing the close.
     yield* ensure(() => {
-      grid.seal();
+      closeAdmission(panes);
     });
 
     const outcomes: (RetainedPaneOutcome | undefined)[] = work.map(() => undefined);
@@ -308,34 +427,25 @@ function presentGrid(
     // completed pane returns its retained outcome without entering a body, a
     // shell, or a launcher, and that outcome is what publishes its status and
     // satisfies the readiness barrier.
-    const panes: Task<RetainedPaneOutcome>[] = [];
+    const children: Task<RetainedPaneOutcome>[] = [];
     for (const [index, pane] of work.entries()) {
-      const claim = grid.claims[index]!;
-      const readiness = grid.readiness[index]!;
-      panes.push(
+      const live = panes[index]!;
+      children.push(
         yield* paneChild(function* (): Operation<RetainedPaneOutcome> {
-          return yield* runPane(
-            pane,
-            claim,
-            composite,
-            readiness,
-            request,
-            index,
-            closing.operation,
-          );
+          return yield* runPane(pane, live, composite, request, index, closing.operation);
         }),
       );
     }
 
     // Observing each task is what turns a pane's outcome — replayed or live —
-    // into a published status and a satisfied readiness latch.
-    for (const [index, task] of panes.entries()) {
+    // into a published status and a pane the barrier counts as started.
+    for (const [index, task] of children.entries()) {
       yield* spawn(function* () {
         const outcome = yield* task;
         outcomes[index] = outcome;
         // A pane restored from its retained outcome counts as started: it did
         // start, on the run that recorded it.
-        grid.claims[index]!.ready();
+        panes[index]!.recordSpawn();
         yield* composite.update(work[index]!.ordinal, outcome.status);
         if (outcome.status === "failed" && !attached) {
           // Before the barrier a pane failure is the whole grid's: nothing has
@@ -350,7 +460,7 @@ function presentGrid(
     // the barrier against startup failure is what stops a grid whose pane
     // already failed from waiting forever for a latch nothing will acknowledge.
     try {
-      yield* race([awaitReadiness(grid.readiness), startupFailed.operation]);
+      yield* race([everyPaneStarted(panes), startupFailed.operation]);
     } catch {
       // Simultaneous startup failures are selected by authored ordinal, not by
       // whichever rejected the race first.
@@ -383,7 +493,7 @@ function presentGrid(
     // own teardown after this returns — so the composite is destroyed, the
     // lease released and the following sibling started only once nothing a pane
     // acquired can still act.
-    grid.seal();
+    closeAdmission(panes);
     closing.resolve();
     // Published before anything is awaited: once the reader has left, a pane
     // that had not settled is closed, and that is true whether or not its own
@@ -396,7 +506,7 @@ function presentGrid(
     for (const [index] of work.entries()) {
       // Awaited, not halted. Each pane settles on the close signal and records
       // the outcome it reached, which is what a resumed run reads.
-      const outcome = yield* panes[index]!;
+      const outcome = yield* children[index]!;
       outcomes[index] ??= outcome;
     }
 
@@ -406,12 +516,23 @@ function presentGrid(
   });
 }
 
+/**
+ * Stop every pane admitting new interactive work.
+ *
+ * Called before the live panes are asked to stop, so a pane that was about to
+ * start an interactive child is refused rather than racing the close.
+ */
+function closeAdmission(panes: readonly LivePane[]): void {
+  for (const pane of panes) {
+    pane.closeAdmission();
+  }
+}
+
 /** Run one pane's work and say what it came to. */
 function runPane(
   pane: PaneWork,
-  claim: TerminalPaneClaim,
+  live: LivePane,
   composite: TerminalComposite,
-  readiness: { readonly acknowledged: boolean },
   request: TerminalGridRequest,
   index: number,
   closing: Operation<void>,
@@ -423,7 +544,7 @@ function runPane(
       // comes down in the enclosing scope's own teardown — so a pane whose
       // finalizers are slow cannot hold up the outcome the grid already knows,
       // and the record a resumed run reads is written either way.
-      const running = yield* spawn(() => pane.run(claim, composite));
+      const running = yield* spawn(() => pane.run(live.terminal, composite));
       const closed = yield* race([
         (function* (): Operation<boolean> {
           yield* running;
@@ -441,7 +562,7 @@ function runPane(
         yield* running.halt();
         return { status: "closed", reason: "" };
       }
-      if (!readiness.acknowledged) {
+      if (!live.hasSpawned) {
         // Settled without ever starting: a startup failure even though the work
         // itself raised nothing.
         return {

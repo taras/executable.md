@@ -2202,9 +2202,10 @@ function* expandTerminalGrid(
 }
 
 /**
- * What one authored pane does once the grid has minted its claim.
+ * What one authored pane does once the grid has created its terminal.
  *
- * A self-closing pane runs the host's default shell through its claim. A paired
+ * A self-closing pane runs the host's default shell through that terminal's
+ * interactive operation, exactly as a paired pane's content does. A paired
  * pane expands its own content in a scope of its own: it inherits the bindings,
  * providers, configuration and working directory visible where the grid was
  * written, and everything it creates afterwards stays inside the pane. Its
@@ -2216,9 +2217,12 @@ function paneWork(pane: TerminalPane, title: string, site: GridSite): PaneWork {
   if (pane.form === "self-closing") {
     return {
       ordinal: pane.ordinal,
-      *run(claim, composite) {
-        const outcome = yield* claim.admit(() =>
-          composite.shell(pane.ordinal, () => claim.ready()),
+      *run(terminal, composite) {
+        // The shell is this pane's one interactive operation, and the spawn it
+        // reports is what makes the pane ready — the same boundary a paired
+        // pane's content crosses, rather than a second way in.
+        const outcome = yield* terminal.interactive((spawned) =>
+          composite.shell(pane.ordinal, spawned),
         );
         if (outcome.signal !== undefined) {
           throw new Error(`pane ${pane.ordinal} ("${title}") shell ended on ${outcome.signal}`);
@@ -2234,12 +2238,12 @@ function paneWork(pane: TerminalPane, title: string, site: GridSite): PaneWork {
 
   return {
     ordinal: pane.ordinal,
-    *run(claim, composite) {
+    *run(terminal, composite) {
       yield* scoped(function* () {
         // A pane is not inside the loop the grid was written in, so a <Break>
         // in its content has no loop to exit and says so.
         yield* ActiveLoop.set(undefined);
-        yield* usePaneTerminal(claim);
+        yield* usePaneTerminal(terminal);
         const siteEnv = yield* env;
         // Starts from what the grid site can see and keeps its own writes: a
         // binding this pane makes is visible to later work in this pane and to

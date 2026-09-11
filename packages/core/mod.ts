@@ -154,17 +154,11 @@ export { useNormalizedOutput } from "./src/output/normalize.ts";
 export { useTerminalOutput } from "./src/output/terminal.ts";
 export {
   createTerminalAuthority,
-  createTerminalGridClaims,
   TerminalAuthorityError,
   terminalInstallation,
   useTerminalInstallation,
 } from "./src/terminal/authority.ts";
-export type {
-  PaneReadiness,
-  TerminalGridAuthority,
-  TerminalGridClaims,
-  TerminalPaneClaim,
-} from "./src/terminal/authority.ts";
+export type { TerminalGridAuthority } from "./src/terminal/authority.ts";
 export {
   installTerminalProvider,
   registerTerminalProvider,

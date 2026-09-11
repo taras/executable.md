@@ -59,11 +59,7 @@ import type {
 import { Component } from "../src/component-api.ts";
 import { execute } from "../src/execute.ts";
 import { registerComponents } from "../src/components/registration.ts";
-import {
-  createTerminalGridClaims,
-  TerminalAuthorityError,
-  useTerminalInstallation,
-} from "../src/terminal/authority.ts";
+import { TerminalAuthorityError, useTerminalInstallation } from "../src/terminal/authority.ts";
 import type { TerminalGridAuthority } from "../src/terminal/authority.ts";
 import {
   installTerminalProvider,
@@ -73,6 +69,9 @@ import {
 } from "../src/terminal/provider-api.ts";
 import { installTerminalGridProfile } from "../src/terminal/profile.ts";
 import { paneTerminal } from "../src/terminal/pane.ts";
+import type { PaneTerminal } from "../src/terminal/pane.ts";
+import { createCloseBoundary, openTerminalGrid } from "../src/terminal/grid.ts";
+import type { PaneWork } from "../src/terminal/grid.ts";
 import type { Json } from "../src/types.ts";
 
 /** One document run against a controlled grid host. */
@@ -115,6 +114,48 @@ function useDir(): Operation<string> {
   });
 }
 
+/**
+ * What the pane-terminal rows read.
+ *
+ * The claim factory these rows used to call directly is gone, and rightly: the
+ * behaviour it carried is the grid's. So each of these is driven from inside a
+ * real pane, through the same `PaneTerminal` a `<Session.Launch>` reaches, and
+ * read back off an ordered record rather than inferred.
+ */
+interface PaneProbe {
+  /** Refusals the document's own work collected, in the order they happened. */
+  readonly refusals: string[];
+  /** Ordered marks: which pane entered and left its interactive work. */
+  readonly marks: string[];
+  /** Pane terminals kept past their grid on purpose. */
+  readonly kept: PaneTerminal[];
+  /** Announce that this pane is inside its interactive body. */
+  entered(): void;
+  /** Settles once every pane this probe expects is inside one at the same time. */
+  overlapped(): Operation<void>;
+}
+
+function paneProbe(expected = 2): PaneProbe {
+  const all = withResolvers<void>();
+  let inside = 0;
+  return {
+    refusals: [],
+    marks: [],
+    kept: [],
+    entered() {
+      inside += 1;
+      if (inside >= expected) {
+        all.resolve();
+      }
+    },
+    overlapped: () => all.operation,
+  };
+}
+
+function refusalOf(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
 /** The controlled interactive child, and a tripwire. */
 function useGridComponents(
   ran: string[],
@@ -123,6 +164,7 @@ function useGridComponents(
   afterAttach: () => Operation<void> = function* () {},
   teardownHeld: () => Operation<void> = function* () {},
   teardownArmed: () => void = () => {},
+  probe: PaneProbe = paneProbe(),
 ): Operation<void> {
   return registerComponents([
     {
@@ -153,6 +195,104 @@ function useGridComponents(
       *fn(props) {
         ran.push(String(props.mark));
         onMark(String(props.mark));
+        return "";
+      },
+    },
+    {
+      // Enters its pane's interactive body and stays there until every other
+      // pane is inside one too. Two panes that contended could never both be
+      // inside, so the wait is the proof; the deadline only turns a regression
+      // into a failed assertion instead of a hung suite.
+      name: "Concurrent",
+      origin: "tier-tg",
+      props: { type: "object", properties: {}, additionalProperties: false },
+      *fn() {
+        const pane = yield* paneTerminal();
+        if (pane === undefined) {
+          throw new Error("<Concurrent /> is written inside a <Terminal> pane");
+        }
+        yield* pane.interactive(function* (spawned) {
+          probe.marks.push(`enter:${pane.ordinal}`);
+          probe.entered();
+          const together = yield* race([
+            (function* (): Operation<boolean> {
+              yield* probe.overlapped();
+              return true;
+            })(),
+            (function* (): Operation<boolean> {
+              yield* sleep(2000);
+              return false;
+            })(),
+          ]);
+          probe.marks.push(`together:${pane.ordinal}:${together}`);
+          spawned();
+        });
+        probe.marks.push(`leave:${pane.ordinal}`);
+        return "";
+      },
+    },
+    {
+      // One pane, asked for two interactive operations at once and then for a
+      // second one after the first settled.
+      name: "Overlapping",
+      origin: "tier-tg",
+      props: { type: "object", properties: {}, additionalProperties: false },
+      *fn() {
+        const pane = yield* paneTerminal();
+        if (pane === undefined) {
+          throw new Error("<Overlapping /> is written inside a <Terminal> pane");
+        }
+        yield* pane.interactive(function* (spawned) {
+          spawned();
+          try {
+            yield* pane.interactive(function* () {
+              probe.marks.push("second entered");
+            });
+          } catch (error) {
+            probe.refusals.push(refusalOf(error));
+          }
+        });
+        // The pane is free again: one owner at a time is not one owner ever.
+        yield* pane.interactive(function* () {
+          probe.marks.push("sequential");
+        });
+        // Kept deliberately, so a row can ask what it grants after the grid has
+        // closed.
+        probe.kept.push(pane);
+        return "";
+      },
+    },
+    {
+      // Reports the same spawn twice. One pane started, not two.
+      name: "TwiceSpawned",
+      origin: "tier-tg",
+      props: { type: "object", properties: {}, additionalProperties: false },
+      *fn() {
+        const pane = yield* paneTerminal();
+        if (pane === undefined) {
+          throw new Error("<TwiceSpawned /> is written inside a <Terminal> pane");
+        }
+        yield* pane.interactive(function* (spawned) {
+          spawned();
+          spawned();
+          probe.marks.push("spawned twice");
+        });
+        return "";
+      },
+    },
+    {
+      // Interactive work that never reports a spawn: doing work is not starting.
+      name: "Quiet",
+      origin: "tier-tg",
+      props: { type: "object", properties: {}, additionalProperties: false },
+      *fn() {
+        const pane = yield* paneTerminal();
+        if (pane === undefined) {
+          throw new Error("<Quiet /> is written inside a <Terminal> pane");
+        }
+        yield* pane.interactive(function* () {
+          probe.marks.push("worked without spawning");
+        });
         return "";
       },
     },
@@ -289,6 +429,8 @@ function runDocument(
     slowMarks?: string[];
     /** Props this run supplies. Props are not restored across a continuation. */
     props?: Record<string, Json>;
+    /** What the pane-terminal rows record through the pane seam. */
+    probe?: PaneProbe;
   } = {},
 ): Operation<DocumentRun> {
   return scoped(function* () {
@@ -304,7 +446,15 @@ function runDocument(
         return yield* next(segment);
       },
     });
-    yield* useGridComponents(ran, options.slowMarks ?? []);
+    yield* useGridComponents(
+      ran,
+      options.slowMarks ?? [],
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      options.probe,
+    );
     yield* installControlledLauncher();
 
     // The reader stays until every pane has settled. Leaving sooner is a real
@@ -833,105 +983,178 @@ describe("Tier TG — the terminal authority", () => {
     expect(refusal instanceof Error ? refusal.message : "").toContain("did not install");
   });
 
-  it("TA7: two claims from one grid do not contend; one pane admits one", function* () {
-    const grid = createTerminalGridClaims({
-      columns: 2,
-      rows: 1,
-      panes: [
-        { ordinal: 0, title: "a", row: 0, column: 0, form: "paired" },
-        { ordinal: 1, title: "b", row: 0, column: 1, form: "paired" },
-      ],
-    });
-    const first = grid.claims[0]!;
-    const second = grid.claims[1]!;
-    let refusal: unknown;
-    let concurrent = false;
-
-    yield* scoped(function* () {
-      yield* first.admit(function* () {
-        try {
-          yield* first.admit(function* () {});
-        } catch (error) {
-          refusal = error;
-        }
-        yield* second.admit(function* () {
-          concurrent = true;
-        });
-      });
-    });
-
-    expect(refusal).toBeInstanceOf(TerminalAuthorityError);
-    expect(refusal instanceof Error ? refusal.message : "").toContain(
-      "one owns a pane terminal at a time",
+  it("TA7: two panes are interactive at the same time", function* () {
+    const dir = yield* useDir();
+    const probe = paneProbe(2);
+    const run = yield* runDocument(
+      dir,
+      [
+        "<Terminal.Grid columns={2}>",
+        '<Terminal title="a"><Concurrent /></Terminal>',
+        '<Terminal title="b"><Concurrent /></Terminal>',
+        "</Terminal.Grid>",
+        "",
+      ].join("\n"),
+      { probe },
     );
-    expect(concurrent).toBe(true);
+
+    expect(run.outcome.ok).toBe(true);
+    // Each pane waited inside its own interactive body until the other was
+    // inside one too. Panes that contended could not both report this.
+    expect(probe.marks).toContain("together:0:true");
+    expect(probe.marks).toContain("together:1:true");
+    // And both were inside before either left.
+    expect(probe.marks.indexOf("enter:1")).toBeLessThan(probe.marks.indexOf("leave:0"));
   });
 
-  it("TA8: a claim from another grid, or a sealed one, admits nothing", function* () {
-    const request = {
-      columns: 1,
-      rows: 1,
-      panes: [{ ordinal: 0, title: "a", row: 0, column: 0, form: "paired" as const }],
-    };
-    const first = createTerminalGridClaims(request);
-    const second = createTerminalGridClaims(request);
-    // Sealing one grid says nothing about the other: claims belong to the grid
-    // that minted them, not to a request shape.
-    first.seal();
+  it("TA8: one pane refuses overlapping work, and admits the next after it settles", function* () {
+    const dir = yield* useDir();
+    const probe = paneProbe(1);
+    const run = yield* runDocument(
+      dir,
+      [
+        "<Terminal.Grid columns={1}>",
+        '<Terminal title="a"><Overlapping /></Terminal>',
+        "</Terminal.Grid>",
+        "",
+      ].join("\n"),
+      { probe },
+    );
+
+    expect(run.outcome.ok).toBe(true);
+    expect(probe.refusals).toHaveLength(1);
+    expect(probe.refusals[0]).toContain("one owns a pane terminal at a time");
+    // The refused operation never ran, and the one written after the first
+    // settled did: a pane has one owner at a time, not one owner ever.
+    expect(probe.marks).not.toContain("second entered");
+    expect(probe.marks).toContain("sequential");
+  });
+
+  it("TA9: a pane terminal kept past its grid admits nothing", function* () {
+    const dir = yield* useDir();
+    const probe = paneProbe(1);
+    const run = yield* runDocument(
+      dir,
+      [
+        "<Terminal.Grid columns={1}>",
+        '<Terminal title="a"><Overlapping /></Terminal>',
+        "</Terminal.Grid>",
+        "",
+      ].join("\n"),
+      { probe },
+    );
+
+    expect(run.outcome.ok).toBe(true);
+    const kept = probe.kept[0];
+    expect(kept).toBeDefined();
 
     let refusal: unknown;
-    let other = false;
     yield* scoped(function* () {
       try {
-        yield* first.claims[0]!.admit(function* () {});
+        yield* kept!.interactive(function* () {});
       } catch (error) {
         refusal = error;
       }
-      yield* second.claims[0]!.admit(function* () {
-        other = true;
-      });
     });
 
-    expect(refusal instanceof Error ? refusal.message : "").toContain("its grid has stopped");
-    expect(other).toBe(true);
-  });
-
-  it("TA9: readiness is the acknowledgement, and acknowledging twice is one event", function* () {
-    const grid = createTerminalGridClaims({
-      columns: 1,
-      rows: 1,
-      panes: [{ ordinal: 0, title: "a", row: 0, column: 0, form: "paired" }],
-    });
-    const claim = grid.claims[0]!;
-    const readiness = grid.readiness[0]!;
-
-    // Doing work is not being ready.
-    expect(readiness.acknowledged).toBe(false);
-    claim.ready();
-    expect(readiness.acknowledged).toBe(true);
-    claim.ready();
-    expect(readiness.acknowledged).toBe(true);
-    yield* scoped(function* () {
-      yield* readiness.reached();
-    });
-  });
-
-  it("TA10: a request whose ordinals are not its positions is refused", function* () {
-    let refusal: unknown;
-    try {
-      createTerminalGridClaims({
-        columns: 2,
-        rows: 1,
-        panes: [
-          { ordinal: 1, title: "a", row: 0, column: 0, form: "paired" },
-          { ordinal: 0, title: "b", row: 0, column: 1, form: "paired" },
-        ],
-      });
-    } catch (error) {
-      refusal = error;
-    }
     expect(refusal).toBeInstanceOf(TerminalAuthorityError);
-    yield* sleep(0);
+    expect(refusalOf(refusal)).toContain("its grid has stopped admitting");
+  });
+
+  it("TA10: only a reported spawn is readiness, and reporting twice is one event", function* () {
+    const dir = yield* useDir();
+    const probe = paneProbe(1);
+    const run = yield* runDocument(
+      dir,
+      [
+        "<Terminal.Grid columns={1}>",
+        '<Terminal title="a"><TwiceSpawned /></Terminal>',
+        "</Terminal.Grid>",
+        "",
+      ].join("\n"),
+      { probe },
+    );
+
+    // Two acknowledgements are one started pane: the grid attached once and
+    // settled, rather than waiting for a second pane nobody authored.
+    expect(run.outcome.ok).toBe(true);
+    expect(probe.marks).toContain("spawned twice");
+    expect(run.events).toContain("attach:0");
+  });
+
+  it("TA11: interactive work that reports no spawn has not started", function* () {
+    const dir = yield* useDir();
+    const probe = paneProbe(1);
+    const run = yield* runDocument(
+      dir,
+      [
+        "<Terminal.Grid columns={1}>",
+        '<Terminal title="a"><Quiet /></Terminal>',
+        "</Terminal.Grid>",
+        "",
+      ].join("\n"),
+      { probe },
+    );
+
+    // The pane owned its terminal and did work in it. Neither is starting.
+    expect(probe.marks).toContain("worked without spawning");
+    expect(failureOf(run)).toContain("finished without starting anything interactive");
+    expect(run.events).not.toContain("attach:0");
+    expect(run.events).toContain("destroy:0");
+  });
+
+  it("TA12: a layout whose ordinal is not its position is refused before a pane exists", function* () {
+    // The guard the lifecycle runs before it builds a single pane terminal.
+    // Asked through the real entry point with a layout core would never derive:
+    // the second cell calls itself pane 0 while sitting at position 1, so the
+    // request describes a grid nobody authored.
+    const attached: string[] = [];
+    const started: number[] = [];
+    let refusal: unknown;
+
+    yield* scoped(function* () {
+      yield* useGridHost({
+        // deno-lint-ignore require-yield
+        *onAttach() {
+          attached.push("attach");
+        },
+      });
+
+      const work: PaneWork[] = [0, 1].map((ordinal) => ({
+        ordinal,
+        // deno-lint-ignore require-yield
+        *run() {
+          started.push(ordinal);
+        },
+      }));
+
+      try {
+        yield* openTerminalGrid(
+          {
+            columns: 2,
+            rows: 1,
+            cells: [
+              { ordinal: 0, title: "a", row: 0, column: 0, form: "paired" },
+              { ordinal: 0, title: "b", row: 0, column: 1, form: "paired" },
+            ],
+          },
+          work,
+          createCloseBoundary(),
+        );
+      } catch (error) {
+        refusal = error;
+      }
+    });
+
+    expect(refusal).toBeInstanceOf(TerminalAuthorityError);
+    const message = refusal instanceof Error ? refusal.message : "";
+    // The refusal says which ordinal, and where it actually sat.
+    expect(message).toContain("ordinal 0");
+    expect(message).toContain("position 1");
+    // Refused before anything could own a pane terminal: no pane work ran, and
+    // nothing was ever shown.
+    expect(started).toEqual([]);
+    expect(attached).toEqual([]);
   });
 });
 
