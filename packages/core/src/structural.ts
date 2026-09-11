@@ -169,6 +169,25 @@ export const STRUCTURAL_DECLARATIONS: readonly StructuralDeclaration[] = [
     as: null,
     context: "A multiline template, in place of the single-line `template` prop.",
   },
+  {
+    name: "Terminal.Grid",
+    syntax: ["<Terminal.Grid columns={2}>…</Terminal.Grid>"],
+    description:
+      "Open several terminals in one view. " +
+      '`<Terminal.Grid columns={2}><Terminal title="Agent">…</Terminal></Terminal.Grid>`',
+    as: null,
+    context: "The `<Terminal>` panes the grid lays out.",
+  },
+  {
+    name: "Terminal",
+    syntax: ['<Terminal title="Agent">…</Terminal>', '<Terminal title="Shell" />'],
+    description:
+      "Expand Markdown or open a shell in a pane. " +
+      '`<Terminal title="Agent">…</Terminal>` runs content; ' +
+      '`<Terminal title="Shell" />` opens a shell.',
+    as: null,
+    context: "Markdown the pane runs, in the paired form.",
+  },
 ];
 
 /**
