@@ -146,6 +146,25 @@ export type {
   NativeLaunchOutcome,
   NativeLaunchRequest,
 } from "./launcher.ts";
+export {
+  prepareControlledComposite,
+  TERMINAL_GRIDS_API,
+  TERMINAL_PROVIDER_UNAVAILABLE,
+  TerminalGrids,
+  terminalProviderLog,
+  TerminalProviderUnavailableError,
+} from "./terminal.ts";
+export type {
+  ControlledCompositeOptions,
+  TerminalComposite,
+  TerminalGridApi,
+  TerminalGridRequest,
+  TerminalPaneRequest,
+  TerminalPaneState,
+  TerminalProviderLog,
+  TerminalProviderResources,
+  TerminalShellOutcome,
+} from "./terminal.ts";
 export { hostFilesHandler, useHostFiles } from "./host-files.ts";
 export type { HostFilesEvent, HostFilesObserver, HostFilesOptions } from "./host-files.ts";
 export {
