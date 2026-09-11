@@ -147,7 +147,7 @@ export type {
   NativeLaunchRequest,
 } from "./launcher.ts";
 export {
-  prepareControlledComposite,
+  controlledTerminalGrid,
   TERMINAL_GRIDS_API,
   TERMINAL_PROVIDER_UNAVAILABLE,
   TerminalGrids,
@@ -155,8 +155,9 @@ export {
   TerminalProviderUnavailableError,
 } from "./terminal.ts";
 export type {
-  ControlledCompositeOptions,
-  TerminalComposite,
+  ControlledTerminalGridOptions,
+  TerminalActivity,
+  TerminalGrid,
   TerminalGridApi,
   TerminalGridRequest,
   TerminalPaneRequest,

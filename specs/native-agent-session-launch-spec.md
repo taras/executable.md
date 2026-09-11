@@ -739,8 +739,8 @@ prop, token, identifier, or mode. A constructed lookalike cannot reach a live
 pane, and the genuine terminal admits nothing after its grid closes.
 
 Different pane terminals do not contend, so native launches in different panes
-can hold their terminals concurrently. `PaneTerminal.interactive()` keeps one
-pane exclusive: a second launch cannot begin while the first is live there, and
+can hold their terminals concurrently. `PaneTerminal.use()` keeps one pane
+exclusive: a second launch cannot begin while the first is live there, and
 sequential launches work after the first releases it. Release requires the
 child, its observable descendants and process-group members, and every other
 holder of that pane terminal to be gone; the pane remains busy if the launcher
@@ -761,7 +761,7 @@ or pane identities never enter the `AgentLaunchRequest`, terminal result,
 `agent_session_launch` record, construction route, ownership key, diagnostic,
 or private instruction file.
 
-The grid's readiness barrier observes the launch only at the existing successful
+The grid's readiness barrier observes the launch only at the successful
 interactive-child start boundary. Session preparation, route publication,
 private-file creation, and detach do not make a pane ready. If spawn fails, the
 launch keeps the durable phases its contract already completed, fails the pane's
@@ -770,26 +770,30 @@ not roll those phases back. A child that successfully starts and exits before
 the other panes become ready has nevertheless crossed readiness and retains its
 ordinary exit outcome.
 
-`PaneTerminal.interactive()` supplies the native launch with a one-use
-`spawned` acknowledgement backed by the grid lifecycle's private readiness
-latch. The launcher calls it from the runtime's child-spawn event and before
-waiting for exit; allocating a PID or observing output is not readiness, and a
-startup error never acknowledges. A root launch receives no such callback. It
-is not added to `AgentLaunchRequest`, `AgentLaunchResult`, the public Agent Api,
-a retained launch phase, or a process handle, so readiness composition changes
-neither the launch's authored nor durable contract.
+A native launch runs through `PaneTerminal.use()` as a terminal activity: a
+resource whose acquisition happens only once the child has actually spawned.
+Acquisition is the readiness, so nobody is handed an acknowledgement to call —
+allocating a PID or observing output is not acquisition, and a preparation,
+reservation or spawn error fails before it. The acquired value is the operation
+that settles with the child's outcome, and the activity's cleanup is what sweeps
+whatever the launch still holds. A root launch has no pane activity at all.
+Readiness is not added to `AgentLaunchRequest`, `AgentLaunchResult`, the public
+Agent Api, a retained launch phase, or a process handle, so it changes neither
+the launch's authored nor its durable contract.
 
 The provider-neutral lifecycle exports `PaneTerminal`, not its readiness,
-busy-state, or closing machinery. There is no public pane-claim or readiness
-interface and no aggregate grid-claims object. Pane work receives the terminal;
-the grid lifecycle alone waits for readiness and closes admission.
+busy-state, or closing machinery. There is no pane-claim or readiness interface,
+no pane controller, and no aggregate object. Pane work receives the terminal; the
+grid lifecycle alone waits for readiness and closes admission.
 
 Under the tmux provider the pane-scoped launcher sends exact argv, cwd, and
 environment values over a private authenticated socket to the persistent pane
 worker. The worker, not a tmux command line, creates the native child with all
-three standard streams inherited from the pane terminal. It forwards the spawn
-event, writes pane display without reading input, and refuses a concurrent
-launch. It uses Effection's `run()` rather than `main()` so Effection does not
+three standard streams inherited from the pane terminal. It provides the
+activity once that child is running — its own observation of the child starting
+is provider-private input to that acquisition, not a callback, an
+acknowledgement, or a second readiness protocol — writes pane display without
+reading input, and refuses a concurrent launch. It uses Effection's `run()` rather than `main()` so Effection does not
 convert terminal `SIGINT` into worker exit 130 while the foreground child is
 handling job control.
 
@@ -1442,9 +1446,10 @@ Implementation review checks these frozen invariants:
     holders from the prior launch are gone.
 25. Pane terminal ownership never replaces or weakens natural-key Agent-session
     ownership, so two panes naming one session still contend without waiting.
-26. A pane is ready only at the runtime child-spawn event; preparation, PID
-    allocation, route publication, detach, private-file creation and first
-    output are not readiness, and a failed spawn rolls none of them back.
+26. A pane is ready only when its terminal activity is acquired, which happens
+    at the runtime child-spawn event; preparation, PID allocation, route
+    publication, detach, private-file creation and first output are not
+    readiness, and a failed spawn rolls none of them back.
 27. Grid cancellation reaches every live launch, awaits its child teardown and
     session quiescence, and exposes no provider-specific layout identity in an
     authored, durable, result, or diagnostic surface.

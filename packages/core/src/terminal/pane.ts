@@ -7,11 +7,11 @@
  * is the whole reason a grid exists. So core installs this in each pane's own
  * scope, and anything interactive asks here first.
  *
- * What travels contextually is the seam, not the authority. The value it holds
- * is the one `PaneTerminal` the grid lifecycle created for this ordinal, and it
- * grants nothing once that grid stops admitting work — so a replaced context,
- * or one kept past the expansion that owns it, yields a pane terminal nobody
- * owns rather than a way into one somebody does.
+ * What travels contextually is the seam, not the capability. The value it holds
+ * is the one `PaneTerminal` the grid built for this pane, and it grants nothing
+ * once that grid stops admitting work — so a replaced context, or one kept past
+ * the expansion that owns it, yields a pane terminal nobody owns rather than a
+ * way into one somebody does.
  *
  * Absence is the ordinary case and means "not in a pane": work outside a grid
  * reads nothing here and goes on competing for the root lease exactly as it
@@ -20,25 +20,31 @@
 
 import { createContext } from "effection";
 import type { Context, Operation } from "effection";
+import type { TerminalActivity } from "@executablemd/runtime";
 
-/** The pane the current work is running in. */
+/**
+ * The pane the current work is running in.
+ *
+ * One operation, because one is all a pane needs: run something interactive
+ * here, as this pane's owner. There is no identity on it — core knows which
+ * ordinal it built this for, and a pane that could name itself would be a pane
+ * something else could name.
+ */
 export interface PaneTerminal {
-  /** The pane's identity: its position among the grid's panes, from zero. */
-  readonly ordinal: number;
   /**
-   * Run one interactive operation as this pane's owner.
+   * Run one terminal activity as this pane's owner.
    *
-   * `body` receives this pane's one-use `spawned` acknowledgement and must call
-   * it from the runtime's successful child-spawn event, before it waits for the
-   * child to exit. Acknowledging twice is one event. A body that never spawns
-   * never reports, and the grid it belongs to never attaches — which is what
-   * stops a pane that failed to start being presented as one that is running.
+   * The activity is a resource. Acquiring it is the pane becoming ready, which
+   * is why nothing here takes a callback: a child that could not be prepared or
+   * spawned fails before acquisition, and a pane whose activity never came up
+   * never becomes ready — so the grid it belongs to never attaches.
    *
-   * A second interactive operation while one is live on this pane is refused,
-   * and so is any operation once the grid has stopped admitting work. Sequential
-   * operations in one pane are ordinary. Two panes do not contend at all.
+   * Settlement is awaited inside the same scope, and the activity's own cleanup
+   * is awaited before the pane is free again. A second use while one is live on
+   * this pane is refused, and so is any use once the grid has stopped admitting
+   * work. Sequential uses are ordinary. Two panes do not contend at all.
    */
-  interactive<T>(body: (spawned: () => void) => Operation<T>): Operation<T>;
+  use<T>(activity: TerminalActivity<T>): Operation<T>;
 }
 
 const PaneTerminalContext: Context<PaneTerminal | undefined> = createContext<

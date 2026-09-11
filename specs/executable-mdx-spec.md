@@ -9328,7 +9328,7 @@ containment.
 Before the grid opens, root output is flushed. Display produced by pane content
 is routed to that pane and is not copied into the root document output or a
 capture around the grid. The grid itself renders `""`. Only after the provider
-has torn down the composite and restored the root terminal can a following
+has released the provider grid and restored the root terminal can a following
 sibling render to the root again.
 
 #### Readiness and the visible lifetime
@@ -9339,42 +9339,45 @@ Opening a grid is atomic from the reader's perspective:
    lease. Another root native launch or terminal grid cannot hold it at the same
    time.
 2. The provider validates its live prerequisites and prepares every terminal
-   endpoint in a hidden composite. It presents nothing yet.
+   endpoint in a hidden grid. It presents nothing yet.
 3. All authored pane children begin concurrently. A self-closing pane starts its
    shell. A paired pane expands until it starts its first interactive child,
    normally `<Session.Launch>`.
-4. A pane reaches readiness only when that interactive child emits the
-   runtime's child-spawn event. A paired pane that settles without starting one
-   fails startup. Merely allocating an endpoint or process identifier, or
-   receiving the child's first output, is not readiness; an interactive child
-   that starts and immediately exits is both ready and settled.
-5. The provider attaches the complete composite only after every pane is ready.
+4. A pane reaches readiness only when its terminal activity is acquired, which
+   happens only once that interactive child has spawned. A paired pane that
+   settles without acquiring one fails startup. Merely allocating an endpoint or
+   process identifier, or receiving the child's first output, is not
+   acquisition; an interactive child that starts and immediately exits is both
+   ready and settled.
+5. The provider attaches the complete grid only after every pane is ready.
 
-The grid lifecycle owns one private readiness latch for each pane. It passes
-that pane's work one concrete `PaneTerminal`; `PaneTerminal.interactive()`
-supplies the live operation with a one-use `spawned` acknowledgement. The
-pane-scoped launcher calls it from the runtime's spawn event and before waiting
-for exit; a startup error never acknowledges. The self-closing shell does the
-same. The latch is absent for a root launch and appears in no prop, binding,
-public request, provider return, process result, or durable record.
+The lifecycle passes that pane's work one concrete `PaneTerminal`, carrying one
+operation and no identity: `PaneTerminal.use()` runs a terminal activity as the
+pane's owner. An activity is a resource acquired only after its child has
+spawned, so acquisition is the readiness and no acknowledgement is handed to
+anybody; the acquired value is the operation that settles with the child's
+outcome, and the activity's cleanup is awaited before the pane is free. A
+startup error fails before acquisition. The self-closing shell uses the same
+path. Readiness appears in no prop, binding, public request, provider return,
+process result, or durable record, and a root launch has no pane activity.
 
-The same private lifecycle state admits at most one interactive operation in a
-pane and stops admitting new work when the grid closes. Different pane
-terminals do not contend. No pane-claim, readiness, aggregate claims, or sealing
-API crosses the lifecycle boundary; those are implementation details rather
-than provider-neutral concepts.
+The same private lifecycle state admits at most one activity in a pane and stops
+admitting new work when the grid closes. Different pane terminals do not
+contend. No pane-claim, readiness, controller, aggregate, callback or sealing API
+crosses the lifecycle boundary; those are implementation details rather than
+provider-neutral concepts.
 
 When a persistent process owns a pane endpoint, the launcher sends the exact
 argv vector, working directory, and environment over the provider's private
 authenticated channel to that pane owner. The presentation provider's command
 parser never sees those values. The pane owner creates the child with
-stdin/stdout/stderr inherited from the pane terminal, forwards the runtime
-spawn event to the readiness latch, and never reads terminal input itself.
+stdin/stdout/stderr inherited from the pane terminal, provides the activity once
+that child is running, and never reads terminal input itself.
 Provider display text is written to the pane without becoming child input.
 
 A provider preparation failure, or a pane failure before every pane is ready,
-cancels all pane scopes, awaits their finalizers, discards the hidden composite,
-restores the root terminal, and fails without showing a partial grid. Effects
+cancels all pane scopes, awaits their finalizers, releases the hidden provider
+grid, restores the root terminal, and fails without showing a partial grid. Effects
 that finished before an interactive start failed keep their ordinary durable
 records. Grid atomicity is not a transaction that rolls back Agent preparation,
 files, commands, or other completed work.
@@ -9382,7 +9385,7 @@ files, commands, or other completed work.
 After attachment, a pane's normal exit or failure changes that pane's visible
 status and does not cancel its siblings. Paired content may continue with later
 sequential work after one interactive child exits, including another launch on
-the same pane. The composite remains visible when all panes have settled. The
+the same pane. The grid remains visible when all panes have settled. The
 reader closes or leaves it to finish the grid.
 
 The provider receives presentation updates only as `starting`, `running`,
@@ -9396,7 +9399,7 @@ effect when the grid owner has entered a cancellation-deferred await of the
 grid's durable child and acknowledges that proposal. Before that acknowledgement
 reaches the child, no close signal reaches a pane. Close then prevents new pane
 launches, asks every live pane child to close, awaits every child and provider
-finalizer, destroys the exact composite, restores the root terminal, and
+finalizer, releases the exact provider grid, restores the root terminal, and
 releases the foreground lease. The deferred await ends only after the durable
 child has settled and its `Close` has been acknowledged. Only then does the
 element settle and a later document sibling begin. There is no implicit timeout;
@@ -9440,7 +9443,7 @@ order fails the element; cancellation caused solely by closing the grid is not
 counted as a failed pane. With no failed pane, close succeeds and the document
 continues.
 
-A provider or host failure cancels the composite and is the grid failure.
+A provider or host failure cancels the grid and is the grid failure.
 Parent cancellation remains cancellation rather than becoming a pane failure.
 If it arrives after reader close takes effect, reader close still decides the
 grid and pane outcomes: then-live panes retain `closed`, already-settled panes
@@ -9482,7 +9485,7 @@ ordinal, never from its title, scheduling order, or provider layout.
 The completed region retains its provider-neutral layout, how it closed, and
 the ordered pane outcomes after the ordinary secret gate. Completed replay
 claims that whole region and restores its result without contacting a terminal
-provider, creating a composite, starting a shell, expanding pane content,
+provider, acquiring a provider grid, starting a shell, expanding pane content,
 resolving an Agent, taking session ownership, or launching a native UI.
 
 Reader-close intent has no separate durable `closing` state. It becomes durable
@@ -9497,7 +9500,7 @@ whose completed `Close` was acknowledged remains settled.
 
 Partial replay compares the **resolved** layout first — the column count and
 each pane's title — and refuses a change before the foreground lease is taken
-and before any provider is contacted. It then builds a new live composite.
+and before any provider is contacted. It then acquires a new live provider grid.
 Completed pane children appear as already-settled statuses and perform no
 effects; incomplete children continue from their own durable records.
 
@@ -11552,14 +11555,14 @@ test derives a core result from a provider identifier.
 | TG6 | Isolated pane scopes | Every pane inherits the grid site's values, cwd, repository selection and providers; one pane's new bindings and contextual changes reach later work in that pane only, and its `Break` or `Return` cannot escape the pane |
 | TG7 | Pane output | Rendered pane text reaches only that pane and the grid renders `""`; a surrounding capture gets no pane display; nested executable effects retain their ordinary results; native UI and shell bytes enter no capture, process journal or transcript |
 | TG8 | Readiness barrier | Endpoint allocation, PID allocation, preparation, route publication, detach and first output are not ready; the runtime child-spawn event is. A paired pane that settles without one fails startup, and a child that spawns then exits immediately is ready and settled |
-| TG9 | Atomic startup failure | Each provider-preparation position and each authored pane start can fail; no composite attaches, all started siblings and finalizers settle, completed earlier effects remain durable, the root terminal is restored, and simultaneous pane failures report the first authored ordinal |
+| TG9 | Atomic startup failure | Each provider-preparation position and each authored pane start can fail; no provider grid attaches, all started siblings and finalizers settle, completed earlier effects remain durable, the root terminal is restored, and simultaneous pane failures report the first authored ordinal |
 | TG10 | Independent settlement | After attach, one pane can exit successfully or fail while siblings remain live and usable; its status stays visible. Closing a grid with failed panes reports the first failed authored ordinal, while teardown cancellation itself does not create a pane failure |
 | TG11 | Terminal versus session ownership | Distinct pane leases permit concurrent native launches, one pane refuses overlapping launches, and a sequential launch is admitted only after the previous child, its observable descendants and group members, and every other holder of that pane terminal are gone; two panes naming one logical Agent session still contend through the unchanged non-waiting coordinator |
-| TG12 | Reader close | Close prevents a later launch, cancels every live pane scope, awaits each child, shell and provider finalizer, destroys the exact composite, restores the root terminal, releases the foreground lease, and only then starts the following document sibling |
+| TG12 | Reader close | Close prevents a later launch, cancels every live pane scope, awaits each child, shell and provider finalizer, releases the exact provider grid, restores the root terminal, releases the foreground lease, and only then starts the following document sibling |
 | TG13 | Cancellation and provider failure | Parent cancellation during prepare, readiness and active presentation follows complete teardown and remains cancellation; an active provider failure cancels every pane and fails the grid; cleanup is attempted for all resources under existing failure precedence |
 | TG14 | Bounded teardown proof | Before cancellation signals, the provider snapshots the live child's observable descendants and pane process-group members; before pane reuse and again before its worker exits it proves those processes and all other terminal holders gone. Grid teardown also proves every worker, attachment, control client and server gone and removes private paths. An attach exit, one PID, signal delivery or timeout is not proof. A descendant that already started a new session, closed the pane terminal and lost its parent is recorded as outside the host's observable boundary rather than falsely claimed stopped |
 | TG15 | Completed replay | A completed successful or failed grid restores its exact result while contacting no terminal provider, shell, Agent provider, coordinator, pane content or native launcher |
-| TG16 | Partial replay | Exact layout rebuilds a fresh provider composite; completed pane children appear settled without effects, incomplete paired children follow their durable records, incomplete native launches preserve prepared/detached session identity, and an incomplete shell starts current host policy without terminal-history continuity |
+| TG16 | Partial replay | Exact layout acquires a fresh provider grid; completed pane children appear settled without effects, incomplete paired children follow their durable records, incomplete native launches preserve prepared/detached session identity, and an incomplete shell starts current host policy without terminal-history continuity |
 | TG17 | Replay divergence and retained shape | A resolved layout change — `columns` or a `title`, reached through a prop-borne value, because a continuation executes the retained root — refuses before the lease and before provider contact, with zero provider observation. Pane count, order and form cannot differ under a fixed retained root, so they are proved retained and honoured rather than refused: the complete authored structure appears in the record, and a continuation whose supplied file differs in count, order or form opens the retained structure rather than the file's. Retained layout, close kind and pane outcomes contain no provider command, socket, process, session, window or pane identifier, path, argv, environment or terminal bytes |
 | TG18 | Provider neutrality | The controlled non-tmux provider passes TG1–TG17 and TG19; the tmux adapter prepares one hidden invocation-private server with authenticated persistent pane workers, transmits exact child creation outside tmux parsing, applies explicit row-major layout, distinguishes visible detach from control loss and server stop, attaches only after runtime spawn readiness, and satisfies TG14 without leaking provider identifiers; Node and Bun validate the same document and refuse before pane start with no provider installed |
 | TG19 | Reader close crossed with parent cancellation | A controlled live pane enters a signal-held finalizer after reader close takes effect. Parent cancellation begins while teardown is blocked; releasing the finalizer lets pane and provider teardown complete, retains the pane as `closed` and the grid with its reader-close result, and only then delivers cancellation to the parent. A continuation neither contacts the provider nor enters pane work, does not hang, and proceeds from the retained grid outcome. Provider-resource and following-sibling observations prove both sides of the ordering; no elapsed duration is evidence |

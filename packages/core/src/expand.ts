@@ -2204,8 +2204,8 @@ function* expandTerminalGrid(
 /**
  * What one authored pane does once the grid has created its terminal.
  *
- * A self-closing pane runs the host's default shell through that terminal's
- * interactive operation, exactly as a paired pane's content does. A paired
+ * A self-closing pane runs the host's default shell as a terminal activity,
+ * exactly as a paired pane's content does. A paired
  * pane expands its own content in a scope of its own: it inherits the bindings,
  * providers, configuration and working directory visible where the grid was
  * written, and everything it creates afterwards stays inside the pane. Its
@@ -2217,13 +2217,11 @@ function paneWork(pane: TerminalPane, title: string, site: GridSite): PaneWork {
   if (pane.form === "self-closing") {
     return {
       ordinal: pane.ordinal,
-      *run(terminal, composite) {
-        // The shell is this pane's one interactive operation, and the spawn it
-        // reports is what makes the pane ready — the same boundary a paired
-        // pane's content crosses, rather than a second way in.
-        const outcome = yield* terminal.interactive((spawned) =>
-          composite.shell(pane.ordinal, spawned),
-        );
+      *run(terminal, grid) {
+        // The shell is this pane's one terminal activity, and acquiring it is
+        // what makes the pane ready — the same boundary a paired pane's content
+        // crosses, rather than a second way in.
+        const outcome = yield* terminal.use(grid.shell(pane.ordinal));
         if (outcome.signal !== undefined) {
           throw new Error(`pane ${pane.ordinal} ("${title}") shell ended on ${outcome.signal}`);
         }
@@ -2238,7 +2236,7 @@ function paneWork(pane: TerminalPane, title: string, site: GridSite): PaneWork {
 
   return {
     ordinal: pane.ordinal,
-    *run(terminal, composite) {
+    *run(terminal, grid) {
       yield* scoped(function* () {
         // A pane is not inside the loop the grid was written in, so a <Break>
         // in its content has no loop to exit and says so.
@@ -2276,7 +2274,7 @@ function paneWork(pane: TerminalPane, title: string, site: GridSite): PaneWork {
         );
         const text = renderSegments(shown);
         if (text.length > 0) {
-          yield* composite.display(pane.ordinal, text);
+          yield* grid.display(pane.ordinal, text);
         }
       });
     },

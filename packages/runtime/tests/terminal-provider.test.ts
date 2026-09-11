@@ -1,11 +1,11 @@
 /**
- * Tier TG — the terminal grid routing surface and the composite contract
- * (architecture.md §Terminal authority, spec §6.21).
+ * Tier TG — the terminal grid routing surface and the provider grid contract
+ * (architecture.md §Terminal grid presentation, spec §6.21).
  *
- * Two things live here, and neither is an authority. The routing surface is
+ * Two things live here, and neither decides anything. The routing surface is
  * where middleware composes around a grid request, and its whole contract is
  * that it decides nothing: `open()` answers `unknown`, and core throws the
- * answer away. The composite is what a provider prepares, and its contract is
+ * answer away. The grid is what a provider supplies as a resource, and its contract is
  * ordering — prepared hidden, attached once, destroyed exactly once.
  *
  * Who may present a grid, and what presenting one authorizes, is core's, and is
@@ -16,17 +16,17 @@
 
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { scoped } from "effection";
+import { resource, scoped, spawn, suspend, withResolvers } from "effection";
 import type { Operation } from "effection";
 
 import {
-  prepareControlledComposite,
+  controlledTerminalGrid,
   TERMINAL_PROVIDER_UNAVAILABLE,
   TerminalGrids,
   terminalProviderLog,
   TerminalProviderUnavailableError,
 } from "../terminal.ts";
-import type { TerminalGridRequest } from "../terminal.ts";
+import type { TerminalGridRequest, TerminalShellOutcome } from "../terminal.ts";
 
 /** A two-by-one grid: the smallest request that still has two ordinals. */
 function request(overrides: Partial<TerminalGridRequest> = {}): TerminalGridRequest {
@@ -147,35 +147,39 @@ describe("Tier TG — the routing surface", () => {
   });
 });
 
-describe("Tier TG — the composite contract", () => {
-  it("TP3: a prepared composite presents nothing until it is attached", function* () {
+describe("Tier TG — the provider grid contract", () => {
+  it("TP3: an acquired grid presents nothing until it is attached", function* () {
     const log = terminalProviderLog();
     const events = yield* scoped(function* () {
-      yield* prepareControlledComposite(request(), { log });
+      yield* controlledTerminalGrid(request(), { log });
       return [...log.events];
     });
 
-    // A composite the reader can see before every pane is ready is the one
-    // thing atomic startup forbids.
+    // A grid the reader can see before every pane is ready is the one thing
+    // atomic startup forbids.
     expect(events).toEqual(["prepare:0:2x1"]);
     expect(events.some((event) => event.startsWith("attach:"))).toBe(false);
   });
 
-  it("TP3: attach, update, display, shell and destroy record in order", function* () {
+  it("TP3: attach, update, display, shell and release record in order", function* () {
     const log = terminalProviderLog();
-    const spawns: number[] = [];
+    let outcome: TerminalShellOutcome | undefined;
     yield* scoped(function* () {
-      const composite = yield* prepareControlledComposite(request(), { log });
-      yield* composite.update(0, "starting");
-      yield* composite.display(0, "pane text");
-      yield* composite.update(0, "running");
-      yield* composite.shell(1, () => spawns.push(1));
-      yield* composite.attach();
-      yield* composite.update(0, "succeeded");
-      yield* composite.closed();
-      yield* composite.destroy();
+      const grid = yield* controlledTerminalGrid(request(), { log });
+      yield* grid.update(0, "starting");
+      yield* grid.display(0, "pane text");
+      yield* grid.update(0, "running");
+      yield* scoped(function* () {
+        // Acquiring the activity is the shell starting.
+        outcome = yield* yield* grid.shell(1);
+      });
+      yield* grid.attach();
+      yield* grid.update(0, "succeeded");
+      yield* grid.closed();
     });
 
+    // The destroy is the resource's own release, recorded without anyone
+    // calling one.
     expect(log.events).toEqual([
       "prepare:0:2x1",
       "state:0:0:starting",
@@ -187,34 +191,43 @@ describe("Tier TG — the composite contract", () => {
       "destroy:0",
     ]);
     expect(log.shown.get(0)).toBe("pane text");
-    // The default shell starts, and says so through the latch it was handed:
-    // readiness is reported by the shell rather than assumed by the grid.
-    expect(spawns).toEqual([1]);
+    expect(outcome).toEqual({ exitCode: 0 });
+    expect(log.live).toEqual({ grids: 0, attached: 0, shells: 0 });
   });
 
-  it("TP4: a shell that never starts never reports a spawn", function* () {
-    const spawns: number[] = [];
-    const outcome = yield* scoped(function* () {
-      const composite = yield* prepareControlledComposite(request(), {
-        // deno-lint-ignore require-yield
-        *shell() {
-          // No spawn event: nothing started, so nothing is acknowledged.
-          return { exitCode: 127 };
-        },
+  it("TP4: a shell that never starts is never acquired", function* () {
+    const log = terminalProviderLog();
+    let refusal: unknown;
+    yield* scoped(function* () {
+      const grid = yield* controlledTerminalGrid(request(), {
+        log,
+        shell: () =>
+          resource<Operation<TerminalShellOutcome>>(function* () {
+            // Fails before it provides: nothing started, so nothing is owed an
+            // outcome and no pane could call this ready.
+            throw new Error("no child could be spawned");
+          }),
       });
-      return yield* composite.shell(1, () => spawns.push(1));
+      try {
+        yield* yield* grid.shell(1);
+      } catch (error) {
+        refusal = error;
+      }
     });
 
-    expect(outcome).toEqual({ exitCode: 127 });
-    expect(spawns).toEqual([]);
+    expect(refusal instanceof Error ? refusal.message : "").toBe("no child could be spawned");
+    // An activity that never came up was never counted as held, and left no
+    // shell record behind.
+    expect(log.events.some((event) => event.startsWith("shell:"))).toBe(false);
+    expect(log.live).toEqual({ grids: 0, attached: 0, shells: 0 });
   });
 
-  it("TP4: a preparation failure leaves no composite to tear down", function* () {
+  it("TP4: a preparation failure leaves no grid to release", function* () {
     const log = terminalProviderLog();
     let refusal: unknown;
     yield* scoped(function* () {
       try {
-        yield* prepareControlledComposite(request(), {
+        yield* controlledTerminalGrid(request(), {
           log,
           // deno-lint-ignore require-yield
           *onPrepare() {
@@ -229,39 +242,65 @@ describe("Tier TG — the composite contract", () => {
     expect(refusal instanceof Error ? refusal.message : "").toBe(
       "no pane endpoint could be created",
     );
-    // The failure happened before the composite existed, so nothing is owed a
-    // destroy.
+    // The failure happened before the grid existed, so nothing is owed a
+    // release.
     expect(log.events).toEqual([]);
   });
 
-  it("TP4: a composite refuses to be destroyed twice", function* () {
-    let refusal: unknown;
+  it("TP4: release happens once, whatever ended the grid", function* () {
+    const log = terminalProviderLog();
+
+    // Settled normally.
     yield* scoped(function* () {
-      const composite = yield* prepareControlledComposite(request());
-      yield* composite.destroy();
+      yield* controlledTerminalGrid(request(), { log }, 0);
+    });
+    // Cancelled while live. The child says when it is actually holding a grid,
+    // so the halt lands on a live one rather than on a task that never began.
+    yield* scoped(function* () {
+      const holding = withResolvers<void>();
+      const task = yield* spawn(function* () {
+        yield* scoped(function* () {
+          yield* controlledTerminalGrid(request(), { log }, 1);
+          holding.resolve();
+          yield* suspend();
+        });
+      });
+      yield* holding.operation;
+      yield* task.halt();
+    });
+    // Failed after acquisition.
+    yield* scoped(function* () {
       try {
-        yield* composite.destroy();
-      } catch (error) {
-        refusal = error;
+        yield* scoped(function* () {
+          yield* controlledTerminalGrid(request(), { log }, 2);
+          throw new Error("the provider failed");
+        });
+      } catch {
+        // The failure is the point; the release is what is being counted.
       }
     });
 
-    // Teardown ordering is only readable if a double destroy is loud. A silent
-    // second destroy would let a suite prove an ordering that never held.
-    expect(refusal instanceof Error ? refusal.message : "").toContain("destroyed twice");
+    // One destroy each, and nothing left holding anything. A resource cannot be
+    // released twice, which is why there is no way to call one by hand.
+    expect(log.events.filter((event) => event === "destroy:0")).toEqual(["destroy:0"]);
+    expect(log.events.filter((event) => event === "destroy:1")).toEqual(["destroy:1"]);
+    expect(log.events.filter((event) => event === "destroy:2")).toEqual(["destroy:2"]);
+    expect(log.live).toEqual({ grids: 0, attached: 0, shells: 0 });
   });
 
-  it("TP5: each preparation is its own composite", function* () {
+  it("TP5: each acquisition is its own grid", function* () {
     const log = terminalProviderLog();
     yield* scoped(function* () {
-      const first = yield* prepareControlledComposite(request(), { log }, 0);
-      const second = yield* prepareControlledComposite(request(), { log }, 1);
-      yield* first.destroy();
-      yield* second.destroy();
+      yield* scoped(function* () {
+        yield* controlledTerminalGrid(request(), { log }, 0);
+      });
+      yield* scoped(function* () {
+        yield* controlledTerminalGrid(request(), { log }, 1);
+      });
     });
 
-    // Two expansions are two grids. A provider that handed the same composite
-    // back would have presented the second expansion's grid as the first's.
-    expect(log.events).toEqual(["prepare:0:2x1", "prepare:1:2x1", "destroy:0", "destroy:1"]);
+    // Two expansions are two grids. A provider that handed the same grid back
+    // would have presented the second expansion's grid as the first's.
+    expect(log.events).toEqual(["prepare:0:2x1", "destroy:0", "prepare:1:2x1", "destroy:1"]);
   });
 });

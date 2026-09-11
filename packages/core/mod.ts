@@ -152,13 +152,12 @@ export { DocumentOutput } from "./src/api.ts";
 export type { DocumentOutputApi } from "./src/api.ts";
 export { useNormalizedOutput } from "./src/output/normalize.ts";
 export { useTerminalOutput } from "./src/output/terminal.ts";
-export {
-  createTerminalAuthority,
-  TerminalAuthorityError,
-  terminalInstallation,
-  useTerminalInstallation,
-} from "./src/terminal/authority.ts";
-export type { TerminalGridAuthority } from "./src/terminal/authority.ts";
+// Only what a provider needs: the refusal it can meet, and the shape of the
+// function it is handed. Issuing a grid, opening an installation and converging
+// the two are core's own, and a host reaches the whole of it through
+// `installTerminalGridProfile`.
+export { TerminalGridPresentationError } from "./src/terminal/presentation.ts";
+export type { PresentTerminalGrid } from "./src/terminal/presentation.ts";
 export {
   installTerminalProvider,
   registerTerminalProvider,

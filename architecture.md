@@ -108,7 +108,7 @@ Existing documents and code get aligned to this section retroactively.
 | session materialization | the transition that makes a placement's chosen route and its backend history resumable. ACP-first materialization happens only when the backend reports that it accepted the session's first turn; client-native materialization is the native launch's existing retained construction. Nothing else promotes a placement — not a returning ensure, a first output, a terminal result, a checkpoint token, an error code or a diagnostic |
 | established session | a placement whose immutable construction route and durable provider or native identity both already exist, and which is therefore validated eagerly: reattached, compared against its retained history, and refused when either is missing or names another conversation |
 | instruction layer | the provider-native session, system or developer instructions a launch installs before the native UI accepts its first user turn. It is not a user message, and it is not conversation history |
-| foreground-terminal lease | the one exclusive claim on a document execution's foreground experience. A root native launch holds it for one inherited terminal; a terminal grid holds it for one composite presentation. A host with no terminal refuses it, and no second root launch or grid can hold it concurrently |
+| foreground-terminal lease | the one exclusive claim on a document execution's foreground experience. A root native launch holds it for one inherited terminal; a terminal grid holds it for one grid presentation. A host with no terminal refuses it, and no second root launch or grid can hold it concurrently |
 | terminal grid | one provider-neutral foreground region whose direct terminal panes begin concurrently, remain independently interactive, and settle under one scope after complete provider and pane teardown |
 | terminal pane | one authored position in a terminal grid, identified structurally by its grid and ordinal and presented by its authored title. It owns one interactive terminal at a time; a paired pane expands its own document flow and a self-closing pane runs the host's default shell |
 | pane-terminal lease | the exclusive ownership one live interactive operation holds through a pane's concrete `PaneTerminal`. Different panes do not contend; a second operation in one pane does. The grid lifecycle closes admission when that pane is closing, and terminal ownership grants no authority over an Agent session |
@@ -3433,7 +3433,7 @@ provider-neutral grid of independently interactive terminal panes:
 
 `Terminal` names the interactive endpoint the document requires. It does not
 name the presentation technology: a tmux integration, another terminal
-multiplexer, and a host-native composite UI are providers for the same
+multiplexer, and a host-native grid UI are providers for the same
 contract. A component that elicits values through a terminal UI is a different
 abstraction, just as `<WebForm>` is one presentation for `<Elicit>`; it does not
 change what an interactive process requires here.
@@ -3464,7 +3464,7 @@ outside that pane. Each pane also owns its checked-failure ledger. A checked
 failure settles that pane without poisoning the root or a sibling; core alone
 observes the pane outcome and applies the grid's settlement rule after close.
 
-### Terminal authority
+### Terminal grid presentation
 
 One grid holds the execution's foreground-terminal lease for its whole visible
 lifetime. A root `<Session.Launch>` and a grid therefore contend for the same
@@ -3477,58 +3477,79 @@ or default shell are never captured or journaled. The grid renders nothing, and
 root document output resumes only after the provider has restored the root
 terminal.
 
-The host owns one non-contextual terminal authority, built and delivered
-directly to the installed provider. It validates the exact grid request and
-provider installation generation and permits only that provider to present the
-grid core issued. No context value, prop, binding, provider result, retained
-record, diagnostic, or structurally similar request carries that presentation
-authority.
+The host owns one non-contextual presentation function, `PresentTerminalGrid`,
+built and delivered directly to the installed provider. It validates the exact
+grid request, the provider installation generation, and that the request has not
+already been presented — and it decides all of that *before* the provider's grid
+is acquired, so a refused presentation costs the provider nothing and produces
+no side effect. No context value, prop, binding, provider result, retained
+record, diagnostic, or structurally similar request carries it.
+
+A provider supplies its grid as a resource rather than an object with a
+teardown method. Acquiring it is the grid coming into existence; releasing it is
+the grid going away, exactly once, whether the grid succeeded, failed to start,
+was closed by the reader, was failed by the provider, or was cancelled. There is
+no destroy to call, and so no way to call one twice or to forget one.
+
+Nothing owns a grid but the expansion that submitted it. A grid runs beneath
+that operation, which is what keeps its panes' durable identities and inherited
+bindings those of the document position that wrote them, and what takes the grid
+down whenever that operation unwinds. There is no execution-wide holder of live
+grid tasks; what the installation keeps is the smallest lookup that lets a
+submitted request and a presentation converge — the request object, its
+generation, whether it has been presented, and the operation that runs it.
 
 The stable contextual terminal API is request routing only. Middleware may
 observe, narrow, refuse, wrap, or delegate a one-use request. A handler's
 return value is ignored, and answering without delegation authorizes and
 settles nothing. Core supplies the one request for the exact expansion; the
-provider factory closes over the direct authority and must present that same
-request to act. This preserves provider composition without letting a document
+provider factory closes over the delivered presentation function and must
+present that same request to act. This preserves provider composition without letting a document
 or replacement context mint terminal ownership.
 
-The grid lifecycle creates one concrete `PaneTerminal` for each authored
-ordinal and passes it to that pane's work. Its `interactive()` operation owns
-the pane terminal for one live operation, refuses a concurrent operation in the
-same pane, and supplies that operation with the one-use `spawned`
-acknowledgement that makes the pane ready. Different `PaneTerminal` values do
-not contend. Closing the grid prevents every pane terminal from admitting new
-work before it asks live work to stop; retaining a pane terminal after its grid
-closes grants nothing.
+The grid lifecycle creates one concrete `PaneTerminal` for each authored ordinal
+and passes it to that pane's work. It carries one operation, `use()`, and no
+identity: core already knows which ordinal it built each one for, and a pane
+that could name itself would be a pane something else could name. `use()` runs
+one terminal activity as that pane's owner, refuses a concurrent use in the same
+pane, permits sequential uses after settlement, and awaits the activity's own
+cleanup before the pane is free again. Different `PaneTerminal` values do not
+contend. Closing the grid prevents every pane terminal from admitting new work
+before it asks live work to stop; retaining a pane terminal after its grid closes
+grants nothing.
 
 Core installs that same `PaneTerminal` in the paired pane's scope. A
 pane-scoped native launcher reads it and `<Session.Launch>` consequently
 reserves, flushes, and launches on the pane terminal instead of competing for
 the root lease. The provider starts a self-closing pane's host-configured
-default shell through the same operation. Sequential work in one pane remains
+default shell as a terminal activity through the same operation. Sequential work in one pane remains
 ordinary composition. The session coordinator is unchanged and independently
 authoritative, so two panes attempting to own the same logical Agent session
 still contend and one is refused.
 
-Readiness, live-operation tracking, and closing admission are private state of
-the grid lifecycle, not a second public capability model. There is no public
-pane-claim or readiness interface, no aggregate grid-claims object, and no
-factory or sealing operation for another package to coordinate. The lifecycle
-passes only the concrete `PaneTerminal` across the pane-work boundary. Its
-`spawned` acknowledgement resolves the private readiness latch from the
-runtime's successful child-spawn event and before the launcher waits for exit;
-failed preparation, reservation, or spawn never acknowledges it. Allocation of
-a PID and the child's first output are not this event. The acknowledgement is
-idempotent, a root launch receives none, and neither the callback nor the latch
-enters a request, provider result, process handle, or durable record.
+Readiness is not something anybody acknowledges. A terminal activity is a
+resource whose acquisition happens only once its child has actually spawned, and
+that acquisition *is* the pane becoming ready; the value acquired is the
+operation that settles with how the child ended. So preparation, reservation or
+spawn failures all fail before acquisition and leave the pane unready, while a
+child that spawns and exits immediately is both ready and settled. Allocation of
+a PID and the child's first output are not acquisition. Nothing about readiness
+enters a request, a provider result, a process handle or a durable record, and a
+root launch has no pane activity at all.
+
+Readiness, live-use tracking, and closing admission are private state of the grid
+lifecycle, not a second public capability model. There is no pane-claim or
+readiness interface, no pane controller, no aggregate object, and no factory or
+sealing operation for another package to coordinate. The lifecycle passes only
+the concrete `PaneTerminal` across the pane-work boundary.
 
 A provider whose pane endpoint is owned by a persistent process routes child
 creation through that process. The launch's exact argv vector, working
 directory, and environment cross a provider-private authenticated channel;
 they never pass through the presentation provider's command language. The pane
 owner creates the child with all three standard streams inherited from the pane
-terminal, reports the runtime spawn event, and remains only the lifecycle and
-display owner. It writes provider display messages to the terminal but never
+terminal, provides the activity once that child is running, and remains only the
+lifecycle and display owner. It writes provider display messages to the terminal but never
 reads terminal input, so interactive input belongs to the foreground child.
 It admits one live launch at a time and releases the pane only after that
 launch's observable terminal ownership has been swept. Sequential launches use
@@ -3551,33 +3572,37 @@ The grid runs as one structured scope:
 
 1. Core validates the whole structural layout, takes the foreground-terminal
    lease, and flushes root output.
-2. The provider checks its live prerequisites and prepares the entire hidden
-   composite: every pane endpoint, its supervision, and the default shell where
-   requested. No grid is attached yet.
+2. Core admits the presentation — exact request, generation, not already used —
+   and only then acquires the provider's grid resource. Acquisition prepares the
+   entire hidden grid: every pane endpoint and its supervision. No grid is
+   attached yet, and a refused presentation acquires nothing at all.
 3. Core starts the pane child operations concurrently, using deterministic
    durable child identities derived from the grid expansion and authored
    ordinal. A paired pane begins its document flow and a self-closing pane
    begins its shell.
-4. A pane is ready only when its interactive child emits the runtime's
-   successful spawn event. Reserving an endpoint, allocating a process
-   identifier, or receiving output is not readiness. A child that starts and
-   exits immediately can be both ready and settled.
+4. A pane is ready only when its terminal activity is acquired, which happens
+   only once its child has actually spawned. Reserving an endpoint, allocating a
+   process identifier, or receiving output is not acquisition. A child that
+   starts and exits immediately can be both ready and settled.
 5. Only after every pane reaches readiness does the provider attach the one
-   composite presentation. Any preparation or pane-start failure before this
-   barrier cancels every pane, awaits complete teardown, discards the hidden
-   composite, and fails without exposing a partial grid. Agent preparation or
+   grid. Any acquisition or pane-start failure before this barrier cancels every
+   pane, awaits complete teardown, releases the hidden grid, and fails without
+   exposing a partial grid. Agent preparation or
    retained route work that occurred before a failed native spawn remains
    durable; atomicity covers terminal presentation and lifecycle, not rollback
    of earlier provider effects.
 6. Once attached, each pane settles independently and keeps its final status
-   visible while siblings continue. The composite remains present after all
-   panes settle until the reader closes or leaves it.
+   visible while siblings continue. The grid remains present after all panes
+   settle until the reader closes or leaves it.
 7. Reader close first crosses a live close boundary, then begins an ordered
    teardown: prevent new pane launches, ask live pane children to close, await
-   every child and finalizer, detach and destroy the exact provider composite,
-   restore the root terminal, and only then release the foreground lease and
-   settle the grid. The document never continues while an observable pane child
-   or provider-owned process can still act through the grid.
+   every child and finalizer, release the provider's grid resource — which is
+   what destroys it, once — restore the root terminal, and only then release the
+   foreground lease and settle the grid. Reader close, pane failure and parent
+   cancellation each decide the durable outcome before disposal begins; cleanup
+   enforces quiescence and never invents or rewrites a retained outcome. The
+   document never continues while an observable pane child or provider-owned
+   process can still act through the grid.
 
 The provider's `closed()` settlement proposes the live close boundary. The
 boundary is crossed when the grid owner has entered a cancellation-deferred
@@ -3698,7 +3723,7 @@ the retained root stays authoritative, and deciding whether a changed source
 should be refused rather than ignored belongs to a versioned root boundary that
 does not exist yet. Until it does, the grid's obligation is the narrower one it
 can actually discharge: retain the complete authored structure, and open the
-structure it retained rather than the one the file now shows. It rebuilds a fresh provider composite: completed pane
+structure it retained rather than the one the file now shows. It acquires a fresh provider grid: completed pane
 children are restored as settled statuses without re-running their effects,
 while incomplete children replay or start their remaining work. An incomplete
 `<Session.Launch>` preserves the prepared/detached identity rules of its own
@@ -5044,7 +5069,7 @@ Status is measured against main.
 | testing harness (`<Execution>`) | runs another document as a real root under a production host profile, authorized by canonical `<Test>` alone: declarations installed before the root import, child output displayed progressively and collected only when asked, journal retention selected independently of observation, and the outcome published by the invocation's own terminal through a request public middleware composes around but cannot answer | built on the #454 stack for `host="run"`; the workflow profile and `<WorkflowRun>` are unbuilt, and a host that offers no workflow profile refuses them |
 | nested run-profile Agent and elicitation declarations | lets one `<Execution host="run">` declare one child-scoped `<TestAgent>` scenario set and one non-delegating `<Answers>` matcher set; only frozen test data crosses the harness request, the trusted host constructs both providers inside the isolated child, siblings share no session or provider state, ordinary component shadowing remains in force, and the child journal retains only the selected Prompt and Elicit components' ordinary results. A controlled `<Plan>` may author an exact scenario label that this host alone maps to Plan's derived conversation identity; declaration selection uses the label while runtime state stays keyed by the opaque identity and child, with no matcher or fallback added to ordinary TestAgent sessions | built on the #641 stack; controlled Plan routing added on the #728 stack |
 | `Config` run deadline / exec default / Fetch default / verbosity | three independently owned contextual timeouts, absent unless configured, each read by exactly one consumer, and contextual verbosity — a boolean that is false unless configured, seeded by the command line and overridable for a lexical subtree, bounding nothing and owning no authority | built on this stack |
-| terminal grid (`<Terminal.Grid>` / `<Terminal>`) | replaces the root foreground terminal with one provider-neutral composite whose statically declared direct panes begin concurrently, stay independently interactive, preserve their final statuses until the reader closes the composite, and tear down completely before document execution continues. A paired pane expands isolated document flow; a self-closing pane runs the host's default shell. The grid owns one foreground-terminal lease, each pane owns a separate pane-terminal lease, and a pane-scoped native launcher lets `<Session.Launch>` use that pane without weakening the independent Agent session coordinator. Core validates the complete row-major layout before provider contact, attaches only after every pane is ready, contains post-attach pane failures until close, and records the ordered provider-neutral outcomes. Completed replay contacts no terminal or Agent provider; partial replay rebuilds a fresh composite, restores completed panes as statuses, and continues incomplete pane effects under their existing durable identities. Provider commands, sockets, process topology and layout identifiers remain live-only inside the provider closure | defined for #717; #726 proves the persistent tmux pane-worker topology and its observable teardown boundary on macOS; first production provider is tmux in the Deno and compiled foreground hosts; controlled non-tmux provider proves the core contract; implementation unbuilt |
+| terminal grid (`<Terminal.Grid>` / `<Terminal>`) | replaces the root foreground terminal with one provider-neutral grid whose statically declared direct panes begin concurrently, stay independently interactive, preserve their final statuses until the reader closes the grid, and tear down completely before document execution continues. A paired pane expands isolated document flow; a self-closing pane runs the host's default shell. The grid owns one foreground-terminal lease, each pane owns a separate pane-terminal lease, and a pane-scoped native launcher lets `<Session.Launch>` use that pane without weakening the independent Agent session coordinator. Core validates the complete row-major layout before provider contact, attaches only after every pane is ready, contains post-attach pane failures until close, and records the ordered provider-neutral outcomes. Completed replay contacts no terminal or Agent provider; partial replay acquires a fresh provider grid, restores completed panes as statuses, and continues incomplete pane effects under their existing durable identities. Provider commands, sockets, process topology and layout identifiers remain live-only inside the provider closure | defined for #717; #726 proves the persistent tmux pane-worker topology and its observable teardown boundary on macOS; first production provider is tmux in the Deno and compiled foreground hosts; controlled non-tmux provider proves the core contract; implementation unbuilt |
 | native session launch (`<Session.Launch>` / `launchAgentSession()`) | prepares one durable coding-agent session from the rendered body of `<Session.Launch>` and hands the provider's native UI the terminal for that exact session, then continues the document after it exits. The body renders completely first and only what it rendered crosses as the instruction layer; the launch performs no model turn; at the root it takes the run's foreground-terminal lease before an agent is resolved, while a launch inside `<Terminal>` takes that pane's lease through its pane-scoped native launcher. A host with no applicable terminal refuses without probing for an installed CLI. A session is constructed once, by one of two mechanisms, and its create-once construction route says which. Where the provider returns the identity, the ACPX provider creates the session, installs the layer at creation, releases ACP ownership before the spawn, and marks its handle stale so a later `<Prompt>` reattaches. Where the adapter names its own sessions, it allocates the identity inside ownership before any process exists, the native process creates the session under that name from a private mode-0600 instruction file, and ACP creates nothing — the instruction text reaches neither argv nor environment, and the file is removed on success, failure and cancellation alike while ownership is still held. Neither route converts into the other, and which one governs is chosen by the first operation that consumes the placement rather than by the `<Session>` that made it: a fresh `<Session>` publishes no route and establishes nothing, so a `<Session.Launch>` nested inside one constructs the session it placed, while a first subscribed `<Prompt>` publishes ACP-first before it ensures and keeps that account even if the turn that follows is never accepted. An established route is validated eagerly by a later `<Session>`, and a launch meeting a published ACP-first route refuses before an identity exists. A `<Session>` or `<Prompt>` meeting a bound client-allocated route attaches under the route's exact identity; a legacy unbound route or an unavailable attachment capability refuses before a turn and creates no substitute conversation. Phases are retained as `agent_session_launch` records under one expansion identity — `prepared` before ownership is released, then `detached`, then `exited` — so a completed replay launches nothing, a replay holding only `prepared` proves the handoff never began and may still create under the retained identity, and one holding `detached` resumes and never falls back. The public route carries an opaque one-use launch request and answers nothing; authority to run and retain a phase is delivered to the installed provider directly, so neither a returned completion nor a rebuilt request authors a launch. Every operation that can act on an advertised session takes exclusive ownership under one natural key first, through a coordinator the host built and passed in; contention refuses instead of queueing, and an owner that never proved it stopped leaves a recovery tombstone. A host that cannot say who owns a session refuses every advertised operation, and one that cannot say how a session was constructed additionally refuses an agent that names its own — before any provider effect. Every private setup or child-creation failure is normalized to `process-creation-failed` with fixed provider-owned text, carrying no path, argv, environment or host message. No launch path discards persistent provider state. A client-allocated session is bound to one executable build: the build is observed inside ownership before an identity is allocated, the binding is published with the V2 route and retained beside the prepared record, the native child runs the exact observed path in place of the launcher name, and every later create, resume, attachment and incomplete replay reobserves and compares before a process, an ensure or a turn. A `<Session>` or `<Prompt>` meeting a bound client-native route attaches to it: it reobserves the build, requires any retained provider arrangement to assert that same conversation, calls ensure with the route identity as `resumeSessionId`, and requires the provider to report that identity before a turn — refusing on missing capability, build drift, missing history or a differing assertion without creating a substitute conversation. ACP runtimes are partitioned by resolved agent command and binding, each handle is closed by the partition that created it, and a bound partition is torn down when its last handle closes. A legacy V1 client-native route keeps exactly the released native-only behavior and never attaches | built on the #517 stack, extended by the #519 and #561 stacks; Deno and the compiled binary assemble the host — coordinator, route store and executable observer — and Node and Bun keep the same advertised names while assembling none of it, so every advertised operation refuses before provider work; `claude` is advertised for native launch after passing the client-allocated gate at Claude Code 2.1.241 on macOS arm64 (#520) and separately for client-native attachment after passing the native-to-ACP marker gate (#561), and Codex remains unadvertised because nothing has run its provider-returned claims against an installed Codex; `Agent.AddDir` is unbuilt |
 | `<Fetch>` | performs one XMD-mediated HTTP read through contextual `API.Fetch`, admitting the whole request before transport, and retains the normalized request and the detached response as one `fetch` durable observation; capture decides whether a status is data or a failure, and the trusted host's destination ceiling sits below the component | built on the #456 stack; a generated fragment may name the pinned identity only for a request the trusted host stated exactly, on the #369 stack |
 | `API.Files` | routes every document filesystem operation to the installed provider, with no host default and structural failure data. Its mandatory semantic operations include `ensureDirectory`, which recursively creates or adopts one directory and returns Unit; separately loaded copies compose through the stable Api name | built on the #227 stack; directory ensure added by #643 |

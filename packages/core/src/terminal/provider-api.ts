@@ -2,7 +2,7 @@
  * How a terminal provider is installed, and what installing one grants.
  *
  * A provider is the only thing that can present a grid, so *selecting* one is
- * itself an authority decision. Returning a factory up the public chain would
+ * itself a presentation decision. Returning a factory up the public chain would
  * mean any handler could answer with a factory of its own — or take the one it
  * was given and install it somewhere else.
  *
@@ -12,7 +12,7 @@
  * handler sits at the terminal end of that chain and holds its own captured
  * continuation — a parameter of its generator, carried by no request and no
  * return value. Through that continuation, and only through it, the invocation
- * terminal hands the factory this execution's terminal authority and records
+ * terminal hands the factory this execution's presentation function and records
  * that the provider acknowledged installation.
  *
  * Registration is scope-local: a nested registration overrides an outer one for
@@ -29,7 +29,7 @@ import { type Api, createApi } from "@effectionx/context-api";
 import { ensure } from "effection";
 import type { Operation } from "effection";
 
-import type { TerminalGridAuthority } from "./authority.ts";
+import type { PresentTerminalGrid } from "./presentation.ts";
 
 /** What a host says about the provider it is installing. */
 export interface TerminalProviderOptions {
@@ -40,14 +40,14 @@ export interface TerminalProviderOptions {
 /**
  * A provider factory installs `TerminalGrids` middleware for its scope.
  *
- * The authority is the second argument because it is delivered, not published:
+ * Presentation is the second argument because it is delivered, not published:
  * there is no reader for it, no context holding one, and no request member
  * carrying one. A factory closes over it, and only the handler that closed over
  * it can pair a routed grid request with it.
  */
 export type TerminalProviderFactory = (
   options: TerminalProviderOptions,
-  authority: TerminalGridAuthority,
+  present: PresentTerminalGrid,
 ) => Operation<void>;
 
 /** The stable name every loaded copy composes through. */
@@ -128,7 +128,7 @@ export function* registerTerminalProvider(
         // refuses a copied, reused or stale request here, before the factory
         // installs anything.
         const delivery = deliveryOf(yield* next({ intent: "inspect", install: call }));
-        yield* factory(delivery.options, delivery.authority);
+        yield* factory(delivery.options, delivery.present);
         yield* next({ intent: "acknowledge", install: call });
         return undefined;
       },
@@ -146,7 +146,7 @@ export function* registerTerminalProvider(
  */
 function deliveryOf(value: unknown): {
   options: TerminalProviderOptions;
-  authority: TerminalGridAuthority;
+  present: PresentTerminalGrid;
 } {
   if (typeof value !== "object" || value === null) {
     throw new TerminalProviderInstallError(
@@ -154,32 +154,24 @@ function deliveryOf(value: unknown): {
     );
   }
   const options = Reflect.get(value, "options");
-  const authority = Reflect.get(value, "authority");
+  const present = Reflect.get(value, "present");
   if (typeof options !== "object" || options === null) {
     throw new TerminalProviderInstallError(
       "the live terminal provider installation named no options",
     );
   }
-  if (typeof authority !== "object" || authority === null) {
+  if (typeof present !== "function") {
     throw new TerminalProviderInstallError(
-      "the live terminal provider installation carried no authority",
+      "the live terminal provider installation carried no way to present a grid",
     );
   }
   const label = Reflect.get(options, "label");
   if (typeof label !== "string") {
     throw new TerminalProviderInstallError("the live terminal provider options are not readable");
   }
-  const present = Reflect.get(authority, "present");
-  if (typeof present !== "function") {
-    throw new TerminalProviderInstallError(
-      "the live terminal provider installation carried no grid authority",
-    );
-  }
   return {
     options: { label },
-    authority: {
-      present: (request, composite) => Reflect.apply(present, authority, [request, composite]),
-    },
+    present: (request, grid) => Reflect.apply(present, undefined, [request, grid]),
   };
 }
 
@@ -187,7 +179,7 @@ function deliveryOf(value: unknown): {
  * Install the provider registered as `name`, under `options`, for the calling
  * operation.
  *
- * The authority reaches whichever factory answers, and nothing else: a handler
+ * Presentation reaches whichever factory answers, and nothing else: a handler
  * that short-circuits, fabricates a return, or never acknowledges installs no
  * provider, and this refuses rather than leaving the caller believing one is
  * there.
@@ -195,7 +187,7 @@ function deliveryOf(value: unknown): {
 export function installTerminalProvider(
   name: string,
   options: TerminalProviderOptions,
-  authority: TerminalGridAuthority,
+  present: PresentTerminalGrid,
 ): Operation<void> {
   return (function* (): Operation<void> {
     const request: TerminalProviderInstallRequest = Object.freeze({
@@ -203,7 +195,7 @@ export function installTerminalProvider(
       name,
       options: Object.freeze({ ...options }),
     });
-    const terminal = installationTerminal(request, options, authority);
+    const terminal = installationTerminal(request, options, present);
     // Same stable name, so the shared middleware chain applies; own descriptor,
     // so the chain ends in this invocation's terminal rather than in the public
     // refusing default.
@@ -224,7 +216,7 @@ export function installTerminalProvider(
 function installationTerminal(
   request: TerminalProviderInstallRequest,
   options: TerminalProviderOptions,
-  authority: TerminalGridAuthority,
+  present: PresentTerminalGrid,
 ): {
   install: (call: TerminalProviderCall) => Operation<unknown>;
   acknowledged: () => boolean;
@@ -253,7 +245,7 @@ function installationTerminal(
           );
         }
         state = "inspected";
-        return { options, authority };
+        return { options, present };
       }
       if (state !== "inspected") {
         throw new TerminalProviderInstallError(
