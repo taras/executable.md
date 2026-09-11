@@ -45,6 +45,8 @@ export interface ForegroundLauncherOptions {
   isTerminal?: () => boolean;
   /** Everything this host has still to show the reader. */
   drain?: () => Operation<void>;
+  /** Handed each process, so a suite can ask the emitter what it still holds. */
+  observe?: (child: ChildProcess) => void;
 }
 
 /**
@@ -90,7 +92,13 @@ export function* installForegroundLauncher(
         yield* drainStream(process.stderr);
       },
       *launch([request, spawned]) {
-        return yield* runForeground(request, spawned);
+        return yield* runForeground(request, spawned, options.observe);
+      },
+      *notify([text]) {
+        // Written and drained, not queued: the next thing to reach this
+        // terminal may be a child drawing over it.
+        process.stdout.write(`${text}\n`);
+        yield* drainStream(process.stdout);
       },
     },
     { at: "min" },
@@ -125,6 +133,7 @@ function drainStream(stream: DrainableStream): Operation<void> {
 function runForeground(
   request: NativeLaunchRequest,
   spawned: () => void,
+  observe?: (child: ChildProcess) => void,
 ): Operation<NativeLaunchOutcome> {
   return scoped(function* (): Operation<NativeLaunchOutcome> {
     const [command, ...args] = request.command;
@@ -150,32 +159,45 @@ function runForeground(
       stdio: "inherit",
     });
     child = started;
+    observe?.(started);
 
     // The runtime's own start event, and the only thing reported as one. A
     // spawn that fails emits `error` instead, so a child that never ran never
-    // reports having started.
-    started.once("spawn", () => spawned());
+    // reports having started. Off on arrival and off again in the `finally`,
+    // so one start is reported exactly once and a launch that was cancelled or
+    // never started reports none at all.
+    const onSpawn = (): void => {
+      started.off("spawn", onSpawn);
+      spawned();
+    };
 
-    // Raced inline, in the same synchronous run as the spawn, so both arms are
-    // attached before the child can report anything — a spawned race attaches
-    // a turn later. Whichever loses is halted, which is what detaches it.
-    return yield* race([
-      (function* (): Operation<NativeLaunchOutcome> {
-        const [code, signal] = yield* once<[number | null, string | null]>(started, "exit");
-        const outcome: NativeLaunchOutcome = {};
-        if (code !== null) {
-          outcome.exitCode = code;
-        }
-        if (signal !== null) {
-          outcome.signal = signal;
-        }
-        return outcome;
-      })(),
-      (function* (): Operation<never> {
-        const [error] = yield* once<[Error]>(started, "error");
-        throw error;
-      })(),
-    ]);
+    try {
+      started.on("spawn", onSpawn);
+
+      // Raced inline, in the same synchronous run as the spawn, so both arms
+      // are attached before the child can report anything — a spawned race
+      // attaches a turn later. Whichever loses is halted, which is what
+      // detaches it.
+      return yield* race([
+        (function* (): Operation<NativeLaunchOutcome> {
+          const [code, signal] = yield* once<[number | null, string | null]>(started, "exit");
+          const outcome: NativeLaunchOutcome = {};
+          if (code !== null) {
+            outcome.exitCode = code;
+          }
+          if (signal !== null) {
+            outcome.signal = signal;
+          }
+          return outcome;
+        })(),
+        (function* (): Operation<never> {
+          const [error] = yield* once<[Error]>(started, "error");
+          throw error;
+        })(),
+      ]);
+    } finally {
+      started.off("spawn", onSpawn);
+    }
   });
 }
 

@@ -59,16 +59,17 @@ routes an opaque request and cannot manufacture that result.
   its `SessionLaunchResult`; the route is where public middleware sees the ask,
   and authority to perform it reaches the installed provider directly rather
   than travelling on this chain
-  (specs/native-agent-session-launch-spec.md). A launch performs no model turn,
-  and a provider that answers `prompt()` does not thereby answer it: native
-  session launch is its own capability, installed on its own.
-- Built-in **`claude` is advertised**, for two separate capabilities: native
-  launch, and attaching ACP to a session a native process constructed. Its
-  sessions are named by XMD and created by the native process
-  (specs/native-agent-session-launch-spec.md). So the ownership,
-  construction-route and executable-observation requirements below apply to it
-  on every host, and only the hosts that assemble all three — Deno and the
-  compiled binary — can serve it. `codex` remains unadvertised for both.
+  (specs/native-agent-session-launch-spec.md). A launch returns no model answer
+  and performs no model turn except the one fixed materialization turn declared
+  by `codex-provider-returned.v1`; a provider that answers `prompt()` does not
+  thereby answer native launch, which remains its own capability.
+- Built-in **`claude` and `codex` are advertised** for native launch under their
+  independently admitted live profiles. Claude's client-native protocol is also
+  advertised for client-native ACP attachment. Codex's provider-returned
+  protocol is advertised for provider-native continuation after native handoff.
+  The ownership, construction-route and executable-observation requirements
+  below apply to both agents, and only the hosts that assemble all three — Deno
+  and the compiled binary — can serve them.
 - Every operation that can act on an **advertised** session — `session()`, a
   subscribed `prompt()` stream, a launch, and an incomplete launch replay —
   takes exclusive ownership of it first, through the session coordinator its
@@ -79,37 +80,48 @@ routes an opaque request and cannot manufacture that result.
   install none, so default Claude session work refuses there before any provider
   effect — no availability probe, no runtime, no route read, no identity, no
   child. An agent that is not advertised keeps ordinary ACP behavior on every
-  host, Codex included.
+  host.
 - The host also passes in a **construction-route store** and an **executable
   observer**, directly and from the same trusted root as the coordinator. Both
-  are required only for an advertised agent whose adapter names its own
-  sessions: a provider that returns the identity constructs nothing a route
-  governs and binds no build, and keeps its behavior unchanged on a host that
-  has neither. A host missing either refuses that agent before any provider
-  effect, on the same terms as a missing coordinator. The observer is not a
-  contextual Api for the same reason the coordinator is not: executable
+  are required for every advertised bound adapter. Claude publishes V2 before
+  client-native construction; Codex publishes V3 before provider-returned ACP
+  construction. A host missing either dependency refuses that agent before any
+  provider effect, on the same terms as a missing coordinator. The observer is
+  not a contextual Api for the same reason the coordinator is not: executable
   validation decides which retained history may be accepted.
 - While ownership is held and before any provider construction effect, the
   provider reconciles the route. A first `session()` or subscribed `prompt()`
   publishes or adopts `acp-first` before runtime creation, `ensureSession()` or
   a turn, and an ensure that fails afterwards leaves that route standing. A
-  launch by an adapter that names its own sessions publishes `client-native`
-  under an identity that adapter allocated, unless existing durable ACPX state
-  or an existing route says the session was constructed through ACP — in which
-  case it publishes or adopts `acp-first` and retains `identity-unavailable`.
+  bound provider-returned launch admits its current executable and publishes or
+  adopts V3 before ACP construction. A launch by an adapter that names its own
+  sessions publishes V2 `client-native` under an identity that adapter
+  allocated, unless existing durable ACPX state or an existing route says the
+  session was constructed through ACP — in which case it publishes or adopts
+  V1 `acp-first` and retains `identity-unavailable`.
   Publication is create-once, so the loser of either order adopts the winner,
   and no route converts.
+- A `session()` or subscribed `prompt()` meeting V3 validates the compiled
+  `codex-provider-returned.v1` interpretation, observes and independently admits
+  the live provider-native-continuation profile, then ensures through the live
+  executable partition. It requires the exact provider assertion retained by
+  the launch before a turn. Missing or different identity, protocol, capability,
+  shape or host refuses without allocation, conversion or materialization.
 - A `session()` or subscribed `prompt()` meeting a **bound** `client-native`
-  route **attaches** to it. Under the same ownership it reobserves the build and
-  compares the binding exactly, requires any retained ACP arrangement to assert
-  that route's identity, selects the runtime for `(resolved agent command,
-  binding)`, calls `ensureSession()` with `resumeSessionId` equal to that
-  identity, and requires the returned canonical assertion to equal it before a
-  turn. The observed executable path reaches only that runtime's transient child
-  environment. A legacy unbound `client-native` route, an agent this host has
-  not advertised for attachment, build drift, a disagreeing arrangement and a
-  differing returned identity each refuse before a turn and create no substitute
-  conversation.
+  route **attaches** to it. Under the same ownership it reobserves the executable
+  and independently admits the route's stable adapter protocol, attachment
+  capability, positive CLI shape and proved host envelope. Its digest or version
+  may differ from the route's immutable audit evidence. The provider requires
+  any retained ACP arrangement to assert that route's identity, selects the
+  runtime for `(resolved agent command, live executable observation)`, calls
+  `ensureSession()` with `resumeSessionId` equal to that identity, and requires
+  the returned canonical assertion to equal it before a turn. The observed
+  executable path reaches only that runtime's transient child environment. A
+  legacy unbound `client-native` route, an agent this host has not advertised for
+  attachment, a protocol/profile/capability/host mismatch, a disagreeing
+  arrangement and a differing returned identity each refuse before a turn and
+  create no substitute conversation. A compatible release change rewrites
+  neither route nor provider history.
 - `withSessionRoute` remains routing only: it selects which partition serves a
   call and carries no authority to construct, own or answer.
 - **Base behavior:** with no provider installed, `agent()`, `session()`,
@@ -399,7 +411,7 @@ received.
 `allowedTools` and `mcpServers` are stated as empty arrays rather than omitted:
 omission is ACPX's own default, and this host is making a different statement.
 
-The profile states both native capability sets empty for the same reason. A
+The profile states all three native capability sets empty for the same reason. A
 workflow session belongs to a run — named by a row in the run's own database,
 arranged in the run's own sidecar, continued by reattaching that row — and the
 machine-wide account of ownership, construction routes and executable builds
@@ -700,9 +712,12 @@ none.
   life, so a second `<Session>` naming the same placement is answered with it and
   a `<Prompt>` given it is acting on the thing that was pinned.
 
-- **Materialization.** A pending ACP-first placement is constructed by the first
-  subscribed `<Prompt>`, and only the backend's acceptance of that turn makes it
-  a conversation. The provider ensures with
+- **Materialization.** An ordinary pending ACP-first placement is constructed by
+  the first subscribed `<Prompt>`, and only the backend's acceptance of that
+  turn makes it a conversation. A V3 provider-returned native launch uses the
+  same acceptance boundary for its protocol's one fixed internal turn, retains
+  that prompt before sending it, and exposes neither its response nor usage as
+  document output. The provider ensures with
   `materialization: "first-turn-acceptance"`, which makes ACPX persist a
   provisional record: the key is occupied and the serialized `agentSessionId` is
   absent, so the record is occupancy rather than an assertion.
@@ -731,7 +746,9 @@ none.
 
   The durable order is therefore: route, provisional non-asserting record,
   backend acceptance, asserting record, host mapping, and only then the events
-  the turn produced. If materialization fails the provider removes no route,
+  the turn produced. A native-launch materialization additionally requires the
+  canonical provider assertion and refuses any tool call or non-`end_turn`
+  result. If materialization fails the provider removes no route,
   publishes no identity, calls no host mapping, gives up the handle so the next
   attempt creates rather than resumes, and leaves the exact `Session` value
   pending for a retry. If it succeeds and the turn then fails, the session stays
@@ -762,10 +779,14 @@ none.
   Promise-returning leaves are consumed with `until`; the provider's only
   Promise-producing adapter is the `onPermissionRequest` callback, and the bridge
   itself is operation-based.
-- **Runtime partitions.** Ordinary ACP-first work uses one unbound runtime. A
-  bound attachment uses one runtime per `(resolved agent command, executable
-  build binding)`, created with the observed path in `agentProcessEnv` and torn
-  down when its last handle closes. Acquiring a runtime to ensure through claims
+- **Runtime partitions.** Ordinary unbound ACP-first work uses one unbound
+  runtime. Bound client-native attachment and V3 provider-returned construction
+  or continuation use one runtime per `(resolved agent command, live executable
+  observation, adapter protocol)`, never the historical route binding. The
+  runtime is created with the observed path in `agentProcessEnv` and torn down
+  when its last handle closes. An upgrade never rekeys a live partition; a
+  later operation observes again and enters the partition for the current
+  executable. Acquiring a runtime to ensure through claims
   the partition, and an `ensureSession()` that rejects gives that claim up — so
   the next attempt observes again rather than inheriting a live path nothing is
   holding, while a sibling ensure still in flight keeps the partition alive.
@@ -787,7 +808,8 @@ none.
   exists and what removes it.
 - **Host-owned dependencies.** `AcpxProviderDependencies` carries what a host,
   rather than a document, decides: `advertiseNativeLaunch` and
-  `advertiseClientNativeAttachment` are two separate lists, and a profile whose
+  the client-native-attachment and provider-native-continuation advertisements
+  are separate lists, and a profile whose
   session authority differs from ordinary `xmd run` states both explicitly
   rather than inheriting the package's defaults by omission;
   `executableObserver` says how this host observes the build behind an

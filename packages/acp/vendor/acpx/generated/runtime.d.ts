@@ -24,6 +24,10 @@ type AcpRuntimeEnsureInput = {
   sessionKey: string;
   agent: string;
   mode: AcpRuntimeSessionMode;
+  /** Confirm this canonical identity through live resume/load before returning. */
+  expectedAgentSessionId?: string;
+  /** Own the handle before expectedAgentSessionId reconnect can open a child or refuse. */
+  onHandle?: (handle: AcpRuntimeHandle) => void;
   resumeSessionId?: string;
   cwd?: string;
   /**
@@ -55,6 +59,8 @@ type AcpRuntimeTurnAttachment = {
 };
 type AcpRuntimeTurnInput = {
   handle: AcpRuntimeHandle;
+  /** Live reconnect must confirm this retained canonical identity before a turn. Never persisted. */
+  expectedAgentSessionId?: string;
   text: string;
   attachments?: AcpRuntimeTurnAttachment[];
   mode: AcpRuntimePromptMode;
@@ -328,14 +334,18 @@ declare class AcpRuntimeManager {
     sessionKey: string;
     agent: string;
     mode: "persistent" | "oneshot";
+    expectedAgentSessionId?: string;
+    onExpectedAgentSessionRecord?: (record: SessionRecord) => void;
     cwd?: string;
     resumeSessionId?: string;
     sessionOptions?: SessionAgentOptions;
   }): Promise<SessionRecord>;
+  private confirmExpectedAgentSessionId;
   private createAndSaveRuntimeRecord;
   private keepPersistentClient;
   startTurn(input: {
     handle: AcpRuntimeHandle;
+    expectedAgentSessionId?: string;
     text: string;
     attachments?: AcpRuntimeTurnAttachment[];
     mode: AcpRuntimePromptMode;
@@ -368,6 +378,7 @@ declare class AcpRuntimeManager {
   private finalizeRuntimeTurnRecord;
   runTurn(input: {
     handle: AcpRuntimeHandle;
+    expectedAgentSessionId?: string;
     text: string;
     attachments?: AcpRuntimeTurnAttachment[];
     mode: AcpRuntimePromptMode;
@@ -433,6 +444,7 @@ declare class AcpxRuntime implements AcpxRuntimeLike {
   private healthy;
   private manager;
   private managerPromise;
+  private createExpectedAgentSessionIdHandle;
   constructor(options: AcpRuntimeOptions, testOptions?: {
     managerFactory?: (options: AcpRuntimeOptions) => AcpRuntimeManager;
     probeRunner?: (options: AcpRuntimeOptions) => Promise<{

@@ -19,7 +19,11 @@
 import { each, stream, until } from "effection";
 import type { Channel, Operation } from "effection";
 import type { AgentPromptCheckpoint, AgentPromptEvent, Session } from "@executablemd/core";
-import type { AcpRuntimeTurn, AcpRuntimeTurnResult } from "./acpx-runtime.ts";
+import type {
+  AcpRuntimeTurn,
+  AcpRuntimeTurnResult,
+  AcpRuntimeTurnResultError,
+} from "./acpx-runtime.ts";
 import { checkpointFromResult } from "./checkpoint.ts";
 
 export interface TurnIdentity {
@@ -52,6 +56,7 @@ export function* consumeTurn(
   markCompleted: () => void,
   refused?: TurnRefusal,
   checkpoint?: TurnCheckpoint,
+  failure?: (error: AcpRuntimeTurnResultError) => Error,
 ): Operation<void> {
   yield* channel.send({ type: "started", agent: identity.agent, session: identity.session });
   let text = "";
@@ -66,7 +71,7 @@ export function* consumeTurn(
       yield* each.next();
     }
     const result = yield* until(turn.result);
-    terminal = mapResult(result);
+    terminal = mapResult(result, failure);
     // Read from the result rather than from the mapped event: a turn ACP
     // reported as completed under a stop reason this host treats as a failure
     // is a failure here, and a failure names no turn.
@@ -95,7 +100,10 @@ export function* consumeTurn(
   yield* channel.close(text);
 }
 
-function mapResult(result: AcpRuntimeTurnResult): AgentPromptEvent {
+function mapResult(
+  result: AcpRuntimeTurnResult,
+  failure?: (error: AcpRuntimeTurnResultError) => Error,
+): AgentPromptEvent {
   if (result.status === "completed") {
     // ACP defines end_turn as the only successful stop reason. An absent
     // stop reason on a completed turn is treated as end_turn — some
@@ -118,6 +126,6 @@ function mapResult(result: AcpRuntimeTurnResult): AgentPromptEvent {
     }
     return terminal;
   }
-  const failure = new Error(result.error.message);
-  return { type: "terminal", status: "failed", error: failure };
+  const error = failure?.(result.error) ?? new Error(result.error.message);
+  return { type: "terminal", status: "failed", error };
 }

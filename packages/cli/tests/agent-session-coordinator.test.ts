@@ -34,22 +34,37 @@ import type { AgentSessionCoordinator } from "@executablemd/runtime";
 import {
   ADVERTISED_CLIENT_NATIVE_ATTACHMENT,
   ADVERTISED_NATIVE_LAUNCH,
+  ADVERTISED_PROVIDER_NATIVE_CONTINUATION,
+  admitsNativeCapability,
   createAcpxProvider,
   createDenoSessionRouteStore,
   createMemorySessionRouteStore,
 } from "@executablemd/acp";
-import type { AgentSessionRouteStore, NativeAdapter, NativeBinding } from "@executablemd/acp";
+import type {
+  AgentSessionRouteStore,
+  NativeAdapter,
+  NativeBinding,
+  NativeCapabilityHost,
+} from "@executablemd/acp";
 import type { ExecutableObserver } from "@executablemd/runtime";
 import type { NativeLaunchRequest } from "@executablemd/grid";
 import { createFakeObserver } from "../../acp/tests/helpers.ts";
 import {
   sessionCoordinatorRoot,
   useExecutableObserver,
+  unassembledMachineSessions,
   useMachineSessions,
   useSessionCoordinator,
 } from "../src/session-coordinator.ts";
 
 const SRC = join(dirname(fileURLToPath(import.meta.url)), "..", "src");
+
+/** The machine the shipped Claude admissions were proved on. */
+const PROVED_HOST: NativeCapabilityHost = { platform: "darwin", architecture: "arm64" };
+
+/** What the built-in Claude adapter is, and what its observer answers as. */
+const CLAUDE_PROTOCOL = "claude-client-native.v1";
+const CLAUDE_PROBE_PROFILE = "claude-help-native-session.v1";
 
 /** Whether this is the runtime that can take a kernel-released advisory lock. */
 function onDeno(): boolean {
@@ -191,6 +206,7 @@ function launchRequest(agent = "claude"): AgentLaunchRequest {
  */
 const PROVIDER_RETURNED: NativeAdapter = {
   launcher: "claude",
+  protocol: "claude-provider-returned.v1",
   identity: "provider-returned",
   resume: (nativeSessionId) => ["claude", "--resume", nativeSessionId],
 };
@@ -198,8 +214,18 @@ const PROVIDER_RETURNED: NativeAdapter = {
 /** The Claude-shaped build contract a client-allocated adapter carries. */
 const BINDING: NativeBinding = {
   command: "claude",
-  version: (output) => {
-    const line = output.trim();
+  metadata: [
+    { name: "help", args: ["--help"] },
+    { name: "version", args: ["--version"] },
+  ],
+  // Whatever the fake observer answered declares the shape this host proved,
+  // because the subject here is which host assembles a policy at all.
+  probe: () => ({
+    probeProfile: CLAUDE_PROBE_PROFILE,
+    capabilities: ["native-launch", "client-native-attachment"],
+  }),
+  reportedVersion: (metadata) => {
+    const line = (metadata.version?.stdout ?? "").trim();
     return /^\d+\.\d+\.\d+ \(Claude Code\)$/.test(line) ? line : undefined;
   },
   environment: (livePath) => ({ CLAUDE_CODE_EXECUTABLE: livePath }),
@@ -208,6 +234,7 @@ const BINDING: NativeBinding = {
 /** A Claude-shaped adapter that names its own sessions. */
 const CLIENT_ALLOCATED: NativeAdapter = {
   launcher: "claude",
+  protocol: CLAUDE_PROTOCOL,
   identity: "client-allocated",
   binding: BINDING,
   allocate: () => randomUUID(),
@@ -295,11 +322,18 @@ function* launchUnder(
         : {
             advertiseNativeLaunch: ["claude"],
             advertiseClientNativeAttachment: ["claude"],
+            advertiseProviderNativeContinuation: ["codex"],
             nativeAdapters: { claude: options.adapter ?? PROVIDER_RETURNED },
           }),
       ...(coordinator ? { coordinator } : {}),
       ...(options.routeStore ? { routeStore: options.routeStore } : {}),
       ...(options.observer ? { executableObserver: options.observer } : {}),
+      // The admissions this host states, for the machine they were proved on
+      // rather than the one running the suite: the subject is what a host
+      // assembles, and stating the policy as a value is how a host does it.
+      ...(useMachineSessions(PROVED_HOST).nativeCapabilityPolicy === undefined
+        ? {}
+        : { nativeCapabilityPolicy: useMachineSessions(PROVED_HOST).nativeCapabilityPolicy }),
     });
     yield* factory(
       { defaultAgent: agent, permissionMode: "deny-all" },
@@ -424,11 +458,10 @@ describe("Tier HC — host session ownership", () => {
     expect(counted.operations).toEqual([]);
   });
 
-  it("HC8: the shipped default advertises claude, and Codex stays off it", function* () {
+  it("HC8: the shipped default advertises Claude and Codex", function* () {
     // What a host actually assembles. A case that injected an advertisement
     // would prove the mechanism and say nothing about what ships.
-    expect([...ADVERTISED_NATIVE_LAUNCH]).toEqual(["claude"]);
-    expect(ADVERTISED_NATIVE_LAUNCH).not.toContain("codex");
+    expect([...ADVERTISED_NATIVE_LAUNCH]).toEqual(["claude", "codex"]);
   });
 
   it("HC9: a default Claude launch reaches the launcher here, and refuses elsewhere", function* () {
@@ -500,11 +533,10 @@ describe("Tier HC — host session ownership", () => {
   });
 
   it("HC10: an unadvertised agent keeps ordinary behavior on every runtime", function* () {
-    // Codex has a command shape and no advertisement, so nothing about session
-    // ownership applies to it — including on the host that could have owned it.
+    // An agent with no native advertisement needs no machine-session assembly.
     const records: LaunchRecord[] = [];
     const probe: RuntimeProbe = { ensures: 0, closes: 0, doctors: 0, runtimes: 0 };
-    yield* launchUnder(undefined, records, probe, { defaults: true, agent: "codex" });
+    yield* launchUnder(undefined, records, probe, { defaults: true, agent: "gemini" });
 
     const failure = records.find((record) => record.failure)?.failure;
     expect(failure?.class).toBe("unsupported-capability");
@@ -513,7 +545,14 @@ describe("Tier HC — host session ownership", () => {
 
   it("HC5: the Deno and compiled entrypoints assemble machine sessions; Node and Bun do not", function* () {
     for (const name of ["deno.ts", "compiled.ts"]) {
-      expect((yield* entrypoint(name)).includes("useMachineSessions()")).toBe(true);
+      // The machine crosses from the entrypoint as values. Shared assembly is
+      // handed the pair rather than reading it, so the one place that is
+      // actually running on this host is the one place that says so.
+      expect(
+        (yield* entrypoint(name)).includes(
+          "useMachineSessions({ platform: process.platform, architecture: process.arch })",
+        ),
+      ).toBe(true);
     }
     for (const name of ["node.ts", "bun.ts"]) {
       const source = yield* entrypoint(name);
@@ -548,19 +587,100 @@ describe("Tier HC — host session ownership", () => {
     expect(probe.ensures).toBe(0);
   });
 
-  it("HC12: the two advertised sets are separate, and this host states both", function* () {
+  it("HC12: the three advertised sets are separate, and this host states each", function* () {
     // What a host actually assembles. Native launch and ACP attachment are
     // different proofs, so they are different lists — and the ordinary profile
     // says which adapters it has proven for each rather than inheriting either.
-    expect([...ADVERTISED_NATIVE_LAUNCH]).toEqual(["claude"]);
+    expect([...ADVERTISED_NATIVE_LAUNCH]).toEqual(["claude", "codex"]);
     expect([...ADVERTISED_CLIENT_NATIVE_ATTACHMENT]).toEqual(["claude"]);
-    const assembly = useMachineSessions();
-    expect([...assembly.advertiseNativeLaunch]).toEqual(["claude"]);
+    expect([...ADVERTISED_PROVIDER_NATIVE_CONTINUATION]).toEqual(["codex"]);
+    const assembly = useMachineSessions(PROVED_HOST);
+    expect([...assembly.advertiseNativeLaunch]).toEqual(["claude", "codex"]);
     expect([...assembly.advertiseClientNativeAttachment]).toEqual(["claude"]);
+    expect([...assembly.advertiseProviderNativeContinuation]).toEqual(["codex"]);
     // Built from the same trusted root as the coordinator beside it.
     expect(assembly.coordinator === undefined).toBe(!onDeno());
     expect(assembly.routeStore === undefined).toBe(!onDeno());
     expect(assembly.executableObserver === undefined).toBe(!onDeno());
     expect(useExecutableObserver() === undefined).toBe(!onDeno());
+  });
+
+  it("HC13: the machine an assembly admits for is the one it was handed", function* () {
+    // A name is a selection; an admission is the proof. The assembly states the
+    // proved admissions beside the observer, and the machine they are proved
+    // for arrives as a value, so the same shared code admits nothing on a host
+    // it was never proved against.
+    const proved = useMachineSessions(PROVED_HOST).nativeCapabilityPolicy;
+    expect(proved?.host).toEqual(PROVED_HOST);
+    expect(proved?.admissions).toEqual([
+      {
+        adapterProtocol: CLAUDE_PROTOCOL,
+        capability: "native-launch",
+        probeProfile: CLAUDE_PROBE_PROFILE,
+        ...PROVED_HOST,
+      },
+      {
+        adapterProtocol: CLAUDE_PROTOCOL,
+        capability: "client-native-attachment",
+        probeProfile: CLAUDE_PROBE_PROFILE,
+        ...PROVED_HOST,
+      },
+      {
+        adapterProtocol: "codex-provider-returned.v1",
+        capability: "native-launch",
+        probeProfile: "codex-help-native-session.v1",
+        ...PROVED_HOST,
+      },
+      {
+        adapterProtocol: "codex-provider-returned.v1",
+        capability: "provider-native-continuation",
+        probeProfile: "codex-help-native-session.v1",
+        ...PROVED_HOST,
+      },
+    ]);
+    // No Claude Code version appears anywhere in what this host proved: which
+    // build ran is a fact about a route, not a term of admission.
+    expect(JSON.stringify(proved)).not.toContain("Claude Code");
+    const claudeLaunch = {
+      adapterProtocol: CLAUDE_PROTOCOL,
+      capability: "native-launch",
+      probeProfile: CLAUDE_PROBE_PROFILE,
+    } as const;
+    expect(admitsNativeCapability(proved, claudeLaunch)).toBe(true);
+    // The Agent name is not what is matched. A different adapter answering for
+    // the same registry name is a different protocol, and nothing proved it.
+    expect(
+      admitsNativeCapability(proved, { ...claudeLaunch, adapterProtocol: "claude-fork.v1" }),
+    ).toBe(false);
+    // Nor is the declaration: a build that answered a profile this host never
+    // proved is a shape nobody has evidence for.
+    expect(
+      admitsNativeCapability(proved, { ...claudeLaunch, probeProfile: "claude-help-native.v2" }),
+    ).toBe(false);
+    for (const elsewhere of [
+      { platform: "linux", architecture: "arm64" },
+      { platform: "darwin", architecture: "x64" },
+    ]) {
+      expect(
+        admitsNativeCapability(useMachineSessions(elsewhere).nativeCapabilityPolicy, claudeLaunch),
+      ).toBe(false);
+    }
+    // Node and Bun keep the coarse names and assemble no authority, so the
+    // advertised name reaches a question this profile answers with a refusal.
+    const unassembled = unassembledMachineSessions();
+    expect([...unassembled.advertiseNativeLaunch]).toEqual(["claude", "codex"]);
+    expect([...unassembled.advertiseProviderNativeContinuation]).toEqual(["codex"]);
+    expect(unassembled.nativeCapabilityPolicy).toBe(undefined);
+    expect(admitsNativeCapability(unassembled.nativeCapabilityPolicy, claudeLaunch)).toBe(false);
+    // Shared assembly is handed the machine rather than reading it: only the
+    // entrypoints checked in HC5 name the running runtime.
+    expect((yield* entrypoint("session-coordinator.ts")).includes("process.platform")).toBe(false);
+    // The workflow profile advertises neither capability and states no policy,
+    // so a workflow Claude prompt never reaches this question at all.
+    const workflow = yield* entrypoint("workflow-agent.ts");
+    expect(workflow.includes("advertiseNativeLaunch: [],")).toBe(true);
+    expect(workflow.includes("advertiseClientNativeAttachment: [],")).toBe(true);
+    expect(workflow.includes("advertiseProviderNativeContinuation: [],")).toBe(true);
+    expect(workflow.includes("nativeCapabilityPolicy")).toBe(false);
   });
 });

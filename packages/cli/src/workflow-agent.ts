@@ -437,6 +437,7 @@ export function* useWorkflowAgentProfile(options: WorkflowAgentProfileOptions): 
     // ownership and a route that this profile has no way to give it.
     advertiseNativeLaunch: [],
     advertiseClientNativeAttachment: [],
+    advertiseProviderNativeContinuation: [],
     // The Workspace root is a logical path, not a directory an agent process
     // could stand in. This host answers with one it owns and empties, and
     // creates it the first time anything asks — a run whose document never

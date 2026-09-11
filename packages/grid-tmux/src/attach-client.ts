@@ -142,8 +142,7 @@ export function useAttachClient(options: {
     // Named, and removed by this scope. `exit` stays through the wait that
     // establishes the client is gone, which is exactly why it is removed with
     // the resource rather than after one delivery.
-    // One of the two arrives, and whichever does takes both off. `exit` stays:
-    // establishing this client is gone is what waits on it.
+    // One of the startup pair arrives, and whichever does takes both off.
     const settleStartup = (): void => {
       child?.off("spawn", onSpawn);
       child?.off("error", onError);
@@ -162,13 +161,17 @@ export function useAttachClient(options: {
       gone = true;
       exited.resolve();
     };
+    // Established before the subscriptions and naming every one of them:
+    // entering an ensure() is itself a suspension, so a scope halted while it
+    // registers unwinds with nothing on it at all.
+    yield* ensure(() => {
+      child?.off("spawn", onSpawn);
+      child?.off("error", onError);
+      child?.off("exit", onExit);
+    });
     child.on("spawn", onSpawn);
     child.on("error", onError);
     child.on("exit", onExit);
-    yield* ensure(() => {
-      settleStartup();
-      child?.off("exit", onExit);
-    });
 
     // The pid, or whatever arrived instead of a start.
     const pid = yield* race([started.operation, failed.operation]);

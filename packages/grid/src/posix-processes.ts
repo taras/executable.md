@@ -211,7 +211,8 @@ function readRow(line: string): ProcessFacts | undefined {
     pid: Number(pid),
     ppid: Number(ppid),
     pgid: Number(pgid),
-    tty,
+    // Linux ps uses `?`; the process interface's no-terminal marker is `??`.
+    tty: tty === "?" ? "??" : tty,
     tpgid: Number(tpgid),
     command,
   };

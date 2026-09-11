@@ -24,6 +24,7 @@ import type {
   AgentSessionOwner,
   AgentSessionOwnerKind,
   AgentSessionOwnership,
+  ExecutableMetadataObservation,
   ExecutableObserver,
   ExecutableRefusal,
 } from "@executablemd/runtime";
@@ -190,17 +191,57 @@ export interface FakeRuntimeHarness {
   script(turn: ScriptedTurn): void;
 }
 
+/** One query's answer, in the shape a real observation produces. */
+export function answered(stdout: string): ExecutableMetadataObservation {
+  return { settled: true, code: 0, stdout, stderr: "" };
+}
+
+/** The three declarations native launch is observed from, as Claude spells them. */
+export const CLAUDE_HELP_DECLARATIONS = {
+  sessionId: "  --session-id <uuid>              Use a specific session ID for the conversation",
+  resume: "  -r, --resume [sessionId]        Resume a conversation",
+  privateFile: "  --system-prompt-file <file>     Load the system prompt from a file",
+} as const;
+
+/**
+ * A Commander-shaped Claude help surface.
+ *
+ * Written out rather than captured, because what the probe reads is the shape
+ * of the declarations rather than any wording: a scenario varies exactly one of
+ * them, and everything a real build also prints is noise the answer must
+ * survive.
+ */
+export function claudeHelp(options?: {
+  product?: string;
+  usage?: string;
+  declarations?: readonly string[];
+  extra?: readonly string[];
+}): string {
+  return [
+    options?.product ?? "Claude Code - starts an interactive session by default",
+    "",
+    options?.usage ?? "Usage: claude [options] [command] [prompt]",
+    "",
+    "Options:",
+    ...(options?.declarations ?? Object.values(CLAUDE_HELP_DECLARATIONS)),
+    ...(options?.extra ?? []),
+    "",
+  ].join("\n");
+}
+
 /** One controlled build, as an observer would report it. */
 export interface FakeObservation {
   path: string;
   digest: string;
-  versionOutput: string;
+  metadata: Record<string, ExecutableMetadataObservation>;
 }
 
 export interface FakeObserverHarness {
   observer: ExecutableObserver;
   /** Every command this observer was asked about, in order. */
   observed: string[];
+  /** Every metadata query it was asked to run, as `name argv…`, in order. */
+  queried: string[];
   /** What the next observation answers, or the failure it raises. */
   observation: FakeObservation;
   /** Answers taken in order before `observation`, so a build can change. */
@@ -214,22 +255,31 @@ export interface FakeObserverHarness {
  * The whole seam is replaced, exactly as a trusted host supplies the whole
  * thing: nothing inside the observer is made replaceable to be testable, so
  * drift is expressed by answering differently rather than by a control the
- * production path also has.
+ * production path also has. The answers are what a build declared, so the
+ * adapter's own probe reads them — a scenario removes a declaration rather
+ * than removing the capability it implies.
  */
 export function createFakeObserver(observation?: Partial<FakeObservation>): FakeObserverHarness {
   const harness: FakeObserverHarness = {
     observed: [],
+    queried: [],
     queued: [],
     observation: {
       path: "/opt/builds/claude",
       digest: "a".repeat(64),
-      versionOutput: "2.1.241 (Claude Code)\n",
+      metadata: {
+        help: answered(claudeHelp()),
+        version: answered("2.1.241 (Claude Code)\n"),
+      },
       ...observation,
     },
     observer: {
       // deno-lint-ignore require-yield
-      *observe(command) {
+      *observe(command, options) {
         harness.observed.push(command);
+        for (const query of options?.metadata ?? []) {
+          harness.queried.push([query.name, ...query.args].join(" "));
+        }
         if (harness.failure) {
           throw new ExecutableObservationError(`${command} could not be observed`, {
             refusal: harness.failure,
@@ -239,7 +289,7 @@ export function createFakeObserver(observation?: Partial<FakeObservation>): Fake
         return {
           path: answer.path,
           digest: { algorithm: "sha256", value: answer.digest },
-          versionOutput: answer.versionOutput,
+          metadata: answer.metadata,
         };
       },
     },

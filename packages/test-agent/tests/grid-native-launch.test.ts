@@ -26,6 +26,7 @@ import { copyFile, ensureDir, rm, writeTextFile } from "@effectionx/fs";
 import { randomUUID } from "node:crypto";
 import * as os from "node:os";
 import * as path from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   agentIdentityComponents,
   installAgentComponents,
@@ -35,7 +36,7 @@ import {
 import { executeInstalled } from "@executablemd/core/host";
 import type { Json } from "@executablemd/core";
 import { API, useHostFiles } from "@executablemd/runtime";
-import { registerGridProvider, Grids } from "@executablemd/grid";
+import { registerGridProvider, reserveTerminal, Grids } from "@executablemd/grid";
 import {
   installControlledLauncher,
   prepareControlledComposite,
@@ -56,8 +57,39 @@ import { useTesting } from "@executablemd/testing";
 import type { TestResult } from "@executablemd/testing";
 import { useCommand } from "./command.ts";
 import { cliBase } from "@executablemd/test-support/launch";
+import { createAcpxProvider } from "../../acp/src/provider.ts";
+import { nativeCapabilityPolicy } from "../../acp/src/native-launch.ts";
+import { createMemorySessionRouteStore } from "../../acp/src/session-route.ts";
+import {
+  answered,
+  createFakeObserver,
+  createFakeRuntime,
+  makeCoordinator,
+  makeRegistry,
+  makeStore,
+  useFlatWorld,
+} from "../../acp/tests/helpers.ts";
 
-const WORKER = cliBase();
+// Each reconnect starts the real worker without loading unrelated CLI commands.
+// Public CLI dispatch remains covered by smoke TG1 and worker-lifecycle tests.
+const WORKER = [
+  ...cliBase().slice(0, -1),
+  fileURLToPath(new URL("./fixtures/terminal-grid-worker.ts", import.meta.url)),
+];
+
+const MIXED_GRID = [
+  "<Grid columns={2}>",
+  '<Pane title="Claude"><Agent name="claude">',
+  '<Session.Launch session="mixed-claude">Keep the Claude instructions.</Session.Launch>',
+  "</Agent></Pane>",
+  '<Pane title="Codex"><Agent name="codex">',
+  '<Session.Launch session="mixed-codex">Keep the Codex instructions.</Session.Launch>',
+  "</Agent></Pane>",
+  "</Grid>",
+  "",
+  "AFTER_MIXED_GRID",
+  "",
+].join("\n");
 
 /** The checked-in journey, and the directory its `src=` paths resolve against. */
 const JOURNEY = path.resolve("packages/test-agent/src/GridNativeLaunch.test.md");
@@ -510,6 +542,282 @@ const ONE_PANE = [
   "",
 ].join("\n");
 
+/**
+ * TG22 crosses the real ACP provider, without TestAgent's nearer launcher.
+ * Workers are controlled endpoints here; authenticated transport belongs to TG20.
+ */
+describe("Tier TG22 — mixed native providers", () => {
+  beforeAll(() => useTempFileCompiler());
+
+  it("TG22: materialization, native readiness and reader-close cleanup stay independent", function* () {
+    const dir = path.join(os.tmpdir(), `xmd-tg22-${randomUUID()}`);
+    yield* ensure(() => rm(dir, { recursive: true, force: true }));
+    yield* ensureDir(dir);
+    const docPath = path.join(dir, "mixed.md");
+    yield* writeTextFile(docPath, MIXED_GRID);
+
+    const runtime = createFakeRuntime();
+    runtime.script({ manual: true, manualAcceptance: true });
+    const coordinator = makeCoordinator();
+    const claude = createFakeObserver({ path: "/controlled/claude" });
+    const codex = createFakeObserver({
+      path: "/controlled/codex",
+      digest: "c".repeat(64),
+      metadata: {
+        help: answered(
+          "Codex CLI\nUsage: codex [OPTIONS] [PROMPT]\n\nCommands:\n  resume  Resume an existing conversation\n",
+        ),
+        "resume-help": answered(
+          "Usage: codex resume [OPTIONS] [SESSION_ID] [PROMPT]\n\nArguments:\n  [SESSION_ID]  Conversation ID (UUID)\n  [PROMPT]      Optional prompt\n",
+        ),
+        version: answered("codex-cli 0.153.2\n"),
+      },
+    });
+    const stream = new InMemoryStream();
+    const log = gridProviderLog();
+    const rootLaunches: NativeLaunchRequest[] = [];
+    const endpoints: { ordinal: number; request: NativeLaunchRequest }[] = [];
+    const starts: number[] = [];
+    const gone: number[] = [];
+    const cleaning: number[] = [];
+    const states: string[] = [];
+    const claudeEntered = withResolvers<void>();
+    const bothEntered = withResolvers<void>();
+    const attached = withResolvers<void>();
+    const readerClose = withResolvers<void>();
+    const bothCleaning = withResolvers<void>();
+    const releaseCleanup = withResolvers<void>();
+    let destroyed = 0;
+    let following = false;
+    let liveChildren = 0;
+    let childrenAtDestroy: number[] = [];
+    let ownersIdleAtDestroy = 0;
+
+    yield* useHostFiles();
+    yield* useFlatWorld(dir);
+    yield* installControlledLauncher({
+      record(request) {
+        rootLaunches.push(request);
+        throw new Error("a mixed-grid launch reached the root terminal");
+      },
+    });
+    yield* registerGridProvider("mixed-controlled", function* (_settings, authority) {
+      yield* Grids.around(
+        {
+          *open([request]) {
+            const composite = yield* prepareControlledComposite(request, {
+              log,
+              close: () => readerClose.operation,
+              *onAttach() {
+                expect([...starts].sort()).toEqual([0, 1]);
+                expect(runtime.turns.length).toBe(1);
+                expect(runtime.closeCalls.length).toBe(1);
+                const retained = launchRecords(yield* stream.readAll());
+                expect(
+                  retained.filter((entry) => entry.name.endsWith("/materialized")).length,
+                ).toBe(1);
+                attached.resolve();
+              },
+              *onDestroy() {
+                childrenAtDestroy = [...gone];
+                ownersIdleAtDestroy = coordinator.events.filter(
+                  (event) => event === "released-idle",
+                ).length;
+                destroyed++;
+              },
+              onUpdate(ordinal, state) {
+                states.push(`${ordinal}:${state}`);
+              },
+              *launch(ordinal, request, spawned) {
+                endpoints.push({ ordinal, request });
+                if (ordinal === 0) {
+                  claudeEntered.resolve();
+                } else {
+                  // A completed model turn is not a native start. Its durable
+                  // result and detached handle must already exist at this edge.
+                  const retained = launchRecords(yield* stream.readAll());
+                  expect(
+                    retained.filter((entry) => entry.name.endsWith("/materialized")).length,
+                  ).toBe(1);
+                  expect(runtime.closeCalls.length).toBe(1);
+                }
+                if (endpoints.length === 2) {
+                  bothEntered.resolve();
+                }
+                // A serialized pair cannot satisfy this from either endpoint.
+                yield* bothEntered.operation;
+                yield* ensure(function* () {
+                  cleaning.push(ordinal);
+                  if (cleaning.length === 2) {
+                    bothCleaning.resolve();
+                  }
+                  yield* releaseCleanup.operation;
+                  gone.push(ordinal);
+                  liveChildren--;
+                });
+                liveChildren++;
+                starts.push(ordinal);
+                spawned();
+                yield* suspend();
+                return { exitCode: 0 };
+              },
+            });
+            yield* authority.present(request, composite);
+            return undefined;
+          },
+        },
+        { at: "min" },
+      );
+    });
+    yield* installGridProfile({ provider: "mixed-controlled" });
+    yield* installAgentComponents({
+      rootProvider: {
+        factory: createAcpxProvider({
+          createRuntime: runtime.create,
+          sessionStore: makeStore(),
+          agentRegistry: makeRegistry({ claude: "claude-acp", codex: "codex-acp" }),
+          coordinator: coordinator.coordinator,
+          routeStore: createMemorySessionRouteStore(),
+          advertiseNativeLaunch: ["claude", "codex"],
+          advertiseClientNativeAttachment: ["claude"],
+          advertiseProviderNativeContinuation: ["codex"],
+          nativeCapabilityPolicy: nativeCapabilityPolicy({
+            platform: "darwin",
+            architecture: "arm64",
+          }),
+          executableObserver: {
+            observe(command, options) {
+              return (command === "codex" ? codex : claude).observer.observe(command, options);
+            },
+          },
+        }),
+        options: { defaultAgent: "claude", permissionMode: "deny-all" },
+      },
+    });
+
+    const execution = yield* executeInstalled({ path: docPath, stream }, [
+      { components: agentIdentityComponents() },
+    ]);
+    const draining = yield* spawn(function* () {
+      const output = yield* execution.output;
+      let next = yield* output.next();
+      while (!next.done) {
+        next = yield* output.next();
+      }
+      following = next.value.includes("AFTER_MIXED_GRID");
+      const outcome = yield* execution;
+      if (!outcome.ok) {
+        throw outcome.error;
+      }
+      return outcome;
+    });
+
+    try {
+      yield* runtime.startedTurns(1);
+      yield* claudeEntered.operation;
+      expect(endpoints.map((entry) => entry.ordinal)).toEqual([0]);
+      expect(starts).toEqual([]);
+      expect(log.events).not.toContain("attach:0");
+      expect(runtime.ensureCalls.map((call) => call.agent)).toEqual(["codex"]);
+      expect(runtime.turns.length).toBe(1);
+      const materialization = runtime.turns[0];
+      expect(materialization.input.text).toBe(
+        "This turn only makes the Codex conversation resumable. Do not perform the prepared " +
+          "task, inspect or modify files, call tools, or take any external action. Reply with a " +
+          "brief acknowledgement only.",
+      );
+      expect(materialization.input.mode).toBe("prompt");
+      expect(materialization.input.attachments).toBeUndefined();
+      expect(runtime.closeCalls).toEqual([]);
+      materialization.accept();
+      materialization.finish([{ type: "text_delta", text: "Acknowledged.", stream: "output" }], {
+        status: "completed",
+        stopReason: "end_turn",
+        _meta: { codex: { turnId: "tg22-turn" } },
+      });
+
+      yield* attached.operation;
+      expect(endpoints.map((entry) => [entry.ordinal, entry.request.command[0]])).toEqual([
+        [0, "/controlled/claude"],
+        [1, "/controlled/codex"],
+      ]);
+      expect(liveChildren).toBe(2);
+      expect(log.live.launches).toBe(2);
+      expect(rootLaunches).toEqual([]);
+      expect(log.shown.get(1)).toContain("codex-materialization.v1");
+      expect(log.shown.get(0) ?? "").not.toContain("codex-materialization.v1");
+      readerClose.resolve();
+      yield* bothCleaning.operation;
+      expect(gone).toEqual([]);
+      expect(destroyed).toBe(0);
+      expect(following).toBe(false);
+      expect(liveChildren).toBe(2);
+      let rootHeld = false;
+      try {
+        yield* scoped(() => reserveTerminal());
+      } catch {
+        rootHeld = true;
+      }
+      expect(rootHeld).toBe(true);
+      const busyKeys = coordinator.acquisitions
+        .filter((entry) => entry.kind === "native-launch")
+        .map((entry) => entry.key);
+      expect(busyKeys.length).toBe(2);
+      for (const key of busyKeys) {
+        const held = yield* coordinator.coordinator.coordinate(
+          key,
+          { kind: "session", operationId: randomUUID() },
+          function* () {
+            throw new Error("session ownership was released before native cleanup");
+          },
+        );
+        expect(held.ok).toBe(false);
+      }
+      releaseCleanup.resolve();
+    } finally {
+      readerClose.resolve();
+      releaseCleanup.resolve();
+    }
+
+    const result = yield* draining;
+    expect(result.ok).toBe(true);
+    expect(following).toBe(true);
+    expect(destroyed).toBe(1);
+    expect([...childrenAtDestroy].sort()).toEqual([0, 1]);
+    expect(ownersIdleAtDestroy).toBe(2);
+    expect(liveChildren).toBe(0);
+    expect(log.live).toEqual({ composites: 0, attached: 0, shells: 0, launches: 0 });
+    expect(rootLaunches).toEqual([]);
+    expect(states.filter((state) => state.endsWith(":failed"))).toEqual([]);
+    expect(new Set(states.filter((state) => state.endsWith(":closed")))).toEqual(
+      new Set(["0:closed", "1:closed"]),
+    );
+    expect(runtime.handleIds.length).toBe(1);
+    expect(runtime.closeCalls.map((handle) => handle.runtimeSessionName)).toEqual(
+      runtime.handleIds,
+    );
+    expect(runtime.turns.length).toBe(1);
+    expect(coordinator.events.filter((event) => event === "released-active")).toEqual([]);
+    const keys = coordinator.acquisitions
+      .filter((entry) => entry.kind === "native-launch")
+      .map((entry) => entry.key);
+    expect(keys.length).toBe(2);
+    for (const key of keys) {
+      const owned = yield* coordinator.coordinator.coordinate(
+        key,
+        { kind: "session", operationId: randomUUID() },
+        function* (ownership) {
+          ownership.quiesced();
+        },
+      );
+      expect(owned.ok).toBe(true);
+    }
+    for (let attempt = 0; attempt < 2; attempt++) {
+      yield* scoped(() => reserveTerminal());
+    }
+  });
+});
+
 describe(
   "Tier GN — native sessions in terminal panes",
   { sanitizeOps: false, sanitizeResources: false },
@@ -562,6 +870,8 @@ describe(
 
     it("GN2: no pane identity reaches the launch request or the retained record", function* () {
       const run = yield* runJourney();
+      expect(run.result.ok ? "" : run.result.error.message).toBe("");
+      expect(run.results.map((result) => result.status)).toEqual(["pass"]);
 
       // The launch's own surfaces: what the provider was asked to start, and
       // what the launch retained. The grid's layout record is a different thing

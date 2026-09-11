@@ -37,6 +37,8 @@ export interface ControlledLauncherOptions {
   start?: (request: NativeLaunchRequest, spawned: () => void) => Operation<void>;
   onReserve?: () => void;
   onFlush?: () => void;
+  /** Each line the launch addressed to the terminal, in the order it said them. */
+  onNotify?: (text: string) => void;
 }
 
 export function* installControlledLauncher(
@@ -65,6 +67,10 @@ export function* installControlledLauncher(
       // deno-lint-ignore require-yield
       *flush() {
         options.onFlush?.();
+      },
+      // deno-lint-ignore require-yield
+      *notify([text]) {
+        options.onNotify?.(text);
       },
       *launch([request, spawned]) {
         options.record?.(request);

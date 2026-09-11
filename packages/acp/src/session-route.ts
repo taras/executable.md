@@ -64,9 +64,20 @@ export type AgentSessionRouteV1 =
  * The exact V2 record, which exists only for `client-native`.
  *
  * V2 adds the one fact V1 never had: which build of the provider executable
- * accepted the identity XMD chose. That fact is what lets a later ACP
- * attachment know it is talking to the same build the native UI is in, so it
- * is required rather than optional here.
+ * accepted the identity XMD chose. Required rather than optional, because it is
+ * what makes this record a complete account of that publication — audit
+ * evidence, and the thing a prepared journal derived from it must still agree
+ * with exactly. It is never compared with a build observed later: a release
+ * that changed under the same launcher continues this session once it is
+ * admitted on its own, and one that no longer implements the operation is
+ * refused even if it is byte-for-byte the build that opened it.
+ *
+ * What this record does fix is the protocol. The exact provider, agent and
+ * launcher contract it carries names the stable native protocol its identity
+ * was published under, and no member here can be reinterpreted by whatever is
+ * installed under that launcher afterwards. A different protocol needs a route
+ * contract that names it; there is no migration, and this record is never
+ * rewritten into one.
  *
  * There is no V2 `acp-first`. ACP-first construction gained no fact, so a
  * second schema for it would be a version number with nothing behind it.
@@ -88,8 +99,22 @@ export interface AgentSessionRouteV2 {
   executableBinding: ExecutableBuildBindingV1;
 }
 
+/**
+ * V3 fixes the Codex provider-returned construction protocol. Its original
+ * binding stays audit evidence even when a later compatible executable resumes
+ * the conversation. Provider identity is asserted later and never belongs here.
+ */
+export interface AgentSessionRouteV3 {
+  schema: "session-route.v3";
+  route: "acp-first";
+  provider: string;
+  agent: string;
+  sessionKey: string;
+  executableBinding: ExecutableBuildBindingV1;
+}
+
 /** Every route form this build accepts. */
-export type AgentSessionRoute = AgentSessionRouteV1 | AgentSessionRouteV2;
+export type AgentSessionRoute = AgentSessionRouteV1 | AgentSessionRouteV2 | AgentSessionRouteV3;
 
 /** Why a route could not be used. Never carries a path or provider-private state. */
 export class AgentSessionRouteError extends Error {
@@ -105,7 +130,18 @@ const CLIENT_NATIVE_MEMBERS = [
   "launcher",
 ];
 const BOUND_CLIENT_NATIVE_MEMBERS = [...CLIENT_NATIVE_MEMBERS, "executableBinding"];
-const BINDING_MEMBERS = ["schema", "reportedVersion", "executableDigest"];
+const BOUND_ACP_FIRST_MEMBERS = [...ACP_FIRST_MEMBERS, "executableBinding"];
+const BINDING_MEMBERS = ["schema", "executableDigest"];
+/**
+ * The one member a binding may omit.
+ *
+ * Separate from the required set rather than merged into it, because a binding
+ * is compared for equality: an unexpected member is still a fact the writer
+ * thought was part of the build's identity, and reading past it would call two
+ * different builds the same one. Omitting this one is not an unexpected member
+ * — it is the record saying the build reported no version it recognized.
+ */
+const BINDING_OPTIONAL_MEMBERS = ["reportedVersion"];
 const DIGEST_MEMBERS = ["algorithm", "value"];
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -115,6 +151,18 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function exactly(value: Record<string, unknown>, members: readonly string[]): boolean {
   const keys = Object.keys(value);
   return keys.length === members.length && keys.every((key) => members.includes(key));
+}
+
+function declared(
+  value: Record<string, unknown>,
+  required: readonly string[],
+  optional: readonly string[],
+): boolean {
+  const keys = Object.keys(value);
+  return (
+    required.every((member) => keys.includes(member)) &&
+    keys.every((key) => required.includes(key) || optional.includes(key))
+  );
 }
 
 /**
@@ -129,21 +177,26 @@ function exactly(value: Record<string, unknown>, members: readonly string[]): bo
 /**
  * Read a retained build binding strictly.
  *
- * The member set is exact rather than minimal, because a binding is compared
- * for equality: a member this build ignores is a fact the writer thought was
- * part of the build's identity, and comparing without it would call two
- * different builds the same one.
+ * The digest is required and exact — it is what names the build this record
+ * describes. Reading it strictly is not a gate on the executable installed now:
+ * this account is audit evidence, and the only thing it is ever held to is the
+ * prepared journal derived from the same observation. A present
+ * `reportedVersion` must still be a real one: a member written as an empty
+ * string is a claim about a release nobody can reproduce, which is not the same
+ * as having made no claim.
  */
 function parseExecutableBinding(value: unknown): ExecutableBuildBindingV1 | undefined {
-  if (!isRecord(value) || !exactly(value, BINDING_MEMBERS)) {
+  if (!isRecord(value) || !declared(value, BINDING_MEMBERS, BINDING_OPTIONAL_MEMBERS)) {
     return undefined;
   }
   const { schema, reportedVersion, executableDigest } = value;
   if (schema !== "executable-build.v1") {
     return undefined;
   }
-  if (typeof reportedVersion !== "string" || reportedVersion.length === 0) {
-    return undefined;
+  if (reportedVersion !== undefined) {
+    if (typeof reportedVersion !== "string" || reportedVersion.length === 0) {
+      return undefined;
+    }
   }
   if (!isRecord(executableDigest) || !exactly(executableDigest, DIGEST_MEMBERS)) {
     return undefined;
@@ -154,7 +207,7 @@ function parseExecutableBinding(value: unknown): ExecutableBuildBindingV1 | unde
   }
   return {
     schema: "executable-build.v1",
-    reportedVersion,
+    ...(reportedVersion === undefined ? {} : { reportedVersion }),
     executableDigest: { algorithm: "sha256", value: digest },
   };
 }
@@ -163,10 +216,15 @@ export function parseAgentSessionRoute(value: unknown): AgentSessionRoute | unde
   if (!isRecord(value)) {
     return undefined;
   }
-  const bound = value.schema === "session-route.v2";
-  if (!bound && value.schema !== "session-route.v1") {
+  const { schema } = value;
+  if (
+    schema !== "session-route.v1" &&
+    schema !== "session-route.v2" &&
+    schema !== "session-route.v3"
+  ) {
     return undefined;
   }
+  const bound = schema === "session-route.v2";
   const { provider, agent, sessionKey } = value;
   if (typeof provider !== "string" || provider.length === 0) {
     return undefined;
@@ -178,11 +236,21 @@ export function parseAgentSessionRoute(value: unknown): AgentSessionRoute | unde
     return undefined;
   }
   if (value.route === "acp-first") {
-    // There is no bound ACP-first form, so a V2 record claiming one is state
-    // this build cannot account for rather than a route with a spare member.
-    return !bound && exactly(value, ACP_FIRST_MEMBERS)
-      ? { schema: "session-route.v1", route: "acp-first", provider, agent, sessionKey }
+    if (schema === "session-route.v1") {
+      return exactly(value, ACP_FIRST_MEMBERS)
+        ? { schema, route: "acp-first", provider, agent, sessionKey }
+        : undefined;
+    }
+    if (schema !== "session-route.v3" || !exactly(value, BOUND_ACP_FIRST_MEMBERS)) {
+      return undefined;
+    }
+    const executableBinding = parseExecutableBinding(value.executableBinding);
+    return executableBinding
+      ? { schema, route: "acp-first", provider, agent, sessionKey, executableBinding }
       : undefined;
+  }
+  if (schema === "session-route.v3") {
+    return undefined;
   }
   const members = bound ? BOUND_CLIENT_NATIVE_MEMBERS : CLIENT_NATIVE_MEMBERS;
   if (value.route !== "client-native" || !exactly(value, members)) {
@@ -247,10 +315,12 @@ export function serializeAgentSessionRoute(route: AgentSessionRoute): string {
     payload.instructionsDigest = route.instructionsDigest;
     payload.launcher = route.launcher;
   }
-  if (route.schema === "session-route.v2") {
+  if (route.schema === "session-route.v2" || route.schema === "session-route.v3") {
     payload.executableBinding = {
       schema: route.executableBinding.schema,
-      reportedVersion: route.executableBinding.reportedVersion,
+      ...(route.executableBinding.reportedVersion === undefined
+        ? {}
+        : { reportedVersion: route.executableBinding.reportedVersion }),
       executableDigest: {
         algorithm: route.executableBinding.executableDigest.algorithm,
         value: route.executableBinding.executableDigest.value,

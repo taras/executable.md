@@ -168,15 +168,19 @@ export function usePaneChild(
       exited.resolve(settled);
     };
     observe?.(child);
+    // Established before the subscriptions and naming every one of them:
+    // entering an ensure() is itself a suspension, so a scope halted while it
+    // registers unwinds with nothing on it at all. The startup pair is usually
+    // gone by then; `exit` is this scope's until the end, because a settlement
+    // may still be waiting on it.
+    yield* ensure(() => {
+      child?.off("spawn", onSpawn);
+      child?.off("error", onError);
+      child?.off("exit", onExit);
+    });
     child.on("spawn", onSpawn);
     child.on("error", onError);
     child.on("exit", onExit);
-    yield* ensure(() => {
-      // The startup pair is usually gone already; `exit` is this scope's until
-      // the end, because a settlement may still be waiting on it.
-      settleStartup();
-      child?.off("exit", onExit);
-    });
 
     yield* provide({ started: started.operation, exited: exited.operation, settle });
   });

@@ -34,22 +34,45 @@ export { DEFAULT_AGENT_NAME } from "./src/acpx-runtime.ts";
 
 /**
  * Native session launch: the adapters whose resume command shape this package
- * knows, and the two separate sets it is willing to use them for — handing a
- * session to a native UI, and attaching ACP to one a native process made.
+ * knows, and the separate capabilities each host may admit.
  */
 export {
   ADVERTISED_CLIENT_NATIVE_ATTACHMENT,
   ADVERTISED_NATIVE_LAUNCH,
+  ADVERTISED_PROVIDER_NATIVE_CONTINUATION,
   knownNativeAdapters,
   nativeAdapterFor,
+  nativeCapabilityPolicy,
 } from "./src/native-launch.ts";
-export { allocatesIdentity } from "./src/native-launch.ts";
+export { allocatesIdentity, bindsBuild } from "./src/native-launch.ts";
 export type {
   ClientAllocatedAdapter,
+  BoundProviderReturnedAdapter,
+  BuildBoundAdapter,
+  MaterializationContract,
   NativeAdapter,
   NativeBinding,
+  NativeCapabilityProbe,
+  ProbedNativeCapabilities,
   ProviderReturnedAdapter,
 } from "./src/native-launch.ts";
+
+/**
+ * Which protocol shapes and machines a native capability is admitted on.
+ *
+ * Public because the host is what states them: it supplies its own OS and
+ * architecture beside the coordinator and the observer, and shared provider
+ * code must not detect either for itself.
+ */
+export { admitsNativeCapability } from "./src/native-capability.ts";
+export type {
+  NativeCapability,
+  NativeCapabilityAdmission,
+  NativeCapabilityHost,
+  NativeCapabilityPolicy,
+  ObservedNativeCapability,
+  ProvedNativeCapability,
+} from "./src/native-capability.ts";
 
 /**
  * ACPX's own runtime types.
@@ -109,4 +132,5 @@ export type {
   AgentSessionRouteStore,
   AgentSessionRouteV1,
   AgentSessionRouteV2,
+  AgentSessionRouteV3,
 } from "./src/session-route.ts";

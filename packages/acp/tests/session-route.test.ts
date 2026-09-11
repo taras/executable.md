@@ -37,6 +37,7 @@ import type {
   AgentSessionRouteStore,
   AgentSessionRouteV1,
   AgentSessionRouteV2,
+  AgentSessionRouteV3,
 } from "../src/session-route.ts";
 import type { ExecutableBuildBindingV1 } from "@executablemd/core";
 import { cliBase } from "@executablemd/test-support/launch";
@@ -90,6 +91,22 @@ function boundClientNative(overrides: Partial<AgentSessionRouteV2> = {}): AgentS
   };
 }
 
+function boundProviderReturned(overrides: Partial<AgentSessionRouteV3> = {}): AgentSessionRouteV3 {
+  return {
+    schema: "session-route.v3",
+    route: "acp-first",
+    provider: "acpx",
+    agent: "codex-cmd",
+    sessionKey: KEY.sessionKey,
+    executableBinding: {
+      schema: "executable-build.v1",
+      reportedVersion: "codex-cli 0.153.2",
+      executableDigest: { algorithm: "sha256", value: "d".repeat(64) },
+    },
+    ...overrides,
+  };
+}
+
 function* workspace(): Operation<string> {
   const root = path.join(os.tmpdir(), `xmd-sr-${randomUUID()}`);
   yield* ensureDir(root);
@@ -111,8 +128,13 @@ function* stores(): Operation<{ name: string; store: AgentSessionRouteStore }[]>
 }
 
 describe("Tier SR — the construction route", () => {
-  it("SR1: both members round-trip through the strict reader", function* () {
-    for (const route of [acpFirst(), clientNative(), boundClientNative()]) {
+  it("SR1: every schema round-trips through the strict reader", function* () {
+    for (const route of [
+      acpFirst(),
+      clientNative(),
+      boundClientNative(),
+      boundProviderReturned(),
+    ]) {
       const text = serializeAgentSessionRoute(route);
       expect(parseAgentSessionRoute(JSON.parse(text))).toEqual(route);
     }
@@ -151,7 +173,7 @@ describe("Tier SR — the construction route", () => {
     const good = clientNative() as Record<string, unknown>;
     const cases: [string, unknown][] = [
       ["not an object", "session-route.v1"],
-      ["unknown schema", { ...good, schema: "session-route.v3" }],
+      ["unknown schema", { ...good, schema: "session-route.v4" }],
       ["unknown route", { ...good, route: "native-first" }],
       ["extra member", { ...good, origin: "migrated" }],
       ["missing member", (({ launcher: _l, ...rest }) => rest)(good)],
@@ -426,7 +448,7 @@ describe("Tier SV — the bound construction route", () => {
     expect(text).not.toContain("/");
   });
 
-  it("SV2: there is no bound acp-first form", function* () {
+  it("SV2: V2 never admits the acp-first form", function* () {
     // A second schema for a shape that gained no fact would be a version number
     // with nothing behind it.
     expect(parseAgentSessionRoute({ ...acpFirst(), schema: "session-route.v2" })).toBe(undefined);
@@ -484,6 +506,22 @@ describe("Tier SV — the bound construction route", () => {
     }
   });
 
+  it("SV3b: a digest-only binding round-trips, and stays digest-only", function* () {
+    // A build that reported no version it recognized was still observed
+    // exactly. The record says so by omitting the member, and reading it back
+    // must not invent one — a version written in later would be a claim about
+    // a session nobody made.
+    const digestOnly = {
+      schema: "executable-build.v1",
+      executableDigest: { algorithm: "sha256", value: "c".repeat(64) },
+    } as const;
+    const route = boundClientNative({ executableBinding: digestOnly });
+    const text = serializeAgentSessionRoute(route);
+    expect(text).not.toContain("reportedVersion");
+    const round = parseAgentSessionRoute(JSON.parse(text));
+    expect(round).toEqual(route);
+  });
+
   it("SV4: serialization preserves the schema it was given", function* () {
     // Nothing here upgrades a route. A V1 record read and written again is
     // still V1, which is what keeps a build observed today from being written
@@ -512,6 +550,102 @@ describe("Tier SV — the bound construction route", () => {
       );
       expect([name, loser]).toEqual([name, boundClientNative()]);
       expect([name, yield* store.read(KEY)]).toEqual([name, boundClientNative()]);
+    }
+  });
+});
+
+describe("Tier SPV — the bound provider-returned construction route", () => {
+  it("SPV1: V3 carries exactly its natural key, construction and original binding", function* () {
+    const route = boundProviderReturned();
+    const serialized = serializeAgentSessionRoute(route);
+    expect(Object.keys(JSON.parse(serialized)).sort()).toEqual([
+      "agent",
+      "executableBinding",
+      "provider",
+      "route",
+      "schema",
+      "sessionKey",
+    ]);
+    expect(parseAgentSessionRoute(JSON.parse(serialized))).toEqual(route);
+    const withoutVersion = boundProviderReturned({
+      executableBinding: {
+        schema: "executable-build.v1",
+        executableDigest: { algorithm: "sha256", value: "a".repeat(64) },
+      },
+    });
+    expect(serializeAgentSessionRoute(withoutVersion)).not.toContain("reportedVersion");
+    expect(parseAgentSessionRoute(JSON.parse(serializeAgentSessionRoute(withoutVersion)))).toEqual(
+      withoutVersion,
+    );
+  });
+
+  it("SPV2: malformed, foreign and partially read V3 records refuse", function* () {
+    const good = boundProviderReturned();
+    const { executableBinding: _binding, ...unbound } = good;
+    const cases: [string, unknown][] = [
+      ["no binding", unbound],
+      ["client-native arm", { ...boundClientNative(), schema: "session-route.v3" }],
+      ["V1 carrying a binding", { ...good, schema: "session-route.v1" }],
+      ["V2 carrying ACP-first", { ...good, schema: "session-route.v2" }],
+      ["unknown schema", { ...good, schema: "session-route.v4" }],
+      ["inline protocol", { ...good, adapterProtocol: "codex-provider-returned.v1" }],
+      ["provider-native identity", { ...good, nativeSessionId: "provider-id" }],
+      ["launcher", { ...good, launcher: "codex" }],
+      ["private path", { ...good, path: "/private/provider" }],
+      ["empty provider", { ...good, provider: "" }],
+      ["empty agent", { ...good, agent: "" }],
+      ["empty key", { ...good, sessionKey: "" }],
+      ["unknown binding", { ...good, executableBinding: { ...BUILD, schema: "unknown" } }],
+      ["extra binding data", { ...good, executableBinding: { ...BUILD, environment: {} } }],
+      [
+        "unrecognized version member",
+        { ...good, executableBinding: { ...BUILD, reportedVersion: 1 } },
+      ],
+      [
+        "malformed digest",
+        {
+          ...good,
+          executableBinding: {
+            ...BUILD,
+            executableDigest: { algorithm: "sha256", value: "short" },
+          },
+        },
+      ],
+    ];
+    for (const [name, record] of cases) {
+      expect([name, parseAgentSessionRoute(record)]).toEqual([name, undefined]);
+    }
+  });
+
+  it("SPV3: both stores preserve V3's original binding across a later release", function* () {
+    const original = boundProviderReturned();
+    const key: AgentSessionKey = {
+      provider: original.provider,
+      agent: original.agent,
+      sessionKey: original.sessionKey,
+    };
+    for (const { name, store } of yield* stores()) {
+      expect([name, yield* store.publish(original)]).toEqual([name, original]);
+      const later = boundProviderReturned({
+        executableBinding: {
+          schema: "executable-build.v1",
+          reportedVersion: "codex-cli 99.0.0",
+          executableDigest: { algorithm: "sha256", value: "f".repeat(64) },
+        },
+      });
+      expect([name, yield* store.publish(later)]).toEqual([name, original]);
+      expect([name, yield* store.read(key)]).toEqual([name, original]);
+      expect([name, yield* store.publish(acpFirst(key))]).toEqual([name, original]);
+    }
+  });
+
+  it("SPV4: an existing V1 is adopted unchanged rather than upgraded to V3", function* () {
+    const candidate = boundProviderReturned();
+    const original = acpFirst(candidate);
+    for (const { name, store } of yield* stores()) {
+      yield* store.publish(original);
+      expect([name, yield* store.publish(candidate)]).toEqual([name, original]);
+      expect([name, yield* store.read(candidate)]).toEqual([name, original]);
     }
   });
 });
