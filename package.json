@@ -50,6 +50,7 @@
     "mdast-util-to-string": "^4"
   },
   "devDependencies": {
+    "@bomb.sh/tty": "0.9.0",
     "@durable-streams/server": "^0.3.8",
     "@executablemd/acp": "workspace:*",
     "@executablemd/cli": "workspace:*",

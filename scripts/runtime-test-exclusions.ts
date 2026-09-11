@@ -78,6 +78,12 @@ const DENO_ONLY_TOOLING: RuntimeExclusion[] = [
     issue: "https://github.com/taras/executable.md/issues/365",
   },
   {
+    path: "scripts/tests/session-rendering.test.ts",
+    reason:
+      "its subject is a `deno compile` executable and the source run it has to match: it spawns `<execPath> run` and `<execPath> compile` with Deno's own resolution, permission and `--include` flags, and reads `Deno.permissions` to record what each journey was refused. Under Node and Bun that argument vector names a file called `run`, and the claim — that a binary carries the components it renders — is a claim about Deno's build output",
+    issue: "https://github.com/taras/executable.md/issues/799",
+  },
+  {
     path: "scripts/tests/build-web-client.test.ts",
     reason:
       "subject is scripts/build-web-client.ts, which runs `deno bundle` and calls Deno.execPath()/makeTempFile — Deno-only",
