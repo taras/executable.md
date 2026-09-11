@@ -756,11 +756,22 @@ ensure, detach, create, resume, prompt, or attach to an Agent session, and a
 session lease grants no terminal.
 
 The pane-scoped launcher keeps the same launch request and provider authority
-division as the root launcher. Public middleware can route or refuse a request
-but cannot settle it, replace the pane, or mint a launch. Provider-specific grid
-or pane identities never enter the `AgentLaunchRequest`, terminal result,
-`agent_session_launch` record, construction route, ownership key, diagnostic,
-or private instruction file.
+division as the root launcher. Core closes it over the terminal composite and
+authored pane ordinal. After the claim admits the launch and pane output is
+flushed, the launcher calls the composite's required provider-neutral
+`launch(ordinal, request, spawned)` operation. It does not delegate to the root
+foreground launcher. The ordinal remains in that live closure and never enters
+the native request.
+
+Public middleware installed nearer the authored launch can route, wrap, refuse,
+or short-circuit before delegating, but cannot settle the claim, replace the
+pane, or mint a launch. Once it delegates, the pane launcher is the physical
+terminal endpoint. A composite that cannot execute the request refuses rather
+than falling through to the root terminal. Root `Session.Launch` retains its
+existing foreground-launch route. Provider-specific grid or pane identities
+never enter the `AgentLaunchRequest`, terminal result, `agent_session_launch`
+record, construction route, ownership key, diagnostic, or private instruction
+file.
 
 The grid's readiness barrier observes the launch only at the existing successful
 interactive-child start boundary. Session preparation, route publication,
@@ -787,6 +798,10 @@ event, writes pane display without reading input, and refuses a concurrent
 launch. It uses Effection's `run()` rather than `main()` so Effection does not
 convert terminal `SIGINT` into worker exit 130 while the foreground child is
 handling job control.
+
+The composite's `shell()` path remains separate. It chooses the current host's
+default shell as live policy; it does not accept or reinterpret a native launch
+request supplied by an Agent provider.
 
 After the grid is visible, a nonzero native exit fails its pane flow but does
 not cancel sibling panes. Core keeps that failure as the pane's status and
@@ -1198,6 +1213,15 @@ exercises pane reuse after terminal-holder quiescence; a process that has
 already started a new session, closed the terminal, and lost its parent is
 recorded as outside the observable host boundary.
 
+The pane-native route has an explicit physical-terminal regression. A paired
+pane delegates through any nearer launcher middleware to its composite endpoint;
+the production tmux adapter delivers the unchanged command vector, cwd, and
+environment to the authenticated worker for that authored ordinal, while a
+root-launcher sentinel proves the foreground endpoint was not entered. Two pane
+endpoints launch concurrently. Cancellation remains pending until worker
+settlement and pane-terminal quiescence are observed. A separate root launch
+still reaches the root foreground launcher.
+
 Focused tests prove:
 
 1. help discovers roles and performs no preparation or launch;
@@ -1448,6 +1472,11 @@ Implementation review checks these frozen invariants:
     keeps worker display out of child input, distinguishes reader detach from
     control loss and server stop, and proves the bounded process and terminal
     teardown before pane reuse and grid settlement.
+29. A paired pane's native launcher terminates at the required composite
+    operation for its authored ordinal: the exact native request reaches that
+    pane's authenticated worker, the root foreground launcher is not entered,
+    distinct panes launch concurrently, cancellation awaits worker settlement
+    and pane quiescence, and root launch routing remains unchanged.
 
 Item 12 is the 2026-08-20 architecture amendment. ACPX fixes `systemPrompt` at
 session creation, while native turns are not authoritative in its cached

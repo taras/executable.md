@@ -320,6 +320,20 @@ function* runDoc(doc: string, options: RunOptions = {}): Operation<Run> {
               const composite = yield* prepareControlledComposite(request, {
                 log: providerLog,
                 close: () => settled.operation,
+                // The pane endpoint a paired pane's `<Session.Launch>` now
+                // reaches. It records what it was asked to start and answers,
+                // exactly as the host launcher used to — so these rows are
+                // about the pane, not about a launcher having moved.
+                *launch(_ordinal, asked, spawned) {
+                  launcher.requests.push(asked);
+                  launcher.order.push("launch");
+                  if (options.start) {
+                    yield* options.start(asked, spawned);
+                  } else {
+                    spawned();
+                  }
+                  return options.outcome ?? { exitCode: 0 };
+                },
                 // deno-lint-ignore require-yield
                 *onPrepare(asked) {
                   panes = asked.panes.length;
@@ -1007,14 +1021,19 @@ describe("Tier SP — a launch inside a terminal pane", () => {
     const asked: string[] = [];
 
     yield* scoped(function* () {
-      yield* installControlledLauncher({
-        wait: () =>
-          (function* () {
-            childLive.resolve();
-            yield* childMayExit.operation;
-          })(),
-      });
-      yield* usePaneNativeLauncher(claim, function* () {});
+      // The composite's pane endpoint, which is what the pane launcher now
+      // delegates to. It stands in for a provider here, and behaves like one:
+      // it reports the start and answers when the child is done.
+      yield* usePaneNativeLauncher(
+        claim,
+        function* () {},
+        function* (_request, spawned) {
+          spawned();
+          childLive.resolve();
+          yield* childMayExit.operation;
+          return { exitCode: 0 };
+        },
+      );
 
       const first = yield* spawn(function* () {
         // The order a launch composes in: this pane, then the lease, then the

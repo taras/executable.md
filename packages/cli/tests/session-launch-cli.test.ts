@@ -121,6 +121,22 @@ const ROLES = [
   "",
 ].join("\n");
 
+/** One authored grid, whose pane content must never run without a provider. */
+const GRID = [
+  "<Terminal.Grid columns={2}>",
+  '<Terminal title="Left">',
+  "PANE_MARKER",
+  "</Terminal>",
+  '<Terminal title="Right" />',
+  "</Terminal.Grid>",
+  "",
+].join("\n");
+
+/** A grid the grammar refuses, wherever it is written. */
+const BAD_GRID = ["<Terminal.Grid>", '<Terminal title="Only" />', "</Terminal.Grid>", ""].join(
+  "\n",
+);
+
 const NO_LAUNCH = "PLAIN_MARKER\n\nThis document launches nothing.\n";
 
 describe(
@@ -181,6 +197,55 @@ describe(
 
       expect(result.code).toBe(0);
       expect(result.stdout).toContain("PLAIN_MARKER");
+    });
+
+    it("CL6: a piped run refuses a grid before any pane starts", function* () {
+      // `xmd run` under a pipe has no terminal to divide. The grid takes the
+      // run's foreground lease before it contacts a provider, so it is refused
+      // there — before a private directory, a socket, a token, a worker, a
+      // server or a pane exists.
+      //
+      // The wording is the foreground launcher's, and it names
+      // `<Session.Launch>` even though this document writes none. Recorded as
+      // it is rather than asserted around: it is the diagnostic a reader
+      // actually gets.
+      const result = yield* useFixture({ "grid.md": GRID }, function* (fixture) {
+        return yield* runCli(["run", "grid.md", "--raw"], env(fixture)).join();
+      });
+
+      expect(result.code).toBe(1);
+      const reported = `${result.stdout}${result.stderr}`;
+      // Refused at the foreground lease, which a grid takes before it contacts
+      // any provider — so this run stopped earlier than the tmux prerequisites,
+      // and earlier still than a pane.
+      expect(reported).toContain("needs a terminal");
+      // The pane's own content never ran.
+      expect(reported).not.toContain("PANE_MARKER");
+      // And nothing tmux-shaped reaches the reader.
+      for (const leak of ["tmux -", "socket", "%0", "kill-server"]) {
+        expect(`${leak}: ${reported.includes(leak)}`).toBe(`${leak}: false`);
+      }
+    });
+
+    it("CL7: the syntax is still catalogued where no grid can open", function* () {
+      // Node and Bun keep the language and the validation. A grid whose layout
+      // is wrong is refused as a *grammar* failure wherever it is written, and
+      // that refusal is not the provider's.
+      const result = yield* useFixture({ "bad.md": BAD_GRID }, function* (fixture) {
+        return yield* runCli(["run", "bad.md", "--raw"], env(fixture)).join();
+      });
+
+      expect(result.code).toBe(1);
+      const reported = `${result.stdout}${result.stderr}`;
+      // The concrete structural refusal, named and located — not merely the
+      // absence of a provider message, which an unrelated failure would also
+      // satisfy.
+      expect(reported).toContain('<Terminal.Grid> requires a "columns" prop');
+      expect(reported).toContain("bad.md:1:1");
+      // And it is the grammar's refusal, reached wherever the document is read
+      // rather than at a provider.
+      expect(reported).not.toContain("cannot open a terminal grid");
+      expect(reported).not.toContain("no terminal provider is installed");
     });
 
     it("CL5: no behavior is keyed to the filename", function* () {
