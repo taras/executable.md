@@ -54,8 +54,24 @@ import { open } from "node:fs/promises";
 import type { FileHandle } from "node:fs/promises";
 import { inspect } from "node:util";
 import process from "node:process";
-import { program, object, field, cli, commands } from "configliere";
-import { z } from "zod";
+import type { ValueSource } from "configliere";
+import {
+  commandToken,
+  isExecute,
+  isHelp,
+  isVersion,
+  parseCommands,
+  parseFailure,
+  parseShorthand,
+  renderProgramHelp,
+  renderRouteHelp,
+  renderVersion,
+  routeFor,
+  routeValues,
+  unexpectedOnly,
+  valueFlags,
+} from "./cli-route.ts";
+import type { AnyXmdIntent, ParseOutcome } from "./cli-route.ts";
 import {
   AgentProviders,
   Config,
@@ -148,14 +164,12 @@ import {
   runWorkflow,
   UNSUPPORTED_WORKFLOW_HOST,
   unsupportedWorkflowHost,
-  workflowConfig,
 } from "./workflow.ts";
 import type { HostWorkflowInstaller, WorkflowHost, WorkflowStart } from "./workflow.ts";
 import { runWorkflowManagement } from "./workflow-management.ts";
 import { establishDefinition } from "./workflow-definition.ts";
 import type { EstablishedDefinition } from "./workflow-definition.ts";
 import { useCompositionComponents, useWorkflowServiceDenial } from "@executablemd/workflow";
-import denoJson from "../deno.json" with { type: "json" };
 
 const SECRET_DETECTION_OPTION = "--secret-detection";
 const NEGATED_SECRET_DETECTION = "--no-secret-detection";
@@ -164,283 +178,8 @@ const NEGATED_SECRET_DETECTION = "--no-secret-detection";
 const SECRET_DETECTION_WARNING =
   "WARNING: secret detection is disabled; credentials may be persisted.";
 
-/**
- * `--no-secret-detection` — the host's opt-out, on both commands.
- *
- * Declared as an ordinary boolean switch because that is what configliere
- * negates: a `secretDetection` field makes `--no-secret-detection` resolve to
- * `false` with no argv reading of our own. It takes no aliases — adding
- * `--no-secret-detection` as one makes the parser read it as the positive
- * switch, and the opt-out silently stops working.
- *
- * Help lists the positive spelling only, so the description carries the one a
- * caller actually writes.
- */
-const SECRET_DETECTION_FIELD = {
-  description:
-    "scan durable events for credentials before they persist; " +
-    `disable with ${NEGATED_SECRET_DETECTION}`,
-  ...field(z.boolean(), field.default(true)),
-};
-
-/**
- * Everything a document execution configures.
- *
- * `xmd run` alone. `xmd plan` writes a program rather than running one, so it
- * declares the few of these that describe *authorship* — the includes the
- * catalog is built from, who writes, and one deadline — and none of the rest:
- * a journal, a permission mode, an exec deadline or a presentation option would
- * each configure work this command never performs.
- */
-const executionFields = {
-  include: {
-    description: "component search directory",
-    ...field(z.array(z.string()), field.default(["components", "."]), field.array()),
-  },
-  verbose: {
-    description: "log journal entries to stderr",
-    aliases: ["-V"],
-    ...field(z.boolean(), field.default(false)),
-  },
-  journal: {
-    description: "write a diagnostic JSONL trace (path must not exist)",
-    aliases: ["-j"],
-    ...field(z.string().optional()),
-  },
-  raw: {
-    description: "output raw markdown without normalization or terminal formatting",
-    ...field(z.boolean(), field.default(false)),
-  },
-  agentProvider: {
-    description: "agent provider for agent components",
-    ...field(z.string(), field.default("acpx")),
-  },
-  defaultAgent: {
-    description: "default agent name (overrides DEFAULT_AGENT_NAME)",
-    ...field(z.string().optional()),
-  },
-  timeout: {
-    description: "deadline for the whole run, as a duration (500ms, 30s, 5min)",
-    ...field(z.string().optional()),
-  },
-  timeoutExec: {
-    description: "default timeout for each exec block, as a duration (500ms, 30s, 5min)",
-    ...field(z.string().optional()),
-  },
-  timeoutFetch: {
-    description: "default timeout for each fetch, as a duration (500ms, 30s, 5min)",
-    ...field(z.string().optional()),
-  },
-  approveAll: {
-    description: "approve every agent permission request",
-    ...field(z.boolean(), field.default(false)),
-  },
-  approveReads: {
-    description: "approve read and search agent permissions, ask for the rest (default)",
-    ...field(z.boolean(), field.default(false)),
-  },
-  denyAll: {
-    description: "deny every agent permission request",
-    ...field(z.boolean(), field.default(false)),
-  },
-  secretDetection: SECRET_DETECTION_FIELD,
-};
-
-const runConfig = object({
-  path: {
-    description:
-      "markdown document to execute, optionally `#` and one target selector; " +
-      "`xmd run -` reads the document from standard input instead",
-    ...field(z.string().optional(), cli.argument()),
-  },
-  // Declared so `xmd run --help` lists it with every other option. The value is
-  // lifted out of argv by readEvalFlags before parsing — see eval-source.ts —
-  // so this field is never the source of the document.
-  eval: {
-    description: "inline markdown document to execute, in place of a path",
-    aliases: ["-e"],
-    ...field(z.string().optional()),
-  },
-  ...executionFields,
-});
-
-/** What `xmd --help` says the plan command is for. */
-const PLAN_DESCRIPTION =
-  "Turn a request into an XMD Plan, review it, and write the approved source.";
-
-/**
- * `xmd plan` — the request, where the approved source goes, and who writes it.
- *
- * Every option that configured *running* a Plan is absent, because this command
- * runs nothing: the program it writes is run by a later `xmd run`, and that is
- * where a permission mode, an exec deadline and a root property are configured.
- * The generated `--props-*` options are absent for the same reason, and for one
- * more — they exist only once a document does, and this command's result is the
- * document.
- *
- * `--verbose` and `--journal` describe writing the Plan rather than running it.
- * They observe this invocation's own authorship and nothing after it, which is
- * why they are spelled in full: `-V` and `-j` are `xmd run`'s aliases for
- * options about a program's run.
- */
-const planConfig = object({
-  request: {
-    description: "the request the coding agent should turn into an XMD Plan",
-    ...field(z.string().optional(), cli.argument()),
-  },
-  output: {
-    description: "write the approved source here instead of to stdout (path must not exist)",
-    ...field(z.string().optional()),
-  },
-  session: {
-    description: "logical name for the assistant session (default: unique to this invocation)",
-    ...field(z.string().optional()),
-  },
-  verbose: {
-    description: "show generated drafts and XMD check diagnostics on stderr",
-    ...field(z.boolean(), field.default(false)),
-  },
-  journal: {
-    description: "record the planning process as diagnostic JSONL (path must not exist)",
-    ...field(z.string().optional()),
-  },
-  include: {
-    description: "component search directory",
-    ...field(z.array(z.string()), field.default(["components", "."]), field.array()),
-  },
-  agentProvider: {
-    description: "agent provider for Plan authorship",
-    ...field(z.string(), field.default("acpx")),
-  },
-  defaultAgent: {
-    description: "default agent name (overrides DEFAULT_AGENT_NAME)",
-    ...field(z.string().optional()),
-  },
-  timeout: {
-    description: "deadline for the whole planning invocation, as a duration (500ms, 30s, 5min)",
-    ...field(z.string().optional()),
-  },
-});
-
-const testConfig = object({
-  path: {
-    description: "markdown document or directory to test (defaults to the current directory)",
-    ...field(z.string().default("."), cli.argument(), field.default(".")),
-  },
-  pattern: {
-    description: "glob for test documents, relative to a directory target (repeatable)",
-    ...field(z.array(z.string()), field.default(["**/*.test.md"]), field.array()),
-  },
-  include: {
-    description: "component search directory",
-    ...field(z.array(z.string()), field.default(["components", "."]), field.array()),
-  },
-  verbose: {
-    description: "log journal entries to stderr",
-    aliases: ["-V"],
-    ...field(z.boolean(), field.default(false)),
-  },
-  journal: {
-    description: "write a diagnostic JSONL trace (path must not exist)",
-    aliases: ["-j"],
-    ...field(z.string().optional()),
-  },
-  raw: {
-    description: "output raw markdown without normalization or terminal formatting",
-    ...field(z.boolean(), field.default(false)),
-  },
-  secretDetection: SECRET_DETECTION_FIELD,
-});
-
-/**
- * `xmd syntax` — inspection only, so its grammar is only what selection needs.
- *
- * No document, props, agent, timeout, journal, raw, testing, workflow or
- * secret-detection option: the command runs nothing, so there is nothing for
- * any of them to configure. `--include` is the same ordered, repeatable field
- * `run` and `test` declare, and explicit values replace the defaults.
- */
-const syntaxConfig = object({
-  component: {
-    description:
-      "component to describe in full — `xmd syntax Elicit` renders its catalog metadata " +
-      "and long-form documentation instead of the compact catalog",
-    ...field(z.string().optional(), cli.argument()),
-  },
-  include: {
-    description: "component search directory",
-    ...field(z.array(z.string()), field.default(["components", "."]), field.array()),
-  },
-  json: {
-    description: "write the symbols as version-2 JSON instead of markdown",
-    ...field(z.boolean(), field.default(false)),
-  },
-});
-
-const testAgentConfig = object({
-  connect: {
-    description: "opaque controller route (controller-launched workers only)",
-    ...field(z.string()),
-  },
-});
-
-/** What `xmd --help` says the upgrade command is for. */
-const UPGRADE_DESCRIPTION =
-  "Upgrade the standalone xmd binary to the latest stable or a specified release.";
-
-/**
- * `xmd upgrade` — one optional tag and three switches, and nothing else.
- *
- * Every option a run configures is deliberately absent. This command executes
- * no caller's document, writes no journal, starts no agent and installs no
- * permission mode, so an option describing any of those would be answered by a
- * command that does none of it. The values are read from argv by
- * {@link scanUpgradeArgs} rather than from this parse; what is declared here is
- * what `xmd upgrade --help` lists.
- */
-const upgradeConfig = object({
-  tag: {
-    description: "exact release tag to install, such as v1.2.3 (default: the latest stable)",
-    ...field(z.string().optional(), cli.argument()),
-  },
-  status: {
-    description: "report how the selected release compares, and change nothing",
-    ...field(z.boolean(), field.default(false)),
-  },
-  allowDowngrade: {
-    description: "consent to installing a release older than the installed one",
-    ...field(z.boolean(), field.default(false)),
-  },
-  allowPrerelease: {
-    description: "consent to installing the exact prerelease tag named",
-    ...field(z.boolean(), field.default(false)),
-  },
-  journal: {
-    description: "write a diagnostic JSONL trace (path must not exist)",
-    aliases: ["-j"],
-    ...field(z.string().optional()),
-  },
-});
-
 /** The version this build reports, from the manifest it was built with. */
-export const XMD_VERSION: string = denoJson.version;
-
-const xmd = program({
-  name: "xmd",
-  version: XMD_VERSION,
-  config: commands(
-    {
-      run: runConfig,
-      plan: { ...planConfig, description: PLAN_DESCRIPTION },
-      test: testConfig,
-      syntax: syntaxConfig,
-      upgrade: { ...upgradeConfig, description: UPGRADE_DESCRIPTION },
-      "test-agent": testAgentConfig,
-      workflow: workflowConfig,
-    },
-    { default: "run" },
-  ),
-});
+export { XMD_VERSION } from "./cli-route.ts";
 
 /** The switches `xmd upgrade` defines, and the whole of what it accepts. */
 const UPGRADE_SWITCHES: readonly string[] = ["--status", "--allow-downgrade", "--allow-prerelease"];
@@ -1320,12 +1059,16 @@ interface TestConfig extends Omit<DocumentConfig, "root"> {
  */
 function* test(
   config: TestConfig,
-  args: string[],
+  /**
+   * What the caller wrote, rather than what the model resolved to. The model
+   * cannot say whether `--pattern` was written at all — its default is a real
+   * value — and the scan that lifted the occurrences out of argv can.
+   */
+  patterns: PatternFlags,
   installService: HostServiceInstaller,
   /** What a `<Execution host="run">` child installs. This command installs none. */
   installRepositories: RepositoryInstaller,
 ): Operation<void> {
-  const patterns = readPatternFlags(args);
   if (patterns.missingValue) {
     console.error(
       `${PATTERN_OPTION} requires a value — write \`${PATTERN_OPTION} <glob>\`, or ` +
@@ -1463,6 +1206,12 @@ interface HelpRequest {
 /**
  * Remove `--help` wherever it appears so document-aware help works in
  * every documented position. `--version` keeps its own handling.
+ *
+ * Retained under the route API rather than retired to it. Configliere lifts
+ * both controls itself and settles a method from them, but a help intent
+ * carries no model, and every document-aware page is built from the document
+ * the command line named. So the controls are removed here for the parse that
+ * produces a model, and reinstated for the parse that produces the intent.
  */
 function takeHelpFlag(args: string[]): HelpRequest {
   const kept: string[] = [];
@@ -1497,40 +1246,233 @@ interface PatternFlags {
 }
 
 /**
- * Read `--pattern` from argv.
+ * Read one repeatable option out of argv, and remove every occurrence.
  *
- * The resolved configuration answers none of the questions this serves. It
- * cannot say whether the option was given at all — the default is a real
- * value, indistinguishable from a typed one — and it hides unusable input: the
- * parser picks the last *valid* source, so an empty pattern falls back to the
- * default, and it happily reads the next option as the glob.
+ * The route grammar cannot express a repeatable option at all: a reader
+ * settles its parameter on the first occurrence, and the binding loop
+ * truncates its view at the first unclaimed word, so an occurrence written
+ * after a value is invisible to it and then reported as an unexpected token.
+ * The occurrences are therefore lifted here and handed back to the parse as a
+ * route value source, which is the one channel that carries a list.
  *
- * A separated value that begins with `-` is another option, not a glob;
- * `--pattern=<glob>` expresses a glob that really does begin with one.
+ * The scan also answers what a resolved model cannot. It says whether the
+ * option was written at all — a default is a real value, indistinguishable
+ * from a typed one — and it refuses unusable input: a separated value that
+ * begins with `-` is another option rather than a value, and
+ * `--option=<value>` expresses a value that really does begin with one.
  */
-function readPatternFlags(args: string[]): PatternFlags {
+function readRepeatedOption(args: readonly string[], option: string): RepeatedOption {
   const values: string[] = [];
+  const rest: string[] = [];
   let missingValue = false;
+  let separated = false;
 
-  for (const [index, arg] of args.entries()) {
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+    if (arg === undefined) {
+      continue;
+    }
     if (arg === "--") {
+      separated = true;
+      rest.push(...args.slice(index));
       break;
     }
-    if (arg === PATTERN_OPTION) {
+    if (!separated && arg === option) {
       const value = args[index + 1];
       if (value === undefined || value.startsWith("-")) {
         missingValue = true;
         continue;
       }
       values.push(value);
+      index += 1;
       continue;
     }
-    if (arg.startsWith(`${PATTERN_OPTION}=`)) {
-      values.push(arg.slice(PATTERN_OPTION.length + 1));
+    if (!separated && arg.startsWith(`${option}=`)) {
+      values.push(arg.slice(option.length + 1));
+      continue;
     }
+    rest.push(arg);
   }
 
-  return { values, missingValue };
+  return { values, rest, missingValue };
+}
+
+/** Every occurrence of one repeatable option, and the argv without them. */
+interface RepeatedOption extends PatternFlags {
+  /** argv with every occurrence of the option removed. */
+  rest: string[];
+}
+
+const INCLUDE_OPTION = "--include";
+
+/**
+ * The refusal a command owns for an option that belongs to another one.
+ *
+ * Each of these names the command, the option and where the option does
+ * belong, which is more than "unexpected token" says. They are read from raw
+ * argv, so they answer before a parse does and stay the invocation's first
+ * failure whether or not the route grammar also refused the token.
+ */
+function strayCommandOption(command: string, args: string[]): string | undefined {
+  if (command === "test") {
+    const strayTimeout = findTimeoutFlag(args);
+    if (strayTimeout) {
+      return `unrecognized option for xmd test: ${strayTimeout} — timeout options are exclusive ` +
+        `to ${belongsTo(strayTimeout)}`;
+    }
+  }
+  const agentFlag = findAgentOnlyFlag(args);
+  if (agentFlag) {
+    return `unrecognized option for xmd ${command}: ${agentFlag} — agent options are exclusive ` +
+      `to ${belongsTo(agentFlag)}`;
+  }
+  if (command === "test") {
+    const propsFlag = findPropsFlag(args);
+    if (propsFlag) {
+      return `unrecognized option for xmd test: ${propsFlag} — document properties are ` +
+        "exclusive to xmd run";
+    }
+  }
+  return undefined;
+}
+
+/** What a run says when the command line named no root document. */
+const MISSING_ROOT_DOCUMENT =
+  "xmd run requires a root document — `xmd run <document.md>`, `xmd run -`, or " +
+  `\`xmd run ${EVAL_OPTION} '<markdown>'\``;
+
+/**
+ * The command line up to its first document property.
+ *
+ * A document's generated options exist only once the document does, and the
+ * document is what this parse is being asked to find. The released parser
+ * stopped at the first token it did not define, which is exactly the first
+ * `--props` occurrence; the tokens after it are read later, by
+ * `extractPropsArgs`, against the bindings the inspected document declares.
+ * A `--props` written after `--` is a literal and stops nothing.
+ */
+function beforeProperties(args: readonly string[]): string[] {
+  const kept: string[] = [];
+  for (const arg of args) {
+    if (arg === "--") {
+      kept.push(...args.slice(kept.length));
+      break;
+    }
+    if (arg === AGGREGATE_OPTION || arg.startsWith(`${AGGREGATE_OPTION}`)) {
+      break;
+    }
+    kept.push(arg);
+  }
+  return kept;
+}
+
+/** Everything one command line carries that the route grammar cannot bind. */
+interface LiftedArgs {
+  /** argv with every lifted token removed, ready to parse. */
+  args: string[];
+  /**
+   * argv with the root references removed and nothing else.
+   *
+   * What the document phase reads. Truncating at the first property and
+   * lifting the repeatable options serve the parse alone: the properties are
+   * classified later against the bindings the document declares, and the
+   * repeatable occurrences are read by their own scanner.
+   */
+  retained: string[];
+  /** Every root document reference the option grammar leaves unwritable. */
+  references: string[];
+  include: RepeatedOption;
+  pattern: RepeatedOption;
+  /** Whether the caller wrote a version control anywhere in argv. */
+  version: boolean;
+}
+
+const VERSION_CONTROLS = new Set(["-v", "--version"]);
+
+/**
+ * Lift what the route grammar cannot bind, and say what was lifted.
+ *
+ * `--pattern` belongs to `xmd test` alone, so it is lifted only there; on any
+ * other command it stays in argv and is reported as the unrecognized option it
+ * is. The version control is lifted everywhere, because the parse this
+ * produces is the one that has to yield a model.
+ */
+function liftArgs(args: string[]): LiftedArgs {
+  const command = commandToken(args);
+  const version = args.some((arg) => VERSION_CONTROLS.has(arg));
+  const controlled = beforeProperties(args).filter((arg) => !VERSION_CONTROLS.has(arg));
+  const include = readRepeatedOption(controlled, INCLUDE_OPTION);
+  const pattern =
+    command === "test"
+      ? readRepeatedOption(include.rest, PATTERN_OPTION)
+      : { values: [], rest: include.rest, missingValue: false };
+  // Only a run names a root document, and only a run's grammar leaves `-`
+  // unwritable. Every other command keeps the meaning it already gives the
+  // token, which is what `xmd test -` relies on.
+  const recover = command === undefined || command === "run";
+  const recovered = readDocumentArguments(pattern.rest, recover);
+  return {
+    args: recovered.args,
+    retained: readDocumentArguments(args, recover).args,
+    references: recovered.references,
+    include,
+    pattern,
+    version,
+  };
+}
+
+/**
+ * The intent the controls settle, when the caller wrote one.
+ *
+ * The same command line, parsed with the control reinstated, so Configliere
+ * chooses the route the control applies to and refuses the route that does
+ * not offer the method.
+ */
+function controlOutcome(help: boolean, lifted: LiftedArgs): ParseOutcome | undefined {
+  const control = help ? "--help" : lifted.version ? "--version" : undefined;
+  if (control === undefined) {
+    return undefined;
+  }
+  // Written first, because `--` quotes everything after it: a control written
+  // past the separator is a literal and is never lifted.
+  return parseLifted({ ...lifted, args: [control, ...lifted.args] });
+}
+
+/** The value sources the lifted options supply to the route that owns them. */
+function liftedValues(command: string | undefined, lifted: LiftedArgs): ValueSource[] {
+  const supplied: Record<string, unknown> = {};
+  if (lifted.include.values.length > 0) {
+    supplied.include = lifted.include.values;
+  }
+  if (lifted.pattern.values.length > 0) {
+    supplied.pattern = lifted.pattern.values;
+  }
+  return routeValues(command === undefined ? [] : [command], supplied);
+}
+
+/** Parse one lifted command line against the tree its first token selects. */
+function parseLifted(lifted: LiftedArgs): ParseOutcome {
+  const command = commandToken(lifted.args);
+  const values = liftedValues(command, lifted);
+  return command === undefined
+    ? parseShorthand(lifted.args, values)
+    : parseCommands(lifted.args, values);
+}
+
+/** The intent one parse settled on, when it settled on one. */
+function settledIntent(outcome: ParseOutcome): AnyXmdIntent | undefined {
+  return outcome.ok ? outcome : undefined;
+}
+
+/** The root document reference one execute intent bound, when it bound one. */
+function boundPath(intent: AnyXmdIntent | undefined): string | undefined {
+  if (intent === undefined || !isExecute(intent)) {
+    return undefined;
+  }
+  if (intent.route === "/" || intent.route === "/run") {
+    return intent.model.path;
+  }
+  return undefined;
 }
 
 interface PropsPhase {
@@ -1593,85 +1535,81 @@ function namesRun(args: string[]): boolean {
   return args[0] === "run";
 }
 
-interface DocumentArgument {
-  /** The reference the caller wrote, as they wrote it. */
-  reference: string;
-  /** argv with that token, and the separator protecting it, removed. */
-  rest: string[];
-}
-
 /** A reference's path half: everything before its first raw `#`. */
 function referencePath(reference: string): string {
   const fragment = reference.indexOf("#");
   return fragment === -1 ? reference : reference.slice(0, fragment);
 }
 
-/**
- * The document argument a run named that the parser could not take.
- *
- * Configliere refuses every positional beginning with `-` and defines no
- * end-of-options separator, so `-` is the one filename its option grammar
- * leaves unwritable — and a reference selecting a section of that file is
- * written the same way. Both are read out of the parser's own remainder, the
- * tokens it did not consume, rather than out of raw argv, where a `-` another
- * option took as its value (`--journal -`) looks identical.
- *
- * Nothing else beginning with `-` is one. A mistyped option stays an option the
- * parser does not define, so a run written with one still refuses for want of a
- * root rather than going looking for a file named after the flag.
- *
- * Removing the token is what lets everything written around it — before it or
- * after it — parse as it would around an ordinary path.
- */
-function takeDocumentArgument(args: string[], remainder: string[]): DocumentArgument | undefined {
-  const separated = remainder[0] === "--";
-  const [reference] = separated ? remainder.slice(1, 2) : remainder;
-  if (reference === undefined || referencePath(reference) !== STANDARD_INPUT_ARGUMENT) {
-    return undefined;
-  }
-  const at = args.length - remainder.length;
-  if (args[at] !== remainder[0]) {
-    return undefined;
-  }
-  return { reference, rest: [...args.slice(0, at), ...remainder.slice(separated ? 2 : 1)] };
-}
-
 interface RunGrammar {
-  /** Every reference the parser could not take, in the order written. */
+  /** Every reference the route grammar could not take, in the order written. */
   references: string[];
   /** argv with all of them removed. */
   args: string[];
-  /** The parse of that argv. */
-  parsed: ReturnType<typeof xmd.parse>;
 }
 
 /**
- * Read every document argument a run named, not just the first.
+ * Read every document argument a run named that the route grammar cannot take.
  *
- * The parser stops at the first token it does not define, so one pass sees one
- * of them. A run that named two roots — a path and a `-`, two `-`s, a reference
- * and a path — has to refuse whichever order they were written in, and it can
- * only do that once all of them are known. Each pass removes one token, so this
- * terminates; what comes back is what the run actually wrote.
+ * Tokenization decides this, and it decides it before routing: a bare `-` is a
+ * word an `argument()` can claim, `-#Section` is a flag no argument will ever
+ * see, and every token after `--` is a literal that reaches the intent instead
+ * of a parameter. All three spell the same thing here — the one filename the
+ * option grammar leaves unwritable, optionally carrying a target selector — so
+ * all three are lifted out of argv before the parse and reported together.
+ *
+ * A value another option took (`--journal -`) is not one, which is why the
+ * scan skips each value-taking flag with its value. Nothing else beginning
+ * with `-` is one either: a mistyped option stays an option, and a run written
+ * with one refuses for want of a root rather than looking for a file named
+ * after the flag.
  */
 function readDocumentArguments(head: string[], recover: boolean): RunGrammar {
-  let args = head;
-  let parsed = xmd.parse({ args });
+  const takesValue = valueFlags();
   const references: string[] = [];
-  while (recover) {
-    const config = parsed.ok && !parsed.value.config.help ? parsed.value.config : undefined;
-    if (config?.name !== "run") {
-      break;
+  const args: string[] = [];
+  let separated = false;
+
+  for (let index = 0; index < head.length; index += 1) {
+    const token = head[index];
+    if (token === undefined) {
+      continue;
     }
-    const taken = takeDocumentArgument(args, parsed.remainder.args ?? []);
-    if (taken === undefined) {
-      break;
+    if (!separated && token === "--") {
+      const next = head[index + 1];
+      if (recover && next !== undefined && referencePath(next) === STANDARD_INPUT_ARGUMENT) {
+        references.push(next);
+        index += 1;
+        continue;
+      }
+      separated = true;
+      args.push(token);
+      continue;
     }
-    references.push(taken.reference);
-    args = taken.rest;
-    parsed = xmd.parse({ args });
+    if (!separated && takesValue.has(token)) {
+      args.push(token);
+      const value = head[index + 1];
+      if (value !== undefined) {
+        args.push(value);
+        index += 1;
+      }
+      continue;
+    }
+    if (!separated && referencePath(token) === STANDARD_INPUT_ARGUMENT) {
+      // A command that names no root document is not offered the token
+      // either. The released parser refused every positional beginning with
+      // `-`, so `xmd test -` searched for documents rather than opening a
+      // file called `-`, and a bare `-` is a word this tokenizer would hand
+      // straight to that command's own argument.
+      if (recover) {
+        references.push(token);
+      }
+      continue;
+    }
+    args.push(token);
   }
-  return { references, args, parsed };
+
+  return { references, args };
 }
 
 /**
@@ -1738,42 +1676,29 @@ function* preparePropsPhase(
     return { args: scan.fixed, bindings: [], plan: scan };
   }
 
-  // `xmd workflow` reads its options from the head and its remaining positionals
-  // from the tail. The parser only ever sees the head, so a dash-leading token
-  // after `--` is never offered to it as an option; the grammar check below
-  // still sees the argv that had the separator, because where options stopped
-  // is what decides whether a later token is a third positional.
+  // A `workflow` positional written after `--` reaches the intent as a
+  // literal rather than as an argument, so the whole argv is offered to the
+  // parse and the tail is read back from the intent. A run's roots are lifted
+  // instead: every other command keeps whatever `-` already means to it.
   const workflow = namesWorkflow(args);
-  const separated = separateArgs(args);
-  const head = workflow ? separated.head : args;
-  // A run's parse takes at most one path, and a token beginning with `-` it
-  // takes none of. Every other command keeps whatever `-` already means to it.
-  const recovered = readDocumentArguments(head, !workflow);
-  const fixed = recovered.references.length === 0 ? args : recovered.args;
-  const parsed = recovered.args;
-  const provisional = recovered.parsed;
-  // `program` short-circuits on `--version` and leaves no configuration
-  // behind, so there is nothing to inspect.
-  const selected = provisional.ok ? provisional.value.config : undefined;
-  const command = selected && !selected.help ? selected.name : undefined;
-  const parsedPath =
-    selected && !selected.help && selected.name === "run" ? selected.config.path : undefined;
-  const roots = writtenRoots(head, recovered.references, parsedPath);
+  const lifted = liftArgs(args);
+  const fixed = lifted.retained;
+  const parsed = lifted.retained;
+  const outcome = parseLifted(lifted);
+  const intent = settledIntent(outcome);
+  const command = commandToken(args);
+  const parsedPath = boundPath(intent);
+  const roots = writtenRoots(args, lifted.references, parsedPath);
   // The sentinel is one exact argument on one command form. Only the form the
   // caller wrote separates `xmd run -` from the shorthand `xmd -`, which
-  // resolves to the same parsed command and names a file called `-`.
-  const standardInput = namesRun(args) && recovered.references.includes(STANDARD_INPUT_ARGUMENT);
+  // resolves to the same route and names a file called `-`.
+  const standardInput = namesRun(args) && lifted.references.includes(STANDARD_INPUT_ARGUMENT);
   const describeRoot = (root: string): string =>
     standardInput && root === STANDARD_INPUT_ARGUMENT ? "standard input" : root;
   const [supplied] = evalFlags.values;
 
-  if (selected && !selected.help && selected.name === "workflow") {
-    return yield* prepareWorkflowProps(
-      args,
-      parsed,
-      { ...selected.config, ...workflowPositionals(selected.config, separated.tail) },
-      supplied,
-    );
+  if (workflow) {
+    return yield* prepareWorkflowProps(args, parsed, workflowRequestOf(intent, args), supplied);
   }
 
   if (supplied !== undefined && command !== undefined && command !== "run") {
@@ -2090,44 +2015,201 @@ function extraWorkflowArgument(args: string[], action?: string): string | undefi
   return undefined;
 }
 
-/**
- * An argv split at its end-of-options separator.
- *
- * The tail is carried rather than folded back in. Dropping the separator and
- * rejoining would hand a dash-leading positional — `-run-id`, `-definition.md`
- * — back to a parser that reads a leading dash as an option, which is exactly
- * what `--` was written to prevent.
- */
-interface SeparatedArgs {
-  /** Everything before `--`: the options, and any positionals written early. */
-  head: string[];
-  /** Everything after it, each token positional however it is spelled. */
-  tail: string[];
+/** Everything one `xmd workflow` invocation asks for, by the action it names. */
+interface WorkflowConfig {
+  action?: string;
+  target?: string;
+  argument?: string;
+  value?: string;
+  id?: string;
+  at?: string;
+  verbose: boolean;
+  raw: boolean;
+  secretDetection: boolean;
+  json: boolean;
+  forkable: boolean;
+  status?: string;
+  artifact?: string;
+  output?: string;
 }
 
-function separateArgs(args: string[]): SeparatedArgs {
-  const at = args.indexOf("--");
-  return at === -1
-    ? { head: args, tail: [] }
-    : { head: args.slice(0, at), tail: args.slice(at + 1) };
+/** What an invocation that named no action at all asks for. */
+const NO_WORKFLOW_ACTION: WorkflowConfig = {
+  verbose: false,
+  raw: false,
+  secretDetection: true,
+  json: false,
+  forkable: false,
+};
+
+/**
+ * The action, its positionals and its options, read from the intent.
+ *
+ * Every action is its own route, so each model holds only what that action
+ * accepts and the action itself is the route rather than a field. A positional
+ * written after `--` reaches the intent as a literal instead of an argument;
+ * the literals fill the remaining positional slots in the order they were
+ * written, because after the separator a token is positional by position
+ * rather than by spelling.
+ */
+function workflowRequestOf(
+  intent: AnyXmdIntent | undefined,
+  args: readonly string[],
+): WorkflowConfig {
+  if (intent === undefined || !isExecute(intent)) {
+    return { ...NO_WORKFLOW_ACTION, action: workflowActionOf(args) };
+  }
+  const literals = [...intent.literals].map((token) => token.text);
+
+  switch (intent.route) {
+    case "/workflow/start":
+      return positioned(
+        {
+          ...NO_WORKFLOW_ACTION,
+          action: "start",
+          target: intent.model.target,
+          id: intent.model.id,
+          verbose: intent.model.verbose,
+          raw: intent.model.raw,
+          secretDetection: intent.model.secretDetection,
+        },
+        literals,
+      );
+    case "/workflow/resume":
+      return positioned(
+        {
+          ...NO_WORKFLOW_ACTION,
+          action: "resume",
+          target: intent.model.target,
+          verbose: intent.model.verbose,
+          raw: intent.model.raw,
+          secretDetection: intent.model.secretDetection,
+        },
+        literals,
+      );
+    case "/workflow/fork":
+      return positioned(
+        {
+          ...NO_WORKFLOW_ACTION,
+          action: "fork",
+          target: intent.model.target,
+          argument: intent.model.argument,
+          id: intent.model.id,
+          at: intent.model.at,
+          verbose: intent.model.verbose,
+          raw: intent.model.raw,
+          secretDetection: intent.model.secretDetection,
+        },
+        literals,
+      );
+    case "/workflow/answer":
+      return positioned(
+        {
+          ...NO_WORKFLOW_ACTION,
+          action: "answer",
+          target: intent.model.target,
+          argument: intent.model.argument,
+          value: intent.model.value,
+          secretDetection: intent.model.secretDetection,
+        },
+        literals,
+      );
+    case "/workflow/status":
+      return positioned(
+        {
+          ...NO_WORKFLOW_ACTION,
+          action: "status",
+          target: intent.model.target,
+          json: intent.model.json,
+          artifact: intent.model.artifact,
+        },
+        literals,
+      );
+    case "/workflow/list":
+      return positioned(
+        {
+          ...NO_WORKFLOW_ACTION,
+          action: "list",
+          json: intent.model.json,
+          status: intent.model.status,
+        },
+        literals,
+      );
+    case "/workflow/history":
+      return positioned(
+        {
+          ...NO_WORKFLOW_ACTION,
+          action: "history",
+          target: intent.model.target,
+          json: intent.model.json,
+          forkable: intent.model.forkable,
+          artifact: intent.model.artifact,
+        },
+        literals,
+      );
+    case "/workflow/cancel":
+      return positioned(
+        { ...NO_WORKFLOW_ACTION, action: "cancel", target: intent.model.target },
+        literals,
+      );
+    case "/workflow/delete":
+      return positioned(
+        { ...NO_WORKFLOW_ACTION, action: "delete", target: intent.model.target },
+        literals,
+      );
+    case "/workflow/export":
+      return positioned(
+        {
+          ...NO_WORKFLOW_ACTION,
+          action: "export",
+          target: intent.model.target,
+          output: intent.model.output,
+        },
+        literals,
+      );
+    default:
+      return { ...NO_WORKFLOW_ACTION, action: workflowActionOf(args) };
+  }
 }
 
 /**
- * The subcommand and target one `xmd workflow` invocation names.
+ * The subcommand token one `xmd workflow` invocation wrote.
  *
- * The parser classifies what it can — everything before `--` — and the tail
- * supplies the rest in order. A token's spelling decides nothing here: after the
- * separator it is positional because of where it is.
+ * Read from argv rather than from the intent, because the intent may not
+ * exist: a fourth positional or an unknown action is a parse failure, and
+ * both of those are refusals this command words itself. An action that names
+ * no route still has to be named back to the caller.
  */
-function workflowPositionals(
-  config: { action?: string; target?: string; argument?: string; value?: string },
-  tail: string[],
-): { action?: string; target?: string; argument?: string; value?: string } {
-  const named = [config.action, config.target, config.argument, config.value].filter(
-    (written) => written !== undefined,
+function workflowActionOf(args: readonly string[]): string | undefined {
+  const takesValue = valueFlags();
+  const start = args.indexOf("workflow");
+  if (start === -1) {
+    return undefined;
+  }
+  for (let index = start + 1; index < args.length; index += 1) {
+    const token = args[index];
+    if (token === undefined || token === "--") {
+      continue;
+    }
+    if (takesValue.has(token)) {
+      index += 1;
+      continue;
+    }
+    if (token.startsWith("-") && token !== "-") {
+      continue;
+    }
+    return token;
+  }
+  return undefined;
+}
+
+/** The positional slots an action leaves open, filled from the literals. */
+function positioned(config: WorkflowConfig, literals: readonly string[]): WorkflowConfig {
+  const written = [config.target, config.argument, config.value].filter(
+    (slot) => slot !== undefined,
   );
-  const [action, target, argument, value] = [...named, ...tail];
-  return { action, target, argument, value };
+  const [target, argument, value] = [...written, ...literals];
+  return { ...config, target, argument, value };
 }
 
 /**
@@ -2182,8 +2264,6 @@ const UPGRADE_HELP = [
   "this command with one atomic rename. Anything that fails before that rename",
   "leaves the installed xmd exactly as it was.",
 ].join("\n");
-
-const COMMAND_NAMES = ["run", "plan", "test", "syntax", "upgrade", "test-agent", "workflow"];
 
 /**
  * What a caller has to know to write a filename that contains reference
@@ -2264,24 +2344,31 @@ const PLAN_REQUEST_HELP = [
  * during the props phase is reinstated there rather than falling back to
  * program help.
  */
-function renderHelp(phase: PropsPhase): string {
-  const [first] = phase.args;
-  const command = COMMAND_NAMES.includes(first) ? first : phase.root ? "run" : undefined;
+function renderHelp(phase: PropsPhase, intent: AnyXmdIntent | undefined): string {
+  // The help intent names the deepest route the caller selected, which is the
+  // definition to describe. A shorthand run selects the root, and the root is
+  // the program page unless a document was named — in which case the page is
+  // the named `run` command's, exactly as it has always been.
+  const selected = intent !== undefined && isHelp(intent) ? [...intent.path] : [];
+  const path = selected.length > 0 ? selected : phase.root ? ["run"] : [];
 
-  if (!command) {
-    return xmd.help({ args: phase.args });
+  if (path.length === 0) {
+    return renderProgramHelp();
   }
 
-  const help = xmd.parse({ args: [command, "--help"] });
-  const base = help.ok && help.value.config.help ? help.value.config.text : xmd.help({ args: [] });
+  const definition = routeFor(path);
+  const base = definition === undefined ? renderProgramHelp() : renderRouteHelp(definition, path);
+  const [command] = path;
   const epilogue =
-    command === "run"
-      ? RUN_SOURCE_HELP
-      : command === "plan"
-        ? PLAN_REQUEST_HELP
-        : command === "upgrade"
-          ? UPGRADE_HELP
-          : "";
+    path.length > 1
+      ? ""
+      : command === "run"
+        ? RUN_SOURCE_HELP
+        : command === "plan"
+          ? PLAN_REQUEST_HELP
+          : command === "upgrade"
+            ? UPGRADE_HELP
+            : "";
   const withSource = epilogue === "" ? base : `${base}\n\n${epilogue}`;
 
   if (!phase.root) {
@@ -2361,7 +2448,7 @@ function* resolveRunProps(
  */
 function* dispatch(
   evalFlags: EvalFlags,
-  helpRequest: { requested: boolean; args: string[] },
+  helpRequest: HelpRequest,
   installService: HostServiceInstaller,
   upgrade: UpgradeAssembly,
   installRepositories: RepositoryInstaller,
@@ -2391,31 +2478,106 @@ function* dispatch(
     return;
   }
 
-  const parsed = xmd.parse({ args: propsPhase.args });
+  // The second parse of this invocation, and the checkpoint gap is why there
+  // is one. The first ran in the props phase to find the document; this one
+  // runs against the argv that phase stripped of the options that document
+  // declares. `checkpoint()` can only add values to parameters that already
+  // exist, so a document's generated options cannot be introduced by a
+  // dynamic phase and the argv has to be prepared before parsing. This is not
+  // a checkpoint migration.
+  //
+  // Two parses of the same command line, and they answer different questions.
+  // The control parse keeps `-h` and `--version` in argv, so Configliere
+  // settles the method and the route it applies to. The model parse has them
+  // removed, because a help or version intent carries no model and every
+  // document-aware page needs the document the command line named.
+  const lifted = liftArgs(propsPhase.args);
+  const settled = parseLifted(lifted);
+  const controls = controlOutcome(helpRequest.requested, lifted);
+  const intent = settledIntent(controls ?? settled);
 
   if (helpRequest.requested) {
-    console.log(renderHelp(propsPhase));
+    console.log(renderHelp(propsPhase, intent));
     yield* exit(0);
     return;
   }
 
-  if (!parsed.ok) {
-    console.error(parsed.error.message);
+  // A root version request writes the bare version. Every other route answers
+  // it the way it always has: `--version` is an option that route does not
+  // define, and its own grammar reports it.
+  if (lifted.version && intent !== undefined && isVersion(intent) && intent.route === "/") {
+    console.log(renderVersion(intent));
+    yield* exit(0);
+    return;
+  }
+
+  // Before the parse is answered, because the `=` spelling reaches the toggle
+  // as a setter it does not read and is then reported as an unexpected token.
+  // The safety message is the one a caller who wrote it needs.
+  const secretDetectionError = secretDetectionGrammarError(evalFlags.rest);
+  if (secretDetectionError) {
+    console.error(secretDetectionError);
     yield* exit(1);
     return;
   }
 
-  const { version, config: command } = parsed.value;
-
-  if (version) {
-    console.log(version);
-    yield* exit(0);
+  if (!settled.ok) {
+    // The released parser stopped at the first token it did not define and
+    // refused none of them, so a run written with a mistyped option refused
+    // for want of a root. That refusal is the accepted message, and the stock
+    // diagnostic does not replace it.
+    const runForm =
+      commandToken(propsPhase.args) === undefined || commandToken(propsPhase.args) === "run";
+    if (runForm && propsPhase.root === undefined && unexpectedOnly(settled)) {
+      console.error(MISSING_ROOT_DOCUMENT);
+      yield* exit(1);
+      return;
+    }
+    // An option that belongs to another command is refused by name, because
+    // the command knows where it does belong and the route layer only knows
+    // that it did not expect it.
+    const command = commandToken(propsPhase.args);
+    const stray = command === undefined ? undefined : strayCommandOption(command, evalFlags.rest);
+    if (stray !== undefined) {
+      console.error(stray);
+      yield* exit(1);
+      return;
+    }
+    // `xmd upgrade` reads its own fixed grammar, and it enumerates what the
+    // command accepts. That sentence is the one a caller needs, and it is
+    // written before the packaged policy exists.
+    if (command === "upgrade") {
+      const scan = scanUpgradeArgs(helpRequest.args);
+      if (scan.error !== undefined) {
+        console.error(scan.error);
+        yield* exit(1);
+        return;
+      }
+    }
+    // `xmd workflow` names its own refusals — a missing subcommand, one it
+    // does not define, an option belonging to another action. The route layer
+    // reports that the address supports no execution, which is true and is
+    // not what a caller who wrote `xmd workflow` needs to read.
+    if (namesWorkflow(propsPhase.args)) {
+      const refused = parseWorkflowRequest(
+        { ...workflowRequestOf(undefined, propsPhase.args), ...propsPhase.workflow },
+        evalFlags.rest,
+      );
+      if (!refused.ok) {
+        console.error(refused.error.message);
+        yield* exit(1);
+        return;
+      }
+    }
+    console.error(parseFailure(settled).message);
+    yield* exit(1);
     return;
   }
 
-  if (command.help) {
-    console.log(command.text);
-    yield* exit(0);
+  const command = settled;
+  if (!isExecute(command)) {
+    console.error(`xmd does not support ${command.method}`);
+    yield* exit(1);
     return;
   }
 
@@ -2429,24 +2591,15 @@ function* dispatch(
     return;
   }
 
-  const secretDetectionError = secretDetectionGrammarError(evalFlags.rest);
-  if (secretDetectionError) {
-    console.error(secretDetectionError);
-    yield* exit(1);
-    return;
-  }
-
-  switch (command.name) {
-    case "run": {
-      const config = command.config;
+  switch (command.route) {
+    case "/":
+    case "/run": {
+      const config = command.model;
       // Reported here rather than in the props phase: `xmd run --help` and
       // `xmd --help` describe the command without one, and they are handled
       // above.
       if (!propsPhase.root) {
-        console.error(
-          "xmd run requires a root document — `xmd run <document.md>`, `xmd run -`, or " +
-            `\`xmd run ${EVAL_OPTION} '<markdown>'\``,
-        );
+        console.error(MISSING_ROOT_DOCUMENT);
         yield* exit(1);
         break;
       }
@@ -2507,8 +2660,8 @@ function* dispatch(
       }
       break;
     }
-    case "plan": {
-      const config = command.config;
+    case "/plan": {
+      const config = command.model;
       const scan = propsPhase.plan;
       if (scan?.request === undefined) {
         console.error('xmd plan names the command first — write `xmd plan "<request>" [options]`');
@@ -2563,7 +2716,7 @@ function* dispatch(
       }
       break;
     }
-    case "upgrade": {
+    case "/upgrade": {
       // Fixed grammar first, and it reads nothing: a command line this command
       // does not define is answered before the packaged policy exists, before
       // the installation is opened and before GitHub is asked anything.
@@ -2634,63 +2787,40 @@ function* dispatch(
       }
       break;
     }
-    case "test": {
-      const strayTimeout = findTimeoutFlag(evalFlags.rest);
-      if (strayTimeout) {
-        console.error(
-          `unrecognized option for xmd test: ${strayTimeout} — timeout options are exclusive to ` +
-            belongsTo(strayTimeout),
-        );
-        yield* exit(1);
-        break;
-      }
-      const agentFlag = findAgentOnlyFlag(evalFlags.rest);
-      if (agentFlag) {
-        console.error(
-          `unrecognized option for xmd test: ${agentFlag} — agent options are exclusive to ` +
-            belongsTo(agentFlag),
-        );
-        yield* exit(1);
-        break;
-      }
-      const propsFlag = findPropsFlag(evalFlags.rest);
-      if (propsFlag) {
-        console.error(
-          `unrecognized option for xmd test: ${propsFlag} — document properties are exclusive to ` +
-            "xmd run",
-        );
+    case "/test": {
+      const stray = strayCommandOption("test", evalFlags.rest);
+      if (stray !== undefined) {
+        console.error(stray);
         yield* exit(1);
         break;
       }
       yield* test(
-        { ...command.config, retainProcessOutput: keepsProcessOutput(command.config.journal) },
-        evalFlags.rest,
+        { ...command.model, retainProcessOutput: keepsProcessOutput(command.model.journal) },
+        lifted.pattern,
         installService,
         installRepositories,
       );
       break;
     }
-    case "syntax": {
+    case "/syntax": {
       // One inspection per invocation, then one complete document. A failure
       // writes nothing to stdout: a healthy subset printed as though it were
       // the whole set of symbols would read as complete.
       let rendered: string;
       try {
-        const named = command.config.component;
+        const named = command.model.component;
         if (named === undefined) {
           // The compact list of symbols, unchanged: routine discovery output and
           // every default Plan prompt read it, and long documentation would make
           // both unnecessarily large.
-          const catalog = yield* syntaxSymbols(command.config.include);
-          rendered = command.config.json
-            ? renderSyntaxJson(catalog)
-            : renderSyntaxMarkdown(catalog);
+          const catalog = yield* syntaxSymbols(command.model.include);
+          rendered = command.model.json ? renderSyntaxJson(catalog) : renderSyntaxMarkdown(catalog);
         } else {
           // The same selection, index and renderer `<Syntax names={…}>` uses, so
           // the command and the component cannot describe one component two
           // ways. JSON stays the compact projection; it is the symbols' shape,
           // and documentation is prose rather than a symbol member.
-          rendered = yield* renderSyntaxDocumentation(command.config.include, [named]);
+          rendered = yield* renderSyntaxDocumentation(command.model.include, [named]);
         }
       } catch (error) {
         console.error(describeError(error));
@@ -2708,20 +2838,27 @@ function* dispatch(
       }
       break;
     }
-    case "test-agent":
-      yield* runTestAgentWorker({ connect: command.config.connect });
+    case "/test-agent":
+      yield* runTestAgentWorker({ connect: command.model.connect });
       break;
-    case "workflow": {
-      // The parser saw only the head, so the positionals the separator carried
-      // come from the props phase rather than from a second parse of an argv
-      // they are not in.
-      const config = { ...command.config, ...propsPhase.workflow };
-      const agentFlag = findAgentOnlyFlag(evalFlags.rest);
-      if (agentFlag) {
-        console.error(
-          `unrecognized option for xmd workflow: ${agentFlag} — agent options are exclusive to ` +
-            belongsTo(agentFlag),
-        );
+    case "/workflow/start":
+    case "/workflow/resume":
+    case "/workflow/fork":
+    case "/workflow/answer":
+    case "/workflow/status":
+    case "/workflow/list":
+    case "/workflow/history":
+    case "/workflow/cancel":
+    case "/workflow/delete":
+    case "/workflow/export": {
+      // Every action is its own route, so the model is that action's alone and
+      // the action itself is the route. The positionals the props phase
+      // established stay authoritative: they were read from the argv that
+      // still had its separator.
+      const config = { ...workflowRequestOf(command, propsPhase.args), ...propsPhase.workflow };
+      const stray = strayCommandOption("workflow", evalFlags.rest);
+      if (stray !== undefined) {
+        console.error(stray);
         yield* exit(1);
         break;
       }
@@ -2882,18 +3019,15 @@ export function* runXmd(
   // Help, `--version`, and the commands that execute nothing stay outside a run
   // lifecycle, which is why the timeout options are read only for the two that
   // end in one.
-  const provisional = xmd.parse({ args: helpRequest.args });
-  const selected = provisional.ok ? provisional.value.config : undefined;
+  const provisional = settledIntent(parseLifted(liftArgs(helpRequest.args)));
+  const selected =
+    provisional !== undefined && isExecute(provisional) ? provisional.route : undefined;
   // The two commands a `--timeout` bounds. `xmd plan`'s deadline encloses
   // something different from a run's — the symbols, the assistant session,
   // every repair, the human review, provider teardown, final validation and the
   // artifact — and covers no later program, because it starts none.
-  const planning = selected !== undefined && !selected.help && selected.name === "plan";
-  const bounded =
-    !helpRequest.requested &&
-    selected !== undefined &&
-    !selected.help &&
-    (selected.name === "run" || planning);
+  const planning = selected === "/plan";
+  const bounded = !helpRequest.requested && (selected === "/" || selected === "/run" || planning);
 
   if (!bounded) {
     return yield* dispatch(
