@@ -33,7 +33,7 @@ const ROOT = fileURLToPath(new URL("../../", import.meta.url));
 const TIMEOUT = 180_000;
 
 /** The workspace members a consumer of core has to resolve. */
-const MEMBERS = ["core", "runtime", "durable-streams", "acp"] as const;
+const MEMBERS = ["core", "runtime", "durable-streams", "grid", "acp"] as const;
 
 /** Every documentation asset the product ships, by package-relative path. */
 const ASSETS: Record<string, readonly string[]> = {

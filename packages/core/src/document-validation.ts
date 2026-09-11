@@ -74,9 +74,9 @@ import {
   strayCaseMessage,
   strayElseMessage,
   strayStructuralMessage,
-  strayTerminalMessage,
+  strayPaneMessage,
   switchStructure,
-  terminalGridStructure,
+  gridStructure,
 } from "./structural-rules.ts";
 import type { StructuralViolation } from "./structural-rules.ts";
 import type {
@@ -316,8 +316,8 @@ interface LexicalContext {
   readonly insideIf: boolean;
   /** Whether a `<Switch>` in this source lexically encloses this point. */
   readonly insideSwitch: boolean;
-  /** Whether a `<Terminal.Grid>` in this source lexically encloses this point. */
-  readonly insideTerminalGrid: boolean;
+  /** Whether a `<Grid>` in this source lexically encloses this point. */
+  readonly insideGrid: boolean;
   /** Whether the immediate parent is an `<Answers>`. */
   readonly underAnswers: boolean;
 }
@@ -496,7 +496,7 @@ class ValidationState {
         insideLoop: false,
         insideIf: false,
         insideSwitch: false,
-        insideTerminalGrid: false,
+        insideGrid: false,
         underAnswers: false,
       });
     }
@@ -1107,22 +1107,22 @@ class ValidationState {
         return context.insideSwitch
           ? []
           : [{ code: "structural-usage-invalid", source: "Case", message: strayCaseMessage() }];
-      case "Terminal.Grid":
+      case "Grid":
         // The whole layout is decided from source, so every pane's own mistake
         // is reported where it was written — and so is a construct written
         // below the grid that the grid does not lay out.
-        return terminalGridStructure(segment).violations;
-      case "Terminal":
-        // A well-placed `<Terminal>` is its grid's, and one placed wrongly
+        return gridStructure(segment).violations;
+      case "Pane":
+        // A well-placed `<Pane>` is its grid's, and one placed wrongly
         // under a grid is already reported by that grid's own structure. What
         // is left is a pane with no grid above it at all.
-        return context.insideTerminalGrid
+        return context.insideGrid
           ? []
           : [
               {
                 code: "structural-usage-invalid",
-                source: "Terminal",
-                message: strayTerminalMessage(),
+                source: "Pane",
+                message: strayPaneMessage(),
               },
             ];
       case "Else":
@@ -1295,7 +1295,7 @@ function childContext(segment: ComponentElement, context: LexicalContext): Lexic
     insideLoop: context.insideLoop || segment.name === "Loop",
     insideIf: context.insideIf || segment.name === "If",
     insideSwitch: context.insideSwitch || segment.name === "Switch",
-    insideTerminalGrid: context.insideTerminalGrid || segment.name === "Terminal.Grid",
+    insideGrid: context.insideGrid || segment.name === "Grid",
     underAnswers: segment.name === "Answers",
   };
 }

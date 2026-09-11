@@ -16,7 +16,8 @@
 import { createApi } from "@effectionx/context-api";
 import { scoped } from "effection";
 import type { Operation, Stream } from "effection";
-import { cwd, flushOutput, reserveTerminal } from "@executablemd/runtime";
+import { cwd } from "@executablemd/runtime";
+import { flushOutput, reserveTerminal } from "@executablemd/grid";
 import { Agent, AGENT_API } from "./agent-api.ts";
 import type {
   AgentApi,

@@ -37,7 +37,7 @@ import type { AgentComponentsOptions, AgentProviderOptions, Json } from "@execut
 import { createPartitionedAcpxProvider } from "@executablemd/acp";
 import type { AcpxProviderDependencies } from "@executablemd/acp";
 import { installInvocationAgentProvider } from "@executablemd/core/host";
-import { installControlledLauncher } from "@executablemd/runtime";
+import { installControlledLauncher } from "@executablemd/grid/test";
 import type {
   ChildDeclaration,
   ChildDeclarationChild,

@@ -30,7 +30,7 @@ jobs:
       - name: Validate the manifests declare this version
         run: |
           VERSION="${{ steps.resolve.outputs.value }}"
-          for f in packages/durable-streams/deno.json packages/runtime/deno.json packages/core/deno.json packages/acp/deno.json packages/testing/deno.json packages/test-agent/deno.json packages/web/deno.json packages/workflow/deno.json packages/cli/deno.json packages/code-review-agent/deno.json; do
+          for f in packages/durable-streams/deno.json packages/grid/deno.json packages/runtime/deno.json packages/core/deno.json packages/acp/deno.json packages/grid-tmux/deno.json packages/testing/deno.json packages/test-agent/deno.json packages/web/deno.json packages/workflow/deno.json packages/cli/deno.json packages/code-review-agent/deno.json; do
             declared="$(jq -r .version "$f")"
             if [ "$declared" != "$VERSION" ]; then
               echo "::error::$f declares $declared, not $VERSION — the tag does not match the manifests"
@@ -68,6 +68,13 @@ jobs:
       package: packages/durable-streams
       version: ${{ needs.version.outputs.value }}
 
+  grid:
+    needs: [version, durable-streams]
+    uses: ./.github/workflows/publish-one.yml
+    with:
+      package: packages/grid
+      version: ${{ needs.version.outputs.value }}
+
   runtime:
     needs: [version]
     uses: ./.github/workflows/publish-one.yml
@@ -76,17 +83,24 @@ jobs:
       version: ${{ needs.version.outputs.value }}
 
   core:
-    needs: [version, durable-streams, runtime]
+    needs: [version, durable-streams, grid, runtime]
     uses: ./.github/workflows/publish-one.yml
     with:
       package: packages/core
       version: ${{ needs.version.outputs.value }}
 
   acp:
-    needs: [version, core, runtime]
+    needs: [version, core, grid, runtime]
     uses: ./.github/workflows/publish-one.yml
     with:
       package: packages/acp
+      version: ${{ needs.version.outputs.value }}
+
+  grid-tmux:
+    needs: [version, grid]
+    uses: ./.github/workflows/publish-one.yml
+    with:
+      package: packages/grid-tmux
       version: ${{ needs.version.outputs.value }}
 
   testing:
@@ -97,7 +111,7 @@ jobs:
       version: ${{ needs.version.outputs.value }}
 
   test-agent:
-    needs: [version, acp, core, durable-streams, runtime, testing]
+    needs: [version, acp, core, durable-streams, grid, runtime, testing]
     uses: ./.github/workflows/publish-one.yml
     with:
       package: packages/test-agent
@@ -118,7 +132,7 @@ jobs:
       version: ${{ needs.version.outputs.value }}
 
   cli:
-    needs: [version, acp, core, durable-streams, runtime, test-agent, testing, web, workflow]
+    needs: [version, acp, core, durable-streams, grid, grid-tmux, runtime, test-agent, testing, web, workflow]
     uses: ./.github/workflows/publish-one.yml
     with:
       package: packages/cli

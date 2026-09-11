@@ -88,8 +88,8 @@ import {
   AgentSessionRecoveryRequired,
   cwd,
   ExecutableObservationError,
-  nativeLaunch,
 } from "@executablemd/runtime";
+import { nativeLaunch } from "@executablemd/grid";
 import type {
   AgentSessionCoordinator,
   AgentSessionKey,
@@ -2760,7 +2760,7 @@ function* useAcpxProviderState(
             //
             // The launch runs in a scope of its own so that this owner can bring
             // it down deliberately and watch how that goes. A cancelled launch —
-            // the reader closing a terminal grid is one — unwinds past every
+            // the reader closing a grid is one — unwinds past every
             // statement after it, so a decision written down here would never be
             // reached; written as this scope's cleanup, it is reached on every
             // path there is.

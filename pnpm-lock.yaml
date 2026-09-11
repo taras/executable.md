@@ -147,6 +147,9 @@ importers:
       '@executablemd/core':
         specifier: workspace:*
         version: link:../core
+      '@executablemd/grid':
+        specifier: workspace:*
+        version: link:../grid
       '@executablemd/runtime':
         specifier: workspace:*
         version: link:../runtime
@@ -171,6 +174,12 @@ importers:
       '@executablemd/durable-streams':
         specifier: workspace:*
         version: link:../durable-streams
+      '@executablemd/grid':
+        specifier: workspace:*
+        version: link:../grid
+      '@executablemd/grid-tmux':
+        specifier: workspace:*
+        version: link:../grid-tmux
       '@executablemd/runtime':
         specifier: workspace:*
         version: link:../runtime
@@ -239,6 +248,9 @@ importers:
       '@executablemd/durable-streams':
         specifier: workspace:*
         version: link:../durable-streams
+      '@executablemd/grid':
+        specifier: workspace:*
+        version: link:../grid
       '@executablemd/runtime':
         specifier: workspace:*
         version: link:../runtime
@@ -294,6 +306,45 @@ importers:
         specifier: 4.1.0
         version: 4.1.0
 
+  packages/grid:
+    dependencies:
+      '@effectionx/context-api':
+        specifier: 0.6.0
+        version: 0.6.0(effection@4.1.0)
+      '@effectionx/fs':
+        specifier: 0.3.0
+        version: 0.3.0(effection@4.1.0)
+      '@effectionx/node':
+        specifier: 0.2.4
+        version: 0.2.4(effection@4.1.0)
+      '@effectionx/process':
+        specifier: 0.8.1
+        version: 0.8.1(effection@4.1.0)
+      '@executablemd/durable-streams':
+        specifier: workspace:*
+        version: link:../durable-streams
+      effection:
+        specifier: 4.1.0
+        version: 4.1.0
+
+  packages/grid-tmux:
+    dependencies:
+      '@effectionx/fs':
+        specifier: 0.3.0
+        version: 0.3.0(effection@4.1.0)
+      '@effectionx/process':
+        specifier: 0.8.1
+        version: 0.8.1(effection@4.1.0)
+      '@executablemd/grid':
+        specifier: workspace:*
+        version: link:../grid
+      effection:
+        specifier: 4.1.0
+        version: 4.1.0
+      zod:
+        specifier: ^4.3.6
+        version: 4.4.3
+
   packages/runtime:
     dependencies:
       '@effectionx/context-api':
@@ -338,6 +389,9 @@ importers:
       '@executablemd/durable-streams':
         specifier: workspace:*
         version: link:../durable-streams
+      '@executablemd/grid':
+        specifier: workspace:*
+        version: link:../grid
       '@executablemd/runtime':
         specifier: workspace:*
         version: link:../runtime

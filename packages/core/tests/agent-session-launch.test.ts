@@ -33,22 +33,23 @@ import { parsePrepared } from "../src/agent/launch-journal.ts";
 import type { AgentLaunchRequest } from "../src/agent/launch-request.ts";
 import { installAgentComponents } from "../src/agent/components.ts";
 import type { AgentProviderFactory } from "../src/agent/provider-api.ts";
+import { API, useHostFiles } from "@executablemd/runtime";
 import {
-  API,
-  installControlledLauncher,
   NATIVE_LAUNCHER_UNAVAILABLE,
   nativeLaunch,
-  prepareControlledComposite,
   reserveTerminal,
-  TerminalGrids,
-  terminalProviderLog,
-  useHostFiles,
-} from "@executablemd/runtime";
-import type { NativeLaunchOutcome, NativeLaunchRequest } from "@executablemd/runtime";
-import { createTerminalGridClaims } from "../src/terminal/authority.ts";
-import { usePaneNativeLauncher } from "../src/terminal/pane-launcher.ts";
-import { installTerminalGridProfile } from "../src/terminal/profile.ts";
-import { registerTerminalProvider } from "../src/terminal/provider-api.ts";
+  Grids,
+} from "@executablemd/grid";
+import {
+  installControlledLauncher,
+  prepareControlledComposite,
+  gridProviderLog,
+} from "@executablemd/grid/test";
+import type { NativeLaunchOutcome, NativeLaunchRequest } from "@executablemd/grid";
+import { createGridClaims } from "@executablemd/grid/lifecycle";
+import { usePaneNativeLauncher } from "@executablemd/grid";
+import { installGridProfile } from "../src/grid/profile.ts";
+import { registerGridProvider } from "@executablemd/grid";
 import type { Json } from "../src/types.ts";
 
 const ALPHABET = "abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ";
@@ -225,7 +226,7 @@ interface RunOptions {
   ) => Operation<unknown>;
   secretDetection?: boolean;
   /**
-   * Install a controlled terminal provider, so the document can open a grid.
+   * Install a controlled grid provider, so the document can open a grid.
    *
    * The reader stays until every pane has settled, so a row about what a pane
    * launched is not racing the close that would cancel it.
@@ -305,7 +306,7 @@ function* runDoc(doc: string, options: RunOptions = {}): Operation<Run> {
       });
     }
 
-    const providerLog = terminalProviderLog();
+    const providerLog = gridProviderLog();
     if (options.grid === true) {
       // The reader leaves once every pane has settled. Leaving sooner is a real
       // thing a reader does — TG12 owns that — but a row about what a pane
@@ -313,8 +314,8 @@ function* runDoc(doc: string, options: RunOptions = {}): Operation<Run> {
       const settled = withResolvers<void>();
       let panes = 0;
       let done = 0;
-      yield* registerTerminalProvider("controlled", function* (_settings, authority) {
-        yield* TerminalGrids.around(
+      yield* registerGridProvider("controlled", function* (_settings, authority) {
+        yield* Grids.around(
           {
             *open([request]) {
               const composite = yield* prepareControlledComposite(request, {
@@ -359,7 +360,7 @@ function* runDoc(doc: string, options: RunOptions = {}): Operation<Run> {
           { at: "min" },
         );
       });
-      yield* installTerminalGridProfile({ provider: "controlled" });
+      yield* installGridProfile({ provider: "controlled" });
     }
 
     yield* installAgentComponents({
@@ -852,7 +853,7 @@ describe("Tier SL — native session launch", () => {
 
 /**
  * Tier SP — `<Session.Launch>` inside a terminal pane
- * (specs/native-agent-session-launch-spec.md §Terminal-grid composition).
+ * (specs/native-agent-session-launch-spec.md §Grid composition).
  *
  * The launch is the same launch. Nothing here passes a pane to it, and its
  * request, result and retained phases are the ones a root launch would have.
@@ -864,14 +865,14 @@ describe("Tier SL — native session launch", () => {
 describe("Tier SP — a launch inside a terminal pane", () => {
   /** Two panes, each launching a session of its own. */
   const PANES = [
-    "<Terminal.Grid columns={2}>",
-    '<Terminal title="Left">',
+    "<Grid columns={2}>",
+    '<Pane title="Left">',
     '<Session.Launch session="left">left work</Session.Launch>',
-    "</Terminal>",
-    '<Terminal title="Right">',
+    "</Pane>",
+    '<Pane title="Right">',
     '<Session.Launch session="right">right work</Session.Launch>',
-    "</Terminal>",
-    "</Terminal.Grid>",
+    "</Pane>",
+    "</Grid>",
     "",
   ].join("\n");
 
@@ -1008,7 +1009,7 @@ describe("Tier SP — a launch inside a terminal pane", () => {
   }
 
   it("SP5: a pane is held until both the child and the lease around it are done", function* () {
-    const claims = createTerminalGridClaims({
+    const claims = createGridClaims({
       columns: 1,
       rows: 1,
       panes: [{ ordinal: 0, title: "Only", row: 0, column: 0, form: "paired" }],

@@ -736,3 +736,83 @@ journal- and root-publication-stability snapshots in
 `packages/cli/tests/workflow-suspension.test.ts`, where an `API.Files` call
 count is explicitly not once-only evidence — document re-expansion legitimately
 enters that boundary before the durable effect underneath restores.
+
+## DEC-016: Grid domain and tmux adapter are separate workspace packages
+
+**Status:** Decided
+
+**Date:** 2026-09-03
+
+### Context
+
+The grid delivery proved one provider-neutral lifecycle and one tmux
+implementation. Its first public vocabulary called the structure
+`Terminal.Grid` and every cell `Terminal`, and extracted the neutral domain as
+`@executablemd/terminal`. That makes a physical terminal the identity of every
+presentation cell. A read-only Agent session view is pane content without being
+the terminal capability itself, and another multiplexer must not require a
+second document language.
+
+The stack has not merged or shipped. Its component names, package names, and
+temporary exports are therefore not compatibility surfaces. Preserving them
+would make the rejected vocabulary permanent and leave a second provider
+coupled to a terminal-specific public domain.
+
+### Decision
+
+`Grid` and `Pane` are the provider-neutral presentation concepts. Core owns the
+authored `<Grid>` and `<Pane>` structural syntax, source-position journal
+descriptions, execution-profile composition, Agent sessions, and expansion
+integration. A paired pane contains isolated document flow; a self-closing pane
+retains the host's default-shell behavior.
+
+Terminal remains the technical capability used where a PTY,
+foreground-terminal lease, terminal process observation, native interactive
+process, or shell requires it. It does not name the grid or every pane.
+
+Ownership is divided between two publishable workspace packages:
+
+- `@executablemd/grid` owns native foreground-launch routing and terminal
+  reservation; provider-neutral grid and pane requests, composites, states,
+  errors, row-major layout, provider registration and direct authority;
+  readiness, live and durable lifecycle, replay, pane launch routing, terminal
+  process observation, quiescence, and controlled test surfaces.
+- `@executablemd/grid-tmux` implements that domain with tmux: capability
+  probing, private server and client control, explicit pane placement,
+  authenticated worker channels and protocol, worker child creation, display,
+  close-signal distinction, and ordered teardown.
+
+The canonical descriptors, functions, types, constants, and errors live in
+those packages. The former runtime and core terminal exports, old CLI terminal
+implementation paths, `@executablemd/terminal`, and
+`@executablemd/terminal-tmux` are deleted. Every repository import uses the
+canonical grid surface. No compatibility component, package, module, alias,
+forwarding barrel, wrapper, subclass, or duplicate descriptor remains.
+
+The neutral package has no dependency on runtime, core, CLI, or the tmux
+package. Core depends on grid. Grid-tmux depends on grid and does not depend on
+runtime, core, or CLI. CLI depends on both packages and on core and runtime.
+Runtime has no grid dependency. Host-specific POSIX terminal observation is an
+explicit grid adapter; Deno and compiled entrypoints install it in the
+supervising host and pane worker, while Node and Bun continue to install neither
+observer nor provider.
+
+### Consequences
+
+Any grid provider implements the public neutral contract without importing CLI
+or tmux. The tmux provider remains an `xmd run` facility and adds nothing to
+Workflow. This removal is non-breaking because none of the rejected names has
+shipped.
+
+The rename preserves the provider name `tmux`, hidden worker invocation,
+durable behavior, private tmux protocol, terminal capability, launch routing,
+layout, readiness, cancellation, replay, teardown, and provider identity. It
+changes the authored syntax, canonical package and import names, public grid
+descriptors and errors, documentation, diagnostics that name the authored
+constructs, and the evidence that enforces those surfaces.
+
+Both packages participate in workspace version lockstep, npm and JSR
+publication, generated dependency ordering, package discovery, runtime test
+discovery, and release verification. Moving tests changes the measured corpus,
+so its weights are remeasured by the repository workflow rather than edited by
+hand.

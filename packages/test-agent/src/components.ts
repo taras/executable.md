@@ -42,7 +42,8 @@ import {
 import type { ErrorSegment, Json, PropsSchema, Segment } from "@executablemd/core";
 import { createMemorySessionRouteStore, createPartitionedAcpxProvider } from "@executablemd/acp";
 import type { AcpxProvider, SessionRouteContext } from "@executablemd/acp";
-import { command, installControlledLauncher, readTextFile } from "@executablemd/runtime";
+import { command, readTextFile } from "@executablemd/runtime";
+import { installControlledLauncher } from "@executablemd/grid/test";
 import { Test } from "@executablemd/testing";
 import { NativeLaunchObserver, useTestAgentController } from "./controller.ts";
 import type { ScenarioHandle, TestAgentControllerInternals } from "./controller.ts";

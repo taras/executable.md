@@ -14,6 +14,7 @@
     "@executablemd/acp": "workspace:*",
     "@executablemd/core": "workspace:*",
     "@executablemd/durable-streams": "workspace:*",
+    "@executablemd/grid": "workspace:*",
     "@executablemd/runtime": "workspace:*",
     "@executablemd/testing": "workspace:*",
     "acorn": "^8.16.0",

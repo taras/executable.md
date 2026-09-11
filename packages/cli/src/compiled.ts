@@ -19,8 +19,8 @@ import {
   isCredentialHelperMode,
   runCredentialHelper,
 } from "@executablemd/workflow/credential-helper";
-import { paneWorkerInvocation, runPaneWorkerProcess } from "./terminal/pane-worker.ts";
-import { foregroundTerminalGrid } from "./terminal/host.ts";
+import { paneWorkerInvocation, runPaneWorkerProcess } from "@executablemd/grid-tmux";
+import { foregroundGrid } from "./grid-host.ts";
 import type { HelperAssembly } from "@executablemd/workflow/credential-helper";
 import { useCompiledService } from "./compiled-service.ts";
 
@@ -103,7 +103,7 @@ if (paneWorker !== undefined) {
       useMachineSessions(),
       // This host presents grids: it has a terminal to divide, and it can
       // re-invoke itself for one pane.
-      foregroundTerminalGrid(),
+      foregroundGrid(),
     );
   });
 }
