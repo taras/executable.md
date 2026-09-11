@@ -5,9 +5,10 @@
   "exports": {
     ".": "./mod.ts",
     "./deno": "./deno.ts",
+    "./software-factory": "./software-factory.ts",
     "./credential-helper": "./src/deno/composition/credential-helper.ts"
   },
   "publish": {
-    "exclude": ["!vendor/cloudflare-computer-dofs/generated/**/*.d.ts"]
+    "exclude": ["!vendor/cloudflare-computer-dofs/generated/**/*.d.ts", "!src/cloudflare"]
   }
 }

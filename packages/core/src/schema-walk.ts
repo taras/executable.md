@@ -26,6 +26,16 @@ export type NameKind =
   | "required property"
   | "property dependency";
 
+/**
+ * One schema position, rewritten.
+ *
+ * Returns what should stand at this position. Everything the walker knows about
+ * where schemas are and where data is applies, so a transform never reaches a
+ * `const`, an `enum` member, a `default` or an `examples` entry, and never
+ * touches a name a schema declares.
+ */
+export type SchemaTransform = (schema: JsonObject, path: string) => JsonObject;
+
 export interface SchemaVisitor {
   /** One subschema, at a real schema position. */
   subschema(schema: JsonObject, path: string): void;
@@ -154,4 +164,109 @@ export function walkSchema(root: JsonObject, visitor: SchemaVisitor): void {
       }
     }
   }
+}
+
+/**
+ * Rewrite every real schema position, leaving everything else exactly as it is.
+ *
+ * The same position table `walkSchema` visits, used to build a copy rather than
+ * to inspect one. Data keywords are carried across by value, declared names are
+ * carried across as names, and nothing in the input is mutated — a caller can
+ * hand this an authored schema and keep using it afterwards.
+ *
+ * Every object it builds has a null prototype, so a key named `__proto__`
+ * arriving in data is an ordinary member rather than an assignment that
+ * rewrites the object it was copied into.
+ */
+export function mapSchema(root: JsonObject, transform: SchemaTransform): JsonObject {
+  return rewrite(root, "#");
+
+  function rewrite(schema: JsonObject, path: string): JsonObject {
+    const mapped = transform(schema, path);
+    const copy = record();
+    for (const [keyword, value] of Object.entries(mapped)) {
+      copy[keyword] = rewriteKeyword(keyword, value, path);
+    }
+    return copy;
+  }
+
+  function rewriteKeyword(keyword: string, value: Json, path: string): Json {
+    if (SUBSCHEMA.includes(keyword)) {
+      return isJsonObject(value) ? rewrite(value, `${path}/${keyword}`) : detach(value);
+    }
+    if (SUBSCHEMA_LIST.includes(keyword)) {
+      return Array.isArray(value)
+        ? value.map((entry, index) =>
+            isJsonObject(entry) ? rewrite(entry, `${path}/${keyword}/${index}`) : detach(entry),
+          )
+        : detach(value);
+    }
+    if (SUBSCHEMA_MAP.some(([name]) => name === keyword)) {
+      return rewriteMap(value, `${path}/${keyword}`);
+    }
+    if (keyword === "items") {
+      if (isJsonObject(value)) {
+        return rewrite(value, `${path}/items`);
+      }
+      return Array.isArray(value)
+        ? value.map((entry, index) =>
+            isJsonObject(entry) ? rewrite(entry, `${path}/items/${index}`) : detach(entry),
+          )
+        : detach(value);
+    }
+    if (keyword === "dependencies") {
+      return rewriteDependencies(value, `${path}/dependencies`);
+    }
+    // Everything else is data: `const`, `enum`, `default`, `examples`, every
+    // scalar constraint, and every keyword this draft does not define.
+    return detach(value);
+  }
+
+  function rewriteMap(value: Json, path: string): Json {
+    if (!isJsonObject(value)) {
+      return detach(value);
+    }
+    const copy = record();
+    for (const [name, entry] of Object.entries(value)) {
+      copy[name] = isJsonObject(entry) ? rewrite(entry, `${path}/${name}`) : detach(entry);
+    }
+    return copy;
+  }
+
+  function rewriteDependencies(value: Json, path: string): Json {
+    if (!isJsonObject(value)) {
+      return detach(value);
+    }
+    const copy = record();
+    for (const [name, entry] of Object.entries(value)) {
+      copy[name] = isJsonObject(entry) ? rewrite(entry, `${path}/${name}`) : detach(entry);
+    }
+    return copy;
+  }
+}
+
+/**
+ * One JSON value, copied all the way down, with every object own-keyed.
+ *
+ * Data, not schema. A copy so nothing downstream can change what the author
+ * wrote, and null-prototyped so a member named `__proto__`, `toString` or
+ * `constructor` is a member rather than something the language answers for.
+ */
+export function detach(value: Json): Json {
+  if (Array.isArray(value)) {
+    return value.map((entry) => detach(entry));
+  }
+  if (value === null || typeof value !== "object") {
+    return value;
+  }
+  const copy = record();
+  for (const name of Object.getOwnPropertyNames(value)) {
+    copy[name] = detach(Reflect.get(value, name));
+  }
+  return copy;
+}
+
+/** One object with no prototype, so every name it answers is a name it holds. */
+function record(): JsonObject {
+  return Object.create(null);
 }

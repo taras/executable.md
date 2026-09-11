@@ -1,4 +1,9 @@
 import { type Operation } from "effection";
+import type {
+  WorkspaceEntry,
+  WorkspaceFilesystem,
+  WorkspaceStat,
+} from "../../workspace/filesystem.ts";
 import { chmod as chmodPath } from "../../../vendor/cloudflare-computer-dofs/generated/fs/chmod.js";
 import { link as linkFile } from "../../../vendor/cloudflare-computer-dofs/generated/fs/link.js";
 import { mkdir as mkdirPath } from "../../../vendor/cloudflare-computer-dofs/generated/fs/mkdir.js";
@@ -17,33 +22,15 @@ import { writeFileSync } from "../../../vendor/cloudflare-computer-dofs/generate
 import type { RunConnection } from "../connections.ts";
 import { throwWorkspaceFilesystemFailure } from "./errors.ts";
 
-export interface DenoWorkspaceEntry {
-  readonly name: string;
-  readonly kind: "file" | "directory" | "symlink";
-}
-
-export interface DenoWorkspaceStat {
-  readonly kind: "file" | "directory" | "symlink";
-  readonly mode: number;
-  readonly mtime: number;
-  readonly size: number;
-}
-
-export interface DenoWorkspaceFilesystem {
-  readFile(path: string): Operation<Uint8Array>;
-  readTextFile(path: string): Operation<string>;
-  stat(path: string): Operation<DenoWorkspaceStat>;
-  lstat(path: string): Operation<DenoWorkspaceStat>;
-  readlink(path: string): Operation<string>;
-  readdir(path: string): Operation<DenoWorkspaceEntry[]>;
-  writeFile(path: string, content: string | Uint8Array, mode?: number): Operation<void>;
-  mkdir(path: string, options?: { recursive?: boolean; mode?: number }): Operation<void>;
-  remove(path: string, options?: { recursive?: boolean; force?: boolean }): Operation<void>;
-  rename(from: string, to: string): Operation<void>;
-  chmod(path: string, mode: number): Operation<void>;
-  symlink(target: string, path: string): Operation<void>;
-  link(existingPath: string, newPath: string): Operation<void>;
-}
+/**
+ * The names this host has always used, for the one shared contract.
+ *
+ * The interface moved rather than changed: this adapter is one implementation
+ * of it, and the runner's attempt-backed adapter is the other.
+ */
+export type DenoWorkspaceEntry = WorkspaceEntry;
+export type DenoWorkspaceStat = WorkspaceStat;
+export type DenoWorkspaceFilesystem = WorkspaceFilesystem;
 
 export function createDenoWorkspaceFilesystem(
   connection: RunConnection,

@@ -62,6 +62,9 @@ export {
 export type { GitApi, GitObjectFormat } from "./src/git.ts";
 export { getWorkflowRun, retainedWorkflowInstallation, workflowInstallation } from "./src/run.ts";
 export { workflowBundleInstallation, WorkflowBundleHistoryError } from "./src/bundle.ts";
+export { retainedReplay, WorkflowReplayHistoryError } from "./src/replay.ts";
+export { DOCUMENT_FAILED, retainedFailureReason } from "./src/lifecycle/policy.ts";
+export type { RetainedReplay } from "./src/replay.ts";
 export type { WorkflowRun } from "./src/run.ts";
 export { useWorkflowServiceDenial, WorkflowServiceDeniedError } from "./src/service-denial.ts";
 
@@ -314,6 +317,18 @@ export type {
   WorkflowLifecycleApi,
   WorkflowLifecycleSnapshot,
 } from "./src/lifecycle/api.ts";
+// What a trusted host needs to move a run's lifecycle. These describe what any
+// host's lifecycle does rather than what one adapter retains, so this entrypoint
+// owns their meaning; `./deno` re-exports them for source compatibility and a
+// second host implements the same shapes without that module being loaded.
+export type {
+  WorkflowBeginRequest,
+  WorkflowExecutionBegun,
+  WorkflowExecutionTransitions,
+  WorkflowForkRequest,
+  WorkflowForkSelection,
+  WorkflowRunCreation,
+} from "./src/lifecycle/execution.ts";
 // The export request, its result and the boundary it names. The retained record
 // shapes an artifact also carries are DOFS and SQLite rows, so they are the
 // Deno entrypoint's to publish rather than this one's.

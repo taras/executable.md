@@ -686,10 +686,39 @@ describe("Tier DLC — Workspace coordination selection", () => {
         "packages/durable-streams/*.ts",
       ],
       // Whole packages rather than named modules, so a coordination module
-      // added later is covered without this list being remembered. The single
-      // exception carries its reason: the HTTP stream is a client for a remote
-      // durable stream and reaches the platform's own `fetch`.
-      exclude: ["packages/workflow/src/deno/**", "packages/durable-streams/http-stream.ts"],
+      // added later is covered without this list being remembered. Each
+      // exception carries its reason.
+      //
+      // The two implementation subtrees are runtime-owned: scanning an adapter
+      // for the vocabulary of the runtime it adapts is a category error, and
+      // Code Rule 12 puts host behavior behind exactly these names. The package
+      // root and every shared module stay covered, so a host name reaching the
+      // neutral surface is still a failure.
+      //
+      // `src/sqlite` is a private physical SQLite backend the two runtime
+      // adapters share so version 1 is declared once rather than twice. It
+      // names a database engine because that is its subject, and it is not the
+      // provider-neutral coordination or external-effect surface — it owns no
+      // connection, path, transaction or lifecycle authority and is published
+      // from no entrypoint.
+      //
+      // The software factory is the other kind of exception. It is not a
+      // runtime adapter and is still held to the host-import and
+      // runtime-detection rules by `host-neutrality.test.ts`; what it is
+      // allowed is the product vocabulary, because
+      // `specs/github-actions-software-factory-spec.md` §1.1 makes GitHub the
+      // subject matter of that contract rather than one provider capturing a
+      // neutral boundary.
+      //
+      // The HTTP stream is a client for a remote durable stream and reaches the
+      // platform's own `fetch`.
+      exclude: [
+        "packages/workflow/src/deno/**",
+        "packages/workflow/src/cloudflare/**",
+        "packages/workflow/src/software-factory/**",
+        "packages/workflow/src/sqlite/**",
+        "packages/durable-streams/http-stream.ts",
+      ],
     }))
       .map((entry) => entry.path)
       .sort();
@@ -729,7 +758,13 @@ describe("Tier DLC — Workspace coordination selection", () => {
         "packages/workflow/src/workspace/effect.ts",
       ]),
     );
+    // An exclusion that matched nothing would scan the adapter and fail on its
+    // own vocabulary; one that matched too little would scan part of it. Both
+    // subtrees are checked, so a malformed pattern cannot pass quietly.
     expect(found.some((path) => path.includes("/src/deno/"))).toBe(false);
+    expect(found.some((path) => path.includes("/src/cloudflare/"))).toBe(false);
+    expect(found.some((path) => path.includes("/src/software-factory/"))).toBe(false);
+    expect(found.some((path) => path.includes("/src/sqlite/"))).toBe(false);
 
     const crossings: Record<string, string[]> = {};
     const unread: string[] = [];

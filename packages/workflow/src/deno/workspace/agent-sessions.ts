@@ -38,62 +38,33 @@
  */
 
 import type { DatabaseSync } from "node:sqlite";
-import { createHash } from "node:crypto";
-
-/** A retained Agent session this host will not continue under. */
-export class WorkflowAgentSessionError extends Error {
-  override name = "WorkflowAgentSessionError";
-}
 
 /**
- * One durable identity a provider asserted, and what kind of thing it is.
+ * The shape and the key derivation are the shared rule, not this adapter's.
  *
- * Tagged, because "the adapter's own session id" and "an ACP session id" and "a
- * record id in some store" are different claims that happen to be strings. A
- * host comparing them without the tag would accept one for another.
+ * Both hosts retain these mappings, and two derivations would be two keys for
+ * one session — reattachment would quietly start a new conversation instead of
+ * finding the old one. What stays here is the storage: the columns, the
+ * statements, and the transaction they run in.
  */
-export interface ProviderAssertion {
-  readonly kind: string;
-  readonly value: string;
-}
+import {
+  type AgentSessionRecord,
+  type AgentSessions,
+  WorkflowAgentSessionError,
+} from "../../storage/agent-session.ts";
 
-/** What identifies one logical Agent session. */
-export interface AgentSessionIdentity {
-  /** Which provider holds the conversation, as that provider names itself. */
-  readonly provider: string;
-  /** The resolved agent command, not the name a document wrote. */
-  readonly agentCommand: string;
-  /** The engine-derived Agent/Session expansion identity. Never authored. */
-  readonly sessionIdentity: string;
-}
-
-/** One retained mapping, as the run's database holds it. */
-export interface AgentSessionRecord extends AgentSessionIdentity {
-  readonly sessionKey: string;
-  /** The session policy in force when the provider created this session. */
-  readonly policy: string;
-  readonly assertion: ProviderAssertion;
-  readonly createdAt: string;
-}
-
-function digest(value: string): string {
-  return createHash("sha256").update(value, "utf8").digest("hex").slice(0, 32);
-}
-
-/**
- * The key one logical session is retained under, within this run.
- *
- * The engine-derived Session expansion identity and nothing else. The provider
- * and the resolved agent command are compatibility attributes stored beside it:
- * changing either refuses reattachment rather than addressing a second mapping,
- * because a `<Session>` element that changed agent is the same element asking
- * for something this run cannot give it.
- *
- * Digested so it stays bounded, and namespaced so a row is recognizable.
- */
-export function agentSessionKey(identity: AgentSessionIdentity): string {
-  return ["xmd", "workflow", "v1", digest(identity.sessionIdentity)].join(":");
-}
+export {
+  agentSessionKey,
+  parseAgentSessionRecord,
+  resolveAgentSession,
+  WorkflowAgentSessionError,
+} from "../../storage/agent-session.ts";
+export type { AgentSessionResolution, AgentSessions } from "../../storage/agent-session.ts";
+export type {
+  AgentSessionIdentity,
+  AgentSessionRecord,
+  ProviderAssertion,
+} from "../../storage/agent-session.ts";
 
 const COLUMNS = `session_key, provider, agent_command, session_identity, policy,
   assertion_kind, assertion_value, created_at`;
@@ -105,12 +76,6 @@ const SELECT_ALL = `SELECT ${COLUMNS} FROM agent_sessions ORDER BY session_key`;
 const INSERT = `INSERT INTO agent_sessions (session_key, provider, agent_command,
   session_identity, policy, assertion_kind, assertion_value, created_at)
   VALUES (?, ?, ?, ?, ?, ?, ?, ?)`;
-
-/** Every retained mapping this run holds. Reading is not a transaction. */
-export interface AgentSessions {
-  read(sessionKey: string): AgentSessionRecord | undefined;
-  commit(record: AgentSessionRecord): void;
-}
 
 function text(value: unknown): string | undefined {
   return typeof value === "string" ? value : undefined;
@@ -190,83 +155,4 @@ export function createAgentSessions(database: DatabaseSync, authorize: () => voi
         );
     },
   };
-}
-
-/** What a continuation may do with the session a key names. */
-export type AgentSessionResolution =
-  | { readonly kind: "create"; readonly sessionKey: string }
-  | { readonly kind: "reattach"; readonly record: AgentSessionRecord };
-
-/**
- * Decide what this attachment may do with the session this identity names.
- *
- * `asserted` is every canonical identity the provider currently asserts for that
- * key — none, one, or more than one. It is deliberately not "does the provider
- * hold this key": occupancy says something is there, not what conversation it
- * is, and adopting one on that basis is how a run continues a session it cannot
- * name.
- */
-export function resolveAgentSession(
-  retained: AgentSessionRecord | undefined,
-  policy: string,
-  asserted: readonly ProviderAssertion[],
-  identity: AgentSessionIdentity,
-): AgentSessionResolution {
-  const sessionKey = agentSessionKey(identity);
-  if (asserted.length > 1) {
-    throw new WorkflowAgentSessionError(
-      "the provider asserts more than one durable identity for this run's Agent session, so " +
-        "this host cannot tell which conversation it would be continuing. Start a new run " +
-        "rather than continuing this one.",
-    );
-  }
-  const current = asserted[0];
-
-  if (retained === undefined) {
-    if (current === undefined) {
-      // Neither side holds anything: nothing was ever established here.
-      return { kind: "create", sessionKey };
-    }
-    // The pre-commit window. An attempt was interrupted between the provider
-    // asserting an identity and this run recording it, and exactly one
-    // canonical assertion is what reconciles it — nothing else may.
-    return {
-      kind: "reattach",
-      record: {
-        sessionKey,
-        ...identity,
-        policy,
-        assertion: current,
-        createdAt: new Date().toISOString(),
-      },
-    };
-  }
-
-  if (
-    retained.provider !== identity.provider ||
-    retained.agentCommand !== identity.agentCommand ||
-    retained.sessionIdentity !== identity.sessionIdentity ||
-    retained.policy !== policy
-  ) {
-    throw new WorkflowAgentSessionError(
-      "this run's Agent session was established under a different provider, agent or session " +
-        "policy than this host states, and a session created under one ceiling is not " +
-        "continued under another. Start a new run rather than continuing this one.",
-    );
-  }
-  if (current === undefined) {
-    throw new WorkflowAgentSessionError(
-      "the provider asserts no durable identity for the Agent session this run retained, and " +
-        "this host does not reconstruct a conversation by replaying it into a new session. " +
-        "Start a new run rather than continuing this one.",
-    );
-  }
-  if (current.kind !== retained.assertion.kind || current.value !== retained.assertion.value) {
-    throw new WorkflowAgentSessionError(
-      "the provider asserts a different durable identity than the Agent session this run " +
-        "retained, so it did not resume the conversation this run was having. This host does " +
-        "not continue under a replacement session.",
-    );
-  }
-  return { kind: "reattach", record: retained };
 }

@@ -36,6 +36,15 @@ import type {
 } from "../lifecycle/execution.ts";
 import type { WorkflowRunDatabase } from "../storage/api.ts";
 import { conflictingFields } from "../storage/compatibility.ts";
+import {
+  admissionRefusal,
+  type Closing,
+  closingOutcome,
+  damagedTerminalRefusal,
+  INTERRUPTED,
+  rootOutcome,
+  terminal,
+} from "../lifecycle/policy.ts";
 import { definitionToJson } from "../storage/definition.ts";
 import {
   WorkflowDocumentExecutionError,
@@ -60,7 +69,7 @@ import { reading } from "./reading.ts";
 import { readJournalEntries } from "./journal.ts";
 import type { ForkSourceSnapshot } from "./fork-source.ts";
 import { readForkLineage, writeForkInheritance, type ForkHeadEvents } from "./fork-write.ts";
-import { readDocumentExecution, readRetrieval, stopReasonColumns } from "./rows.ts";
+import { readDocumentExecution, readRetrieval, stopReasonColumns } from "../sqlite/rows.ts";
 import {
   initializeSchema,
   isSqliteForeignKeyConstraint,
@@ -182,6 +191,14 @@ interface Recovery {
   /** Absent when there is no run yet, which only a `start` may go on from. */
   readonly status?: WorkflowRunStatus;
   readonly closed?: DocumentExecutionRecord;
+  /**
+   * Whether this run's own terminal is one this build cannot read.
+   *
+   * Carried out of recovery rather than collapsed into the stored status: an
+   * unreadable terminal is not a run to go on with, and a caller that saw only
+   * `running` would begin another execution over it.
+   */
+  readonly damaged?: boolean;
 }
 
 interface Refused {
@@ -239,6 +256,10 @@ function beginOnce(
   }
 
   const recovery = recover(connection, path, hold, request);
+
+  if (recovery.damaged === true) {
+    return { kind: "refused", reason: damagedTerminalRefusal() };
+  }
 
   // A file can exist and hold nothing — created by an interrupted attempt, or
   // left empty by something else. Existence is not a run, so a resume that
@@ -493,8 +514,15 @@ export function* settleExecution(
         throw new WorkflowDocumentExecutionError(completion.executionId);
       }
       const { database } = connection;
+      const stored = readRunRow(database, path);
       finish(database, path, completion);
-      publish(database, path, completion.status, completion.reason);
+      // A replay closes only its own envelope: the terminal outcome it observed
+      // is not made mutable again, and nothing about the run — its status, its
+      // reason or when it last moved — is rewritten by an execution that was
+      // only ever going to restore what was already there.
+      if (!terminal(stored.status)) {
+        publish(database, path, completion.status, completion.reason);
+      }
       const record = readRunRow(database, path);
       if (record.runId !== hold.runId) {
         throw new WorkflowRunIdMismatchError(hold.runId, path);
@@ -604,39 +632,6 @@ function firstExecution(
   return { execution: insertExecution(database, path), replay: false };
 }
 
-/**
- * Why this action may not continue from this status, or nothing when it may.
- *
- * Answered rather than raised, and asked outside the transaction that recovered
- * the run: refusing is this caller's outcome, not a reason to undo what the
- * previous workflow executor's execution was found to have become.
- */
-function admissionRefusal(
-  action: "start" | "resume",
-  status: WorkflowRunStatus | undefined,
-): Error | undefined {
-  if (status === undefined) {
-    return undefined;
-  }
-  if (action === "resume" && (status === "failed" || status === "cancelled")) {
-    return new WorkflowRequestError(
-      `workflow run ${status}: a run that ${
-        status === "failed" ? "failed" : "was cancelled"
-      } is not resumed. The run is left exactly as it is.`,
-    );
-  }
-  if (status === "cancelled") {
-    return new WorkflowRequestError(
-      "workflow run cancelled: a cancelled run reports its retained state and is not advanced.",
-    );
-  }
-  return undefined;
-}
-
-function terminal(status: WorkflowRunStatus): boolean {
-  return status === "completed" || status === "failed";
-}
-
 interface Reconciled {
   readonly status: WorkflowRunStatus;
   readonly of: { recovered?: DocumentExecutionRecord };
@@ -651,12 +646,18 @@ interface Reconciled {
  * addressed to; failing both, the execution was interrupted.
  */
 function reconcile(database: DatabaseSync, path: string, stored: WorkflowRunRecord): Recovery {
+  const closing = closingOutcome(stored.status, rootOutcome(readJournalEntries(database)));
+  if (closing.damaged) {
+    // Nothing is decided here and nothing is written: whatever the previous
+    // executor left stays exactly as it left it, because this build cannot say
+    // what the document it ran did.
+    return { status: stored.status, damaged: true };
+  }
+
   const unfinished = reading(database, SELECT_UNFINISHED).all().map(readDocumentExecution);
   if (unfinished.length === 0) {
     return { status: stored.status };
   }
-
-  const closing = closingOutcome(database, stored);
 
   let last: DocumentExecutionRecord | undefined;
   for (const execution of unfinished) {
@@ -673,62 +674,6 @@ function reconcile(database: DatabaseSync, path: string, stored: WorkflowRunReco
   }
   publish(database, path, closing.status, closing.reason);
   return { status: closing.status, ...closed };
-}
-
-interface Closing {
-  readonly status: WorkflowRunStatus;
-  readonly reason: DocumentExecutionCompletion["reason"];
-  readonly publishes: boolean;
-}
-
-/**
- * What the previous workflow executor's execution became, on the evidence the run holds.
- *
- * A retained root Close proves the canonical outcome won before anything could
- * interrupt it, so it is restored. Failing that, the execution was interrupted:
- * the workflow executor went away without recording an outcome, and that is what happened.
- */
-function closingOutcome(database: DatabaseSync, stored: WorkflowRunRecord): Closing {
-  // A replay whose terminal state was preserved closes only its own execution,
-  // and the authoritative outcome stays exactly as it was.
-  if (terminal(stored.status)) {
-    return { status: "interrupted", reason: interrupted, publishes: false };
-  }
-
-  const canonical = rootOutcome(database);
-  if (canonical !== undefined) {
-    return { status: canonical.status, reason: canonical.reason, publishes: true };
-  }
-
-  return { status: "interrupted", reason: interrupted, publishes: true };
-}
-
-const interrupted = { kind: "host", code: "executor-interrupted" } as const;
-
-/**
- * The canonical outcome the root recorded, when it recorded one.
- *
- * A root Close is what proves the document itself finished. Its result decides
- * the run's terminal status, and its own event identity is the reason — the
- * journal already filtered it, so nothing new is retained to say why.
- */
-function rootOutcome(
-  database: DatabaseSync,
-): { status: WorkflowRunStatus; reason: DocumentExecutionCompletion["reason"] } | undefined {
-  for (const entry of readJournalEntries(database)) {
-    const { event } = entry;
-    if (event.type !== "close" || event.coroutineId !== "root") {
-      continue;
-    }
-    if (event.result.status === "ok") {
-      return { status: "completed", reason: undefined };
-    }
-    return {
-      status: event.result.status === "cancelled" ? "cancelled" : "failed",
-      reason: { kind: "journal", eventId: entry.eventId },
-    };
-  }
-  return undefined;
 }
 
 function insertExecution(database: DatabaseSync, path: string): DocumentExecutionRecord {
@@ -916,7 +861,13 @@ export function* cancelRun(
         );
       }
 
-      const canonical = rootOutcome(database);
+      const canonical = rootOutcome(readJournalEntries(database));
+      if (canonical?.kind === "damaged") {
+        // The document finished and this build cannot read what it finished
+        // as. Cancelling it would replace a result rather than end a run that
+        // had none, so nothing here changes anything.
+        return { kind: "refused" as const, reason: damagedTerminalRefusal() };
+      }
       if (canonical !== undefined) {
         // The document finished before its workflow executor disappeared. Restoring what it
         // recorded is not cancelling it.

@@ -28,7 +28,7 @@
 import { createHash } from "node:crypto";
 import { Buffer } from "node:buffer";
 import type { Operation } from "effection";
-import { prepareElicitation, validateParsed } from "@executablemd/core";
+import { prepareElicitation } from "@executablemd/core";
 import { AGENT_PROMPT, parsePromptRecord } from "@executablemd/core/host";
 import type { PromptRecord } from "@executablemd/core/host";
 import { parseDurableEvent } from "@executablemd/durable-streams";
@@ -86,8 +86,8 @@ import {
   workspaceRoot,
   type WorkspaceRootManifest,
 } from "../workspace/manifest.ts";
-import { decodeDofsManifest } from "../workspace/root.ts";
-import type { DofsManifest } from "../workspace/root.ts";
+import { decodeContentManifest } from "../workspace/root.ts";
+import type { ContentManifest } from "../workspace/root.ts";
 import { gitBlobIdentity } from "./source.ts";
 import { canonicalJsonBytes, canonicalJsonText, entryKey } from "./manifest.ts";
 import type {
@@ -1335,7 +1335,7 @@ function verifyLifecycle(
 function verifyContentStore(
   contents: XmdArtifactContents,
   reject: Reject,
-): ReadonlyMap<string, DofsManifest> {
+): ReadonlyMap<string, ContentManifest> {
   const blobs = new Map<string, number>();
   for (const blob of contents.blobs) {
     const hash = toHex(blob.hash);
@@ -1348,7 +1348,7 @@ function verifyContentStore(
     blobs.set(hash, blob.size);
   }
 
-  const manifests = new Map<string, DofsManifest>();
+  const manifests = new Map<string, ContentManifest>();
   for (const manifest of contents.manifests) {
     const hash = toHex(manifest.hash);
     if (manifests.has(hash)) {
@@ -1357,7 +1357,7 @@ function verifyContentStore(
     if (toHex(sha256(manifest.encoded)) !== hash) {
       reject("a DOFS manifest's identity does not match its bytes");
     }
-    const decoded = decodeDofsManifest(manifest.encoded, reject);
+    const decoded = decodeContentManifest(manifest.encoded, reject);
     if (decoded.size !== manifest.size) {
       reject("a DOFS manifest's declared size does not equal its chunks");
     }
@@ -1382,7 +1382,7 @@ function verifyContentStore(
  */
 function verifyRoots(
   contents: XmdArtifactContents,
-  manifests: ReadonlyMap<string, DofsManifest>,
+  manifests: ReadonlyMap<string, ContentManifest>,
   path: string,
   reject: Reject,
 ): void {
@@ -1395,7 +1395,7 @@ function verifyRoots(
       reject("a Workspace root identity does not match its manifest bytes");
     }
 
-    const declared = new Map<string, DofsManifest>();
+    const declared = new Map<string, ContentManifest>();
     for (const entry of parsed.entries) {
       if (entry.kind !== "file") {
         continue;
@@ -1695,7 +1695,7 @@ function* judgeRetainedAnswer(
   let issues;
   try {
     const prepared = yield* prepareElicitation(wait.responseSchema, "artifact answer");
-    issues = validateParsed(prepared.validate, answer);
+    issues = prepared.validator.judge(answer);
   } catch {
     reject("a retained response schema cannot judge the answer stored against it");
   }

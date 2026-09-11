@@ -29,8 +29,7 @@ import {
   useWorkflowRunHost,
   withWorkflowWorkspace,
 } from "@executablemd/workflow/deno";
-import type { WorkflowExecutionTransitions } from "@executablemd/workflow/deno";
-import type { WorkflowRunDatabase } from "@executablemd/workflow";
+import type { WorkflowExecutionTransitions, WorkflowRunDatabase } from "@executablemd/workflow";
 import type { HelperAssembly } from "@executablemd/workflow/credential-helper";
 import { readDefinitionSource } from "./workflow-source.ts";
 import type { WorkflowHost } from "./workflow.ts";

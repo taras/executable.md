@@ -16,7 +16,11 @@
  */
 
 import { Err, Ok, type Result } from "effection";
-import { isCanonicalDocumentTarget, isComponentName } from "@executablemd/core";
+// The node-free subpaths: this module is reached from a Cloudflare Worker, and
+// the package root's barrel resolves host modules a Worker cannot load. Both
+// predicates are the same public functions, selected through a narrower path.
+import { isCanonicalDocumentTarget } from "@executablemd/core/document-target";
+import { isComponentName } from "@executablemd/core/component-name";
 import type { Json } from "@executablemd/durable-streams";
 import { WorkflowDefinitionError } from "./errors.ts";
 import {

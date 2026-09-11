@@ -73,7 +73,8 @@ import { retainedSource, validateProps } from "@executablemd/core";
 import type { PropsSchema } from "@executablemd/core";
 import type { RootDocumentSource } from "@executablemd/core";
 import {
-  definitionComponents,
+  retainedFailureReason,
+  retainedReplay,
   retainedWorkflowInstallation,
   workflowBundleInstallation,
   WORKFLOW_RUN_STATUSES,
@@ -82,7 +83,9 @@ import {
 import type { ExecutionInstallation } from "@executablemd/core/host";
 import type {
   ExecutorLock,
+  RetainedReplay,
   WorkflowRunDatabase,
+  WorkflowRunRecord,
   WorkflowRunStatus,
   WorkflowStopReason,
 } from "@executablemd/workflow";
@@ -90,8 +93,12 @@ import type {
   WorkflowExecutionBegun,
   WorkflowExecutionTransitions,
   WorkflowRunCreation,
+} from "@executablemd/workflow";
+import type {
+  SuspensionController,
+  SuspensionControllerOptions,
+  SuspensionNotice,
 } from "@executablemd/workflow/deno";
-import type { SuspensionControllerOptions, SuspensionNotice } from "@executablemd/workflow/deno";
 import { SUSPENSION_REQUEST } from "@executablemd/workflow";
 import { describeError } from "./props.ts";
 import { preflightFork } from "./workflow-fork.ts";
@@ -172,8 +179,6 @@ const EXIT_BY_STATUS: Readonly<Record<WorkflowRunStatus, number>> = Object.freez
   running: 1,
 });
 
-/** A failure the host classified, rather than an exception message it retained. */
-const HOST_FAILURE_CODE = "document-execution-failed";
 const HOST_INTERRUPTED_CODE = "executor-interrupted";
 const HOST_ORPHANED_CODE = "executor-disappeared";
 
@@ -421,31 +426,24 @@ function reportStatus(status: WorkflowRunStatus): void {
   report(`workflow status: ${status}`);
 }
 
-/** Whether this journal already holds the root's terminal event. */
-function* isCompleted(stream: DurableStream): Operation<boolean> {
-  const events = yield* stream.readAll();
-  return events.some((event) => event.type === "close" && event.coroutineId === "root");
+/** Whether one retained event is the root's terminal. */
+function isRootClose(event: DurableEvent): boolean {
+  return event.type === "close" && event.coroutineId === "root";
 }
 
 /**
  * The stop reason a failure gets.
  *
- * A retained event that already crossed the secret filter is preferable to a
- * code, because it says which effect failed. Anything else becomes one
- * categorical host code: the alternative is retaining an exception message
- * beside the journal that filtered it, which is history nothing has filtered.
+ * The rule is the lifecycle's own and lives beside the outcome it belongs to: a
+ * retained event that already crossed the secret filter says which effect
+ * failed, and a failure the journal holds no row for gets the one categorical
+ * code. Stale recovery reading a dead executor's journal and a retained history
+ * held to its lifecycle row reach the same rule, because a reason chosen three
+ * ways would be three explanations of one failure.
  */
 function* failureReason(database: WorkflowRunDatabase): Operation<WorkflowStopReason> {
   const entries = yield* database.readJournalEntries();
-  if (entries.ok) {
-    for (let index = entries.value.length - 1; index >= 0; index -= 1) {
-      const entry = entries.value[index];
-      if (entry !== undefined && entry.event.result.status === "err") {
-        return { kind: "journal", eventId: entry.eventId };
-      }
-    }
-  }
-  return { kind: "host", code: HOST_FAILURE_CODE };
+  return retainedFailureReason(entries.ok ? entries.value : []);
 }
 
 /**
@@ -953,17 +951,6 @@ export function runWorkflow(
     }
     const { lock: executorLock } = acquired.value;
 
-    // A resumed run closed over a component bundle reconstructs it here: under
-    // the executor lock, from the retained commit, and before the execution
-    // record exists. A component that is gone, changed, or unreachable leaves
-    // the run's lifecycle records exactly as they are rather than adding an
-    // attempt that never began.
-    const reconstructed = yield* reconstructedSources(request, runId);
-    if (!reconstructed.ok) {
-      report(reconstructed.error.message);
-      return { exitCode: 1 };
-    }
-
     // One transaction: whatever the previous workflow executor left is reconciled, this
     // action is admitted against what that left behind, and the execution is
     // recorded — or none of it is. A fork's one transaction is its whole
@@ -985,12 +972,50 @@ export function runWorkflow(
     const { database, record, execution, replay } = begun.value;
     reportRun(record.runId);
 
-    // Only now, and only because execution or replay was admitted.
-    const source = yield* documentSource(start, database, reconstructed.value);
-    if (!source.ok) {
-      report(source.error.message);
+    // The frontier this run's owner answered with, read once and decided from.
+    // Everything below asks it the same two questions: whether a document
+    // result is already recorded, and — for a resume of a run whose retained
+    // state ended — what that result is a result of.
+    const frontier = yield* database.readJournalEntries();
+    if (!frontier.ok) {
+      report(frontier.error.message);
       return { exitCode: 1 };
     }
+    const completed = frontier.value.some((entry) => isRootClose(entry.event));
+
+    // A resume of a run that already ended replays what its own history holds.
+    // The lifecycle decided that, in the transaction above: it reconciled
+    // whatever the previous executor left, published the canonical terminal a
+    // retained root result implies, and answered `replay`. Nothing before this
+    // point may decide it — a run whose executor committed its document result
+    // and disappeared before settling still reads `running`, and treating that
+    // status as live is what sent a completed replay to a checkout it may not
+    // have.
+    //
+    // So the definition is fetched here or not at all, and everything below is
+    // downstream of the same answer: this host's own adapter, the suspension
+    // controller, the answer provider, the `<Evaluate>` declaration and
+    // `host.attach()` are each work for an execution that is going to import
+    // nothing, perform nothing and append nothing.
+    //
+    // `replay` alone, and deliberately: a `start` naming a run that already
+    // ended is the same terminal reuse a `resume` of one is, and the candidate
+    // definition it carried is what proved the two runs are the same run rather
+    // than a second account of what that run did. The begin transaction has
+    // already held the supplied definition, base, props and bundle to the
+    // immutable record; what a caller established describes the request, and
+    // what the run retained describes the result.
+    const prepared = replay
+      ? retainedReplay(record, frontier.value)
+      : yield* liveDocument(record, start, database);
+    if (!prepared.ok) {
+      report(prepared.error.message);
+      return { exitCode: 1 };
+    }
+
+    // Nothing beyond this point loads for a completed replay: no controller, no
+    // answer provider, and no import of the adapter either one comes from.
+    const support = replay ? undefined : yield* liveSupport(database);
 
     // Interruption is the outcome nothing else publishes. Registered before the
     // execution starts, so a scope torn down by Ctrl-C settles the run rather
@@ -1001,19 +1026,6 @@ export function runWorkflow(
     // "this invocation is durably settled" are different facts, and collapsing
     // them is how a post-execution storage refusal would be republished as an
     // interruption. Teardown speaks only while the phase is still `running`.
-    // Imported where it is used rather than at the top of this module. This
-    // file is on the ordinary `xmd run` path too, and the Deno workflow adapter
-    // reaches `node:sqlite` — which Node greets with an experimental warning on
-    // standard error the moment it loads. A run that opens no workflow storage
-    // should not be announcing that it might have.
-    // `evaluationComponents` comes through the same import, and for the same
-    // reason: `<Evaluate>` is the workflow host's component, and a run that
-    // opens no workflow storage must not load the adapter that reaches
-    // `node:sqlite` — which Bun does not have at all.
-    const { createSuspensionController, evaluationComponents } = yield* until(
-      import("@executablemd/workflow/deno"),
-    );
-    const suspension = createSuspensionController({ database });
     const phase: LifecyclePhase = { state: "running" };
     yield* ensure(function* () {
       if (phase.state !== "running") {
@@ -1040,35 +1052,23 @@ export function runWorkflow(
       reportStatus("interrupted");
     });
 
-    const completed = yield* isCompleted(database.journal);
     const documentExecution: WorkflowExecution = {
-      root: retainedSource(record.definition.rootDocumentPath, source.value.source),
+      root: prepared.value.root,
       props: record.props,
       stream: database.journal,
       // The run already exists: the begin transition created or found it before
-      // anything executed, so this installation records exactly that value,
-      // allocates nothing and never consults Git. Service denial is installed
-      // beside it, through the same host-service slot `xmd run` fills with a
+      // anything executed, so these installations record exactly that value,
+      // allocate nothing and never consult Git. Service denial is installed
+      // beside them, through the same host-service slot `xmd run` fills with a
       // real adapter.
       installations: [
-        retainedWorkflowInstallation({
-          runId: record.runId,
-          base: record.base,
-          pinnedCommit: record.definition.objectId,
-        }),
-        // The bundle this run is a run of, when it is a run of one. Both start
-        // and resume install it, and a completed replay installs it too: the
-        // retained history is held to the same components before its recorded
-        // output is accepted.
-        ...(source.value.components.length === 0
-          ? []
-          : [workflowBundleInstallation(source.value.components)]),
+        ...prepared.value.installations,
         // `<Evaluate>` names durable work after its own invocation, so this run
         // declares it to the execution and canonical execution builds it from
         // the claimant it minted for this attachment. Declared where the
         // Workspace is attached — a completed replay restores its retained
         // output and expands nothing, so it needs no component of its own.
-        ...(completed || replay ? [] : [{ components: evaluationComponents(database) }]),
+        ...(support === undefined || completed || replay ? [] : [support.declaration]),
       ],
       around<T>(operation: Operation<T>): Operation<T> {
         // A completed run replays its retained output and result. Attaching a
@@ -1078,10 +1078,10 @@ export function runWorkflow(
         //
         // The suspension controller owns the scope *inside* the attachment, so
         // halting a suspended execution tears the Workspace down with it and
-        // nothing survives the settlement.
-        return completed || replay
-          ? suspension.own(operation)
-          : host.attach(database, suspension.own(operation));
+        // nothing survives the settlement. A completed replay has no controller
+        // to own anything: it reaches no wait, so there is none to construct.
+        const owned = support === undefined ? operation : support.controller.own(operation);
+        return completed || replay ? owned : host.attach(database, owned);
       },
     };
 
@@ -1097,10 +1097,17 @@ export function runWorkflow(
     // swallowed by a halt. An execution whose teardown failed did not reach a
     // durable wait, and `suspended` is never claimed for one.
     const attempted = yield* attempt(documentExecution, execute);
-    const waiting = suspension.reported() && !attempted.ok && suspension.entered(attempted.error);
-    const settlement: Settlement = waiting
-      ? { kind: "suspension", notice: yield* suspension.notice }
-      : { kind: "document", result: attempted };
+    const notice =
+      support !== undefined &&
+      support.controller.reported() &&
+      !attempted.ok &&
+      support.controller.entered(attempted.error)
+        ? yield* support.controller.notice
+        : undefined;
+    const settlement: Settlement =
+      notice === undefined
+        ? { kind: "document", result: attempted }
+        : { kind: "suspension", notice };
 
     // The document is over, whatever storage does next — so teardown must not
     // relabel this run interrupted, even if what follows refuses.
@@ -1343,54 +1350,81 @@ function* inheritedProps(
 }
 
 /**
- * The document this run executes.
+ * The document a live or partial execution runs, and what it is held to.
  *
  * A `start` already established it from Git to read what the pinned document
  * declares. A resume fetches what the run retained, and only once the run has
- * been admitted — a run that ended is not one to fetch a definition for.
+ * been admitted — a run that ended is not one to fetch a definition for, which
+ * is why a completed replay never arrives here at all.
  */
+function* liveDocument(
+  record: WorkflowRunRecord,
+  start: WorkflowStart | undefined,
+  database: WorkflowRunDatabase,
+): Operation<Result<RetainedReplay>> {
+  const sources = yield* documentSource(start, database);
+  if (!sources.ok) {
+    return sources;
+  }
+  return Ok({
+    root: retainedSource(record.definition.rootDocumentPath, sources.value.source),
+    installations: [
+      retainedWorkflowInstallation({
+        runId: record.runId,
+        base: record.base,
+        pinnedCommit: record.definition.objectId,
+      }),
+      // The bundle this run is a run of, when it is a run of one — the sources
+      // to import from and the admission every retained import is held to.
+      ...(sources.value.components.length === 0
+        ? []
+        : [workflowBundleInstallation(sources.value.components)]),
+    ],
+  });
+}
+
 function* documentSource(
   start: WorkflowStart | undefined,
   database: WorkflowRunDatabase,
-  reconstructed: RetainedSources | undefined,
 ): Operation<Result<RetainedSources>> {
   if (start !== undefined) {
     return Ok({ source: start.established.source, components: start.established.components });
   }
-  if (reconstructed !== undefined) {
-    return Ok(reconstructed);
-  }
+  // The root and every component this run is closed over, from the retained
+  // commit, in one read: `loadRetainedDefinition()` reconstructs the bundle
+  // when the definition names one. The admitted run record is what says which
+  // commit that is, so this asks the run rather than an earlier snapshot of it.
   return yield* loadRetainedDefinition(database.record.definition, database.retrieval?.metadata);
 }
 
+/** What a live or partial execution needs from this host's own adapter. */
+interface LiveSupport {
+  readonly controller: SuspensionController;
+  /** The declaration `<Evaluate>` reaches this run's durable work through. */
+  readonly declaration: ExecutionInstallation;
+}
+
 /**
- * The pinned sources a resumed run closed over a bundle needs before it begins.
+ * The controller a live or partial execution waits through, and the component
+ * declaration that goes with it.
  *
- * Answers with nothing for a `start`, which established its own bundle from Git
- * before it asked storage for anything, and for a run whose definition names no
- * components — that one keeps loading its root after the run has been admitted,
- * because a run that ended is not one to fetch a definition for.
- *
- * A run this host cannot inspect answers with nothing too. What that run is,
- * and whether this action may advance it, is the begin transition's to decide,
- * and answering it here would report a different refusal for the same fact.
+ * Imported where it is used rather than at the top of this module, for two
+ * reasons that point the same way. This file is on the ordinary `xmd run` path
+ * too, and the Deno workflow adapter reaches `node:sqlite` — which Node greets
+ * with an experimental warning on standard error the moment it loads, and which
+ * Bun does not have at all; a run that opens no workflow storage should not be
+ * announcing that it might have. And a completed replay reaches no wait and
+ * expands no `<Evaluate>`, so it needs neither of these — which is what lets a
+ * host whose runs live somewhere else replay one without this adapter existing.
  */
-function* reconstructedSources(
-  request: WorkflowRequest,
-  runId: string,
-): Operation<Result<RetainedSources | undefined>> {
-  if (request.action !== "resume") {
-    return Ok(undefined);
-  }
-  const snapshot = yield* WorkflowLifecycle.operations.inspect(runId);
-  if (!snapshot.ok) {
-    return Ok(undefined);
-  }
-  const { definition } = snapshot.value.record;
-  if (definitionComponents(definition).length === 0) {
-    return Ok(undefined);
-  }
-  return yield* loadRetainedDefinition(definition, snapshot.value.retrieval?.metadata);
+function* liveSupport(database: WorkflowRunDatabase): Operation<LiveSupport> {
+  const { createSuspensionController, evaluationComponents } = yield* until(
+    import("@executablemd/workflow/deno"),
+  );
+  return {
+    controller: createSuspensionController({ database }),
+    declaration: { components: evaluationComponents(database) },
+  };
 }
 
 /**

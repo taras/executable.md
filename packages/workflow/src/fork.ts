@@ -38,6 +38,10 @@ import { Err, Ok, type Result } from "effection";
 import { describeWorkflowRun, WORKFLOW_RUN, type WorkflowRun } from "./journal.ts";
 import type { Forkability } from "./lifecycle/forkability.ts";
 import { WorkflowRequestError } from "./storage/errors.ts";
+import { isRootImportEvent, isRunRecordEvent } from "./journal-events.ts";
+import { forkRunRecordEvent } from "./journal-events.ts";
+
+export { forkRunRecordEvent, isRootImportEvent, isRunRecordEvent } from "./journal-events.ts";
 
 /** The coroutine a run's own record and canonical outcome belong to. */
 const ROOT_COROUTINE = "root";
@@ -120,25 +124,6 @@ export function selectForkPrefix(
 }
 
 /**
- * The record the fork writes at position zero, exactly as its own execution
- * would have written it.
- *
- * Composed here rather than in a host, so the value a fork is admitted with and
- * the value its first execution replays are the same shape by construction.
- */
-export function forkRunRecordEvent(run: WorkflowRun): DurableEvent {
-  return {
-    type: "yield",
-    coroutineId: ROOT_COROUTINE,
-    description: describeWorkflowRun(run.base),
-    result: {
-      status: "ok",
-      value: { runId: run.runId, base: run.base, pinnedCommit: run.pinnedCommit },
-    },
-  };
-}
-
-/**
  * The fork's logical journal: its own two head records, then what it inherited.
  *
  * `rootImport` is the record the fork's own definition produced, captured from
@@ -154,25 +139,6 @@ export function forkJournal(
     rootImport,
     ...selection.inherited.map((candidate) => candidate.event),
   ]);
-}
-
-/** Whether this event is the root coroutine's import of the root document. */
-export function isRootImportEvent(event: DurableEvent): boolean {
-  return (
-    event.type === "yield" &&
-    event.description.type === IMPORT_COMPONENT &&
-    event.description.name === ROOT_DOCUMENT
-  );
-}
-
-/** Whether this event is the root coroutine's own `workflow_run` record. */
-export function isRunRecordEvent(event: DurableEvent): boolean {
-  return (
-    event.type === "yield" &&
-    event.coroutineId === ROOT_COROUTINE &&
-    event.description.type === WORKFLOW_RUN &&
-    event.description.name === WORKFLOW_RUN
-  );
 }
 
 /** Whether this event is the root's Close — the run's canonical outcome. */

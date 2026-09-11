@@ -585,6 +585,17 @@ const LOOP_ROOT = [
   "",
 ].join("\n");
 
+/** A checkpoint that waits, so one bundled run can be resumed while still live. */
+const WAITING_CHECKPOINT = [
+  "checkpoint reached.",
+  "",
+  '<Elicit schema={{"type":"object","properties":{"proceed":{"type":"boolean"}},' +
+    '"required":["proceed"]}} as="decision">',
+  "Proceed with the change?",
+  "</Elicit>",
+  "",
+].join("\n");
+
 const LOOP_FILES: Record<string, string> = {
   "flows/loop.md": LOOP_ROOT,
   "flows/InstructionFiles.md": "instruction files listed.\n",
@@ -763,29 +774,72 @@ describe("Tier WFC — a workflow closed over a component bundle", () => {
   });
 
   it("WFC19: a resume whose pinned components are unreachable is refused whole", function* () {
+    // A run that has not ended is the case this is about. It continues by
+    // importing the components its definition pins, so it reconstructs them
+    // from the repository — and a repository that is gone refuses the resume
+    // rather than continuing under whatever is there now. A run that already
+    // ended imports nothing and asks the repository nothing, which is WFC20.
+    yield* useFixture(
+      { ...LOOP_FILES, "flows/UserCheckpoint.md": WAITING_CHECKPOINT },
+      function* (fixture) {
+        const started = yield* xmd(fixture, [
+          "workflow",
+          "start",
+          "--id=loop-4",
+          "flows/loop.md",
+        ]).join();
+        expect(started.code).toBe(2);
+        expect(reportedStatus(started.stderr)).toBe("suspended");
+
+        const before = yield* xmd(fixture, ["workflow", "history", "loop-4", "--json"]).join();
+
+        // The repository this run retains is no longer a repository.
+        yield* rm(join(fixture.repository, ".git"), { recursive: true, force: true });
+
+        const resumed = yield* xmd(fixture, ["workflow", "resume", "loop-4"]).join();
+
+        expect(resumed.code).toBe(1);
+        expect(reportedStatus(resumed.stderr)).toBeUndefined();
+
+        // Its lifecycle records are exactly what they were: the refusal happened
+        // before an execution was recorded.
+        yield* git(fixture.repository, ["init", "-q", "--initial-branch=main", "."]);
+        const after = yield* xmd(fixture, ["workflow", "history", "loop-4", "--json"]).join();
+        expect(after.stdout).toBe(before.stdout);
+      },
+    );
+  });
+
+  it("WFC20: a completed bundled run replays with no repository at all", function* () {
     yield* useFixture(LOOP_FILES, function* (fixture) {
       const started = yield* xmd(fixture, [
         "workflow",
         "start",
-        "--id=loop-4",
+        "--id=loop-5",
         "flows/loop.md",
       ]).join();
       expect(started.code).toBe(0);
+      const before = yield* xmd(fixture, ["workflow", "history", "loop-5", "--json"]).join();
 
-      const before = yield* xmd(fixture, ["workflow", "history", "loop-4", "--json"]).join();
-
-      // The repository this run retains is no longer a repository.
+      // Not a stale checkout and not a rewritten object: no repository. A
+      // completed replay restores what the run retained, so there is nothing
+      // here for it to read and nothing it asks for.
       yield* rm(join(fixture.repository, ".git"), { recursive: true, force: true });
+      for (const name of Object.keys(LOOP_FILES)) {
+        yield* rm(join(fixture.repository, name), { force: true });
+      }
 
-      const resumed = yield* xmd(fixture, ["workflow", "resume", "loop-4"]).join();
+      const resumed = yield* xmd(fixture, ["workflow", "resume", "loop-5"]).join();
 
-      expect(resumed.code).toBe(1);
-      expect(reportedStatus(resumed.stderr)).toBeUndefined();
+      expect(resumed.code).toBe(0);
+      expect(reportedStatus(resumed.stderr)).toBe("completed");
+      // Every stage the run recorded, in the order it recorded them.
+      expect(resumed.stdout).toContain("discovered.");
+      expect(resumed.stdout).toContain("instruction files listed.");
+      expect(resumed.stdout).toContain("implemented.");
 
-      // Its lifecycle records are exactly what they were: the refusal happened
-      // before an execution was recorded.
       yield* git(fixture.repository, ["init", "-q", "--initial-branch=main", "."]);
-      const after = yield* xmd(fixture, ["workflow", "history", "loop-4", "--json"]).join();
+      const after = yield* xmd(fixture, ["workflow", "history", "loop-5", "--json"]).join();
       expect(after.stdout).toBe(before.stdout);
     });
   });

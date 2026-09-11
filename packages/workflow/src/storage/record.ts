@@ -14,7 +14,10 @@
  */
 
 import { Err, Ok, type Result } from "effection";
-import { canonicalize } from "@executablemd/core";
+// The node-free subpath: this module is reached from a Cloudflare Worker, and
+// the package root's barrel resolves `node:crypto` and the rest of the host
+// surface. Same function, narrower resolution path.
+import { canonicalize } from "@executablemd/core/canonicalize";
 import type { Json } from "@executablemd/durable-streams";
 import type { WorkflowDefinition } from "./definition.ts";
 import { WorkflowRequestError } from "./errors.ts";

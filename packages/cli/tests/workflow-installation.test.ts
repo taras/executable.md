@@ -26,10 +26,11 @@ import {
   useWorkflowLifecycle,
   useWorkflowRunHost,
 } from "@executablemd/workflow/deno";
-import type { WorkflowExecutionTransitions } from "@executablemd/workflow/deno";
+import type { WorkflowExecutionTransitions } from "@executablemd/workflow";
 import { Git, WorkflowLifecycle, WorkflowRunStorage } from "@executablemd/workflow";
 import type { WorkflowRunDatabase, WorkflowRunStatus } from "@executablemd/workflow";
 import type { Json } from "@executablemd/core";
+import type { DurableEvent } from "@executablemd/durable-streams";
 import { runWorkflow } from "../src/workflow.ts";
 import type { WorkflowExecution, WorkflowHost, WorkflowRequest } from "../src/workflow.ts";
 
@@ -161,14 +162,31 @@ function refusingHost(root: string, refuse: "settle" | "none", attempted: string
   };
 }
 
+/**
+ * The root import a document execution records before anything else.
+ *
+ * A completed replay is held to it: the retained selection is what says which
+ * document the recorded result is a result of, and a history that closes the
+ * root without one describes a run that never imported anything.
+ */
+function rootImport(path: string, content: string): DurableEvent {
+  return {
+    type: "yield",
+    coroutineId: "root",
+    description: { type: "import_component", name: "__root__" },
+    result: { status: "ok", value: { kind: "repository", path, content } },
+  };
+}
+
 /** Record a root terminal, so the next pass over this journal is a replay. */
-function* closeRoot(root: string, runId: string): Operation<void> {
+function* closeRoot(root: string, runId: string, contents: string): Operation<void> {
   yield* scoped(function* () {
     yield* useWorkflowRunHost({ root });
     const found = yield* WorkflowRunStorage.operations.lookup(runId);
     if (!found.ok) {
       throw found.error;
     }
+    yield* found.value.journal.append(rootImport("workflow.md", contents));
     yield* found.value.journal.append({
       type: "close",
       coroutineId: "root",
@@ -326,7 +344,9 @@ describe("Tier WFI — what a run hands to canonical core", () => {
         recordingHost(root, attached),
         function* (execution): Operation<Result<void>> {
           executions += 1;
-          // Close the root, so the next pass is a completed replay.
+          // Close the root, so the next pass is a completed replay — behind the
+          // import that says which document the result is a result of.
+          yield* execution.stream.append(rootImport("workflow.md", created.contents));
           yield* execution.stream.append({
             type: "close",
             coroutineId: "root",
@@ -423,7 +443,7 @@ describe("Tier WFI — what a run hands to canonical core", () => {
         const created = yield* startedRun(root);
         yield* useGit(created.repository, created.objectId, created.contents);
         if (admitted === "completed") {
-          yield* closeRoot(root, created.runId);
+          yield* closeRoot(root, created.runId, created.contents);
         }
         yield* endRun(root, created.runId, admitted);
         yield* runWorkflow(

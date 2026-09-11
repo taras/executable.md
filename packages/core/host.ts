@@ -71,6 +71,18 @@ export type { ExecutionInstallation, JournalAdmission } from "./src/execute.ts";
 export type { DurablePreparation } from "./src/document-request.ts";
 
 /**
+ * Text a host holds, as a root document reported by the path it came from.
+ *
+ * The same function the package root publishes, reached here because a host
+ * that supplies a root is often a host that cannot resolve the root barrel: it
+ * pulls the terminal renderer and the rest of the reader-facing surface, and a
+ * durable owner running inside a Worker has neither. This entrypoint already
+ * resolves canonical execution and nothing beyond it.
+ */
+export { retainedSource } from "./src/root-source.ts";
+export type { RetainedRootDocument } from "./src/root-source.ts";
+
+/**
  * What a trusted host declares to an execution when one of its components names
  * durable work after its own invocation — see `src/invocation-identity.ts`.
  * The claimant is delivered to the factory and published nowhere.
@@ -130,3 +142,18 @@ export type {
  */
 export { AGENT_PROMPT, parsePromptRecord } from "./src/agent/journal.ts";
 export type { PromptRecord } from "./src/agent/journal.ts";
+
+/**
+ * The retained root-import protocol, for a host that reads a retained journal.
+ *
+ * Same reasoning as the Prompt record above, with more at stake. A workflow run
+ * decides from its own retained events whether a completed history may publish
+ * an outcome and be replayed, and which document that history was about — and
+ * the only thing that can answer that is the parser canonical execution admits
+ * partial histories through. Read a second way, the same record would answer to
+ * a second, weaker protocol: a selection the executor would refuse could
+ * publish a terminal outcome and authorize a replay. So the parser crosses the
+ * boundary rather than being described again.
+ */
+export { recordedRootImport } from "./src/root-selection.ts";
+export type { RootImportRecord, SelectionOutcome } from "./src/root-selection.ts";

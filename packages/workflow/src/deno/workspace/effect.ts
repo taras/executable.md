@@ -6,7 +6,7 @@ import {
   type Result as DurableResult,
   serializeError,
 } from "@executablemd/durable-streams";
-import { ensure, type Operation, scoped } from "effection";
+import { ensure, type Operation, scoped, type Result } from "effection";
 import type { WorkflowRunDatabase, WorkflowRunTransaction } from "../../storage/api.ts";
 import { WorkflowTransactionError } from "../../storage/errors.ts";
 import {
@@ -22,8 +22,16 @@ import { savepoint } from "../transaction.ts";
 import { isJournaledEffectFailure } from "./errors.ts";
 import type { DenoWorkspaceFilesystem } from "./filesystem.ts";
 import type { WorkspaceMetadata } from "./repositories.ts";
+import type {
+  WorkspaceAttachmentView,
+  WorkspaceHostBinding,
+  WorkspaceMutation,
+} from "../../workspace/effects.ts";
+import type { AgentSessions } from "../../storage/agent-session.ts";
 import {
   type PrivateWorkspaceTransaction,
+  transactAgentSessions as transactDenoAgentSessions,
+  transactWorkspaceRoots,
   withPrivateWorkspaceTransaction,
   workflowRunTransactionToken,
 } from "./private.ts";
@@ -269,4 +277,37 @@ export function createWorkspaceEffect<T extends Json>(
   const executionIdentity = Object.freeze({});
   workspaceEffectOwners.claim(executionIdentity, database);
   return createOwnedDurableWorkspaceOperation(description, execute, executionIdentity);
+}
+
+/**
+ * What this host answers for one of its own handles.
+ *
+ * The three things the shared document rules ask a host for, over the lease
+ * this handle already validated. Built for the handle rather than for a scope,
+ * because the lease is the authority: a handle another provider opened is not
+ * one this can answer for, and validating it is what says so.
+ */
+export function denoWorkspaceHost(database: WorkflowRunDatabase): WorkspaceHostBinding {
+  return {
+    create<Value extends Json>(
+      description: EffectDescription,
+      mutate: WorkspaceMutation<Value>,
+    ): DurableEffect<Value> {
+      return createWorkspaceEffect(database, description, mutate);
+    },
+
+    read<Value>(
+      body: (view: WorkspaceAttachmentView) => Operation<Value>,
+    ): Operation<Result<Value>> {
+      // The same transaction this host has always used for an ephemeral
+      // attachment, handing the body only the two members it may see.
+      return transactWorkspaceRoots(database, (workspace) =>
+        body({ filesystem: workspace.filesystem, metadata: workspace.metadata }),
+      );
+    },
+
+    sessions<Value>(body: (sessions: AgentSessions) => Operation<Value>): Operation<Result<Value>> {
+      return transactDenoAgentSessions(database, body);
+    },
+  };
 }

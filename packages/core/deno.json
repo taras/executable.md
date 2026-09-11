@@ -3,7 +3,12 @@
   "version": "0.9.0",
   "exports": {
     ".": "./mod.ts",
-    "./host": "./host.ts"
+    "./canonicalize": "./canonicalize.ts",
+    "./component-name": "./component-name.ts",
+    "./document-target": "./document-target.ts",
+    "./host": "./host.ts",
+    "./elicitation": "./elicitation.ts",
+    "./secrets": "./secrets.ts"
   },
   "imports": {
     "@effectionx/context-api": "npm:@effectionx/context-api@0.6.0",
@@ -11,6 +16,7 @@
     "@secretlint/secretlint-rule-preset-recommend": "npm:@secretlint/secretlint-rule-preset-recommend@13.0.4",
     "@secretlint/types": "npm:@secretlint/types@13.0.4",
     "acorn": "npm:acorn@^8.16.0",
+    "@cfworker/json-schema": "npm:@cfworker/json-schema@^4.1.1",
     "ajv": "npm:ajv@^8.17.1",
     "gray-matter": "npm:gray-matter@^4.0.3",
     "magic-string": "npm:magic-string@^0.30.21",

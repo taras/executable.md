@@ -1,0 +1,1106 @@
+/**
+ * Planting one source's committed prefix in a destination this owner holds.
+ *
+ * A fork arrives in two stages because a source is larger than one message may
+ * be. First the runner offers its parts — the roots, the inherited rows, the
+ * checkouts, and the content those roots name — and each part is scratch that
+ * belongs to the offering connection and describes nothing. Then one command
+ * commits them: the destination's schema, its immutable identity, the whole
+ * copied prefix, its Workspace closure, its lineage and its first execution all
+ * appear together, or the destination holds nothing at all.
+ *
+ * Nothing here trusts the parts for being staged. A staged root is held to its
+ * own manifest, its reference arrays are derived rather than believed, every
+ * piece of content it names must have been offered, and every inherited row
+ * must belong to a root that came with it. Staging is a way to cross, not a way
+ * to be believed.
+ */
+
+import {
+  type DurableEvent,
+  parseDurableEvent,
+  serializeDurableEvent,
+} from "@executablemd/durable-streams";
+import {
+  compareUtf8,
+  parseWorkspaceRootManifest,
+  WORKSPACE_ROOT_DOMAIN,
+  WORKSPACE_ROOT_FORMAT,
+} from "../workspace/root-manifest.ts";
+import { decodeContentManifest } from "../workspace/content-manifest.ts";
+import { sha256Hex } from "../workspace/sha256.ts";
+import { bytesOf } from "./encoding.ts";
+import type { CreateWorkflowRunRequest } from "../storage/api.ts";
+import {
+  CommandError,
+  type ForkContinuationOrigin,
+  type ForkCounts,
+  type ForkOrigin,
+  type ForkPart,
+  type ForkSection,
+} from "./commands.ts";
+import type { OwnerStorage } from "./storage.ts";
+import type { OwnerTransaction } from "./owner-transaction.ts";
+import { establishRun } from "./owner-open.ts";
+import { beginRun, type LifecycleRefusal } from "./owner-lifecycle.ts";
+import { conflictingFields } from "../storage/compatibility.ts";
+import { recognizeObject as recognize } from "./recognition.ts";
+import { readFrontier, validateRetainedRoot, type FrontierValue } from "./owner-reads.ts";
+import { FORK_TABLE, holdExecution, STAGING_TABLE } from "./private-schema.ts";
+import { checkoutKey, forkSelectionAnchor } from "./fork-anchor.ts";
+import { forkRunRecordEvent, isRootImportEvent } from "../journal-events.ts";
+import { encodeBase64 } from "./encoding.ts";
+import { readDocumentExecution, readRunRecord, type Row } from "../sqlite/rows.ts";
+import type { DocumentExecutionRecord } from "../storage/record.ts";
+
+/** What one committed fork produced. */
+export interface ForkedValue {
+  readonly frontier: FrontierValue;
+  readonly execution: DocumentExecutionRecord;
+  /** Whether the destination kept a terminal state instead of running. */
+  readonly replay: boolean;
+  /** What stale recovery closed on the way in, when it closed anything. */
+  readonly recovered: DocumentExecutionRecord | null;
+}
+
+/** A fork answer: the destination, or which immutable fields say it is another. */
+export interface ForkValue {
+  readonly conflict: readonly string[] | null;
+  /** Why the lifecycle would not continue, when it would not. */
+  readonly refusal: LifecycleRefusal | null;
+  readonly value: ForkedValue | null;
+}
+
+const RUN_COLUMNS = `run_id, definition, base, props, status,
+  stop_reason_kind, stop_reason_code, stop_reason_event_id, created_at, updated_at`;
+
+const MAX_PART_BYTES = 256 * 1024;
+const MAX_PARTS = 8192;
+
+function rows(storage: OwnerStorage, sql: string, ...bindings: unknown[]): Row[] {
+  return storage.sql.exec(sql, ...bindings).toArray();
+}
+
+function text(value: unknown): string {
+  if (typeof value !== "string" || value === "") {
+    throw new CommandError("malformed-member");
+  }
+  return value;
+}
+
+function digest(value: unknown): string {
+  const candidate = text(value);
+  if (!/^[0-9a-f]{64}$/.test(candidate)) {
+    throw new CommandError("malformed-member");
+  }
+  return candidate;
+}
+
+function count(value: unknown): number {
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) {
+    throw new CommandError("malformed-member");
+  }
+  return value;
+}
+
+function list(value: unknown): unknown[] {
+  if (!Array.isArray(value)) {
+    throw new CommandError("malformed-member");
+  }
+  return value;
+}
+
+function members(value: unknown, names: readonly string[]): Map<string, unknown> {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    throw new CommandError("malformed-member");
+  }
+  const found = new Map(Object.entries(value));
+  if (found.size !== names.length || names.some((name) => !found.has(name))) {
+    throw new CommandError("unknown-member");
+  }
+  return found;
+}
+
+/**
+ * Keep one offered part, bounded and in its place.
+ *
+ * Offering the same position twice is a conflict rather than a replacement: a
+ * transfer that rewrote its own members would be one nobody could describe.
+ */
+export function stageForkPart(
+  storage: OwnerStorage,
+  acquisitionId: string,
+  part: ForkPart,
+): { staged: number } {
+  const encoded = JSON.stringify(part.part);
+  const size = new TextEncoder().encode(encoded).length;
+  if (size > MAX_PART_BYTES) {
+    throw new CommandError("too-large");
+  }
+  const held = rows(
+    storage,
+    `SELECT count(*) AS parts FROM ${FORK_TABLE} WHERE acquisition_id = ?`,
+    acquisitionId,
+  )[0];
+  if (count(held?.["parts"]) >= MAX_PARTS) {
+    throw new CommandError("capacity");
+  }
+  const already = rows(
+    storage,
+    `SELECT part FROM ${FORK_TABLE}
+      WHERE acquisition_id = ? AND section = ? AND position = ?`,
+    acquisitionId,
+    part.section,
+    part.position,
+  )[0];
+  if (already !== undefined) {
+    if (already["part"] !== encoded) {
+      throw new CommandError("duplicate-conflict");
+    }
+    return { staged: count(held?.["parts"]) };
+  }
+  storage.sql.exec(
+    `INSERT INTO ${FORK_TABLE} (acquisition_id, section, position, part, part_bytes)
+      VALUES (?, ?, ?, ?, ?)`,
+    acquisitionId,
+    part.section,
+    part.position,
+    encoded,
+    size,
+  );
+  return { staged: count(held?.["parts"]) + 1 };
+}
+
+/** Whether this transfer describes anything at all. */
+function expectsTransfer(counts: ForkCounts): boolean {
+  return counts.inherited + counts.roots + counts.manifests + counts.blobs + counts.checkouts > 0;
+}
+
+/** Whether this acquisition has offered any part of a fork. */
+function offered(storage: OwnerStorage, acquisitionId: string): boolean {
+  // A store with no scratch table at all has been offered nothing, which is
+  // the same answer: that table is created by the command that offers a part.
+  if (
+    rows(storage, "SELECT name FROM sqlite_schema WHERE type = 'table' AND name = ?", FORK_TABLE)
+      .length === 0
+  ) {
+    return false;
+  }
+  return (
+    rows(
+      storage,
+      `SELECT 1 AS held FROM ${FORK_TABLE} WHERE acquisition_id = ? LIMIT 1`,
+      acquisitionId,
+    ).length > 0
+  );
+}
+
+/** Every part of one section, in the order it was offered, with no gaps. */
+function section(
+  storage: OwnerStorage,
+  acquisitionId: string,
+  name: ForkSection,
+  expected: number,
+): Record<string, unknown>[] {
+  const held = rows(
+    storage,
+    `SELECT position, part FROM ${FORK_TABLE}
+      WHERE acquisition_id = ? AND section = ? ORDER BY position`,
+    acquisitionId,
+    name,
+  );
+  if (held.length !== expected) {
+    throw new CommandError("malformed-member");
+  }
+  return held.map((row, at) => {
+    if (count(row["position"]) !== at) {
+      // A gap, so the section is not the one the counts describe.
+      throw new CommandError("malformed-member");
+    }
+    const parsed: unknown = JSON.parse(text(row["part"]));
+    if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+      throw new CommandError("malformed-member");
+    }
+    return Object.fromEntries(Object.entries(parsed));
+  });
+}
+
+/** Content this acquisition offered, by the identity its bytes produce. */
+function staged(
+  storage: OwnerStorage,
+  acquisitionId: string,
+  kind: "manifest" | "blob",
+  hash: string,
+): Uint8Array {
+  const row = rows(
+    storage,
+    `SELECT bytes FROM ${STAGING_TABLE} WHERE acquisition_id = ? AND kind = ? AND digest = ?`,
+    acquisitionId,
+    kind,
+    hash,
+  )[0];
+  if (row === undefined) {
+    // Named by a root but never offered: the transfer is not the closure it
+    // claims to be.
+    throw new CommandError("malformed-member");
+  }
+  const bytes = bytesOf(row["bytes"]);
+  if (sha256Hex(bytes) !== hash) {
+    throw new CommandError("malformed-member");
+  }
+  return bytes;
+}
+
+interface StagedRoot {
+  readonly rootId: string;
+  readonly formatVersion: number;
+  readonly manifest: string;
+  readonly manifestHashes: readonly string[];
+  readonly blobHashes: readonly string[];
+}
+
+function parseRoot(part: Record<string, unknown>): StagedRoot {
+  const found = members(part, [
+    "rootId",
+    "formatVersion",
+    "manifest",
+    "manifestHashes",
+    "blobHashes",
+  ]);
+  if (found.get("formatVersion") !== WORKSPACE_ROOT_FORMAT) {
+    throw new CommandError("malformed-member");
+  }
+  const manifest = text(found.get("manifest"));
+  const rootId = digest(found.get("rootId"));
+  if (sha256Hex(`${WORKSPACE_ROOT_DOMAIN}${manifest}`) !== rootId) {
+    throw new CommandError("malformed-member");
+  }
+  return {
+    rootId,
+    formatVersion: WORKSPACE_ROOT_FORMAT,
+    manifest,
+    manifestHashes: list(found.get("manifestHashes")).map((value) => digest(value)),
+    blobHashes: list(found.get("blobHashes")).map((value) => digest(value)),
+  };
+}
+
+function sameOrder(left: readonly string[], right: readonly string[]): boolean {
+  return left.length === right.length && left.every((value, at) => value === right[at]);
+}
+
+/**
+ * Retain one root's content and the root itself, proving the closure as it goes.
+ *
+ * The reference arrays are derived from the root's own manifest and compared
+ * element for element, which is the same comparison a destination makes when it
+ * reads the root back. A root whose arrays are the right set in the wrong order
+ * is refused here rather than becoming unreadable later.
+ */
+function retainRoot(
+  storage: OwnerStorage,
+  acquisitionId: string,
+  root: StagedRoot,
+  watermarks: ContentWatermarks,
+): void {
+  const parsed = parseWorkspaceRootManifest(root.manifest, () => {
+    throw new CommandError("malformed-member");
+  });
+  const named = new Set<string>();
+  const sizes = new Map<string, number>();
+  for (const entry of parsed.entries) {
+    if (entry.kind === "file") {
+      named.add(entry.manifest);
+      const already = sizes.get(entry.manifest);
+      if (already !== undefined && already !== entry.size) {
+        throw new CommandError("malformed-member");
+      }
+      sizes.set(entry.manifest, entry.size);
+    }
+  }
+  const blobs = new Map<string, number>();
+  const manifests = new Map<string, Uint8Array>();
+  for (const hash of named) {
+    const bytes = staged(storage, acquisitionId, "manifest", hash);
+    const content = decodeContentManifest(bytes, () => {
+      throw new CommandError("malformed-member");
+    });
+    if (sizes.get(hash) !== content.size) {
+      throw new CommandError("malformed-member");
+    }
+    manifests.set(hash, bytes);
+    for (const chunk of content.chunks) {
+      const seen = blobs.get(chunk.hash);
+      if (seen !== undefined && seen !== chunk.size) {
+        throw new CommandError("malformed-member");
+      }
+      blobs.set(chunk.hash, chunk.size);
+    }
+  }
+  if (
+    !sameOrder([...named].toSorted(compareUtf8), root.manifestHashes) ||
+    !sameOrder([...blobs.keys()].toSorted(compareUtf8), root.blobHashes)
+  ) {
+    throw new CommandError("malformed-member");
+  }
+
+  for (const [hash, size] of blobs) {
+    const bytes = staged(storage, acquisitionId, "blob", hash);
+    if (bytes.length !== size) {
+      throw new CommandError("malformed-member");
+    }
+    const key = hexBytes(hash);
+    storage.sql.exec(
+      "INSERT INTO vfs_blobs (hash, size, last_seen) VALUES (?, ?, ?) ON CONFLICT(hash) DO NOTHING",
+      key,
+      size,
+      // The watermark the source retained beside these bytes. A digest stands
+      // for the bytes and for their size; it does not stand for this.
+      watermarkOf(watermarks.blob, hash),
+    );
+    storage.sql.exec(
+      "INSERT INTO vfs_blob_bytes (hash, bytes) VALUES (?, ?) ON CONFLICT(hash) DO NOTHING",
+      key,
+      bytes,
+    );
+  }
+  for (const [hash, bytes] of manifests) {
+    storage.sql.exec(
+      `INSERT INTO vfs_manifests (hash, size, encoded, last_seen) VALUES (?, ?, ?, ?)
+        ON CONFLICT(hash) DO NOTHING`,
+      hexBytes(hash),
+      decodeContentManifest(bytes, () => {
+        throw new CommandError("malformed-member");
+      }).size,
+      bytes,
+      watermarkOf(watermarks.manifest, hash),
+    );
+  }
+
+  const existing = rows(
+    storage,
+    "SELECT manifest FROM workspace_roots WHERE root_id = ?",
+    root.rootId,
+  )[0];
+  if (existing === undefined) {
+    storage.sql.exec(
+      "INSERT INTO workspace_roots (root_id, format_version, manifest) VALUES (?, ?, ?)",
+      root.rootId,
+      WORKSPACE_ROOT_FORMAT,
+      root.manifest,
+    );
+    for (const hash of root.manifestHashes) {
+      storage.sql.exec(
+        "INSERT INTO workspace_root_manifest_refs (root_id, manifest_hash) VALUES (?, ?)",
+        root.rootId,
+        hexBytes(hash),
+      );
+    }
+    for (const hash of root.blobHashes) {
+      storage.sql.exec(
+        "INSERT INTO workspace_root_blob_refs (root_id, blob_hash) VALUES (?, ?)",
+        root.rootId,
+        hexBytes(hash),
+      );
+    }
+  } else if (existing["manifest"] !== root.manifest) {
+    throw new CommandError("duplicate-conflict");
+  }
+  validateRetainedRoot(storage, root.rootId);
+}
+
+/** What the source retained beside one piece of content. */
+function watermarkOf(watermarks: ReadonlyMap<string, number>, hash: string): number {
+  const found = watermarks.get(hash);
+  if (found === undefined) {
+    // Every piece a root names was described by the transfer, or the anchor
+    // would not have matched. Reaching here would mean it did.
+    throw new CommandError("malformed-member");
+  }
+  return found;
+}
+
+function hexBytes(digestHex: string): Uint8Array {
+  const bytes = new Uint8Array(32);
+  for (let at = 0; at < 32; at += 1) {
+    bytes[at] = Number.parseInt(digestHex.slice(at * 2, at * 2 + 2), 16);
+  }
+  return bytes;
+}
+
+/** One inherited row, exactly as the source retained it. */
+function writeInherited(
+  storage: OwnerStorage,
+  part: Record<string, unknown>,
+  sourceRunId: string,
+  carried: ReadonlySet<string>,
+): void {
+  const found = members(part, ["eventId", "record", "workspaceRootId"]);
+  const eventId = text(found.get("eventId"));
+  const record = text(found.get("record"));
+  const rootId = digest(found.get("workspaceRootId"));
+  if (!carried.has(rootId)) {
+    throw new CommandError("malformed-member");
+  }
+  const parsed = parseDurableEvent(record);
+  if (!parsed.ok) {
+    throw new CommandError("corrupt-journal");
+  }
+  storage.sql.exec(
+    "INSERT INTO journal_events (event_id, record, workspace_root_id) VALUES (?, ?, ?)",
+    eventId,
+    record,
+    rootId,
+  );
+  storage.sql.exec(
+    `INSERT INTO journal_event_provenance (event_id, source_run_id, source_event_id)
+      VALUES (?, ?, ?)`,
+    eventId,
+    sourceRunId,
+    eventId,
+  );
+}
+
+/** One inherited checkout, in the directory the checkpoint's Workspace holds. */
+function writeCheckout(
+  storage: OwnerStorage,
+  part: Record<string, unknown>,
+  directories: ReadonlySet<string>,
+  repositories: Set<string>,
+): void {
+  const kind = part["kind"];
+  if (kind === "repository") {
+    const found = members(part, [
+      "kind",
+      "name",
+      "locator",
+      "locatorFingerprint",
+      "requestedBase",
+      "creationCommit",
+      "primaryBranch",
+      "objectFormat",
+      "checkoutPath",
+    ]);
+    const path = text(found.get("checkoutPath"));
+    if (!directories.has(path)) {
+      throw new CommandError("malformed-member");
+    }
+    const format = found.get("objectFormat");
+    if (format !== "sha1" && format !== "sha256") {
+      throw new CommandError("malformed-member");
+    }
+    const name = text(found.get("name"));
+    storage.sql.exec(
+      `INSERT INTO workspace_repositories (name, locator, locator_fingerprint, requested_base,
+         creation_commit, primary_branch, object_format, checkout_path)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      name,
+      text(found.get("locator")),
+      digest(found.get("locatorFingerprint")),
+      found.get("requestedBase") === null ? null : text(found.get("requestedBase")),
+      text(found.get("creationCommit")),
+      text(found.get("primaryBranch")),
+      format,
+      path,
+    );
+    repositories.add(name);
+    return;
+  }
+  const found = members(part, [
+    "kind",
+    "repositoryName",
+    "name",
+    "requestedBranch",
+    "requestedBase",
+    "creationCommit",
+    "checkoutPath",
+  ]);
+  if (kind !== "worktree") {
+    throw new CommandError("malformed-member");
+  }
+  const path = text(found.get("checkoutPath"));
+  if (!directories.has(path)) {
+    throw new CommandError("malformed-member");
+  }
+  const repository = text(found.get("repositoryName"));
+  if (!repositories.has(repository)) {
+    // A Worktree of a Repository that did not come with it belongs to nothing.
+    throw new CommandError("malformed-member");
+  }
+  storage.sql.exec(
+    `INSERT INTO workspace_worktrees (repository_name, name, requested_branch, requested_base,
+       creation_commit, checkout_path)
+     VALUES (?, ?, ?, ?, ?, ?)`,
+    repository,
+    text(found.get("name")),
+    text(found.get("requestedBranch")),
+    found.get("requestedBase") === null ? null : text(found.get("requestedBase")),
+    text(found.get("creationCommit")),
+    path,
+  );
+}
+
+/**
+ * Rebuild the source selection out of the parts that were offered.
+ *
+ * Every value is validated as it is read — roots against their own manifests,
+ * content against its digests, rows against the roots they name — and then
+ * described in the shared logical shape and hashed by the shared rule. The
+ * digest that comes out is comparable with the one the source computed only
+ * because neither side spells the selection for itself.
+ */
+function reconstruct(
+  storage: OwnerStorage,
+  acquisitionId: string,
+  input: { readonly origin: ForkOrigin; readonly counts: ForkCounts },
+): { anchor: string; rootIds: Set<string>; watermarks: ContentWatermarks } {
+  const roots = section(storage, acquisitionId, "roots", input.counts.roots).map((part) =>
+    parseRoot(part),
+  );
+  const rootIds = new Set(roots.map((root) => root.rootId));
+  if (rootIds.size !== roots.length) {
+    throw new CommandError("malformed-member");
+  }
+  for (const rootId of [
+    input.origin.checkpointWorkspaceRootId,
+    input.origin.runRecordWorkspaceRootId,
+    input.origin.rootImportWorkspaceRootId,
+  ]) {
+    if (!rootIds.has(rootId)) {
+      throw new CommandError("malformed-member");
+    }
+  }
+
+  const manifests = section(storage, acquisitionId, "manifests", input.counts.manifests).map(
+    (part) => parseContentMetadata(part),
+  );
+  const blobs = section(storage, acquisitionId, "blobs", input.counts.blobs).map((part) =>
+    parseContentMetadata(part),
+  );
+  const inherited = section(storage, acquisitionId, "inherited", input.counts.inherited).map(
+    (part) => parseInherited(part, rootIds),
+  );
+  const checkouts = section(storage, acquisitionId, "checkouts", input.counts.checkouts).map(
+    (part) => parseCheckoutPart(part),
+  );
+
+  // Two namespaces, never one. A digest identifies bytes, and the same bytes
+  // can be one manifest's encoding and another manifest's chunk: the two tables
+  // retain their own watermarks, so one role must not answer for the other.
+  const watermarks = {
+    manifest: metadataOf(manifests),
+    blob: metadataOf(blobs),
+  };
+
+  return {
+    rootIds,
+    watermarks,
+    anchor: forkSelectionAnchor({
+      checkpointEventId: input.origin.checkpointEventId,
+      checkpointWorkspaceRootId: input.origin.checkpointWorkspaceRootId,
+      runRecordWorkspaceRootId: input.origin.runRecordWorkspaceRootId,
+      rootImportWorkspaceRootId: input.origin.rootImportWorkspaceRootId,
+      inherited,
+      roots,
+      manifests: manifests.map((piece) => ({
+        hash: piece.hash,
+        size: piece.size,
+        lastSeen: piece.lastSeen,
+        // The bytes the source hashed, read back out of what was staged rather
+        // than taken on the word of the part that described them.
+        encoded: encodeBase64(staged(storage, acquisitionId, "manifest", piece.hash)),
+      })),
+      blobs,
+      checkouts,
+    }),
+  };
+}
+
+/** The watermarks one transfer carried, kept by the role each belongs to. */
+export interface ContentWatermarks {
+  readonly manifest: ReadonlyMap<string, number>;
+  readonly blob: ReadonlyMap<string, number>;
+}
+
+/** One section's metadata, refusing a digest it names twice. */
+function metadataOf(
+  pieces: readonly { hash: string; size: number; lastSeen: number }[],
+): Map<string, number> {
+  const held = new Map<string, number>();
+  for (const piece of pieces) {
+    if (held.has(piece.hash)) {
+      // The same identity described twice in one role. Which description is
+      // the transfer's is not a question this can answer.
+      throw new CommandError("malformed-member");
+    }
+    held.set(piece.hash, piece.lastSeen);
+  }
+  return held;
+}
+
+/** One manifest's or blob's retained metadata, as a part carries it. */
+function parseContentMetadata(part: Record<string, unknown>): {
+  hash: string;
+  size: number;
+  lastSeen: number;
+} {
+  const found = members(part, ["hash", "size", "lastSeen"]);
+  return {
+    hash: digest(found.get("hash")),
+    size: count(found.get("size")),
+    lastSeen: count(found.get("lastSeen")),
+  };
+}
+
+/** One inherited row, as a part carries it. */
+function parseInherited(
+  part: Record<string, unknown>,
+  carried: ReadonlySet<string>,
+): { eventId: string; record: string; workspaceRootId: string } {
+  const found = members(part, ["eventId", "record", "workspaceRootId"]);
+  const rootId = digest(found.get("workspaceRootId"));
+  if (!carried.has(rootId)) {
+    throw new CommandError("malformed-member");
+  }
+  const record = text(found.get("record"));
+  if (!parseDurableEvent(record).ok) {
+    throw new CommandError("corrupt-journal");
+  }
+  return { eventId: text(found.get("eventId")), record, workspaceRootId: rootId };
+}
+
+/** One checkout, as the selection describes it: its key and its record. */
+function parseCheckoutPart(part: Record<string, unknown>): {
+  key: string;
+  value: Record<string, unknown>;
+} {
+  const kind = part["kind"];
+  if (kind === "repository") {
+    return { key: checkoutKey(["repository", text(part["name"])]), value: { ...part } };
+  }
+  if (kind !== "worktree") {
+    throw new CommandError("malformed-member");
+  }
+  return {
+    key: checkoutKey(["worktree", text(part["repositoryName"]), text(part["name"])]),
+    value: { ...part },
+  };
+}
+
+/**
+ * The two records this fork writes for itself, held to what they must be.
+ *
+ * A generic parseable event is not enough where the command promises one
+ * specific role: the run record is the canonical event this destination's own
+ * identity, base and pinned commit imply, and the root import is a root import
+ * written against a root the transfer carried.
+ */
+function requireHeadRecords(
+  input: {
+    readonly runId: string;
+    readonly creation: CreateWorkflowRunRequest;
+    readonly origin: ForkOrigin;
+    readonly runRecord: DurableEvent;
+    readonly rootImport: DurableEvent;
+  },
+  carried: ReadonlySet<string>,
+): void {
+  const expected = forkRunRecordEvent({
+    runId: input.runId,
+    base: input.creation.base,
+    pinnedCommit: input.creation.definition.objectId,
+  });
+  if (serializeDurableEvent(input.runRecord) !== serializeDurableEvent(expected)) {
+    throw new CommandError("malformed-member");
+  }
+  if (!isRootImportEvent(input.rootImport)) {
+    throw new CommandError("malformed-member");
+  }
+  if (!carried.has(input.origin.rootImportWorkspaceRootId)) {
+    throw new CommandError("malformed-member");
+  }
+}
+
+/**
+ * Continue a destination that already holds this fork, without its source.
+ *
+ * A committed fork is independent: it holds its own prefix, its own content and
+ * its own Workspace, and nothing about continuing it needs the run it was
+ * copied from. So this asks only what the destination itself retains — its
+ * immutable identity, its lineage, and the two head records it wrote for
+ * itself — and then takes the run up through the same recovery and admission a
+ * resume uses.
+ *
+ * Absent when nothing is here. Making a fork needs a source; this is for when
+ * one was already made.
+ */
+export function continueFork(
+  storage: OwnerStorage,
+  transaction: OwnerTransaction,
+  acquisitionId: string,
+  input: {
+    readonly runId: string;
+    readonly creation: CreateWorkflowRunRequest;
+    readonly origin: ForkContinuationOrigin;
+    readonly runRecord: DurableEvent;
+    readonly rootImport: DurableEvent;
+    readonly executionId: string;
+  },
+  now: () => string,
+): ForkValue {
+  if (
+    rows(storage, "SELECT name FROM sqlite_schema WHERE type = 'table' AND name = 'workflow_run'")
+      .length === 0
+  ) {
+    // Nothing here to continue. Copying a source is a different command.
+    throw new CommandError("absent");
+  }
+  recognize(storage);
+  const stored = rows(storage, `SELECT ${RUN_COLUMNS} FROM workflow_run`)[0];
+  if (stored === undefined) {
+    throw new CommandError("absent");
+  }
+  const record = readRunRecord(stored);
+  if (record.runId !== input.runId) {
+    throw new CommandError("wrong-run");
+  }
+  const differing = conflictingFields(record, input.creation);
+  if (differing.length > 0) {
+    return { conflict: differing, refusal: null, value: null };
+  }
+
+  const lineage = rows(
+    storage,
+    `SELECT source_run_id, checkpoint_event_id, checkpoint_workspace_root_id,
+            selection_anchor, run_record_root_id, root_import_root_id
+       FROM workflow_fork_lineage WHERE id = 1`,
+  )[0];
+  if (
+    lineage === undefined ||
+    lineage["source_run_id"] !== input.origin.sourceRunId ||
+    lineage["checkpoint_event_id"] !== input.origin.checkpointEventId
+  ) {
+    // Not a fork at all, or a fork of somewhere else. Either way this request
+    // is not describing the run that is here.
+    return { conflict: ["lineage"], refusal: null, value: null };
+  }
+
+  // The two records this fork wrote for itself, as it retains them. A request
+  // carrying a different root import is a different fork, whatever else agrees.
+  const heads = rows(
+    storage,
+    "SELECT record, workspace_root_id FROM journal_events ORDER BY sequence LIMIT 2",
+  );
+  const expected = serializeDurableEvent(
+    forkRunRecordEvent({
+      runId: input.runId,
+      base: input.creation.base,
+      pinnedCommit: input.creation.definition.objectId,
+    }),
+  );
+  if (
+    heads.length !== 2 ||
+    serializeDurableEvent(input.runRecord) !== expected ||
+    heads[0]?.["record"] !== expected ||
+    heads[1]?.["record"] !== serializeDurableEvent(input.rootImport) ||
+    // The exact roots these rows were committed against, as this fork's own
+    // lineage retained them — not merely roots this store happens to hold. A
+    // head reassociated to another valid root is a different fork's head.
+    lineage["run_record_root_id"] === null ||
+    lineage["root_import_root_id"] === null ||
+    heads[0]?.["workspace_root_id"] !== lineage["run_record_root_id"] ||
+    heads[1]?.["workspace_root_id"] !== lineage["root_import_root_id"]
+  ) {
+    return { conflict: ["lineage"], refusal: null, value: null };
+  }
+
+  const resumed = beginRun(
+    storage,
+    transaction,
+    acquisitionId,
+    input.runId,
+    "resume",
+    null,
+    null,
+    input.executionId,
+    now,
+  );
+  if (resumed.conflict !== null) {
+    return { conflict: resumed.conflict, refusal: null, value: null };
+  }
+  if (resumed.refusal !== null) {
+    return { conflict: null, refusal: resumed.refusal, value: null };
+  }
+  const begun = resumed.value;
+  if (begun === null) {
+    throw new CommandError("malformed-member");
+  }
+  return {
+    conflict: null,
+    refusal: null,
+    value: {
+      frontier: begun.frontier,
+      execution: begun.execution,
+      replay: begun.replay,
+      recovered: begun.recovered,
+    },
+  };
+}
+
+/**
+ * Commit one fork: the destination and everything it inherited, together.
+ *
+ * Runs inside the caller's transaction. What it writes is what the schema's own
+ * references require, in that order: content, then the roots that name it, then
+ * the Workspace pointer those roots are restored into, then the checkouts, then
+ * the journal rows that name the roots, then the lineage, and last the fork's
+ * own first execution. A failure anywhere rolls the whole thing back, so the
+ * destination is either absent or complete.
+ */
+export function commitFork(
+  storage: OwnerStorage,
+  transaction: OwnerTransaction,
+  acquisitionId: string,
+  input: {
+    readonly runId: string;
+    readonly creation: CreateWorkflowRunRequest;
+    readonly retrieval: string | null;
+    readonly origin: ForkOrigin;
+    readonly counts: ForkCounts;
+    readonly runRecord: DurableEvent;
+    readonly rootImport: DurableEvent;
+    readonly executionId: string;
+  },
+  mintEventId: () => string,
+  now: () => string,
+): ForkValue {
+  // Whether this destination already holds a run decides what committing
+  // means: making one, or confirming the one that is here is this fork.
+  const fresh =
+    rows(storage, "SELECT name FROM sqlite_schema WHERE type = 'table' AND name = 'workflow_run'")
+      .length === 0;
+
+  // Before anything semantic: prove that what was offered is the selection the
+  // source anchored. Everything below is derived from the staged parts,
+  // described in the shared shape and hashed by the shared rule, then compared.
+  // A transfer that is not that selection stops here, with the destination
+  // holding no run.
+  if (fresh && expectsTransfer(input.counts) && !offered(storage, acquisitionId)) {
+    // Nothing here, and nothing offered: the commit this command names never
+    // happened, and the staging it would have used went with the connection
+    // that made it. Said as its own answer, because it is the one failure a
+    // caller responds to by copying the source again.
+    throw new CommandError("needs-transfer");
+  }
+  const staged = fresh ? reconstruct(storage, acquisitionId, input) : undefined;
+  const watermarks: ContentWatermarks = staged?.watermarks ?? {
+    manifest: new Map(),
+    blob: new Map(),
+  };
+  if (staged !== undefined) {
+    if (staged.anchor !== input.origin.anchor) {
+      throw new CommandError("stale-journal");
+    }
+    // The two records this fork writes for itself are the fork's own, not any
+    // parseable event.
+    requireHeadRecords(input, staged.rootIds);
+  }
+
+  const conflict = establishRun(
+    storage,
+    transaction,
+    input.runId,
+    input.creation,
+    now,
+    input.retrieval ?? undefined,
+  );
+  if (conflict !== null) {
+    return { conflict, refusal: null, value: null };
+  }
+  if (!fresh) {
+    // A destination that already exists is the same fork only when it came
+    // from the same place. Its identity was compared above; this is its
+    // lineage.
+    const lineage = rows(
+      storage,
+      `SELECT source_run_id, checkpoint_event_id, checkpoint_workspace_root_id,
+              selection_anchor, run_record_root_id, root_import_root_id
+         FROM workflow_fork_lineage WHERE id = 1`,
+    )[0];
+    if (
+      lineage === undefined ||
+      lineage["source_run_id"] !== input.origin.sourceRunId ||
+      lineage["checkpoint_event_id"] !== input.origin.checkpointEventId ||
+      lineage["checkpoint_workspace_root_id"] !== input.origin.checkpointWorkspaceRootId
+    ) {
+      return { conflict: ["lineage"], refusal: null, value: null };
+    }
+    if (lineage["selection_anchor"] !== input.origin.anchor) {
+      // The same source and checkpoint, copied out of a different committed
+      // state. That is a different fork wearing this one's identity.
+      return { conflict: ["lineage"], refusal: null, value: null };
+    }
+    // The fork is already here, so this is not making one: it is taking a run
+    // up again. It goes through the same recovery and admission a resume does,
+    // reconciling what the previous executor left before beginning exactly one
+    // replacement, rather than inserting a second open execution beside it.
+    const resumed = beginRun(
+      storage,
+      transaction,
+      acquisitionId,
+      input.runId,
+      "resume",
+      null,
+      null,
+      input.executionId,
+      now,
+    );
+    if (resumed.conflict !== null) {
+      return { conflict: resumed.conflict, refusal: null, value: null };
+    }
+    if (resumed.refusal !== null) {
+      return { conflict: null, refusal: resumed.refusal, value: null };
+    }
+    const begun = resumed.value;
+    if (begun === null) {
+      throw new CommandError("malformed-member");
+    }
+    return {
+      conflict: null,
+      refusal: null,
+      // Exactly what the shared policy decided, including a terminal run that
+      // replays and whatever recovery closed on the way in.
+      value: {
+        frontier: begun.frontier,
+        execution: begun.execution,
+        replay: begun.replay,
+        recovered: begun.recovered,
+      },
+    };
+  }
+
+  const roots = section(storage, acquisitionId, "roots", input.counts.roots).map((part) =>
+    parseRoot(part),
+  );
+  const carried = new Set(roots.map((root) => root.rootId));
+  for (const rootId of [
+    input.origin.checkpointWorkspaceRootId,
+    input.origin.runRecordWorkspaceRootId,
+    input.origin.rootImportWorkspaceRootId,
+  ]) {
+    if (!carried.has(rootId)) {
+      throw new CommandError("malformed-member");
+    }
+  }
+  for (const root of roots) {
+    retainRoot(storage, acquisitionId, root, watermarks);
+  }
+
+  const checkpoint = roots.find((root) => root.rootId === input.origin.checkpointWorkspaceRootId);
+  if (checkpoint === undefined) {
+    throw new CommandError("malformed-member");
+  }
+  const directories = new Set<string>();
+  for (const entry of parseWorkspaceRootManifest(checkpoint.manifest, () => {
+    throw new CommandError("malformed-member");
+  }).entries) {
+    if (entry.kind === "directory") {
+      directories.add(entry.path);
+    }
+  }
+  // The fork's live Workspace is the checkpoint's, named before a single
+  // journal row names a root.
+  storage.sql.exec(
+    "UPDATE workspace_state SET current_root_id = ? WHERE singleton_id = 1",
+    input.origin.checkpointWorkspaceRootId,
+  );
+
+  const repositories = new Set<string>();
+  for (const part of section(storage, acquisitionId, "checkouts", input.counts.checkouts)) {
+    writeCheckout(storage, part, directories, repositories);
+  }
+
+  // The two records the fork writes for itself stand where the source's stood,
+  // against the same roots, under identities of this run's own.
+  storage.sql.exec(
+    "INSERT INTO journal_events (event_id, record, workspace_root_id) VALUES (?, ?, ?)",
+    mintEventId(),
+    serializeDurableEvent(input.runRecord),
+    input.origin.runRecordWorkspaceRootId,
+  );
+  storage.sql.exec(
+    "INSERT INTO journal_events (event_id, record, workspace_root_id) VALUES (?, ?, ?)",
+    mintEventId(),
+    serializeDurableEvent(input.rootImport),
+    input.origin.rootImportWorkspaceRootId,
+  );
+  for (const part of section(storage, acquisitionId, "inherited", input.counts.inherited)) {
+    writeInherited(storage, part, input.origin.sourceRunId, carried);
+  }
+
+  storage.sql.exec(
+    `INSERT INTO workflow_fork_lineage
+      (id, source_run_id, checkpoint_event_id, checkpoint_workspace_root_id,
+       selection_anchor, run_record_root_id, root_import_root_id, created_at)
+      VALUES (1, ?, ?, ?, ?, ?, ?, ?)`,
+    input.origin.sourceRunId,
+    input.origin.checkpointEventId,
+    input.origin.checkpointWorkspaceRootId,
+    // The copy identity and the two head associations, retained with the
+    // lineage: continuing this fork later is then checkable here, without
+    // reading the source at all.
+    input.origin.anchor,
+    input.origin.runRecordWorkspaceRootId,
+    input.origin.rootImportWorkspaceRootId,
+    now(),
+  );
+
+  return { conflict: null, refusal: null, value: begunOn(storage, acquisitionId, input, now) };
+}
+
+/** The fork's first execution, begun by the acquisition that committed it. */
+function begunOn(
+  storage: OwnerStorage,
+  acquisitionId: string,
+  input: { readonly runId: string; readonly executionId: string },
+  now: () => string,
+): ForkedValue {
+  storage.sql.exec(
+    "INSERT INTO document_executions (execution_id, started_at) VALUES (?, ?)",
+    input.executionId,
+    now(),
+  );
+  holdExecution(storage, acquisitionId, input.executionId);
+  storage.sql.exec(
+    "UPDATE workflow_run SET status = 'running', updated_at = ? WHERE id = 1",
+    now(),
+  );
+  const row = rows(
+    storage,
+    `SELECT execution_id, started_at, stopped_at, stop_status,
+            stop_reason_kind, stop_reason_code, stop_reason_event_id
+       FROM document_executions WHERE execution_id = ?`,
+    input.executionId,
+  )[0];
+  if (row === undefined) {
+    throw new CommandError("malformed-member");
+  }
+  return {
+    frontier: readFrontier(storage, input.runId),
+    execution: readDocumentExecution(row),
+    // A fork this transaction just created runs; there was nothing here to
+    // replay and nothing to recover.
+    replay: false,
+    recovered: null,
+  };
+}
+
+/** What a destination already holds, when a retry finds one. */
+export function retainedFork(storage: OwnerStorage, runId: string): boolean {
+  const row = rows(storage, "SELECT run_id FROM workflow_run")[0];
+  return row !== undefined && readRunRecord(row).runId === runId;
+}
+
+/** Discard this acquisition's offered parts once they have been adopted. */
+export function discardForkParts(storage: OwnerStorage, acquisitionId: string): void {
+  storage.sql.exec(`DELETE FROM ${FORK_TABLE} WHERE acquisition_id = ?`, acquisitionId);
+}

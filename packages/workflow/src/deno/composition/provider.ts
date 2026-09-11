@@ -38,13 +38,12 @@ import type {
 import type { GitPushOutcome, GitPushRequest } from "../../composition/git-push-records.ts";
 import type { RepositoryRecord, WorktreeRecord } from "../../composition/records.ts";
 import type { WorkflowRunDatabase } from "../../storage/api.ts";
-import { transactWorkspaceRoots } from "../workspace/private.ts";
-import type { PrivateWorkspaceTransaction } from "../workspace/private.ts";
+import { workspaceHostFor } from "../../workspace/effects.ts";
+import type { WorkspaceAttachmentView } from "../../workspace/effects.ts";
 import { gitSession, type GitSession } from "./git.ts";
 import { denoRepositoryHost, type RepositoryHost } from "./host.ts";
 import type { GitAuthentication } from "./authentication.ts";
 import type { HelperAssembly } from "./credential-helper.ts";
-import { WORKSPACE_REPOSITORY, WORKSPACE_WORKTREE } from "./effects.ts";
 import { stale, type Attached, type StaleReason } from "./identity.ts";
 import {
   createRepository,
@@ -109,11 +108,15 @@ function* attach(
   database: WorkflowRunDatabase,
   host: RepositoryHost,
   subject: string,
-  prepare: (workspace: PrivateWorkspaceTransaction, root: string) => Operation<Attached>,
+  prepare: (workspace: WorkspaceAttachmentView, root: string) => Operation<Attached>,
   disagreement: (git: GitSession, attached: Attached) => Operation<StaleReason | undefined>,
 ): Operation<void> {
   const root = yield* host.useDirectory();
-  const prepared = yield* transactWorkspaceRoots(database, (workspace) => prepare(workspace, root));
+  // Through whichever host attached this run. Locally that is the validated
+  // lease and its transaction; on a runner it is one coherent owner snapshot
+  // materialized into a directory this invocation owns. Either way the read is
+  // over before Git runs, so nothing is held open across a subprocess.
+  const prepared = yield* workspaceHostFor(database).read((workspace) => prepare(workspace, root));
   if (!prepared.ok) {
     throw prepared.error;
   }

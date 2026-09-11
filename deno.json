@@ -1,5 +1,8 @@
 {
-  "workspace": ["packages/*", "site"],
+  "workspace": [
+    "packages/*",
+    "site"
+  ],
   "exclude": [
     "scripts/tests/fixtures",
     ".xmd-eval",
@@ -7,7 +10,12 @@
     "packages/workflow/vendor/cloudflare-computer-dofs/upstream",
     "packages/workflow/vendor/cloudflare-computer-dofs/generated/**/*.d.ts",
     "packages/acp/vendor/acpx/upstream",
-    "packages/acp/vendor/acpx/generated/**/*.d.ts"
+    "packages/acp/vendor/acpx/generated/**/*.d.ts",
+    "packages/workflow/src/cloudflare",
+    "packages/workflow/tests/cloudflare",
+    "vitest.config.ts",
+    "packages/workflow/tsconfig.cloudflare.json",
+    "packages/workflow/cloudflare.ts"
   ],
   "nodeModulesDir": "auto",
   "lock": {
@@ -71,6 +79,8 @@
     "review:local": "deno run --allow-all packages/cli/src/deno.ts run .reviews/ReviewPR.local.md --component-dir .reviews/components --component-dir .reviews/policies --component-dir packages/core/components -j .reviews/journal.local.jsonl",
     "analyze": "deno run --allow-all packages/cli/src/deno.ts run .reviews/AnalyzeRepo.md --component-dir .reviews/components --component-dir .reviews/policies --component-dir packages/core/components -j .reviews/journal.analyze.jsonl",
     "analyze:ci": "deno run --allow-all packages/cli/src/deno.ts run .reviews/AnalyzeRepoCI.md --component-dir .reviews/components --component-dir .reviews/policies --component-dir packages/core/components -j .reviews/journal.analyze.ci.jsonl",
-    "analyze:dispatch": "deno run --allow-all packages/cli/src/deno.ts run .reviews/DispatchRepoAnalysis.md --component-dir .reviews/components --component-dir .reviews/policies --component-dir packages/core/components -j .reviews/journal.dispatch.jsonl"
+    "analyze:dispatch": "deno run --allow-all packages/cli/src/deno.ts run .reviews/DispatchRepoAnalysis.md --component-dir .reviews/components --component-dir .reviews/policies --component-dir packages/core/components -j .reviews/journal.dispatch.jsonl",
+    "test:cloudflare": "pnpm test:cloudflare",
+    "check:cloudflare": "pnpm check:cloudflare"
   }
 }

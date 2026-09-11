@@ -370,7 +370,13 @@ describe("Elicit: judging the answer", () => {
     const result = yield* run(workspace, document("Approve?"), constant({ decision: 7 }));
 
     expect(result.failure?.message).toContain("<Elicit />");
-    expect(result.failure?.message).toContain('"/decision" must be string');
+    // Where the value went wrong and which rule it broke — and not the value
+    // itself, nor the type the schema declared, because an issue is printed,
+    // bound and journaled, and neither belongs in all three.
+    expect(result.failure?.message).toContain(
+      '"/decision" must be of the type this schema declares',
+    );
+    expect(result.failure?.message).not.toContain("7");
   });
 
   /**

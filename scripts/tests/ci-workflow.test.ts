@@ -472,6 +472,26 @@ describe("the conditional CI jobs", () => {
     return found.if;
   }
 
+  /**
+   * The workerd suite runs nowhere else. A Durable Object's acquisition
+   * lifetime, its eviction and its transaction atomicity are properties of that
+   * runtime, and the `.vitest.ts` files that prove them are invisible to the
+   * Deno, Node and Bun corpora by design — so if this job stopped running the
+   * evidence would go with it and every other job would still be green.
+   */
+  it("owns the Cloudflare typecheck and the workerd suite", function* () {
+    const jobs = yield* workflow();
+    const job = jobs["test-cloudflare"];
+    expect(job).toBeDefined();
+    const commands = (job?.steps ?? []).flatMap((step) =>
+      step.run === undefined ? [] : [step.run],
+    );
+    expect(commands).toContain("pnpm check:cloudflare");
+    expect(commands).toContain("pnpm test:cloudflare");
+    // It runs on every event, so `green` requires success from it unconditionally.
+    expect(job?.if).toBeUndefined();
+  });
+
   it("runs main-green on a pull request and on nothing else", function* () {
     expect(conditional(yield* workflow(), "main-green")).toEqual(
       "github.event_name == 'pull_request'",

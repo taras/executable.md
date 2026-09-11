@@ -1,0 +1,482 @@
+/**
+ * The Durable Object that owns one workflow run.
+ *
+ * One run, one object, selected arithmetically from the public run ID. It holds
+ * the WorkflowRun record and its filtered journal, the immutable Workspace roots
+ * and their content, and executor ownership — and it holds them in one embedded
+ * SQLite database, because a second store would be a second thing to keep in
+ * agreement with the first.
+ *
+ * What it does *not* do is as much of the contract as what it does. It runs no
+ * native client: no Git, no evidence process, no Agent. Those live on the
+ * ephemeral runner against disposable materialization, and what crosses the
+ * connection is a proposal this object validates and publishes. The runner
+ * performs; the owner decides.
+ *
+ * Three planes reach it and only one of them can advance a run. The executor
+ * plane is one authenticated WebSocket whose lifetime is the acquisition.
+ * Delivery and inspection arrive over ordinary requests, take no acquisition,
+ * and cannot move the lifecycle — which is why they are separate methods here
+ * rather than commands on the socket.
+ *
+ * `fetch` is where those three meet an actual request. It reads which plane was
+ * addressed and nothing else: the upgrade, the admission order and every
+ * decision stay in the three methods below, so a gateway in front of this
+ * routes bytes and cannot pre-approve any of it.
+ */
+
+import { DurableObject } from "cloudflare:workers";
+import { run, type Operation } from "effection";
+import { OwnerTransactions } from "./owner-transaction.ts";
+import {
+  acquireExecutor,
+  type AcquisitionAttachment,
+  AcquisitionError,
+  releaseExecutor,
+  requireAcquisition,
+  requireExecutorSocket,
+} from "./acquisition.ts";
+import { admitToken, type AdmissionPolicy, AdmissionError } from "./admission.ts";
+import { TokenError, type TokenVerification } from "./token.ts";
+import { CommandError, type CommandResult, parseCommand, type RunnerCommand } from "./commands.ts";
+import {
+  answerRead,
+  parseReadOperation,
+  type ReadAdmission,
+  type ReadAnswer,
+} from "./read-plane.ts";
+import {
+  answerRetainedWait,
+  type DeliveryAnswer,
+  deliverySubject,
+  parseDeliveryOperation,
+  retainDeliveredAnswer,
+} from "./delivery-plane.ts";
+import { crossSecretGate } from "./owner-gate.ts";
+import { dispatchCommand } from "./dispatcher.ts";
+import { WorkflowRecordMalformedError } from "../storage/errors.ts";
+import { discardPriorAcquisitions, PRIVATE_OBJECT_NAMES } from "./private-schema.ts";
+import {
+  RELEASE_HEADER,
+  routeOf,
+  selectedProtocol,
+  upgradeAdmission,
+  type RouteAdmission,
+} from "./routes.ts";
+import {
+  declaredObjects,
+  holdsNoRun,
+  initializeObject,
+  isPristine,
+  recognizeObject,
+  WorkflowObjectStorageError,
+} from "./recognition.ts";
+import { ReleaseIdentityError, requireSameRelease } from "./release.ts";
+import { admitRunId, RunIdError } from "./routing.ts";
+import type { OwnerStorage } from "./storage.ts";
+
+/**
+ * What one admission presents.
+ *
+ * Bytes and identifiers, all of them untrusted. There is deliberately no member
+ * for a verified result, a claim set, an acquisition identity or verification
+ * material: a request that could name any of those would be a request choosing
+ * what it is allowed to be.
+ */
+export interface AdmissionRequest {
+  readonly runId: unknown;
+  readonly release: unknown;
+  /** The raw short-lived OIDC token, exactly as presented. */
+  readonly token: unknown;
+}
+
+/** Everything a deployment must state before this object admits anybody. */
+export interface OwnerConfiguration {
+  readonly policy: AdmissionPolicy;
+  /** The issuer's keys and clock. Trusted closure state, never request data. */
+  readonly verification: TokenVerification;
+}
+
+/** Name a refusal without repeating what caused it. */
+export function refusalOf(error: unknown): string {
+  if (error instanceof AcquisitionError) {
+    return `acquisition:${error.refusal}`;
+  }
+  if (error instanceof AdmissionError) {
+    return `admission:${error.refusal}`;
+  }
+  if (error instanceof TokenError) {
+    return `token:${error.refusal}`;
+  }
+  if (error instanceof ReleaseIdentityError) {
+    return `release:${error.refusal}`;
+  }
+  if (error instanceof RunIdError) {
+    return `run-id:${error.refusal}`;
+  }
+  if (error instanceof CommandError) {
+    return `command:${error.refusal}`;
+  }
+  if (error instanceof WorkflowObjectStorageError) {
+    if (error.failure.kind === "unsupported-version") {
+      // The version travels in the category rather than beside it, because the
+      // answer envelope carries a refusal and nothing else. It is the one fact
+      // a host needs to decide whether this build may open the store, and a
+      // public error that guessed it would state something untrue.
+      return `storage:unsupported-version-v${error.failure.schemaVersion}`;
+    }
+    return `storage:${error.failure.kind}`;
+  }
+  if (error instanceof WorkflowRecordMalformedError) {
+    return "storage:corrupt";
+  }
+  if (
+    error instanceof Error &&
+    (error.message.startsWith("private protocol storage") ||
+      error.message.startsWith("private staging") ||
+      error.message.startsWith("stored bytes"))
+  ) {
+    return "storage:corrupt";
+  }
+  return "internal";
+}
+
+/**
+ * The owner, minus the deployment's own configuration.
+ *
+ * Subclassed rather than configured through a binding because the policy is
+ * trusted host state: a value a request could supply would be a runner naming
+ * the identities it must satisfy.
+ */
+export abstract class WorkflowOwnerObject extends DurableObject {
+  /**
+   * This object's claim on its own storage.
+   *
+   * One per Durable Object, so a transaction here cannot refuse one in another
+   * object and no table outlives the object that owns it.
+   */
+  protected readonly transactions: OwnerTransactions = new OwnerTransactions();
+
+  protected abstract configuration(): OwnerConfiguration;
+
+  /** This object's storage, as the shared modules expect to see it. */
+  protected get owned(): OwnerStorage {
+    return this.ctx.storage;
+  }
+
+  /**
+   * Admit one executor connection.
+   *
+   * The order is the contract: the build is compared before any token work, the
+   * token is verified before the run is touched, and the acquisition is taken
+   * last. A refusal at any step leaves no acquisition and no object state.
+   *
+   * The correlation value is minted here, after both checks pass, and never
+   * taken from the request. A caller-selected one would let a later connection
+   * reuse an abandoned identifier and collide with the private staging that
+   * identifier partitions.
+   */
+  *admit(request: AdmissionRequest, socket: WebSocket): Operation<AcquisitionAttachment> {
+    const { policy, verification } = this.configuration();
+    requireSameRelease(policy.release, request.release);
+    yield* admitToken(policy, verification, request.token);
+    const runId = admitRunId(request.runId);
+    const acquisitionId = mintAcquisitionId();
+    return acquireExecutor(this.ctx, socket, runId, acquisitionId, () => {
+      const names = new Set(declaredObjects(this.owned).map((object) => object.name));
+      if (PRIVATE_OBJECT_NAMES.every((name) => names.has(name))) {
+        // A store that holds nothing but this adapter's scratch holds no run
+        // to recognize — a fork was offered parts here and never committed.
+        // The scratch still goes, because it belonged to a connection that is
+        // gone.
+        if (!holdsNoRun(this.owned)) {
+          recognizeObject(this.owned);
+        }
+        this.transactions.run(this.owned, () => {
+          discardPriorAcquisitions(this.owned, acquisitionId);
+        });
+      }
+    });
+  }
+
+  /**
+   * Answer one ordinary read, taking nothing.
+   *
+   * The same order admission uses — the build is compared before any token
+   * work, and the token is verified before the run is touched — and then it
+   * stops. No socket is accepted, no acquisition is minted or compared, and
+   * nothing is written, so this can be answered while an executor is live and
+   * a refusal at any step leaves the acquisition set and the run untouched.
+   */
+  *read(admission: ReadAdmission, body: string): Operation<ReadAnswer> {
+    const { policy, verification } = this.configuration();
+    try {
+      // The order is the contract, and the body takes no part in it. A build
+      // this owner will not talk to is refused before its request is decoded,
+      // and an unauthenticated one before the run is named.
+      requireSameRelease(policy.release, admission.release);
+      yield* admitToken(policy, verification, admission.token);
+      const runId = admitRunId(admission.runId);
+      return {
+        outcome: "performed",
+        value: answerRead(this.owned, runId, parseReadOperation(body)),
+      };
+    } catch (error) {
+      return { outcome: "refused", refusal: refusalOf(error) };
+    }
+  }
+
+  /**
+   * Answer one typed delivery, taking nothing.
+   *
+   * The same order the other two planes use — the build is compared before any
+   * token work, and the token is verified before the run is named — and then it
+   * writes exactly one row inside one transaction. No socket is accepted and no
+   * acquisition is minted or compared, so a run with a live executor can still
+   * be answered and a refusal at any step leaves the run untouched.
+   */
+  *deliver(admission: ReadAdmission, body: string): Operation<DeliveryAnswer> {
+    const { policy, verification } = this.configuration();
+    try {
+      requireSameRelease(policy.release, admission.release);
+      yield* admitToken(policy, verification, admission.token);
+      const runId = admitRunId(admission.runId);
+      const request = parseDeliveryOperation(body);
+      const now = new Date().toISOString();
+      if (request.operation === "wait") {
+        return {
+          outcome: "performed",
+          value: answerRetainedWait(this.owned, runId, request.suspensionId),
+        };
+      }
+
+      // The gate durable journal persistence is written through, over the two
+      // framings this value would be stored in. It runs before the transaction
+      // because it is asynchronous and a Durable Object transaction cannot
+      // wait; what it read is pinned by the request identity carried into the
+      // write, which the transaction requires to still be the retained one.
+      const subject = deliverySubject(this.owned, runId, request);
+      if (request.secretDetection) {
+        yield* crossSecretGate(subject.framings);
+      }
+
+      // One transaction, entered here rather than inside the answer, so every
+      // fact the retention depends on is read under the write it is about to
+      // make and a refusal rolls back having written nothing.
+      return {
+        outcome: "performed",
+        value: this.transactions.run(this.owned, () =>
+          retainDeliveredAnswer(this.owned, runId, request, subject.requestFingerprint, now),
+        ),
+      };
+    } catch (error) {
+      return { outcome: "refused", refusal: refusalOf(error) };
+    }
+  }
+
+  /**
+   * Handle one message from an admitted connection.
+   *
+   * Acquisition is proved before the message is parsed, so a superseded or
+   * foreign socket never reaches the command reader — and proved again by
+   * whatever writes, inside the transaction that writes.
+   */
+  onRunnerMessage(socket: WebSocket, runId: string, raw: string): CommandResult {
+    let command: RunnerCommand | undefined;
+    try {
+      requireAcquisition(this.ctx, socket, runId);
+      command = parseCommand(raw);
+      return dispatchCommand(this.ctx, this.transactions, socket, runId, command);
+    } catch (error) {
+      return { id: command?.id ?? "", outcome: "refused", refusal: refusalOf(error) };
+    }
+  }
+
+  webSocketMessage(socket: WebSocket, message: string | ArrayBuffer): void {
+    let answer: CommandResult;
+    if (typeof message !== "string") {
+      answer = { id: "", outcome: "refused", refusal: "command:malformed-member" };
+    } else {
+      try {
+        const held = requireExecutorSocket(this.ctx, socket);
+        answer = this.onRunnerMessage(socket, held.runId, message);
+      } catch (error) {
+        answer = { id: "", outcome: "refused", refusal: refusalOf(error) };
+      }
+    }
+    try {
+      socket.send(JSON.stringify(answer));
+    } catch {
+      releaseExecutor(socket);
+      socket.close(1011, "send failed");
+      return;
+    }
+    if (fatal(answer)) {
+      releaseExecutor(socket);
+      socket.close(1002, "protocol refused");
+    }
+  }
+
+  /** A connection that ended owns nothing, and rolled nothing back. */
+  webSocketClose(socket: WebSocket): void {
+    releaseExecutor(socket);
+  }
+
+  webSocketError(socket: WebSocket): void {
+    releaseExecutor(socket);
+  }
+
+  /**
+   * Create this run's storage, or recognize what is already there.
+   *
+   * Pristine is asked first rather than inferred from a refusal: storage that
+   * holds nothing is the only storage this build may write into, and every
+   * other state — foreign, damaged, a version this build does not implement —
+   * is recognition's to refuse rather than initialization's to overwrite.
+   */
+  /**
+   * Answer one request on one of this owner's three planes.
+   *
+   * The runtime callback boundary this host adapts at, so the Effection scope
+   * is opened here and closed before a response leaves: every plane below is an
+   * operation, and none of them may outlive the request that asked.
+   *
+   * Which plane is decided by the path, and the run id it names is admitted by
+   * the plane rather than here — a path that says nothing this build writes is
+   * refused before an admission exists at all.
+   */
+  override async fetch(request: Request): Promise<Response> {
+    const url = new URL(request.url);
+    const route = routeOf(url.pathname);
+    if (route === undefined) {
+      return new Response("route", { status: 404 });
+    }
+    if (route.plane === "executor") {
+      return await this.#upgrade(request, route.runId);
+    }
+    const admission: RouteAdmission = {
+      release: request.headers.get(RELEASE_HEADER),
+      token: bearer(request.headers.get("authorization")),
+      runId: route.runId,
+    };
+    const body = await request.text();
+    const answered = await run(() =>
+      route.plane === "read" ? this.read(admission, body) : this.deliver(admission, body),
+    );
+    // Both planes answer rather than raise, so the status says only that this
+    // owner answered; what it answered is the envelope, and a refusal category
+    // is the same word on either plane.
+    return new Response(JSON.stringify(answered), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  }
+
+  /**
+   * Take one executor connection, or refuse the upgrade.
+   *
+   * The socket the owner accepts is the runtime's own server half, created
+   * here; the client half is handed back with the 101 and is the only end the
+   * caller ever holds. A refusal closes nothing because nothing was accepted:
+   * `admit()` takes the acquisition last, so a release, token or run-id
+   * refusal leaves this object exactly as it was.
+   */
+  async #upgrade(request: Request, runId: string): Promise<Response> {
+    if (request.headers.get("upgrade")?.toLowerCase() !== "websocket") {
+      return new Response("upgrade", { status: 400 });
+    }
+    const admission = upgradeAdmission(request.headers.get("sec-websocket-protocol"), runId);
+    const pair = new WebSocketPair();
+    const client = pair[0];
+    const server = pair[1];
+    if (client === undefined || server === undefined) {
+      return new Response("internal", { status: 500 });
+    }
+    try {
+      await run(() =>
+        this.admit(
+          { runId: admission.runId, release: admission.release, token: admission.token },
+          server,
+        ),
+      );
+    } catch (error) {
+      // The refusal category, and nothing else. A caller learns which of the
+      // ordered checks said no; it learns nothing about this object's state.
+      return new Response(refusalOf(error), { status: 403 });
+    }
+    return new Response(null, {
+      status: 101,
+      webSocket: client,
+      // Selected explicitly: a handshake that offered a subprotocol and got
+      // none back is one a standard client fails.
+      headers: { "sec-websocket-protocol": selectedProtocol() },
+    });
+  }
+
+  open(runId: string, initializeRun: () => void): void {
+    admitRunId(runId);
+    if (isPristine(declaredObjects(this.owned))) {
+      initializeObject(this.owned, this.transactions, initializeRun);
+      return;
+    }
+    recognizeObject(this.owned);
+  }
+}
+
+/** The token one `Authorization` header carries, if it carries one. */
+function bearer(header: string | null): string | null {
+  if (header === null) {
+    return null;
+  }
+  const [scheme, value] = header.split(" ");
+  return scheme?.toLowerCase() === "bearer" && value !== undefined && value !== "" ? value : null;
+}
+
+/**
+ * A fresh correlation value for one acquisition.
+ *
+ * Bounded and unpredictable, and used only to partition acquisition-private
+ * staging and duplicate handling. It is not a bearer credential, a lease, a
+ * generation record or a durable identity: what proves a message may act is the
+ * exact live socket, and this value proves nothing on its own.
+ */
+function mintAcquisitionId(): string {
+  const bytes = new Uint8Array(16);
+  crypto.getRandomValues(bytes);
+  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+/**
+ * Whether a refusal means the connection itself is finished.
+ *
+ * Two kinds of refusal reach here and they deserve opposite treatment. One says
+ * the channel or the store is not what it claims — a message that would not
+ * parse, an acquisition this socket does not hold, storage that is damaged —
+ * and carrying on would mean guessing what the other side meant.
+ *
+ * The other is an answer about the request. A duplicate id, a frontier that has
+ * moved, a mapping that disagrees with what is already retained, and a command
+ * this release does not implement are all decisions the runner can act on: read
+ * the frontier again, propose against it, or stop. Closing the connection on
+ * those would turn every ordinary disagreement into a lost acquisition and make
+ * the runner reconnect to be told the same thing.
+ */
+const ANSWERED: readonly string[] = [
+  "command:duplicate-conflict",
+  "command:unavailable",
+  "command:stale-root",
+  "command:stale-journal",
+  "command:mapping-conflict",
+  // Both are answers about this run rather than faults in the protocol: there
+  // is nothing stored here, or something is and it is not this run. A caller
+  // acts on either and goes on using the connection.
+  "command:absent",
+  "command:wrong-run",
+];
+
+function fatal(answer: CommandResult): boolean {
+  if (answer.outcome === "performed") {
+    return false;
+  }
+  return !ANSWERED.includes(answer.refusal);
+}

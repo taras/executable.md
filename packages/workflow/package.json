@@ -6,6 +6,8 @@
   "exports": {
     ".": "./mod.ts",
     "./deno": "./deno.ts",
+    "./cloudflare": "./cloudflare.ts",
+    "./software-factory": "./software-factory.ts",
     "./credential-helper": "./src/deno/composition/credential-helper.ts"
   },
   "dependencies": {

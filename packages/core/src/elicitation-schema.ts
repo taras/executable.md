@@ -1,0 +1,506 @@
+/**
+ * The one judgment an elicitation response is held to, wherever it is judged.
+ *
+ * A response schema is decided in more places than the document that declared
+ * it: `<Elicit>` judges what a provider returns, `xmd prompt` judges the same,
+ * a workflow answer is judged before it is retained locally, and a run whose
+ * owner is a Cloudflare Durable Object judges it there — inside the transaction
+ * that writes it, because a caller that decides for itself decides nothing.
+ *
+ * That last place is why this exists. A Worker refuses code generation from
+ * strings during a request, and a schema learned from a retained wait cannot be
+ * compiled ahead of time, so a validator that generates code cannot be the one
+ * the owner runs. One that does not generate code can be the one *everybody*
+ * runs, which is the point: the same schema and the same value receive one
+ * verdict, whichever boundary asks.
+ *
+ * ## What preparation refuses, before anything is asked
+ *
+ * Preparation is everything that can fail cheaply, so a schema that cannot be
+ * used fails before a question is rendered and before a provider is contacted:
+ *
+ * - a schema that is not a JSON Schema object, in either accepted form;
+ * - `$async`, `__proto__` as a declared name, a reference that leaves the
+ *   supplied schema, and a keyword draft-07 does not define; and
+ * - a schema the draft-07 meta-schema itself refuses.
+ *
+ * ## `format` annotates and constrains nothing
+ *
+ * The compiler this replaces ran with `validateFormats: false`, so a `format`
+ * carried in a schema described the value to whoever answers and never decided
+ * whether an answer was admitted. The validator underneath does apply formats,
+ * so what it is given is a copy with them removed — the schema a provider
+ * receives keeps them, because saying "this is an email" is the point of
+ * writing it.
+ */
+
+import { dereference, validate, Validator } from "@cfworker/json-schema";
+import type { OutputUnit, Schema } from "@cfworker/json-schema";
+import { DRAFT_07_META_SCHEMA } from "./draft-07-meta-schema.ts";
+import { parseJson, parseJsonObject } from "./json.ts";
+import type { NormalizedIssue } from "./validate.ts";
+import { detach, mapSchema, walkSchema } from "./schema-walk.ts";
+import type { NameKind } from "./schema-walk.ts";
+import type { Json, JsonObject } from "./types.ts";
+
+/** A schema that could not be read or admitted. Raised before anything runs. */
+export class ResponseSchemaError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ResponseSchemaError";
+  }
+}
+
+/**
+ * One prepared response schema: what a provider is shown, and what judges it.
+ *
+ * `judge` returns the issues rather than raising them, because both callers
+ * want them — one turns them into an error and one hands them to a document.
+ */
+export interface ResponseValidator {
+  /** Normalized draft-07, as the provider will receive it. */
+  readonly schema: JsonObject;
+  /** Empty when the value satisfies the schema. */
+  judge(value: Json): NormalizedIssue[];
+}
+
+/**
+ * Every keyword draft-07 defines, plus the annotations it allows.
+ *
+ * Closed on purpose. A schema carrying something else is refused rather than
+ * validated with that keyword ignored: an unimplemented constraint that reads
+ * as satisfied is exactly the failure this whole boundary exists to prevent.
+ */
+const DRAFT_07 = new Set([
+  "$id",
+  "$schema",
+  "$ref",
+  "$comment",
+  "title",
+  "description",
+  "default",
+  "readOnly",
+  "writeOnly",
+  "examples",
+  "definitions",
+  "multipleOf",
+  "maximum",
+  "exclusiveMaximum",
+  "minimum",
+  "exclusiveMinimum",
+  "maxLength",
+  "minLength",
+  "pattern",
+  "additionalItems",
+  "items",
+  "maxItems",
+  "minItems",
+  "uniqueItems",
+  "contains",
+  "maxProperties",
+  "minProperties",
+  "required",
+  "additionalProperties",
+  "properties",
+  "patternProperties",
+  "dependencies",
+  "propertyNames",
+  "const",
+  "enum",
+  "type",
+  "format",
+  "contentMediaType",
+  "contentEncoding",
+  "if",
+  "then",
+  "else",
+  "allOf",
+  "anyOf",
+  "oneOf",
+  "not",
+]);
+
+/**
+ * Read and admit one response schema, and hand back what judges values by it.
+ *
+ * Synchronous and effect-free: it either produces a usable judgment or raises,
+ * and a caller that has not begun anything can still stop. Everything that
+ * makes a schema unusable is decided here — including a reference whose target
+ * does not exist, which no value would have to visit to be wrong about.
+ */
+export function prepareResponseValidator(label: string, schema: Json): ResponseValidator {
+  const declaration = readSchema(label, schema);
+
+  refuseUnusable(label, declaration);
+  admitDraft07(label, declaration);
+
+  // The copy the validator is given. Schema positions lose `format`, because a
+  // format annotates and constrains nothing here; data positions and declared
+  // names are carried across untouched, so an object under a `const` and a
+  // property whose authored name is `format` both survive exactly.
+  const judged = mapSchema(declaration, (subschema) => omitFormat(subschema));
+
+  let lookup: Record<string, Schema | boolean>;
+  try {
+    lookup = dereference(judged);
+  } catch (error) {
+    throw new ResponseSchemaError(
+      `<${label} /> schema could not be read as draft-07: ${bounded(error)}`,
+    );
+  }
+  requireResolvableReferences(label, judged, lookup);
+
+  return {
+    schema: declaration,
+    judge(value: Json): NormalizedIssue[] {
+      // The value the validator sees is own-keyed all the way down, so a name
+      // the language answers for — `toString`, `constructor`, `__proto__` — is
+      // present only when the value actually holds it. The value a caller keeps
+      // is untouched.
+      const outcome = validate(detach(value), judged, "7", lookup, false);
+      return outcome.valid ? [] : normalize(outcome.errors);
+    },
+  };
+}
+
+/** One schema position, without the annotation that constrains nothing. */
+function omitFormat(schema: JsonObject): JsonObject {
+  if (!Object.hasOwn(schema, "format")) {
+    return schema;
+  }
+  const kept: JsonObject = {};
+  for (const [keyword, value] of Object.entries(schema)) {
+    if (keyword !== "format") {
+      kept[keyword] = value;
+    }
+  }
+  return kept;
+}
+
+/**
+ * Refuse a reference whose target is not in the supplied schema.
+ *
+ * Resolved statically, at every real schema position, rather than discovered by
+ * a value that happens to reach it: a branch nothing sampled still has to be
+ * usable, and the settled boundary is that an unusable schema fails before
+ * content expands and before a provider is contacted.
+ *
+ * The lookup is the one the validator itself will use, so what resolves here is
+ * exactly what resolves there. It stays inside this adapter.
+ */
+function requireResolvableReferences(
+  label: string,
+  schema: JsonObject,
+  lookup: Record<string, Schema | boolean>,
+): void {
+  walkSchema(schema, {
+    subschema(subschema: JsonObject, path: string) {
+      const reference = subschema["$ref"];
+      if (typeof reference !== "string") {
+        return;
+      }
+      // `dereference` records the absolute form it resolved against, which is
+      // the key the validator looks up. Falling back to the written reference
+      // covers a position it did not annotate.
+      const absolute = subschema["__absolute_ref__"];
+      const key = typeof absolute === "string" ? absolute : reference;
+      if (!Object.hasOwn(lookup, key)) {
+        throw new ResponseSchemaError(
+          `<${label} /> schema references "${reference}" at ${path}, which the supplied ` +
+            "schema does not define.",
+        );
+      }
+    },
+    declaredName() {},
+  });
+}
+
+/**
+ * The meta-schema every admitted response schema is itself validated against.
+ *
+ * Built once, because it is one constant document. This is what the compiler
+ * this replaces did with `validateSchema: true`: a schema that is not a
+ * draft-07 schema fails before a question is rendered, rather than being
+ * carried as far as a value nobody can judge.
+ */
+const META = new Validator(metaSchema(), "7", false);
+
+function metaSchema(): Schema {
+  const held: Record<string, Json> = {};
+  for (const [name, value] of Object.entries(parseJsonObject(DRAFT_07_META_SCHEMA))) {
+    held[name] = value;
+  }
+  return held;
+}
+
+function admitDraft07(label: string, schema: JsonObject): void {
+  const outcome = META.validate(schema);
+  if (outcome.valid) {
+    return;
+  }
+  const first = normalize(outcome.errors)[0];
+  const where =
+    first === undefined || first.instancePath === "" ? "the schema" : first.instancePath;
+  throw new ResponseSchemaError(
+    `<${label} /> schema is not a valid draft-07 JSON Schema: ${where} ${first?.message ?? ""}`,
+  );
+}
+
+/**
+ * What one failure says, in this repository's words rather than a library's.
+ *
+ * Every message here is bounded and carries no payload: not the rejected value,
+ * not a threshold, a pattern, an allowed value or an enum. An issue travels
+ * further than the document that produced it — it is bound into the evaluation
+ * environment, printed, and carried across a journal — so what it may say is
+ * where the failure is and which rule was not met.
+ *
+ * `required` is the one that names something, and what it names is the absent
+ * member: the instance location is the object, so without the name there is no
+ * way to say which member is missing. The name is a name the schema declares
+ * and the value does not hold.
+ */
+function described(unit: OutputUnit): string {
+  if (unit.keyword === "required") {
+    const named = /"([^"]*)"/.exec(unit.error);
+    return named === null
+      ? "must have every property this schema requires"
+      : `must have the required property "${named[1]}"`;
+  }
+  return DESCRIPTIONS[unit.keyword] ?? "does not satisfy this schema";
+}
+
+const DESCRIPTIONS: Record<string, string> = {
+  type: "must be of the type this schema declares",
+  enum: "must be one of the values this schema allows",
+  const: "must be the value this schema requires",
+  minimum: "must not be below the minimum this schema declares",
+  maximum: "must not be above the maximum this schema declares",
+  exclusiveMinimum: "must be above the exclusive minimum this schema declares",
+  exclusiveMaximum: "must be below the exclusive maximum this schema declares",
+  multipleOf: "must be a multiple of the step this schema declares",
+  minLength: "must not be shorter than this schema allows",
+  maxLength: "must not be longer than this schema allows",
+  pattern: "must match the pattern this schema declares",
+  minItems: "must not have fewer items than this schema allows",
+  maxItems: "must not have more items than this schema allows",
+  uniqueItems: "must not repeat an item",
+  contains: "must contain an item this schema admits",
+  minProperties: "must not have fewer properties than this schema allows",
+  maxProperties: "must not have more properties than this schema allows",
+  additionalProperties: "must not have properties this schema does not declare",
+  additionalItems: "must not have items this schema does not declare",
+  propertyNames: "must have property names this schema admits",
+  dependencies: "must satisfy the dependencies this schema declares",
+  false: "is not admitted here",
+  not: "must not be what this schema excludes",
+  oneOf: "must satisfy exactly one of the alternatives this schema allows",
+  anyOf: "must satisfy one of the alternatives this schema allows",
+  allOf: "must satisfy every alternative this schema requires",
+  if: "must satisfy the branch this schema selects",
+  // oxlint-disable-next-line unicorn/no-thenable
+  then: "must satisfy the branch this schema selects",
+  else: "must satisfy the branch this schema selects",
+  $ref: "must satisfy the schema this one references",
+  format: "must match the format this schema declares",
+};
+
+/**
+ * The failures that describe the value, without the ones that only wrap them.
+ *
+ * A keyword that contains another reports its own failure as well as the
+ * failure inside it — `properties` failing because `/a` failed. Those wrappers
+ * are dropped, and only those: a failure is a wrapper of another only when it
+ * is above it in the schema *and* at or above it in the value. An independent
+ * rule at the same position as a wrapper — `minProperties` beside `properties`
+ * — is neither, and survives.
+ */
+function normalize(units: readonly OutputUnit[]): NormalizedIssue[] {
+  const kept = withoutRestatement(
+    units.filter((unit) => !units.some((other) => wraps(unit, other))),
+  );
+  const seen = new Set<string>();
+  const issues: NormalizedIssue[] = [];
+  for (const unit of kept) {
+    const key = JSON.stringify([unit.instanceLocation, unit.keywordLocation, unit.keyword]);
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    issues.push({
+      instancePath: pointerOf(unit.instanceLocation),
+      schemaPath: unit.keywordLocation,
+      keyword: unit.keyword,
+      // Deliberately empty. A library's parameters carry the schema and, for
+      // `const` and `enum`, the values themselves.
+      params: {},
+      message: described(unit),
+    });
+  }
+  return issues;
+}
+
+/**
+ * The same failures, without a member's own failure restated as an extra one.
+ *
+ * A declared member that fails its own rule counts as unevaluated where the
+ * validator tracks that, so `additionalProperties: false` fires on it too and
+ * says the value carries a member the schema does not declare. It does not: the
+ * member is declared and its own failure is already reported. So a boolean
+ * refusal at a location something else explains is dropped, and the
+ * `additionalProperties` above it is dropped when nothing it refused survives.
+ */
+function withoutRestatement(units: readonly OutputUnit[]): OutputUnit[] {
+  const explained = new Set(
+    units
+      .filter((unit) => unit.keyword !== "false" && unit.keyword !== "additionalProperties")
+      .map((unit) => unit.instanceLocation),
+  );
+  const refusals = units.filter(
+    (unit) => unit.keyword === "false" && !explained.has(unit.instanceLocation),
+  );
+  return units.filter((unit) => {
+    if (unit.keyword === "false") {
+      return !explained.has(unit.instanceLocation);
+    }
+    if (unit.keyword === "additionalProperties") {
+      return refusals.some((refusal) => below(unit.instanceLocation, refusal.instanceLocation));
+    }
+    return true;
+  });
+}
+
+/** Whether one failure is only the wrapper of another. */
+function wraps(unit: OutputUnit, other: OutputUnit): boolean {
+  if (unit === other) {
+    return false;
+  }
+  return (
+    below(unit.keywordLocation, other.keywordLocation) &&
+    (unit.instanceLocation === other.instanceLocation ||
+      below(unit.instanceLocation, other.instanceLocation))
+  );
+}
+
+/** Whether `inner` sits beneath `outer` in a location, on a segment boundary. */
+function below(outer: string, inner: string): boolean {
+  return inner.startsWith(`${outer}/`);
+}
+
+/**
+ * One instance location, as the raw JSON pointer this repository reports.
+ *
+ * The validator writes locations as URI fragments: each token is escaped for
+ * JSON Pointer and then encoded for a URI. Undoing the URI encoding token by
+ * token gives the pointer back, with `~0` and `~1` left alone because those are
+ * the pointer's own escapes and a literal `%` decoded because it was encoded.
+ */
+function pointerOf(location: string): string {
+  const withoutFragment = location.startsWith("#") ? location.slice(1) : location;
+  if (withoutFragment === "") {
+    return "";
+  }
+  return withoutFragment
+    .split("/")
+    .map((token) => {
+      try {
+        return decodeURIComponent(token);
+      } catch {
+        return token;
+      }
+    })
+    .join("/");
+}
+
+/** What a public error may say about a failure this adapter did not classify. */
+function bounded(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.length > 200 ? `${message.slice(0, 200)}…` : message;
+}
+
+/**
+ * Everything one walk of a schema refuses, in one walk.
+ *
+ * Each of these is a reason a schema cannot judge an answer, and all of them
+ * are decided before a question is rendered or a provider is contacted:
+ *
+ * - `$async` would make validation something to await, and props, returns and
+ *   this are judged synchronously;
+ * - `__proto__` declared as a name is a rule no validator applies faithfully,
+ *   because a validator reached through an object's own keys loses it — the
+ *   same string as *data*, in a `const`, an `enum` member, a title or a
+ *   default, is untouched, because nothing reads it as a key;
+ * - a `$ref` that leaves the supplied schema resolves to nothing here, and
+ *   external file and HTTP(S) references are deferred to #192 — `$ref` is read
+ *   only at real schema positions, so an object carrying one inside a `const`
+ *   is the value a document wants matched; and
+ * - a keyword draft-07 does not define constrains nothing, so a document that
+ *   wrote one is told rather than quietly given a validation it did not get.
+ */
+function refuseUnusable(label: string, schema: JsonObject): void {
+  walkSchema(schema, {
+    subschema(subschema: JsonObject, path: string) {
+      if (subschema["$async"] === true) {
+        throw new ResponseSchemaError(
+          `<${label} /> does not support an asynchronous schema ($async: true) at ${path}.`,
+        );
+      }
+      const reference = subschema["$ref"];
+      if (typeof reference === "string" && !reference.startsWith("#")) {
+        throw new ResponseSchemaError(
+          `<${label} /> schema references "${reference}" at ${path}, which is outside the ` +
+            "supplied schema. Only references contained within it resolve; external file " +
+            "and HTTP(S) references are deferred to #192.",
+        );
+      }
+      for (const keyword of Object.keys(subschema)) {
+        if (!DRAFT_07.has(keyword)) {
+          throw new ResponseSchemaError(
+            `<${label} /> schema uses "${keyword}" at ${path}, which draft-07 does not ` +
+              "define. An unknown keyword constrains nothing, so it is refused rather than " +
+              "ignored.",
+          );
+        }
+      }
+    },
+    declaredName(name: string, kind: NameKind, path: string) {
+      if (name !== "__proto__") {
+        return;
+      }
+      throw new ResponseSchemaError(
+        `<${label} /> schema declares "__proto__" as a ${kind} at ${path}, which is not ` +
+          "supported: a validator reached through an object's own keys loses that name, so " +
+          "the rule would silently not apply. Rename it, or carry the value under a " +
+          "different key.",
+      );
+    },
+  });
+}
+
+/** The issues as the JSON a document binds, parsed rather than asserted. */
+export function responseIssuesAsJson(issues: readonly NormalizedIssue[]): Json {
+  return parseJson(issues);
+}
+
+function readSchema(label: string, schema: Json): JsonObject {
+  if (typeof schema === "string") {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(schema);
+    } catch (error) {
+      throw new ResponseSchemaError(`<${label} /> schema text is not JSON: ${bounded(error)}`);
+    }
+    return asSchemaObject(label, parsed);
+  }
+  return asSchemaObject(label, schema);
+}
+
+function asSchemaObject(label: string, value: unknown): JsonObject {
+  try {
+    return parseJsonObject(value);
+  } catch {
+    throw new ResponseSchemaError(
+      `<${label} /> schema must be a JSON Schema object or JSON text describing one.`,
+    );
+  }
+}

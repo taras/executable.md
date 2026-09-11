@@ -24,6 +24,13 @@
  * own exact-origin check, which this neither repeats nor relaxes. And the root
  * import stays the root import — a repository selection under `__root__`,
  * already held to the run's exact root source by core.
+ *
+ * A completed replay takes the second half without the first, through
+ * `workflowBundleReplayInstallation()`: it imports nothing, so it is handed no
+ * source to import from, and its records are held to the name, path and object
+ * id the immutable definition declares — with the recorded bytes named as a
+ * Git blob and required to *be* that object rather than merely to repeat its
+ * id beside itself.
  */
 
 import type { DurableEvent, Json, Yield } from "@executablemd/durable-streams";
@@ -32,6 +39,9 @@ import type {
   JournalAdmission,
   WorkflowBundleComponent,
 } from "@executablemd/core/host";
+import { definitionComponents } from "./storage/definition.ts";
+import type { WorkflowDefinition } from "./storage/definition.ts";
+import { gitBlobId } from "./git-blob.ts";
 
 /** The root's own import, which is not a bundle member and is admitted elsewhere. */
 const ROOT = "__root__";
@@ -61,6 +71,26 @@ const REFUSALS = {
   repository:
     "A retained component import recorded a repository file, which a workflow run resolves none of.",
 } as const;
+
+/**
+ * One component a run's definition declares, as an admission holds a retained
+ * import to it.
+ *
+ * `holds` is where the two halves of this contract differ, and it is the only
+ * place they may. A live or partial execution has already read the pinned
+ * source from the definition's own commit, so a retained record is held to
+ * those exact bytes. A completed replay has no pinned source and no repository
+ * to ask for one, so it does what Git does: it names the recorded bytes as a
+ * blob under the definition's own object format and requires that name to be
+ * the object id the definition declares. Either way the bytes are
+ * authenticated — repeating an object id beside unrelated bytes is not.
+ */
+interface DeclaredComponent {
+  readonly path: string;
+  readonly sourceHash: string;
+  /** Whether these exact bytes are the object this run's definition names. */
+  holds(content: string): boolean;
+}
 
 /**
  * Read one journal-controlled value, or answer that reading it refused.
@@ -130,13 +160,14 @@ function importedValue(event: DurableEvent): { value: unknown } | undefined | ty
  *
  * Every branch is a decision about what the record *is*, taken before anything
  * is replayed from it. A declared name must have been recorded as a bundled
- * component, with this bundle's exact path, hash, and source; an undeclared
+ * component, with the exact path and object id the definition declares, and
+ * with bytes that are that object; an undeclared
  * name must not claim to be one; and a repository selection is admitted only
  * for the root, which core holds to the run's own root source.
  */
 function admitImport(
   event: DurableEvent,
-  components: ReadonlyMap<string, WorkflowBundleComponent>,
+  components: ReadonlyMap<string, DeclaredComponent>,
 ): void {
   const name = importedName(event);
   if (name === undefined || name === ROOT) {
@@ -172,10 +203,14 @@ function admitImport(
       }
     }
     const read = (member: string) => reading(() => (record as Record<string, unknown>)[member]);
+    const content = read("content");
+    if (typeof content !== "string") {
+      throw new WorkflowBundleHistoryError(REFUSALS.unreadable);
+    }
     if (
       read("path") !== declared.path ||
       read("sourceHash") !== declared.sourceHash ||
-      read("content") !== declared.content
+      !declared.holds(content)
     ) {
       throw new WorkflowBundleHistoryError(REFUSALS.mismatched);
     }
@@ -192,7 +227,7 @@ function admitImport(
   }
 }
 
-function admits(components: ReadonlyMap<string, WorkflowBundleComponent>): JournalAdmission {
+function admits(components: ReadonlyMap<string, DeclaredComponent>): JournalAdmission {
   // deno-lint-ignore require-yield
   return function* (retained: readonly DurableEvent[]) {
     for (const event of retained) {
@@ -222,19 +257,67 @@ export function workflowBundleInstallation(
   // Copied entry by entry at construction, so the authority this installation
   // carries is closed over these values rather than over an array the caller
   // still holds and could rewrite between installation and import.
-  const index = new Map<string, WorkflowBundleComponent>(
-    components.map((component) => [
+  const bundled = components.map((component) =>
+    Object.freeze({
+      name: component.name,
+      path: component.path,
+      sourceHash: component.sourceHash,
+      content: component.content,
+    }),
+  );
+  const index = new Map<string, DeclaredComponent>(
+    bundled.map((component) => [
       component.name,
       Object.freeze({
-        name: component.name,
         path: component.path,
         sourceHash: component.sourceHash,
-        content: component.content,
+        // The bytes themselves, because this run has them: they were read from
+        // the definition's own commit before it existed.
+        holds: (content: string) => content === component.content,
       }),
     ]),
   );
   return {
     admissions: [admits(index)],
-    bundle: { components: Object.freeze([...index.values()]) },
+    bundle: { components: Object.freeze(bundled) },
   };
+}
+
+/**
+ * Hold a completed run's retained component imports to the bundle its
+ * definition declares, and grant no authority to import one.
+ *
+ * The other half of `workflowBundleInstallation()`, for the execution that
+ * reuses a terminal instead of running. There is no execution view here because
+ * there is nothing to resolve: a completed replay answers from its recorded
+ * root Close before any name is looked up, so a source read for it would be a
+ * fetch performed for a component nobody imports. What remains is the
+ * admission, and it is exactly as strict — every retained import is held to the
+ * declared name, canonical path and object id, and a member the history never
+ * imported is neither read nor granted anything by being declared.
+ *
+ * ```ts
+ * yield* executeInstalled(options, [
+ *   retainedWorkflowInstallation(run),
+ *   workflowBundleReplayInstallation(definitionComponents(definition)),
+ * ]);
+ * ```
+ */
+export function workflowBundleReplayInstallation(
+  definition: WorkflowDefinition,
+): ExecutionInstallation {
+  const { objectFormat } = definition;
+  const index = new Map<string, DeclaredComponent>(
+    definitionComponents(definition).map((entry) => [
+      entry.name,
+      Object.freeze({
+        path: entry.path,
+        sourceHash: entry.sourceHash,
+        // Named the way Git names a blob, under this definition's own object
+        // format, and required to be the object the definition declares.
+        holds: (content: string) => gitBlobId(content, objectFormat) === entry.sourceHash,
+      }),
+    ]),
+  );
+  return { admissions: [admits(index)] };
 }

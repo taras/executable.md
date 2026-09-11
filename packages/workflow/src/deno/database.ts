@@ -49,6 +49,8 @@ import {
 } from "../storage/record.ts";
 import { insertJournalEvent, readJournalEntries } from "./journal.ts";
 import { routeWorkflowRunJournal } from "./journal-route.ts";
+import { denoWorkspaceHost } from "./workspace/effect.ts";
+import { useWorkspaceHost } from "../workspace/effects.ts";
 import type {
   RunConnection,
   RunConnectionLease,
@@ -61,7 +63,7 @@ import {
   holdsTransactionOn,
   useTransactionSavepoints,
 } from "./transaction.ts";
-import { readDocumentExecution, readRetrieval, readRunRecord } from "./rows.ts";
+import { readDocumentExecution, readRetrieval, readRunRecord } from "../sqlite/rows.ts";
 import { reading } from "./reading.ts";
 import { translateSqliteError } from "./schema.ts";
 
@@ -93,6 +95,11 @@ export function openWorkflowRunDatabase(
     yield* ensure(() => {
       handle.close();
     });
+    // This host's answers for this exact handle, for as long as the handle is
+    // open. An attachment binds a narrower one over the top while a document
+    // runs; a caller that only opened storage still has the two reads a
+    // retained mapping and an ephemeral attachment need.
+    yield* useWorkspaceHost(handle.database, denoWorkspaceHost(handle.database));
     yield* provide(handle.database);
   });
 }

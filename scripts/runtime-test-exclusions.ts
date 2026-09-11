@@ -485,6 +485,24 @@ const DENO_ONLY_TOOLING: RuntimeExclusion[] = [
       "opens a real node:sqlite run store through @executablemd/workflow/deno to drive runWorkflow() directly; Bun has no node:sqlite at all and Node 22 keeps it behind --experimental-sqlite",
     issue: "https://github.com/taras/executable.md/issues/366",
   },
+  {
+    path: "packages/cli/tests/workflow-replay.test.ts",
+    reason:
+      "replays completed runs out of a real node:sqlite run store opened through @executablemd/workflow/deno, and reads the answers table it settles; Bun has no node:sqlite at all and Node 22 keeps it behind --experimental-sqlite. The host-neutral half — what a completed run replays on, and what its retained history is held to — runs on every runtime as packages/workflow/tests/replay-inputs.test.ts",
+    issue: "https://github.com/taras/executable.md/issues/366",
+  },
+  {
+    path: "packages/workflow/tests/remote-interoperability.test.ts",
+    reason:
+      "the subject is that the two capture implementations agree, so the fixture has to be produced by the local one: it opens a real node:sqlite store, creates the run through the Deno provider — which takes that run's advisory lock through Deno.FsFile.tryLock — and captures it with the Deno DOFS provider before the runner materializes and recaptures it. Neither half is portable, and there is nothing left of the claim without both",
+    issue: "https://github.com/taras/executable.md/issues/698",
+  },
+  {
+    path: "packages/workflow/tests/remote-staged-fork.test.ts",
+    reason:
+      "assembles the fork candidate through the Deno adapter itself — its connections, its staging directory and its remote lifecycle installation — so creating the run takes an advisory lock through Deno.FsFile.tryLock. What a staged candidate must be, independent of the adapter that builds one, is proved over the no-acquisition plane on every runtime as packages/workflow/tests/remote-fork.test.ts",
+    issue: "https://github.com/taras/executable.md/issues/698",
+  },
 ];
 
 /**

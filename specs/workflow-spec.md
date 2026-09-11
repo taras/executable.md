@@ -114,6 +114,15 @@ base is any revision expression, so both are external text on the same terms as
 retained props. A value installed without a run id, a base or a pinned commit
 identifies no run and is refused before any document executes.
 
+A host that keeps its runs remotely has decided the same things in the same
+order, and installs the same value. `retainedWorkflowInstallation()` names a run
+its host already created and a commit its host already pinned; whether the
+record behind that name lives in a local file or in a remote owner is host
+arrangement the execution never learns. What the execution requires is
+unchanged: the run id, base and pinned commit it was handed must be exactly what
+the journal it reads records, and a journal recording a different run is
+`StaleInputError` wherever the journal is kept.
+
 ### 3.2 Where workflow-run identity is decided
 
 **Workflow-run identity is execution-owned, and it is not middleware of any
@@ -328,6 +337,16 @@ after an interruption. The Deno host installs its own with
 entrypoint is the only place SQLite, run-id hashing, filesystem paths and host
 behavior appear. Shared modules import none of them and detect no runtime.
 
+A second host installs its own the same way. Cloudflare is a runtime-named
+adapter beside the Deno one, not a second contract: it answers `create()` and
+`lookup()` with a `WorkflowRunDatabase` of its own, and every shared
+WorkflowRun surface above it stays host-neutral. The lifecycle transition and request types a host assembly speaks — `WorkflowExecutionTransitions`, `WorkflowBeginRequest`, `WorkflowExecutionBegun`, `WorkflowForkRequest`, `WorkflowForkSelection` and `WorkflowRunCreation` — are part of that neutral surface and are published from the package root; a runtime-named entrypoint may re-export them for source compatibility, but what belongs behind one is the implementation and its retained encoding, not the shape of the request. Nothing below changes for it —
+immutable run identity is compared the same way, recognition stays strict,
+events reach storage already filtered, a caller still owns the transaction it
+opened, and a completed run still replays without attaching a provider. What a
+remote adapter adds is where the bytes live and how an executor reaches them
+(§9.8), which identity and recognition already treat as host arrangement.
+
 A handle is a lease belonging to the scope that asked for it. Lease teardown
 makes that handle unusable, and every later call answers with a closed-handle
 failure rather than reopening the file. It does not close the run's physical
@@ -400,6 +419,23 @@ Where that object can be fetched from is deliberately not identity. A locator
 and a local checkout path are **retrieval metadata** — replaceable, excluded
 from the comparison, never containing credentials, and reauthorized by the host
 before use. A run that moves between hosts is the same run.
+
+#### A host may derive the id it selects
+
+A run id is opaque, and §3.3 of the Workspace specification already lets an
+authorized caller select one. A host may equally derive one from the subject the
+run is about, and a derived id is an ordinary selected id: it has to be a
+non-empty string containing no NUL, and it has to be the same string every time
+the same subject is admitted. Nothing else about it is constrained, and nothing
+here narrows the ids an ordinary caller may choose.
+
+The software factory derives its ids that way. A factory run id is the lowercase unpadded RFC 4648 Base32 encoding of the full SHA-256 digest of the UTF-8 bytes `github-issue-v1`, a NUL, the canonical GitHub authority, a NUL, and the exact GitHub issue GraphQL node ID — 52 characters of `a`-`z` and `2`-`7`, so the storage rule above is satisfied by construction.
+
+Those two inputs are the ones [the software factory](./github-actions-software-factory-spec.md) §1.1 defines, byte for byte, and this paragraph restates rather than generalizes them: the authority is the lowercase DNS hostname plus a non-default port, with no scheme, path, query, fragment, user information or trailing separator, and the node ID is GitHub's exact returned string with no case folding and no Unicode normalization. There is no broader Issue-provider authority in this hash — a hash whose inputs two documents spell differently is two hashes.
+
+That specification also owns every other factory protocol record: its §11.2 holds the closed versioned schemas, and no other document restates them.
+
+Because every input is immutable, admitting one issue twice derives one id and reaches one run through ordinary compatible reuse, and no separate idempotency concept appears. Two independent implementations given the same authority and node ID therefore produce the same id. A changed authority or node ID for a subject the host already retains is unsupported provider-identity drift, refused under §1.1 of that specification rather than derived into a second run.
 
 ### 9.2 Creating a run is also how it is found
 
@@ -833,6 +869,84 @@ Version 1 reads and writes version 1. Unsupported versions are refused without
 the file being touched; partial version-1 initialization is corruption and is
 also left unchanged.
 
+### 9.8 A remote host owns the same run
+
+Serialization decides who uses one connection next; it has never decided who may
+advance a run. A remote host keeps both answers and gives each a different
+mechanism.
+
+The owner of one run is selected from the public run id by the same arithmetic
+§9.3 uses, so a remote run has exactly one durable owner and no second registry
+can disagree with it. Inside that owner, operations on the run's storage are
+serialized and each runs in a transaction, exactly as §9.6 states: the
+connection queue, the transaction identities and the savepoint allocator are
+provider-private and say nothing about lifecycle authority.
+
+**Executor acquisition is an authenticated connection.** The acquisition is that
+connection's lifetime: the owner registers the exact acquisition when the
+connection is admitted and invalidates it when the connection closes, which is
+the staleness proof a remote host has in place of an operating system releasing
+a file lock. Like the local lock it is not a time lease — no duration, expiry,
+renewal, heartbeat, generation record or liveness poll — and closing it releases
+executor ownership without rolling back anything already committed. A second
+healthy executor follows or is refused, and cannot advance the run either way.
+
+**These requests require the acquisition**, and each validates the exact live
+acquisition and the expected Workspace root inside its own mutating
+transaction: start and resume, stale-execution recovery, document execution,
+Workspace mutation, provider attachment, native execution performed against a
+materialized root, lifecycle transition, accepted-outcome publication, and
+terminal settlement.
+
+**These requests take no acquisition.** Delivery retains one externally supplied
+value for one exact retained subject and does what typed answer delivery already
+does: it begins no document execution, attaches no Workspace, inserts no
+document-execution record, appends no journal event and changes no run status.
+What authorizes it is the subject, not the caller's position in the lifecycle —
+a suspension id the run's retained `suspension_request` names for an answer, and
+the exact retained decision subject for a terminal decision. A value for a
+subject the run is not holding is refused with nothing written.
+
+A **wake notification** is delivered on the same terms and is the one delivery that carries no value at all. A run may wait on a fact about a provider rather than on an answer, and that machine wait is a distinct event kind identified by a `waitId` rather than by a suspension id. An authenticated intake correlated to the exact wait subject retains a bounded notification saying that another observation may occur — no answer, verdict, stage, transition or observation result — and a later executor consumes it and appends the wake event in the run's own transaction. Delivery still stores and execution still decides; what changes is that here there is nothing stored for the execution to read except permission to look again. Read-only
+inspection takes no acquisition either, and returns the immutable snapshot
+surface of the lifecycle contract rather than a writable handle.
+
+A later executor is what turns retained delivery into progress: it consumes the
+value inside the run's own transaction, appends the accepted event once, and
+only then may execution continue past the wait.
+
+**The owner parses, and the owner transacts.** A request is adopted by the owner alone: it validates the release identity of the connection before parsing anything, parses the request itself rather than accepting a caller's account of it, and opens and commits every transaction. Content arrives content-addressed and is validated against the name it arrived under before it is stored, and against the expected Workspace root before it is published. The runner parses only responses. A caller therefore cannot describe a state change into existence, and a refusal is a refusal of a request the owner read.
+
+**Creation happens once, and is immutable.** Creating a run initializes pristine storage with the immutable run record, its retrieval metadata, an empty Workspace, the first execution record and `running`, in one transaction. A second compatible creation of the same run id finds that run rather than making another: one owner, one run, one initial root, one lifecycle. A creation whose immutable identity conflicts with what the owner holds is refused, and so is one meeting storage that is damaged or not pristine — in both cases nothing is written, and the distinct condition is what the caller is told.
+
+**Lookup answers one committed reading, and creates nothing.** An exact lookup returns the complete run storage of §9.4 as a handle the caller may transact against. Absent, foreign, incompatible, damaged, unparseable, wrong-run and closed-scope lookups stay distinct conditions; none of them creates, repairs or partially answers, and a handle whose scope has ended answers nothing.
+
+**One execution is one envelope.** Beginning inserts exactly one document-execution record — its identity minted by the caller so a retried request is the same bytes and an owner cannot begin a second execution for a request it already answered — and publishes the run state that goes with it in the same transaction, against the exact expected root. Settlement closes that same record with the semantic outcome and its exact stop reason, in one transaction, and only a settled record's status may be reported. An injected failure on either side exposes the whole old state or the whole new one.
+
+**Stale recovery needs no timer.** An unfinished record found after acquisition belonged to the previous executor and is proven stale by the closed connection rather than by a timestamp, PID, timeout or status row. The next acquisition reconciles the retained root history first, restores or closes that execution accordingly, and only then begins another; a committed effect is never repeated, and cancellation instead finishes that exact stale execution and publishes `cancelled` without beginning one.
+
+**Fork copies from one selected source, or does nothing.** A fork names one source prefix and root and produces one destination run and one lineage. The destination commits whole or not at all, its copied prefix outlives the source, and an incompatible selection or a failure part-way mutates neither the source nor the destination.
+
+**The planes are three requests, and one client carries them.** Which plane a request is for is its path, and the run id in that path is what selects the owner — arithmetically, through the namespace's own naming, with a gateway that forwards on that id and decides nothing else. A trusted host reaches all three through one configured client bound to one run: it holds an already-selected run id, one credential-free endpoint parsed before anything is sent, the exact release identity, and an operation that mints a short-lived token for the immediate request. Every plane requires the configured run id before a token exists, a URL is built or any I/O happens; the endpoint, the release and the token stay in the host's closure and reach no record, event or diagnostic; and the request shapes, header names and refusal spellings stay private to one release, save for the one category that is a fact about the run — another live executor holds it.
+
+**A handle's authority ends with its scope.** Teardown closes the handle and, for an executor, releases ownership; it rolls back nothing already committed and settles nothing that was not settled. Closing the connection is the only staleness proof a remote host needs, and a closed one authorizes nothing while leaving every committed transaction exactly as it was.
+
+### 9.9 A retained terminal, and what may be concluded from it
+
+A finished run is read before it is trusted, and one shared judgment does the reading, because a conclusion reached two ways is two contracts. Recovery publishing an outcome and admission reusing one ask the same functions of the same events.
+
+**One semantic outcome.** A root `Close` has two layers and both decide something. The outer layer is the coroutine's own settlement: it returned, it was raised out of, or it was cancelled. Returning is what a document does whether it succeeded or failed, so an outer `ok` says only that the value beneath it is the document's own result, and that result's `status` is what decides `completed` or `failed`. A returned value that is not a document result at all is neither outcome. A failed run names its reason exactly: the last retained row that failed, or — for a failure raised outside any durable operation — one categorical code, and never a message lifted out of an exception.
+
+**One final terminal.** Exactly one final root `Close` may exist. A second one, or any work recorded after the one that is there, is a history no single execution produced; the run is damaged rather than resolved, because choosing between them would be this build deciding which execution the run was.
+
+**The terminal has to agree with the history around it.** A run that failed before importing anything carries the root binding core writes for exactly that case, and no root import. A run that produced an ordinary document result carries exactly one root import: exactly one retained event names it, whichever coroutine recorded it, and that one event belongs to the root coroutine. Either shape found with the other's history is damaged.
+
+**The root import is read by canonical execution's own parser.** The same function that admits a partial history parses the retained selection here, so a selection the executor would refuse cannot publish an outcome instead. It proves rather than recognizes: the retained document parses; an exact target is canonically encoded and resolves against that document to the exact target recorded; and a recorded selection failure re-derives from the same selector to the same kind, matches and available catalog, so a failure record reduced to its selector, carrying another catalog, or naming a selector that actually resolves is not a failure any selection produced. A selection that named no target is raised out of the root import, so the document never ran and a successful result beside one is two histories rather than one.
+
+**Damage outranks the row.** History those readings refuse is damaged, and damage decides before the stored status does. A run whose row says `completed` or `failed` over a terminal that cannot be read is not advanced, not re-settled and not published: start, resume and cancel each refuse before an execution record exists, before an acquisition performs anything, and before Git, a Workspace or any provider is reached. What the run keeps is exactly what it had — the row, the journal, the Workspace frontier and any unfinished execution the previous executor left open. Stale recovery reads the same judgment first and publishes nothing over damaged history.
+
+**A coherent terminal replays, and changes only its own envelope.** A completed or failed run named again is replayed rather than refused, under whichever command named it. The replay opens its own document-execution record and closes it, and the run row is left exactly what it was, `updatedAt` included: an outcome that already won does not become mutable again by being read. What the replay runs on comes from the run's own retained state and nowhere else — the root document its root import retained, and the component bundle rebuilt from the immutable definition with each retained component's bytes named the way Git names a blob and compared to the object id the definition holds. No repository, working tree, live import, Workspace, Agent, process, Git-host, Issue, Project or credential provider is reached, no effect is performed again, no native operation starts, no retained answer is consumed and no event is appended. A retained root that does not agree with the run's own definition path refuses before anything is replayed from it.
+
 ## 10. The document filesystem of a run
 
 A host attaches one run's Workspace to a document execution with
@@ -899,7 +1013,4 @@ uncontained filesystem this boundary exists to prevent.
 
 ## 11. Intentionally excluded
 
-Public `xmd workflow` lifecycle commands; lifecycle transition policy, executor
-leases and stale-owner recovery; public root selection, history checkpoints and
-forks; workflow-owned worktrees; and deterministic Git and GitHub effects.
-Retained roots and private restoration do not expose any of those behaviors.
+Public `xmd workflow` lifecycle commands; public root selection, history checkpoints and forks; workflow-owned worktrees; and deterministic Git and GitHub effects. Retained roots and private restoration do not expose any of those behaviors. The lifecycle policy those commands are built on — which transitions exist, what a stale executor's unfinished execution becomes, and what a retained terminal permits — is specified by §9.6, §9.8 and §9.9 here and by [Workflow workspaces](./workflow-workspace-spec.md) §3, and reaching it is not something a retained root or a restoration does.

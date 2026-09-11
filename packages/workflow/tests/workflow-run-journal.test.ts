@@ -1594,6 +1594,7 @@ describe("Tier WJ — surviving a process", () => {
     // same sequence, read by a process that never saw them written.
     expect(after.events).toEqual(before.events);
     expect(after.events.map((event: { name?: string }) => event.name)).toEqual([
+      "__root__",
       "first",
       "second",
       "third",

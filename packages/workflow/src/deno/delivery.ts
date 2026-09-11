@@ -30,7 +30,6 @@ import {
   prepareElicitation,
   SecretDetectedError,
   type SecretFinding,
-  validateParsed,
 } from "@executablemd/core";
 import { serializeDurableEvent } from "@executablemd/durable-streams";
 import type { DurableEvent } from "@executablemd/durable-streams";
@@ -41,6 +40,7 @@ import {
 } from "../suspension/api.ts";
 import { SUSPENSION_ANSWER } from "../suspension/answer.ts";
 import {
+  parseAnswerDelivery,
   type WorkflowAnswerDelivery,
   WorkflowAnswerDeliveryError,
   type WorkflowAnswerRetention,
@@ -48,7 +48,6 @@ import {
 } from "../suspension/delivery.ts";
 import { SUSPENSION_REQUEST } from "../suspension/suspend.ts";
 import {
-  WorkflowRequestError,
   WorkflowRunIdMismatchError,
   WorkflowRunNotFoundError,
   WorkflowStorageError,
@@ -61,7 +60,7 @@ import { readRunRow } from "./database.ts";
 import { useHostConnections } from "./host-connections.ts";
 import { readJournalEntries } from "./journal.ts";
 import { workflowRunPath } from "./path.ts";
-import { authorizedRoot, checkRunId } from "./provider.ts";
+import { authorizedRoot } from "./provider.ts";
 import { readTransaction } from "./reading.ts";
 import { translateSqliteError, verifySchema } from "./schema.ts";
 
@@ -92,14 +91,6 @@ export function* installWorkflowInputDelivery(
   );
 }
 
-/** A delivery whose every member has been checked rather than believed. */
-interface CheckedDelivery {
-  readonly runId: string;
-  readonly suspensionId: string;
-  readonly value: Json;
-  readonly secretDetection: boolean;
-}
-
 /** The wait a run is at, read from what it retained. */
 interface RetainedWait {
   readonly record: WorkflowRunRecord;
@@ -113,7 +104,7 @@ function* deliverAnswer(
   connections: WorkflowRunConnections,
   request: WorkflowAnswerDelivery,
 ): Operation<Result<WorkflowAnswerRetention>> {
-  const checked = checkDelivery(request);
+  const checked = parseAnswerDelivery(request);
   if (!checked.ok) {
     return checked;
   }
@@ -262,7 +253,7 @@ function* judgeAnswer(
   let issues;
   try {
     const prepared = yield* prepareElicitation(waiting.request.responseSchema, "workflow answer");
-    issues = validateParsed(prepared.validate, value);
+    issues = prepared.validator.judge(value);
   } catch (error) {
     return Err(
       new WorkflowAnswerDeliveryError(
@@ -427,90 +418,6 @@ function rollback(database: DatabaseSync): void {
   } catch {
     return;
   }
-}
-
-const DELIVERY_MEMBERS = ["runId", "suspensionId", "value", "secretDetection"];
-
-/**
- * The whole request, parsed as a closed shape before any member is read.
- *
- * The type describes what a caller meant; what arrives is whatever the language
- * allows. A suspension id is opaque and every character of it is part of it, so
- * the only thing asked of it is that it is a non-empty string this run could
- * have derived.
- */
-function checkDelivery(offered: WorkflowAnswerDelivery): Result<CheckedDelivery> {
-  if (typeof offered !== "object" || offered === null || Array.isArray(offered)) {
-    return Err(new WorkflowRequestError("a delivery takes an object describing one answer."));
-  }
-  const names = new Set(Object.keys(offered));
-  const missing = DELIVERY_MEMBERS.filter((name) => !names.has(name));
-  if (missing.length > 0) {
-    return Err(new WorkflowRequestError(`the delivery is missing ${missing.join(", ")}.`));
-  }
-
-  const runId = checkRunId(Reflect.get(offered, "runId"));
-  if (!runId.ok) {
-    return runId;
-  }
-
-  const suspensionId = Reflect.get(offered, "suspensionId");
-  if (typeof suspensionId !== "string" || suspensionId === "") {
-    return Err(
-      new WorkflowRequestError(
-        "a delivery names the wait it answers, and a suspension id is a non-empty string.",
-      ),
-    );
-  }
-
-  const secretDetection = Reflect.get(offered, "secretDetection");
-  if (typeof secretDetection !== "boolean") {
-    return Err(
-      new WorkflowRequestError("a delivery says whether it crosses the secret gate, as a boolean."),
-    );
-  }
-
-  const value = retainableJson(Reflect.get(offered, "value"));
-  if (value === undefined) {
-    return Err(
-      new WorkflowRequestError(
-        "an answer is retained in this run's storage, so it must be JSON this run can store.",
-      ),
-    );
-  }
-
-  return Ok({ runId: runId.value, suspensionId, value, secretDetection });
-}
-
-/** The value, if every part of it is JSON this run can retain. */
-function retainableJson(value: unknown): Json | undefined {
-  let encoded: string | undefined;
-  try {
-    encoded = JSON.stringify(value);
-  } catch {
-    return undefined;
-  }
-  if (encoded === undefined) {
-    return undefined;
-  }
-  const parsed: unknown = JSON.parse(encoded);
-  return isJson(parsed) ? parsed : undefined;
-}
-
-function isJson(value: unknown): value is Json {
-  if (value === null || typeof value === "string" || typeof value === "number") {
-    return true;
-  }
-  if (typeof value === "boolean") {
-    return true;
-  }
-  if (Array.isArray(value)) {
-    return value.every(isJson);
-  }
-  if (typeof value === "object") {
-    return Object.values(value).every(isJson);
-  }
-  return false;
 }
 
 /**

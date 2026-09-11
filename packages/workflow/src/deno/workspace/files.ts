@@ -73,8 +73,9 @@ import type {
 } from "@executablemd/runtime";
 import type { EffectDescription, Json, Workflow } from "@executablemd/durable-streams";
 import type { WorkflowRunDatabase } from "../../storage/api.ts";
+import { workspaceHostFor } from "../../workspace/effects.ts";
+import type { WorkspaceFilesystem } from "../../workspace/filesystem.ts";
 import { savepoint } from "../transaction.ts";
-import { createWorkspaceEffect } from "./effect.ts";
 import { journalableWorkspaceCode } from "./errors.ts";
 import type { DenoWorkspaceFilesystem, DenoWorkspaceStat } from "./filesystem.ts";
 import {
@@ -277,9 +278,12 @@ function* describeFileEffect(
 function* fileEffect<Phase extends string>(
   database: WorkflowRunDatabase,
   description: EffectDescription,
-  perform: (filesystem: DenoWorkspaceFilesystem) => Operation<FileEffectOutcome<Phase>>,
+  perform: (filesystem: WorkspaceFilesystem) => Operation<FileEffectOutcome<Phase>>,
 ): Workflow<unknown> {
-  return yield createWorkspaceEffect(database, description, (filesystem) => perform(filesystem));
+  // The binding the host attached for this exact handle. Which host answers is
+  // decided by the handle; that the handle is this run's was proved when the
+  // attachment registered it.
+  return yield workspaceHostFor(database).create(description, (filesystem) => perform(filesystem));
 }
 
 /**

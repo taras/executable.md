@@ -104,6 +104,17 @@ Existing documents and code get aligned to this section retroactively.
 | recovery tombstone | an ownership record left active because its owner never proved it stopped. A crash releases the kernel lock and not this, and no pid, elapsed time, released lock or empty transcript clears it |
 | provider partition | one complete, independently owned agent-provider state — runtime, store, managed sessions, queues, coordinator, teardown — selected by the one installed factory at each dispatch. Production is the single-partition case of the same path; holding a partition grants work, never permission |
 | `JournalProvenance` | a non-operational, equality-only witness that a live publication stream descends from the exact journal backend a provider selected for one workflow run; it grants no append, read, execution, publication or reconciliation capability, and is meaningful only because the provider retains the witness it established and later requires exact equality |
+| factory run identity | the run ID a software-factory run is addressed by: the lowercase unpadded RFC 4648 Base32 encoding of the full SHA-256 digest of the UTF-8 bytes `github-issue-v1`, NUL, the canonical GitHub authority, NUL and the exact GitHub issue GraphQL node ID. The canonical GitHub authority and the node ID are the ones `specs/github-actions-software-factory-spec.md` §1.1 defines, byte for byte; there is no more general Issue-provider spelling of this hash. It is one host-selected public run ID, derived once from immutable provider identity, and it is distinct from the workflow definition SHA, the implementation revision, the Workspace root, the expansion identity and every delivery identity |
+| authenticated intake | one bounded record a trusted host retains for an externally delivered request — a verified webhook, or an authenticated human form submission — keyed by the provider's own delivery or submission identity and holding only typed bounded fields. It is what a later execution reads; it is never a stage, an outcome, a transition or a credential, and receiving one authorizes nothing beyond finding the run it names |
+| Project provider | an external service that owns project boards and the status of the items on them. GitHub Projects V2 is one adapter. It is a separate boundary from a Git host and from an Issue provider, because a project board need own neither a repository nor an issue collection |
+| Project projection | the human-facing status a Project provider holds for one item, published from the journaled lifecycle rather than read as it. A projection ahead of the journal is drift to reconcile; it is never evidence that a lifecycle transition happened |
+| executor connection | a remote host's form of executor acquisition: one authenticated connection whose lifetime *is* the acquisition. Like the local executor lock it is not a time lease — no duration, expiry, renewal, heartbeat, PID or liveness poll — and closing it releases executor ownership without rolling back what already committed |
+| delivery-plane transaction | one authenticated transaction that retains an externally supplied value for an exact retained subject without executing the run: intake retention, typed answer delivery and terminal-decision delivery are the three. It generalizes delivery to subjects other than a suspension request, on the same terms: no executor acquisition, no document execution, no journal append, no run-status change |
+| implementation revision | the evolving pair `{ headSha, baseSha }` one factory run is currently producing or reviewing: the exact head commit of the implementation branch and the exact target-branch commit it is evaluated against. It changes many times within one run and never takes part in run identity |
+| exact-review subject | the implementation revision a review conclusion names. A conclusion authorizes only the pair it names, so a later revision inherits nothing and a moved half of the pair invalidates it |
+| machine wait | a durable wait that asks nobody anything: it ends because a later execution observed a provider again, not because a value was delivered. It shares the atomic suspension boundary — its retained event and the `suspended` status commit together, and the executor acquisition is released only after that commit — but it is a distinct event kind identified by a `waitId`, and it has no response schema, no answer route, no form and no bound value. It is a second kind of wait inside the lifecycle, never a second lifecycle controller |
+| wake notification | a bounded record correlated to one exact machine wait, retained by an authenticated intake as an ordinary delivery-plane transaction. It carries no answer, verdict, stage, transition or observation result; a later executor consumes one inside the run's transaction and appends the wake event that permits exactly one further observation |
+| terminal settlement | the last transition of a run whose outcome required external projections: the retained terminal decision is published as run state only after every required projection has completed, so a completed replay never needs a provider to repair one |
 
 ## Three axes
 
@@ -397,6 +408,45 @@ describe what failed without repeating retained props or journal payloads —
 including their member *names*, which can carry a credential as readily as a
 member value can.
 
+### One remote owner for one run
+
+A remote host owns the same run the local host owns, through the same
+provider-neutral surfaces. The Cloudflare topology is one SQLite-backed Durable
+Object per run, selected from the public run ID by the same arithmetic local
+discovery uses, so a remote run has exactly one durable owner and no second
+registry can disagree with it. That object holds the WorkflowRun record and its
+filtered journal, the immutable Workspace roots and their content-addressed
+bytes, the Agent-session mappings and checkpoints, the retained delivery state,
+the authenticated intake records, and executor ownership.
+
+The runtime-named Cloudflare entrypoint is the only place that topology appears.
+Shared modules reach it through the contextual storage and lifecycle APIs they
+already use, detect no runtime, and import nothing Cloudflare-specific — the
+same boundary the Deno entrypoint sits behind.
+
+Native execution stays off that object. Native Git, evidence processes and Agent
+clients run on an ephemeral runner against bounded materialized state; the
+Durable Object runs none of them. The runner materializes one selected retained
+root, works in it, and submits content-addressed changes; the owner validates
+the executor acquisition, the expected root and the submitted content, then
+atomically publishes the new root together with the filtered journal result.
+That is the same effect transaction local Workspace mutation uses, with the
+mutation performed where the tools are and the publication performed where the
+authority is.
+
+A runner that dies mid-flight therefore exposes only a prior or a new complete
+transaction, never a partial one. The next acquisition performs the ordinary
+stale-execution recovery and resumes from the exact committed WorkflowRun and
+Workspace frontier. A completed run replays as it does anywhere, and reading its own history is what it does: it may reach the durable owner holding its retained result — an ephemeral client has nothing else to replay from — while attaching no Workspace, Agent, process, Git, Git-host, Issue, Project, credential or other external-effect provider, performing no effect again and starting no native operation. Lifecycle storage access is not external-effect replay, and only the second is what a completed run must never do.
+
+What that owner implements, it implements behind the four-method `WorkflowHost` boundary and nothing wider: create and lookup, coherent reads, lifecycle transitions and terminal settlement, stale recovery, fork and its staging, Workspace publication, typed delivery and consumption, read-only inspection and history, and canonical completed replay.
+
+A runner reaches it over three requests, and the path says which plane. One run id selects its owner arithmetically, a gateway forwards on that id alone, and the executor plane is a real upgrade whose admission order — release, then token, then the run — is the owner's own. One configured client carries all three: an already-selected run id, one credential-free endpoint parsed at construction, the release identity, a token minted per request, and the I/O its host performs. It is bound to that one run, refuses another before a token exists, and keeps endpoint, release and token in closure state that reaches no record, event, error or document-visible value. Trusted code assembles that client into the same four methods, and an attachment is bound to the exact storage handle the begin transition produced — compared by identity to the link this runner's own acquisition opened, because two clients on two owners can hold handles that agree about everything except where they came from.
+
+A remote attachment installs what a local one installs, because the document rules are written once. Filesystem, Repository, Worktree, `<Dir>`, Git, composition components, pull-request and Issue middleware, elicitation and any configured Agent profile all come from the same modules; what each host contributes is four things — the effect a mutation becomes, the savepoint that undoes an unfinishable part of one, the read an ephemeral checkout attachment needs, and the transaction an Agent-session mapping is retained by. The exact storage handle decides which host answers all four, so an authored `<File>` on a remote run becomes a durable Workspace effect against the invocation's materialized tree and never falls through to the runner's own filesystem, a reattachment reads one owner snapshot into a tree the invocation owns and closes it before Git runs, an Agent-session mapping is retained by the run's own owner in one transaction the provider is never called from inside, and a handle no attachment registered is refused rather than performed.
+
+What no code chooses is which host a run belongs to. There is no runtime or CLI selector, no ambient endpoint, release-identity or OIDC source, and no deployment: the shipped entrypoints install the local host, and the explicit installer is the seam a later trusted assembly configures.
+
 ## The workflow lifecycle
 
 `xmd workflow start [--id=<run-id>] [--props-*=…] <definition>` and
@@ -625,7 +675,7 @@ the requested lifecycle action and inserts one execution record while
 publishing `running`. A replay of an already completed or failed root instead
 inserts its execution record while preserving that terminal run state: the
 replay observes an outcome that already won and does not make the run mutable
-again. The settlement transition finishes the record while publishing its
+again. The run row is left exactly what it was, `updatedAt` included, and its own settlement closes only the execution envelope it opened — the one durable change a coherent replay makes. The settlement transition finishes the record while publishing its
 terminal or resumable status. Begin and settlement are separate transactions
 enclosing the document execution, and each is atomic within itself.
 
@@ -674,6 +724,12 @@ without entering replay. A `cancelled` run reports its retained state without
 entering replay under either command. None can be advanced under the same run
 ID.
 
+A retained terminal is read before it is trusted, and one shared judgment does the reading. Both layers of the root `Close` are load-bearing: the outer coroutine settlement says the root returned, was raised out of, or was cancelled, and a returned value's own `status` decides whether the run completed or failed — so reading the outer layer alone would call every finished document a completed one. The history around that terminal has to agree with it. Exactly one final root `Close` may exist, because a second one, or work recorded after the one that is there, is a history no single execution produced and choosing between them would be this build deciding which execution the run was. A run that failed before importing anything carries its root binding and no import; a run that produced an ordinary document result carries exactly one root import, recorded by the root coroutine, and canonical core's own root-selection parser is what reads it — the same function that admits a partial history, so a retained selection the executor would refuse cannot publish an outcome here instead. That parser proves the selection rather than recognizing its shape: the retained document parses, an exact target resolves against it to the exact recorded target, and a recorded selection failure re-derives from the same selector to the same kind, matches and available catalog. A selection that named no target is raised out of the root import, so a successful document result beside one is two histories rather than one.
+
+Anything those readings refuse is damaged history rather than an outcome, and damage outranks the stored row. A run whose row says `completed` or `failed` over a terminal this build cannot read is not advanced, not re-settled and not published: `start`, `resume` and `cancel` each refuse before an execution record exists, before an acquisition performs anything and before Git, a Workspace or any provider is reached, and the run keeps its row, its journal, its Workspace frontier and whatever unfinished execution the previous executor left open. Stale recovery reads the same judgment first and publishes nothing over damaged history. Both hosts reach these conclusions through the one provider-neutral lifecycle policy; `specs/workflow-spec.md` §9.9 is the normative statement of them.
+
+A coherent terminal is also where a completed replay gets its inputs. Nothing is fetched for it: the root document is the one the run's own root import retained, the bundle admission is rebuilt from the definition rather than from a repository, and each retained component's bytes are authenticated by naming them the way Git names a blob and comparing that to the object id the definition already holds. So the replay reaches no repository, no working tree and no live component import, and a history whose retained root does not agree with the run's own definition path refuses before anything is replayed from it.
+
 The executor lock remains in the trusted host's outer lifecycle scope; it is not
 installed as a document provider. A completed replay may hold
 the lock while recording its document-execution envelope, while the run remains
@@ -700,6 +756,29 @@ while the deleting workflow executor still holds its lock. An empty lock file
 is not retained run state and is not reported as history or provider-session
 data.
 
+### Remote executor connection
+
+A remote host acquires the same authority over one authenticated connection.
+The acquisition is that connection's lifetime: the run's owner registers the
+exact acquisition when the connection is admitted and invalidates it when the
+connection closes, which is the staleness proof a remote host has in place of a
+released kernel lock. It is not a time lease either — no duration, expiry,
+renewal, heartbeat, generation record or liveness poll — and closing it releases
+executor ownership without rolling back anything already committed. A second
+healthy executor follows the active one or is refused; it cannot advance the
+run.
+
+What the acquisition gates is the same list the lock gates locally, plus what a
+split host adds: start and resume, stale-execution recovery, document execution,
+Workspace mutation, Agent attachment, native Git and evidence execution,
+lifecycle transition, accepted-outcome publication and terminal settlement. Each
+of them validates the exact live acquisition *and* the expected Workspace root
+inside its own mutating transaction, so a stale connection and a stale frontier
+are refused at the same boundary rather than at two.
+
+What it does not gate is delivery and inspection. Those are described below and
+below that, and neither becomes transition authority by being remote.
+
 ### Read-only lifecycle inspection
 
 Inspection has its own provider-neutral immutable snapshot surface. It returns
@@ -724,6 +803,8 @@ identically. History is shared: both sources run the same projection over
 ordered rows — authored source, cumulative forkability, inherited provenance —
 because two mappings are how history quietly starts meaning different things
 depending on where it was read.
+
+A durable owner satisfies that surface from one committed reading of its own state: it takes no acquisition, attaches nothing, materializes nothing, appends nothing, and answers status, list and history from the same projection the local provider runs, so a malformed or incomplete page fails the request whole rather than returning part of one. Everything in the rest of this section is the local provider's, because a hot rollback journal and the coordination that recovers one are facts about a file.
 
 The Deno provider first reads each retained database through its ordinary
 read-only connection. A host crash may leave a hot rollback journal: that is a
@@ -965,6 +1046,17 @@ installed nearer — may answer the question or refuse it, and in both cases the
 run it affected never suspended; continuation of a suspended run is retained
 delivery state and nothing else.
 
+A response schema is judged by one implementation wherever it is judged. The
+document runtime judges what a provider returns, a local host judges a delivered
+answer, and a run whose storage lives somewhere else judges it there — inside
+the transaction that writes it, because a boundary that accepts somebody's
+report of a judgment has not made one. That is possible only because the
+judgment generates no code: a runtime that refuses code generation during a
+request cannot compile a schema it learns from a retained wait, so a validator
+that compiles could never be the one every boundary runs. It is draft-07, the
+schema is admitted against the draft-07 meta-schema before anything is asked,
+and `format` annotates without constraining.
+
 The retained request at the execution's exact current durable position is what
 authorizes entry. The controller derives the identifier for the position
 immediately behind the caller's own, requires the presented one to equal it,
@@ -1026,6 +1118,24 @@ transaction, so a crash before it commits leaves the answer pending and a
 transaction that does not commit publishes nothing. Replay after that
 transaction commits restores the recorded answer event without reaching the live
 controller and without consuming or publishing again.
+
+That separation is a property of delivery rather than of the local CLI, so it
+survives a remote host and generalizes past a suspension request. A **delivery-
+plane transaction** is any authenticated transaction that retains an externally
+supplied value for an exact retained subject: intake retention, typed answer
+delivery, and the terminal-decision delivery the software-factory specification
+describes. Each validates its own delivery identity and
+its own retained subject, retains only the typed bounded value that subject
+describes, and does exactly what answer delivery does otherwise — takes no
+executor acquisition, begins no document execution, attaches no provider,
+appends no lifecycle outcome and changes no run status. A duplicate delivery of
+one identity finds the retained record and writes nothing.
+
+Consumption stays where it already is. A later executor reads the retained value
+inside the run's own transaction, appends the accepted durable event or outcome
+exactly once, and only then may authored control flow decide what follows. A
+delivery that could advance a lifecycle would be a second state machine beside
+the journal, which is the thing this split exists to prevent.
 
 Scheduling — automatic resume, watchers, unattended iteration and remote host
 selection — is #300's and is not part of this behavior. Nothing here waits on
@@ -1405,6 +1515,75 @@ addressed. Once middleware matches it owns the answer: it never delegates
 afterwards, and nothing catches its refusal to try somebody else, because a
 search is how a document that named one service quietly reaches another. A
 destination every provider delegated reaches the operation's own base error.
+
+### A project board is a third external boundary
+
+A **Project provider** owns project boards and the status of the items on them,
+and it is a boundary of its own for the reason the Issue boundary is one: a
+project board need own neither a Git repository nor an issue collection, so a
+Project status cannot truthfully execute or persist as a Git-host effect or an
+Issue effect. `Project.Status` reaches its own contextual operation and journals
+its own durable effect. Its natural key is the exact Project item plus the exact
+field; its compatible pre-state is the option that item currently holds; and the
+configured Project, item, field and option identities are a host ceiling rather
+than something an authored prop can widen.
+
+The status a board shows is a **Project projection** of the journaled lifecycle,
+never a reading of it. A board ahead of the journal is drift the next execution
+reconciles, and it is not evidence that a stage was passed.
+
+Which option means which stage is configuration, not inference. A host that projects lifecycle onto a board holds a total bijection between its stages and the board's exact status option IDs, validated against a complete reread before it is used and refusing when it is missing, partial, duplicated, names an option the board does not offer or one under another field, or names an option whose display name is not the settled string for its stage. Admission maps a reread option ID to a stage through that table and projection maps a stage back through its inverse; neither direction parses a display string, because a name is what a person reads and an option ID is what the host compares.
+
+### Comments, readiness and closure
+
+Four more reconciled effects join the same boundary, each keyed by its own subject. `Issue.Comment` is an Issue-provider effect keyed by the canonical issue URL plus the engine-derived effect identity; `PullRequest.Comment` is a Git-host effect keyed by the canonical pull-request URL plus that identity. The body is presentation in both: keying a comment by its text would make an edited sentence a different comment. Creating an object is not by itself what makes an effect attempt-stateful: an Issue upsert and a pull-request upsert each reconcile on a key or an identity the provider gives them, and keep their existing complete-observation contracts. A comment has neither. A Git host issues no client-supplied idempotency key for one, so a comment provider has to support one stable opaque correlation marker it can write, preserve and completely query, and a provider that cannot refuses before its first mutation. The marker is provider transport metadata rather than authored prose: the authored logical body stays byte for byte what the document rendered, the correlation representation rides outside it, and the binding and every replay expose the body and the provider's comment identity rather than the encoding. What a complete observation means depends on the attempt state the effect retains — before an attempt, no marker is proven absence and permits one creation; after an attempt with no committed completion, no marker is permanent ambiguity, because it equally describes somebody having removed one. That is what stops an interrupted creation from becoming a duplicate without pretending a person cannot edit a comment. `PullRequest.Ready` and `PullRequest.Close` are Git-host effects keyed by their exact pull-request subject, and `Issue.Close` is an Issue-provider effect keyed by its exact issue subject and carrying a closed `reason` enum that has to match the retained terminal intent. Each observes before it mutates, adopts a compatible completion, performs once from proven absence or an exact compatible pre-state, and refuses conflict, permanent ambiguity, incomplete observation and temporary unavailability.
+
+`PullRequest.Merged` is the fourth, and it is the one that never mutates. A Git host records a pull request as merged when it notices its own ref move, which is not the same event as a target publication succeeding, so the fact has to be observed as its own retained step rather than inferred from the step before it. Adoption is its only completion: the host reporting the pull request merged at the exact published commit is the fact, and a merge at another commit is a conflict. A pull request still open is temporary unavailability — the host has not caught up, which is a different thing from refusing — while one closed unmerged is a conflict, because a person having intervened is not a state that resolves itself by waiting. A run that keeps observing the open case does so through a bounded host-configured retry and then a machine wait whose subject is the pull request and the expected commit. That wait is not a typed-answer suspension: it publishes no response schema, accepts no delivered value, and ends because an execution looked again rather than because somebody answered. An authenticated intake retains a bounded wake notification correlated to that exact wait and nothing more; a later executor consumes it and appends the wake event in one transaction, and only a compatible observation advances anything.
+
+### Ordered merge, and publishing a target
+
+`Git.Merge` is Workspace-local. It observes and fixes its first parent, second
+parent and merge base before it mutates, and its two closed results are
+distinct: a clean merge publishes the new commit, the new Workspace root and the
+filtered result in one effect transaction, while a conflicted merge restores the
+pre-merge root and publishes normalized conflict evidence against it. The parent
+order is the caller's and is part of the request, because the two merges a
+factory performs mean opposite things — synchronizing a target into an
+implementation, and publishing an implementation onto a target.
+
+`Git.PublishTarget` is a Git-host effect and is not a spelling of `Git.Push`.
+Push advances a branch this run published, from an ancestry relation proved
+inside the authenticated object source. Target publication is a compare-and-swap
+against a protected ref: it updates only after observing the target equal to the
+expected commit, adopts a target already equal to the exact source commit with
+nothing performed, and refuses everything else without mutating. The remote, the
+ref, the credential and the non-force policy are host-owned; the reviewed head
+and expected commit travel in the request so the record says what the
+publication was authorized against.
+
+### Trusted evidence execution
+
+`Evidence.Run` executes an authored structured argv list natively, on the trusted runner, against one exact retained Workspace root, under host-owned executable, environment, working-root, per-command duration, whole-run duration, output and process-tree ceilings. It is not Worker Shell and not a document's own process capability: it runs where the tools are, and it is absent from the workflow Agent's capabilities and from every generated-XMD write table.
+
+It is a fail-fast pipeline. Commands run in authored order and the first one that does not exit with status `0` is the last one that runs, because a plan's evidence list is usually a pipeline and rows produced after a failed build are evaluated against prerequisites that are missing or stale. What the effect binds is therefore the executed prefix, stated as such: how it completed, how many commands were authored, and one row per command that ran, each naming its argv, how it ended, and its stdout and stderr as separate bounded channels that state their own truncation. Breadth belongs inside a command whose own contract runs a corpus to the end, or in separate elements the plan says are independent.
+
+Two host-owned ceilings bound it — one per command, one for the whole list — and a row that timed out says which fired. A timeout is an ordinary unsuccessful outcome: it records that the host enforced its ceiling, reaped the tree and captured its channels. A non-zero status is likewise evidence rather than an infrastructure failure, since it is the answer the effect exists to obtain.
+
+Being unable to say what happened is the failure. A launch the ceiling refused, a channel the host could not read, and a child it could not reap each fail the effect and bind no result, so no prefix is ever mistaken for an answer. Cancellation wins over everything and commits neither completion nor failure; otherwise the first infrastructure failure is authoritative and a teardown failure after it is retained as secondary evidence, while a teardown failure with nothing before it is authoritative on its own — a host that cannot prove its process ownership settled cannot publish a success, on the same terms lifecycle settlement applies. A failed effect still retains bounded diagnostic evidence on its error: the safely collected prefix, the bounded channels, and the primary and secondary failure categories. No successful binding is not the same as no retained evidence, and replaying a failed effect starts no process.
+
+### Terminal settlement follows its projections
+
+An outcome whose completion requires external projections retains the decision first and settles last: the accepted decision is journaled before any effect is attempted, the required projections are separate reconciled steps, and only after all of them complete is the terminal run state published.
+
+There are two terminal paths, and they do not share a step list. Reading one general sequence for both would require merge effects during an abandonment, or pull-request closure during a merge.
+
+**The merged path** retains the authenticated exact-revision merge decision, then constructs the trusted merge commit, publishes the target, retains the merged pull-request observation, closes the issue as completed, projects the Project item to its closed option, and publishes terminal kind `merged` carrying the actor, the exact revision, the merge commit, the resulting provider identities and the retained history.
+
+**The abandoned path** retains the authenticated exact-revision abandonment decision together with its required reason, then closes the pull request unmerged, closes the issue as not planned, projects the Project item to its closed option, and publishes terminal kind `abandoned` carrying the actor, the exact revision, the reason, the resulting provider identities and the retained history. It constructs no merge and publishes no target — there is nothing it reviewed that it is publishing.
+
+A third decision is not terminal at all. A change decision names the earliest stage it invalidates and a reason, and returns the run to that stage; it settles nothing and projects no closure.
+
+Every step on either path is a separate reconciled external effect or a separate retained transition, and no distributed transaction is claimed across the run's storage, native Git and processes, and the external services. An interruption resumes at the first uncommitted or unreconciled step. Terminal settlement is last on both paths for one reason: a completed run replays without contacting a provider, so a terminal state published before its projections would leave the repair to exactly the replay that is forbidden to reach a provider.
 
 Every committed journal event references the current logical Workspace root.
 Only committed event boundaries are checkpoints. A history fork copies the
@@ -3116,6 +3295,51 @@ or partial continuation they run and record through the ordinary durable
 protocol — an effect an earlier preparation already completed is restored from
 its retained record rather than performed again.
 
+### A split trusted host
+
+A factory run has one trusted host in two pieces, and which piece owns what is
+the whole of its security boundary.
+
+The **provider host** is the Cloudflare runtime-named entrypoint. It owns
+persistence and transactions, the authenticated intake receiver, the
+authorization gates, token minting, and executor admission. On GitHub that
+receiver is one dedicated GitHub App: it verifies a webhook signature before it
+parses the payload as anything but bytes,
+rereads the complete provider objects through the API rather than trusting the
+payload's copy of them, authenticates the installation and the human actor, and
+only then retains one bounded intake keyed by the provider's delivery or
+submission identity, and mints the short-lived installation token every external
+effect is performed with. It admits a runner session — the OIDC client the
+Actions job authenticates as — only after validating that session's claims:
+issuer, configured audience, repository ID, repository-owner ID, event name,
+workflow ref and SHA, and the configured immutable workflow identity. Names are
+mutable and IDs are not, which is why the check is on IDs.
+
+The **runner host** is the ephemeral Actions job. It owns the native clients:
+Git, the plan-evidence processes, and the Agent. It holds no durable authority
+at all; what it holds is one authenticated executor connection and one
+materialized Workspace root, and every mutation it proposes is validated and
+published by the provider host.
+
+Credentials stay with the piece that mints them. The application private key,
+the webhook secret, the OIDC verification configuration, every issued
+installation token, the provider endpoints, the raw payloads, the pagination
+cursors and the host paths are provider-host secrets and closure state. None of
+them reaches props, context composition data, a durable request or result, a
+comment, document output, or a diagnostic. A short-lived installation token
+performs the external effects; the journal retains the human actor separately
+from the token that acted, so the record says who decided as well as what was
+done.
+
+Ceilings narrow in one direction. The installation is limited to configured
+repositories, and the host narrows further per operation to the exact
+repository, branch, target ref, project, field, option, subject, reviewed
+revision, parent pair and non-force operation. A path the granted permission
+could reach but the contract excludes — a workflow definition under
+`.github/workflows/**` is the one that matters, since rewriting it would rewrite
+the run's own authorization — is refused by the host rather than left to the
+permission model.
+
 ### The weak journal-provenance association
 
 Journal provenance is the one further exception, and it is deliberately narrow.
@@ -3259,6 +3483,7 @@ Status is measured against main.
 | workflow component bundle | a workflow root declares a closed set of authored Markdown components; the V1 workflow definition optionally carries them as one array sorted by component name, each entry holding the name, its canonical repository-relative path inside the pinned commit and that blob's object ID, and an absent member identifies a run closed over no components — so a definition retained before the member existed reads unchanged. `start` and `resume` read every component from the definition's own pinned commit; the array takes part in definition identity and is compared as part of the same V1 descriptor in compatible reuse; and canonical core resolves those names and holds both live import and retained history to that exact bundle | built on the #301 stack; the full adversarial implementation loop and its scheduling remain unbuilt (#300), and generated XMD admits no bundled Markdown component (#369) |
 | `workflowInstallation()` / `getWorkflowRun()` | associates one document execution with a workflow run, through an `ExecutionInstallation` the trusted host passes to `executeInstalled()` | built on the #366 stack |
 | `retainedWorkflowInstallation()` | associates one document execution with a run storage already created, requiring exact journal agreement | built on the #366 stack |
+| `retainedReplay()` | assembles what a completed run replays on from the owner's committed state alone — the root document its own root import retained, and the admissions that hold the retained history to the run's immutable definition and its component bundle, each component's bytes authenticated by Git blob identity against the object id the definition holds. It reaches no repository, working tree, provider or live import, and a history it cannot read refuses before anything is replayed from it | built on the #698 stack, both providers |
 | `Git.revParse()` | verifies and resolves one Git revision expression contextually | built on main |
 | workflow run storage | creates or compatibly finds one run by public run ID, retains its identity, state, document executions and filtered journal, and validates immutable Workspace roots through one provider-owned connection entry | built on the #365 stack; the CLI lifecycle reaches it on the #366 stack |
 | caller-owned storage transaction | publishes several changes, including journal events, in one transaction nothing else enlists in | built on main |
@@ -3287,11 +3512,11 @@ Status is measured against main.
 | `Git.Push` | publishes the selected checkout's exact current named branch and commit to the same branch on the retained Repository's canonical `origin`, reconciled through the shared Git-host state machine rather than through a Workspace transaction: no props and no component result, no force, no upstream mutation and no implicit staging or committing; the durable request and record carry the Repository's filtered identity without its checkout path, and the transport runs in a provider-owned isolated control repository reading the checkout's objects through an object-source attachment whose alternates chain and object tree are proven contained before the first remote observation, aimed at the exact private retained locator. A destination proven absent is published to once and one already naming this exact commit is adopted; one naming a distinct commit that same authenticated source proves is in this commit's ancestry is a performable pre-state, published over by the same exact non-force refspec and retained as the predecessor with the attested relation, while a divergent commit and one the source cannot read are both conflicts and nothing is fetched to decide either; a completed Push is reconstructed from the Workspace root its own journal event was appended against, read without publishing it or moving the run's frontier, so a branch published more than once resumes | built on the #370 stack, Deno provider only |
 | `<PullRequest>` | upserts one pull request of the selected checkout's current named branch, reconciled through the shared Git-host state machine: a required `title`, an optional positive-integer `number`, an optional `base` defaulting to the Repository's retained initial branch, an optional `draft`, and the rendered content as the body; it renders nothing and returns stable evidence through `as` — the filtered Repository identity, the provider's own stable pull-request identity, number, URL, open state, and the head and base SHAs of the snapshot it finished at. Without a number it creates one pull request for the head/base pair or adopts the compatible one an interrupted attempt left; with a number it brings that exact pull request's title, body, draft state and base to what the request says, records a no-op when they already match, and refuses a number belonging to another repository, opened from another head, or no longer open. It never pushes, never rewrites a head, and never reopens, merges or comments. The run must already hold its own successful `Git.Push` result for that exact Repository identity, head branch, destination ref and commit — proven by a scan of the whole successful history that requires each relevant record's natural key, inputs and result to describe one publication; a branch is published repeatedly, so the whole history is read in order and the run's last publication of that branch decides — an earlier one behind it is history rather than disagreement, while a last one naming another commit is the branch having moved on; that is conflicting, no relevant record at all is missing, and a relevant record that cannot be read whole is unreadable, each failing locally before the Git host is observed; the first adapter works over `github.com` on REST plus the two GraphQL draft transitions, selected from the private retained locator, credentialed from `GH_TOKEN`, then `GITHUB_TOKEN`, then the machine's own `gh` login, issuing each required mutation at most once per attempt and deciding the outcome by one observation, with the locator, endpoint, credential and payload confined to the per-invocation provider closure | built on the #295 stack, Deno provider only |
 | `<Issue>` | asks one of two questions, decided by its own shape, through a boundary of its own rather than the Git host's. Self-closing with `url` reads that issue and binds `{ url, title, description, tags, assignee }`; paired with `title` upserts and binds exactly `{ url }`, its rendered content being the description. There is no `description` prop. Props are exactly `url`, `title`, optional `tags`, optional `assignee` and — on a read only — optional `provider`; no repository/token/label/milestone/project/comment/close or approval prop. Both forms render nothing. The form is decided before the tracker is read, before any provider is asked and before an `issue_effect` record exists, and that is where a mixed `url`+`title`, a read carrying content or `tags`/`assignee`, an upsert with no content, an upsert naming a `provider`, and an element that is neither are all refused. A read needs no tracker — its URL is the identity; an upsert requires the nearest lexical `<IssueTracker>` and takes its discriminator only from there. The tracker carries a credential-free `url` and an optional `provider`; the URL is canonicalized — a credential, a query and a fragment are refused rather than stripped — and a nested tracker replaces the whole value for its descendants, never merging members, with the enclosing one restored on leaving. It is composition data, not authority: the provider holds an adapter-private ceiling beside its credentials, admitted before it connects, so a target outside it sends nothing. One stable contextual operation, `executablemd.workflow.issue`, with `read(url, options)` and `upsert(issue, options)`; a provider is ordinary middleware around it, matching its own URLs without a discriminator and only its own name with one, independently per member, with no host-side resolution. Once middleware matches it owns the answer — it never delegates afterwards, and nothing catches its refusal to try somebody else — and a request everyone delegated reaches `NoIssueProvider` unchanged. `issue_effect` records an operation discriminator with the normalized request and result; both forms replay without reaching `IssueApi` and therefore without network access; only an upsert derives an idempotency key, from the operation, the canonical target and the run's own effect identity. Retention excludes credentials, endpoints, payloads, provider identities, origin markers and host paths. Observing, adopting, creating once and recovering an interrupted creation are the provider's, because they are knowledge about what a service can prove; title is never identity, and tags are a code-point-sorted set. The Deno workflow host installs configured GitHub middleware and installs none otherwise, so absence of configuration is fail-closed | built on the #296 stack; GitHub middleware, Deno host |
-| workflow lifecycle inspection and control | reads status/list/history without advancing a run, recovering a private copy when a crashed source needs rollback; enforces the executor lock, refuses live cancellation, cancels non-live runs under that lock and deletes retained state | direct read-only inspection and control built on the #367 stack; coordinated recovered inspection built on the #513 stack, Deno provider only |
+| workflow lifecycle inspection and control | reads status/list/history without advancing a run, recovering a private copy when a crashed source needs rollback; enforces the executor lock, refuses live cancellation, cancels non-live runs under that lock and deletes retained state | direct read-only inspection and control built on the #367 stack; coordinated recovered inspection built on the #513 stack, Deno provider only; the durable owner answers the same status, list and history questions from one committed reading, taking no acquisition and appending nothing |
 | XMD artifact export, inspection and fork source | seals one run's committed retained state, Workspace roots and workflow definition source closure into one immutable `.xmd` evidence file; opens that file read-only for status/history and admits continuation only by creating a new history fork whose lineage names the artifact identity | specified by `specs/xmd-artifact-spec.md`; the version-1 sealed container, its total read-only verifier, `xmd workflow export` and artifact `status`/`history` are built, Deno provider only — the artifact-source fork remains unbuilt. Inspection is two sibling lifecycle operations, `inspectArtifact()` and `historyArtifact()`, taking a path rather than a run id: a run id names live lifecycle authority and a path names immutable evidence, so neither is a mode of the other. They reach no run store, lock, Workspace, definition reader or external provider, and the artifact path never enters the structural answer |
 | Agent session portability evidence in an XMD artifact | classifies every logical Agent session that contributed a retained Prompt as portable — with ordered provider checkpoint tokens and an opaque Agent session bundle — or as explicitly unavailable, as two content kinds inside the existing version-1 manifest and identity | specified by `specs/xmd-artifact-spec.md` §2.5; the closed union, both content kinds and the complete post-identity profile verifier are built on the #621 stack, Deno provider only. Provider bundle capture, Agent-aware export, intrinsic Agent-aware inspection and artifact-backed fork are unbuilt |
 | historical authored source | retains an authored durable operation's normalized `SourcePosition` beside its identity, and history parses it or refuses the entry | built on the #367 stack |
-| history fork | creates a new run from one compatible checkpoint and retained Workspace root, under a new immutable definition and normalized props | built on the #368 stack, Deno provider only |
+| history fork | creates a new run from one compatible checkpoint and retained Workspace root, under a new immutable definition and normalized props | built on the #368 stack; both providers — the durable owner copies the selected prefix and roots into a destination that commits whole or not at all, and neither side is mutated when the fork is refused |
 | workflow Agent session | a workflow document's `<Agent>` runs under a profile the host attaches only for a live or partial run: an empty host-owned working directory instead of any Workspace, checkout or caller path, no MCP servers, an empty requested native tool set, and `deny-all` with a permission path that denies every native request and fails the turn that asked without reaching the public permission chain. Within a run a session is identified by the Agent/Session expansion identity the engine derived — the authored name is descriptive, so two sibling `<Session name="review">` elements are two sessions — routed inside a placement bound to its element and good for one use, so a kept placement cannot be substituted for the next. The conversation is retained as a row in the run's own database with the provider, resolved agent command and policy fingerprint beside it as compatibility attributes. The order is provider creation, the provider's canonical tagged assertion, the mapping commit, then the first Prompt; occupancy of a provider key is not an assertion, the pre-commit window reconciles only from exactly one, and a missing, conflicting, replaced or ambiguous assertion is one explicit refusal that starts no replacement. Deleting a run removes the row with the run and the provider-session directory beside it, and reports the categories. The profile selects ACP-only capability explicitly — no native-launch advertisement and no client-native attachment advertisement — rather than inheriting the provider package's ordinary-run sets by omission, and it supplies no machine session coordinator, construction-route store or executable observer: a workflow session belongs to a run, and the machine-wide account describes a different thing entirely | built on the #302 stack, with the explicit ACP-only selection from #561; the portable proof that an adapter honours an empty tool set is tracked by #496 and does not widen the ceiling |
 | generated-XMD admission | admits one Agent-generated fragment through the trusted-host seam: host policy is a `read` table and a `write` table of exact pinned identities, each carrying the authored forms it is admitted for, and an authored `allow` selects a canonical non-empty subset of the closed classes — omitted means `read`. The complete source is preflighted inside one `generated_xmd` durable effect before its first generated effect; only the pinned identity the selected classes hold for that name **and** that form executes; and the admitted source, class selection, selected root, every selected entry with its forms, the identity and form of each element named, and the normalized request policy are retained in that effect's own result — so a continuation restores the decision without reading the current candidate and expands only the retained source. The roots are an as-of-admission retained basis checked by membership — the run's own later root publications and an advanced retained current root pass, while a lost admission root or lost selected root refuses — and every non-root term is checked exactly, refusing a run whose classes, identities, forms or requests have moved. The admission and every nested generated effect are offered inline by the owning expansion in authored order, so a partial continuation restores each completed one without another live execution. Each admitted effect is retained by its own ordinary record, and a read's value is collected while a mutation's is not | built on the #369 stack, continuation basis amended by #589; core owns the mechanics and the workflow policy wrapper is internal |
 | `<Evaluate source>` | the workflow host's component an authored document writes where an observation should happen. The host does not register it: it **declares** it to the execution through `ExecutionInstallation.components`, captured before any installation runs, and canonical execution calls its factory once for that attachment with the claimant it minted and registers what comes back. Registration provides availability only — a name a trusted document may write — and carries none of the authority. Its schema is closed on one required `source` string and one optional `allow` array selecting a non-empty duplicate-free subset of the closed effect classes `read` and `write` — omitted means `read` — and paired content is refused. It declares no `returns` and answers with a detached value — `{ observations: [{ name, value }], output }`, each admitted read's own returned value under the name the fragment invoked it by, in invocation order, with whatever the fragment rendered under `output` rather than instead of them, and the pinned identity that produced one left in the retained admission rather than copied here — so an admitted `<Fetch>`, which renders nothing at all, still reaches the document. An admitted mutation contributes no entry and no receipt, so a write-only fragment binds `{ observations: [], output: "" }`; `as` is valid for every selection and binds that same shape. An ordinary `as` captures that value by reference, and an authored `<Json>` renders it into the next `<Prompt>`: deciding how a value becomes text is the document's. Every ceiling comes from values the host captured at installation — the run's retained roots and its authoritative current root read from the run's own storage at invocation, as-of-admission provenance a continuation holds by membership so the run's own later publications and an advanced retained current root invalidate nothing, core's pinned self-closing `<File>` read, the write table of core's paired `<File>`, this package's lexical `<Dir>` built from the definition the ordinary registration owns, and core's self-closing `<File.Delete>`, and `<Fetch>` only when the captured request ceiling is non-empty — and no prop, binding, context or middleware return value supplies or widens one. `allow` selects among those tables and adds nothing to them; approval, when a workflow needs one, is authored control flow before the element. Its durable operation is named through that claimant, on the exact invocation the engine handed it and in that invocation's own frame — not from a context a document could rebind, a contextual Api answer, a definition, or a registry answer. Generated source never resolves through the registration: the evaluator consults only its own closed table of pinned identities. It is deliberately not wrapped in `printErrors`, so a refused fragment stops the authored loop rather than becoming text the next turn could read as a read that happened | built on the #302 stack, extended by #369 |
@@ -3303,6 +3528,19 @@ Status is measured against main.
 | `xmd workflow answer <run-id> <suspension-id> <json>` | retains one schema-validated value for one retained wait, taking no executor lock and changing no run state | built by #300 |
 | `suspension_answer` durable effect | ends a wait from retained delivery state, publishing the answer and consuming that state in one transaction | built by #300 |
 | `<PullRequest.Reviews>` · `<PullRequest.Comments>` · `<PullRequest.Checks>` | read the reviews, comments and checks a Git host already holds for one numbered pull request, completely or not at all | built by #576 |
+| `<Issue.Comment url as>` | adds one comment to the issue a canonical URL names, from the paired content it renders, reconciled as an Issue-provider effect whose natural key is that URL plus the engine-derived effect identity — the body is presentation, so an edited sentence is the same comment | specified by #710; implementation unbuilt |
+| `<PullRequest.Comment url as>` | adds one comment to the pull request a canonical URL names, from the paired content it renders, reconciled as a Git-host effect keyed by that URL plus the engine-derived effect identity | specified by #710; implementation unbuilt |
+| `<Project.Status item field option as />` | publishes one item's status to a Project provider — a boundary of its own, because a board owns neither a repository nor an issue collection — keyed by the exact item and field, against the option the item currently holds, inside the host's configured project, field and option ceiling | specified by #710; implementation unbuilt |
+| `<PullRequest.Ready url as />` · `<PullRequest.Close url as />` | take one pull request out of draft, and close one unmerged, as Git-host effects keyed by their exact subject; readiness is authorized by an accepted review outcome rather than by observing the pull request | specified by #710; implementation unbuilt |
+| `<Issue.Close url reason as />` | closes one issue as `completed` or `not_planned`, as an Issue-provider effect keyed by its exact subject, with the reason a closed enum that must match the retained terminal intent | specified by #710; implementation unbuilt |
+| `<Git.Merge firstParent secondParent mergeBase purpose as />` | merges two exact commits inside the retained Workspace, observing and fixing both parents and the merge base first; a clean result publishes commit, root and filtered result in one effect transaction, and a conflicted one restores the pre-merge root and publishes normalized conflict evidence. The parent order is the caller's — synchronizing a target into an implementation and publishing an implementation onto a target are opposite operations — and `purpose` authorizes it rather than merely recording it: the provider-authenticated merge ceiling supplies the pair each purpose may carry, and a swapped, stale or cross-purpose parent refuses before any Git mutation | specified by #710; implementation unbuilt |
+| `<Git.PublishTarget expectedRemoteCommit sourceCommit reviewedHead as />` | updates a protected target ref by compare-and-swap: one non-force update after observing the target equal to the expected commit, adoption of a target already equal to the exact source commit, and refusal of everything else without mutation; remote, ref, credential and non-force policy are host-owned. Not a spelling of `Git.Push`, which advances a branch this run published from a proved ancestry relation | specified by #710; implementation unbuilt |
+| `<Evidence.Run commands as />` | runs an authored structured argv list natively on the trusted runner against one exact retained Workspace root, under host-owned executable, environment, working-root, per-command duration, whole-run duration, output and process-tree ceilings; a fail-fast pipeline that stops at the first command not exiting `0` and binds the executed prefix — how it completed, how many commands were authored, and one row per command that ran carrying argv, how it ended, which ceiling fired on a timeout, and separately bounded stdout and stderr that state their own truncation; a launch, output-pump or teardown failure binds no result while retaining bounded error evidence, and cancellation commits nothing; absent from the workflow Agent's capabilities and from every generated-XMD write table, and a completed replay runs nothing | specified by #710; implementation unbuilt |
+| `<PullRequest.Merged url expectedMergeCommit as />` | observes that a Git host now records one pull request as merged, at the exact commit a target publication published; a reconciled Git-host observation that mutates nothing, whose only completion is adoption, keyed by the canonical pull-request URL — a merge at another commit conflicts, a pull request still open is temporary unavailability the run waits out under a bounded retry and then a durable machine wait, one closed unmerged conflicts, and publication does not imply any of it | specified by #710; implementation unbuilt |
+| remote `WorkflowHost` implementation | keeps the existing four-method host boundary — `useRunHost()`, `useLifecycle()`, `useDelivery()`, `attach()` — and adds a Cloudflare runtime-named implementation of it beside the Deno one; start, lookup, execute, deliver and inspect stay lifecycle operations reached through those four rather than becoming method names, and a remote host receives no transitions type of its own. One SQLite-backed Durable Object per run is selected from the public run ID, and executor acquisition is an authenticated connection lifetime | built: one SQLite-backed Durable Object per run owns create/lookup, coherent reads, lifecycle transitions and settlement, stale recovery, fork and staging, Workspace publication, delivery and consumption, inspection and history, and completed replay, reached over three request planes and one gateway that routes by run id; one configured client — run id, credential-free endpoint, release identity, per-request token, host I/O — is bound to one owner, and trusted code assembles it into the same four methods with an attachment bound by identity to the handle its own lifecycle opened. Unbuilt: any selector or ambient source that would choose this host, and any deployment |
+| provider-neutral lifecycle transition types | `WorkflowExecutionTransitions`, `WorkflowBeginRequest`, `WorkflowExecutionBegun`, `WorkflowForkRequest`, `WorkflowForkSelection` and `WorkflowRunCreation` describe what any host's lifecycle does rather than what one adapter retains, and become package-root public types; the Deno entrypoint may re-export them for source compatibility without owning their meaning, while runtime-specific implementations and retained encodings stay behind their runtime-named entrypoints | built: neutrality settled by #710, and the types are package-root public types re-exported by the Deno entrypoint for source compatibility |
+| same-release runner transport | the messages between an ephemeral runner client and its durable owner are private to one software-factory release: not journaled, exported, authored or supported across independently versioned builds. Connection admission validates an exact immutable build or protocol fingerprint from trusted deployment configuration and refuses a mismatch closed, before parsing, acquisition or state access; there is no cross-version adaptation or downgrade. Privacy of the transport is not privacy of the authority — the acquisition, expected-root validation, owner-side parsing and transactions, content validation, separate no-acquisition delivery and inspection paths, and provider-free completed replay stay public and exact | built: admission validates the exact release identity and refuses a mismatch closed before parsing, acquisition or state access, and the private paths, header names, commands and refusal spellings are named in no public type, journal record, export or documented protocol — one refusal category crosses, the one that says another live executor holds the run. Which release identity a deployment supplies is deployment configuration, and no deployment exists |
+| factory protocol records | the closed versioned schemas `specs/github-actions-software-factory-spec.md` §11.2 defines — and normatively owns, every other document linking to it rather than restating it — for the subject, stage, implementation revision, handoff, actor, role outcome, invalidation, evidence reference, Planner and Architect verdicts, conflict suspension, Stage 7 decision, merged-observation wait, stage-to-option table, active frontier and the two terminal settlements one issue-driven run retains. Each carries a schema discriminant and a version, and an unknown schema, version, member or enum value refuses rather than being ignored — provider-neutral durable protocol, neither an XMD component nor a TypeScript lifecycle controller | specified by #710; implementation unbuilt |
 | workflow scheduling (watchers, unattended iteration, remote host selection) | — | #300 |
 | `<Result as>` | binds `{ok: true, value}` or `{ok: false, error}`; a failure becomes a bound value, not a raise | defined, unbuilt |
 | error middleware (JS api) | retry · suspend · decline | defined, unbuilt |

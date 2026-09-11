@@ -5,9 +5,15 @@
   "type": "module",
   "exports": {
     ".": "./mod.ts",
-    "./host": "./host.ts"
+    "./canonicalize": "./canonicalize.ts",
+    "./component-name": "./component-name.ts",
+    "./document-target": "./document-target.ts",
+    "./host": "./host.ts",
+    "./elicitation": "./elicitation.ts",
+    "./secrets": "./secrets.ts"
   },
   "dependencies": {
+    "@cfworker/json-schema": "^4.1.1",
     "@effectionx/context-api": "0.6.0",
     "@effectionx/converge": "0.1.4",
     "@effectionx/fetch": "0.2.1",

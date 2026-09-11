@@ -44,7 +44,9 @@
 
 import { type Api, createApi } from "@effectionx/context-api";
 import type { Operation } from "effection";
-import { canonicalFingerprint, type Json, type JsonObject } from "@executablemd/core";
+import type { Json } from "@executablemd/durable-streams";
+import type { JsonObject } from "../storage/members.ts";
+import { fingerprintOfValue } from "./fingerprint.ts";
 import { WorkflowStorageError } from "../storage/errors.ts";
 
 /** What one durable wait is for, and what may end it. */
@@ -148,7 +150,7 @@ export function parseSuspensionRequest(value: unknown): WorkflowSuspensionReques
  * answer to the same question.
  */
 export function suspensionRequestFingerprint(request: WorkflowSuspensionRequest): string {
-  return canonicalFingerprint({
+  return fingerprintOfValue({
     request: request.request,
     responseSchema: request.responseSchema,
   });
