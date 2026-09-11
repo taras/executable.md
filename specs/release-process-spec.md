@@ -49,7 +49,8 @@ sequenceDiagram
 ## 2. Version lockstep
 
 Every publishable package (`packages/core`, `packages/cli`,
-`packages/durable-streams`, `packages/runtime`, `packages/testing`,
+`packages/durable-streams`, `packages/runtime`, `packages/terminal`,
+`packages/testing`,
 `packages/code-review-agent`, `packages/test-agent`, `packages/acp`,
 `packages/web`, `packages/workflow`) declares the same version in its `deno.json` and
 `package.json`. A member marked `"private": true` is outside the lockstep

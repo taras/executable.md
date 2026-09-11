@@ -1,35 +1,60 @@
 /**
- * How a terminal provider is installed, and what installing one grants.
+ * How a grid request reaches a provider, and how a provider is installed.
  *
- * A provider is the only thing that can present a grid, so *selecting* one is
- * itself a presentation decision. Returning a factory up the public chain would
- * mean any handler could answer with a factory of its own — or take the one it
- * was given and install it somewhere else.
+ * **Routing is routing, and only routing.** Middleware here may observe,
+ * narrow, refuse, wrap or delegate one grid request. What it cannot do is open
+ * a grid: `open()` answers `unknown`, and the answer is thrown away. The
+ * capability that takes the terminal lease and settles a grid is the
+ * non-contextual presentation function delivered straight to the registered
+ * provider, so a handler that answers without delegating has presented nothing
+ * and settled nothing.
  *
- * So nothing is returned. Public middleware receives one frozen, one-use
- * install request naming the provider and its normalized options, and may
- * inspect it, refuse by throwing, or delegate it. The registered provider's
- * handler sits at the terminal end of that chain and holds its own captured
- * continuation — a parameter of its generator, carried by no request and no
- * return value. Through that continuation, and only through it, the invocation
- * terminal hands the factory this execution's presentation function and records
- * that the provider acknowledged installation.
- *
- * Registration is scope-local: a nested registration overrides an outer one for
- * its own name without touching siblings or process-global state.
- *
- * This is the same handshake `AgentProviders` uses, deliberately. The two
- * capabilities are different — one hands a child the whole terminal, one
- * divides it into panes — but the question "who may install the thing that
- * performs it" has one right answer, and two spellings of it would be two
- * chances to get it wrong.
+ * Installation works the same way, and deliberately mirrors the Agent provider
+ * handshake. Selecting a provider *is* a presentation decision, so nothing is
+ * returned up the public chain: public middleware receives one frozen, one-use
+ * install request and may inspect it, refuse by throwing, or delegate it. The
+ * registered provider's handler sits at the terminal end of that chain and
+ * holds its own captured continuation — a parameter of its generator, carried
+ * by no request and no return value. Through it, and only through it, the
+ * invocation terminal hands the factory this execution's presentation function
+ * and records that the provider acknowledged installation.
  */
 
 import { type Api, createApi } from "@effectionx/context-api";
 import { ensure } from "effection";
 import type { Operation } from "effection";
 
-import type { PresentTerminalGrid } from "./presentation.ts";
+import { TerminalProviderInstallError, TerminalProviderUnavailableError } from "./errors.ts";
+import type { PresentTerminalGrid } from "./host.ts";
+import type { TerminalGridRequest } from "./layout.ts";
+
+/** The stable name every loaded copy composes through. */
+export const TERMINAL_GRIDS_API = "TerminalGrids";
+
+export interface TerminalGridApi {
+  /**
+   * Route one grid request to whatever presents it.
+   *
+   * Answers `unknown`, and the answer is discarded: a return value is not
+   * evidence that a grid was opened, and the lifecycle reads what presentation
+   * settled instead of what a handler said.
+   */
+  open(request: TerminalGridRequest): Operation<unknown>;
+}
+
+/**
+ * The public routing surface. Its own default always refuses.
+ *
+ * Reaching this default means no registered provider consumed the request, so
+ * nothing was presented — which is the honest answer for a host that installs
+ * no provider at all.
+ */
+export const TerminalGrids: Api<TerminalGridApi> = createApi<TerminalGridApi>(TERMINAL_GRIDS_API, {
+  // deno-lint-ignore require-yield
+  *open(_request: TerminalGridRequest): Operation<unknown> {
+    throw new TerminalProviderUnavailableError();
+  },
+});
 
 /** What a host says about the provider it is installing. */
 export interface TerminalProviderOptions {
@@ -81,10 +106,6 @@ export interface TerminalProviderApi {
    * and the invocation that issued the request ignores it.
    */
   install(call: TerminalProviderCall): Operation<unknown>;
-}
-
-export class TerminalProviderInstallError extends Error {
-  override name = "TerminalProviderInstallError";
 }
 
 /**
@@ -171,7 +192,7 @@ function deliveryOf(value: unknown): {
   }
   return {
     options: { label },
-    present: (request, grid) => Reflect.apply(present, undefined, [request, grid]),
+    present: (request, provider) => Reflect.apply(present, undefined, [request, provider]),
   };
 }
 

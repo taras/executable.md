@@ -5,7 +5,7 @@
  * `API` is available for middleware (`.around()`).
  * For normal calls, import operations directly.
  *
- * Seven domain APIs:
+ * Six domain APIs:
  * - `API.Process` — subprocess execution (`exec`)
  * - `API.Fs` — the low-level host filesystem (`readTextFile`, `writeTextFile`,
  *   `stat`, `lstat`, `readDirectory`, `glob`, `realpath`, `ensureDir`, `rename`,
@@ -17,8 +17,6 @@
  *   this xmd, and eval-block compilation
  *   (`cwd`, `env`, `platform`, `command`, `compile`)
  * - `API.Service` — scoped attached service startup (`startService`)
- * - `NativeLauncher` — handing one native agent UI the foreground terminal
- *   (`reserveTerminal`, `flushOutput`, `nativeLaunch`)
  * - `Config` — shared execution config (`timeout`, `timeoutExec`, `timeoutFetch`,
  *   `verbose`)
  *
@@ -129,43 +127,6 @@ export type {
   FileWriteTarget,
   GlobInput,
 } from "./files.ts";
-export {
-  flushOutput,
-  installControlledLauncher,
-  installForegroundLauncher,
-  NATIVE_LAUNCHER_UNAVAILABLE,
-  NativeLauncher,
-  NativeLauncherUnavailableError,
-  nativeLaunch,
-  NO_TERMINAL,
-  reserveTerminal,
-} from "./launcher.ts";
-export type {
-  ControlledLauncherOptions,
-  NativeLauncherHandler,
-  NativeLaunchOutcome,
-  NativeLaunchRequest,
-} from "./launcher.ts";
-export {
-  controlledTerminalGrid,
-  TERMINAL_GRIDS_API,
-  TERMINAL_PROVIDER_UNAVAILABLE,
-  TerminalGrids,
-  terminalProviderLog,
-  TerminalProviderUnavailableError,
-} from "./terminal.ts";
-export type {
-  ControlledTerminalGridOptions,
-  TerminalActivity,
-  TerminalGrid,
-  TerminalGridApi,
-  TerminalGridRequest,
-  TerminalPaneRequest,
-  TerminalPaneState,
-  TerminalProviderLog,
-  TerminalProviderResources,
-  TerminalShellOutcome,
-} from "./terminal.ts";
 export { hostFilesHandler, useHostFiles } from "./host-files.ts";
 export type { HostFilesEvent, HostFilesObserver, HostFilesOptions } from "./host-files.ts";
 export {

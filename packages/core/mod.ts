@@ -152,29 +152,13 @@ export { DocumentOutput } from "./src/api.ts";
 export type { DocumentOutputApi } from "./src/api.ts";
 export { useNormalizedOutput } from "./src/output/normalize.ts";
 export { useTerminalOutput } from "./src/output/terminal.ts";
-// Only what a provider needs: the refusal it can meet, and the shape of the
-// function it is handed. Issuing a grid, opening an installation and converging
-// the two are core's own, and a host reaches the whole of it through
-// `installTerminalGridProfile`.
-export { TerminalGridPresentationError } from "./src/terminal/presentation.ts";
-export type { PresentTerminalGrid } from "./src/terminal/presentation.ts";
-export {
-  installTerminalProvider,
-  registerTerminalProvider,
-  TERMINAL_PROVIDERS_API,
-  TerminalProviderInstallError,
-  TerminalProviders,
-} from "./src/terminal/provider-api.ts";
-export type {
-  TerminalProviderFactory,
-  TerminalProviderInstallRequest,
-  TerminalProviderOptions,
-} from "./src/terminal/provider-api.ts";
+// A host reaches the whole terminal-grid capability through
+// `installTerminalGridProfile`; the contracts a provider composes against live
+// in `@executablemd/terminal` and are imported from there.
 export { installTerminalGridProfile } from "./src/terminal/profile.ts";
 export type { TerminalGridProfileOptions } from "./src/terminal/profile.ts";
-export { paneTerminal } from "./src/terminal/pane.ts";
-export type { PaneTerminal } from "./src/terminal/pane.ts";
-export type { PaneStatus, RetainedGrid, RetainedPaneOutcome } from "./src/terminal/grid.ts";
+export { createTerminalGridJournal } from "./src/terminal/journal.ts";
+export type { GridIdentity } from "./src/terminal/journal.ts";
 
 export { execute, Execution } from "./src/execute.ts";
 export type {

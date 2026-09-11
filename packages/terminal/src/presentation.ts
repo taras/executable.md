@@ -1,14 +1,13 @@
 /**
- * Who may present a grid, and for which request (architecture.md §Terminal
- * presentation).
+ * Who may present a grid, and for which request.
  *
  * The provider draws a grid. This decides one thing about it: whether the
- * request being presented is the exact one core issued, under the installation
- * that issued it, and not one that has been presented already. Nothing else
- * here decides anything — and nothing here owns a grid.
+ * request being presented is the exact one the lifecycle issued, under the
+ * installation that issued it, and not one that has been presented already.
+ * Nothing else here decides anything — and nothing here owns a grid.
  *
  * Ownership belongs to the expansion that submitted it. A grid runs beneath
- * that operation, so its panes keep the durable identity and the bindings of
+ * that operation, so its cells keep the durable identity and the bindings of
  * the document position that wrote them, and structured concurrency takes the
  * grid down whenever that operation unwinds.
  *
@@ -19,44 +18,27 @@
  * the submitting expansion itself, so nothing here can keep a grid running
  * after the work that asked for it has gone. A request reaching this from
  * anywhere else — copied, rebuilt, kept from another grid, belonging to a
- * superseded installation, or already used — presents nothing.
+ * superseded installation, or already used — presents nothing, and the
+ * provider is never touched.
  */
 
 import { createContext } from "effection";
 import type { Context, Operation } from "effection";
-import type { TerminalGrid, TerminalGridRequest } from "@executablemd/runtime";
 
-export class TerminalGridPresentationError extends Error {
-  override name = "TerminalGridPresentationError";
-}
-
-/**
- * What a registered provider is handed, and the only way to present.
- *
- * Delivered directly to the provider factory as it installs, and reachable
- * nowhere else: it does not travel through a context, a request, a result, a
- * prop, a binding or a durable record. Presenting the exact request core issued
- * is what runs the grid; anything else authorizes nothing.
- *
- * The grid arrives as a resource the provider owns. Core acquires it only once
- * the presentation has been admitted, so a refused presentation costs the
- * provider nothing at all, and releases it exactly once however the grid ends.
- */
-export type PresentTerminalGrid = (
-  request: TerminalGridRequest,
-  grid: Operation<TerminalGrid>,
-) => Operation<void>;
+import { TerminalGridPresentationError } from "./errors.ts";
+import type { PresentTerminalGrid, TerminalGridProvider } from "./host.ts";
+import type { TerminalGridRequest } from "./layout.ts";
 
 /** One grid an expansion submitted, and what it is waiting to be given. */
-interface IssuedGrid {
-  /** The exact request object core issued. Compared by identity, never shape. */
+export interface IssuedGrid {
+  /** The exact request object the lifecycle issued. Compared by identity, never shape. */
   readonly request: TerminalGridRequest;
   /** The installation this grid belongs to. */
   readonly generation: object;
   /** Whether this request has already been presented. */
   used: boolean;
   /** Run the grid, beneath the operation that submitted it. */
-  run(grid: Operation<TerminalGrid>): Operation<void>;
+  run(provider: TerminalGridProvider): Operation<void>;
 }
 
 /**
@@ -70,7 +52,7 @@ export function createPresentTerminalGrid(
   generation: object,
   issued: ReadonlySet<IssuedGrid>,
 ): PresentTerminalGrid {
-  return function* present(request, grid) {
+  return function* present(request, provider) {
     const found = [...issued].find((candidate) => Object.is(candidate.request, request));
     if (found === undefined) {
       throw new TerminalGridPresentationError(
@@ -88,10 +70,11 @@ export function createPresentTerminalGrid(
         "this grid request has already been presented — one request opens one grid",
       );
     }
-    // Admitted before the provider's grid is touched: a refused presentation
-    // acquires nothing and leaves the provider holding nothing.
+    // Admitted before anything of the provider's is touched: a refused
+    // presentation creates no store, acquires no host, and leaves the provider
+    // holding nothing.
     found.used = true;
-    yield* found.run(grid);
+    yield* found.run(provider);
   };
 }
 
@@ -112,7 +95,7 @@ export interface TerminalInstallation {
 
 const Installation: Context<TerminalInstallation | undefined> = createContext<
   TerminalInstallation | undefined
->("core.terminal.installation", undefined);
+>("terminal.installation", undefined);
 
 /**
  * Open one terminal installation for a live document, and hand back the
@@ -138,5 +121,3 @@ export function* useTerminalInstallation(): Operation<PresentTerminalGrid> {
 export function terminalInstallation(): Operation<TerminalInstallation | undefined> {
   return Installation.get();
 }
-
-export type { IssuedGrid };

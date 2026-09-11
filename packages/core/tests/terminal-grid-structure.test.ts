@@ -23,7 +23,7 @@ import { Component } from "../src/component-api.ts";
 import { expandSegments } from "../src/expand.ts";
 import { renderSegments } from "../src/render.ts";
 import { scanSegments } from "../src/scanner.ts";
-import { terminalGridLayout } from "../src/terminal-grid.ts";
+import { terminalGridLayout } from "@executablemd/terminal";
 import type { Json, Segment } from "../src/types.ts";
 
 interface GridRun {

@@ -20,6 +20,7 @@
     "@effectionx/timebox": "0.4.3",
     "@executablemd/durable-streams": "workspace:*",
     "@executablemd/runtime": "workspace:*",
+    "@executablemd/terminal": "workspace:*",
     "@secretlint/core": "13.0.4",
     "@secretlint/profiler": "13.0.4",
     "@secretlint/secretlint-rule-preset-recommend": "13.0.4",

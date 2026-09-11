@@ -33,14 +33,10 @@ import { parsePrepared } from "../src/agent/launch-journal.ts";
 import type { AgentLaunchRequest } from "../src/agent/launch-request.ts";
 import { installAgentComponents } from "../src/agent/components.ts";
 import type { AgentProviderFactory } from "../src/agent/provider-api.ts";
-import {
-  API,
-  installControlledLauncher,
-  NATIVE_LAUNCHER_UNAVAILABLE,
-  nativeLaunch,
-  useHostFiles,
-} from "@executablemd/runtime";
-import type { NativeLaunchOutcome, NativeLaunchRequest } from "@executablemd/runtime";
+import { API, useHostFiles } from "@executablemd/runtime";
+import { NATIVE_LAUNCHER_UNAVAILABLE, nativeLaunch } from "@executablemd/terminal";
+import type { NativeLaunchOutcome, NativeLaunchRequest } from "@executablemd/terminal";
+import { installControlledLauncher } from "@executablemd/terminal/test";
 import type { Json } from "../src/types.ts";
 
 const ALPHABET = "abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ";

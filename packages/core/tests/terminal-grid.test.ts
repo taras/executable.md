@@ -1,29 +1,32 @@
 /**
- * Tier TG — running a terminal grid through a replaceable provider
- * (spec §6.21, architecture.md §Terminal grid presentation, §Atomic presentation and
+ * Tier TG — a terminal grid written in a document (spec §6.21,
+ * architecture.md §Interactive terminal grids, §Atomic presentation and
  * settlement, §Durability and replay).
  *
- * The provider here is controlled and is not tmux: it opens no terminal, starts
- * no process, and records what it was asked to do in the order it was asked.
- * Every ordering claim is read off that record. Nothing is inferred from
- * timing, because a grid that attached too early and one that attached on time
- * take the same wall clock.
+ * These rows are about what core contributes: the authored structure it
+ * resolves, the lazy cell work it constructs, the journal it describes, and
+ * what a document sees when a grid runs, fails, closes or replays. The
+ * provider-neutral lifecycle those rows run on is proved in
+ * `packages/terminal/tests/terminal-grid.test.ts`.
+ *
+ * The provider here is controlled and is not tmux: it opens no terminal,
+ * starts no process, and records what it was asked to do in the order it was
+ * asked. Every ordering claim is read off that record. Nothing is inferred
+ * from timing, because a grid that showed too early and one that showed on
+ * time take the same wall clock.
  *
  * Readiness is the claim these rows care about most, so it is always driven
- * explicitly: a pane becomes ready because work in it acquired a terminal
- * activity, never because it got far enough. That is what lets "started" and
- * "did some work" be told apart at all.
- *
- * A paired pane is ready only once something in it acquires a terminal activity
- * through `PaneTerminal.use()`. Until the native-launch Story lands,
- * `<Interactive />` is what a suite writes to be that something — and it reaches
- * the pane through the same seam a real `<Session.Launch>` will.
+ * explicitly: a cell becomes ready because work in it acquired a terminal
+ * activity, never because it got far enough. `<Interactive />` is what a suite
+ * writes to be that something, and it reaches the cell through the same
+ * contextual handle a real `<Session.Launch>` will.
  */
 
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import {
   ensure,
+  Err,
   race,
   resource,
   scoped,
@@ -42,41 +45,35 @@ import { join } from "node:path";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import type { DurableEvent } from "@executablemd/durable-streams";
 import {
-  controlledTerminalGrid,
-  installControlledLauncher,
+  registerTerminalProvider,
   reserveTerminal,
   TerminalGrids,
-  terminalProviderLog,
-} from "@executablemd/runtime";
+  useTerminalCellUI,
+} from "@executablemd/terminal";
 import type {
-  ControlledTerminalGridOptions,
   TerminalActivity,
-  TerminalShellOutcome,
-  TerminalGrid,
+  TerminalCellUI,
   TerminalGridRequest,
+  TerminalGridState,
+  TerminalShellOutcome,
+} from "@executablemd/terminal";
+import {
+  controlledTerminalProvider,
+  installControlledLauncher,
+  terminalProviderLog,
+} from "@executablemd/terminal/test";
+import type {
+  ControlledProviderOptions,
   TerminalProviderLog,
   TerminalProviderResources,
-} from "@executablemd/runtime";
+} from "@executablemd/terminal/test";
+import { useTerminalInstallation } from "@executablemd/terminal/lifecycle";
+import type { PresentTerminalGrid } from "@executablemd/terminal/lifecycle";
 
 import { Component } from "../src/component-api.ts";
 import { execute } from "../src/execute.ts";
 import { registerComponents } from "../src/components/registration.ts";
-import {
-  TerminalGridPresentationError,
-  useTerminalInstallation,
-} from "../src/terminal/presentation.ts";
-import type { PresentTerminalGrid } from "../src/terminal/presentation.ts";
-import {
-  installTerminalProvider,
-  registerTerminalProvider,
-  TerminalProviderInstallError,
-  TerminalProviders,
-} from "../src/terminal/provider-api.ts";
 import { installTerminalGridProfile } from "../src/terminal/profile.ts";
-import { paneTerminal } from "../src/terminal/pane.ts";
-import type { PaneTerminal } from "../src/terminal/pane.ts";
-import { createCloseBoundary, openTerminalGrid } from "../src/terminal/grid.ts";
-import type { PaneWork, RetainedGrid } from "../src/terminal/grid.ts";
 import type { Json } from "../src/types.ts";
 
 /** One document run against a controlled grid host. */
@@ -86,9 +83,9 @@ interface DocumentRun {
   output: string;
   /** The grid the provider was actually asked to present. */
   requests: TerminalGridRequest[];
-  /** What each pane displayed. */
+  /** What each cell displayed, by authored position. */
   shown: Map<number, string>;
-  /** Everything the provider's grid did, in order. */
+  /** Everything the provider's host did, in order. */
   events: string[];
   /** Every mark a tripwire component recorded, in order. */
   ran: string[];
@@ -130,31 +127,23 @@ function done<T>(value: T): Operation<T> {
 /**
  * An activity whose child spawned and is already finished.
  *
- * The ordinary case a row wants when it only needs a pane to be ready: acquired
- * at once, settled at once.
+ * The ordinary case a row wants when it only needs a cell to be ready:
+ * acquired at once, settled at once.
  */
-function startsAndSettles(onStart?: () => void): TerminalActivity<void> {
+function startsAndSettles(onStart?: () => void): TerminalActivity<TerminalShellOutcome> {
   return resource(function* (provide) {
     onStart?.();
-    yield* provide(done(undefined));
-  });
-}
-
-/** An activity whose child spawned and stays until it is released. */
-function startsAndHolds(onStart?: () => void): TerminalActivity<void> {
-  return resource(function* (provide) {
-    onStart?.();
-    yield* provide(suspend());
+    yield* provide(done<TerminalShellOutcome>({ exitCode: 0 }));
   });
 }
 
 /**
  * An activity whose child never spawned.
  *
- * It fails during acquisition, which is before a pane could be ready — the
+ * It fails during acquisition, which is before a cell could be ready — the
  * shape of a preparation or spawn failure rather than of work that ran.
  */
-function neverStarts(onAttempt?: () => void): TerminalActivity<void> {
+function neverStarts(onAttempt?: () => void): TerminalActivity<TerminalShellOutcome> {
   return resource(function* () {
     onAttempt?.();
     throw new Error("this activity's child never spawned");
@@ -162,27 +151,26 @@ function neverStarts(onAttempt?: () => void): TerminalActivity<void> {
 }
 
 /**
- * What the pane-terminal rows read.
+ * What the cell-handle rows read.
  *
- * The claim factory these rows used to call directly is gone, and rightly: the
- * behaviour it carried is the grid's. So each of these is driven from inside a
- * real pane, through the same `PaneTerminal` a `<Session.Launch>` reaches, and
- * read back off an ordered record rather than inferred.
+ * Each of these is driven from inside a real cell, through the same
+ * `TerminalCellUI` a `<Session.Launch>` reaches, and read back off an ordered
+ * record rather than inferred.
  */
-interface PaneProbe {
+interface CellProbe {
   /** Refusals the document's own work collected, in the order they happened. */
   readonly refusals: string[];
-  /** Ordered marks: which pane entered and left its interactive work. */
+  /** Ordered marks: which cell entered and left its interactive work. */
   readonly marks: string[];
-  /** Pane terminals kept past their grid on purpose. */
-  readonly kept: PaneTerminal[];
-  /** Announce that this pane is inside its interactive body. */
+  /** Cell handles kept past their grid on purpose. */
+  readonly kept: TerminalCellUI[];
+  /** Announce that this cell is inside its interactive body. */
   entered(): void;
-  /** Settles once every pane this probe expects is inside one at the same time. */
+  /** Settles once every cell this probe expects is inside one at the same time. */
   overlapped(): Operation<void>;
 }
 
-function paneProbe(expected = 2): PaneProbe {
+function cellProbe(expected = 2): CellProbe {
   const all = withResolvers<void>();
   let inside = 0;
   return {
@@ -203,90 +191,13 @@ function refusalOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-/**
- * Open a grid and own the other side of its close boundary.
- *
- * `durableGrid()` owns that side in the document path: a grid proposes close and
- * waits, and something has to acknowledge. A row that drives the lifecycle
- * directly owns it here instead, or its grid waits for an owner that never
- * arrives.
- */
-function openGridWithCloseOwner(work: readonly PaneWork[]): Operation<RetainedGrid> {
-  return (function* (): Operation<RetainedGrid> {
-    const boundary = createCloseBoundary();
-    yield* spawn(function* () {
-      yield* boundary.proposed();
-      boundary.acknowledge();
-    });
-    return yield* openTerminalGrid(ONE_PANE, work, boundary);
-  })();
-}
-
-/**
- * Pane work that begins a terminal activity and never finishes acquiring one.
- *
- * The grid therefore sits at the readiness barrier with the provider's grid
- * held, which is a live grid a row can cancel without parking on a reader that
- * will never leave.
- */
-function startingPane(live: { resolve(): void }, finalized: string[], mark: string): PaneWork {
-  return {
-    ordinal: 0,
-    *run(terminal) {
-      yield* terminal.use(
-        resource<Operation<void>>(function* (provide) {
-          yield* ensure(() => {
-            finalized.push(mark);
-          });
-          live.resolve();
-          yield* suspend();
-          yield* provide(done(undefined));
-        }),
-      );
-    },
-  };
-}
-
-/** One authored pane, for the rows that drive the lifecycle directly. */
-const ONE_PANE = {
-  columns: 1,
-  rows: 1,
-  cells: [{ ordinal: 0, title: "a", row: 0, column: 0, form: "paired" as const }],
-};
-
-/** Pane work that acquires a terminal activity whose child is already finished. */
-function readyPane(opened: string[], mark: string): PaneWork {
-  return {
-    ordinal: 0,
-    *run(terminal) {
-      yield* terminal.use(startsAndSettles(() => opened.push(mark)));
-    },
-  };
-}
-
-/**
- * Pane work that starts and then stays, announcing that it is live.
- *
- * Its finalizer is what a row reads to know the grid was actually taken down
- * rather than left running: a pane nobody stopped never records one.
- */
-function holdingPane(live: { resolve(): void }, finalized: string[], mark: string): PaneWork {
-  return {
-    ordinal: 0,
-    *run(terminal) {
-      yield* terminal.use(
-        resource<Operation<void>>(function* (provide) {
-          // Acquired, so the pane is ready. Released only when something stops
-          // the grid, which is what the finalizer records.
-          yield* ensure(() => {
-            finalized.push(mark);
-          });
-          live.resolve();
-          yield* provide(suspend());
-        }),
-      );
-    },
-  };
+/** The cell handle the current work is running in, or a failed row. */
+function* cellHandle(name: string): Operation<TerminalCellUI> {
+  const cell = yield* useTerminalCellUI();
+  if (cell === undefined) {
+    throw new Error(`<${name} /> is written inside a <Terminal> cell`);
+  }
+  return cell;
 }
 
 /** The controlled interactive child, and a tripwire. */
@@ -294,10 +205,10 @@ function useGridComponents(
   ran: string[],
   slowMarks: string[] = [],
   onMark: (mark: string) => void = () => {},
-  afterAttach: () => Operation<void> = function* () {},
+  afterShow: () => Operation<void> = function* () {},
   teardownHeld: () => Operation<void> = function* () {},
   teardownArmed: () => void = () => {},
-  probe: PaneProbe = paneProbe(),
+  probe: CellProbe = cellProbe(),
 ): Operation<void> {
   return registerComponents([
     {
@@ -305,11 +216,8 @@ function useGridComponents(
       origin: "tier-tg",
       props: { type: "object", properties: {}, additionalProperties: false },
       *fn() {
-        const pane = yield* paneTerminal();
-        if (pane === undefined) {
-          throw new Error("<Interactive /> is written inside a <Terminal> pane");
-        }
-        yield* pane.use(startsAndSettles());
+        const cell = yield* cellHandle("Interactive");
+        yield* cell.shell();
         return "";
       },
     },
@@ -330,8 +238,8 @@ function useGridComponents(
       },
     },
     {
-      // Enters its pane's interactive body and stays there until every other
-      // pane is inside one too. Two panes that contended could never both be
+      // Enters its cell's interactive body and stays there until every other
+      // cell is inside one too. Two cells that contended could never both be
       // inside, so the wait is the proof; the deadline only turns a regression
       // into a failed assertion instead of a hung suite.
       name: "Concurrent",
@@ -343,100 +251,66 @@ function useGridComponents(
         additionalProperties: false,
       },
       *fn(props) {
-        const pane = yield* paneTerminal();
-        if (pane === undefined) {
-          throw new Error("<Concurrent /> is written inside a <Terminal> pane");
-        }
+        const cell = yield* cellHandle("Concurrent");
         const mark = String(props.mark);
-        yield* pane.use(
-          resource<Operation<void>>(function* (provide) {
-            // Acquired: this pane is ready and is holding its activity.
-            probe.marks.push(`enter:${mark}`);
-            probe.entered();
-            yield* provide(
-              (function* (): Operation<void> {
-                // Settlement waits for every other pane to be holding one too.
-                // Panes that contended could never all be here at once; the
-                // deadline only turns a regression into a failed assertion
-                // instead of a hung suite.
-                const together = yield* race([
-                  (function* (): Operation<boolean> {
-                    yield* probe.overlapped();
-                    return true;
-                  })(),
-                  (function* (): Operation<boolean> {
-                    yield* sleep(2000);
-                    return false;
-                  })(),
-                ]);
-                probe.marks.push(`together:${mark}:${together}`);
-              })(),
-            );
-          }),
-        );
+        probe.marks.push(`enter:${mark}`);
+        probe.entered();
+        yield* cell.shell();
         probe.marks.push(`leave:${mark}`);
         return "";
       },
     },
     {
-      // One pane, asked for two interactive operations at once and then for a
+      // One cell, asked for two interactive operations at once and then for a
       // second one after the first settled.
       name: "Overlapping",
       origin: "tier-tg",
       props: { type: "object", properties: {}, additionalProperties: false },
       *fn() {
-        const pane = yield* paneTerminal();
-        if (pane === undefined) {
-          throw new Error("<Overlapping /> is written inside a <Terminal> pane");
-        }
-        yield* pane.use(
-          resource<Operation<void>>(function* (provide) {
-            yield* provide(
-              (function* (): Operation<void> {
-                try {
-                  yield* pane.use(startsAndSettles(() => probe.marks.push("second entered")));
-                } catch (error) {
-                  probe.refusals.push(refusalOf(error));
-                }
-              })(),
-            );
-          }),
-        );
-        // The pane is free again: one owner at a time is not one owner ever.
-        yield* pane.use(startsAndSettles(() => probe.marks.push("sequential")));
+        const cell = yield* cellHandle("Overlapping");
+        yield* spawn(function* () {
+          // Raced against the first shell deliberately: whichever of the two
+          // reaches admission second is the overlapping one, and it is refused
+          // rather than queued.
+          try {
+            yield* cell.shell();
+            probe.marks.push("second entered");
+          } catch (error) {
+            probe.refusals.push(refusalOf(error));
+          }
+        });
+        yield* cell.shell();
+        // The cell is free again: one owner at a time is not one owner ever.
+        yield* cell.shell();
+        probe.marks.push("sequential");
         // Kept deliberately, so a row can ask what it grants after the grid has
         // closed.
-        probe.kept.push(pane);
+        probe.kept.push(cell);
         return "";
       },
     },
     {
-      // Acquires two activities in turn. One pane started, not two.
+      // Acquires one activity that spawns and settles in the same breath.
       name: "SettlesAtOnce",
       origin: "tier-tg",
       props: { type: "object", properties: {}, additionalProperties: false },
       *fn() {
-        const pane = yield* paneTerminal();
-        if (pane === undefined) {
-          throw new Error("<TwiceSpawned /> is written inside a <Terminal> pane");
-        }
-        // Spawned and finished in the same breath: ready and settled at once.
-        yield* pane.use(startsAndSettles(() => probe.marks.push("started and settled")));
+        const cell = yield* cellHandle("SettlesAtOnce");
+        yield* cell.shell();
+        probe.marks.push("started and settled");
         return "";
       },
     },
     {
-      // Interactive work that never acquires an activity: doing work is not starting.
+      // Interactive work that never acquires an activity: doing work is not
+      // starting.
       name: "Quiet",
       origin: "tier-tg",
       props: { type: "object", properties: {}, additionalProperties: false },
       *fn() {
-        const pane = yield* paneTerminal();
-        if (pane === undefined) {
-          throw new Error("<Quiet /> is written inside a <Terminal> pane");
-        }
-        // Fails before acquisition: a child that never spawned.
-        yield* pane.use(neverStarts(() => probe.marks.push("tried to start")));
+        const cell = yield* cellHandle("Quiet");
+        probe.marks.push("tried to start");
+        yield* cell.shell();
         return "";
       },
     },
@@ -446,24 +320,15 @@ function useGridComponents(
       origin: "tier-tg",
       props: { type: "object", properties: {}, additionalProperties: false },
       *fn() {
-        const pane = yield* paneTerminal();
-        if (pane === undefined) {
-          throw new Error("<Slow /> is written inside a <Terminal> pane");
-        }
-        // Slow to *start*: readiness is the acquisition, so the grid waits for
-        // this pane to come up rather than for it to finish.
-        yield* pane.use(
-          resource<Operation<void>>(function* (provide) {
-            yield* sleep(25);
-            slowMarks.push("ready:slow");
-            yield* provide(done(undefined));
-          }),
-        );
+        const cell = yield* cellHandle("Slow");
+        yield* sleep(25);
+        slowMarks.push("ready:slow");
+        yield* cell.shell();
         return "";
       },
     },
     {
-      // Holds the pane open, and blocks its own teardown until released — so a
+      // Holds the cell open, and blocks its own teardown until released — so a
       // row can interrupt a run while reader-close teardown is in progress.
       name: "SlowTeardown",
       origin: "tier-tg",
@@ -472,7 +337,7 @@ function useGridComponents(
         yield* ensure(function* () {
           yield* teardownHeld();
         });
-        // Armed: the finalizer is installed and this pane is live, which is
+        // Armed: the finalizer is installed and this cell is live, which is
         // what a row waits for before letting the reader leave.
         teardownArmed();
         yield* suspend();
@@ -480,14 +345,14 @@ function useGridComponents(
       },
     },
     {
-      // Waits until the grid has attached, so a pane can fail *after* the
+      // Waits until the grid has been shown, so a cell can fail *after* the
       // barrier — which is the failure the grid contains as a status rather
       // than the startup failure that fails the whole region.
-      name: "AfterAttach",
+      name: "AfterShow",
       origin: "tier-tg",
       props: { type: "object", properties: {}, additionalProperties: false },
       *fn() {
-        yield* afterAttach();
+        yield* afterShow();
         return "";
       },
     },
@@ -503,27 +368,28 @@ function useGridComponents(
   ]);
 }
 
+/** What a row asks of the controlled provider, plus the ways it may misuse one. */
+type ProviderOptions = ControlledProviderOptions & {
+  /** Present something other than the request that was routed. */
+  readonly substitute?: (request: TerminalGridRequest) => TerminalGridRequest;
+  /** Answer the routed request without presenting anything at all. */
+  readonly shortCircuit?: boolean;
+  /** Keep the presentation function for a later, unrouted use. */
+  readonly capture?: (present: PresentTerminalGrid) => void;
+};
+
 /**
  * Register a controlled provider that presents through the function it was
  * delivered.
  *
  * This is the whole handshake in miniature: the factory receives presentation
- * as an argument, supplies a grid resource of its own, and presents the exact
+ * as an argument, supplies a provider of its own, and presents the exact
  * request it was routed. Nothing it returns reaches core.
  */
-function useControlledProvider(
-  options: ControlledTerminalGridOptions & {
-    /** Present something other than the request that was routed. */
-    readonly substitute?: (request: TerminalGridRequest) => TerminalGridRequest;
-    /** Answer the routed request without presenting anything at all. */
-    readonly shortCircuit?: boolean;
-    /** Keep the presentation function for a later, unrouted use. */
-    readonly capture?: (present: PresentTerminalGrid) => void;
-  } = {},
-): Operation<void> {
-  let generation = 0;
+function useControlledProvider(options: ProviderOptions = {}): Operation<void> {
   return registerTerminalProvider("controlled", function* (_settings, present) {
     options.capture?.(present);
+    const provider = controlledTerminalProvider(options);
     yield* TerminalGrids.around(
       {
         *open([request]) {
@@ -531,29 +397,13 @@ function useControlledProvider(
             // Answers, presents nothing. Core must not believe this.
             return { presented: true };
           }
-          yield* present(
-            options.substitute?.(request) ?? request,
-            controlledTerminalGrid(request, options, generation++),
-          );
+          yield* present(options.substitute?.(request) ?? request, provider);
           return undefined;
         },
       },
       { at: "min" },
     );
   });
-}
-
-/** Everything a controlled grid host installs, for an in-process grid. */
-function useGridHost(
-  options: Parameters<typeof useControlledProvider>[0] = {},
-): Operation<PresentTerminalGrid> {
-  return (function* (): Operation<PresentTerminalGrid> {
-    yield* installControlledLauncher();
-    yield* useControlledProvider(options);
-    const present = yield* useTerminalInstallation();
-    yield* installTerminalProvider("controlled", { label: "controlled" }, present);
-    return present;
-  })();
 }
 
 /** Close as soon as the reader is asked, which is the ordinary journey. */
@@ -574,13 +424,13 @@ function runDocument(
   options: {
     provider?: boolean;
     stream?: InMemoryStream;
-    grid?: ControlledTerminalGridOptions;
+    grid?: ProviderOptions;
     /** Where `<Slow />` records that it started. */
     slowMarks?: string[];
     /** Props this run supplies. Props are not restored across a continuation. */
     props?: Record<string, Json>;
-    /** What the pane-terminal rows record through the pane seam. */
-    probe?: PaneProbe;
+    /** What the cell-handle rows record. */
+    probe?: CellProbe;
   } = {},
 ): Operation<DocumentRun> {
   return scoped(function* () {
@@ -607,12 +457,10 @@ function runDocument(
     );
     yield* installControlledLauncher();
 
-    // The reader stays until every pane has settled. Leaving sooner is a real
-    // thing a reader does — TG12 covers it — but a row about what a pane
+    // The reader stays until every cell has settled. Leaving sooner is a real
+    // thing a reader does — TG12 covers it — but a row about what a cell
     // rendered must not race the close that cancels it.
     const settled = withResolvers<void>();
-    let expected = 0;
-    let done = 0;
     const supplied = options.grid ?? {};
     if (options.provider !== false) {
       yield* useControlledProvider({
@@ -620,19 +468,17 @@ function runDocument(
         log,
         close: supplied.close ?? (() => settled.operation),
         *onPrepare(asked) {
-          expected = asked.panes.length;
           requests.push(asked);
           if (supplied.onPrepare) {
             yield* supplied.onPrepare(asked);
           }
         },
-        onUpdate(ordinal, state) {
-          supplied.onUpdate?.(ordinal, state);
-          if (state === "succeeded" || state === "failed" || state === "closed") {
-            done++;
-            if (done >= expected) {
-              settled.resolve();
-            }
+        *render(state) {
+          if (supplied.render) {
+            yield* supplied.render(state);
+          }
+          if (state.cells.every((cell) => cell.status !== "starting" && isSettled(cell.status))) {
+            settled.resolve();
           }
         },
       });
@@ -662,6 +508,10 @@ function runDocument(
   });
 }
 
+function isSettled(status: string): boolean {
+  return status === "succeeded" || status === "failed" || status === "closed";
+}
+
 /** The message a run failed with, failing the test if it completed. */
 function failureOf(run: DocumentRun): string {
   if (run.outcome.ok) {
@@ -670,16 +520,11 @@ function failureOf(run: DocumentRun): string {
   return run.outcome.error.message;
 }
 
-/** A grid on its own, which a resumed run can carry to an outcome. */
-function plainDocument(columns: number, panes: string[]): string {
-  return [`<Terminal.Grid columns={${columns}}>`, ...panes, "</Terminal.Grid>", ""].join("\n");
-}
-
 /** A grid, then a component that holds the run open so the root never settles. */
-function heldDocument(columns: number, panes: string[]): string {
+function heldDocument(columns: number, cells: string[]): string {
   return [
     `<Terminal.Grid columns={${columns}}>`,
-    ...panes,
+    ...cells,
     "</Terminal.Grid>",
     "",
     // The sibling after the grid. It runs whether the grid ran or replayed, so
@@ -704,29 +549,29 @@ function runInterrupted(
   stream: InMemoryStream,
   options: {
     provider?: boolean;
-    shell?: ControlledTerminalGridOptions["shell"];
+    shell?: ControlledProviderOptions["shell"];
     /** Let the reader leave, so the grid completes rather than staying open. */
     close?: boolean;
     /** Props this run supplies. Props are not restored across a continuation. */
     props?: Record<string, Json>;
     /**
-     * Keep the grid open until a pane reports a failure.
+     * Keep the grid open until a cell reports a failure.
      *
-     * A pane that fails *after* attachment is contained as that pane's status,
+     * A cell that fails *after* it is shown is contained as that cell's status,
      * and the grid settles as failed rather than throwing. Closing before that
-     * would record the pane as cancelled by the close instead.
+     * would record the cell as cancelled by the close instead.
      */
     closeAfterFailure?: boolean;
-    /** Let the reader leave only once a `<SlowTeardown />` pane is armed. */
+    /** Let the reader leave only once a `<SlowTeardown />` cell is armed. */
     closeWhenArmed?: boolean;
     /** Let the reader leave only once this tripwire mark has been recorded. */
     closeWhenMarked?: string;
-    /** Ordinal of a shell that starts, waits for attachment, then exits badly. */
-    shellFailsAfterAttach?: number;
-    /** Holds a `<SlowTeardown />` pane's finalizer until this settles. */
+    /** Position of a shell that starts, waits for the grid, then exits badly. */
+    shellFailsAfterShow?: number;
+    /** Holds a `<SlowTeardown />` cell's finalizer until this settles. */
     holdTeardown?: () => Operation<void>;
     /**
-     * Called once a pane's finalizer has been entered and is blocked, with what
+     * Called once a cell's finalizer has been entered and is blocked, with what
      * the provider is holding at that moment.
      *
      * A row reads those counters here to know they ever went up, which is what
@@ -762,12 +607,10 @@ function runInterrupted(
      */
     releaseOnInterrupt?: () => void;
     /**
-     * How many panes must have settled before the run is interrupted.
+     * How many cells must have settled before the run is interrupted.
      *
-     * A pane's status is published only after its durable child has returned,
-     * so this is also how many pane Closes the journal is known to hold. Rows
-     * that read those records name the number they need; rows that only need an
-     * open grid name none.
+     * A cell's status is published only after its durable child has returned,
+     * so this is also how many cell Closes the journal is known to hold.
      */
     settled?: number;
   } = {},
@@ -777,33 +620,28 @@ function runInterrupted(
     const log = terminalProviderLog();
     const ran: string[] = [];
     const errors: string[] = [];
-    // Three signals, kept apart because they mean different things. `attached`
+    // Three signals, kept apart because they mean different things. `shown`
     // says a grid opened on this run. `pastGrid` says the document reached the
-    // sibling after it, which is what a *replayed* grid does and what a
-    // completed-region journal has to be waited for. `panesSettled` says the
-    // pane children the row cares about have written their own records.
+    // sibling after it, which is what a *replayed* grid does. `cellsSettled`
+    // says the cell children the row cares about have written their records.
     //
     // Every one of them is an event this run produced. Nothing here waits for a
     // duration, so a replay that hangs reaches none of them and hangs the row —
     // it can never hand back a run that looks finished but is not.
-    const attached = withResolvers<void>();
+    const shown = withResolvers<void>();
     const pastGrid = withResolvers<void>();
-    const panesSettled = withResolvers<void>();
-    let settledPanes = 0;
+    const cellsSettled = withResolvers<void>();
     if ((options.settled ?? 0) === 0) {
-      panesSettled.resolve();
+      cellsSettled.resolve();
     }
-    // The printed errors this run produced, which is how a contained failure is
-    // observable at all — and the same list on a replayed run is how "the same
-    // result came back" is read rather than assumed.
     yield* Component.around({
       *raise([segment], next) {
         errors.push(segment.message);
         return yield* next(segment);
       },
     });
-    const paneFailed = withResolvers<void>();
-    // Resolved once a `<SlowTeardown />` pane has installed its finalizer.
+    const cellFailed = withResolvers<void>();
+    // Resolved once a `<SlowTeardown />` cell has installed its finalizer.
     const armed = withResolvers<void>();
     const marked = withResolvers<void>();
     yield* useGridComponents(
@@ -817,7 +655,7 @@ function runInterrupted(
           marked.resolve();
         }
       },
-      () => attached.operation,
+      () => shown.operation,
       function* () {
         options.onTeardownEntered?.(log.live);
         if (options.holdTeardown) {
@@ -833,7 +671,7 @@ function runInterrupted(
         log,
         close:
           options.closeAfterFailure === true
-            ? () => paneFailed.operation
+            ? () => cellFailed.operation
             : options.closeWhenMarked !== undefined
               ? () => marked.operation
               : options.closeWhenArmed === true
@@ -841,20 +679,20 @@ function runInterrupted(
                 : options.close === true
                   ? immediateClose()
                   : () => suspend(),
-        ...(options.shellFailsAfterAttach !== undefined
+        ...(options.shellFailsAfterShow !== undefined
           ? {
-              shell: (ordinal: number) =>
+              shell: (position: number) =>
                 resource<Operation<TerminalShellOutcome>>(function* (provide) {
-                  // Acquired, so the pane is ready and the grid attaches; the
+                  // Acquired, so the cell is ready and the grid is shown; the
                   // failure is in the settlement afterwards, which is the
-                  // failure a grid contains as a pane status.
-                  if (ordinal !== options.shellFailsAfterAttach) {
+                  // failure a grid contains as a cell status.
+                  if (position !== options.shellFailsAfterShow) {
                     yield* provide(done({ exitCode: 0 }));
                     return;
                   }
                   yield* provide(
                     (function* (): Operation<TerminalShellOutcome> {
-                      yield* attached.operation;
+                      yield* shown.operation;
                       return { exitCode: 1 };
                     })(),
                   );
@@ -867,21 +705,20 @@ function runInterrupted(
         *onPrepare(asked) {
           requests.push(asked);
         },
-        // Attach, not `running`: a pane that settles before the barrier keeps
-        // its own status and never becomes runnable.
         // deno-lint-ignore require-yield
-        *onAttach() {
-          attached.resolve();
+        *onShow() {
+          shown.resolve();
         },
-        onUpdate(_ordinal, state) {
-          if (state === "failed") {
-            paneFailed.resolve();
-          }
-          if (state === "succeeded" || state === "failed" || state === "closed") {
-            settledPanes++;
-            if (settledPanes >= (options.settled ?? 0)) {
-              panesSettled.resolve();
+        // deno-lint-ignore require-yield
+        *render(state) {
+          for (const cell of state.cells) {
+            if (cell.status === "failed") {
+              cellFailed.resolve();
             }
+          }
+          const settledCells = state.cells.filter((cell) => isSettled(cell.status)).length;
+          if (settledCells >= (options.settled ?? 0)) {
+            cellsSettled.resolve();
           }
         },
       });
@@ -902,15 +739,15 @@ function runInterrupted(
     // `close: true` expects the grid to complete, so the run is interrupted only
     // once the document has moved past it — which is what leaves a completed
     // grid child under an incomplete root. Otherwise the grid is expected to
-    // stay open, and the run is interrupted once it has opened and the pane
+    // stay open, and the run is interrupted once it has been shown and the cell
     // records the row reads are durable.
     if (options.interruptWhen !== undefined) {
       yield* options.interruptWhen;
     } else if (options.close === true || options.closeAfterFailure === true) {
       yield* pastGrid.operation;
     } else {
-      yield* attached.operation;
-      yield* panesSettled.operation;
+      yield* shown.operation;
+      yield* cellsSettled.operation;
     }
     // Cancellation is begun, then released, then awaited. A row that blocks a
     // finalizer has to release it after the parent is cancelled, or the
@@ -931,7 +768,7 @@ function runInterrupted(
       });
     }
     return {
-      outcome: { ok: false, error: new Error("interrupted") } as Result<Json>,
+      outcome: Err(new Error("interrupted")),
       output: "",
       requests,
       shown: log.shown,
@@ -944,17 +781,17 @@ function runInterrupted(
   });
 }
 
-const PANES = [
+const CELLS = [
   '<Terminal title="Left">left<Interactive /></Terminal>',
   '<Terminal title="Right" />',
 ];
 
-describe("Tier TG — presenting a grid", () => {
-  const GRID = ["<Terminal.Grid columns={2}>", ...PANES, "</Terminal.Grid>", ""].join("\n");
+describe("Tier TG — presenting a grid from a document", () => {
+  const GRID = ["<Terminal.Grid columns={2}>", ...CELLS, "</Terminal.Grid>", ""].join("\n");
 
   it("TA1: a handler that answers without presenting opens nothing", function* () {
     const dir = yield* useDir();
-    const run = yield* runDocument(dir, GRID, { grid: {} as ControlledTerminalGridOptions });
+    const run = yield* runDocument(dir, GRID, {});
     expect(run.outcome.ok).toBe(true);
 
     // The same document, against a provider that answers the routed request
@@ -982,13 +819,9 @@ describe("Tier TG — presenting a grid", () => {
 
   it("TA2: presenting a rebuilt request authorizes nothing", function* () {
     const dir = yield* useDir();
-    const run = yield* runDocument(dir, GRID, {
-      grid: {},
-    });
-    expect(run.outcome.ok).toBe(true);
-
     const forged = yield* scoped(function* () {
       const path = join(dir, "doc.md");
+      yield* writeTextFile(path, GRID);
       const ran: string[] = [];
       yield* useGridComponents(ran);
       yield* installControlledLauncher();
@@ -997,18 +830,21 @@ describe("Tier TG — presenting a grid", () => {
         substitute: (request) => ({
           columns: request.columns,
           rows: request.rows,
-          panes: request.panes.map((pane) => ({ ...pane })),
+          cells: request.cells.map((cell) => ({ ...cell })),
         }),
       });
       yield* installTerminalGridProfile({ provider: "controlled" });
       const execution = yield* execute({ path, stream: new InMemoryStream(), includes: [dir] });
       const outcome = yield* execution;
       yield* forEach(function* (_chunk: string) {}, execution.output);
-      return outcome;
+      return { outcome, ran };
     });
 
-    expect(forged.ok).toBe(false);
-    expect(forged.ok ? "" : forged.error.message).toContain("this grid request is not live");
+    expect(forged.outcome.ok).toBe(false);
+    expect(forged.outcome.ok ? "" : forged.outcome.error.message).toContain(
+      "this grid request is not live",
+    );
+    expect(forged.ran).toEqual([]);
   });
 
   it("TA3: presenting a changed request authorizes nothing", function* () {
@@ -1033,95 +869,11 @@ describe("Tier TG — presenting a grid", () => {
     expect(changed.ok ? "" : changed.error.message).toContain("this grid request is not live");
   });
 
-  it("TA4: a presentation function kept past its grid presents nothing", function* () {
+  it("TA7: two cells are interactive at the same time", function* () {
     const dir = yield* useDir();
-    let kept: PresentTerminalGrid | undefined;
-    const run = yield* runDocument(dir, GRID, {});
-    expect(run.outcome.ok).toBe(true);
-
-    yield* scoped(function* () {
-      const path = join(dir, "doc.md");
-      const ran: string[] = [];
-      yield* useGridComponents(ran);
-      yield* installControlledLauncher();
-      yield* useControlledProvider({ capture: (present) => (kept = present) });
-      yield* installTerminalGridProfile({ provider: "controlled" });
-      const execution = yield* execute({ path, stream: new InMemoryStream(), includes: [dir] });
-      yield* execution;
-      yield* forEach(function* (_chunk: string) {}, execution.output);
-    });
-
-    // The execution has finished, so the request it issued is no longer live.
-    let refusal: unknown;
-    yield* scoped(function* () {
-      const asked = {
-        columns: 1,
-        rows: 1,
-        panes: [{ ordinal: 0, title: "x", row: 0, column: 0, form: "self-closing" as const }],
-      };
-      try {
-        yield* kept!(asked, controlledTerminalGrid(asked, {}));
-      } catch (error) {
-        refusal = error;
-      }
-    });
-
-    expect(refusal).toBeInstanceOf(TerminalGridPresentationError);
-    expect(refusal instanceof Error ? refusal.message : "").toContain("is not live");
-  });
-
-  it("TA5: a presentation function from another installation generation presents nothing", function* () {
-    let refusal: unknown;
-    yield* scoped(function* () {
-      // Two installations in one scope: the second supersedes the first, so the
-      // first's function names a generation the shared lookup no longer matches.
-      const stale = yield* scoped(function* () {
-        return yield* useTerminalInstallation();
-      });
-      yield* useTerminalInstallation();
-      const asked = {
-        columns: 1,
-        rows: 1,
-        panes: [{ ordinal: 0, title: "x", row: 0, column: 0, form: "self-closing" as const }],
-      };
-      try {
-        yield* stale(asked, controlledTerminalGrid(asked, {}));
-      } catch (error) {
-        refusal = error;
-      }
-    });
-
-    expect(refusal).toBeInstanceOf(TerminalGridPresentationError);
-    expect(refusal instanceof Error ? refusal.message : "").toContain("is not live");
-  });
-
-  it("TA6: a provider that never acknowledges installs nothing", function* () {
-    let refusal: unknown;
-    yield* scoped(function* () {
-      const present = yield* useTerminalInstallation();
-      // A handler that answers the install request without delivering it to a
-      // registered provider.
-      yield* registerTerminalProvider("real", function* () {});
-      yield* TerminalProviders.around({
-        // deno-lint-ignore require-yield
-        *install() {
-          return undefined;
-        },
-      });
-      try {
-        yield* installTerminalProvider("real", { label: "real" }, present);
-      } catch (error) {
-        refusal = error;
-      }
-    });
-
-    expect(refusal).toBeInstanceOf(TerminalProviderInstallError);
-    expect(refusal instanceof Error ? refusal.message : "").toContain("did not install");
-  });
-
-  it("TA7: two panes are interactive at the same time", function* () {
-    const dir = yield* useDir();
-    const probe = paneProbe(2);
+    const probe = cellProbe(2);
+    const gateBoth = withResolvers<void>();
+    let inside = 0;
     const run = yield* runDocument(
       dir,
       [
@@ -1131,21 +883,50 @@ describe("Tier TG — presenting a grid", () => {
         "</Terminal.Grid>",
         "",
       ].join("\n"),
-      { probe },
+      {
+        probe,
+        grid: {
+          shell: () =>
+            resource<Operation<TerminalShellOutcome>>(function* (provide) {
+              // Acquired: this cell is holding its activity. Settlement waits
+              // for every other cell to be holding one too. Cells that
+              // contended could never all be here at once.
+              inside += 1;
+              if (inside >= 2) {
+                gateBoth.resolve();
+              }
+              yield* provide(
+                (function* (): Operation<TerminalShellOutcome> {
+                  const together = yield* race([
+                    (function* (): Operation<boolean> {
+                      yield* gateBoth.operation;
+                      return true;
+                    })(),
+                    (function* (): Operation<boolean> {
+                      yield* sleep(2000);
+                      return false;
+                    })(),
+                  ]);
+                  probe.marks.push(`together:${together}`);
+                  return { exitCode: 0 };
+                })(),
+              );
+            }),
+        },
+      },
     );
 
     expect(run.outcome.ok).toBe(true);
-    // Each pane held its own acquired activity until the other was holding one
-    // too. Panes that contended could not both report this.
-    expect(probe.marks).toContain("together:a:true");
-    expect(probe.marks).toContain("together:b:true");
+    expect(probe.marks.filter((mark) => mark === "together:true")).toHaveLength(2);
     // And both were holding before either let go.
     expect(probe.marks.indexOf("enter:b")).toBeLessThan(probe.marks.indexOf("leave:a"));
   });
 
-  it("TA8: one pane refuses overlapping work, and admits the next after it settles", function* () {
+  it("TA8: one cell refuses overlapping work, and admits the next after it settles", function* () {
     const dir = yield* useDir();
-    const probe = paneProbe(1);
+    const probe = cellProbe(1);
+    const held = withResolvers<void>();
+    let first = true;
     const run = yield* runDocument(
       dir,
       [
@@ -1154,21 +935,51 @@ describe("Tier TG — presenting a grid", () => {
         "</Terminal.Grid>",
         "",
       ].join("\n"),
-      { probe },
+      {
+        probe,
+        grid: {
+          shell: () =>
+            resource<Operation<TerminalShellOutcome>>(function* (provide) {
+              // The first activity holds the cell until the overlapping one has
+              // been refused, so the refusal is what the row reads rather than
+              // a schedule it hoped for.
+              if (first) {
+                first = false;
+                yield* provide(
+                  (function* (): Operation<TerminalShellOutcome> {
+                    yield* held.operation;
+                    return { exitCode: 0 };
+                  })(),
+                );
+                return;
+              }
+              yield* provide(done({ exitCode: 0 }));
+            }),
+          // deno-lint-ignore require-yield
+          *render(state) {
+            if (probe.refusals.length > 0) {
+              held.resolve();
+            }
+            void state;
+          },
+        },
+      },
     );
 
     expect(run.outcome.ok).toBe(true);
     expect(probe.refusals).toHaveLength(1);
-    expect(probe.refusals[0]).toContain("one owns a pane terminal at a time");
+    expect(probe.refusals[0]).toContain("one owns a cell terminal at a time");
     // The refused operation never ran, and the one written after the first
-    // settled did: a pane has one owner at a time, not one owner ever.
+    // settled did: a cell has one owner at a time, not one owner ever.
     expect(probe.marks).not.toContain("second entered");
     expect(probe.marks).toContain("sequential");
   });
 
-  it("TA9: a pane terminal kept past its grid admits nothing", function* () {
+  it("TA9: a cell handle kept past its grid admits nothing", function* () {
     const dir = yield* useDir();
-    const probe = paneProbe(1);
+    const probe = cellProbe(1);
+    const held = withResolvers<void>();
+    let first = true;
     const run = yield* runDocument(
       dir,
       [
@@ -1177,7 +988,31 @@ describe("Tier TG — presenting a grid", () => {
         "</Terminal.Grid>",
         "",
       ].join("\n"),
-      { probe },
+      {
+        probe,
+        grid: {
+          shell: () =>
+            resource<Operation<TerminalShellOutcome>>(function* (provide) {
+              if (first) {
+                first = false;
+                yield* provide(
+                  (function* (): Operation<TerminalShellOutcome> {
+                    yield* held.operation;
+                    return { exitCode: 0 };
+                  })(),
+                );
+                return;
+              }
+              yield* provide(done({ exitCode: 0 }));
+            }),
+          // deno-lint-ignore require-yield
+          *render() {
+            if (probe.refusals.length > 0) {
+              held.resolve();
+            }
+          },
+        },
+      },
     );
 
     expect(run.outcome.ok).toBe(true);
@@ -1187,19 +1022,18 @@ describe("Tier TG — presenting a grid", () => {
     let refusal: unknown;
     yield* scoped(function* () {
       try {
-        yield* kept!.use(startsAndSettles());
+        yield* kept!.shell();
       } catch (error) {
         refusal = error;
       }
     });
 
-    expect(refusal).toBeInstanceOf(TerminalGridPresentationError);
-    expect(refusalOf(refusal)).toContain("its grid has stopped admitting");
+    expect(refusalOf(refusal)).toContain("has stopped admitting");
   });
 
   it("TA10: a child that spawns and settles at once is both ready and settled", function* () {
     const dir = yield* useDir();
-    const probe = paneProbe(1);
+    const probe = cellProbe(1);
     const run = yield* runDocument(
       dir,
       [
@@ -1211,16 +1045,16 @@ describe("Tier TG — presenting a grid", () => {
       { probe },
     );
 
-    // Acquired and settled in the same breath: the grid attached rather than
-    // waiting for a pane that had already finished.
+    // Acquired and settled in the same breath: the grid was shown rather than
+    // waiting for a cell that had already finished.
     expect(run.outcome.ok).toBe(true);
     expect(probe.marks).toContain("started and settled");
-    expect(run.events).toContain("attach:0");
+    expect(run.events.some((event) => event.startsWith("show:0:"))).toBe(true);
   });
 
-  it("TA11: an activity that fails before acquisition never makes a pane ready", function* () {
+  it("TA11: an activity that fails before acquisition never makes a cell ready", function* () {
     const dir = yield* useDir();
-    const probe = paneProbe(1);
+    const probe = cellProbe(1);
     const run = yield* runDocument(
       dir,
       [
@@ -1229,618 +1063,32 @@ describe("Tier TG — presenting a grid", () => {
         "</Terminal.Grid>",
         "",
       ].join("\n"),
-      { probe },
+      { probe, grid: { shell: () => neverStarts() } },
     );
 
-    // The pane owned its terminal and tried. Neither is starting.
+    // The cell owned its terminal and tried. Neither is starting.
     expect(probe.marks).toContain("tried to start");
-    // The pane fails with the reason its activity could not start, rather than
+    // The cell fails with the reason its activity could not start, rather than
     // with the generic "never started anything" — a spawn that failed says why.
     expect(failureOf(run)).toContain("this activity's child never spawned");
-    expect(run.events).not.toContain("attach:0");
+    expect(run.events.some((event) => event.startsWith("show:"))).toBe(false);
     expect(run.events).toContain("destroy:0");
-  });
-
-  it("TA12: a layout whose ordinal is not its position is refused before a pane exists", function* () {
-    // The guard the lifecycle runs before it builds a single pane terminal.
-    // Asked through the real entry point with a layout core would never derive:
-    // the second cell calls itself pane 0 while sitting at position 1, so the
-    // request describes a grid nobody authored.
-    const attached: string[] = [];
-    const started: number[] = [];
-    let refusal: unknown;
-
-    yield* scoped(function* () {
-      yield* useGridHost({
-        // deno-lint-ignore require-yield
-        *onAttach() {
-          attached.push("attach");
-        },
-      });
-
-      const work: PaneWork[] = [0, 1].map((ordinal) => ({
-        ordinal,
-        // deno-lint-ignore require-yield
-        *run() {
-          started.push(ordinal);
-        },
-      }));
-
-      try {
-        yield* openTerminalGrid(
-          {
-            columns: 2,
-            rows: 1,
-            cells: [
-              { ordinal: 0, title: "a", row: 0, column: 0, form: "paired" },
-              { ordinal: 0, title: "b", row: 0, column: 1, form: "paired" },
-            ],
-          },
-          work,
-          createCloseBoundary(),
-        );
-      } catch (error) {
-        refusal = error;
-      }
-    });
-
-    expect(refusal).toBeInstanceOf(TerminalGridPresentationError);
-    const message = refusal instanceof Error ? refusal.message : "";
-    // The refusal says which ordinal, and where it actually sat.
-    expect(message).toContain("ordinal 0");
-    expect(message).toContain("position 1");
-    // Refused before anything could own a pane terminal: no pane work ran, and
-    // nothing was ever shown.
-    expect(started).toEqual([]);
-    expect(attached).toEqual([]);
   });
 });
 
 /**
  * What every completed journey must be able to say.
  *
- * The provider's grid is released exactly once — not zero times, and not twice —
+ * The provider's host is released exactly once — not zero times, and not twice —
  * and nothing it handed out is still held. Both halves matter: a count alone
- * would pass for a run that released one grid and stranded another.
+ * would pass for a run that released one host and stranded another.
  */
 function expectReleasedOnce(run: DocumentRun, generation = 0): void {
   expect(run.events.filter((event) => event === `destroy:${generation}`)).toEqual([
     `destroy:${generation}`,
   ]);
-  expect(run.live).toEqual({ grids: 0, attached: 0, shells: 0 });
+  expect(run.live).toEqual({ grids: 0, shown: 0, activities: 0 });
 }
-
-/**
- * A provider grid that records every effect it could possibly have.
- *
- * Lazy on purpose: nothing in here runs until something acquires it. A refusal
- * that happens first therefore leaves the record empty, which is the only way
- * to tell "refused before the provider was touched" from "refused after".
- */
-function watchedGrid(effects: string[], label: string): Operation<TerminalGrid> {
-  return resource(function* (provide) {
-    effects.push(`acquired:${label}`);
-    yield* ensure(() => {
-      effects.push(`released:${label}`);
-    });
-    yield* provide({
-      // deno-lint-ignore require-yield
-      *attach() {
-        effects.push(`attach:${label}`);
-      },
-      // deno-lint-ignore require-yield
-      *update() {},
-      // deno-lint-ignore require-yield
-      *display() {},
-      shell: () =>
-        resource<Operation<TerminalShellOutcome>>(function* (provideOutcome) {
-          effects.push(`shell:${label}`);
-          yield* provideOutcome(done({ exitCode: 0 }));
-        }),
-      // deno-lint-ignore require-yield
-      *closed() {},
-    });
-  });
-}
-
-describe("Tier TG — refusing a presentation before the provider is touched", () => {
-  /** Drive one grid, letting the row decide what the provider presents. */
-  function underProvider(
-    present: (present: PresentTerminalGrid, request: TerminalGridRequest) => Operation<void>,
-    work: readonly PaneWork[],
-  ): Operation<unknown> {
-    return scoped(function* () {
-      yield* installControlledLauncher();
-      yield* registerTerminalProvider("controlled", function* (_settings, presentGrid) {
-        yield* TerminalGrids.around(
-          {
-            *open([request]) {
-              yield* present(presentGrid, request);
-              return undefined;
-            },
-          },
-          { at: "min" },
-        );
-      });
-      const installed = yield* useTerminalInstallation();
-      yield* installTerminalProvider("controlled", { label: "controlled" }, installed);
-      try {
-        return yield* openGridWithCloseOwner(work);
-      } catch (error) {
-        return error;
-      }
-    });
-  }
-
-  it("TR1: a copied request is refused, and the copy's grid is never acquired", function* () {
-    const effects: string[] = [];
-    const opened: string[] = [];
-    let refusal: unknown;
-
-    yield* scoped(function* () {
-      yield* underProvider(
-        function* (present, request) {
-          // Same members, a different object. Identity is what is read.
-          const copy = {
-            columns: request.columns,
-            rows: request.rows,
-            panes: request.panes.map((pane) => ({ ...pane })),
-          };
-          try {
-            yield* present(copy, watchedGrid(effects, "copy"));
-          } catch (error) {
-            refusal = error;
-          }
-        },
-        [readyPane(opened, "a")],
-      );
-    });
-
-    expect(refusalOf(refusal)).toContain("is not live");
-    expect(effects).toEqual([]);
-    expect(opened).toEqual([]);
-  });
-
-  it("TR2: a changed request is refused, and its grid is never acquired", function* () {
-    const effects: string[] = [];
-    const opened: string[] = [];
-    let refusal: unknown;
-
-    yield* scoped(function* () {
-      yield* underProvider(
-        function* (present, request) {
-          try {
-            yield* present(
-              { ...request, columns: request.columns + 1 },
-              watchedGrid(effects, "changed"),
-            );
-          } catch (error) {
-            refusal = error;
-          }
-        },
-        [readyPane(opened, "a")],
-      );
-    });
-
-    expect(refusalOf(refusal)).toContain("is not live");
-    expect(effects).toEqual([]);
-    expect(opened).toEqual([]);
-  });
-
-  it("TR3: the exact request is refused once it is stale", function* () {
-    const effects: string[] = [];
-    const opened: string[] = [];
-    let kept: { present: PresentTerminalGrid; request: TerminalGridRequest } | undefined;
-
-    yield* scoped(function* () {
-      yield* underProvider(
-        function* (present, request) {
-          kept = { present, request };
-          yield* present(request, watchedGrid(effects, "live"));
-        },
-        [readyPane(opened, "a")],
-      );
-    });
-
-    // The grid ran and finished, so its submitting operation has unwound and
-    // the request it issued is no longer anything to present for.
-    expect(opened).toEqual(["a"]);
-    expect(effects).toEqual(["acquired:live", "attach:live", "released:live"]);
-
-    let refusal: unknown;
-    yield* scoped(function* () {
-      try {
-        yield* kept!.present(kept!.request, watchedGrid(effects, "stale"));
-      } catch (error) {
-        refusal = error;
-      }
-    });
-
-    expect(refusalOf(refusal)).toContain("is not live");
-    // Nothing new: the stale grid was never acquired.
-    expect(effects).toEqual(["acquired:live", "attach:live", "released:live"]);
-  });
-
-  it("TR4: a second presentation of the exact live request is refused", function* () {
-    const effects: string[] = [];
-    const opened: string[] = [];
-    let refusal: unknown;
-
-    yield* scoped(function* () {
-      yield* underProvider(
-        function* (present, request) {
-          yield* present(request, watchedGrid(effects, "first"));
-          try {
-            yield* present(request, watchedGrid(effects, "second"));
-          } catch (error) {
-            refusal = error;
-          }
-        },
-        [readyPane(opened, "a")],
-      );
-    });
-
-    expect(refusalOf(refusal)).toContain("already been presented");
-    // One grid acquired and released; the second was never touched.
-    expect(effects).toEqual(["acquired:first", "attach:first", "released:first"]);
-  });
-
-  it("TR5: the exact live request is refused under another installation generation", function* () {
-    const effects: string[] = [];
-    const finalized: string[] = [];
-    const live = withResolvers<void>();
-    let refusal: unknown;
-
-    yield* scoped(function* () {
-      yield* installControlledLauncher();
-      yield* registerTerminalProvider("controlled", function* (_settings, presentGrid) {
-        yield* TerminalGrids.around(
-          {
-            *open([request]) {
-              // A second installation supersedes the one this grid was issued
-              // under. It shares the lookup, so it *finds* this request — and
-              // turns it away for belonging to another installation.
-              const superseding = yield* useTerminalInstallation();
-              try {
-                yield* superseding(request, watchedGrid(effects, "wrong-generation"));
-              } catch (error) {
-                refusal = error;
-              }
-              // Then the right one presents, so the grid still settles.
-              yield* presentGrid(request, watchedGrid(effects, "right-generation"));
-              return undefined;
-            },
-          },
-          { at: "min" },
-        );
-      });
-      const installed = yield* useTerminalInstallation();
-      yield* installTerminalProvider("controlled", { label: "controlled" }, installed);
-      yield* openGridWithCloseOwner([holdingPane(live, finalized, "pane")]);
-    });
-
-    expect(refusal).toBeInstanceOf(TerminalGridPresentationError);
-    expect(refusalOf(refusal)).toContain("belongs to another terminal provider installation");
-    // The refused generation's grid was never acquired; only the admitted one.
-    expect(effects.filter((effect) => effect.includes("wrong-generation"))).toEqual([]);
-    expect(effects).toContain("acquired:right-generation");
-    expect(effects).toContain("released:right-generation");
-  });
-});
-
-describe("Tier TG — issuing, presenting and settling one grid", () => {
-  /**
-   * A provider that presents exactly what it was routed, with hooks for the
-   * rows that need to interrupt it.
-   *
-   * Written out rather than reusing the document harness because these rows
-   * drive `openTerminalGrid()` directly, so the grid's only owner is the
-   * operation the row is holding.
-   */
-  function usePresentingHost(
-    log: TerminalProviderLog,
-    options: {
-      readonly close?: () => Operation<void>;
-      readonly onAttach?: () => Operation<void>;
-      readonly onPresent?: (
-        present: () => Operation<void>,
-        request: TerminalGridRequest,
-        presentAny: PresentTerminalGrid,
-      ) => Operation<void>;
-      readonly seen?: TerminalGridRequest[];
-    } = {},
-  ): Operation<PresentTerminalGrid> {
-    return (function* (): Operation<PresentTerminalGrid> {
-      let generation = 0;
-      yield* installControlledLauncher();
-      yield* registerTerminalProvider("controlled", function* (_settings, present) {
-        yield* TerminalGrids.around(
-          {
-            *open([request]) {
-              options.seen?.push(request);
-              const grid = controlledTerminalGrid(
-                request,
-                {
-                  log,
-                  ...(options.close === undefined ? {} : { close: options.close }),
-                  ...(options.onAttach === undefined ? {} : { onAttach: options.onAttach }),
-                },
-                generation++,
-              );
-              const presentThis = () => present(request, grid);
-              if (options.onPresent === undefined) {
-                yield* presentThis();
-              } else {
-                yield* options.onPresent(presentThis, request, present);
-              }
-              return undefined;
-            },
-          },
-          { at: "min" },
-        );
-      });
-      const present = yield* useTerminalInstallation();
-      yield* installTerminalProvider("controlled", { label: "controlled" }, present);
-      return present;
-    })();
-  }
-
-  it("TS1: a registered provider that is never routed starts nothing", function* () {
-    const log = terminalProviderLog();
-    const opened: string[] = [];
-
-    yield* scoped(function* () {
-      yield* installControlledLauncher();
-      // Registered and installed, and it answers the routed request without
-      // ever presenting: reaching a provider is not opening a grid.
-      yield* registerTerminalProvider("controlled", function* () {
-        yield* TerminalGrids.around(
-          {
-            // deno-lint-ignore require-yield
-            *open() {
-              return { presented: true };
-            },
-          },
-          { at: "min" },
-        );
-      });
-      const present = yield* useTerminalInstallation();
-      yield* installTerminalProvider("controlled", { label: "controlled" }, present);
-
-      let refusal: unknown;
-      try {
-        yield* openGridWithCloseOwner([readyPane(opened, "a")]);
-      } catch (error) {
-        refusal = error;
-      }
-      expect(refusalOf(refusal)).toContain("no terminal provider opened this grid");
-    });
-
-    // Submitted and never presented: no pane ran and no grid existed.
-    expect(opened).toEqual([]);
-    expect(log.events).toEqual([]);
-    expect(log.live.grids).toBe(0);
-  });
-
-  it("TS2: one request opens one grid, however often it is presented", function* () {
-    const log = terminalProviderLog();
-    const opened: string[] = [];
-    let second: unknown;
-
-    yield* scoped(function* () {
-      yield* usePresentingHost(log, {
-        *onPresent(present, request, presentAny) {
-          yield* present();
-          // The same request again, with a grid of its own, once the grid
-          // it named has already run.
-          try {
-            yield* presentAny(request, controlledTerminalGrid(request, { log }, 9));
-          } catch (error) {
-            second = error;
-          }
-        },
-      });
-      yield* openGridWithCloseOwner([readyPane(opened, "a")]);
-    });
-
-    // The matching grid ran exactly once, and the second presentation of the
-    // same request opened nothing.
-    expect(opened).toEqual(["a"]);
-    expect(second).toBeInstanceOf(TerminalGridPresentationError);
-    expect(refusalOf(second)).toContain("already been presented");
-  });
-
-  it("TS3: a settled grid is gone, and the next one still opens", function* () {
-    const log = terminalProviderLog();
-    const opened: string[] = [];
-    const seen: TerminalGridRequest[] = [];
-    let stale: unknown;
-
-    yield* scoped(function* () {
-      const present = yield* usePresentingHost(log, { seen });
-
-      yield* openGridWithCloseOwner([readyPane(opened, "first")]);
-      yield* openGridWithCloseOwner([readyPane(opened, "second")]);
-
-      // The first grid's request is no longer something a provider can present
-      // for: its entry went when its submitting operation unwound.
-      try {
-        yield* present(seen[0]!, controlledTerminalGrid(seen[0]!, { log }, 9));
-      } catch (error) {
-        stale = error;
-      }
-    });
-
-    expect(opened).toEqual(["first", "second"]);
-    expect(stale).toBeInstanceOf(TerminalGridPresentationError);
-    expect(refusalOf(stale)).toContain("is not live");
-    // Only the settled grid was removed, and only after its own teardown: the
-    // first grid was released before the second was ever prepared, and
-    // both grids destroyed theirs.
-    expect(log.events).toContain("destroy:0");
-    expect(log.events).toContain("destroy:1");
-    expect(log.events.indexOf("destroy:0")).toBeLessThan(log.events.indexOf("prepare:1:1x1"));
-  });
-
-  it("TS4: a presenting call that is cancelled leaves no grid running", function* () {
-    const log = terminalProviderLog();
-    const finalized: string[] = [];
-    const live = withResolvers<void>();
-    let refusal: unknown;
-
-    yield* scoped(function* () {
-      yield* usePresentingHost(log, {
-        // The reader never leaves, so the grid stays live until something stops
-        // it.
-        close: () => suspend(),
-        *onPresent(present) {
-          const presenting = yield* spawn(present);
-          yield* live.operation;
-          // The provider's own call goes while its grid is still running.
-          yield* presenting.halt();
-        },
-      });
-
-      try {
-        yield* openGridWithCloseOwner([holdingPane(live, finalized, "pane")]);
-      } catch (error) {
-        refusal = error;
-      }
-    });
-
-    // The grid went with the call that owned it rather than carrying on
-    // without one: its pane ran its finalizer, and the provider holds nothing.
-    expect(finalized).toEqual(["pane"]);
-    expect(log.live.grids).toBe(0);
-    expect(log.live.attached).toBe(0);
-    expect(refusalOf(refusal)).toContain("no terminal provider opened this grid");
-  });
-
-  it("TS5: cancelling the submitting operation takes its grid down, installation and all still live", function* () {
-    const log = terminalProviderLog();
-    const finalized: string[] = [];
-    const live = withResolvers<void>();
-    let heldWhileLive = -1;
-
-    yield* scoped(function* () {
-      yield* usePresentingHost(log);
-
-      // The grid is live — its provider grid acquired, its pane starting — and
-      // the row's own branch then wins the race, cancelling the submitting
-      // operation and nothing else. The installation is untouched: this is what
-      // owns a grid, structured concurrency beneath the expansion rather than
-      // anything holding tasks for the execution.
-      yield* race([
-        (function* (): Operation<void> {
-          yield* openGridWithCloseOwner([startingPane(live, finalized, "pane")]);
-        })(),
-        (function* (): Operation<void> {
-          yield* live.operation;
-          heldWhileLive = log.live.grids;
-        })(),
-      ]);
-
-      expect(heldWhileLive).toBe(1);
-      // The pane's activity was released and the provider's grid with it.
-      expect(finalized).toEqual(["pane"]);
-      expect(log.live).toEqual({ grids: 0, attached: 0, shells: 0 });
-
-      // And the installation is still live: it issues and settles another grid.
-      const opened: string[] = [];
-      yield* openGridWithCloseOwner([readyPane(opened, "after")]);
-      expect(opened).toEqual(["after"]);
-    });
-  });
-
-  it("TS7: presenting stays blocked until the grid has settled and been released", function* () {
-    const log = terminalProviderLog();
-    const opened: string[] = [];
-    const order: string[] = [];
-
-    yield* scoped(function* () {
-      yield* usePresentingHost(log, {
-        *onPresent(present) {
-          yield* present();
-          // Read the moment presentation returns: the grid must already be
-          // settled and released, not merely started.
-          order.push(`returned:${log.live.grids}:${log.live.attached}`);
-          order.push(...log.events.filter((event) => event.startsWith("destroy:")));
-        },
-      });
-      yield* openGridWithCloseOwner([readyPane(opened, "a")]);
-    });
-
-    expect(opened).toEqual(["a"]);
-    // Nothing was still held when the provider's call came back, and the
-    // release had already been recorded.
-    expect(order).toEqual(["returned:0:0", "destroy:0"]);
-  });
-
-  it("TS8: an incomplete replay acquires only the activity that must resume", function* () {
-    const dir = yield* useDir();
-    const stream = new InMemoryStream();
-    const source = [
-      "<Terminal.Grid columns={2}>",
-      '<Terminal title="Left"><Ran mark="left ran" /><Interactive /></Terminal>',
-      '<Terminal title="Shell" />',
-      "</Terminal.Grid>",
-      "",
-      `<Ran mark="${PAST_THE_GRID}" />`,
-      "",
-    ].join("\n");
-
-    // The shell holds, so the run is interrupted with the left pane complete
-    // and the shell pane incomplete.
-    const holdingShell: ControlledTerminalGridOptions["shell"] = () =>
-      resource<Operation<TerminalShellOutcome>>(function* (provide) {
-        yield* provide(
-          (function* (): Operation<TerminalShellOutcome> {
-            yield* suspend();
-            // Unreachable: the shell is released rather than returning.
-            return { exitCode: 0 };
-          })(),
-        );
-      });
-
-    const first = yield* runInterrupted(dir, source, stream, {
-      shell: holdingShell,
-      settled: 1,
-    });
-    expect(first.ran).toContain("left ran");
-
-    // Resumed: the completed pane restores its outcome without acquiring
-    // anything, and only the shell that must resume acquires an activity.
-    const second = yield* runInterrupted(dir, source, stream, { settled: 1 });
-    expect(second.ran).not.toContain("left ran");
-    expect(second.events.filter((event) => event.startsWith("shell:"))).toHaveLength(1);
-  });
-
-  it("TS6: a second grid cannot be live beside the first", function* () {
-    const log = terminalProviderLog();
-    const finalized: string[] = [];
-    const live = withResolvers<void>();
-    let refusal: unknown;
-
-    yield* scoped(function* () {
-      yield* usePresentingHost(log, { close: () => suspend() });
-      yield* spawn(() => openGridWithCloseOwner([holdingPane(live, finalized, "first")]));
-      yield* live.operation;
-
-      // Why "every remaining grid" is one grid: the foreground-terminal lease
-      // admits a single grid at a time, so a second never reaches the
-      // lookup at all.
-      try {
-        yield* openGridWithCloseOwner([readyPane([], "second")]);
-      } catch (error) {
-        refusal = error;
-      }
-    });
-
-    expect(refusalOf(refusal)).toContain("owns the terminal at a time");
-    expect(finalized).toEqual(["first"]);
-    expect(log.live.grids).toBe(0);
-  });
-});
 
 describe("Tier TG — a grid written in a document", () => {
   it("TG4: the provider is asked for exactly the authored row-major layout", function* () {
@@ -1861,22 +1109,23 @@ describe("Tier TG — a grid written in a document", () => {
 
     expect(run.outcome.ok).toBe(true);
     expect(run.requests).toHaveLength(1);
+    // Position is identity: no ordinal, index or key duplicates it.
     expect(run.requests[0]).toEqual({
       columns: 2,
       rows: 3,
-      panes: [
-        { ordinal: 0, title: "One", row: 0, column: 0, form: "self-closing" },
-        { ordinal: 1, title: "Two", row: 0, column: 1, form: "self-closing" },
-        { ordinal: 2, title: "Three", row: 1, column: 0, form: "self-closing" },
-        { ordinal: 3, title: "Four", row: 1, column: 1, form: "self-closing" },
-        { ordinal: 4, title: "Five", row: 2, column: 0, form: "self-closing" },
+      cells: [
+        { title: "One", row: 0, column: 0, form: "self-closing" },
+        { title: "Two", row: 0, column: 1, form: "self-closing" },
+        { title: "Three", row: 1, column: 0, form: "self-closing" },
+        { title: "Four", row: 1, column: 1, form: "self-closing" },
+        { title: "Five", row: 2, column: 0, form: "self-closing" },
       ],
     });
-    // A grid that succeeded released its provider's grid once, holding nothing.
+    // A grid that succeeded released its provider's host once, holding nothing.
     expectReleasedOnce(run);
   });
 
-  it("TG4: duplicate titles stay valid, and identity is the ordinal", function* () {
+  it("TG4: duplicate titles stay valid, and identity is the position", function* () {
     const dir = yield* useDir();
     const run = yield* runDocument(
       dir,
@@ -1891,14 +1140,14 @@ describe("Tier TG — a grid written in a document", () => {
     );
 
     expect(run.outcome.ok).toBe(true);
-    expect(run.requests[0]?.panes).toEqual([
-      { ordinal: 0, title: "Agent", row: 0, column: 0, form: "paired" },
-      { ordinal: 1, title: "Agent", row: 0, column: 1, form: "self-closing" },
-      { ordinal: 2, title: "Agent", row: 1, column: 0, form: "paired" },
+    expect(run.requests[0]?.cells).toEqual([
+      { title: "Agent", row: 0, column: 0, form: "paired" },
+      { title: "Agent", row: 0, column: 1, form: "self-closing" },
+      { title: "Agent", row: 1, column: 0, form: "paired" },
     ]);
   });
 
-  it("TG7: root output is flushed before the grid, and pane text stays in its pane", function* () {
+  it("TG7: root output is flushed before the grid, and cell text stays in its cell", function* () {
     const dir = yield* useDir();
     const flushed: string[] = [];
     const run = yield* runDocument(
@@ -1928,10 +1177,10 @@ describe("Tier TG — a grid written in a document", () => {
 
     expect(run.outcome.ok).toBe(true);
     expect(flushed).toEqual(["prepared"]);
-    // Each pane's own text went to that pane.
+    // Each cell's own text went to that cell.
     expect(run.shown.get(0)).toContain("left text");
     expect(run.shown.get(1)).toContain("right text");
-    // The grid renders "": the root output holds what surrounds it and no pane
+    // The grid renders "": the root output holds what surrounds it and no cell
     // display at all.
     expect(run.output).toContain("before");
     expect(run.output).toContain("after");
@@ -1939,7 +1188,122 @@ describe("Tier TG — a grid written in a document", () => {
     expect(run.output).not.toContain("right text");
   });
 
-  it("TG6: a pane inherits the grid site's bindings and keeps its own", function* () {
+  it("TG20: a cell's output is committed before the effect written after it", function* () {
+    const dir = yield* useDir();
+    // The shell records what the aggregate already said about its own cell at
+    // the moment it was asked to start. Text written before `<Interactive />`
+    // must already be there: an append that waited for the next authored effect
+    // would show empty content here.
+    const contentAtLaunch: string[] = [];
+    const run = yield* runDocument(
+      dir,
+      [
+        "<Terminal.Grid columns={1}>",
+        '<Terminal title="Left">',
+        "first paragraph",
+        "",
+        "<Interactive />",
+        "",
+        "second paragraph",
+        "</Terminal>",
+        "</Terminal.Grid>",
+        "",
+      ].join("\n"),
+      {
+        grid: {
+          shell: () =>
+            resource<Operation<TerminalShellOutcome>>(function* (provide) {
+              yield* provide(done({ exitCode: 0 }));
+            }),
+          // deno-lint-ignore require-yield
+          *render(state) {
+            for (const cell of state.cells) {
+              if (cell.status === "launching") {
+                contentAtLaunch.push(cell.content);
+              }
+            }
+          },
+        },
+      },
+    );
+
+    expect(run.outcome.ok).toBe(true);
+    expect(contentAtLaunch).toHaveLength(1);
+    expect(contentAtLaunch[0]).toContain("first paragraph");
+    // And what came after is not there yet: the append is per boundary, not one
+    // dump at the end.
+    expect(contentAtLaunch[0]).not.toContain("second paragraph");
+    // The complete output is what the cell finally displays.
+    expect(run.shown.get(0)).toContain("first paragraph");
+    expect(run.shown.get(0)).toContain("second paragraph");
+  });
+
+  it("TG20: output nested inside one structural child reaches state before the action beside it", function* () {
+    const dir = yield* useDir();
+    // Every snapshot the renderer worked through, and what the newest of them
+    // said at the moment the provider was asked for a terminal. Read off the
+    // renderer rather than the store, so this is the screen the action waited
+    // for rather than a value beside it.
+    const rendered: TerminalGridState[] = [];
+    const convergedContent: string[] = [];
+    const run = yield* runDocument(
+      dir,
+      [
+        "<Terminal.Grid columns={1}>",
+        '<Terminal title="Left">',
+        "<If condition={true}>",
+        "before the action",
+        "",
+        "<Interactive />",
+        "",
+        "after the action",
+        "</If>",
+        "",
+        "outside the branch",
+        "</Terminal>",
+        "</Terminal.Grid>",
+        "",
+      ].join("\n"),
+      {
+        grid: {
+          // deno-lint-ignore require-yield
+          *render(state) {
+            rendered.push(state);
+          },
+          shell: () =>
+            resource<Operation<TerminalShellOutcome>>(function* (provide) {
+              const applied = rendered[rendered.length - 1];
+              convergedContent.push(applied?.cells[0]?.content ?? "");
+              yield* provide(done({ exitCode: 0 }));
+            }),
+        },
+      },
+    );
+
+    expect(run.outcome.ok).toBe(true);
+    expect(convergedContent).toHaveLength(1);
+    // The output written before the action inside the same branch is already
+    // part of the desired screen the action converged through. A publication
+    // that waited for the whole `<If>` to finish would have committed none of
+    // it by now.
+    expect(convergedContent[0]).toContain("before the action");
+    // And nothing written after it is, at either depth.
+    expect(convergedContent[0]).not.toContain("after the action");
+    expect(convergedContent[0]).not.toContain("outside the branch");
+    // All three reach the cell in the end, in authored order.
+    const shown = run.shown.get(0) ?? "";
+    expect(shown).toContain("before the action");
+    expect(shown).toContain("after the action");
+    expect(shown).toContain("outside the branch");
+    expect(shown.indexOf("before the action")).toBeLessThan(shown.indexOf("after the action"));
+    expect(shown.indexOf("after the action")).toBeLessThan(shown.indexOf("outside the branch"));
+    // Once each: a boundary that published twice would repeat itself.
+    expect(shown.split("before the action")).toHaveLength(2);
+    expect(shown.split("after the action")).toHaveLength(2);
+    expect(shown.split("outside the branch")).toHaveLength(2);
+  });
+
+  it("TG6: a cell inherits the grid site's bindings and keeps its own", function* () {
     const dir = yield* useDir();
     const run = yield* runDocument(
       dir,
@@ -1972,7 +1336,7 @@ describe("Tier TG — a grid written in a document", () => {
     // Inherited from the grid site.
     expect(run.shown.get(0)).toContain("sees site");
     expect(run.shown.get(1)).toContain("sees site");
-    // Created inside one pane, visible to later work in that pane.
+    // Created inside one cell, visible to later work in that cell.
     expect(run.shown.get(0)).toContain("then left");
     // Invisible to the sibling and to the document after the grid: an
     // unresolved binding stays the literal text it was written as.
@@ -1980,7 +1344,7 @@ describe("Tier TG — a grid written in a document", () => {
     expect(run.output).toContain("after {mine}");
   });
 
-  it("TG6: a pane's <Return> cannot claim a value body outside the grid", function* () {
+  it("TG6: a cell's <Return> cannot claim a value body outside the grid", function* () {
     const dir = yield* useDir();
     const run = yield* runDocument(
       dir,
@@ -1990,8 +1354,8 @@ describe("Tier TG — a grid written in a document", () => {
         "  type: string",
         "---",
         "<Terminal.Grid columns={1}>",
-        '<Terminal title="Pane">',
-        '<Return value={"from the pane"} />',
+        '<Terminal title="Cell">',
+        '<Return value={"from the cell"} />',
         "<Interactive />",
         "</Terminal>",
         "</Terminal.Grid>",
@@ -2001,7 +1365,7 @@ describe("Tier TG — a grid written in a document", () => {
       ].join("\n"),
     );
 
-    // The pane has no enclosing value body to claim, so the <Return> written in
+    // The cell has no enclosing value body to claim, so the <Return> written in
     // it is refused where it sits rather than becoming the document's value.
     expect(failureOf(run)).toContain(
       "is not written in the flow of a body that declares `returns`",
@@ -2009,7 +1373,7 @@ describe("Tier TG — a grid written in a document", () => {
     expect(failureOf(run)).not.toContain("from the document");
   });
 
-  it("TG6: a pane's checked failure settles that pane and not its sibling", function* () {
+  it("TG6: a cell's checked failure settles that cell and not its sibling", function* () {
     const dir = yield* useDir();
     const run = yield* runDocument(
       dir,
@@ -2017,7 +1381,7 @@ describe("Tier TG — a grid written in a document", () => {
         "<Terminal.Grid columns={2}>",
         '<Terminal title="Broken">',
         "<PrintErrors>",
-        '<Fail message="this pane gave up" />',
+        '<Fail message="this cell gave up" />',
         "</PrintErrors>",
         "<Interactive />",
         "</Terminal>",
@@ -2030,17 +1394,17 @@ describe("Tier TG — a grid written in a document", () => {
       ].join("\n"),
     );
 
-    // Printed inside the pane it happened in, and the sibling ran regardless.
-    expect(run.shown.get(0)).toContain("this pane gave up");
+    // Printed inside the cell it happened in, and the sibling ran regardless.
+    expect(run.shown.get(0)).toContain("this cell gave up");
     expect(run.ran).toEqual(["sibling"]);
-    expect(run.output).not.toContain("this pane gave up");
+    expect(run.output).not.toContain("this cell gave up");
   });
 
-  it("TG6: a paired pane runs every component in its body, in order", function* () {
+  it("TG6: a paired cell runs every component in its body, in order", function* () {
     const dir = yield* useDir();
     const stream = new InMemoryStream();
-    // The reader leaves only once the pane's *second* component has run, so a
-    // pane body that stopped after the first would never let the grid close —
+    // The reader leaves only once the cell's *second* component has run, so a
+    // cell body that stopped after the first would never let the grid close —
     // a hang rather than a pass.
     const run = yield* runInterrupted(
       dir,
@@ -2055,14 +1419,14 @@ describe("Tier TG — a grid written in a document", () => {
     expect(run.ran).toContain("second component");
   });
 
-  it("TG9: with no provider installed, no pane body or shell runs", function* () {
+  it("TG9: with no provider installed, no cell body or shell runs", function* () {
     const dir = yield* useDir();
     const run = yield* runDocument(
       dir,
       [
         "<Terminal.Grid columns={2}>",
         '<Terminal title="Work">',
-        '<Ran mark="pane body" />',
+        '<Ran mark="cell body" />',
         "<Interactive />",
         "</Terminal>",
         '<Terminal title="Shell" />',
@@ -2073,21 +1437,19 @@ describe("Tier TG — a grid written in a document", () => {
     );
 
     expect(failureOf(run)).toContain("no terminal provider is installed");
-    // The pane held work; none of it was reached, and nothing was displayed.
+    // The cell held work; none of it was reached, and nothing was displayed.
     expect(run.ran).toEqual([]);
     expect(run.shown.size).toBe(0);
   });
 });
 
-describe("Tier TG — startup, settlement and teardown", () => {
-  const TWO = ["<Terminal.Grid columns={2}>", ...PANES, "</Terminal.Grid>", ""].join("\n");
+describe("Tier TG — startup, settlement and teardown in a document", () => {
+  const TWO = ["<Terminal.Grid columns={2}>", ...CELLS, "</Terminal.Grid>", ""].join("\n");
 
-  it("TG9: nothing attaches until every pane has acquired a terminal activity", function* () {
+  it("TG9: nothing is shown until every cell has acquired a terminal activity", function* () {
     const dir = yield* useDir();
-    // One ordered record the pane and the grid both write to, so
-    // "readiness came first" is read rather than assumed. The grid emits
-    // `running` for every pane immediately before it attaches, so asserting on
-    // that alone would prove nothing.
+    // One ordered record the cell and the grid both write to, so "readiness
+    // came first" is read rather than assumed.
     const timeline: string[] = [];
     const run = yield* runDocument(
       dir,
@@ -2102,12 +1464,14 @@ describe("Tier TG — startup, settlement and teardown", () => {
         slowMarks: timeline,
         grid: {
           // deno-lint-ignore require-yield
-          *onAttach() {
-            timeline.push("attach");
+          *onShow() {
+            timeline.push("show");
           },
-          shell: () =>
+          shell: (position) =>
             resource<Operation<TerminalShellOutcome>>(function* (provide) {
-              timeline.push("ready:shell");
+              if (position === 1) {
+                timeline.push("ready:shell");
+              }
               yield* provide(done({ exitCode: 0 }));
             }),
         },
@@ -2115,12 +1479,12 @@ describe("Tier TG — startup, settlement and teardown", () => {
     );
 
     expect(run.outcome.ok).toBe(true);
-    // The slow pane started last, and the grid still waited for it.
-    expect(timeline[timeline.length - 1]).toBe("attach");
+    // The slow cell started last, and the grid still waited for it.
+    expect(timeline[timeline.length - 1]).toBe("show");
     expect(timeline).toContain("ready:slow");
   });
 
-  it("TG9: a pane that never starts fails the grid, and nothing attaches", function* () {
+  it("TG9: a cell that never starts fails the grid, and nothing is shown", function* () {
     const dir = yield* useDir();
     const run = yield* runDocument(
       dir,
@@ -2134,9 +1498,9 @@ describe("Tier TG — startup, settlement and teardown", () => {
     );
 
     expect(failureOf(run)).toContain("finished without starting anything interactive");
-    // No partial grid was ever shown, and the hidden grid was released — once,
+    // No partial grid was ever shown, and the hidden host was released — once,
     // with nothing of the provider's still held.
-    expect(run.events).not.toContain("attach:0");
+    expect(run.events.some((event) => event.startsWith("show:"))).toBe(false);
     expectReleasedOnce(run);
   });
 
@@ -2147,49 +1511,39 @@ describe("Tier TG — startup, settlement and teardown", () => {
       ["<Terminal.Grid columns={1}>", '<Terminal title="Shell" />', "</Terminal.Grid>", ""].join(
         "\n",
       ),
-      {
-        grid: {
-          // Spawns and is finished in the same breath: ready and settled.
-          shell: () =>
-            resource<Operation<TerminalShellOutcome>>(function* (provide) {
-              yield* provide(done({ exitCode: 0 }));
-            }),
-        },
-      },
     );
 
     expect(run.outcome.ok).toBe(true);
-    // Ready the moment the activity was acquired, so the grid attached; settled straight after,
-    // so its final status is its own. Both, from one child that started and
-    // stopped in the same breath.
-    expect(run.events).toContain("attach:0");
-    expect(run.events).toContain("state:0:0:succeeded");
-    expect(run.events.indexOf("state:0:0:succeeded")).toBeGreaterThan(
-      run.events.indexOf("attach:0"),
+    // Ready the moment the activity was acquired, so the grid was shown;
+    // settled straight after, so its final status is its own.
+    expect(run.events.some((event) => event.startsWith("show:0:"))).toBe(true);
+    expect(run.events).toContain("status:0:0:succeeded");
+    expect(run.events.indexOf("status:0:0:succeeded")).toBeGreaterThan(
+      run.events.findIndex((event) => event.startsWith("show:0:")),
     );
   });
 
-  it("TG9: a preparation failure starts no pane at all", function* () {
+  it("TG9: a preparation failure starts no cell at all", function* () {
     const dir = yield* useDir();
     const run = yield* runDocument(dir, TWO, {
       grid: {
         // deno-lint-ignore require-yield
         *onPrepare() {
-          throw new Error("no pane endpoint could be created");
+          throw new Error("no cell endpoint could be created");
         },
       },
     });
 
-    expect(failureOf(run)).toContain("no pane endpoint could be created");
+    expect(failureOf(run)).toContain("no cell endpoint could be created");
     expect(run.shown.size).toBe(0);
   });
 
-  it("TG9: an attach failure shows no partial grid and releases it", function* () {
+  it("TG9: a failure showing the grid shows no partial grid and releases it", function* () {
     const dir = yield* useDir();
     const run = yield* runDocument(dir, TWO, {
       grid: {
         // deno-lint-ignore require-yield
-        *onAttach() {
+        *onShow() {
           throw new Error("the grid could not be shown");
         },
       },
@@ -2199,7 +1553,7 @@ describe("Tier TG — startup, settlement and teardown", () => {
     expect(run.events).toContain("destroy:0");
   });
 
-  it("TG9: simultaneous startup failures report the first authored ordinal", function* () {
+  it("TG9: simultaneous startup failures report the first authored position", function* () {
     const dir = yield* useDir();
     const run = yield* runDocument(
       dir,
@@ -2212,13 +1566,13 @@ describe("Tier TG — startup, settlement and teardown", () => {
       ].join("\n"),
     );
 
-    // Both panes fail to start. The one reported is the first authored, not
+    // Both cells fail to start. The one reported is the first authored, not
     // whichever settled first.
-    expect(failureOf(run)).toContain('pane 0 ("First")');
-    expect(failureOf(run)).not.toContain('pane 1 ("Second")');
+    expect(failureOf(run)).toContain('terminal 0 ("First")');
+    expect(failureOf(run)).not.toContain('terminal 1 ("Second")');
   });
 
-  it("TG12: close cancels a live pane as closed, then destroys and continues", function* () {
+  it("TG12: close cancels a live cell as closed, then destroys and continues", function* () {
     const dir = yield* useDir();
     const run = yield* runDocument(
       dir,
@@ -2232,15 +1586,15 @@ describe("Tier TG — startup, settlement and teardown", () => {
       ].join("\n"),
       {
         grid: {
-          // The reader leaves while the pane is still live.
+          // The reader leaves while the cell is still live.
           close: immediateClose(),
         },
       },
     );
 
     expect(run.outcome.ok).toBe(true);
-    // Teardown cancellation is not a pane failure.
-    expect(run.events).toContain("state:0:0:closed");
+    // Teardown cancellation is not a cell failure.
+    expect(run.events).toContain("status:0:0:closed");
     const destroyed = run.events.indexOf("destroy:0");
     expect(run.events.indexOf("closed:0")).toBeLessThan(destroyed);
     // Released once, after the reader left, with nothing still held.
@@ -2249,11 +1603,10 @@ describe("Tier TG — startup, settlement and teardown", () => {
     expect(run.ran).toEqual(["after the grid"]);
   });
 
-  it("TG13: an active provider failure cancels every pane and fails the grid", function* () {
+  it("TG13: an active provider failure cancels every cell and fails the grid", function* () {
     const dir = yield* useDir();
     const run = yield* runDocument(dir, TWO, {
       grid: {
-        // The reader's close operation is where an active provider can fail.
         // deno-lint-ignore require-yield
         *close() {
           throw new Error("the terminal provider lost its server");
@@ -2262,15 +1615,35 @@ describe("Tier TG — startup, settlement and teardown", () => {
     });
 
     expect(failureOf(run)).toContain("the terminal provider lost its server");
-    // A provider that failed mid-grid still had its grid released exactly once.
+    // A provider that failed mid-grid still had its host released exactly once.
+    expectReleasedOnce(run);
+  });
+
+  it("TG21: a background provider failure fails the grid with no foreground action", function* () {
+    const dir = yield* useDir();
+    const background = withResolvers<Error>();
+    const run = yield* runDocument(dir, TWO, {
+      grid: {
+        // Nothing is waiting on the renderer: the reader never leaves, and the
+        // failure is raised from the provider's own background observation.
+        close: () => suspend(),
+        fail: () => background.operation,
+        // deno-lint-ignore require-yield
+        *onShow() {
+          background.resolve(new Error("the renderer lost its channel"));
+        },
+      },
+    });
+
+    expect(failureOf(run)).toContain("the renderer lost its channel");
     expectReleasedOnce(run);
   });
 });
 
 describe("Tier TG — durability and replay", () => {
-  const GRID = heldDocument(2, PANES);
+  const GRID = heldDocument(2, CELLS);
   /**
-   * A grid whose only pane never starts, with its failure contained.
+   * A grid whose only cell never starts, with its failure contained.
    *
    * `<PrintErrors>` keeps the document going, so the root reaches no outcome of
    * its own and a resumed run reaches the region rather than replaying the root
@@ -2323,16 +1696,16 @@ describe("Tier TG — durability and replay", () => {
     return undefined;
   }
 
-  /** The pane outcomes the grid retained, in authored order. */
-  function paneOutcomes(run: DocumentRun): unknown[] {
-    const panes = retainedGrid(run)?.panes;
-    return Array.isArray(panes) ? panes : [];
+  /** The cell outcomes the grid retained, in authored order. */
+  function cellOutcomes(run: DocumentRun): unknown[] {
+    const cells = retainedGrid(run)?.cells;
+    return Array.isArray(cells) ? cells : [];
   }
 
   /**
    * How every `Close` at this coroutine depth ended, in journal order.
    *
-   * Depth 2 is the grid child and depth 3 its panes, so a row reads these to
+   * Depth 2 is the grid child and depth 3 its cells, so a row reads these to
    * say how many records each level wrote and what each one settled to —
    * including whether any of them settled as a cancellation.
    */
@@ -2358,8 +1731,9 @@ describe("Tier TG — durability and replay", () => {
 
     const second = yield* runInterrupted(dir, GRID, stream, { close: true });
 
-    // No provider was asked for a grid, nothing was prepared or attached, no
-    // pane content expanded, no shell or launcher ran, and nothing displayed.
+    // No provider was asked for a host, nothing was prepared, rendered or
+    // shown, no cell content expanded, no shell or launcher ran, and nothing
+    // displayed.
     expect(second.requests).toEqual([]);
     expect(second.events).toEqual([]);
     expect(second.shown.size).toBe(0);
@@ -2372,7 +1746,7 @@ describe("Tier TG — durability and replay", () => {
 
     const first = yield* runInterrupted(dir, CONTAINED_FAILURE, stream, {
       closeAfterFailure: true,
-      shellFailsAfterAttach: 0,
+      shellFailsAfterShow: 0,
     });
     expect(first.requests).toHaveLength(1);
     expect(completedGrid(first)).toBe(true);
@@ -2397,51 +1771,56 @@ describe("Tier TG — durability and replay", () => {
     expect(second.shown.size).toBe(0);
   });
 
-  it("TG16: each pane is a durable child of the grid, in authored order", function* () {
+  it("TG16: each cell is a durable child of the grid, in authored order", function* () {
     const dir = yield* useDir();
     const stream = new InMemoryStream();
-    // Both panes settle, so both pane children have written their records.
+    // Both cells settle, so both cell children have written their records.
     const first = yield* runInterrupted(dir, GRID, stream, { settled: 2 });
 
     const closes = first.journal.filter((event) => event.type === "close");
-    const paneIds = closes
+    const cellIds = closes
       .map((event) => String(event.coroutineId))
       .filter((id) => id.split(".").length >= 3)
       .sort();
-    expect(paneIds).toHaveLength(2);
-    const [left, right] = paneIds;
+    expect(cellIds).toHaveLength(2);
+    const [left, right] = cellIds;
     // Authored order, not scheduling order, and both beneath one grid child.
     expect(left!.endsWith(".0")).toBe(true);
     expect(right!.endsWith(".1")).toBe(true);
     expect(left!.slice(0, left!.lastIndexOf("."))).toBe(right!.slice(0, right!.lastIndexOf(".")));
   });
 
-  it("TG16: an interrupted grid acquires a fresh provider grid rather than hanging", function* () {
+  it("TG16: an interrupted grid acquires a fresh provider host rather than hanging", function* () {
     const dir = yield* useDir();
     const stream = new InMemoryStream();
 
     // Interrupted while the grid is open, so its child records a cancelled
-    // close. Under the repaired spawn policy the resumed run continues that
-    // region instead of suspending on it forever.
+    // close. The resumed run continues that region instead of suspending on it.
     const first = yield* runInterrupted(dir, GRID, stream);
     expect(first.requests).toHaveLength(1);
 
     const second = yield* runInterrupted(dir, GRID, stream);
 
-    // A fresh provider grid, acquired by this run.
+    // A fresh host, acquired by this run, with a state sequence of its own that
+    // starts at revision zero.
     expect(second.requests).toHaveLength(1);
     expect(second.events).toContain("prepare:0:2x1");
+    expect(second.events).toContain("render:0:0");
   });
 
-  it("TG16: a completed pane is restored; an incomplete shell starts again", function* () {
+  it("TG16: a completed cell is restored; an incomplete shell starts again", function* () {
     const dir = yield* useDir();
     const stream = new InMemoryStream();
     const source = heldDocument(2, [
       '<Terminal title="Left"><Ran mark="left ran" /><Interactive /></Terminal>',
       '<Terminal title="Right" />',
     ]);
-    const holdingShell: ControlledTerminalGridOptions["shell"] = () =>
+    const holdingShell: ControlledProviderOptions["shell"] = (position) =>
       resource<Operation<TerminalShellOutcome>>(function* (provide) {
+        if (position === 0) {
+          yield* provide(done({ exitCode: 0 }));
+          return;
+        }
         // Started, and never finishes on its own.
         yield* provide(
           (function* (): Operation<TerminalShellOutcome> {
@@ -2452,7 +1831,7 @@ describe("Tier TG — durability and replay", () => {
         );
       });
 
-    // The left pane settles; the shell holds, so only one pane record exists.
+    // The left cell settles; the shell holds, so only one cell record exists.
     const first = yield* runInterrupted(dir, source, stream, {
       shell: holdingShell,
       settled: 1,
@@ -2464,12 +1843,10 @@ describe("Tier TG — durability and replay", () => {
       settled: 1,
     });
 
-    // The completed pane came back from its retained outcome: its body did not
-    // run again.
+    // The completed cell came back from its retained outcome: its body did not
+    // run again, and no activity was acquired for it.
     expect(second.ran).not.toContain("left ran");
-    // The incomplete shell starts again under current host policy, claiming no
-    // continuity with the terminal history it had before.
-    expect(second.events.some((event) => event.startsWith("shell:"))).toBe(true);
+    expect(second.events.filter((event) => event.startsWith("shell:"))).toEqual(["shell:0:1"]);
   });
 
   /**
@@ -2513,17 +1890,14 @@ describe("Tier TG — durability and replay", () => {
     });
 
     // Refused before the foreground lease and before the provider: nothing was
-    // prepared, attached or displayed.
+    // prepared, rendered or displayed.
     expect(second.requests).toEqual([]);
     expect(second.events).toEqual([]);
     expect(second.shown.size).toBe(0);
-    // A replay refusal, not a run that opened something and then failed. The
-    // sentence is the divergence report's: a refusal raised while retained
-    // children are still being replayed loses to it, which is established
-    // behaviour rather than something this row can change.
-    expect(failureOf(second)).toContain("Divergence");
-    expect(second.events).toEqual([]);
-    expect(second.shown.size).toBe(0);
+    // A replay refusal, not a run that opened something and then failed, and it
+    // names the value that changed.
+    expect(failureOf(second)).toContain("columns 2 rather than 3");
+    expect(failureOf(second)).toContain("cannot be replayed onto this run");
   });
 
   it("TG17: a changed prop-borne title refuses with zero provider observation", function* () {
@@ -2541,7 +1915,7 @@ describe("Tier TG — durability and replay", () => {
     });
 
     expect(second.requests).toEqual([]);
-    expect(failureOf(second)).toContain("Divergence");
+    expect(failureOf(second)).toContain('terminal 0 titled "Left" rather than "Elsewhere"');
     expect(second.events).toEqual([]);
     expect(second.shown.size).toBe(0);
   });
@@ -2561,12 +1935,12 @@ describe("Tier TG — durability and replay", () => {
 
   it("TG17: a continuation opens the retained structure, not the file's", function* () {
     const structural: [string, string[]][] = [
-      ["pane count", [...PANES, '<Terminal title="Extra" />']],
-      ["pane order", ['<Terminal title="Right" />', ...PANES.slice(0, 1)]],
-      ["pane form", ['<Terminal title="Left" />', '<Terminal title="Right" />']],
+      ["cell count", [...CELLS, '<Terminal title="Extra" />']],
+      ["cell order", ['<Terminal title="Right" />', ...CELLS.slice(0, 1)]],
+      ["cell form", ['<Terminal title="Left" />', '<Terminal title="Right" />']],
     ];
 
-    for (const [what, panes] of structural) {
+    for (const [what, cells] of structural) {
       const dir = yield* useDir();
       const stream = new InMemoryStream();
       const first = yield* runInterrupted(dir, GRID, stream);
@@ -2574,7 +1948,7 @@ describe("Tier TG — durability and replay", () => {
 
       // The file now says something else. A continuation executes the root the
       // journal retained, so the grid it opens is the one that was recorded.
-      const second = yield* runInterrupted(dir, heldDocument(2, panes), stream);
+      const second = yield* runInterrupted(dir, heldDocument(2, cells), stream);
 
       expect(`${what}: ${second.requests.length}`).toBe(`${what}: 1`);
       expect(`${what}: ${JSON.stringify(second.requests[0])}`).toBe(
@@ -2583,7 +1957,7 @@ describe("Tier TG — durability and replay", () => {
     }
   });
 
-  it("TG17: the retained record holds the complete authored pane structure", function* () {
+  it("TG17: the retained record holds the complete authored cell structure", function* () {
     const dir = yield* useDir();
     const stream = new InMemoryStream();
     const run = yield* runInterrupted(dir, GRID, stream);
@@ -2594,13 +1968,14 @@ describe("Tier TG — durability and replay", () => {
     expect(layout).toBeDefined();
     const value =
       layout?.type === "yield" && layout.result.status === "ok" ? layout.result.value : undefined;
-    // Every authored pane, with its ordinal, title, form and derived position.
+    // Every authored cell, with its title, form and derived position — and no
+    // ordinal, index, key or live identity beside them.
     expect(value).toEqual({
       columns: 2,
       rows: 1,
-      panes: [
-        { ordinal: 0, title: "Left", form: "paired", row: 0, column: 0 },
-        { ordinal: 1, title: "Right", form: "self-closing", row: 0, column: 1 },
+      cells: [
+        { title: "Left", form: "paired", row: 0, column: 0 },
+        { title: "Right", form: "self-closing", row: 0, column: 1 },
       ],
     });
   });
@@ -2608,16 +1983,16 @@ describe("Tier TG — durability and replay", () => {
   it("TG17: a malformed retained layout refuses before provider observation", function* () {
     /** The retained layout, replaced by something the record cannot mean. */
     const damaged: [string, Json][] = [
-      ["a missing member", { columns: 2, panes: [] }],
+      ["a missing member", { columns: 2, cells: [] }],
       [
         "an extra member",
         {
           columns: 2,
           rows: 1,
           extra: true,
-          panes: [
-            { ordinal: 0, title: "Left", form: "paired", row: 0, column: 0 },
-            { ordinal: 1, title: "Right", form: "self-closing", row: 0, column: 1 },
+          cells: [
+            { title: "Left", form: "paired", row: 0, column: 0 },
+            { title: "Right", form: "self-closing", row: 0, column: 1 },
           ],
         },
       ],
@@ -2626,20 +2001,20 @@ describe("Tier TG — durability and replay", () => {
         {
           columns: "two",
           rows: 1,
-          panes: [
-            { ordinal: 0, title: "Left", form: "paired", row: 0, column: 0 },
-            { ordinal: 1, title: "Right", form: "self-closing", row: 0, column: 1 },
+          cells: [
+            { title: "Left", form: "paired", row: 0, column: 0 },
+            { title: "Right", form: "self-closing", row: 0, column: 1 },
           ],
         },
       ],
       [
-        "a pane out of position",
+        "a retained ordinal",
         {
           columns: 2,
           rows: 1,
-          panes: [
-            { ordinal: 1, title: "Left", form: "paired", row: 0, column: 0 },
-            { ordinal: 0, title: "Right", form: "self-closing", row: 0, column: 1 },
+          cells: [
+            { ordinal: 0, title: "Left", form: "paired", row: 0, column: 0 },
+            { ordinal: 1, title: "Right", form: "self-closing", row: 0, column: 1 },
           ],
         },
       ],
@@ -2648,9 +2023,9 @@ describe("Tier TG — durability and replay", () => {
         {
           columns: 2,
           rows: 5,
-          panes: [
-            { ordinal: 0, title: "Left", form: "paired", row: 3, column: 1 },
-            { ordinal: 1, title: "Right", form: "self-closing", row: 0, column: 1 },
+          cells: [
+            { title: "Left", form: "paired", row: 3, column: 1 },
+            { title: "Right", form: "self-closing", row: 0, column: 1 },
           ],
         },
       ],
@@ -2688,7 +2063,7 @@ describe("Tier TG — durability and replay", () => {
     const dir = yield* useDir();
     const stream = new InMemoryStream();
     const source = heldDocument(2, [
-      '<Terminal title="Live"><Interactive /><Ran mark="pane body" /><SlowTeardown /></Terminal>',
+      '<Terminal title="Live"><Interactive /><Ran mark="cell body" /><SlowTeardown /></Terminal>',
       '<Terminal title="Shell" />',
     ]);
 
@@ -2704,7 +2079,7 @@ describe("Tier TG — durability and replay", () => {
     let heldWhenBlocked: TerminalProviderResources | undefined;
 
     const first = yield* runInterrupted(dir, source, stream, {
-      // 1. The live pane arms its blocking finalizer, and 2. only then does the
+      // 1. The live cell arms its blocking finalizer, and 2. only then does the
       //    reader leave.
       closeWhenArmed: true,
       // 3. Entering the finalizer is observed, and it blocks there.
@@ -2732,30 +2107,30 @@ describe("Tier TG — durability and replay", () => {
     expect(entries).toBe(1);
     expect(exits).toBe(1);
     expect(first.events.filter((event) => event === "destroy:0")).toEqual(["destroy:0"]);
-    expect(first.ran).toEqual(["pane body"]);
+    expect(first.ran).toEqual(["cell body"]);
 
     // One grid child, completed, and it says what closed it.
     expect(closeStatuses(first, 2)).toEqual(["ok"]);
     expect(retainedGrid(first)?.close).toBe("reader");
-    // Two pane children, both completed. Neither they nor the grid recorded a
+    // Two cell children, both completed. Neither they nor the grid recorded a
     // cancellation: a cancelled child is what a later run would have to revive,
     // and these have nothing left to do.
     expect(closeStatuses(first, 3)).toEqual(["ok", "ok"]);
-    expect(paneOutcomes(first)).toEqual([
+    expect(cellOutcomes(first)).toEqual([
       { status: "closed", reason: "" },
       { status: "succeeded", reason: "" },
     ]);
 
     // The provider's counters went up and came back down. Reading them only at
     // the end would be true of counters that never moved.
-    expect(heldWhenBlocked).toEqual({ grids: 1, attached: 1, shells: 0 });
-    expect(first.live).toEqual({ grids: 0, attached: 0, shells: 0 });
+    expect(heldWhenBlocked).toEqual({ grids: 1, shown: 1, activities: 0 });
+    expect(first.live).toEqual({ grids: 0, shown: 0, activities: 0 });
     // And the foreground lease came back: it was taken and given back twice
     // over once the run was done.
     expect(leases).toBe(2);
 
     // 7. Resumed with three tripwires: no provider at all, so a replay that
-    //    asked for a grid would refuse; a mark inside the pane body, so a pane
+    //    asked for a host would refuse; a mark inside the cell body, so a cell
     //    that expanded again would say so; and the finalizer, which would
     //    report being entered a second time.
     let reentered = 0;
@@ -2775,7 +2150,7 @@ describe("Tier TG — durability and replay", () => {
     expect(second.ran).toEqual([PAST_THE_GRID]);
   });
 
-  it("TG17: the retained layout and pane outcomes are provider-neutral", function* () {
+  it("TG17: the retained layout and cell outcomes are provider-neutral", function* () {
     const dir = yield* useDir();
     const stream = new InMemoryStream();
     const run = yield* runInterrupted(dir, GRID, stream);
@@ -2783,7 +2158,7 @@ describe("Tier TG — durability and replay", () => {
     const written = JSON.stringify(run.journal);
     expect(written).toContain('"columns":2');
     expect(written).toContain('"Left"');
-    for (const leak of ["socket", "tmux", "attach-key", "argv", "multiplexer"]) {
+    for (const leak of ["socket", "tmux", "attach-key", "argv", "multiplexer", "ordinal"]) {
       expect(`${leak}: ${written.includes(leak)}`).toBe(`${leak}: false`);
     }
   });

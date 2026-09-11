@@ -77,6 +77,9 @@ importers:
       semver:
         specifier: ^7.8.5
         version: 7.8.5
+      starfx:
+        specifier: 0.16.1
+        version: 0.16.1(react-dom@19.2.0(react@19.2.0))(react@19.2.0)
       unist-util-select:
         specifier: ^5
         version: 5.1.0
@@ -105,6 +108,9 @@ importers:
       '@executablemd/runtime':
         specifier: workspace:*
         version: link:packages/runtime
+      '@executablemd/terminal':
+        specifier: workspace:*
+        version: link:packages/terminal
       '@executablemd/test-agent':
         specifier: workspace:*
         version: link:packages/test-agent
@@ -242,6 +248,9 @@ importers:
       '@executablemd/runtime':
         specifier: workspace:*
         version: link:../runtime
+      '@executablemd/terminal':
+        specifier: workspace:*
+        version: link:../terminal
       '@secretlint/core':
         specifier: 13.0.4
         version: 13.0.4
@@ -314,6 +323,24 @@ importers:
       effection:
         specifier: 4.1.0
         version: 4.1.0
+
+  packages/terminal:
+    dependencies:
+      '@effectionx/context-api':
+        specifier: 0.6.0
+        version: 0.6.0(effection@4.1.0)
+      '@effectionx/node':
+        specifier: 0.2.5
+        version: 0.2.5(effection@4.1.0)
+      '@executablemd/durable-streams':
+        specifier: workspace:*
+        version: link:../durable-streams
+      effection:
+        specifier: 4.1.0
+        version: 4.1.0
+      starfx:
+        specifier: 0.16.1
+        version: 0.16.1(react-dom@19.2.0(react@19.2.0))(react@19.2.0)
 
   packages/test-agent:
     dependencies:
@@ -2076,6 +2103,9 @@ packages:
   html-void-elements@3.0.0:
     resolution: {integrity: sha512-bEqo66MRXsUGxWHV5IP0PUiAWwoEjba4VCzg0LjFJBpchPaTfyfCKTG6bc5F8ucKec3q5y6qOdGyYTSBEvhCrg==}
 
+  immer@11.1.18:
+    resolution: {integrity: sha512-EQyQtLiYW029lyoczMl/Hh4Xu7cDecSc58JRYpHyL4tIAu3eqd1yJzQX04d2BZHDkzFFvm6qJEJWOtfDSWAXbQ==}
+
   immutable@5.1.5:
     resolution: {integrity: sha512-t7xcm2siw+hlUM68I+UEOK+z84RzmN59as9DZ7P1l0994DKUWV7UXBMQZVxaoMSRQ+PBZbHCOoBt7a2wxOMt+A==}
 
@@ -2427,6 +2457,9 @@ packages:
     resolution: {integrity: sha512-Xf0nWe6RseziFMu+Ap9biiUbmplq6S9/p+7w7YXP/JBHhrUDDUhwa+vANyubuqfZWTveU//DYVGsDG7RKL/vEw==}
     engines: {node: '>=0.10.0'}
 
+  reselect@5.3.0:
+    resolution: {integrity: sha512-XGoLeRAVzUTcJ1qkxPQhDJyIZ5d6zzZD9nT7AEZOaaU9UbWclhycElmhO+VD5bFeLuzhPBaOV2oXC8uG35ZSpg==}
+
   resolve-pkg-maps@1.0.0:
     resolution: {integrity: sha512-seS2Tj26TBVOC2NIc2rOe2y2ZO7efxITtLZcGSOnHHNOQ7CkiUBfw0Iw2ck6xkIhPwLhKNLS8BO+hEpngQlqzw==}
 
@@ -2482,6 +2515,20 @@ packages:
   stack-utils@2.0.6:
     resolution: {integrity: sha512-XlkWvfIm6RmsWtNJx+uqtKLS8eqFbxUg0ZzLXqY0caEy9l7hruX8IpiDnjsLavoBgqCCR71TqWO8MaXYheJ3RQ==}
     engines: {node: '>=10'}
+
+  starfx@0.16.1:
+    resolution: {integrity: sha512-qYAGHJJCYkBChTu9ZSmNTdzvNMDC0Hds+ecNh3TpTSCIqCi15U2+CJ+jI37b6TZuPG76+CUxFbzP+BA+qUb1TQ==}
+    peerDependencies:
+      react: '>=18'
+      react-dom: '>=18'
+      react-redux: ^9
+    peerDependenciesMeta:
+      react:
+        optional: true
+      react-dom:
+        optional: true
+      react-redux:
+        optional: true
 
   streamx@2.28.0:
     resolution: {integrity: sha512-1Yowhzjf0ivGMrTIkY9hav5TxobO9qIVqUE41fiCGMGgc3CLlf4MY+9AHmZqBWgDTue0fY9zWjYFVyf6Diuobw==}
@@ -3915,6 +3962,8 @@ snapshots:
 
   html-void-elements@3.0.0: {}
 
+  immer@11.1.18: {}
+
   immutable@5.1.5: {}
 
   is-extendable@0.1.1: {}
@@ -4418,6 +4467,8 @@ snapshots:
 
   require-from-string@2.0.2: {}
 
+  reselect@5.3.0: {}
+
   resolve-pkg-maps@1.0.0: {}
 
   reusify@1.1.0: {}
@@ -4463,6 +4514,15 @@ snapshots:
   stack-utils@2.0.6:
     dependencies:
       escape-string-regexp: 2.0.0
+
+  starfx@0.16.1(react-dom@19.2.0(react@19.2.0))(react@19.2.0):
+    dependencies:
+      effection: 4.1.0
+      immer: 11.1.18
+      reselect: 5.3.0
+    optionalDependencies:
+      react: 19.2.0
+      react-dom: 19.2.0(react@19.2.0)
 
   streamx@2.28.0:
     dependencies:

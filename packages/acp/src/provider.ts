@@ -87,8 +87,8 @@ import {
   AgentSessionRecoveryRequired,
   cwd,
   ExecutableObservationError,
-  nativeLaunch,
 } from "@executablemd/runtime";
+import { nativeLaunch } from "@executablemd/terminal";
 import type {
   AgentSessionCoordinator,
   AgentSessionKey,

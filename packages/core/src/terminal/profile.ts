@@ -14,10 +14,10 @@
 
 import { scoped } from "effection";
 import type { Operation } from "effection";
+import { installTerminalProvider } from "@executablemd/terminal";
+import { useTerminalInstallation } from "@executablemd/terminal/lifecycle";
 
 import { Execution } from "../execute.ts";
-import { useTerminalInstallation } from "./presentation.ts";
-import { installTerminalProvider } from "./provider-api.ts";
 
 export interface TerminalGridProfileOptions {
   /**
