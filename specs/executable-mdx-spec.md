@@ -9490,6 +9490,82 @@ Node and Bun accept and validate the same syntax but install no provider and
 therefore refuse before pane start. A controlled provider that is not tmux
 exercises the same core contract in tests.
 
+### 6.22 Presenting Agent conversations with `Session.Message.*`
+
+A conversation view presents provider-neutral logical entries through ordinary
+Markdown components. The initial component names are:
+
+- `Session.Message.User`
+- `Session.Message.Assistant`
+- `Session.Message.Thought`
+- `Session.Message.Tool`
+- `Session.Message.Permission`
+- `Session.Message.Status`
+- `Session.Message.Unknown`
+
+Each name has a package default. Component selection uses the ordinary §5.3
+resolution order, so a repository-local component replaces the default for
+that name alone. The selected component keeps ordinary XMD behavior. Authors
+write Markdown and do not name or manage presentation regions.
+
+#### Entry updates
+
+One conversation view owns one update loop and one stable internal region for
+each logical entry. XMD owns immutable normalized entry state, stable entry
+identity, replacement, coalescing, viewport anchoring, follow mode, and unread
+state. A streaming or settled snapshot replaces only the region for its logical
+entry and neither duplicates nor renumbers neighboring entries.
+
+Source ingestion proceeds independently from Markdown projection. If a
+component blocks, later immutable snapshots continue to enter the view. A
+projection that completes against an older view version is discarded. Pending
+work coalesces, and after rendering can proceed the newest state is presented
+instead of every skipped revision.
+
+The viewport anchor is an entry identity rather than a terminal row. Layout and
+resize may change which rows an entry occupies without changing the anchor,
+follow state, unread count, history order, or entry identity. Decoded navigation
+input changes the XMD-owned viewport state; terminal coordinates do not become
+conversation identity.
+
+#### Terminal boundary
+
+`@bomb.sh/tty` is a zero-I/O layer beneath the conversation view. It owns layout,
+input decoding, resize processing, and the ANSI bytes for terminal cells changed
+since the preceding frame. XMD supplies presentation operations and applies the
+decoded input and size changes to its own entry and viewport state. Bombshell
+does not read a provider source, normalize entries, choose entry identity, own
+follow or unread state, or authorize an Agent action.
+
+The same contract runs under the Deno source host and `deno compile`. Default
+Markdown components and every Bombshell WASM or other runtime asset are named
+through `scripts/lib/compile.ts`, the canonical compiled-asset source used by
+local builds, releases, and clean verification. No consumer or compile site
+keeps another asset list, and compiled evidence runs outside the checkout so a
+missing embedded asset cannot fall back to a source file.
+
+#### Ownership and durability
+
+Tail and REPL may share the normalizer-facing presentation contract. They do not
+share transports, stores, file watchers, ACP connections, or lifecycle
+authority. Each view owns and tears down its update loop, ingestion child, and
+projection work inside its own scope.
+
+Rendered frames, streaming revisions, cursor, selection, scroll position,
+follow mode, and unread state are ephemeral. The presentation layer journals
+none of them. A consumer may retain a final normalized turn when its separate
+replay contract requires one, but replay never treats the prior terminal frame
+or interaction state as authoritative.
+
+This section does not yet define the exact normalized production entry schema,
+the props supplied to each `Session.Message.*` component, or the production
+package that owns normalization-facing presentation. #800 settles those
+connected boundaries without introducing a dependency cycle with core. The
+#799 proof's synthetic entry type, test-only props, narrow Markdown lexer,
+mutation switches, evidence record, byte counts, barrier implementation,
+development-dependency placement, and environment permissions are not part of
+this contract.
+
 
 ## 7. Entry point
 
@@ -11513,6 +11589,19 @@ test derives a core result from a provider identifier.
 | TG16 | Partial replay | Exact layout rebuilds a fresh provider composite; completed pane children appear settled without effects, incomplete paired children follow their durable records, incomplete native launches preserve prepared/detached session identity, and an incomplete shell starts current host policy without terminal-history continuity |
 | TG17 | Replay divergence and retained shape | A changed column count, pane count, order, form or title refuses before provider work; retained layout, close kind and pane outcomes contain no provider command, socket, process, session, window or pane identifier, path, argv, environment or terminal bytes |
 | TG18 | Provider neutrality | The controlled non-tmux provider passes TG1–TG17; the tmux adapter prepares one hidden invocation-private server with authenticated persistent pane workers, transmits exact child creation outside tmux parsing, applies explicit row-major layout, distinguishes visible detach from control loss and server stop, attaches only after runtime spawn readiness, and satisfies TG14 without leaking provider identifiers; Node and Bun validate the same document and refuse before pane start with no provider installed |
+
+### Tier SP — Agent conversation presentation (§6.22)
+
+| # | Test | Verify |
+|---|------|--------|
+| SP1 | Standard presentations | Every `Session.Message.*` name in §6.22 resolves to its package default, and a repository-local Tool component replaces Tool alone through ordinary component selection |
+| SP2 | Stable replacement | Several active snapshots and one settled snapshot replace one stable entry region without changing or duplicating either neighboring entry |
+| SP3 | Blocked projection | While one component is signal-blocked, ingestion records later immutable snapshots; release discards the stale result and commits the newest state without rendering each skipped revision |
+| SP4 | Entry-anchored viewport | Full history opens at the newest entry; scrolling upward suspends follow, new entries increase unread state, returning to the end resumes follow, and resize preserves the entry anchor, identities, history and correct follow state |
+| SP5 | Bombshell boundary | Real `@bomb.sh/tty` layout, input decoding, resize processing and changed-cell ANSI output consume XMD-owned entry and viewport state without acquiring provider or Agent authority |
+| SP6 | Independent owners | A Tail-shaped source and a REPL-shaped source can present the same normalized conversation while sharing no transport, store, watcher, ACP connection, cursor, update loop or teardown |
+| SP7 | Ephemeral state | Frames, streaming revisions, cursor, selection, scroll, follow and unread state append no journal record and are reconstructed live rather than restored as authoritative presentation state |
+| SP8 | Distribution | The source host and a compiled binary run the same component and Bombshell presentation journey from outside the checkout; removing a default component or Bombshell runtime asset from the canonical compile inputs makes the compiled case fail |
 
 ### Tier CR — Component registration and resolution
 

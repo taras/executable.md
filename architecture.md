@@ -112,6 +112,9 @@ Existing documents and code get aligned to this section retroactively.
 | terminal grid | one provider-neutral foreground region whose direct terminal panes begin concurrently, remain independently interactive, and settle under one scope after complete provider and pane teardown |
 | terminal pane | one authored position in a terminal grid, identified structurally by its grid and ordinal and presented by its authored title. It owns one interactive terminal at a time; a paired pane expands its own document flow and a self-closing pane runs the host's default shell |
 | pane-terminal lease | the exclusive claim one live interactive operation holds on one terminal pane. Claims in different panes do not contend; two claims in one pane do. It is minted and validated by the host's terminal authority and grants no authority over an Agent session |
+| normalized conversation entry | one provider-neutral immutable snapshot of a logical Agent conversation entry. Its production schema and the props projected from it remain owned by #800; raw provider records and private fields are not part of it |
+| conversation view | one live presentation of normalized conversation entries, owned by one update loop with one stable internal region per logical entry. Its presentation state is ephemeral and grants no authority over the source session |
+| entry region | the stable internal presentation identity a conversation view assigns to one logical entry, so a new snapshot replaces that entry without duplicating or renumbering its neighbors. It is live state, not authored syntax or a durable identity |
 | native launcher | the host-owned seam that reserves the foreground terminal or the current pane terminal, flushes what that terminal has pending, starts one native UI there, and reports its terminal status and nothing else. It is not `exec`, whose children are piped, captured and journaled |
 | launch request | the frozen, one-use value public launch middleware routes. It carries the facts of one launch and `with()`, and nothing that can settle one. Identity is object identity: a rebuilt look-alike describes the same ask and authorizes none of it |
 | provider authority | what core delivers to the provider factory it installs, as an argument that factory closes over. It validates the routed request, runs each absent phase once, cross-checks and retains what comes back, and derives the result. There is no reader for one, no context holding one, and no request member carrying one |
@@ -3673,6 +3676,70 @@ provider, including Node and Bun until they install one, refuses before pane
 start. Tests install a controlled non-tmux provider to prove that core grammar,
 authority, lifecycle, settlement, and replay do not depend on tmux behavior.
 
+## Agent conversation presentation
+
+Tail and REPL present one provider-neutral conversation contract even though
+they acquire their conversations in different ways. Tail observes provider
+files without gaining interaction authority. REPL receives updates from the ACP
+connection it owns. Each normalizes its own source before handing immutable
+entries to the presentation layer. Sharing presentation does not share a
+transport, store, watcher, ACP connection, or lifecycle owner.
+
+One conversation view has one XMD-owned update loop and one stable internal
+entry region per logical entry. XMD owns the latest normalized entry state,
+stable entry identity, replacement, coalescing, viewport anchor, follow mode,
+and unread state. Viewport position is anchored to an entry identity rather
+than to terminal rows, so relayout and resize do not turn a row number into
+conversation identity.
+
+Ingestion and projection are independently scheduled children of the view's
+one scope. Ingestion continues while a Markdown component is blocked. A
+projection records which immutable view version it began from; if a newer
+version exists when that work completes, the view discards the stale result.
+Pending work coalesces to the newest state instead of replaying every skipped
+revision. Cancellation stops ingestion and projection, and neither child can
+outlive the view that owns it.
+
+Each message kind is presented by an ordinary Markdown component under the
+existing resolution tiers. The initial names are
+`Session.Message.User`, `Session.Message.Assistant`,
+`Session.Message.Thought`, `Session.Message.Tool`,
+`Session.Message.Permission`, `Session.Message.Status`, and
+`Session.Message.Unknown`. Their package defaults remain ordinary defaults, so
+a repository-local component of the same name wins by the established
+repository-over-default precedence. Authors write Markdown and never address an
+entry region.
+
+`@bomb.sh/tty` is the zero-I/O terminal layer beneath that XMD state. Bombshell
+owns layout, input decoding, resize processing, and the ANSI bytes for cells
+changed since the preceding frame. XMD consumes decoded input and size changes
+to update its semantic viewport state; Bombshell does not acquire a provider
+source, decide entry identity, own follow or unread state, or authorize an
+Agent action. The #799 proof establishes this composition under Deno source and
+`deno compile`.
+
+Rendered frames, streaming revisions, cursor, selection, scroll position,
+follow mode, and unread state are ephemeral. The presentation layer journals
+none of them. A Tail rebuilds them from its current observation, and a REPL
+rebuilds them inside its own live scope. A consumer's separate contract may
+retain a final normalized turn, but that does not retain or restore the
+presentation state.
+
+The default Markdown components and every Bombshell WASM or other runtime asset
+ship through the repository's canonical compiled-asset list in
+`scripts/lib/compile.ts`. No Tail, REPL, release workflow, local build, or clean
+verification path keeps a second list. The compiled binary must run from
+outside the checkout so a missing embedded asset cannot fall back to source
+files.
+
+This boundary does not define the normalized production entry schema, the
+props passed to `Session.Message.*`, or the package that owns normalization-facing
+presentation. #800 is not architecture-complete until those two connected
+decisions are settled without introducing a dependency cycle with core. The
+#799 synthetic type, test-only props, Markdown subset, mutation controls,
+evidence shape, byte thresholds, barrier, dependency placement, and proof-host
+permissions are not this architecture.
+
 ## Contextual run configuration
 
 Nothing has a timeout by default. Three contextual values bound three different
@@ -4971,6 +5038,7 @@ Status is measured against main.
 | nested run-profile Agent and elicitation declarations | lets one `<Execution host="run">` declare one child-scoped `<TestAgent>` scenario set and one non-delegating `<Answers>` matcher set; only frozen test data crosses the harness request, the trusted host constructs both providers inside the isolated child, siblings share no session or provider state, ordinary component shadowing remains in force, and the child journal retains only the selected Prompt and Elicit components' ordinary results. A controlled `<Plan>` may author an exact scenario label that this host alone maps to Plan's derived conversation identity; declaration selection uses the label while runtime state stays keyed by the opaque identity and child, with no matcher or fallback added to ordinary TestAgent sessions | built on the #641 stack; controlled Plan routing added on the #728 stack |
 | `Config` run deadline / exec default / Fetch default / verbosity | three independently owned contextual timeouts, absent unless configured, each read by exactly one consumer, and contextual verbosity — a boolean that is false unless configured, seeded by the command line and overridable for a lexical subtree, bounding nothing and owning no authority | built on this stack |
 | terminal grid (`<Terminal.Grid>` / `<Terminal>`) | replaces the root foreground terminal with one provider-neutral composite whose statically declared direct panes begin concurrently, stay independently interactive, preserve their final statuses until the reader closes the composite, and tear down completely before document execution continues. A paired pane expands isolated document flow; a self-closing pane runs the host's default shell. The grid owns one foreground-terminal lease, each pane owns a separate pane-terminal lease, and a pane-scoped native launcher lets `<Session.Launch>` use that pane without weakening the independent Agent session coordinator. Core validates the complete row-major layout before provider contact, attaches only after every pane is ready, contains post-attach pane failures until close, and records the ordered provider-neutral outcomes. Completed replay contacts no terminal or Agent provider; partial replay rebuilds a fresh composite, restores completed panes as statuses, and continues incomplete pane effects under their existing durable identities. Provider commands, sockets, process topology and layout identifiers remain live-only inside the provider closure | defined for #717; #726 proves the persistent tmux pane-worker topology and its observable teardown boundary on macOS; first production provider is tmux in the Deno and compiled foreground hosts; controlled non-tmux provider proves the core contract; implementation unbuilt |
+| Agent conversation presentation (`Session.Message.*`) | presents immutable provider-neutral entries through ordinary Markdown components in one scope-owned update loop per view, with one stable internal region per logical entry. XMD owns normalized state, identity, replacement, coalescing, entry-anchored viewport state, follow and unread state; `@bomb.sh/tty` owns zero-I/O layout, input decoding, resize processing and changed-cell ANSI output. Ingestion continues while rendering blocks, stale projections are discarded, and pending work coalesces to the newest snapshot. Tail and REPL share this presentation contract but share no transport, store, watcher, ACP connection or lifecycle authority. Frames, streaming revisions and interaction state are ephemeral, and compiled defaults plus Bombshell assets use the canonical compile inputs | #799 proves the composition under Deno source and `deno compile`; specified for #800 and unbuilt. The normalized entry schema, component props and owning production package remain unsettled |
 | native session launch (`<Session.Launch>` / `launchAgentSession()`) | prepares one durable coding-agent session from the rendered body of `<Session.Launch>` and hands the provider's native UI the terminal for that exact session, then continues the document after it exits. The body renders completely first and only what it rendered crosses as the instruction layer; the launch performs no model turn; at the root it takes the run's foreground-terminal lease before an agent is resolved, while a launch inside `<Terminal>` takes that pane's lease through its pane-scoped native launcher. A host with no applicable terminal refuses without probing for an installed CLI. A session is constructed once, by one of two mechanisms, and its create-once construction route says which. Where the provider returns the identity, the ACPX provider creates the session, installs the layer at creation, releases ACP ownership before the spawn, and marks its handle stale so a later `<Prompt>` reattaches. Where the adapter names its own sessions, it allocates the identity inside ownership before any process exists, the native process creates the session under that name from a private mode-0600 instruction file, and ACP creates nothing — the instruction text reaches neither argv nor environment, and the file is removed on success, failure and cancellation alike while ownership is still held. Neither route converts into the other, and which one governs is chosen by the first operation that consumes the placement rather than by the `<Session>` that made it: a fresh `<Session>` publishes no route and establishes nothing, so a `<Session.Launch>` nested inside one constructs the session it placed, while a first subscribed `<Prompt>` publishes ACP-first before it ensures and keeps that account even if the turn that follows is never accepted. An established route is validated eagerly by a later `<Session>`, and a launch meeting a published ACP-first route refuses before an identity exists. A `<Session>` or `<Prompt>` meeting a bound client-allocated route attaches under the route's exact identity; a legacy unbound route or an unavailable attachment capability refuses before a turn and creates no substitute conversation. Phases are retained as `agent_session_launch` records under one expansion identity — `prepared` before ownership is released, then `detached`, then `exited` — so a completed replay launches nothing, a replay holding only `prepared` proves the handoff never began and may still create under the retained identity, and one holding `detached` resumes and never falls back. The public route carries an opaque one-use launch request and answers nothing; authority to run and retain a phase is delivered to the installed provider directly, so neither a returned completion nor a rebuilt request authors a launch. Every operation that can act on an advertised session takes exclusive ownership under one natural key first, through a coordinator the host built and passed in; contention refuses instead of queueing, and an owner that never proved it stopped leaves a recovery tombstone. A host that cannot say who owns a session refuses every advertised operation, and one that cannot say how a session was constructed additionally refuses an agent that names its own — before any provider effect. Every private setup or child-creation failure is normalized to `process-creation-failed` with fixed provider-owned text, carrying no path, argv, environment or host message. No launch path discards persistent provider state. A client-allocated session is bound to one executable build: the build is observed inside ownership before an identity is allocated, the binding is published with the V2 route and retained beside the prepared record, the native child runs the exact observed path in place of the launcher name, and every later create, resume, attachment and incomplete replay reobserves and compares before a process, an ensure or a turn. A `<Session>` or `<Prompt>` meeting a bound client-native route attaches to it: it reobserves the build, requires any retained provider arrangement to assert that same conversation, calls ensure with the route identity as `resumeSessionId`, and requires the provider to report that identity before a turn — refusing on missing capability, build drift, missing history or a differing assertion without creating a substitute conversation. ACP runtimes are partitioned by resolved agent command and binding, each handle is closed by the partition that created it, and a bound partition is torn down when its last handle closes. A legacy V1 client-native route keeps exactly the released native-only behavior and never attaches | built on the #517 stack, extended by the #519 and #561 stacks; Deno and the compiled binary assemble the host — coordinator, route store and executable observer — and Node and Bun keep the same advertised names while assembling none of it, so every advertised operation refuses before provider work; `claude` is advertised for native launch after passing the client-allocated gate at Claude Code 2.1.241 on macOS arm64 (#520) and separately for client-native attachment after passing the native-to-ACP marker gate (#561), and Codex remains unadvertised because nothing has run its provider-returned claims against an installed Codex; `Agent.AddDir` is unbuilt |
 | `<Fetch>` | performs one XMD-mediated HTTP read through contextual `API.Fetch`, admitting the whole request before transport, and retains the normalized request and the detached response as one `fetch` durable observation; capture decides whether a status is data or a failure, and the trusted host's destination ceiling sits below the component | built on the #456 stack; a generated fragment may name the pinned identity only for a request the trusted host stated exactly, on the #369 stack |
 | `API.Files` | routes every document filesystem operation to the installed provider, with no host default and structural failure data. Its mandatory semantic operations include `ensureDirectory`, which recursively creates or adopts one directory and returns Unit; separately loaded copies compose through the stable Api name | built on the #227 stack; directory ensure added by #643 |
