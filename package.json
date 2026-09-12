@@ -58,6 +58,7 @@
     "@executablemd/durable-streams": "workspace:*",
     "@executablemd/runtime": "workspace:*",
     "@executablemd/test-agent": "workspace:*",
+    "@executablemd/terminal": "workspace:*",
     "@executablemd/test-support": "workspace:*",
     "@executablemd/testing": "workspace:*",
     "@executablemd/workflow": "workspace:*",

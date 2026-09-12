@@ -50,6 +50,7 @@ import { PROTECTED_COMPONENT_NAMES, protectedNameRefusal } from "./protected.ts"
 import { CanonicalImports, retain } from "./import-authority.ts";
 import type { ImportedDefinition, ImportRefusal, ImportTier } from "./import-authority.ts";
 import { admitDeclaration, isComponentName } from "./registration.ts";
+import type { MarkdownDeclaration } from "../execution-declarations.ts";
 import { documentationOf } from "./documentation.ts";
 import type {
   ComponentDefinition,
@@ -77,44 +78,10 @@ export class DeclaredMarkdownError extends Error {
 /**
  * One exact Markdown component, as the host declares it.
  *
- * `source` is the authority on the contract. `props`, `returns` and `forms` are
- * optional statements *about* it — a host that states one is held to it, so a
- * packaged asset and the host that ships it cannot drift apart silently.
- *
- * There is no prose here for the same reason. What the component is for, what
- * its `as` binds and what its content means are frontmatter in those bytes,
- * exactly as they are for any other Markdown component, so the asset and the
- * catalog entry describing it are one text.
+ * The Markdown arm of {@link ExecutionDeclaration}, kept under its original
+ * name because that is what hosts and their tests already write.
  */
-export interface DeclaredMarkdownComponent {
-  /** The name a document writes. */
-  readonly name: string;
-  /** Stable, human-readable source identity — reported by inspection. */
-  readonly origin: string;
-  /** The exact Markdown this component is. */
-  readonly source: string;
-  /** SHA-256 of `source` as UTF-8, lowercase hex. Checked, never trusted. */
-  readonly digest: string;
-  /** The forms this component accepts. Omitted means both. */
-  readonly forms?: readonly InvocationForm[];
-  /** What the host says the source declares. Refused when it disagrees. */
-  readonly props?: PropsSchema;
-  /** What the host says the source returns. Refused when it disagrees. */
-  readonly returns?: ReturnsSchema;
-  /** Components only elements authored by these exact bytes may resolve. */
-  readonly privates?: readonly IdentityComponent[];
-  /**
-   * Whether what this component renders is exact bytes rather than prose.
-   *
-   * A text component's rendering is ordinarily presentation: the whitespace
-   * middleware reflows it and the terminal middleware formats it as Markdown.
-   * A component whose rendering is a program's source is not presentation, and
-   * a host that ships such bytes says so here. Only a declaring host can: the
-   * Markdown itself cannot ask for it, so a repository file of the same name
-   * gets the presentation every other document gets.
-   */
-  readonly exact?: boolean;
-}
+export type DeclaredMarkdownComponent = MarkdownDeclaration;
 
 /** One declaration, admitted: what the host stated, checked against its bytes. */
 export interface AdmittedDeclaredMarkdown {

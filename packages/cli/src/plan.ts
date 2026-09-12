@@ -64,6 +64,7 @@ import type { StructuralValidation } from "./plan-component.ts";
 import type { MachineSessionAssembly } from "./session-coordinator.ts";
 import { describeError } from "./props.ts";
 import { renderSyntaxMarkdown } from "./syntax.ts";
+import type { StructuralInstallationFactory } from "./cli.ts";
 
 /**
  * The identity approved text runs under.
@@ -99,6 +100,14 @@ export interface PlanDependencies {
   acp?: AcpxProviderDependencies;
   /** The run profile's complete structured vocabulary. */
   symbols(includes: readonly string[]): Operation<SyntaxSymbols>;
+  /**
+   * The exact factory an ordinary run installs its structural syntax from.
+   *
+   * The same record the symbols above describe, so what the agent is told it
+   * may write and what the final gate accepts are one contract. Read as data:
+   * planning executes no document, so no `install()` or `expand()` is reached.
+   */
+  runStructuralInstallation?: StructuralInstallationFactory;
   /** Who answers the review question. */
   installElicitation(): Operation<void>;
   /**
@@ -191,7 +200,11 @@ export function* runPlan(command: PlanCommand, deps: PlanDependencies): Operatio
   // check, the admission and the gate below all ask about is the profile the
   // approved program would actually run in.
   const validate =
-    deps.validate ?? structuralValidation(command.include, [yield* planComponentDescription()]);
+    deps.validate ??
+    structuralValidation(command.include, [
+      yield* planComponentDescription(),
+      ...(deps.runStructuralInstallation?.().declarations ?? []),
+    ]);
 
   let authored: Result<string>;
   try {

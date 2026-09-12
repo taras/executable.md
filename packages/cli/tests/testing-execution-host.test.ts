@@ -30,6 +30,7 @@ import { testingExecutionHost } from "../src/testing-host.ts";
 import { planComponentDeclaration, planComponentDescription } from "../src/plan-component.ts";
 
 import { unsupportedRepositories } from "../src/run-repositories.ts";
+import { terminalGridInstallation } from "@executablemd/terminal/xmd";
 function doc(...lines: string[]): string {
   return `${lines.join("\n")}\n`;
 }
@@ -777,6 +778,11 @@ describe("deterministic dependencies declared for a nested run", () => {
       // deno-lint-ignore require-yield
       installService: function* (): Operation<void> {},
       installRepositories: unsupportedRepositories,
+      // A `host="run"` child is the run profile, and the run profile installs
+      // the terminal syntax. The entrypoint states it in production; this
+      // harness states the same thing, so a child here is the child production
+      // builds.
+      runStructuralInstallation: terminalGridInstallation,
       testAgentWorker: Ok([...cliBase(), "test-agent"]),
       planDeclaration: (request) =>
         planComponentDeclaration({
@@ -994,6 +1000,7 @@ describe("deterministic dependencies declared for a nested run", () => {
       // deno-lint-ignore require-yield
       installService: function* (): Operation<void> {},
       installRepositories: unsupportedRepositories,
+      runStructuralInstallation: terminalGridInstallation,
       testAgentWorker: Err(new Error("xmd command not installed")),
       // The run profile's own Component is built for every child, and this case
       // is about the relaunch it cannot perform rather than about `<Plan>`.

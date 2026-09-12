@@ -732,7 +732,7 @@ describe("Tier PI — read-only information requests", () => {
    * form is not permission to write" observable in what a selection returns.
    */
   const SELECTABLE: SyntaxSymbols = {
-    version: 2,
+    version: 3,
     categories: [
       { kind: "structural", entries: [] },
       {

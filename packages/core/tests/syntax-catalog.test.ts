@@ -38,6 +38,7 @@ import {
 import type {
   CompleteComponentSyntaxEntry,
   OriginOnlyComponentSyntaxEntry,
+  InstalledStructuralSyntaxEntry,
   StructuralSyntaxEntry,
   SyntaxSymbols,
 } from "../mod.ts";
@@ -195,8 +196,15 @@ function catalogFor(
   });
 }
 
-function structural(catalog: SyntaxSymbols): readonly StructuralSyntaxEntry[] {
+function structural(
+  catalog: SyntaxSymbols,
+): readonly (StructuralSyntaxEntry | InstalledStructuralSyntaxEntry)[] {
   return catalog.categories[0].entries;
+}
+
+/** The engine's own constructs, told from the syntax a host installed. */
+function engine(catalog: SyntaxSymbols): readonly StructuralSyntaxEntry[] {
+  return structural(catalog).filter((entry) => entry.kind === "structural");
 }
 
 function builtIn(catalog: SyntaxSymbols): readonly CompleteComponentSyntaxEntry[] {
@@ -240,7 +248,7 @@ describe("Tier SY: the versioned shape", () => {
   it("SY1: reports version 2 and the three categories in a fixed order", function* () {
     const catalog = yield* catalogFor({ components: { kind: "directory" } }, ["components"]);
 
-    expect(catalog.version).toBe(2);
+    expect(catalog.version).toBe(3);
     expect(catalog.categories.map((category) => category.kind)).toEqual([
       "structural",
       "built-in",
@@ -308,7 +316,9 @@ describe("Tier SY: structural vocabulary", () => {
     expect(find(entries, "Break").syntax).toEqual(["<Break />"]);
 
     // `as` applies to the two constructs that bind, and to no other.
-    const binding = entries.filter((entry) => entry.as !== undefined).map((entry) => entry.name);
+    const binding = engine(catalog)
+      .filter((entry) => entry.as !== undefined)
+      .map((entry) => entry.name);
     expect(binding.sort()).toEqual(["Each", "Let"]);
     // `Break` and `Content` read no content; `Else` and `Answers` do.
     expect(find(entries, "Break").context).toBeUndefined();
@@ -321,7 +331,7 @@ describe("Tier SY: structural vocabulary", () => {
     const catalog = yield* catalogFor({}, []);
     const entries = structural(catalog);
 
-    expect(catalog.version).toBe(2);
+    expect(catalog.version).toBe(3);
     expect(find(entries, "Switch")).toEqual({
       kind: "structural",
       name: "Switch",
@@ -344,42 +354,34 @@ describe("Tier SY: structural vocabulary", () => {
       context: "Markdown expanded when this case is selected.",
     });
     // Neither construct binds, so neither carries an `as` sentence at all.
-    expect(find(entries, "Switch").as).toBeUndefined();
-    expect(find(entries, "Case").as).toBeUndefined();
+    expect(find(engine(catalog), "Switch").as).toBeUndefined();
+    expect(find(engine(catalog), "Case").as).toBeUndefined();
   });
 
-  it("TG3: freezes the <Terminal.Grid> and <Terminal> entries the catalog publishes", function* () {
+  it("TG3: the engine's own catalog publishes no terminal syntax at all", function* () {
+    // The grid and its panes are installed syntax, not engine constructs. A
+    // core catalog assembled without the installation that declares them
+    // describes an environment where the names mean nothing — which is what
+    // makes installing them a decision a profile takes rather than a default
+    // every execution carries.
     const catalog = yield* catalogFor({}, []);
-    const entries = structural(catalog);
 
-    expect(catalog.version).toBe(2);
-    expect(find(entries, "Terminal.Grid")).toEqual({
-      kind: "structural",
-      name: "Terminal.Grid",
-      origin: { kind: "structural", construct: "Terminal.Grid" },
-      syntax: ["<Terminal.Grid columns={2}>…</Terminal.Grid>"],
-      description:
-        "Open several terminals in one view. " +
-        '`<Terminal.Grid columns={2}><Terminal title="Agent">…</Terminal></Terminal.Grid>`',
-      context: "The `<Terminal>` panes the grid lays out.",
-    });
-    expect(find(entries, "Terminal")).toEqual({
-      kind: "structural",
-      name: "Terminal",
-      origin: { kind: "structural", construct: "Terminal" },
-      syntax: ['<Terminal title="Agent">…</Terminal>', '<Terminal title="Shell" />'],
-      description:
-        "Expand Markdown or open a shell in a pane. " +
-        '`<Terminal title="Agent">…</Terminal>` runs content; ' +
-        '`<Terminal title="Shell" />` opens a shell.',
-      context: "Markdown the pane runs, in the paired form.",
-    });
-    // Neither construct binds, so neither carries an `as` sentence at all.
-    expect(find(entries, "Terminal.Grid").as).toBeUndefined();
-    expect(find(entries, "Terminal").as).toBeUndefined();
+    expect(names(structural(catalog))).not.toContain("Terminal.Grid");
+    expect(names(structural(catalog))).not.toContain("Terminal");
+    expect(names(builtIn(catalog))).not.toContain("Terminal.Grid");
+    expect(names(userProvided(catalog))).not.toContain("Terminal.Grid");
+    expect(STRUCTURAL_DECLARATIONS.map((declaration) => declaration.name)).not.toContain(
+      "Terminal.Grid",
+    );
   });
 
-  it("TG3: a repository file cannot supply the grid or a pane, and neither can a registration", function* () {
+  it("TG3: without the installation, the grid's names are ordinary component names", function* () {
+    // The engine no longer owns these names, so an execution that installs no
+    // terminal syntax treats them the way it treats any other name: a
+    // repository file supplies one, and a registration may claim one. That is
+    // the whole point of moving them out — a profile that does not install the
+    // package gets no grid syntax, not a reserved name that resolves to
+    // nothing.
     const catalog = yield* catalogFor(
       {
         components: { kind: "directory" },
@@ -391,9 +393,8 @@ describe("Tier SY: structural vocabulary", () => {
     );
 
     for (const name of ["Terminal.Grid", "Terminal"]) {
-      expect(names(structural(catalog))).toContain(name);
-      expect(names(userProvided(catalog))).not.toContain(name);
-      expect(names(builtIn(catalog))).not.toContain(name);
+      expect(names(structural(catalog))).not.toContain(name);
+      expect(names(userProvided(catalog))).toContain(name);
     }
 
     for (const name of ["Terminal.Grid", "Terminal"]) {
@@ -404,7 +405,7 @@ describe("Tier SY: structural vocabulary", () => {
             {
               name,
               origin: "tier-tg",
-              props: {},
+              props: { type: "object" },
               *fn() {
                 return "";
               },
@@ -414,9 +415,7 @@ describe("Tier SY: structural vocabulary", () => {
           refused = error;
         }
       });
-      expect(refused instanceof Error ? refused.message : "").toContain(
-        `cannot register "${name}": it is structural syntax the engine owns`,
-      );
+      expect(refused).toBeUndefined();
     }
   });
 

@@ -31,6 +31,7 @@ import { stat } from "@executablemd/runtime";
 import type { Operation } from "effection";
 import type { WorkflowImportAuthority } from "./bundle.ts";
 import type { DeclaredMarkdownCatalog } from "./declared-markdown.ts";
+import type { StructuralCatalog } from "../execution-declarations.ts";
 import { mergeRegistry } from "./registration.ts";
 import { protectedComponent, protectedOrigin } from "./protected.ts";
 import { CORE_REGISTRY } from "./registry.ts";
@@ -63,6 +64,17 @@ export interface SelectOptions {
    * what stops them describing an environment execution would not have.
    */
   declared?: DeclaredMarkdownCatalog;
+  /**
+   * The structural syntax this environment installs, when a trusted host
+   * installed any.
+   *
+   * Host-owned on the same terms as `declared`: it crosses on an installation
+   * by value, so nothing a document, a component or middleware can reach
+   * decides that a name is installed syntax or what it accepts. Inspection and
+   * validation read the same catalog, which is what stops them describing an
+   * environment execution would not have.
+   */
+  structural?: StructuralCatalog;
 }
 
 /** Strip leading ./ from paths for workspace-relative normalization. */
@@ -146,6 +158,17 @@ export function* selectComponent(
       kind: "registered",
       definition: entry.reserved.definition,
       origin: { kind: "registered", origin: entry.reserved.origin, reserved: true },
+    };
+  }
+
+  const installed = options.structural?.entry(name);
+  if (installed !== undefined) {
+    return {
+      kind: "declared-structural",
+      origin: installed.declaration.origin,
+      declaration: installed.declaration,
+      owner: installed.owner,
+      children: installed.children,
     };
   }
 

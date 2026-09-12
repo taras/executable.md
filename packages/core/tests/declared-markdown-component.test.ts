@@ -70,6 +70,7 @@ function declared(
   overrides: Partial<DeclaredMarkdownComponent> = {},
 ): DeclaredMarkdownComponent {
   return {
+    kind: "markdown",
     name: "Policy",
     origin: ORIGIN,
     source,

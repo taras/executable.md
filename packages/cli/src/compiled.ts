@@ -21,6 +21,7 @@ import {
 } from "@executablemd/workflow/credential-helper";
 import type { HelperAssembly } from "@executablemd/workflow/credential-helper";
 import { useCompiledService } from "./compiled-service.ts";
+import { terminalGridInstallation } from "@executablemd/terminal/xmd";
 
 /**
  * What this host is, stated rather than inferred.
@@ -91,6 +92,7 @@ if (isCredentialHelperMode(process.argv.slice(2))) {
       UPGRADE,
       denoRunRepositories(HELPER),
       () => readInputStream(process.stdin),
+      terminalGridInstallation,
       () => useDenoWorkflowHost(HELPER),
       useMachineSessions(),
     );

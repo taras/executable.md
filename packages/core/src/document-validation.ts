@@ -36,10 +36,18 @@ import type { BodyStructureFacts } from "./body-structure.ts";
 import { Component } from "./component-api.ts";
 import { declaredRegistry } from "./components/declared-registry.ts";
 import { admitDeclaredMarkdown, declaredCatalog } from "./components/declared-markdown.ts";
+import type { DeclaredMarkdownCatalog } from "./components/declared-markdown.ts";
+import {
+  admitDeclaredStructural,
+  installedLiteralPropFailure,
+  markdownDeclarations,
+  structuralCatalog,
+} from "./execution-declarations.ts";
 import type {
-  DeclaredMarkdownCatalog,
-  DeclaredMarkdownComponent,
-} from "./components/declared-markdown.ts";
+  ExecutionDeclaration,
+  StructuralCatalog,
+  StructuralDeclaration,
+} from "./execution-declarations.ts";
 import { admitDeclaration, mergeRegistry } from "./components/registration.ts";
 import { DEFAULT_INCLUDES, selectComponent, unresolvedMessage } from "./components/select.ts";
 import {
@@ -74,9 +82,9 @@ import {
   strayCaseMessage,
   strayElseMessage,
   strayStructuralMessage,
-  strayTerminalMessage,
+  installedStructuralStructure,
+  strayInstalledChildMessage,
   switchStructure,
-  terminalGridStructure,
 } from "./structural-rules.ts";
 import type { StructuralViolation } from "./structural-rules.ts";
 import type {
@@ -84,6 +92,7 @@ import type {
   ComponentElement,
   ComponentOrigin,
   ComponentRegistry,
+  ComponentSelection,
   InvocationForm,
   Json,
   PropsSchema,
@@ -129,7 +138,7 @@ export interface ValidateDocumentSettings {
    * the names only they may write resolve nowhere else — so reporting on them
    * would be reporting a document's author for the engine's own asset.
    */
-  readonly declarations?: readonly DeclaredMarkdownComponent[];
+  readonly declarations?: readonly ExecutionDeclaration[];
 }
 
 /** The root to validate, and the environment to validate it against. */
@@ -316,8 +325,8 @@ interface LexicalContext {
   readonly insideIf: boolean;
   /** Whether a `<Switch>` in this source lexically encloses this point. */
   readonly insideSwitch: boolean;
-  /** Whether a `<Terminal.Grid>` in this source lexically encloses this point. */
-  readonly insideTerminalGrid: boolean;
+  /** The installed structural parents that lexically enclose this point. */
+  readonly insideInstalled: ReadonlySet<string>;
   /** Whether the immediate parent is an `<Answers>`. */
   readonly underAnswers: boolean;
 }
@@ -400,11 +409,13 @@ function* validate(
     yield* admitDeclaration(component);
   }
   const registry = mergeRegistry(yield* Component.operations.registry, declaredRegistry(declared));
+  const catalog = options.declarations ?? [];
   const declarations = declaredCatalog(
-    yield* admitDeclaredMarkdown(options.declarations ?? [], registry),
+    yield* admitDeclaredMarkdown(markdownDeclarations(catalog), registry),
   );
+  const installed = structuralCatalog(yield* admitDeclaredStructural(catalog));
 
-  const state = new ValidationState(includes, registry, declarations, rootValues);
+  const state = new ValidationState(includes, registry, declarations, installed, rootValues);
   yield* state.run(options);
   return state.finish();
 }
@@ -421,6 +432,8 @@ class ValidationState {
   readonly #includes: readonly string[];
   readonly #registry: ComponentRegistry;
   readonly #declarations: DeclaredMarkdownCatalog | undefined;
+  /** The structural syntax this environment installs, when it installs any. */
+  readonly #installed: StructuralCatalog | undefined;
   /** Whether the root's props are checked against the values a run would pass. */
   readonly #rootValues: boolean;
   readonly #diagnostics: DraftDiagnostic[] = [];
@@ -466,11 +479,13 @@ class ValidationState {
     includes: readonly string[],
     registry: ComponentRegistry,
     declarations: DeclaredMarkdownCatalog | undefined,
+    installed: StructuralCatalog | undefined,
     rootValues: boolean,
   ) {
     this.#includes = includes;
     this.#registry = registry;
     this.#declarations = declarations;
+    this.#installed = installed;
     this.#rootValues = rootValues;
   }
 
@@ -496,7 +511,7 @@ class ValidationState {
         insideLoop: false,
         insideIf: false,
         insideSwitch: false,
-        insideTerminalGrid: false,
+        insideInstalled: new Set<string>(),
         underAnswers: false,
       });
     }
@@ -762,7 +777,7 @@ class ValidationState {
         continue;
       }
       yield* this.#visit(segment, context);
-      yield* this.#walk(segment.children, childContext(segment, context));
+      yield* this.#walk(segment.children, childContext(segment, context, this.#installed));
     }
   }
 
@@ -782,6 +797,7 @@ class ValidationState {
       includes: this.#includes,
       registry: this.#registry,
       ...(this.#declarations === undefined ? {} : { declared: this.#declarations }),
+      ...(this.#installed === undefined ? {} : { structural: this.#installed }),
     });
 
     if (selected.kind === "structural") {
@@ -920,6 +936,29 @@ class ValidationState {
       return;
     }
 
+    if (selected.kind === "declared-structural") {
+      draft.origin = { kind: "declared-structural", origin: selected.origin };
+      for (const violation of yield* this.#installedViolations(segment, selected, context)) {
+        const anchor = violation.element ?? segment;
+        const token = this.#draft(context.entry.ordinal, violation.code, {
+          message: violation.message,
+          component: violation.source,
+          ...positionOf(anchor),
+        });
+        draft.tokens.push(token);
+        if (anchor !== segment) {
+          this.#defer(anchor, token);
+        }
+      }
+      // A prop the scanner could not read is a value the document computes, and
+      // checking it against the declared schema is expansion's alone. The
+      // occurrence's own placement was still decided above.
+      if (draft.tokens.length === 0 && hasDynamicProp(segment, [])) {
+        draft.reasons.push("dynamic-props");
+      }
+      return;
+    }
+
     const origin: ComponentOrigin = { kind: "repository", path: selected.path };
     draft.origin = origin;
 
@@ -1050,6 +1089,77 @@ class ValidationState {
     }
   }
 
+  /**
+   * Everything one installed structural occurrence's own source decided.
+   *
+   * The same rules expansion applies, read from the same declaration, so a
+   * document a run would refuse is refused here too — and a well-placed
+   * occurrence is reported by neither.
+   */
+  *#installedViolations(
+    segment: ComponentElement,
+    selected: Extract<ComponentSelection, { kind: "declared-structural" }>,
+    context: LexicalContext,
+  ): Operation<readonly StructuralViolation[]> {
+    const declaration = selected.declaration;
+    if (declaration.placement.kind === "child") {
+      // A well-placed child is its parent's, and one placed wrongly beneath
+      // that parent is already reported by the parent's own structure. What is
+      // left is a child with no parent above it at all.
+      if (!context.insideInstalled.has(declaration.placement.parent)) {
+        return [
+          {
+            code: "structural-usage-invalid",
+            source: declaration.name,
+            message: strayInstalledChildMessage(declaration),
+          },
+        ];
+      }
+      // Its placement is its parent's business; its own props are its own, and
+      // a literal one is decided here exactly as the parent's are.
+      return yield* this.#installedPropViolations(segment, declaration);
+    }
+    const installed = this.#installed;
+    const violations = [
+      ...installedStructuralStructure(
+        segment,
+        declaration,
+        selected.children,
+        (name) => installed?.entry(name) !== undefined,
+      ).violations,
+    ];
+    violations.push(...(yield* this.#installedPropViolations(segment, declaration)));
+    return violations;
+  }
+
+  /**
+   * What one occurrence's literal props say, checked against its declaration.
+   *
+   * The same rule wherever the value came from: a literal is checked while the
+   * document is only being read, and an expression's answer is checked in
+   * expansion once it has been evaluated.
+   */
+  *#installedPropViolations(
+    segment: ComponentElement,
+    declaration: StructuralDeclaration,
+  ): Operation<readonly StructuralViolation[]> {
+    const failure = yield* installedLiteralPropFailure(
+      declaration,
+      segment.props,
+      new Set(Object.keys(segment.expressions)),
+    );
+    if (failure === undefined) {
+      return [];
+    }
+    return [
+      {
+        code: "structural-usage-invalid",
+        source: declaration.name,
+        message: failure.message,
+      },
+    ];
+  }
+
   /** Everything one structural construct's own source decided. */
   #structuralViolations(
     segment: ComponentElement,
@@ -1107,24 +1217,6 @@ class ValidationState {
         return context.insideSwitch
           ? []
           : [{ code: "structural-usage-invalid", source: "Case", message: strayCaseMessage() }];
-      case "Terminal.Grid":
-        // The whole layout is decided from source, so every pane's own mistake
-        // is reported where it was written — and so is a construct written
-        // below the grid that the grid does not lay out.
-        return terminalGridStructure(segment).violations;
-      case "Terminal":
-        // A well-placed `<Terminal>` is its grid's, and one placed wrongly
-        // under a grid is already reported by that grid's own structure. What
-        // is left is a pane with no grid above it at all.
-        return context.insideTerminalGrid
-          ? []
-          : [
-              {
-                code: "structural-usage-invalid",
-                source: "Terminal",
-                message: strayTerminalMessage(),
-              },
-            ];
       case "Else":
         // A well-placed `<Else>` is its `<If>`'s, and one placed wrongly under
         // an `<If>` is already reported by that `<If>`'s own structure. What is
@@ -1288,14 +1380,23 @@ function hasDynamicOperand(segment: ComponentElement): boolean {
 }
 
 /** The lexical facts one element's children are written under. */
-function childContext(segment: ComponentElement, context: LexicalContext): LexicalContext {
+function childContext(
+  segment: ComponentElement,
+  context: LexicalContext,
+  installed: StructuralCatalog | undefined,
+): LexicalContext {
+  const parent = installed?.entry(segment.name);
+  const enclosing =
+    parent?.declaration.placement.kind === "parent"
+      ? new Set([...context.insideInstalled, segment.name])
+      : context.insideInstalled;
   return {
     entry: context.entry,
     isRoot: context.isRoot,
     insideLoop: context.insideLoop || segment.name === "Loop",
     insideIf: context.insideIf || segment.name === "If",
     insideSwitch: context.insideSwitch || segment.name === "Switch",
-    insideTerminalGrid: context.insideTerminalGrid || segment.name === "Terminal.Grid",
+    insideInstalled: enclosing,
     underAnswers: segment.name === "Answers",
   };
 }

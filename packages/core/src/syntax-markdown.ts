@@ -19,6 +19,7 @@
 import type {
   CompleteComponentSyntaxEntry,
   OriginOnlyComponentSyntaxEntry,
+  InstalledStructuralSyntaxEntry,
   StructuralSyntaxEntry,
   SyntaxSymbols,
 } from "./inspect.ts";
@@ -59,6 +60,7 @@ export function renderSyntaxMarkdown(symbols: SyntaxSymbols): string {
 export interface SelectedEntry {
   readonly entry:
     | StructuralSyntaxEntry
+    | InstalledStructuralSyntaxEntry
     | CompleteComponentSyntaxEntry
     | OriginOnlyComponentSyntaxEntry;
   /** The long-form documentation this entry has, if it has any. */
@@ -91,10 +93,17 @@ export function renderSelectedDocumentation(selected: readonly SelectedEntry[]):
 }
 
 function renderEntry(
-  entry: StructuralSyntaxEntry | CompleteComponentSyntaxEntry | OriginOnlyComponentSyntaxEntry,
+  entry:
+    | StructuralSyntaxEntry
+    | InstalledStructuralSyntaxEntry
+    | CompleteComponentSyntaxEntry
+    | OriginOnlyComponentSyntaxEntry,
 ): string[] {
   if (entry.kind === "structural") {
     return renderStructural(entry);
+  }
+  if (entry.kind === "declared-structural") {
+    return renderInstalledStructural(entry);
   }
   if (entry.inspectability === "origin-only") {
     return renderOriginOnly(entry);
@@ -111,6 +120,30 @@ function renderStructural(entry: StructuralSyntaxEntry): string[] {
   blocks.push("**Syntax:**", fence("md", entry.syntax.join("\n")));
   blocks.push(...prose(entry));
   return blocks;
+}
+
+function renderInstalledStructural(entry: InstalledStructuralSyntaxEntry): string[] {
+  const blocks = [heading(entry.name), entry.description];
+  blocks.push("**Syntax:**", fence("md", entry.syntax.join("\n")));
+  blocks.push(`**Forms:** ${entry.forms.map((form) => invocation(entry.name, form)).join(", ")}`);
+  blocks.push(...renderProps(entry.props));
+  blocks.push(`**Placement:** ${describePlacement(entry)}`);
+  if (entry.context !== undefined) {
+    blocks.push(`**Content:** ${entry.context}`);
+  }
+  blocks.push(`**Origin:** ${describeOrigin(entry.origin)}`);
+  return blocks;
+}
+
+/** Where a document may write this form, said as the author needs to hear it. */
+function describePlacement(entry: InstalledStructuralSyntaxEntry): string {
+  const placement = entry.placement;
+  if (placement.kind === "child") {
+    return `Written directly inside \`<${placement.parent}>\`.`;
+  }
+  const minimum = placement.minimumChildren;
+  const children = minimum === 1 ? "at least one child" : `at least ${minimum} children`;
+  return minimum === 0 ? "Holds its own children." : `Holds ${children}.`;
 }
 
 function renderOriginOnly(entry: OriginOnlyComponentSyntaxEntry): string[] {
@@ -276,6 +309,9 @@ function describeOrigin(origin: ComponentOrigin): string {
   }
   if (origin.kind === "declared-markdown") {
     return `${code(origin.origin)} (declared Markdown)`;
+  }
+  if (origin.kind === "declared-structural") {
+    return `${code(origin.origin)} (installed syntax)`;
   }
   return `structural syntax (${code(origin.construct)})`;
 }

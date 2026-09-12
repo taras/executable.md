@@ -1,6 +1,11 @@
 /**
  * Tier TG — the authored structure of a terminal grid (spec §6.21).
  *
+ * The grid is installed syntax: these rows drive it through the same
+ * `ExecutionInstallation` an ordinary run installs, so what they prove about
+ * the grammar, the layout and the refusal is proved about the form execution
+ * selects rather than about a table written beside it.
+ *
  * What an author may write, and where each pane lands, decided before anything
  * opens. These rows drive the real expansion path: a grid the grammar accepts
  * runs until the point a terminal provider would be asked for one, and this
@@ -19,12 +24,21 @@ import { expect } from "@executablemd/test-support/expect";
 import { scoped } from "effection";
 import type { Operation } from "effection";
 
-import { Component } from "../src/component-api.ts";
-import { expandSegments } from "../src/expand.ts";
-import { renderSegments } from "../src/render.ts";
-import { scanSegments } from "../src/scanner.ts";
-import { terminalGridLayout } from "../src/terminal-grid.ts";
-import type { Json, Segment } from "../src/types.ts";
+import { Component } from "../../core/src/component-api.ts";
+import { expandSegments } from "../../core/src/expand.ts";
+import { renderSegments } from "../../core/src/render.ts";
+import { scanSegments } from "../../core/src/scanner.ts";
+import { installedAuthority } from "../../core/tests/support/installed-structural.ts";
+import type { Json, Segment } from "../../core/src/types.ts";
+import { terminalGridLayout } from "../mod.ts";
+import { TERMINAL_XMD_ORIGIN, terminalGridInstallation } from "../xmd.ts";
+import { validateDocument } from "../../core/src/document-validation.ts";
+import type { DocumentValidation } from "../../core/src/document-validation.ts";
+import { inlineSource, retainedSource } from "../../core/src/root-source.ts";
+import { collect } from "../../core/src/collect.ts";
+import { executeInstalled } from "../../core/host.ts";
+import type { ExecutionInstallation } from "../../core/host.ts";
+import { InMemoryStream } from "@executablemd/durable-streams";
 
 interface GridRun {
   segments: Segment[];
@@ -74,7 +88,19 @@ function runGrid(source: string, values: Record<string, unknown> = {}): Operatio
       },
     };
     yield* Component.around({ env: () => testEnv }, { at: "min" });
-    const segments = yield* expandSegments(scanSegments(source), {}, {}, new Set());
+    const authority = yield* installedAuthority(terminalGridInstallation());
+    const segments = yield* expandSegments(
+      scanSegments(source),
+      {},
+      {},
+      new Set(),
+      undefined,
+      undefined,
+      "",
+      0,
+      undefined,
+      authority,
+    );
     return { segments, output: renderSegments(segments), imports, blocks, calls };
   });
 }
@@ -509,3 +535,244 @@ function filler(panes: number): { title: string; form: "self-closing" }[] {
     form: "self-closing" as const,
   }));
 }
+
+/** The invocation names one validation reported, in document order. */
+function names(result: DocumentValidation): string[] {
+  return result.invocations.map((invocation) => invocation.name);
+}
+
+function named(result: DocumentValidation, name: string) {
+  const found = result.invocations.find((invocation) => invocation.name === name);
+  if (found === undefined) {
+    throw new Error(`no invocation named ${name} in [${names(result).join(", ")}]`);
+  }
+  return found;
+}
+
+function codes(result: DocumentValidation): string[] {
+  return result.diagnostics.map((diagnostic) => diagnostic.code);
+}
+
+/** One grid installation whose expander counts the occurrences it is given. */
+function countingInstallation(): {
+  installation: ExecutionInstallation;
+  expansions: () => number;
+} {
+  const declared = terminalGridInstallation();
+  const expand = declared.expand;
+  if (expand === undefined) {
+    throw new Error("the grid installation supplies no expander");
+  }
+  let reached = 0;
+  return {
+    installation: {
+      declarations: declared.declarations,
+      *expand(request, regions) {
+        reached++;
+        yield* expand(request, regions);
+      },
+    },
+    expansions: () => reached,
+  };
+}
+
+/**
+ * Validate one document against the installed grid declarations.
+ *
+ * Validation is handed the declarations and nothing else. `expansions()`
+ * answering zero says the expander was not reached — and it is not a vacuous
+ * zero, because the row below drives the same counter through a real execution
+ * and watches it move.
+ */
+function validateGrid(
+  source: string,
+): Operation<{ result: DocumentValidation; expansions: () => number }> {
+  return scoped(function* () {
+    const { installation, expansions } = countingInstallation();
+    const result = yield* validateDocument({
+      ...inlineSource(source),
+      includes: [],
+      declarations: [...(installation.declarations ?? [])],
+    });
+    return { result, expansions };
+  });
+}
+
+describe("Tier DV — validating a grid without running one", () => {
+  const GRID_DOC = [
+    "<Terminal.Grid columns={2}>",
+    '<Terminal title="Agent">',
+    "The briefing this pane runs.",
+    "</Terminal>",
+    '<Terminal title="Shell" />',
+    "</Terminal.Grid>",
+    "",
+  ].join("\n");
+
+  it("TG3: a well-formed grid is valid, and nothing beneath it runs", function* () {
+    const { result, expansions } = yield* validateGrid(GRID_DOC);
+
+    expect(result.outcome).toBe("valid");
+    expect(result.diagnostics).toEqual([]);
+    expect(names(result)).toEqual(["Terminal.Grid", "Terminal", "Terminal"]);
+    expect(named(result, "Terminal.Grid").origin).toEqual({
+      kind: "declared-structural",
+      origin: TERMINAL_XMD_ORIGIN,
+    });
+    expect(named(result, "Terminal").origin).toEqual({
+      kind: "declared-structural",
+      origin: TERMINAL_XMD_ORIGIN,
+    });
+    // Validation reads the declarations and never the implementation: no
+    // occurrence reached the expander, so nothing derived a layout and nothing
+    // refused for want of a provider.
+    expect(expansions()).toBe(0);
+  });
+
+  it("TG3: reports each invalid authored form, with no execution", function* () {
+    const invalid: [string, string, string][] = [
+      [
+        "an unknown prop on the grid",
+        '<Terminal.Grid columns={2} layout="tiled"><Terminal title="A" /></Terminal.Grid>\n',
+        '<Terminal.Grid> only accepts a "columns" prop. Got: "layout".',
+      ],
+      [
+        "a capture on the grid",
+        '<Terminal.Grid columns={2} as="grid"><Terminal title="A" /></Terminal.Grid>\n',
+        '<Terminal.Grid> only accepts a "columns" prop. Got: "as".',
+      ],
+      [
+        "no column count",
+        '<Terminal.Grid><Terminal title="A" /></Terminal.Grid>\n',
+        '<Terminal.Grid> requires a "columns" prop (a positive integer).',
+      ],
+      [
+        "a column count that is not a positive integer",
+        '<Terminal.Grid columns={0}><Terminal title="A" /></Terminal.Grid>\n',
+        'Prop "columns" on <Terminal.Grid> must be a positive integer. Got: 0.',
+      ],
+      [
+        "an unknown prop on a pane",
+        '<Terminal.Grid columns={2}><Terminal title="A" shell="zsh" /></Terminal.Grid>\n',
+        '<Terminal> only accepts a "title" prop. Got: "shell".',
+      ],
+      [
+        "no title on a pane",
+        "<Terminal.Grid columns={2}><Terminal /></Terminal.Grid>\n",
+        '<Terminal> requires a "title" prop (the label the pane displays).',
+      ],
+      [
+        "an empty title",
+        '<Terminal.Grid columns={2}><Terminal title="" /></Terminal.Grid>\n',
+        'Prop "title" on <Terminal> must be a non-empty string. Got: "".',
+      ],
+      [
+        "a self-closing grid",
+        "<Terminal.Grid columns={2} />\n",
+        "<Terminal.Grid> holds the panes it lays out",
+      ],
+      [
+        "a grid with no pane",
+        "<Terminal.Grid columns={2}></Terminal.Grid>\n",
+        "<Terminal.Grid> requires at least one <Terminal> pane.",
+      ],
+      [
+        "text written directly in a grid",
+        '<Terminal.Grid columns={2}>a note<Terminal title="A" /></Terminal.Grid>\n',
+        '<Terminal.Grid> holds only <Terminal> panes. Found text "a note" directly inside it.',
+      ],
+      [
+        "a direct element that is not a pane",
+        '<Terminal.Grid columns={2}><Note title="x" /><Terminal title="A" /></Terminal.Grid>\n',
+        "<Terminal.Grid> holds only <Terminal> panes. Found <Note> directly inside it.",
+      ],
+      [
+        "a pane produced by control flow",
+        '<Terminal.Grid columns={2}><If condition={true}><Terminal title="A" /></If></Terminal.Grid>\n',
+        "<Terminal.Grid> holds only <Terminal> panes. Found <If> directly inside it.",
+      ],
+      [
+        "a nested grid",
+        '<Terminal.Grid columns={2}><Terminal title="A"><Terminal.Grid columns={1}>' +
+          '<Terminal title="B" /></Terminal.Grid></Terminal></Terminal.Grid>\n',
+        "<Terminal.Grid> cannot be written inside another <Terminal.Grid>.",
+      ],
+      [
+        "a pane outside every grid",
+        '<Terminal title="A">alone</Terminal>\n',
+        "<Terminal> must be a direct child of <Terminal.Grid>.",
+      ],
+      [
+        "a pane below a grid that is not one of its panes",
+        '<Terminal.Grid columns={2}><Terminal title="A"><Terminal title="B" /></Terminal>' +
+          "</Terminal.Grid>\n",
+        "<Terminal> must be a direct child of <Terminal.Grid>.",
+      ],
+    ];
+
+    for (const [form, source, message] of invalid) {
+      const { result, expansions } = yield* validateGrid(source);
+
+      expect(`${form}: ${result.outcome}`).toBe(`${form}: invalid`);
+      expect(`${form}: ${codes(result).includes("structural-usage-invalid")}`).toBe(
+        `${form}: true`,
+      );
+      const said = result.diagnostics.some((diagnostic) => diagnostic.message.includes(message));
+      expect(`${form}: ${said}`).toBe(`${form}: true`);
+      expect(`${form}: ${expansions()}`).toBe(`${form}: 0`);
+    }
+  });
+
+  it("TG3: answers the same way twice", function* () {
+    const first = yield* validateGrid("<Terminal.Grid columns={2}><Terminal /></Terminal.Grid>\n");
+    const second = yield* validateGrid("<Terminal.Grid columns={2}><Terminal /></Terminal.Grid>\n");
+
+    expect(JSON.stringify(second.result)).toBe(JSON.stringify(first.result));
+  });
+
+  it("TG3: a dynamic column count and title are decided by expansion, not here", function* () {
+    const { result, expansions } = yield* validateGrid(
+      ["<Terminal.Grid columns={size}>", "<Terminal title={label} />", "</Terminal.Grid>", ""].join(
+        "\n",
+      ),
+    );
+
+    // Whether those expressions produce a positive integer and a non-empty
+    // string is a value the document computes, and evaluating one is
+    // expansion's alone.
+    expect(result.outcome).toBe("valid");
+    expect(result.diagnostics).toEqual([]);
+    expect(expansions()).toBe(0);
+  });
+});
+
+describe("Tier DV — validation reaches no expander, execution does", () => {
+  it("TG3: the same counter stays at zero for validation and moves for a run", function* () {
+    const source = '<Terminal.Grid columns={1}><Terminal title="A" /></Terminal.Grid>\n';
+    const { installation, expansions } = countingInstallation();
+
+    yield* scoped(function* () {
+      yield* validateDocument({
+        ...inlineSource(source),
+        includes: [],
+        declarations: [...(installation.declarations ?? [])],
+      });
+    });
+    expect(expansions()).toBe(0);
+
+    yield* scoped(function* () {
+      try {
+        yield* collect(
+          yield* executeInstalled(
+            { ...retainedSource("root.md", source), stream: new InMemoryStream(), includes: [] },
+            [installation],
+          ),
+        );
+      } catch {
+        // The grid refuses for want of a provider, which is the point: the
+        // expander ran.
+      }
+    });
+    expect(expansions()).toBe(1);
+  });
+});

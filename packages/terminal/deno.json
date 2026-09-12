@@ -1,0 +1,8 @@
+{
+  "name": "@executablemd/terminal",
+  "version": "0.12.1",
+  "exports": {
+    ".": "./mod.ts",
+    "./xmd": "./xmd.ts"
+  }
+}

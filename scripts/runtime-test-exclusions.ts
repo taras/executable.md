@@ -555,6 +555,12 @@ const COMPILED_BINARY: RuntimeExclusion[] = [
     issue: "https://github.com/taras/executable.md/issues/567",
   },
   {
+    path: "scripts/tests/structural-profile-compiled.test.ts",
+    reason:
+      "asks the compiled `dist/xmd` which structural syntax its entrypoint installed and what a valid grid does there, and only `deno compile` produces that binary — no test shard builds it, so the suite belongs beside the other compiled-binary evidence the `smoke` job builds for through README.md#Build",
+    issue: "https://github.com/taras/executable.md/issues/567",
+  },
+  {
     path: "scripts/tests/plan-component-compiled.test.ts",
     reason:
       "asks the compiled `dist/xmd` which `<Plan>` Component source it carries, and only `deno compile --include` embeds that asset — no test shard builds the binary, so the suite belongs beside the other compiled-binary evidence the `smoke` job builds for through README.md#Build",

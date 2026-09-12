@@ -91,7 +91,7 @@ const DESCRIPTION =
 /** Symbols with one built-in entry per name, for a case that needs a marker. */
 function symbolsOf(...names: readonly string[]): SyntaxSymbols {
   return {
-    version: 2,
+    version: 3,
     categories: [
       { kind: "structural", entries: [] },
       {
@@ -281,7 +281,7 @@ function* tampered(
 /** Symbols holding one component entry of exactly this identity. */
 function symbolsNamed(name: string, origin: NamedOrigin): SyntaxSymbols {
   return {
-    version: 2,
+    version: 3,
     categories: [
       { kind: "structural", entries: [] },
       {
@@ -633,7 +633,7 @@ describe("Tier SYN — the named form", () => {
     });
     const marked = symbolsOf("Marker");
     const pair: SyntaxSymbols = {
-      version: 2,
+      version: 3,
       categories: [
         { kind: "structural", entries: [] },
         {
@@ -1534,6 +1534,7 @@ describe("Tier SYN — the name canonical core owns", () => {
   it("SYN9: a host that declares Markdown called Syntax is refused before the root import", function* () {
     const source = "declared symbols\n";
     const declaration: DeclaredMarkdownComponent = {
+      kind: "markdown",
       name: "Syntax",
       origin: "@executablemd/test/Syntax.md",
       source,
@@ -1550,6 +1551,7 @@ describe("Tier SYN — the name canonical core owns", () => {
     // The positive control: an adjacent declaration under another name is
     // admitted and runs, so the refusal is about the name.
     const adjacent: DeclaredMarkdownComponent = {
+      kind: "markdown",
       name: "Policy",
       origin: "@executablemd/test/Policy.md",
       source,
@@ -1779,7 +1781,7 @@ describe("Tier SYN — the site the symbols describe", () => {
       );
       return yield* inspectSyntax({ includes: [] });
     });
-    expect(symbols.version).toBe(2);
+    expect(symbols.version).toBe(3);
 
     // Built-in: the second category, where a reader indexes for it.
     const entry = symbols.categories[1].entries.find((candidate) => candidate.name === "Syntax");
@@ -1868,6 +1870,7 @@ describe("Tier SYN — the site the symbols describe", () => {
   it("SYN18: a declared Markdown component's own body reports the site it inherited", function* () {
     const source = ['<Syntax as="symbols" />', "policy sees {symbols}", ""].join("\n");
     const declaration: DeclaredMarkdownComponent = {
+      kind: "markdown",
       name: "Policy",
       origin: "@executablemd/test/Policy.md",
       source,
@@ -2096,7 +2099,7 @@ describe("Tier SYN — reference is never authority", () => {
   it("SYN25d: availability compares the whole identity, not the spelling", function* () {
     /** Symbols holding a single entry of exactly this identity. */
     const holding = (origin: NamedOrigin): SyntaxSymbols => ({
-      version: 2,
+      version: 3,
       categories: [
         { kind: "structural", entries: [] },
         {

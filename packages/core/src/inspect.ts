@@ -20,7 +20,16 @@ import { DEFAULT_INCLUDES, effectiveRegistry, selectComponent } from "./componen
 import { admitDeclaration, mergeRegistry } from "./components/registration.ts";
 import { declaredRegistry } from "./components/declared-registry.ts";
 import { admitDeclaredMarkdown, declaredCatalog } from "./components/declared-markdown.ts";
-import type { DeclaredMarkdownComponent } from "./components/declared-markdown.ts";
+import {
+  admitDeclaredStructural,
+  markdownDeclarations,
+  structuralCatalog,
+} from "./execution-declarations.ts";
+import type {
+  AdmittedStructural,
+  ExecutionDeclaration,
+  StructuralPlacement,
+} from "./execution-declarations.ts";
 import { repositoryCandidateNames } from "./components/candidates.ts";
 import { PROTECTED_COMPONENT_NAMES } from "./components/protected.ts";
 import type { WorkflowImportAuthority } from "./components/bundle.ts";
@@ -138,7 +147,7 @@ export interface InspectComponentOptions {
    * included. Private declarations are never described: nothing a document can
    * write resolves one.
    */
-  declarations?: readonly DeclaredMarkdownComponent[];
+  declarations?: readonly ExecutionDeclaration[];
 }
 
 /**
@@ -178,6 +187,21 @@ export type ComponentInfo =
       returns?: ReturnsSchema;
     } & DescribedContract)
   | { kind: "function"; origin: ComponentOrigin }
+  /**
+   * An installed structural form.
+   *
+   * Its own `kind` because the question a caller has about it is the one the
+   * other kinds cannot answer: where it may be written. A parent states how few
+   * children it takes, and a child names the parent it belongs to, so a reader
+   * learns that writing it anywhere else is an error rather than an unresolved
+   * name.
+   */
+  | ({
+      kind: "declared-structural";
+      origin: ComponentOrigin;
+      props: PropsSchema;
+      placement: StructuralPlacement;
+    } & DescribedContract)
   | { kind: "unresolved"; searched: string[]; registered: readonly ComponentOrigin[] };
 
 /**
@@ -205,13 +229,16 @@ export interface DescribedContract extends ComponentDocumentation {
 export function* inspectComponent(options: InspectComponentOptions): Operation<ComponentInfo> {
   const { name, includes } = options;
   const registry = yield* Component.operations.registry;
+  const catalog = options.declarations ?? [];
   const declared = declaredCatalog(
-    yield* admitDeclaredMarkdown(options.declarations ?? [], registry),
+    yield* admitDeclaredMarkdown(markdownDeclarations(catalog), registry),
   );
+  const structural = structuralCatalog(yield* admitDeclaredStructural(catalog));
   const selected = yield* selectComponent(name, {
     includes,
     registry,
     ...(declared === undefined ? {} : { declared }),
+    ...(structural === undefined ? {} : { structural }),
   });
 
   switch (selected.kind) {
@@ -220,6 +247,18 @@ export function* inspectComponent(options: InspectComponentOptions): Operation<C
         kind: "structural",
         construct: selected.construct,
         origin: { kind: "structural", construct: selected.construct },
+      };
+    case "declared-structural":
+      return {
+        kind: "declared-structural",
+        origin: { kind: "declared-structural", origin: selected.origin },
+        props: selected.declaration.props,
+        placement: selected.declaration.placement,
+        forms: selected.declaration.forms,
+        captures: [],
+        returnMode: "text",
+        description: selected.declaration.description,
+        ...(selected.declaration.context === null ? {} : { context: selected.declaration.context }),
       };
     case "protected":
       return {
@@ -327,11 +366,11 @@ const BOTH_FORMS: readonly InvocationForm[] = ["self-closing", "paired"];
  * switches exhaustively on `kind` needs two new arms and no other work.
  */
 export interface SyntaxSymbols {
-  readonly version: 2;
+  readonly version: 3;
   readonly categories: readonly [
     {
       readonly kind: "structural";
-      readonly entries: readonly StructuralSyntaxEntry[];
+      readonly entries: readonly (StructuralSyntaxEntry | InstalledStructuralSyntaxEntry)[];
     },
     {
       readonly kind: "built-in";
@@ -352,6 +391,27 @@ export interface StructuralSyntaxEntry {
   readonly syntax: readonly string[];
   readonly description: string;
   readonly as?: string;
+  readonly context?: string;
+}
+
+/**
+ * One structural form a trusted host installed.
+ *
+ * Beside the engine's own constructs rather than among the components, because
+ * that is what it is: a document cannot resolve it, a registry cannot supply
+ * it, and where it may be written is decided by its `placement` rather than by
+ * selection. `origin` names the package that installed it, and `props` is the
+ * schema every occurrence is validated against.
+ */
+export interface InstalledStructuralSyntaxEntry {
+  readonly kind: "declared-structural";
+  readonly name: string;
+  readonly origin: Extract<ComponentOrigin, { kind: "declared-structural" }>;
+  readonly syntax: readonly string[];
+  readonly description: string;
+  readonly forms: readonly ("self-closing" | "paired")[];
+  readonly props: PropsSchema;
+  readonly placement: StructuralPlacement;
   readonly context?: string;
 }
 
@@ -451,7 +511,7 @@ export interface InspectSyntaxOptions {
    * document can write, so symbols that listed it would describe syntax that
    * does not exist.
    */
-  readonly declarations?: readonly DeclaredMarkdownComponent[];
+  readonly declarations?: readonly ExecutionDeclaration[];
 }
 
 /**
@@ -488,12 +548,18 @@ export function* inspectSyntax(options: InspectSyntaxOptions): Operation<SyntaxS
   // Admitted on exactly the terms an execution installs declarations on, and
   // for the same reason the identity components above are: a set a run would
   // refuse describes an environment no document could ever run in.
+  const catalog = options.declarations ?? [];
   const declarations = declaredCatalog(
-    yield* admitDeclaredMarkdown(options.declarations ?? [], registry),
+    yield* admitDeclaredMarkdown(markdownDeclarations(catalog), registry),
   );
+  const installed = yield* admitDeclaredStructural(catalog);
+  const installedSyntax = structuralCatalog(installed);
 
   const names = yield* repositoryCandidateNames(includes);
   for (const name of declarations?.names() ?? []) {
+    names.add(name);
+  }
+  for (const name of installedSyntax?.names() ?? []) {
     names.add(name);
   }
   for (const declaration of STRUCTURAL_DECLARATIONS) {
@@ -511,7 +577,7 @@ export function* inspectSyntax(options: InspectSyntaxOptions): Operation<SyntaxS
     names.add(registered);
   }
 
-  const structural: StructuralSyntaxEntry[] = [];
+  const structural: (StructuralSyntaxEntry | InstalledStructuralSyntaxEntry)[] = [];
   const builtIn: CompleteComponentSyntaxEntry[] = [];
   const userProvided: (CompleteComponentSyntaxEntry | OriginOnlyComponentSyntaxEntry)[] = [];
 
@@ -521,9 +587,17 @@ export function* inspectSyntax(options: InspectSyntaxOptions): Operation<SyntaxS
       registry,
       ...(bundled === undefined ? {} : { workflow: bundled }),
       ...(declarations === undefined ? {} : { declared: declarations }),
+      ...(installedSyntax === undefined ? {} : { structural: installedSyntax }),
     });
     if (selected.kind === "structural") {
       structural.push(structuralEntry(selected.construct));
+      continue;
+    }
+    if (selected.kind === "declared-structural") {
+      const entry = installedSyntax?.entry(selected.declaration.name);
+      if (entry !== undefined) {
+        structural.push(installedStructuralEntry(entry));
+      }
       continue;
     }
     const entry = yield* componentEntry(name, selected);
@@ -547,7 +621,7 @@ export function* inspectSyntax(options: InspectSyntaxOptions): Operation<SyntaxS
   }
 
   return {
-    version: 2,
+    version: 3,
     categories: [
       { kind: "structural", entries: structural },
       { kind: "built-in", entries: builtIn },
@@ -574,6 +648,21 @@ function byCodePoint(left: string, right: string): number {
     }
   }
   return a.length - b.length;
+}
+
+function installedStructuralEntry(entry: AdmittedStructural): InstalledStructuralSyntaxEntry {
+  const declaration = entry.declaration;
+  return {
+    kind: "declared-structural",
+    name: declaration.name,
+    origin: { kind: "declared-structural", origin: declaration.origin },
+    syntax: declaration.syntax,
+    description: declaration.description,
+    forms: declaration.forms,
+    props: declaration.props,
+    placement: declaration.placement,
+    ...(declaration.context === null ? {} : { context: declaration.context }),
+  };
 }
 
 function structuralEntry(construct: string): StructuralSyntaxEntry {

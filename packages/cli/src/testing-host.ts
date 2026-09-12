@@ -59,7 +59,7 @@ import type {
 } from "@executablemd/testing";
 import { installDocumentComponents } from "./cli.ts";
 import { ordinaryEvaluationProfile } from "./evaluation-profile.ts";
-import type { HostServiceInstaller } from "./cli.ts";
+import type { HostServiceInstaller, StructuralInstallationFactory } from "./cli.ts";
 import type { RepositoryInstaller } from "./run-repositories.ts";
 
 /** What one child asks the entrypoint to build its `<Plan>` declaration from. */
@@ -102,6 +102,14 @@ export interface TestingHostSettings {
    * why a configured child could not write a Plan.
    */
   readonly planDeclaration: (request: ChildPlanDeclaration) => Operation<DeclaredMarkdownComponent>;
+  /**
+   * The structural syntax an ordinary run installs here.
+   *
+   * A `host="run"` child is the run profile whatever command is hosting it, so
+   * it installs exactly what `xmd run` installs — built fresh for this child,
+   * so nothing it establishes is shared with its parent or a sibling.
+   */
+  readonly runStructuralInstallation: StructuralInstallationFactory;
   /** Whether durable events are scanned for credentials before they persist. */
   readonly secretDetection: boolean;
   /** The native service adapter this entrypoint supplies. */
@@ -278,7 +286,10 @@ function* runProfileChild(
   const stream = new InMemoryStream();
   const { testAgent, answers } = selectConfiguration(request);
 
-  yield* installDocumentComponents({ testing: false }, false);
+  yield* installDocumentComponents(
+    { testing: false, profile: "run", structural: settings.runStructuralInstallation },
+    false,
+  );
   const installations: ExecutionInstallation[] = [];
   // What this child can establish for a `<Plan>` written inside it. A child
   // nobody configured establishes nothing, which is the refusal `<Plan>` has
@@ -314,6 +325,10 @@ function* runProfileChild(
   // could not resolve `<Plan>` would be a different one. Built here, from what
   // this child settled above, rather than taken from a declaration the
   // entrypoint built before this child's configuration had been read.
+  // The structural syntax a run installs, as its own installation: one
+  // installation owns a form and the implementation that expands it. A fresh
+  // record for this child, so it observes nothing its parent installed.
+  installations.push(settings.runStructuralInstallation());
   installations.push({
     // The run profile's own evaluation ceiling. A `host="run"` child is an
     // ordinary run whatever command is hosting it, so a child of `xmd test` —

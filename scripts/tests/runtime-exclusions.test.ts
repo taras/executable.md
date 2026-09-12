@@ -80,6 +80,7 @@ describe("runtime exclusions", () => {
     // dropped for a reason this manifest has not stated.
     expect(exclusions.deno.map((entry) => entry.path)).toEqual([
       "scripts/tests/component-form-dispatch.test.ts",
+      "scripts/tests/structural-profile-compiled.test.ts",
       "scripts/tests/plan-component-compiled.test.ts",
     ]);
   });

@@ -56,18 +56,33 @@ import {
   strayBreakMessage,
   strayCaseMessage,
   strayElseMessage,
+  installedStructuralStructure,
+  strayInstalledChildMessage,
   strayStructuralMessage,
-  strayTerminalMessage,
   switchStructure,
-  terminalColumns,
-  terminalColumnsMissingMessage,
-  terminalGridStructure,
-  terminalTitle,
-  terminalTitleMissingMessage,
 } from "./structural-rules.ts";
-import type { StructuralViolation, SwitchCase, TerminalPane } from "./structural-rules.ts";
-import { terminalGridLayout } from "./terminal-grid.ts";
-import type { PlacedPane } from "./terminal-grid.ts";
+import type {
+  InstalledStructuralChild,
+  StructuralViolation,
+  SwitchCase,
+} from "./structural-rules.ts";
+import { createApi } from "@effectionx/context-api";
+import { issueExpansion } from "./expansion-request.ts";
+import type {
+  ExpansionChunk,
+  ExpansionJson,
+  ExpansionRegion,
+  ExpansionRequest,
+  StructuralExpander,
+} from "./expansion-request.ts";
+import { regionStream } from "./expansion-region.ts";
+import { installedPropFailure } from "./execution-declarations.ts";
+import type {
+  AdmittedStructural,
+  StructuralCatalog,
+  StructuralDeclaration,
+} from "./execution-declarations.ts";
+import { emissions } from "./render.ts";
 import {
   asBindingViolation,
   asExpressionViolation,
@@ -268,6 +283,59 @@ function expandChildrenScoped(
       authority,
       returnBody,
     );
+  });
+}
+
+/**
+ * Expand one installed child region, delivering its output as it is produced.
+ *
+ * The same scope and overlay an ordinary child region gets: the region's own
+ * bindings are isolated from its siblings, and a `<Let>` written in it is
+ * visible to what follows in the same region. What differs is where the output
+ * goes — each expanded top-level segment becomes chunks the caller takes, and
+ * nothing accumulates in a document region.
+ *
+ * Delivery suspends between chunks, so the segment after the one just handed
+ * over does not expand until the consumer asks for it.
+ */
+function expandRegionScoped(
+  child: InstalledStructuralChild,
+  deliver: (chunk: ExpansionChunk) => Operation<void>,
+  callerEnv: EvalEnv | undefined,
+  scope: EvalScope | undefined,
+  meta: Record<string, unknown>,
+  props: Record<string, Json>,
+  hideSet: Set<string>,
+  counter: BlockCounter,
+  path: string,
+  checkedFailures: CheckedFailures | undefined,
+  authority: ExpansionAuthority | undefined,
+  returnBody: ReturnBody | undefined,
+): Operation<void> {
+  return scoped(function* () {
+    yield* provideEnv(layerEnvironments(callerEnv, { values: {} }, false) ?? { values: {} });
+    if (scope) {
+      yield* provideEvalScope(scope);
+    }
+    for (const [index, inner] of child.element.children.entries()) {
+      const buffer: Segment[] = [];
+      yield* expandSegmentsWithin(
+        [inner],
+        meta,
+        props,
+        hideSet,
+        counter,
+        buffer,
+        path,
+        index,
+        checkedFailures,
+        authority,
+        returnBody,
+      );
+      for (const run of emissions(authority?.exact, buffer)) {
+        yield* deliver({ text: run.text, exact: run.exact });
+      }
+    }
   });
 }
 
@@ -1149,6 +1217,45 @@ function* expandListSegments(
           break;
         }
 
+        const installed = authority?.structural?.entry(segment.name);
+        if (installed !== undefined && authority?.structural !== undefined) {
+          const catalog = authority.structural;
+          const contextEnv = yield* env;
+          const regionEnv = layerEnvironments(segment.projectedEnv, contextEnv);
+          const regionScope = yield* evalScope;
+          // No raise() here, like the branches above: the expander reports
+          // every error it creates.
+          yield* expandInstalledStructural(
+            segment,
+            installed,
+            catalog,
+            authority.expanders?.[installed.owner],
+            result,
+            (child, deliver) =>
+              expandRegionScoped(
+                child,
+                deliver,
+                regionEnv ?? undefined,
+                regionScope ?? undefined,
+                parentMeta,
+                parentProps,
+                hideSet,
+                counter,
+                extendPath(
+                  elementPath,
+                  elementFrame(
+                    child.element.name,
+                    elementSite(child.element.position, child.index),
+                  ),
+                ),
+                checkedFailures,
+                authority,
+                returnBody,
+              ),
+          );
+          break;
+        }
+
         if (segment.name === "Switch") {
           // No raise() here, like <If> above: expandSwitch reports the errors
           // it creates, and the selected case settled its own (§6.9).
@@ -1177,28 +1284,6 @@ function* expandListSegments(
               type: "error",
               message: positioned(strayCaseMessage(), segment),
               source: "Case",
-            }),
-          );
-          break;
-        }
-
-        if (segment.name === "Terminal.Grid") {
-          // No raise() here, like the branches above: expandTerminalGrid
-          // reports every error it creates.
-          yield* expandTerminalGrid(segment, result);
-          break;
-        }
-
-        if (segment.name === "Terminal") {
-          // A well-placed <Terminal> is consumed by its <Terminal.Grid> and
-          // never expanded on its own. Reaching this branch means the pane sits
-          // outside every grid, so it names no component and is diagnosed
-          // rather than resolved from the filesystem.
-          result.push(
-            yield* raise({
-              type: "error",
-              message: positioned(strayTerminalMessage(), segment),
-              source: "Terminal",
             }),
           );
           break;
@@ -2059,55 +2144,129 @@ function* expandSwitch(
   );
 }
 
-function terminalGridError(segment: ComponentElement, message: string): ErrorSegment {
-  return { type: "error", message: positioned(message, segment), source: "Terminal.Grid" };
-}
-
-function terminalPaneError(segment: ComponentElement, message: string): ErrorSegment {
-  return { type: "error", message: positioned(message, segment), source: "Terminal" };
+function structuralElementError(
+  segment: ComponentElement,
+  source: string,
+  message: string,
+): ErrorSegment {
+  return { type: "error", message: positioned(message, segment), source };
 }
 
 /**
- * The value one prop of a terminal-grid construct produced, or why evaluating
- * it failed. A missing prop is `undefined`, which is also what an expression
- * evaluating to `undefined` leaves behind (§6.5) — absence either way, and the
- * caller says what its construct requires instead.
+ * The props one occurrence of an installed structural form declared, evaluated
+ * and checked against the schema its declaration states.
+ *
+ * The ordinary component path: expressions are evaluated against the element's
+ * own environment, the result is JSON, and the declared schema supplies
+ * defaults and decides what is acceptable. A form's implementation therefore
+ * never sees an unevaluated expression, an unknown prop, or a value the
+ * declaration does not admit.
  */
-function* resolveStructuralProp(
+function* installedStructuralProps(
   segment: ComponentElement,
-  construct: string,
-  prop: string,
-): Operation<Result<Json | undefined>> {
-  const expression = segment.expressions[prop];
-  if (expression === undefined) {
-    return Ok(segment.props[prop]);
-  }
+  declaration: StructuralDeclaration,
+): Operation<Result<Record<string, Json>>> {
+  const name = declaration.name;
+  // `as` is not stripped the way an ordinary component's is. An installed form
+  // produces no value, so there is nothing for a binding to capture, and the
+  // declared schema refuses it as the unknown prop it is — in the declaration's
+  // own wording rather than in a second sentence about bindings.
+  let resolved: Record<string, Json>;
   try {
-    const resolved = yield* resolveExpressionProps(
-      {},
-      { [prop]: expression },
-      construct,
+    resolved = yield* resolveExpressionProps(
+      segment.props,
+      segment.expressions,
+      name,
       segment.projectedEnv,
     );
-    return Ok(resolved[prop]);
   } catch (error) {
     return Err(error instanceof Error ? error : new Error(String(error)));
   }
+  try {
+    return Ok(yield* validateProps(name, resolved, declaration.props));
+  } catch (error) {
+    return Err(installedPropFailure(declaration, resolved, error));
+  }
 }
 
+/** The immutable JSON one request publishes, detached from the author's values. */
+function detachedExpansionProps(props: Record<string, Json>): Record<string, ExpansionJson> {
+  const copy: Record<string, ExpansionJson> = {};
+  for (const [key, value] of Object.entries(props)) {
+    Object.defineProperty(copy, key, {
+      value: deepFreeze(value),
+      enumerable: true,
+      writable: false,
+      configurable: false,
+    });
+  }
+  return Object.freeze(copy);
+}
+
+function deepFreeze(value: Json): ExpansionJson {
+  if (value === null || typeof value !== "object") {
+    return value;
+  }
+  if (Array.isArray(value)) {
+    return Object.freeze(value.map(deepFreeze));
+  }
+  const copy: Record<string, ExpansionJson> = {};
+  for (const [key, member] of Object.entries(value)) {
+    Object.defineProperty(copy, key, {
+      value: deepFreeze(member),
+      enumerable: true,
+      writable: false,
+      configurable: false,
+    });
+  }
+  return Object.freeze(copy);
+}
+
+/** How one region expands its own authored content into ordered chunks. */
+type RegionExpansion = (
+  child: InstalledStructuralChild,
+  deliver: (chunk: ExpansionChunk) => Operation<void>,
+) => Operation<void>;
+
 /**
- * Open the grid the author wrote (spec §6.21).
+ * Expand one occurrence of an installed structural form (spec §6.1).
  *
- * The whole layout is decided before anything opens: the panes and their forms
- * from source, then `columns` and each pane's `title` from the values the
- * document computes. Only once the concrete grid is complete is a terminal
- * provider anything's business — and this build has none, so the grid refuses
- * there. Nothing beneath a pane has expanded and no shell has started when it
- * does, which is what makes the refusal a closed one rather than a partial grid
- * left behind.
+ * The order is the contract. What the author wrote is validated from source
+ * first, so a malformed occurrence reaches no prop and no package. The parent's
+ * props are evaluated and checked next, then every accepted child's, in source
+ * order — a failure anywhere here publishes no request, invokes no middleware,
+ * reaches no region producer and starts nothing the installing package owns.
+ * Only a complete, validated occurrence is published, and only canonical core's
+ * own terminal can hand it to the installation that declared it.
  */
-function* expandTerminalGrid(segment: ComponentElement, owner: Segment[]): Operation<void> {
-  const structure = terminalGridStructure(segment);
+function* expandInstalledStructural(
+  segment: ComponentElement,
+  entry: AdmittedStructural,
+  catalog: StructuralCatalog,
+  expander: StructuralExpander | undefined,
+  owner: Segment[],
+  expandRegion: RegionExpansion,
+): Operation<void> {
+  const isInstalledChild = (name: string): boolean => catalog.entry(name) !== undefined;
+  const declaration = entry.declaration;
+  const name = declaration.name;
+
+  if (declaration.placement.kind === "child") {
+    // A well-placed child is consumed by the parent that accepts it and never
+    // expanded on its own. Reaching here means it sits outside every such
+    // parent, so it names no component and is diagnosed rather than resolved.
+    owner.push(
+      yield* raise(structuralElementError(segment, name, strayInstalledChildMessage(declaration))),
+    );
+    return;
+  }
+
+  const structure = installedStructuralStructure(
+    segment,
+    declaration,
+    entry.children,
+    isInstalledChild,
+  );
   if (structure.violations.length > 0) {
     for (const violation of structure.violations) {
       owner.push(yield* raise(structuralErrorSegment(violation, segment)));
@@ -2115,70 +2274,146 @@ function* expandTerminalGrid(segment: ComponentElement, owner: Segment[]): Opera
     return;
   }
 
-  const columnsValue = yield* resolveStructuralProp(segment, "Terminal.Grid", "columns");
-  if (!columnsValue.ok) {
-    owner.push(yield* raise(terminalGridError(segment, columnsValue.error.message)));
-    return;
-  }
-  if (columnsValue.value === undefined) {
-    owner.push(yield* raise(terminalGridError(segment, terminalColumnsMissingMessage())));
-    return;
-  }
-  const columns = terminalColumns(columnsValue.value);
-  if (!columns.ok) {
-    owner.push(yield* raise(terminalGridError(segment, columns.error.message)));
+  const parentProps = yield* installedStructuralProps(segment, declaration);
+  if (!parentProps.ok) {
+    owner.push(yield* raise(structuralElementError(segment, name, parentProps.error.message)));
     return;
   }
 
-  const placed: PlacedPane[] = [];
-  for (const pane of structure.panes) {
-    const title = yield* resolvePaneTitle(pane);
-    if (!title.ok) {
-      owner.push(yield* raise(terminalPaneError(pane.element, title.error.message)));
+  const resolved: { child: InstalledStructuralChild; props: Record<string, Json> }[] = [];
+  for (const child of structure.children) {
+    const childEntry = catalog.entry(child.element.name);
+    if (childEntry === undefined) {
+      continue;
+    }
+    const childProps = yield* installedStructuralProps(child.element, childEntry.declaration);
+    if (!childProps.ok) {
+      owner.push(
+        yield* raise(
+          structuralElementError(child.element, child.element.name, childProps.error.message),
+        ),
+      );
       return;
     }
-    placed.push({ title: title.value, form: pane.form });
+    resolved.push({ child, props: childProps.value });
   }
 
-  const layout = terminalGridLayout(columns.value, placed);
-  owner.push(
-    yield* raise({
-      type: "error",
-      message: positioned(noTerminalProviderMessage(), segment),
-      source: "Terminal.Grid",
-      // The grid the author asked for, carried beside the sentence so an
-      // assertion is about the layout that was derived rather than about the
-      // wording of a refusal.
-      cause: {
-        layout: {
-          columns: layout.columns,
-          rows: layout.rows,
-          cells: layout.cells.map((cell) => ({ ...cell })),
-        },
+  const regions: readonly ExpansionRegion[] = Object.freeze(
+    resolved.map(({ child, props }) =>
+      Object.freeze({
+        name: child.element.name,
+        origin: catalog.entry(child.element.name)?.declaration.origin ?? declaration.origin,
+        form: child.form,
+        ...(child.element.position === undefined
+          ? {}
+          : { position: Object.freeze({ ...child.element.position }) }),
+        props: detachedExpansionProps(props),
+        expand: () => regionStream((deliver) => expandRegion(child, deliver)),
+      }),
+    ),
+  );
+
+  const issued = issueExpansion(
+    {
+      name,
+      origin: declaration.origin,
+      form: segment.selfClosing ? "self-closing" : "paired",
+      ...(segment.position === undefined
+        ? {}
+        : { position: Object.freeze({ ...segment.position }) }),
+      props: detachedExpansionProps(parentProps.value),
+    },
+    function* () {
+      if (expander === undefined) {
+        throw new Error(`<${name}> is declared by an installation that supplies no expansion.`);
+      }
+      yield* expander(issued.request, regions);
+    },
+  );
+
+  // The terminal for this occurrence and no other. A stable Api name shares the
+  // middleware context, so every public handler composes around this call; what
+  // it cannot reach is this default, which is closed over this occurrence and
+  // is the only thing that can invoke the captured owner.
+  const occurrence = createApi<{ expand(request: ExpansionRequest): Operation<void> }>(
+    "Execution",
+    {
+      *expand(request: ExpansionRequest): Operation<void> {
+        yield* issued.claim(request);
       },
-    }),
+    },
+  );
+
+  let raised: unknown;
+  try {
+    yield* occurrence.operations.expand(issued.request);
+  } catch (error) {
+    raised = error;
+  }
+
+  // A refusal core itself issued is republished from the reason core recorded
+  // rather than from the object that came back: public middleware can catch the
+  // exact error, replace its members and rethrow it. This is asked before the
+  // settlement, because a handler that delegates and *then* violates the
+  // protocol — by delegating a second time — has a settled expansion and a
+  // refusal, and the refusal is the answer.
+  const republished = raised === undefined ? undefined : issued.republish(raised);
+  if (republished !== undefined) {
+    owner.push(yield* raiseFrom(installedFailure(segment, name, republished), republished));
+    return;
+  }
+  if (raised !== undefined) {
+    // A handler refused the occurrence, before or after delegating. Either way
+    // this element did not complete, and the failure is the one it raised.
+    owner.push(yield* raiseFrom(installedFailure(segment, name, raised), raised));
+    return;
+  }
+
+  const settlement = issued.settlement();
+  if (settlement.status === "expanded") {
+    return;
+  }
+  if (settlement.status === "raised") {
+    owner.push(
+      yield* raiseFrom(installedFailure(segment, name, settlement.raised), settlement.raised),
+    );
+    return;
+  }
+  // A handler that returned without delegating.
+  owner.push(
+    yield* raiseFrom(installedFailure(segment, name, settlement.refusal), settlement.refusal),
   );
 }
 
-/** The label one pane displays, from the value its own `title` prop produced. */
-function* resolvePaneTitle(pane: TerminalPane): Operation<Result<string>> {
-  const value = yield* resolveStructuralProp(pane.element, "Terminal", "title");
-  if (!value.ok) {
-    return value;
-  }
-  if (value.value === undefined) {
-    return Err(new Error(terminalTitleMissingMessage()));
-  }
-  return terminalTitle(value.value);
+/** The positioned checked failure one occurrence's expansion produced. */
+function installedFailure(segment: ComponentElement, name: string, raised: unknown): ErrorSegment {
+  const message = raised instanceof Error ? raised.message : String(raised);
+  const cause = jsonCause(raised);
+  return {
+    type: "error",
+    message: positioned(message, segment),
+    source: name,
+    ...(cause === undefined ? {} : { cause }),
+  };
 }
 
-/** What a complete grid says on a host where nothing can open one. */
-function noTerminalProviderMessage(): string {
-  return (
-    "no terminal provider opened this grid. A host installs the terminal-grid capability " +
-    "explicitly, and this one installs none, so no pane expanded its content and no default " +
-    "shell started."
-  );
+/**
+ * A JSON `Error.cause`, detached onto the printed error.
+ *
+ * A package states evidence beside its sentence — the arrangement it derived,
+ * the input it refused — and an assertion about that evidence is worth more
+ * than one about the wording. Anything that is not JSON stays ordinary error
+ * detail rather than becoming record data.
+ */
+function jsonCause(raised: unknown): Json | undefined {
+  if (!(raised instanceof Error) || raised.cause === undefined) {
+    return undefined;
+  }
+  try {
+    return parseJson(structuredClone(raised.cause));
+  } catch {
+    return undefined;
+  }
 }
 
 function loopError(segment: ComponentElement, message: string): ErrorSegment {

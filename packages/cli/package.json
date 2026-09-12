@@ -16,6 +16,7 @@
     "@executablemd/core": "workspace:*",
     "@executablemd/durable-streams": "workspace:*",
     "@executablemd/runtime": "workspace:*",
+    "@executablemd/terminal": "workspace:*",
     "@executablemd/test-agent": "workspace:*",
     "@executablemd/testing": "workspace:*",
     "@executablemd/web": "workspace:*",

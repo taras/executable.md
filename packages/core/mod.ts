@@ -169,6 +169,24 @@ export type { CompletionFailure, ExecutionRequest } from "./src/execution-reques
 // what canonical execution settled to are all internal.
 export { DocumentProtocolError } from "./src/document-request.ts";
 export type { DocumentRequest } from "./src/document-request.ts";
+
+/**
+ * The public expansion boundary one installed structural form is implemented
+ * across.
+ *
+ * `Execution.expand` is policy middleware: a handler receives the occurrence's
+ * request — its name, origin, authored form, source position and evaluated,
+ * frozen props — and may observe it, refuse it by throwing, or delegate it. It
+ * receives no child regions and no implementation, so only canonical core can
+ * hand an occurrence to the installation that declared it.
+ */
+export { ExpansionProtocolError } from "./src/expansion-request.ts";
+export type {
+  ExpansionChunk,
+  ExpansionJson,
+  ExpansionRegion,
+  ExpansionRequest,
+} from "./src/expansion-request.ts";
 export {
   fileSource,
   formatDocumentReference,
@@ -209,6 +227,7 @@ export type {
   InspectOptions,
   InspectSyntaxOptions,
   OriginOnlyComponentSyntaxEntry,
+  InstalledStructuralSyntaxEntry,
   StructuralSyntaxEntry,
   SyntaxSymbols,
 } from "./src/inspect.ts";
@@ -284,7 +303,7 @@ export { DEFAULT_INCLUDES, selectComponent } from "./src/components/select.ts";
 export type { SelectOptions } from "./src/components/select.ts";
 export { CORE_COMPONENT_NAMES } from "./src/components/registry.ts";
 export { RESERVED_STRUCTURAL, STRUCTURAL_DECLARATIONS } from "./src/structural.ts";
-export type { StructuralDeclaration } from "./src/structural.ts";
+export type { EngineStructuralDeclaration } from "./src/structural.ts";
 export { documented, documentationOf } from "./src/components/documentation.ts";
 export type {
   ComponentDocumentation,

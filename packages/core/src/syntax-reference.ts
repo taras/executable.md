@@ -39,7 +39,7 @@ import type { DocumentationContribution } from "./component-documentation.ts";
 import type { DocumentationIndex } from "./documentation-index.ts";
 import { UnknownComponentError } from "./documentation-index.ts";
 import type { WorkflowImportAuthority } from "./components/bundle.ts";
-import type { DeclaredMarkdownComponent } from "./components/declared-markdown.ts";
+import type { ExecutionDeclaration } from "./execution-declarations.ts";
 import type { IdentityComponent } from "./invocation-identity.ts";
 import { SyntaxSelectionRefusal } from "./syntax-refusal.ts";
 import type { ComponentOrigin, ComponentRegistry } from "./types.ts";
@@ -105,7 +105,7 @@ export interface CapturedSymbolInputs {
   /** The registrations this execution started with, captured before it ran. */
   readonly registry: ComponentRegistry;
   readonly components: readonly IdentityComponent[];
-  readonly declarations: readonly DeclaredMarkdownComponent[];
+  readonly declarations: readonly ExecutionDeclaration[];
   /** The bundle this execution is closed over, when a trusted host installed one. */
   readonly workflow?: WorkflowImportAuthority;
 }
@@ -229,7 +229,9 @@ function identityOf(entry: { name: string; origin: ComponentOrigin }): string {
             ? [origin.origin]
             : origin.kind === "workflow"
               ? [origin.path, origin.sourceHash]
-              : [origin.origin, origin.digest];
+              : origin.kind === "declared-structural"
+                ? [origin.origin]
+                : [origin.origin, origin.digest];
   // Length-prefixed, so no member's content can spell a separator and make two
   // different identities collide.
   return [entry.name, origin.kind, ...parts].map((part) => `${part.length}:${part}`).join("");

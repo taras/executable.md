@@ -24,6 +24,7 @@ import {
 } from "@executablemd/workflow/credential-helper";
 import type { HelperAssembly } from "@executablemd/workflow/credential-helper";
 import { useDenoService } from "./deno-service.ts";
+import { terminalGridInstallation } from "@executablemd/terminal/xmd";
 
 const ENTRYPOINT = fileURLToPath(import.meta.url);
 
@@ -110,6 +111,7 @@ if (isCredentialHelperMode(process.argv.slice(2))) {
       UPGRADE,
       denoRunRepositories(HELPER),
       () => readInputStream(process.stdin),
+      terminalGridInstallation,
       () => useDenoWorkflowHost(HELPER),
       useMachineSessions(),
     );

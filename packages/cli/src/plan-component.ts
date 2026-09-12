@@ -68,6 +68,7 @@ import {
 } from "@executablemd/core/host";
 import type {
   DeclaredMarkdownComponent,
+  ExecutionDeclaration,
   IdentityClaimant,
   IdentityComponent,
 } from "@executablemd/core/host";
@@ -136,7 +137,7 @@ export type StructuralValidation = (candidate: string) => Operation<DocumentVali
  */
 export function structuralValidation(
   includes: readonly string[],
-  declarations: readonly DeclaredMarkdownComponent[],
+  declarations: readonly ExecutionDeclaration[],
 ): StructuralValidation {
   return (candidate: string) =>
     // The registry is installed around the question rather than around the
@@ -382,6 +383,7 @@ export function* planComponentDeclaration(
   // gate after this declaration is gone.
   const validate = assembly.validate ?? structuralValidation(assembly.includes, declared);
   const declaration: DeclaredMarkdownComponent = {
+    kind: "markdown",
     name: PLAN_COMPONENT,
     origin: PLAN_ORIGIN,
     source,
@@ -426,6 +428,7 @@ export function* planComponentDeclaration(
 export function* planComponentDescription(): Operation<DeclaredMarkdownComponent> {
   const source = yield* readPackagedDocument(PLAN_DOCUMENT);
   return {
+    kind: "markdown",
     name: PLAN_COMPONENT,
     origin: PLAN_ORIGIN,
     source,

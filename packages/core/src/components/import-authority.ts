@@ -30,6 +30,8 @@ import type { DeclaredImports, PrivateClosure } from "./declared-markdown.ts";
 import type { ExactSource } from "../output/exact-source.ts";
 import type { SyntaxReference } from "../syntax-reference.ts";
 import type { CapturedProfile } from "../evaluation-profile.ts";
+import type { StructuralCatalog } from "../execution-declarations.ts";
+import type { StructuralExpander } from "../expansion-request.ts";
 
 /** A definition an import may answer with. */
 export type ImportedDefinition = ComponentDefinition | FunctionComponentDefinition;
@@ -149,6 +151,18 @@ export interface ExpansionAuthority {
    * kept past this execution's teardown reaches a table that is gone.
    */
   readonly protectedBodies?: ProtectedBodies;
+  /**
+   * The structural syntax this execution installs, and how each installation
+   * expands the forms it declared.
+   *
+   * Held by the execution and handed here by value, like everything else on
+   * this object: an expansion reaching it is core's own, so nothing a document,
+   * a component or middleware can name decides that a name is installed syntax
+   * or substitutes an implementation for the one the host selected. The
+   * expanders are indexed by the owner an admitted declaration names.
+   */
+  readonly structural?: StructuralCatalog;
+  readonly expanders?: readonly (StructuralExpander | undefined)[];
   /** The generated import's form check and result collection, around either body kind. */
   readonly invoke?: (
     fn: unknown,

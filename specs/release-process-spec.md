@@ -49,9 +49,10 @@ sequenceDiagram
 ## 2. Version lockstep
 
 Every publishable package (`packages/core`, `packages/cli`,
-`packages/durable-streams`, `packages/runtime`, `packages/testing`,
-`packages/code-review-agent`, `packages/test-agent`, `packages/acp`,
-`packages/web`, `packages/workflow`) declares the same version in its `deno.json` and
+`packages/durable-streams`, `packages/runtime`, `packages/terminal`,
+`packages/testing`, `packages/code-review-agent`, `packages/test-agent`,
+`packages/acp`, `packages/web`, `packages/workflow`) declares the same version
+in its `deno.json` and
 `package.json`. A member marked `"private": true` is outside the lockstep
 because it never publishes — `packages/test-support` is the one, and it stays
 at `0.0.0`. `packages/cli/src/cli.ts`
@@ -175,6 +176,24 @@ what a branch changing a shared API needs and what the `packages/cli` npm suite
 runs. The emitted package.json names local directories, so an artifact built this
 way is a verification artifact, never a publishable one. Release workflows never
 set the variable.
+
+### Package order and subpaths
+
+`.github/workflows/publish-packages.yml` is generated from the workspace
+manifests, so a member's `needs:` order is its dependency order and nothing
+restates it by hand. `@executablemd/terminal` depends on `@executablemd/core`
+and `@executablemd/cli` depends on both, so the order is core → terminal → CLI.
+
+`@executablemd/terminal` publishes two entry points: the provider-neutral root,
+which depends on no other member, and `./xmd`, the executable-Markdown
+integration that depends on core. Both are declared in its `deno.json` and
+`package.json` exports, and a release that shipped only the root would publish a
+CLI whose profile cannot resolve the subpath it imports.
+
+A member that has never been published to npm has no package to publish *into*:
+the first release carrying it needs the documented bootstrap
+(`components/BootstrapNpmPackage.md`) completed first, and nothing in the
+release workflow creates a registry entry on its own.
 
 ### JSR publishing
 

@@ -29,6 +29,7 @@ import { API } from "@executablemd/runtime";
 import { CORE_COMPONENT_NAMES } from "@executablemd/core";
 import type { PropsSchema, SyntaxSymbols } from "@executablemd/core";
 import { renderSyntaxJson, renderSyntaxMarkdown, syntaxSymbols } from "../src/syntax.ts";
+import { terminalGridInstallation } from "@executablemd/terminal/xmd";
 
 function* useWorkspace<T>(
   files: Record<string, string>,
@@ -72,8 +73,8 @@ function parseSymbols(text: string): SyntaxSymbols {
   }
   const version = Reflect.get(parsed, "version");
   const categories = Reflect.get(parsed, "categories");
-  if (version !== 2 || !Array.isArray(categories) || categories.length !== 3) {
-    throw new Error("the symbols are not the version-2 shape");
+  if (version !== 3 || !Array.isArray(categories) || categories.length !== 3) {
+    throw new Error("the symbols are not the version-3 shape");
   }
   return { version, categories: readCategories(categories) };
 }
@@ -113,7 +114,7 @@ function names(entries: readonly { name: string }[]): string[] {
 /** One built-in entry carrying `props`, for a renderer row that supplies its own. */
 function symbolsWith(props: PropsSchema): SyntaxSymbols {
   return {
-    version: 2,
+    version: 3,
     categories: [
       { kind: "structural", entries: [] },
       {
@@ -311,14 +312,23 @@ describe("Tier SX — the run profile the command describes", () => {
           throw new Error(`describing the syntax ran ${JSON.stringify(options.command)}`);
         },
       });
-      return yield* syntaxSymbols([]);
+      // The exact factory an ordinary run installs from, so what `xmd syntax`
+      // describes is the vocabulary a run has rather than a table written
+      // beside it.
+      return yield* syntaxSymbols([], terminalGridInstallation);
     });
     const [structural, builtIn] = catalog.categories;
 
     const grid = structural.entries.find((entry) => entry.name === "Terminal.Grid");
     const pane = structural.entries.find((entry) => entry.name === "Terminal");
-    expect(grid?.origin).toEqual({ kind: "structural", construct: "Terminal.Grid" });
-    expect(pane?.origin).toEqual({ kind: "structural", construct: "Terminal" });
+    expect(grid?.origin).toEqual({
+      kind: "declared-structural",
+      origin: "@executablemd/terminal/xmd",
+    });
+    expect(pane?.origin).toEqual({
+      kind: "declared-structural",
+      origin: "@executablemd/terminal/xmd",
+    });
     expect(grid?.syntax).toEqual(["<Terminal.Grid columns={2}>…</Terminal.Grid>"]);
     expect(pane?.syntax).toEqual([
       '<Terminal title="Agent">…</Terminal>',
@@ -326,7 +336,7 @@ describe("Tier SX — the run profile the command describes", () => {
     ]);
     expect(grid?.description ?? "").not.toBe("");
     expect(pane?.description ?? "").not.toBe("");
-    // Reserved syntax, so neither name is a component this profile offers.
+    // Installed syntax, so neither name is a component this profile offers.
     expect(names(builtIn.entries)).not.toContain("Terminal.Grid");
     expect(names(builtIn.entries)).not.toContain("Terminal");
   });
@@ -555,7 +565,7 @@ describe("Tier SX — the command line", { sanitizeOps: false, sanitizeResources
     expect(command.stdout.length).toBeGreaterThan(400);
   });
 
-  it("SX10: writes markdown by default and version-2 JSON with --json", function* () {
+  it("SX10: writes markdown by default and version-3 JSON with --json", function* () {
     yield* useWorkspace(WORKSPACE, function* (cwd) {
       const markdown = yield* runCli(["syntax", "--include", "first"], { cwd }).expect();
       expect(markdown.stdout).toContain("## Built-in structural syntax");
@@ -564,7 +574,7 @@ describe("Tier SX — the command line", { sanitizeOps: false, sanitizeResources
 
       const json = yield* runCli(["syntax", "--json", "--include", "first"], { cwd }).expect();
       const catalog = parseSymbols(json.stdout);
-      expect(catalog.version).toBe(2);
+      expect(catalog.version).toBe(3);
       expect(names(catalog.categories[2].entries)).toEqual(["Shared"]);
     });
   });
@@ -661,7 +671,7 @@ describe(
 
         expect(piped).toBe(redirected);
         const catalog = parseSymbols(piped);
-        expect(catalog.version).toBe(2);
+        expect(catalog.version).toBe(3);
         expect(names(catalog.categories[2].entries)).toContain("ZBeyondTheBuffer");
         expect(piped.lastIndexOf(`"ZBeyondTheBuffer"`)).toBeGreaterThan(PIPE_BUFFER);
       });

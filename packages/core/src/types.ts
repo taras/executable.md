@@ -9,6 +9,7 @@ import type { Operation, Result } from "effection";
 import type { Json as DurableJson } from "@executablemd/durable-streams";
 import type { TestHarnessComponentDefinition } from "./test-harness.ts";
 import type { ComponentInvocation, InvocationForm } from "./invocation-identity.ts";
+import type { StructuralDeclaration } from "./execution-declarations.ts";
 import type { ProtectedComponent } from "./components/protected.ts";
 
 export type Json = DurableJson;
@@ -356,7 +357,17 @@ export type ComponentOrigin =
    * first-party asset the bytes came from, never a path a repository could
    * supply and never the root that invoked it.
    */
-  | { kind: "declared-markdown"; origin: string; digest: string };
+  | { kind: "declared-markdown"; origin: string; digest: string }
+  /**
+   * An installed structural form — syntax a trusted host added to this
+   * execution through `ExecutionInstallation.declarations`.
+   *
+   * Its own kind rather than a registration, because it is not one: no registry
+   * supplies it, a document cannot write it where its declaration does not
+   * place it, and the installation that declared it is the only thing that can
+   * expand it.
+   */
+  | { kind: "declared-structural"; origin: string };
 
 /**
  * What resolving a name decided, before anything is loaded.
@@ -405,6 +416,22 @@ export type ComponentSelection =
        * host declared about the *name*.
        */
       exact: boolean;
+    }
+  /**
+   * An installed structural form this environment declares.
+   *
+   * Nothing was read from the filesystem to answer this, and no implementation
+   * travels with it: the declaration states what the form accepts, and `owner`
+   * names the captured installation canonical core dispatches an occurrence to.
+   */
+  | {
+      kind: "declared-structural";
+      origin: string;
+      declaration: StructuralDeclaration;
+      /** The captured installation that declared it and implements it. */
+      owner: number;
+      /** For a parent, the accepted direct child names, in declaration order. */
+      children: readonly string[];
     }
   | { kind: "unresolved"; searched: string[]; registered: readonly ComponentOrigin[] };
 

@@ -17,6 +17,7 @@ import { unassembledMachineSessions } from "./session-coordinator.ts";
 import { unsupportedWorkflowHost } from "./workflow.ts";
 import { unsupportedRepositories } from "./run-repositories.ts";
 import { useBunService } from "./bun-service.ts";
+import { terminalGridInstallation } from "@executablemd/terminal/xmd";
 
 const ENTRYPOINT = fileURLToPath(import.meta.url);
 
@@ -72,6 +73,7 @@ await main(function* (args) {
     UPGRADE,
     unsupportedRepositories,
     () => readInputStream(process.stdin),
+    terminalGridInstallation,
     unsupportedWorkflowHost,
     unassembledMachineSessions(),
   );

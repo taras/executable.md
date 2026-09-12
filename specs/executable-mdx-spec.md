@@ -2654,20 +2654,23 @@ A component name is resolved in tiers, and the first tier that answers wins:
 
 1. **structural syntax** — `<Content>`, `<Output>`, `<Return>`, `<Let>`,
    `<Each>`, `<If>`/`<Else>`, `<Switch>`/`<Case>`, `<Loop>`/`<Break>`,
-   `<PrintErrors>`, `<Answers>`/`<Answer>`, and
-   `<Terminal.Grid>`/`<Terminal>`. These are the language's own constructs.
-   They are reserved: a registration cannot claim one, and a repository file
-   named after one never stands in for it. A structural name written where its
-   construct gives it no meaning is a printed error, not a missing component.
+   `<PrintErrors>` and `<Answers>`/`<Answer>`. These are the language's own
+   constructs. They are reserved: a registration cannot claim one, a repository
+   file named after one never stands in for it, and an installation cannot
+   declare one. A structural name written where its construct gives it no
+   meaning is a printed error, not a missing component.
 2. **a component canonical core protects** — the engine's own claim rather than
    a host's, so the name means the same thing in every execution. `<Syntax />`
    (§5.3.1) is the one member. The table is the resolver's own and is consulted
    unconditionally, so no option a caller passes puts anything in front of it.
 3. **a host claiming the name** — a reserved registration protecting a language
-   or security invariant, or a *declared Markdown component*: exact first-party
-   Markdown a trusted host handed this execution. Both claim the name rather
-   than offering a default for it, so two claims on one name are refused where
-   they are installed and this tier never chooses between them.
+   or security invariant, an *installed structural form* (§6.1.1), or a
+   *declared Markdown component*: exact first-party Markdown a trusted host
+   handed this execution. Each claims the name rather than offering a default
+   for it, so two claims on one name are refused where they are installed and
+   this tier never chooses between them. An installed structural name written
+   where its declaration gives it no placement is a printed error, not a missing
+   component, and never resolves a repository file.
 4. **the workflow component bundle** this execution is closed over, when a
    trusted host installed one.
 5. **a repository-local file**, by the candidate order below.
@@ -5360,6 +5363,87 @@ the first error produced while executing that non-rendered documentation stops
 the body immediately (§6.9).
 
 The modifier chain composition and handler registration are defined in §3.3.
+
+### 6.1.1 Installed structural expansion
+
+A trusted host may add a coordinated parent and child form to one execution. The
+forms cross on `ExecutionInstallation.declarations`, and the same installation
+supplies the `expand` that implements them — so one installation owns both
+halves, and declaring a structural form without an implementation, or an
+implementation with no structural form, refuses the execution before authored
+content runs.
+
+A structural declaration is data. It states the public `name`, the `origin` it
+reports, the accepted `forms`, a closed self-contained props schema, the
+`syntax` and `description` a reader is shown, what its content means, its
+`placement`, and optionally the wording of its own refusals. It carries no
+implementation, scope, raw AST, captures, returns, private components, durable
+identity or provider, and its implementation returns nothing, so an authored
+`as` is refused by the schema as the unknown prop it is.
+
+Placement is what makes the pair coordinated. A parent states how few direct
+children it accepts and whether another occurrence of itself may appear below
+it; a child names the parent it belongs to, and that parent is declared by the
+same installation. The accepted direct children of a parent are exactly the
+child declarations of its own installation that name it.
+
+For one occurrence of an installed parent, canonical core:
+
+1. selects the declaration and determines which authored form was written;
+2. validates the form and the direct-child placement from source — accepting
+   whitespace and accepted direct children only, and refusing text, a foreign
+   element, a child a control structure would have produced, a misplaced child,
+   too few children and a forbidden nested parent;
+3. evaluates and schema-validates the parent's props, then each accepted child's
+   props in source order, through the ordinary expression and `validateProps`
+   path, defaults and normalized schema failures included;
+4. detaches and deeply freezes the validated facts and builds the child regions
+   in accepted source order;
+5. publishes one authentic request to public `Execution.expand`;
+6. hands that request and the regions to the captured owner's implementation,
+   and to nothing else.
+
+A failure at any step before the last publishes no request, invokes no
+middleware, reaches no region producer and starts nothing the installing package
+owns. A literal prop is decided while the document is only being read, so
+document validation refuses the same occurrence `xmd run` would; a prop written
+as an expression is a value the document computes, and deciding it is
+expansion's alone.
+
+`Execution.expand` is policy. A handler receives the request — the name, the
+origin, the authored form, the source position and the evaluated, frozen props —
+and may observe it, refuse it by throwing, or delegate it. It receives no child
+regions and no implementation, so it can neither expand a child nor substitute
+an implementation for the one the host selected. Returning without delegating,
+delegating a request canonical execution did not issue, delegating one another
+occurrence issued, and delegating twice are each protocol refusals. An
+implementation's failure becomes the parent's positioned checked failure, and a
+JSON `Error.cause` travels with it as evidence.
+
+#### Region output
+
+Each accepted child is an `ExpansionRegion`: the same request facts for that
+child, plus an `expand()` that returns a stream of `{ text, exact }` chunks.
+
+The producer is established as a resource in the calling handler's scope and
+starts when the stream is first consumed. Delivery is a rendezvous: after a
+chunk is delivered the producer stays suspended until the consumer advances
+again, so what has been produced is exactly what has been taken. Successful
+completion closes the stream; a failure is delivered after every chunk the
+consumer already acknowledged rather than in place of them. Stopping
+consumption, cancelling, failing, and leaving the handler's scope each halt and
+join the producer and everything it started.
+
+Chunks are rendered text plus the existing exact-output fact, grouped the way
+root output groups its own emissions. Region output never travels through
+`DocumentOutput`, and nothing copies an unconsumed region into the document.
+A paired child expands its own content under its source frame in an isolated
+binding overlay; a self-closing child has no content, and what that means is the
+installing package's to decide.
+
+Repeating an expansion or a subscription is given the ordinary behavior of the
+underlying expansion and durable machinery: there is no at-most-once,
+ownership-counter or single-consumer rule of its own.
 
 ### 6.2 Component expansion with cycle detection
 
@@ -9201,6 +9285,21 @@ that execution.
 
 ### 6.21 Opening concurrent terminal panes: `<Terminal.Grid>` and `<Terminal>`
 
+These two forms are **installed structural syntax** (§6.1.1), not constructs the
+engine owns. `@executablemd/terminal/xmd` declares both and supplies the
+implementation that expands them, and an execution has them exactly when its
+trusted host installs that package. Ordinary `xmd run`, the vocabulary `xmd
+plan` targets, `xmd syntax` and a nested `<Execution host="run">` child install
+it; the `xmd test` root and every workflow execution do not, and there the names
+resolve to nothing at all.
+
+The whole of the behavior this section describes about what an author may write
+— the forms, the props, the placement, the layout and the wording of each
+refusal — is what those declarations state. What the installed implementation
+does on this stack is derive the row-major layout from the validated props and
+refuse for want of a terminal provider: no pane expands its content and no
+default shell starts, and the refusal carries the derived layout as its cause.
+
 Use a terminal grid when several interactive tools must remain available at the
 same time in one foreground view:
 
@@ -11489,6 +11588,10 @@ Each row names the derivation it kills.
 
 ### Tier TG — Terminal grids (§6.21)
 
+The grid is installed syntax, so these rows drive it through the same
+`ExecutionInstallation` an ordinary run installs, and they live with the package
+that declares it. Core's own suites prove the generic boundary instead.
+
 Core lifecycle rows use a controlled provider that is not tmux. Production
 adapter rows use fake tmux processes and exact invocation-private handles; no
 test derives a core result from a provider identifier.
@@ -11552,7 +11655,7 @@ so the include-boundary rows are the same on every host. Defined in §5.3.
 | # | Test | Verify |
 |---|------|--------|
 | SY1/SY2 | Versioned shape | `version` is 1, the categories are the fixed tuple, and one structural, one registered and one repository entry appear together |
-| SY3/SY4 | Structural vocabulary | The declarations are exactly the reserved names, each with authored forms and a description; `Let`, `Content`, `Else`, `Break`, `Answers`, `Answer`, `Terminal.Grid` and `Terminal` carry the frozen forms, and `as` applies to `Let` and `Each` alone |
+| SY3/SY4 | Structural vocabulary | The engine declarations are exactly the reserved names, each with authored forms and a description; `Let`, `Content`, `Else`, `Break`, `Answers` and `Answer` carry the frozen forms, and `as` applies to `Let` and `Each` alone. An installed structural form is listed beside them under its own origin, and an execution that installs none lists none |
 | SY5 | Structural stays structural | A repository file named after a construct never moves it out of the structural category |
 | SY6/SY7 | Repository mapping | Direct `.md`/`.ts`, direct `index`, nested dotted and nested index paths describe names; a lowercase segment, an empty stem, a dotted stem and a dotted directory describe none, and the inversion is held to the single-segment grammar directly |
 | SY7c | Pruning | A lower-case, hidden or dotted directory is never read — at the top level or deeper — while the direct, nested and index candidates beside it stay discoverable; every skipped directory throws if it is read, and the recorded reads name only the ones a name reaches |
@@ -11737,7 +11840,7 @@ would bind differently — belongs to `EP`, where profile capture is tested.
 | SX4–SX6 | Renderers take a value | Both formats render from a supplied symbols with the filesystem refusing every call, twice with identical bytes, under the fixed category headings; every table cell is escaped, a prop name holding a pipe included |
 | SX7/SX8 | Includes | Repeated values select in caller order and replace the defaults; absent, the defaults apply |
 | SX9 | Failure | An unusable include exits 1, reports on stderr and prints no symbols |
-| SX10/SX11 | Formats | Markdown by default, version-2 JSON with `--json`; the symbols are inspection, and `xmd plan` is the command that writes with the same structured value |
+| SX10/SX11 | Formats | Markdown by default, version-3 JSON with `--json`; the symbols are inspection, and `xmd plan` is the command that writes with the same structured value |
 | SX16 | Named lookup | `xmd syntax Elicit` renders that component's metadata and long-form documentation through the same selection, index and renderer `<Syntax names={…}>` uses; the compact symbols are unchanged and an unknown name refuses whole |
 | SX12 | A package tree | Bare `xmd syntax` succeeds with the default includes in a repository whose `node_modules` holds directory links |
 | SX13–SX15 | Delivery | A real pipeline reading symbols larger than one pipe buffer receives the bytes a regular-file redirect receives, in both forms; a consumer that closes early leaves the command reporting on stderr with exit 1 rather than an unhandled write failure |

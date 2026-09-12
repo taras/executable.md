@@ -4129,6 +4129,13 @@
           ]
         }
       },
+      "packages/terminal": {
+        "packageJson": {
+          "dependencies": [
+            "npm:effection@4.1.0"
+          ]
+        }
+      },
       "packages/test-agent": {
         "dependencies": [
           "npm:@agentclientprotocol/sdk@1.3.0",

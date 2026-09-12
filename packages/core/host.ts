@@ -224,6 +224,29 @@ export { DeclaredMarkdownError, sourceDigest } from "./src/components/declared-m
 export type { DeclaredMarkdownComponent } from "./src/components/declared-markdown.ts";
 
 /**
+ * The one declarative input for the syntax a trusted host adds to an execution.
+ *
+ * `ExecutionInstallation.declarations` carries both kinds. A `markdown` entry
+ * is the exact Markdown tier above. A `structural` entry is installed syntax —
+ * a parent form that decides how its own direct children are arranged, and the
+ * child forms meaningful only beneath it — and the same installation supplies
+ * the `expand` that implements it.
+ *
+ * Canonical core copies and validates this data before any installation,
+ * middleware or document code runs, and inspection and document validation read
+ * that same captured catalog. So a profile cannot describe a form differently
+ * from the form execution selects.
+ */
+export { ExecutionDeclarationError } from "./src/execution-declarations.ts";
+export type {
+  ExecutionDeclaration,
+  MarkdownDeclaration,
+  StructuralDeclaration,
+  StructuralDiagnostics,
+  StructuralPlacement,
+} from "./src/execution-declarations.ts";
+
+/**
  * Installing one Agent provider for the invocation that projects the content it
  * covers.
  *

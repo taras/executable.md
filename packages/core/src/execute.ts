@@ -95,9 +95,8 @@ import {
 } from "./errors.ts";
 import { Component, importComponent, raise } from "./component-api.ts";
 import { sourceDescription } from "./source-position.ts";
-import { renderSegment } from "./render.ts";
+import { emissions, exactly, renderSegment } from "./render.ts";
 import { createExactSource } from "./output/exact-source.ts";
-import type { ExactSource as ExactSourceRecord } from "./output/exact-source.ts";
 import { DocumentOutput } from "./api.ts";
 import {
   composeBoundExecChain,
@@ -127,6 +126,20 @@ import {
   privateClosure,
 } from "./components/declared-markdown.ts";
 import type { DeclaredMarkdownComponent } from "./components/declared-markdown.ts";
+import {
+  admitStructuralDeclarations,
+  assertStructuralInstallable,
+  markdownDeclarations,
+  structuralCatalog,
+} from "./execution-declarations.ts";
+import type {
+  AdmittedStructural,
+  ExecutionDeclaration,
+  OwnedDeclarations,
+  StructuralCatalog,
+} from "./execution-declarations.ts";
+import { ExpansionProtocolError } from "./expansion-request.ts";
+import type { ExpansionRegion, ExpansionRequest, StructuralExpander } from "./expansion-request.ts";
 import { documentationOf } from "./components/documentation.ts";
 import { registerComponents } from "./components/registration.ts";
 import {
@@ -455,6 +468,8 @@ interface ImportInputs {
   readonly registry: ComponentRegistry;
   readonly bundle: WorkflowImportAuthority | undefined;
   readonly declared: DeclaredImports | undefined;
+  /** The installed structural syntax, so an occurrence never resolves a file. */
+  readonly structural: StructuralCatalog | undefined;
   readonly guarded: ReadonlyMap<string, FunctionComponentDefinition>;
 }
 
@@ -501,12 +516,13 @@ function* selectImport(
     return { kind: "declared-private", origin: claimed.origin };
   }
 
-  const { searchPaths, registry, bundle, declared } = inputs;
+  const { searchPaths, registry, bundle, declared, structural } = inputs;
   const selected = yield* selectComponent(name, {
     includes: searchPaths,
     registry,
     ...(bundle === undefined ? {} : { workflow: bundle }),
     ...(declared === undefined ? {} : { declared: declared.catalog }),
+    ...(structural === undefined ? {} : { structural }),
   });
 
   switch (selected.kind) {
@@ -554,6 +570,12 @@ function* selectImport(
       throw new Error(
         `${name} is structural syntax the engine owns, so it never resolves a component`,
       );
+    case "declared-structural":
+      // Reaching an import means the element was written where its declaration
+      // does not place it. Canonical expansion answers a well-placed occurrence
+      // before anything is imported, so this is a placement failure rather than
+      // a name a repository file could supply.
+      throw new Error(`${name} is installed structural syntax, so it never resolves a component`);
     case "unresolved":
       throw new Error(unresolvedMessage(name, selected.searched));
   }
@@ -2073,47 +2095,6 @@ function* runValueRoot(
  * that exited nonzero failed the run is not theirs to decide, and this is where
  * the run says so (#441).
  */
-/** Whether one expanded segment carries exact bytes rather than prose. */
-function exactly(exact: ExactSourceRecord | undefined, segment: Segment): boolean {
-  return exact !== undefined && exact.has(segment);
-}
-
-/**
- * What a buffered region emits: consecutive segments of one exactness, joined.
- *
- * Buffering is what makes this necessary. A streaming root hands the Output Api
- * one segment at a time and each write says what it is; a region that renders
- * as a whole would otherwise join a program's approved source to the prose
- * beside it and present the pair as one thing. Segments of the same kind still
- * travel together, so a region holding no exact bytes emits exactly once, as it
- * always has.
- */
-interface Emission {
-  readonly text: string;
-  readonly exact: boolean;
-}
-
-function emissions(
-  record: ExactSourceRecord | undefined,
-  segments: readonly Segment[],
-): Emission[] {
-  const runs: Emission[] = [];
-  for (const segment of segments) {
-    const text = renderSegment(segment);
-    if (!text) {
-      continue;
-    }
-    const exact = exactly(record, segment);
-    const last = runs[runs.length - 1];
-    if (last !== undefined && last.exact === exact) {
-      runs[runs.length - 1] = { text: last.text + text, exact };
-      continue;
-    }
-    runs.push({ text, exact });
-  }
-  return runs;
-}
-
 function* refuseCheckedFailure(checkedFailures: CheckedFailures): Operation<void> {
   const segment = checkedFailures.failure;
   if (segment !== undefined) {
@@ -2397,7 +2378,21 @@ function* executeDocument(
   preparations: readonly DurablePreparation[] = [],
   bundles: readonly WorkflowComponentBundle[] = [],
   identityComponents: readonly IdentityComponent[] = [],
-  declarations: readonly DeclaredMarkdownComponent[] = [],
+  declarations: readonly ExecutionDeclaration[] = [],
+  /**
+   * The installed structural forms, already admitted against one another.
+   *
+   * Carried beside the declarations rather than derived here, because admission
+   * ran before the first installation and refusing a catalog afterwards would
+   * refuse it after installation hooks had already observed the execution.
+   */
+  structural: readonly AdmittedStructural[] = [],
+  /**
+   * Each captured installation's bound structural implementation, indexed by
+   * the owner an admitted declaration names. Private: nothing on a selection,
+   * an inspection record, a request or a region reaches one.
+   */
+  expanders: readonly (StructuralExpander | undefined)[] = [],
   providers: readonly SyntaxSymbolsProvider[] = [],
   /**
    * The documentation each bootstrapped package contributed.
@@ -2532,8 +2527,33 @@ function* executeDocument(
       // before any component runs. A declaration that disagrees with the source
       // it names, or that claims a name a host already reserved, describes a
       // document that cannot mean what it says.
-      const admittedDeclarations = yield* admitDeclaredMarkdown(declarations, startingRegistry);
+      const admittedDeclarations = yield* admitDeclaredMarkdown(
+        markdownDeclarations(declarations),
+        startingRegistry,
+      );
       const catalog = declaredCatalog(admittedDeclarations);
+
+      // The conflicts an installed structural name can only have once the
+      // trusted host's bootstrap has run. Asked here, before the journal is
+      // read and before the root document is imported, for the reason the
+      // declared-Markdown collisions above are: a name two tiers claim
+      // describes a document that cannot mean what it says.
+      assertStructuralInstallable(structural, (name) => {
+        if (startingRegistry.get(name)?.reserved !== undefined) {
+          return "a reserved registration";
+        }
+        if (bundle?.component(name) !== undefined) {
+          return "a workflow bundle component";
+        }
+        if (catalog?.component(name) !== undefined) {
+          return "a declared Markdown component";
+        }
+        if (catalog?.isPrivate(name) === true) {
+          return "a private declaration";
+        }
+        return undefined;
+      });
+      const installedStructural = structuralCatalog(structural);
 
       // What this execution gives a durable identity to, from what installation
       // declared before anything could observe or replace it. Each factory is
@@ -2608,6 +2628,7 @@ function* executeDocument(
                 registry: startingRegistry,
                 bundle,
                 declared: declaredImports,
+                structural: installedStructural,
                 guarded: identity.protected,
               }),
               identity.protectedBodies.project,
@@ -2623,6 +2644,13 @@ function* executeDocument(
         // document, a component, middleware or a separately loaded copy can
         // name reaches this object.
         exact: createExactSource(),
+        // The installed structural syntax and the implementations that own it,
+        // both captured before any installation ran. On the private authority
+        // rather than in a context for the reason the rest are: a context
+        // resolves by name, and a name is not a secret, so a document could
+        // build one and answer for syntax it was never installed with.
+        ...(installedStructural === undefined ? {} : { structural: installedStructural }),
+        expanders,
         // Built from what this execution captured before any installation,
         // middleware or document code ran, and asked only when an occurrence
         // renders: a run whose document never writes `<Syntax />` enumerates
@@ -2662,6 +2690,7 @@ function* executeDocument(
                 registry: registered,
                 bundle,
                 declared: declaredImports,
+                structural: installedStructural,
                 guarded: identity.protected,
               },
             );
@@ -2876,15 +2905,34 @@ export interface ExecutionInstallation {
    */
   readonly bundle?: WorkflowComponentBundle;
   /**
-   * The exact Markdown this host declares to the execution.
+   * The syntax this host declares to the execution.
    *
-   * Plain immutable data: the public name, the reported origin, the bytes,
-   * their digest, the forms and any private declarations those bytes alone may
-   * write. Captured by value alongside the admissions, before any installation
-   * runs, so what a declared name resolves to — and which answers a document
-   * may invoke — is fixed before anything can observe or replace it.
+   * Plain immutable data in one discriminated catalog. A `markdown` entry names
+   * exact Markdown — the public name, the reported origin, the bytes, their
+   * digest, the forms and any private declarations those bytes alone may write.
+   * A `structural` entry names an installed parent or child form, and this same
+   * installation supplies the {@link ExecutionInstallation.expand} that
+   * implements it.
+   *
+   * Captured by value alongside the admissions, before any installation runs,
+   * so what a declared name resolves to — and which answers a document may
+   * invoke — is fixed before anything can observe or replace it.
    */
-  readonly declarations?: readonly DeclaredMarkdownComponent[];
+  readonly declarations?: readonly ExecutionDeclaration[];
+  /**
+   * How this installation's structural forms expand.
+   *
+   * Bound and captured with the declarations, before any installation runs, and
+   * reached only through canonical core's private terminal: public
+   * `Execution.expand` middleware can refuse or delegate an occurrence and
+   * cannot invoke this. One installation owns both halves — declaring a
+   * structural form without supplying this, or supplying this without declaring
+   * one, refuses the execution before authored content runs.
+   *
+   * The regions are the accepted direct children, in source order, each already
+   * carrying its own evaluated props. Whatever it returns is ignored.
+   */
+  expand?(request: ExpansionRequest, regions: readonly ExpansionRegion[]): Operation<void>;
   /**
    * What this installation records inside the durable root.
    *
@@ -2987,6 +3035,16 @@ export interface ExecutionApi {
    * outlast every element but still be journaled can go.
    */
   document(request: DocumentRequest): Operation<void>;
+  /**
+   * One occurrence of an installed structural form, before it expands.
+   *
+   * A handler is given the request and nothing else: the props it carries are
+   * already evaluated, validated and frozen, and the accepted child regions are
+   * not on it. So a layer here may observe the occurrence, refuse it by
+   * throwing, or delegate it — and cannot reach a child region, expand one, or
+   * substitute an implementation for the one the host selected.
+   */
+  expand(request: ExpansionRequest): Operation<void>;
 }
 
 /**
@@ -3005,6 +3063,10 @@ export const Execution: Api<ExecutionApi> = createApi<ExecutionApi>("Execution",
   // deno-lint-ignore require-yield
   *document(_request: DocumentRequest): Operation<void> {
     throw new DocumentProtocolError("invoked a document expansion outside canonical core");
+  },
+  // deno-lint-ignore require-yield
+  *expand(_request: ExpansionRequest): Operation<void> {
+    throw new ExpansionProtocolError("invoked a structural expansion outside canonical core");
   },
 });
 
@@ -3254,6 +3316,35 @@ function retainedIdentityComponent(component: IdentityComponent): IdentityCompon
 }
 
 /**
+ * One declaration this execution owns, copied out of the object the host handed
+ * over.
+ *
+ * A structural declaration is copied where it is admitted, which is the same
+ * moment and the same reason: the schema is a whole object graph, so copying
+ * the reference would copy nothing and leave the contract open to whoever still
+ * holds the original.
+ */
+function retainedDeclaration(declaration: ExecutionDeclaration): ExecutionDeclaration {
+  if (declaration.kind === "structural") {
+    return declaration;
+  }
+  return Object.freeze({
+    kind: "markdown" as const,
+    name: declaration.name,
+    origin: declaration.origin,
+    source: declaration.source,
+    digest: declaration.digest,
+    ...(declaration.forms === undefined ? {} : { forms: [...declaration.forms] }),
+    ...(declaration.props === undefined ? {} : { props: detachedSchema(declaration.props) }),
+    ...(declaration.returns === undefined ? {} : { returns: detachedSchema(declaration.returns) }),
+    ...(declaration.privates === undefined
+      ? {}
+      : { privates: [...declaration.privates].map(retainedIdentityComponent) }),
+    ...(declaration.exact === undefined ? {} : { exact: declaration.exact }),
+  });
+}
+
+/**
  * A schema this execution owns, copied out of the object the host handed over.
  *
  * A schema is the one member of a declaration that is a whole object graph
@@ -3343,26 +3434,35 @@ function* invoke(
   // the reason the rest are: what a declared name means here is settled before
   // anything can observe it, and the execution closes over its own values
   // rather than over an array a host still holds.
-  const declarations = Object.freeze(
-    installations.flatMap((installation) =>
-      [...(installation.declarations ?? [])].map((declaration) =>
-        Object.freeze({
-          name: declaration.name,
-          origin: declaration.origin,
-          source: declaration.source,
-          digest: declaration.digest,
-          ...(declaration.forms === undefined ? {} : { forms: [...declaration.forms] }),
-          ...(declaration.props === undefined ? {} : { props: detachedSchema(declaration.props) }),
-          ...(declaration.returns === undefined
-            ? {}
-            : { returns: detachedSchema(declaration.returns) }),
-          ...(declaration.privates === undefined
-            ? {}
-            : { privates: [...declaration.privates].map(retainedIdentityComponent) }),
-          ...(declaration.exact === undefined ? {} : { exact: declaration.exact }),
-        }),
-      ),
-    ),
+  //
+  // Kept per installation rather than flattened, because a structural
+  // declaration and the `expand` that implements it are owned together: a
+  // flattened catalog could not say which installation core must dispatch an
+  // occurrence to.
+  const owned: readonly OwnedDeclarations[] = Object.freeze(
+    installations.map((installation, owner) => {
+      // Read once, like every other member: a property that answered
+      // differently the second time would let a host be tested for one
+      // implementation and run another.
+      const expand = installation.expand?.bind(installation);
+      return Object.freeze({
+        owner,
+        declarations: Object.freeze(
+          [...(installation.declarations ?? [])].map(retainedDeclaration),
+        ),
+        expands: expand !== undefined,
+        ...(expand === undefined ? {} : { expand }),
+      });
+    }),
+  );
+  const declarations = Object.freeze(owned.flatMap((entry) => [...entry.declarations]));
+  // Admitted before the first `install()` runs, so a catalog no execution could
+  // honour refuses before any installation, middleware or document code exists.
+  // The conflicts only a prepared execution can see — a reserved registration,
+  // a workflow bundle — are asked later, before the root import.
+  const structural = yield* admitStructuralDeclarations(owned);
+  const expanders: readonly (StructuralExpander | undefined)[] = Object.freeze(
+    owned.map((entry) => entry.expand),
   );
 
   // Read once and frozen with the rest, and before any installation runs: which
@@ -3496,6 +3596,8 @@ function* invoke(
     bundles,
     identityComponents,
     declarations,
+    structural,
+    expanders,
     providers,
     documentation,
     readAsset,

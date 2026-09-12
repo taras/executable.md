@@ -898,7 +898,38 @@ export interface DocumentMode {
    * list is exactly what `execute()` itself does.
    */
   installations?: readonly ExecutionInstallation[];
+  /**
+   * Which profile this execution is, stated rather than inferred.
+   *
+   * `xmd run` and an explicit `<Execution host="run">` child are `run`; the
+   * `xmd test` root is `test`; a workflow execution is `workflow`. Deriving it
+   * from `testing` made two different questions — whether assertions are active
+   * and which vocabulary a document may write — into one answer, and a workflow
+   * run answers the first the way an ordinary run does.
+   */
+  profile: DocumentProfile;
+  /**
+   * The structural syntax this run installs, built fresh for this execution.
+   *
+   * Absent installs none, which is what the `xmd test` root and every workflow
+   * execution get. A factory rather than a record, so two runs never share one
+   * installation and a nested child cannot observe its parent's.
+   */
+  structural: StructuralInstallationFactory;
 }
+
+/** Which vocabulary and which providers one document execution is assembled with. */
+export type DocumentProfile = "run" | "test" | "workflow";
+
+/**
+ * How a host builds the structural syntax one ordinary run installs.
+ *
+ * Pure: it reads no context, no flag and no document, and returns a fresh
+ * record each call. The entrypoint supplies it, so which runtime installs a
+ * live provider is that entrypoint's statement rather than something the shared
+ * CLI detects.
+ */
+export type StructuralInstallationFactory = () => ExecutionInstallation;
 
 export type HostServiceInstaller = () => Operation<void>;
 
@@ -1139,6 +1170,12 @@ function* runDocument(
     installRepositories: childRepositories,
     testAgentWorker: yield* readWorkerCommand(),
     planDeclaration,
+    // The *entrypoint's* factory, for the same reason the repository installer
+    // above is the entrypoint's: a `host="run"` child is an ordinary run
+    // whatever command is hosting it, so it installs the run profile's
+    // structural syntax even under `xmd test`, which installs none for its own
+    // document.
+    runStructuralInstallation: mode.structural,
   });
 
   // One authoritative execution, and only one. What a host attaches travels as
@@ -1165,12 +1202,17 @@ function* runDocument(
     // anything else is installed — and builds it from the claimant it mints.
     [
       ...(mode.installations ?? []),
+      // The structural syntax this profile installs, as its own installation:
+      // one installation owns a structural form and the implementation that
+      // expands it, so it cannot be merged into the declarations beside it.
+      // Built here, per execution, so a nested child never shares its parent's.
+      ...(mode.profile === "run" ? [mode.structural()] : []),
       {
         components: agentIdentityComponents(),
         // The `run` profile's own vocabulary. `xmd test` is a different profile
         // and does not gain `<Plan>` at its root — but the production run child
         // it can launch is the run profile, and gets it below.
-        ...(mode.testing ? {} : { declarations: [plan] }),
+        ...(mode.profile === "run" ? { declarations: [plan] } : {}),
         // The ceiling a generated fragment runs under, stated only where the
         // host that attached this execution stated none: a workflow attachment
         // states its own Workspace-bound profile, and one execution offers one
@@ -1324,6 +1366,11 @@ function* test(
   installService: HostServiceInstaller,
   /** What a `<Execution host="run">` child installs. This command installs none. */
   installRepositories: RepositoryInstaller,
+  /**
+   * What a `<Execution host="run">` child installs as structural syntax. The
+   * `xmd test` root installs none of it, and the child installs all of it.
+   */
+  runStructuralInstallation: StructuralInstallationFactory,
 ): Operation<void> {
   const patterns = readPatternFlags(args);
   if (patterns.missingValue) {
@@ -1355,7 +1402,7 @@ function* test(
     announceSecretDetection(config.secretDetection);
     const result = yield* runScopedDocument(
       { ...config, root: { path } },
-      { testing: true },
+      { testing: true, profile: "test", structural: runStructuralInstallation },
       installService,
       // The outer `xmd test` command installs no operational repository
       // provider. A test that needs the production behavior exercises an
@@ -1401,7 +1448,7 @@ function* test(
         root: { path: document.path },
         include: componentSearchPath(document, target.root, config.include),
       },
-      { testing: true },
+      { testing: true, profile: "test", structural: runStructuralInstallation },
       installService,
       unsupportedRepositories,
       installRepositories,
@@ -2368,6 +2415,7 @@ function* dispatch(
   readStandardInput: StandardInputReader,
   workflowHost: WorkflowHost | undefined,
   sessions: MachineSessionAssembly | undefined,
+  runStructuralInstallation: StructuralInstallationFactory,
 ): Operation<void> {
   // Before the props phase, and before the help short-circuit below. `--help`
   // is lifted out of argv early enough that a command's own grammar never sees
@@ -2483,6 +2531,8 @@ function* dispatch(
           { ...config, root, retainProcessOutput: keepsProcessOutput(config.journal) },
           {
             testing: false,
+            profile: "run",
+            structural: runStructuralInstallation,
             props: props.value,
             // Only `xmd run` receives it. Every other command assembles none of
             // it, which is what keeps a machine session from being acted on by
@@ -2539,7 +2589,12 @@ function* dispatch(
         },
         {
           ...(sessions === undefined ? {} : { sessions }),
-          symbols: syntaxSymbols,
+          // Closed over this host's own factory, so the vocabulary the agent is
+          // shown and the vocabulary the final gate validates against are the
+          // one an ordinary run installs.
+          symbols: (includes: readonly string[]) =>
+            syntaxSymbols(includes, runStructuralInstallation),
+          runStructuralInstallation,
           // The two facts about this process's own stderr that nothing further
           // in may go and read: whether it is a terminal, and whether it took
           // what it was handed. The approved Plan's sinks are stdout and
@@ -2667,6 +2722,7 @@ function* dispatch(
         evalFlags.rest,
         installService,
         installRepositories,
+        runStructuralInstallation,
       );
       break;
     }
@@ -2681,7 +2737,7 @@ function* dispatch(
           // The compact list of symbols, unchanged: routine discovery output and
           // every default Plan prompt read it, and long documentation would make
           // both unnecessarily large.
-          const catalog = yield* syntaxSymbols(command.config.include);
+          const catalog = yield* syntaxSymbols(command.config.include, runStructuralInstallation);
           rendered = command.config.json
             ? renderSyntaxJson(catalog)
             : renderSyntaxMarkdown(catalog);
@@ -2690,7 +2746,11 @@ function* dispatch(
           // the command and the component cannot describe one component two
           // ways. JSON stays the compact projection; it is the symbols' shape,
           // and documentation is prose rather than a symbol member.
-          rendered = yield* renderSyntaxDocumentation(command.config.include, [named]);
+          rendered = yield* renderSyntaxDocumentation(
+            command.config.include,
+            [named],
+            runStructuralInstallation,
+          );
         }
       } catch (error) {
         console.error(describeError(error));
@@ -2789,7 +2849,15 @@ function* dispatch(
             // workflow host attached the execution and installed the suspending
             // one already; a browser form here would sit nearer, answer first,
             // and wait for a reader the run has no way to reach.
-            { testing: false, props: execution.props, installations: execution.installations },
+            {
+              testing: false,
+              // A workflow execution installs neither the declarations nor a
+              // provider, in a capable process as much as an incapable one.
+              profile: "workflow",
+              structural: runStructuralInstallation,
+              props: execution.props,
+              installations: execution.installations,
+            },
             // The workflow authority boundary sits exactly where a host
             // service adapter would: installed inside the execution scope,
             // before the root document is imported.
@@ -2825,6 +2893,12 @@ export function* runXmd(
   // of its own, and nothing a document can write reaches this: it is a value
   // the entrypoint supplies, called at most once per invocation.
   readStandardInput: StandardInputReader,
+  // The structural syntax an ordinary run of this host installs, built fresh
+  // for each execution. Stated by the entrypoint rather than detected here: the
+  // shared CLI names no runtime, and which host can open a live grid is that
+  // entrypoint's claim. A host that installs none supplies a factory returning
+  // an installation with no declarations.
+  runStructuralInstallation: StructuralInstallationFactory,
   // Defaults to the host that refuses. A caller driving this without naming a
   // workflow host has no run store, and inheriting one by omission is the
   // failure mode the whole boundary exists to prevent — so the default is the
@@ -2905,6 +2979,7 @@ export function* runXmd(
       readStandardInput,
       workflowHost,
       sessions,
+      runStructuralInstallation,
     );
   }
 
@@ -2927,6 +3002,7 @@ export function* runXmd(
       readStandardInput,
       workflowHost,
       sessions,
+      runStructuralInstallation,
     ),
   );
 }

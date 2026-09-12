@@ -39,6 +39,7 @@ import { useTestingComponents } from "@executablemd/testing";
 import { useWebComponents } from "@executablemd/web";
 import { useVerboseComponent } from "./verbose-component.ts";
 import { useCompositionComponents } from "@executablemd/workflow";
+import type { StructuralInstallationFactory } from "./cli.ts";
 
 export { renderSyntaxMarkdown };
 
@@ -61,15 +62,28 @@ export { renderSyntaxMarkdown };
  * state and documentation middleware. Leaving it removes the layer, and there
  * is no process, agent, service, journal, file or authority left to clean up.
  */
-export function* syntaxSymbols(includes: readonly string[]): Operation<SyntaxSymbols> {
+export function* syntaxSymbols(
+  includes: readonly string[],
+  /**
+   * The exact factory an ordinary run installs its structural syntax from.
+   *
+   * The declarations are read and nothing else: `install()` is never called and
+   * `expand()` is never reached, so describing the profile starts no provider
+   * and opens nothing. Omitted describes a profile that installs none.
+   */
+  runStructuralInstallation?: StructuralInstallationFactory,
+): Operation<SyntaxSymbols> {
   return yield* scoped(function* () {
     yield* useRunProfileRegistry();
-    return yield* profileSymbols(includes);
+    return yield* profileSymbols(includes, runStructuralInstallation);
   });
 }
 
 /** The profile's symbols, inside a scope that has already bootstrapped it. */
-function* profileSymbols(includes: readonly string[]): Operation<SyntaxSymbols> {
+function* profileSymbols(
+  includes: readonly string[],
+  runStructuralInstallation: StructuralInstallationFactory | undefined,
+): Operation<SyntaxSymbols> {
   return yield* inspectSyntax({
     includes,
     components: agentIdentityComponents(),
@@ -77,7 +91,14 @@ function* profileSymbols(includes: readonly string[]): Operation<SyntaxSymbols> 
     // describe a vocabulary no run has. Described from the packaged bytes:
     // inspection mints nothing, so it reports the Component's identity and
     // contract without building the capabilities only a run can build.
-    declarations: [yield* planComponentDescription()],
+    //
+    // The installed structural forms come from the run's own factory rather
+    // than from a table written beside it: a second table is free to describe a
+    // form differently from the one execution selects.
+    declarations: [
+      yield* planComponentDescription(),
+      ...(runStructuralInstallation?.().declarations ?? []),
+    ],
   });
 }
 
@@ -133,10 +154,11 @@ export function renderSyntaxJson(symbols: SyntaxSymbols): string {
 export function* renderSyntaxDocumentation(
   includes: readonly string[],
   names: readonly string[],
+  runStructuralInstallation?: StructuralInstallationFactory,
 ): Operation<string> {
   return yield* scoped(function* () {
     yield* useRunProfileRegistry();
-    const catalog = yield* profileSymbols(includes);
+    const catalog = yield* profileSymbols(includes, runStructuralInstallation);
     const index = documentationIndexFor(yield* capturedDocumentation());
     return renderSelectedDocumentation(selectDocumented(catalog, catalog, names, index));
   });

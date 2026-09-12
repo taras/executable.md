@@ -37,7 +37,7 @@ const UNDECLARED: ReturnsSchema = { type: "string" };
  */
 export function admittedSymbols(entries: readonly CapturedEntry[]): SyntaxSymbols {
   return {
-    version: 2,
+    version: 3,
     categories: [
       { kind: "structural", entries: [] },
       { kind: "built-in", entries: [] },

@@ -105,6 +105,9 @@ importers:
       '@executablemd/runtime':
         specifier: workspace:*
         version: link:packages/runtime
+      '@executablemd/terminal':
+        specifier: workspace:*
+        version: link:packages/terminal
       '@executablemd/test-agent':
         specifier: workspace:*
         version: link:packages/test-agent
@@ -174,6 +177,9 @@ importers:
       '@executablemd/runtime':
         specifier: workspace:*
         version: link:../runtime
+      '@executablemd/terminal':
+        specifier: workspace:*
+        version: link:../terminal
       '@executablemd/test-agent':
         specifier: workspace:*
         version: link:../test-agent
@@ -311,6 +317,15 @@ importers:
       '@effectionx/process':
         specifier: 0.8.1
         version: 0.8.1(effection@4.1.0)
+      effection:
+        specifier: 4.1.0
+        version: 4.1.0
+
+  packages/terminal:
+    dependencies:
+      '@executablemd/core':
+        specifier: workspace:*
+        version: link:../core
       effection:
         specifier: 4.1.0
         version: 4.1.0
