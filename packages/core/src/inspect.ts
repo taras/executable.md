@@ -577,7 +577,12 @@ export function* inspectSyntax(options: InspectSyntaxOptions): Operation<SyntaxS
     names.add(registered);
   }
 
-  const structural: (StructuralSyntaxEntry | InstalledStructuralSyntaxEntry)[] = [];
+  // The engine's own constructs, and the installed declarations, are kept apart
+  // while the walk runs: the category's order is the frozen contract — protected
+  // engine syntax first, then what a host installed, in the order it was
+  // captured — and a single name-sorted list cannot express the second half.
+  const engineStructural: StructuralSyntaxEntry[] = [];
+  const installedSelected = new Set<string>();
   const builtIn: CompleteComponentSyntaxEntry[] = [];
   const userProvided: (CompleteComponentSyntaxEntry | OriginOnlyComponentSyntaxEntry)[] = [];
 
@@ -590,14 +595,14 @@ export function* inspectSyntax(options: InspectSyntaxOptions): Operation<SyntaxS
       ...(installedSyntax === undefined ? {} : { structural: installedSyntax }),
     });
     if (selected.kind === "structural") {
-      structural.push(structuralEntry(selected.construct));
+      engineStructural.push(structuralEntry(selected.construct));
       continue;
     }
     if (selected.kind === "declared-structural") {
-      const entry = installedSyntax?.entry(selected.declaration.name);
-      if (entry !== undefined) {
-        structural.push(installedStructuralEntry(entry));
-      }
+      // Recorded rather than emitted here. Which installed forms this profile
+      // actually resolves is selection's answer; what order they are listed in
+      // is the catalog's, and it is applied once the walk is done.
+      installedSelected.add(selected.declaration.name);
       continue;
     }
     const entry = yield* componentEntry(name, selected);
@@ -619,6 +624,13 @@ export function* inspectSyntax(options: InspectSyntaxOptions): Operation<SyntaxS
       builtIn.push(entry);
     }
   }
+
+  const structural: (StructuralSyntaxEntry | InstalledStructuralSyntaxEntry)[] = [
+    ...engineStructural,
+    ...installed
+      .filter((entry) => installedSelected.has(entry.declaration.name))
+      .map(installedStructuralEntry),
+  ];
 
   return {
     version: 3,

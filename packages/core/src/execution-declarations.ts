@@ -307,14 +307,40 @@ function assertPlacement(name: string, placement: StructuralPlacement): void {
  * object could otherwise change the contract validation compiles and expansion
  * checks every occurrence against.
  */
-function detachStructural(declaration: StructuralDeclaration): StructuralDeclaration {
+/**
+ * Freeze one detached object graph through.
+ *
+ * `structuredClone` gives this execution its own copy, and a shallow freeze
+ * over that copy leaves every nested object writable — so a schema's
+ * `properties`, or one property's own constraints, could still be edited by
+ * anything holding the captured declaration. The copy is the execution's, so
+ * nothing may write to it at all.
+ */
+function freezeThrough(value: unknown): void {
+  if (value === null || typeof value !== "object") {
+    return;
+  }
+  Object.freeze(value);
+  for (const member of Object.values(value)) {
+    freezeThrough(member);
+  }
+}
+
+/** This execution's own copy of one object graph, frozen through. */
+function frozenClone<Value>(value: Value): Value {
+  const copy = structuredClone(value);
+  freezeThrough(copy);
+  return copy;
+}
+
+export function detachStructural(declaration: StructuralDeclaration): StructuralDeclaration {
   const placement = declaration.placement;
   return Object.freeze({
     kind: "structural" as const,
     name: declaration.name,
     origin: declaration.origin,
     forms: Object.freeze([...declaration.forms]),
-    props: structuredClone(declaration.props),
+    props: frozenClone(declaration.props),
     syntax: Object.freeze([...declaration.syntax]),
     description: declaration.description,
     context: declaration.context,
@@ -329,7 +355,7 @@ function detachStructural(declaration: StructuralDeclaration): StructuralDeclara
     ),
     ...(declaration.diagnostics === undefined
       ? {}
-      : { diagnostics: structuredClone(declaration.diagnostics) }),
+      : { diagnostics: frozenClone(declaration.diagnostics) }),
   });
 }
 
@@ -341,6 +367,96 @@ export interface OwnedDeclarations {
   readonly expands: boolean;
   /** That implementation, bound at capture. Absent when it supplies none. */
   readonly expand?: StructuralExpander;
+}
+
+/**
+ * Whether this is a declaration kind core answers for at all.
+ *
+ * A host crosses this boundary from JavaScript, so the discriminant is read
+ * rather than trusted: an entry of an unknown kind is a catalog this build
+ * cannot honour, and treating it as either arm would install something nobody
+ * described.
+ */
+function declarationKind(declaration: ExecutionDeclaration): "markdown" | "structural" {
+  const kind: unknown = declaration.kind;
+  if (kind === "markdown" || kind === "structural") {
+    return kind;
+  }
+  throw refuse(
+    `a declaration states the kind ${JSON.stringify(kind)}, which is neither "markdown" nor ` +
+      '"structural". One execution installs the syntax it was described, so an entry core has ' +
+      "no arm for refuses the catalog rather than being read as the other one.",
+  );
+}
+
+export function assertDeclarationKind(declaration: ExecutionDeclaration): void {
+  declarationKind(declaration);
+}
+
+function assertMarkdownShape(declaration: MarkdownDeclaration): void {
+  for (const member of ["name", "origin", "source", "digest"] as const) {
+    if (typeof declaration[member] !== "string") {
+      throw refuse(
+        `a declared Markdown component states a ${member} that is not a string. A declaration ` +
+          "describes itself completely before anything is built from it.",
+      );
+    }
+  }
+}
+
+/**
+ * Everything one execution's whole catalog can be refused for on its own terms.
+ *
+ * Asked before the first `install()` runs, because these are facts about the
+ * declarations rather than about the execution they would be installed into: an
+ * unknown discriminant, a malformed entry, and a name two arms of the catalog
+ * both claim are wrong however the run is assembled. What is deliberately *not*
+ * here is a conflict with a reserved registration or a workflow bundle — those
+ * exist only once the trusted host's bootstrap has run, and
+ * {@link assertStructuralInstallable} asks them before the root import.
+ *
+ * Declared Markdown keeps its own admission, which parses the bytes and holds
+ * the host to what it said about them. This pass adds no digest, schema or form
+ * check and changes nothing about when those are decided.
+ */
+export function assertIntrinsicCatalog(owned: readonly OwnedDeclarations[]): void {
+  const structuralNames = new Map<string, number>();
+  const markdownNames = new Map<string, number>();
+  const privateNames = new Map<string, number>();
+
+  for (const { owner, declarations } of owned) {
+    for (const declaration of declarations) {
+      // Read first, so an entry of an unknown kind refuses here rather than
+      // being sorted into whichever arm the narrowing below prefers.
+      declarationKind(declaration);
+      if (declaration.kind === "structural") {
+        structuralNames.set(declaration.name, owner);
+        continue;
+      }
+      assertMarkdownShape(declaration);
+      markdownNames.set(declaration.name, owner);
+      for (const component of declaration.privates ?? []) {
+        privateNames.set(component.name, owner);
+      }
+    }
+  }
+
+  for (const name of structuralNames.keys()) {
+    if (markdownNames.has(name)) {
+      throw refuse(
+        `"${name}" is declared both as installed structural syntax and as a declared Markdown ` +
+          "component. Both claim the name rather than offering a default for it, so which one " +
+          "wins is not a question of order.",
+      );
+    }
+    if (privateNames.has(name)) {
+      throw refuse(
+        `"${name}" is both installed structural syntax and a private declaration. A private ` +
+          "name resolves only for the Markdown that declares it, so it may not also be syntax a " +
+          "document can write.",
+      );
+    }
+  }
 }
 
 /**
@@ -439,8 +555,17 @@ export function* admitStructuralDeclarations(
         );
       }
     }
+    // Emitted in the order the installation declared them, which is the order
+    // `xmd syntax` lists them in. Grouping parents ahead of their children here
+    // would make what a reader is shown a fact about this loop rather than
+    // about the catalog.
     for (const declaration of structural) {
       if (declaration.placement.kind !== "parent") {
+        admitted.push({
+          declaration: detachStructural(declaration),
+          owner,
+          children: Object.freeze([]),
+        });
         continue;
       }
       const children = structural
@@ -459,16 +584,6 @@ export function* admitStructuralDeclarations(
         declaration: detachStructural(declaration),
         owner,
         children: Object.freeze(children),
-      });
-    }
-    for (const declaration of structural) {
-      if (declaration.placement.kind !== "child") {
-        continue;
-      }
-      admitted.push({
-        declaration: detachStructural(declaration),
-        owner,
-        children: Object.freeze([]),
       });
     }
   }

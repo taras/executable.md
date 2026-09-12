@@ -14,7 +14,7 @@
 
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { scoped } from "effection";
+import { ensure, scoped, sleep, spawn, suspend, useScope, withResolvers } from "effection";
 import type { Operation, Subscription } from "effection";
 
 import { DocumentOutput } from "../src/api.ts";
@@ -24,6 +24,7 @@ import { renderSegments } from "../src/render.ts";
 import { scanSegments } from "../src/scanner.ts";
 import { installedAuthority } from "./support/installed-structural.ts";
 import { regionStream } from "../src/expansion-region.ts";
+import type { RegionProducer } from "../src/expansion-region.ts";
 import type { ExecutionInstallation } from "../host.ts";
 import type { ExpansionChunk, ExpansionRegion } from "../src/expansion-request.ts";
 import type { StructuralDeclaration } from "../src/execution-declarations.ts";
@@ -277,7 +278,7 @@ describe("Tier RS — the producer waits for its consumer", () => {
     });
   });
 
-  it("RS3: a consumer that stops halts the producer rather than detaching it", function* () {
+  it("RS3: a region stops where its consumer stopped", function* () {
     const observed = trace();
 
     yield* expandPanel(THREE_STEPS, observed, function* (regions, seen) {
@@ -291,8 +292,10 @@ describe("Tier RS — the producer waits for its consumer", () => {
       // stop the producer.
     });
 
-    // Nothing ran on after the handler returned: the region's own scope went
-    // with the handler that was consuming it.
+    // The region expanded exactly as far as it was read. That the producer was
+    // *halted and joined* rather than left running is the transport's claim,
+    // and the latched rows at the bottom of this file are what prove it — this
+    // row shows the consequence through a document.
     expect(observed.calls).toEqual(["one"]);
   });
 });
@@ -382,6 +385,49 @@ describe("Tier RS — the root's own output is unchanged", () => {
   });
 });
 
+/**
+ * One producer that records every lifecycle moment a row needs to distinguish.
+ *
+ * `ensure` is registered before the child is spawned, so the finalizer exists
+ * for the whole of the child's life — an `ensure` yielded afterwards would have
+ * established nothing for a producer halted while registering.
+ */
+function latchedProducer(): { events: string[]; produce: RegionProducer } {
+  const events: string[] = [];
+  const produce: RegionProducer = function* (deliver) {
+    yield* ensure(function* () {
+      events.push("producer-finalized");
+    });
+    // The child reports that it is *inside* its try before the producer goes on.
+    // `spawn` attaches a turn late, so a child halted before its body ran would
+    // never have entered the block its finalizer belongs to — and the latch
+    // would read as "no child ran" rather than "the child was halted".
+    const childStarted = withResolvers<void>();
+    yield* spawn(function* () {
+      try {
+        childStarted.resolve();
+        yield* suspend();
+      } finally {
+        events.push("child-halted");
+      }
+    });
+    yield* childStarted.operation;
+    yield* deliver({ text: "first", exact: false });
+    events.push("resumed");
+    yield* deliver({ text: "second", exact: false });
+    events.push("completed");
+  };
+  return { events, produce };
+}
+
+/** Both finalizers ran, and the work after the delivered chunk never did. */
+function expectHaltedAndJoined(events: readonly string[]): void {
+  expect(events).toContain("child-halted");
+  expect(events).toContain("producer-finalized");
+  expect(events).not.toContain("resumed");
+  expect(events).not.toContain("completed");
+}
+
 describe("Tier RS — the transport itself", () => {
   it("RS3: a producer failure reaches the consumer after every acknowledged chunk", function* () {
     const taken: string[] = [];
@@ -440,21 +486,121 @@ describe("Tier RS — the transport itself", () => {
     });
   });
 
-  it("RS3: leaving the scope halts a producer mid-delivery", function* () {
-    const reached: string[] = [];
+  it("RS3: stopping early halts and joins the producer and its child", function* () {
+    const { events, produce } = latchedProducer();
 
     yield* scoped(function* () {
-      const stream = yield* regionStream(function* (deliver) {
-        yield* deliver({ text: "first", exact: false });
-        reached.push("resumed");
-        yield* deliver({ text: "second", exact: false });
-      });
-      const subscription = yield* stream;
+      const subscription = yield* yield* regionStream(produce);
+      yield* subscription.next();
+      // The consumer wants no more. It stays in scope and does other work, and
+      // the producer must not use that window to run ahead.
+      expect(events).not.toContain("resumed");
+    });
+
+    expectHaltedAndJoined(events);
+  });
+
+  it("RS3: leaving the handler's scope halts and joins the producer and its child", function* () {
+    const { events, produce } = latchedProducer();
+
+    yield* scoped(function* () {
+      const subscription = yield* yield* regionStream(produce);
       yield* subscription.next();
     });
 
-    // The scope closed while the producer was suspended on its first delivery.
-    // A detached producer would have resumed on its own.
-    expect(reached).toEqual([]);
+    // Read *after* the scope returned: both finalizers had to complete before
+    // it did, which is the join half of the claim.
+    expectHaltedAndJoined(events);
+  });
+
+  it("RS3: a handler that fails halts and joins the producer and its child", function* () {
+    const { events, produce } = latchedProducer();
+    let raised: unknown;
+
+    try {
+      yield* scoped(function* () {
+        const subscription = yield* yield* regionStream(produce);
+        yield* subscription.next();
+        throw new Error("the handler failed");
+      });
+    } catch (error) {
+      raised = error;
+    }
+
+    expect(raised instanceof Error ? raised.message : "").toBe("the handler failed");
+    expectHaltedAndJoined(events);
+  });
+
+  it("RS3: cancelling the handler halts and joins the producer and its child", function* () {
+    const { events, produce } = latchedProducer();
+    const holding = withResolvers<void>();
+
+    yield* scoped(function* () {
+      const handler = yield* spawn(function* () {
+        const subscription = yield* yield* regionStream(produce);
+        yield* subscription.next();
+        holding.resolve();
+        yield* suspend();
+      });
+      // Deterministic: the handler says when it is holding a chunk, rather than
+      // this row guessing with a delay.
+      yield* holding.operation;
+      yield* handler.halt();
+      expect(events).not.toContain("resumed");
+    });
+
+    expectHaltedAndJoined(events);
+  });
+
+  it("RS3: the control — work the region does not own is not stopped by leaving", function* () {
+    // Without this row, every `not.toContain("resumed")` above could be passing
+    // because nothing was ever going to run, rather than because leaving the
+    // scope stopped it. Here the same shape of work is owned by an *outer*
+    // scope, and leaving the inner one does not stop it.
+    const events: string[] = [];
+    const outer = yield* useScope();
+    const finished = withResolvers<void>();
+
+    yield* scoped(function* () {
+      outer.run(function* () {
+        yield* sleep(0);
+        events.push("resumed");
+        finished.resolve();
+      });
+    });
+
+    yield* finished.operation;
+    expect(events).toContain("resumed");
+  });
+
+  it("RS4: a second acquisition and a second subscription are ordinary", function* () {
+    const taken: string[] = [];
+
+    yield* scoped(function* () {
+      const produce: RegionProducer = function* (deliver) {
+        yield* deliver({ text: "one", exact: false });
+        yield* deliver({ text: "two", exact: false });
+      };
+
+      // A second acquisition establishes a second producer, and it runs.
+      const first = yield* yield* regionStream(produce);
+      const firstChunk = yield* first.next();
+      expect(firstChunk.done).toBe(false);
+      const second = yield* yield* regionStream(produce);
+      const secondChunk = yield* second.next();
+      expect(secondChunk.done).toBe(false);
+
+      // And a second subscription to one stream is taken without any bespoke
+      // refusal: this asserts no new "already expanded" or single-consumer rule
+      // was invented, not that repeating durable work is safe.
+      const stream = yield* regionStream(produce);
+      const a = yield* stream;
+      const b = yield* stream;
+      const fromA = yield* a.next();
+      const fromB = yield* b.next();
+      taken.push(String(fromA.value?.text), String(fromB.value?.text));
+    });
+
+    expect(taken).toEqual(["one", "two"]);
   });
 });

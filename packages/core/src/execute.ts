@@ -128,7 +128,10 @@ import {
 import type { DeclaredMarkdownComponent } from "./components/declared-markdown.ts";
 import {
   admitStructuralDeclarations,
+  assertDeclarationKind,
+  assertIntrinsicCatalog,
   assertStructuralInstallable,
+  detachStructural,
   markdownDeclarations,
   structuralCatalog,
 } from "./execution-declarations.ts";
@@ -2538,18 +2541,15 @@ function* executeDocument(
       // read and before the root document is imported, for the reason the
       // declared-Markdown collisions above are: a name two tiers claim
       // describes a document that cannot mean what it says.
+      // Only the conflicts a prepared execution can see. A name the catalog
+      // itself claims twice — across its two arms, or in a private closure —
+      // was refused before the first installation ran.
       assertStructuralInstallable(structural, (name) => {
         if (startingRegistry.get(name)?.reserved !== undefined) {
           return "a reserved registration";
         }
         if (bundle?.component(name) !== undefined) {
           return "a workflow bundle component";
-        }
-        if (catalog?.component(name) !== undefined) {
-          return "a declared Markdown component";
-        }
-        if (catalog?.isPrivate(name) === true) {
-          return "a private declaration";
         }
         return undefined;
       });
@@ -3325,8 +3325,12 @@ function retainedIdentityComponent(component: IdentityComponent): IdentityCompon
  * holds the original.
  */
 function retainedDeclaration(declaration: ExecutionDeclaration): ExecutionDeclaration {
+  // Read rather than trusted, and read once: a host crosses this boundary from
+  // JavaScript, so an entry of a kind core has no arm for refuses the catalog
+  // instead of being treated as the other one.
+  assertDeclarationKind(declaration);
   if (declaration.kind === "structural") {
-    return declaration;
+    return detachStructural(declaration);
   }
   return Object.freeze({
     kind: "markdown" as const,
@@ -3455,12 +3459,28 @@ function* invoke(
       });
     }),
   );
-  const declarations = Object.freeze(owned.flatMap((entry) => [...entry.declarations]));
-  // Admitted before the first `install()` runs, so a catalog no execution could
-  // honour refuses before any installation, middleware or document code exists.
-  // The conflicts only a prepared execution can see — a reserved registration,
-  // a workflow bundle — are asked later, before the root import.
+  // Everything the catalog can be refused for on its own terms, asked before
+  // the first `install()` runs: an unknown discriminant, a malformed entry, and
+  // a name two arms both claim. The conflicts only a prepared execution can see
+  // — a reserved registration, a workflow bundle — are asked later, before the
+  // root import.
+  assertIntrinsicCatalog(owned);
   const structural = yield* admitStructuralDeclarations(owned);
+  // The admitted copies are the ones every surface reads. Selection, execution,
+  // `<Syntax>`, inspection and validation therefore describe one set of
+  // objects, and a host still holding what it handed over reaches none of them.
+  const admittedByName = new Map(
+    structural.map((entry) => [entry.declaration.name, entry.declaration]),
+  );
+  const declarations = Object.freeze(
+    owned.flatMap((entry) =>
+      entry.declarations.map((declaration) =>
+        declaration.kind === "structural"
+          ? (admittedByName.get(declaration.name) ?? declaration)
+          : declaration,
+      ),
+    ),
+  );
   const expanders: readonly (StructuralExpander | undefined)[] = Object.freeze(
     owned.map((entry) => entry.expand),
   );

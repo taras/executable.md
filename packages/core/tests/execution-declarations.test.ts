@@ -22,6 +22,7 @@ import type { Json } from "@executablemd/durable-streams";
 import { collect } from "../src/collect.ts";
 import { executeInstalled, sourceDigest } from "../host.ts";
 import type { ExecutionInstallation } from "../host.ts";
+import { admitStructuralDeclarations } from "../src/execution-declarations.ts";
 import type {
   ExecutionDeclaration,
   MarkdownDeclaration,
@@ -29,6 +30,7 @@ import type {
 } from "../src/execution-declarations.ts";
 import { inspectComponent, inspectSyntax } from "../src/inspect.ts";
 import { retainedSource } from "../src/root-source.ts";
+import type { IdentityClaimant, IdentityComponent } from "../src/invocation-identity.ts";
 
 const ORIGIN = "@test/panels";
 const ROOT = "root.md";
@@ -72,6 +74,22 @@ function slot(overrides: Partial<StructuralDeclaration> = {}): StructuralDeclara
     context: "Markdown the slot renders.",
     placement: { kind: "child", parent: "Panel" },
     ...overrides,
+  };
+}
+
+/** One private component a declaration keeps to itself. */
+function hidden(name = "Hidden"): IdentityComponent {
+  return {
+    name,
+    origin: `${ORIGIN}#${name}`,
+    props: { type: "object" },
+    returns: { type: "string" },
+    forms: ["self-closing"],
+    // deno-lint-ignore require-yield
+    factory: (_claim: IdentityClaimant) =>
+      function* Hidden(): Operation<string> {
+        return "hidden";
+      },
   };
 }
 
@@ -263,8 +281,8 @@ describe("Tier DC — two installations, and the names they may not share", () =
     expect(second.counters.installs).toBe(0);
   });
 
-  it("DC2: a structural name that is also declared Markdown refuses", function* () {
-    const { installation } = installed([
+  it("DC2: a name declared in both arms refuses before install()", function* () {
+    const { installation, counters } = installed([
       panel({ name: "Policy" }),
       slot({ placement: { kind: "child", parent: "Policy" } }),
       markdownDeclaration(),
@@ -273,6 +291,39 @@ describe("Tier DC — two installations, and the names they may not share", () =
     const refused = yield* refusal(run(PANEL_DOC, [installation]));
 
     expect(refused).toContain("declared Markdown component");
+    // Intrinsic: two arms of one catalog claiming a name is wrong however the
+    // execution is assembled, so it is decided before anything is installed
+    // rather than at the prepared-execution boundary with the registration and
+    // bundle conflicts.
+    expect(counters.installs).toBe(0);
+  });
+
+  it("DC2: a structural name that a private closure also claims refuses before install()", function* () {
+    const { installation, counters } = installed([
+      panel({ name: "Hidden" }),
+      slot({ placement: { kind: "child", parent: "Hidden" } }),
+      markdownDeclaration({ privates: [hidden()] }),
+    ]);
+
+    const refused = yield* refusal(run(PANEL_DOC, [installation]));
+
+    expect(refused).toContain("private declaration");
+    expect(counters.installs).toBe(0);
+  });
+
+  it("DC2: a declaration of an unknown kind refuses before install() and the root import", function* () {
+    const unknown: ExecutionDeclaration = panel();
+    // A host crosses this boundary from JavaScript, so the discriminant is a
+    // value core reads rather than a type it can rely on.
+    Reflect.set(unknown, "kind", "widget");
+    const { installation, counters } = installed([unknown, slot()], { expand: true });
+
+    const refused = yield* refusal(run(PANEL_DOC, [installation]));
+
+    expect(refused).toContain('neither "markdown" nor "structural"');
+    expect(counters.installs).toBe(0);
+    // And no root was imported: the refusal precedes the document entirely.
+    expect(counters.expansions).toBe(0);
   });
 
   it("DC2: a structural name that is a protected component refuses", function* () {
@@ -368,6 +419,117 @@ describe("Tier DC — a malformed declaration is refused where it is made", () =
 
     expect(refused).toContain('root props schema must declare type: "object"');
     expect(counters.installs).toBe(0);
+  });
+});
+
+describe("Tier DC — the capture is by value", () => {
+  it("DC1: a mutation during install() changes neither execution nor the catalog", function* () {
+    // The caller keeps its own objects. Everything below is done to *those*,
+    // from inside the installation's own hook — the one moment a host is
+    // running while the execution already exists.
+    const parent = panel();
+    const child = slot();
+    const seen: string[] = [];
+    const installation: ExecutionInstallation = {
+      declarations: [parent, child],
+      // deno-lint-ignore require-yield
+      *install(): Operation<void> {
+        Reflect.set(parent, "name", "Renamed");
+        Reflect.set(parent, "origin", "@attacker/elsewhere");
+        Reflect.set(parent, "syntax", ["<Renamed />"]);
+        Reflect.set(parent.props, "additionalProperties", true);
+        Reflect.set(parent.placement, "minimumChildren", 99);
+        Reflect.set(child, "name", "Slotted");
+      },
+      // deno-lint-ignore require-yield
+      *expand(request): Operation<void> {
+        seen.push(`${request.name}@${request.origin}`);
+      },
+    };
+
+    // The document still writes what was declared, and the occurrence still
+    // reaches the owner under the captured name and origin.
+    yield* run(PANEL_DOC, [installation]);
+
+    expect(seen).toEqual([`Panel@${ORIGIN}`]);
+  });
+
+  it("DC1: the captured declaration is frozen, and the caller's object is not it", function* () {
+    const parent = panel();
+    const admitted = yield* admitStructuralDeclarations([
+      { owner: 0, declarations: [parent, slot()], expands: true },
+    ]);
+
+    const captured = admitted[0]?.declaration;
+    if (captured === undefined) {
+      throw new Error("nothing was admitted");
+    }
+    expect(captured).not.toBe(parent);
+    expect(Object.isFrozen(captured)).toBe(true);
+    expect(Object.isFrozen(captured.props)).toBe(true);
+    expect(Object.isFrozen(captured.placement)).toBe(true);
+    expect(Object.isFrozen(captured.syntax)).toBe(true);
+
+    // And writing through the caller's object reaches none of it.
+    Reflect.set(parent.props, "additionalProperties", true);
+    expect(captured.props["additionalProperties"]).toBe(false);
+  });
+
+  it("DC1: `<Syntax>` describes the captured contract, not a mutated one", function* () {
+    const parent = panel();
+    const child = slot();
+    const installation: ExecutionInstallation = {
+      declarations: [parent, child],
+      // deno-lint-ignore require-yield
+      *install(): Operation<void> {
+        Reflect.set(parent, "description", "replaced after capture");
+        Reflect.set(parent, "syntax", ["<Replaced />"]);
+      },
+      // deno-lint-ignore require-yield
+      *expand(): Operation<void> {},
+    };
+
+    const rendered = String(yield* run("<Syntax />\n", [installation]));
+
+    expect(rendered).toContain("Arrange slots.");
+    expect(rendered).not.toContain("replaced after capture");
+    expect(rendered).not.toContain("<Replaced />");
+  });
+});
+
+describe("Tier DC — the order the catalog is listed in", () => {
+  it("DC1: engine constructs come first, then installed forms in capture order", function* () {
+    // Three declarations whose capture order is distinct from both of the
+    // orders a listing might fall back to. Written as `Mid, Zeta, Alpha`:
+    // sorting by name gives `Alpha, Mid, Zeta`, and grouping parents ahead of
+    // their children gives `Zeta, Mid, Alpha`. Only the captured order is
+    // `Mid, Zeta, Alpha`, so each wrong answer is a different list.
+    const zeta = panel({ name: "Zeta", syntax: ["<Zeta columns={1}>…</Zeta>"] });
+    const mid = slot({ name: "Mid", placement: { kind: "child", parent: "Zeta" } });
+    const alpha = slot({ name: "Alpha", placement: { kind: "child", parent: "Zeta" } });
+
+    const symbols = yield* inspectSyntax({
+      includes: [],
+      declarations: [mid, zeta, alpha],
+    });
+    const entries = symbols.categories[0].entries;
+    const installedNames = entries
+      .filter((entry) => entry.kind === "declared-structural")
+      .map((entry) => entry.name);
+    const engineNames = entries
+      .filter((entry) => entry.kind === "structural")
+      .map((entry) => entry.name);
+
+    // Capture order: not alphabetical, and not parents-before-children.
+    expect(installedNames).toEqual(["Mid", "Zeta", "Alpha"]);
+    // And every engine construct precedes every installed one.
+    const firstInstalled = entries.findIndex((entry) => entry.kind === "declared-structural");
+    const lastEngine = entries.map((entry) => entry.kind).lastIndexOf("structural");
+    expect(engineNames.length).toBeGreaterThan(0);
+    expect(lastEngine).toBeLessThan(firstInstalled);
+    // A global name sort over the whole category would have put `Alpha` ahead
+    // of `Each`, `If` and `Let`; it does not.
+    expect(entries[0]?.name).not.toBe("Alpha");
   });
 });
 
