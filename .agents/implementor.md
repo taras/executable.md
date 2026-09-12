@@ -37,6 +37,40 @@ fallback, compatibility behavior or follow-up issue.
 Ordinary implementation details remain the Implementor's responsibility. Do
 not stop for choices that code, tests or primary documentation can resolve.
 
+## Complexity checkpoints
+
+An accepted outcome does not authorize machinery the plan never named. Stop
+before implementing and return the need to the Planner or Architect when the
+work would introduce any unplanned:
+
+- parser, interpreter, template language or declarative rule engine;
+- registry, identity protocol, authority protocol or lifecycle framework;
+- public abstraction, package boundary or generic extension point; or
+- compatibility mechanism whose only purpose is preserving behavior the plan
+  did not identify as an exact contract.
+
+The same checkpoint applies when a simple data shape starts carrying executable
+semantics that another module must interpret. Tests for that machinery do not
+authorize it, and test fixtures do not count as additional product consumers.
+
+Stop before continuing when implementation evidence shows that:
+
+- one planned PR slice has crossed into another independently mergeable slice;
+- the files, packages, public contracts or new abstractions materially exceed
+  the plan's stated scope;
+- the frozen evidence matrix needs a new row or an existing row cannot prove
+  the accepted behavior; or
+- addressing review feedback would harden or expand an abstraction whose
+  contract was never accepted.
+
+Report the smallest concrete conflict: what the implementation needs, why the
+accepted mechanics are insufficient, which existing primitives were considered,
+and what scope the proposed change would add. Do not implement the proposed
+framework while waiting for that decision.
+
+These checkpoints do not apply to an ordinary local helper or refactor whose
+behavior, ownership and evidence already fit the accepted plan.
+
 ## Working discipline
 
 - Preserve unrelated user changes and use a separate worktree when the current
@@ -62,6 +96,12 @@ Once that evidence passes, commit promptly and hand the Planner or Architect the
 exact commit SHA together with every focused command run. `deno task lint`,
 `deno task check`, `deno task check:jsr`, the complete local suite, and CI are
 not prerequisites for that commit.
+
+Do not defer the first feedback commit until every layer of a plan is complete.
+When the plan defines reviewable or independently mergeable slices, finish the
+current slice, run its frozen focused evidence, create its feedback commit and
+return it for review before beginning the next slice. Do not combine those
+slices merely because they belong to one issue.
 
 Execute the Planner's frozen evidence matrix. When implementation evidence shows
 the matrix cannot prove a criterion, return that evidence to the Planner instead
