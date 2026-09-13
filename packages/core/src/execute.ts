@@ -126,7 +126,7 @@ import {
   DeclaredImports,
   privateClosure,
 } from "./components/declared-markdown.ts";
-import type { MarkdownDeclaration } from "./components/declared-markdown.ts";
+import type { MarkdownComponent } from "./components/declared-markdown.ts";
 import { documentationOf } from "./components/documentation.ts";
 import { registerComponents } from "./components/registration.ts";
 import {
@@ -2397,7 +2397,7 @@ function* executeDocument(
   preparations: readonly DurablePreparation[] = [],
   bundles: readonly WorkflowComponentBundle[] = [],
   identityComponents: readonly IdentityComponent[] = [],
-  declarations: readonly MarkdownDeclaration[] = [],
+  declarations: readonly MarkdownComponent[] = [],
   providers: readonly SyntaxSymbolsProvider[] = [],
   /**
    * The documentation each bootstrapped package contributed.
@@ -2885,7 +2885,7 @@ export interface ExecutionInstallation {
    * to — and which answers a document may invoke — is fixed before anything can
    * observe or replace it.
    */
-  readonly declarations?: readonly MarkdownDeclaration[];
+  readonly declarations?: readonly MarkdownComponent[];
   /**
    * What this installation records inside the durable root.
    *

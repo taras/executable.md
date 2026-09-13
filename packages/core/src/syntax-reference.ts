@@ -39,7 +39,7 @@ import type { DocumentationContribution } from "./component-documentation.ts";
 import type { DocumentationIndex } from "./documentation-index.ts";
 import { UnknownComponentError } from "./documentation-index.ts";
 import type { WorkflowImportAuthority } from "./components/bundle.ts";
-import type { DeclaredMarkdownComponent } from "./components/declared-markdown.ts";
+import type { MarkdownComponent } from "./components/declared-markdown.ts";
 import type { IdentityComponent } from "./invocation-identity.ts";
 import { SyntaxSelectionRefusal } from "./syntax-refusal.ts";
 import type { ComponentOrigin, ComponentRegistry } from "./types.ts";
@@ -105,7 +105,7 @@ export interface CapturedSymbolInputs {
   /** The registrations this execution started with, captured before it ran. */
   readonly registry: ComponentRegistry;
   readonly components: readonly IdentityComponent[];
-  readonly declarations: readonly DeclaredMarkdownComponent[];
+  readonly declarations: readonly MarkdownComponent[];
   /** The bundle this execution is closed over, when a trusted host installed one. */
   readonly workflow?: WorkflowImportAuthority;
 }

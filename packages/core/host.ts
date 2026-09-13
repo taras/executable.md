@@ -220,12 +220,11 @@ export type { WorkflowBundleComponent, WorkflowComponentBundle } from "./src/com
  * is the same hash core checks against, so a build states the digest of what it
  * actually shipped rather than a constant someone updates by hand.
  *
- * A declaration states which kind it is, and `Markdown({…})` is what states it:
- * a host describes its asset, and the constructor writes the discriminant after
- * the description, so an input carrying a `kind` of its own cannot decide what
- * the declaration is. `MarkdownDeclarationInput` is what a host writes,
- * `MarkdownDeclaration` is what comes back, and `DeclaredMarkdownComponent` is
- * the name that type has always been imported under.
+ * A declaration states which kind it is, and `Markdown({…})` is how this
+ * repository states it: a host describes its asset, and the constructor writes
+ * the discriminant after the description, so an input carrying a `kind` of its
+ * own does not decide what the declaration is. `MarkdownComponentInput` is what
+ * a host writes and `MarkdownComponent` is what comes back.
  */
 export {
   DeclaredMarkdownError,
@@ -233,9 +232,8 @@ export {
   sourceDigest,
 } from "./src/components/declared-markdown.ts";
 export type {
-  DeclaredMarkdownComponent,
-  MarkdownDeclaration,
-  MarkdownDeclarationInput,
+  MarkdownComponent,
+  MarkdownComponentInput,
 } from "./src/components/declared-markdown.ts";
 
 /**

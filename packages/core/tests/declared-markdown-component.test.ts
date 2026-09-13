@@ -43,11 +43,11 @@ import { collect } from "../src/collect.ts";
 import { execute } from "../src/execute.ts";
 import { executeInstalled, Markdown, sourceDigest } from "../host.ts";
 import type {
-  DeclaredMarkdownComponent,
   ExecutionInstallation,
   IdentityClaimant,
   IdentityComponent,
-  MarkdownDeclarationInput,
+  MarkdownComponent,
+  MarkdownComponentInput,
 } from "../host.ts";
 import { admitDeclaredMarkdown } from "../src/components/declared-markdown.ts";
 import { inspectComponent, inspectSyntax } from "../src/inspect.ts";
@@ -69,8 +69,8 @@ const NO_PROPS = { type: "object", properties: {}, additionalProperties: false }
 /** The declared Markdown this tier runs against, with its digest computed. */
 function declared(
   source: string,
-  overrides: Partial<MarkdownDeclarationInput> = {},
-): DeclaredMarkdownComponent {
+  overrides: Partial<MarkdownComponentInput> = {},
+): MarkdownComponent {
   return Markdown({
     name: "Policy",
     origin: ORIGIN,
@@ -226,14 +226,14 @@ function claiming(seen: string[], name = "Claiming"): IdentityComponent {
   };
 }
 
-function installation(declarations: readonly DeclaredMarkdownComponent[]): ExecutionInstallation {
+function installation(declarations: readonly MarkdownComponent[]): ExecutionInstallation {
   return { declarations };
 }
 
 /** Run one root against a set of declarations, with no component search path. */
 function run(
   source: string,
-  declarations: readonly DeclaredMarkdownComponent[] = [declared(POLICY_SOURCE)],
+  declarations: readonly MarkdownComponent[] = [declared(POLICY_SOURCE)],
   extra: readonly ExecutionInstallation[] = [],
   stream: InMemoryStream = new InMemoryStream(),
   includes: readonly string[] = [],
@@ -1381,7 +1381,7 @@ function unpresented(published: string): boolean {
  */
 function* published(
   source: string,
-  declarations: readonly DeclaredMarkdownComponent[],
+  declarations: readonly MarkdownComponent[],
   extra: readonly ExecutionInstallation[],
 ): Operation<string> {
   const chunks: string[] = [];
@@ -1579,14 +1579,14 @@ describe("Tier DM — exact source is a provenance, not a field", () => {
  */
 
 /** A declaration as a host that states no kind at all would hand it over. */
-function withoutKind(declaration: DeclaredMarkdownComponent): DeclaredMarkdownComponent {
+function withoutKind(declaration: MarkdownComponent): MarkdownComponent {
   const copy = { ...declaration };
   Reflect.deleteProperty(copy, "kind");
   return copy;
 }
 
 /** A declaration stating a kind this version does not know. */
-function statingKind(declaration: DeclaredMarkdownComponent, kind: string) {
+function statingKind(declaration: MarkdownComponent, kind: string) {
   const copy = { ...declaration };
   Reflect.set(copy, "kind", kind);
   return copy;
@@ -1610,7 +1610,7 @@ describe("Tier MDK — the declaration states its kind", () => {
   it("MDK1: the constructor states the kind and changes nothing else", function* () {
     const props: PropsSchema = { type: "object", properties: {}, additionalProperties: false };
     const privates = [secret()];
-    const input: MarkdownDeclarationInput = {
+    const input: MarkdownComponentInput = {
       name: "Policy",
       origin: ORIGIN,
       source: POLICY_SOURCE,

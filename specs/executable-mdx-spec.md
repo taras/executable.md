@@ -2927,9 +2927,9 @@ caller-facing option selects one, adds one, or names its source.
 builds exact Markdown with the canonical constructor:
 
 ```typescript
-type MarkdownDeclarationInput = Omit<MarkdownDeclaration, "kind">;
+type MarkdownComponentInput = Omit<MarkdownComponent, "kind">;
 
-function Markdown(input: MarkdownDeclarationInput): MarkdownDeclaration;
+function Markdown(input: MarkdownComponentInput): MarkdownComponent;
 ```
 
 The host writes the description — name, origin, source, digest, forms, schemas
@@ -2939,7 +2939,7 @@ of its own does not decide what the declaration is. It is a constructor and
 nothing else: it validates nothing, computes no digest, copies no nested schema,
 array or private declaration, freezes nothing and admits nothing.
 
-`MarkdownDeclaration` remains an ordinary structural type, so the constructor is
+`MarkdownComponent` remains an ordinary structural type, so the constructor is
 the canonical way to build one rather than the only way a value of that shape
 can come to exist. The defence is admission: the discriminant is required, and
 admission reads it before anything else about the value, because everything else
@@ -3458,7 +3458,7 @@ type ValidateDocumentOptions = RootDocumentSource & {
   readonly props?: Record<string, Json>;
   readonly includes?: readonly string[];
   readonly components?: readonly IdentityComponent[];
-  readonly declarations?: readonly DeclaredMarkdownComponent[];
+  readonly declarations?: readonly MarkdownComponent[];
 };
 
 function* validateDocument(

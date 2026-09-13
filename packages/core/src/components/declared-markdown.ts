@@ -86,7 +86,7 @@ export class DeclaredMarkdownError extends Error {
  * exactly as they are for any other Markdown component, so the asset and the
  * catalog entry describing it are one text.
  */
-export interface MarkdownDeclaration {
+export interface MarkdownComponent {
   /**
    * Which kind of declaration this is.
    *
@@ -124,17 +124,8 @@ export interface MarkdownDeclaration {
   readonly exact?: boolean;
 }
 
-/**
- * The name this declaration has always had.
- *
- * Kept because a host, a profile and a test all import it by this name. It is
- * the same type: what changed is that a declaration now states which kind it
- * is, and {@link Markdown} is how this repository states it.
- */
-export type DeclaredMarkdownComponent = MarkdownDeclaration;
-
 /** Everything a host states about exact Markdown, apart from what kind it is. */
-export type MarkdownDeclarationInput = Omit<MarkdownDeclaration, "kind">;
+export type MarkdownComponentInput = Omit<MarkdownComponent, "kind">;
 
 /**
  * Declare exact Markdown to one execution.
@@ -144,7 +135,7 @@ export type MarkdownDeclarationInput = Omit<MarkdownDeclaration, "kind">;
  * what that description is: `kind` is written after the input is spread, so an
  * input carrying one of its own is overwritten rather than believed.
  *
- * It is a convenience and a convention, not a gate. {@link MarkdownDeclaration}
+ * It is a convenience and a convention, not a gate. {@link MarkdownComponent}
  * is an ordinary structural type, so a caller can still write the object out by
  * hand, and nothing here can stop one. What defends the execution is admission,
  * which reads the discriminant before any other member and refuses a missing or
@@ -157,7 +148,7 @@ export type MarkdownDeclarationInput = Omit<MarkdownDeclaration, "kind">;
  * every other installed value is — at capture, before any `install()` runs —
  * and checked where every other declaration is, at admission.
  */
-export function Markdown(input: MarkdownDeclarationInput): DeclaredMarkdownComponent {
+export function Markdown(input: MarkdownComponentInput): MarkdownComponent {
   return { ...input, kind: "markdown" };
 }
 
@@ -202,7 +193,7 @@ function refuse(message: string): DeclaredMarkdownError {
  * have, and a set a run would refuse is refused for them too.
  */
 export function* admitDeclaredMarkdown(
-  declarations: readonly MarkdownDeclaration[],
+  declarations: readonly MarkdownComponent[],
   registry: ComponentRegistry,
 ): Operation<readonly AdmittedDeclaredMarkdown[]> {
   const admitted: AdmittedDeclaredMarkdown[] = [];

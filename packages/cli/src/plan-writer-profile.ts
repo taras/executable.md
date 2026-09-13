@@ -45,7 +45,7 @@ import {
   useTerminalOutput,
 } from "@executablemd/core";
 import type { AgentProviderOptions, Json } from "@executablemd/core";
-import type { SyntaxSymbolsProvider, DeclaredMarkdownComponent } from "@executablemd/core/host";
+import type { SyntaxSymbolsProvider, MarkdownComponent } from "@executablemd/core/host";
 import { executeInstalled, installInvocationAgentProvider } from "@executablemd/core/host";
 import { createAcpxProvider } from "@executablemd/acp";
 import type { AcpxProviderDependencies } from "@executablemd/acp";
@@ -168,7 +168,7 @@ export interface PlanWriterProfile {
    * Agent context it settled — none of which is a prop the adapter could supply
    * or a document could reach.
    */
-  declaration: DeclaredMarkdownComponent;
+  declaration: MarkdownComponent;
   /**
    * The symbols this authorship describes.
    *

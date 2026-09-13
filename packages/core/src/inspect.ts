@@ -20,7 +20,7 @@ import { DEFAULT_INCLUDES, effectiveRegistry, selectComponent } from "./componen
 import { admitDeclaration, mergeRegistry } from "./components/registration.ts";
 import { declaredRegistry } from "./components/declared-registry.ts";
 import { admitDeclaredMarkdown, declaredCatalog } from "./components/declared-markdown.ts";
-import type { DeclaredMarkdownComponent } from "./components/declared-markdown.ts";
+import type { MarkdownComponent } from "./components/declared-markdown.ts";
 import { repositoryCandidateNames } from "./components/candidates.ts";
 import { PROTECTED_COMPONENT_NAMES } from "./components/protected.ts";
 import type { WorkflowImportAuthority } from "./components/bundle.ts";
@@ -138,7 +138,7 @@ export interface InspectComponentOptions {
    * included. Private declarations are never described: nothing a document can
    * write resolves one.
    */
-  declarations?: readonly DeclaredMarkdownComponent[];
+  declarations?: readonly MarkdownComponent[];
 }
 
 /**
@@ -451,7 +451,7 @@ export interface InspectSyntaxOptions {
    * document can write, so symbols that listed it would describe syntax that
    * does not exist.
    */
-  readonly declarations?: readonly DeclaredMarkdownComponent[];
+  readonly declarations?: readonly MarkdownComponent[];
 }
 
 /**

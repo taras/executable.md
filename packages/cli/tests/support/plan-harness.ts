@@ -29,7 +29,7 @@ import { planComponentDeclaration } from "../../src/plan-component.ts";
 import type { PlanSurface, StructuralValidation } from "../../src/plan-component.ts";
 import { planAgentContext } from "../../src/plan-writer-profile.ts";
 import type { PlanWriterStack } from "../../src/agent-stack.ts";
-import type { SyntaxSymbolsProvider, DeclaredMarkdownComponent } from "@executablemd/core/host";
+import type { SyntaxSymbolsProvider, MarkdownComponent } from "@executablemd/core/host";
 import type { PlanDependencies } from "../../src/plan.ts";
 import { createFakeAcp, makeRegistry, makeStore } from "./fake-acp.ts";
 import type { FakeAcp, FakeStore } from "./fake-acp.ts";
@@ -316,7 +316,7 @@ export interface PlanDeclarationHarness {
   /** Every review request a provider was asked, in order. */
   reviews: ElicitationRequest[];
   /** The declaration to attach to an execution. */
-  declaration: DeclaredMarkdownComponent;
+  declaration: MarkdownComponent;
   /**
    * The symbols this case's execution describes.
    *
