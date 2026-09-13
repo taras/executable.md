@@ -66,7 +66,6 @@
 
 import { Err, Ok, ensure, scoped, until } from "effection";
 import type { Operation, Result } from "effection";
-import { field, object, cli } from "configliere";
 import { z } from "zod";
 import type { DurableEvent, DurableStream, Json } from "@executablemd/durable-streams";
 import { retainedSource, validateProps } from "@executablemd/core";
@@ -217,74 +216,6 @@ const OPTIONS_BY_ACTION: Readonly<Record<string, readonly string[]>> = Object.fr
   cancel: [],
   delete: [],
   export: ["--output"],
-});
-
-export const workflowConfig = object({
-  action: {
-    description: "start, resume, fork, answer, status, list, history, cancel, delete or export",
-    ...field(z.string().optional(), cli.argument()),
-  },
-  target: {
-    description:
-      "markdown definition to start, the run a fork continues, or the run id every other " +
-      "action addresses",
-    ...field(z.string().optional(), cli.argument()),
-  },
-  argument: {
-    description: "the definition a fork runs, or the wait an answer is delivered to",
-    ...field(z.string().optional(), cli.argument()),
-  },
-  value: {
-    description: "the answer itself, as one JSON value (answer only)",
-    ...field(z.string().optional(), cli.argument()),
-  },
-  id: {
-    description: "run id to create or address (start and fork only; generated when absent)",
-    ...field(z.string().optional()),
-  },
-  at: {
-    description: "the retained event a fork continues from (fork only)",
-    ...field(z.string().optional()),
-  },
-  verbose: {
-    description: "log journal entries to stderr",
-    aliases: ["-V"],
-    ...field(z.boolean(), field.default(false)),
-  },
-  raw: {
-    description: "output raw markdown without normalization or terminal formatting",
-    ...field(z.boolean(), field.default(false)),
-  },
-  secretDetection: {
-    description:
-      "scan durable events for credentials before they persist; " +
-      "disable with --no-secret-detection",
-    ...field(z.boolean(), field.default(true)),
-  },
-  json: {
-    description: "write the inspection result as JSON (status, list and history only)",
-    ...field(z.boolean(), field.default(false)),
-  },
-  forkable: {
-    description: "add each event's forkability to the history (history only)",
-    ...field(z.boolean(), field.default(false)),
-  },
-  status: {
-    description: "list only runs retaining this status",
-    ...field(z.string().optional()),
-  },
-  artifact: {
-    description:
-      "inspect this sealed .xmd artifact instead of a retained run (status and history only)",
-    ...field(z.string().optional()),
-  },
-  output: {
-    description:
-      "the .xmd file to write the artifact to (export only); the artifact contains this " +
-      "run's complete retained Workspace, which may include source, generated files and " +
-      "secrets — treat it as confidential",
-    ...field(z.string().optional()),
-  },
 });
 
 /** What one execution invocation asks for, after the grammar has been read. */

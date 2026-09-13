@@ -1,0 +1,1 @@
+{"version":3,"file":"dasherize.js","sourceRoot":"","sources":["../../src/lib/dasherize.ts"],"names":[],"mappings":";;AAAA,8BAMC;AAND,SAAgB,SAAS,CAAC,IAAY;IACpC,OAAO,IAAI;SACR,OAAO,CAAC,uBAAuB,EAAE,OAAO,CAAC;SACzC,OAAO,CAAC,mBAAmB,EAAE,OAAO,CAAC;SACrC,OAAO,CAAC,SAAS,EAAE,GAAG,CAAC;SACvB,WAAW,EAAE,CAAC;AACnB,CAAC"}
