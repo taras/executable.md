@@ -416,23 +416,16 @@ export type ComponentSelection =
   /**
    * Structural syntax this environment declares. It selects no definition and
    * reaches no component import: the installation that declared the construct
-   * expands it. Selection reports the declaration's own facts and never the
-   * captured handler — what may run is the execution's, not a selection's.
+   * expands it.
+   *
+   * The name and where it came from, and nothing else. What the construct
+   * accepts — its forms, its schema, where its regions sit — is the admitted
+   * contract, and whoever needs it already holds the catalog that has it. A
+   * selection carrying the contract would be a second copy of it, and one
+   * carrying the handler would make *what may run* a selection's answer rather
+   * than the execution's.
    */
-  | {
-      kind: "declared-structural";
-      origin: string;
-      forms: readonly InvocationForm[];
-      props: PropsSchema;
-      syntax: readonly string[];
-      description: string;
-      /** What the construct's content means, or `null` when it reads none. */
-      context: string | null;
-      /** `null` for a construct; the construct's name for one of its regions. */
-      parent: string | null;
-      /** The direct regions a construct accepts, derived from their declarations. */
-      children: readonly string[];
-    }
+  | { kind: "declared-structural"; origin: string }
   | { kind: "unresolved"; searched: string[]; registered: readonly ComponentOrigin[] };
 
 /** A registered implementation and the origin that named it. */

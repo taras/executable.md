@@ -1556,6 +1556,16 @@ describe("Tier ED — declared structural placement", () => {
         ["<Deck>", "  <Panel title={5} />", "</Deck>", ""].join("\n"),
         ["props-invalid"],
       ],
+      [
+        "a construct written where one of its own regions belongs",
+        ["<Deck>", "  <Deck>", '    <Panel title="One" />', "  </Deck>", "</Deck>", ""].join("\n"),
+        ["structural-usage-invalid"],
+      ],
+      [
+        "a literal the construct's own schema rejects",
+        ['<Deck extra="no">', '  <Panel title="One" />', "</Deck>", ""].join("\n"),
+        ["props-invalid"],
+      ],
     ];
 
     for (const [described, source, expected] of cases) {

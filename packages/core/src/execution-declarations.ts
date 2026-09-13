@@ -15,10 +15,20 @@
  * ## The discriminant is read, never assumed
  *
  * Every declaration states its `kind`, and a value that states neither arm is
- * refused rather than read as Markdown. That refusal belongs to the Markdown
- * admission, which already owns it: its first check runs before any other
- * member of the value is read, so a value this catalog cannot place is refused
- * there, in the words and with the error a host already gets.
+ * refused rather than read as Markdown — by capture, before any other member of
+ * the value is read and before any `install()` runs, and again here for the
+ * callers that have no execution. The refusal keeps the error and the sentence
+ * exact Markdown already had, because a value that never said what it is has
+ * not said it is structural syntax either.
+ *
+ * ## One error for the catalog, one for the bytes
+ *
+ * Everything this module decides about a *set* — a malformed structural member,
+ * a schema that will not compile, a name claimed twice, a pair that cannot
+ * expand — is an `ExecutionDeclarationError`. What exact Markdown's own bytes
+ * say about themselves stays `DeclaredMarkdownError`, and so does an unknown
+ * discriminant, which is a value that never reached either arm. A host reading
+ * one of those two knows which question it failed.
  *
  * ## The pair is derived from the regions
  *
@@ -38,7 +48,11 @@
 
 import type { Operation, Stream } from "effection";
 
-import { admitDeclaredMarkdown, declaredCatalog } from "./components/declared-markdown.ts";
+import {
+  admitDeclaredMarkdown,
+  declaredCatalog,
+  DeclaredMarkdownError,
+} from "./components/declared-markdown.ts";
 import type {
   AdmittedDeclaredMarkdown,
   DeclaredMarkdownCatalog,
@@ -252,6 +266,62 @@ function refuse(message: string): ExecutionDeclarationError {
 }
 
 /**
+ * What a value that states neither arm is refused with.
+ *
+ * PR A settled this sentence for exact Markdown, and it is still the right one:
+ * a value that never said what it is has not said it is structural syntax
+ * either. It is spelled here as well as in the Markdown admission because
+ * *capture* refuses before that admission is reached, and capture may read the
+ * discriminant only once — delegating would read it a second time. `ED1` holds
+ * the two spellings against each other, so they cannot drift apart silently.
+ */
+const UNKNOWN_KIND =
+  "a declaration was handed to one execution without saying it is exact Markdown. A host " +
+  "declares exact Markdown with `Markdown({…})`, and a declaration that states something " +
+  "else, or nothing, is never read as Markdown.";
+
+/**
+ * Refuse a discriminant this version does not know.
+ *
+ * Takes the value already read rather than the declaration, because the one
+ * caller that matters reads `kind` exactly once and must not read it again to
+ * decide what to say about it.
+ */
+export function refuseUnknownKind(): DeclaredMarkdownError {
+  return new DeclaredMarkdownError(UNKNOWN_KIND);
+}
+
+/** Whether this discriminant names an arm of the catalog. */
+export function isKnownKind(kind: unknown): kind is ExecutionDeclaration["kind"] {
+  return kind === "markdown" || kind === "structural";
+}
+
+/**
+ * Run one declaration's shared admission, and answer for it as this catalog.
+ *
+ * The rule stays where it is — a name, a schema and a forms array are admitted
+ * on exactly the terms every registration is — and only the *kind* of failure
+ * is restated: a host assembling a declaration set gets one error class for
+ * "this set is not installable", with the underlying sentence intact and the
+ * original failure kept as its cause.
+ */
+function* admitting(name: string, admission: () => Operation<void>): Operation<void> {
+  try {
+    yield* admission();
+  } catch (error) {
+    if (error instanceof ExecutionDeclarationError) {
+      throw error;
+    }
+    const stated = error instanceof Error ? error.message : String(error);
+    throw new ExecutionDeclarationError(
+      `the declared structural construct "${name}" states a contract this execution cannot ` +
+        `install: ${stated}`,
+      { cause: error },
+    );
+  }
+}
+
+/**
  * Admit what a host would declare, for a caller that runs none of it.
  *
  * Inspection and validation describe the environment a run would have, so they
@@ -377,7 +447,7 @@ function* admitStructural(
     // The name is printed only once it has passed the grammar a document
     // writes: until then it is text of unknown provenance, and a refusal is not
     // a reason to publish it.
-    if (!isComponentName(name)) {
+    if (typeof name !== "string" || !isComponentName(name)) {
       throw refuse(
         "a declared structural construct was given a name that is not a component name.",
       );
@@ -391,7 +461,7 @@ function* admitStructural(
     if (PROTECTED_COMPONENT_NAMES.has(name)) {
       throw refuse(`a host ${protectedNameRefusal(name, "declare as structural syntax")}.`);
     }
-    if (origin.length === 0) {
+    if (typeof origin !== "string" || origin.length === 0) {
       throw refuse(
         `the declared structural construct "${name}" needs an origin naming where it came from.`,
       );
@@ -424,7 +494,7 @@ function* admitStructural(
     // Present, unlike a Markdown declaration's: omission means "both" there,
     // and a construct that arranges what is written inside it states which
     // spellings it accepts rather than inheriting a default.
-    if (forms === undefined) {
+    if (!Array.isArray(forms)) {
       throw refuse(
         `the declared structural construct "${name}" states no forms. A construct states the ` +
           "authored spellings it accepts.",
@@ -434,12 +504,16 @@ function* admitStructural(
     if (badForms !== undefined) {
       throw refuse(`the declared structural construct "${name}" ${badForms}.`);
     }
-    if (syntax.length === 0 || syntax.some((example) => example.length === 0)) {
+    if (
+      !Array.isArray(syntax) ||
+      syntax.length === 0 ||
+      syntax.some((example) => typeof example !== "string" || example.length === 0)
+    ) {
       throw refuse(
         `the declared structural construct "${name}" needs the authored forms a reader copies.`,
       );
     }
-    if (description.length === 0) {
+    if (typeof description !== "string" || description.length === 0) {
       throw refuse(
         `the declared structural construct "${name}" needs a description saying what it is for.`,
       );
@@ -460,13 +534,21 @@ function* admitStructural(
     // The same admission a registration is held to, so a declared contract is
     // admissible on exactly the terms every other declared contract is: the
     // schema compiles here, before a document can write the name.
-    yield* admitDeclaration({
-      name,
-      origin,
-      props,
-      forms,
-      description,
-      ...(context === null ? {} : { context }),
+    //
+    // What comes back out is this catalog's error, not registration's. The rule
+    // is registration's and stays there — a schema this build cannot compile is
+    // refused for exactly the reason it always was — but a host assembling a
+    // declaration set is owed one answer to "is this set installable", and a
+    // registration error escaping from here would be a second one.
+    yield* admitting(name, function* () {
+      yield* admitDeclaration({
+        name,
+        origin,
+        props,
+        forms,
+        description,
+        ...(context === null ? {} : { context }),
+      });
     });
 
     claimed.add(name);

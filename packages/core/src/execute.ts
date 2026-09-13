@@ -121,7 +121,11 @@ import {
 } from "./components/select.ts";
 import { installedBundle } from "./components/bundle.ts";
 import { DeclaredImports, privateClosure } from "./components/declared-markdown.ts";
-import { admitInstalledDeclarations } from "./execution-declarations.ts";
+import {
+  admitInstalledDeclarations,
+  isKnownKind,
+  refuseUnknownKind,
+} from "./execution-declarations.ts";
 import type {
   ExecutionDeclaration,
   ExecutionDeclarationCatalog,
@@ -3292,18 +3296,24 @@ function retainedIdentityComponent(component: IdentityComponent): IdentityCompon
  * one by reading fewer of its members than it was given.
  */
 function retainedDeclaration(declaration: ExecutionDeclaration): ExecutionDeclaration {
-  // Read once, and used for both the branch and the copy: reading it a second
-  // time to write it down would let a value answer one way about which arm it
-  // belongs to and another about what this execution retains.
+  // Read once, before any other member of this value is read, and used for both
+  // the branch and the copy. Everything below is a statement *about* one arm or
+  // the other, so reading one of those from a value that named neither would be
+  // treating it as that arm — and reading the discriminant a second time to
+  // write it down would let a value answer one way about which arm it belongs
+  // to and another about what this execution retains.
   const kind = declaration.kind;
+  if (!isKnownKind(kind)) {
+    throw refuseUnknownKind();
+  }
   if (kind === "structural") {
     return Object.freeze({
       kind,
       name: declaration.name,
       origin: declaration.origin,
-      forms: Object.freeze([...declaration.forms]),
+      forms: retainedList(declaration.forms),
       props: detachedSchema(declaration.props),
-      syntax: Object.freeze([...declaration.syntax]),
+      syntax: retainedList(declaration.syntax),
       description: declaration.description,
       context: declaration.context,
       parent: declaration.parent,
@@ -3323,6 +3333,18 @@ function retainedDeclaration(declaration: ExecutionDeclaration): ExecutionDeclar
       : { privates: Object.freeze([...declaration.privates].map(retainedIdentityComponent)) }),
     ...(declaration.exact === undefined ? {} : { exact: declaration.exact }),
   });
+}
+
+/**
+ * One declared list, copied — or carried through when it is not a list at all.
+ *
+ * Capture states what the host stated; it does not decide whether the host
+ * stated something usable. A member that is not an array reaches admission as it
+ * was written and is refused there as the malformed declaration it is, rather
+ * than failing here as whatever the copy happened to throw.
+ */
+function retainedList<Member>(value: readonly Member[]): readonly Member[] {
+  return Array.isArray(value) ? Object.freeze([...value]) : value;
 }
 
 /**

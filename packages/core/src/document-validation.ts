@@ -821,11 +821,18 @@ class ValidationState {
 
     if (selected.kind === "declared-structural") {
       draft.origin = { kind: "declared-structural", origin: selected.origin };
+      // The contract is the admitted entry, read from the catalog this walk
+      // already holds: selection reports which name was chosen, not what the
+      // construct accepts.
+      const admitted = this.#declarations?.structural(segment.name);
+      if (admitted === undefined) {
+        throw new Error(`${segment.name} resolved as declared structural syntax nothing admitted`);
+      }
       // Placement first, from the shared analysis canonical expansion reads, so
       // a region reported for sitting outside its construct is not also
       // reported for the props it wrote there. Both are decided from source;
       // neither reaches the installation's handler or expands a region body.
-      for (const violation of structuralPlacement(segment, selected, context.enclosing)
+      for (const violation of structuralPlacement(segment, admitted, context.enclosing)
         .violations) {
         const anchor = violation.element ?? segment;
         const token = this.#draft(context.entry.ordinal, violation.code, {
@@ -843,9 +850,9 @@ class ValidationState {
         context,
         draft,
         {
-          props: selected.props,
+          props: admitted.props,
           captures: [],
-          forms: selected.forms,
+          forms: admitted.forms,
           // A construct renders through its regions, so there is no value for a
           // site to capture and no `as` for one to have forgotten.
           hasReturns: false,

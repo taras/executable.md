@@ -20,7 +20,10 @@ import { DEFAULT_INCLUDES, effectiveRegistry, selectComponent } from "./componen
 import { admitDeclaration, mergeRegistry } from "./components/registration.ts";
 import { declaredRegistry } from "./components/declared-registry.ts";
 import { admitExecutionDeclarations } from "./execution-declarations.ts";
-import type { ExecutionDeclaration } from "./execution-declarations.ts";
+import type {
+  ExecutionDeclaration,
+  ExecutionDeclarationCatalog,
+} from "./execution-declarations.ts";
 import { repositoryCandidateNames } from "./components/candidates.ts";
 import { PROTECTED_COMPONENT_NAMES } from "./components/protected.ts";
 import type { WorkflowImportAuthority } from "./components/bundle.ts";
@@ -259,7 +262,7 @@ export function* inspectComponent(options: InspectComponentOptions): Operation<C
       };
     }
     case "declared-structural":
-      return { kind: "declared-structural", ...declaredStructuralContract(selected) };
+      return { kind: "declared-structural", ...declaredStructuralContract(name, declared) };
     case "unresolved":
       return { kind: "unresolved", searched: selected.searched, registered: selected.registered };
     case "workflow":
@@ -409,19 +412,32 @@ export interface DeclaredStructuralContract {
   readonly context?: string;
 }
 
+/**
+ * The contract behind one declared-structural selection.
+ *
+ * Selection reports the name and where it came from; what the construct accepts
+ * is the admitted entry, read from the catalog this caller already holds. There
+ * is no second copy of the contract to keep in step, and no path from a
+ * selection to the handler.
+ */
 function declaredStructuralContract(
-  selected: Extract<ComponentSelection, { kind: "declared-structural" }>,
+  name: string,
+  declared: ExecutionDeclarationCatalog | undefined,
 ): DeclaredStructuralContract {
+  const admitted = declared?.structural(name);
+  if (admitted === undefined) {
+    throw new Error(`${name} resolved as declared structural syntax nothing admitted`);
+  }
   return {
-    origin: { kind: "declared-structural", origin: selected.origin },
-    forms: selected.forms,
-    props: selected.props,
-    parent: selected.parent,
-    syntax: selected.syntax,
-    description: selected.description,
+    origin: { kind: "declared-structural", origin: admitted.origin },
+    forms: admitted.forms,
+    props: admitted.props,
+    parent: admitted.parent,
+    syntax: admitted.syntax,
+    description: admitted.description,
     // `null` is the construct stating that its content means nothing, which
     // contributes no field — exactly as the engine's own table states it.
-    ...(selected.context === null ? {} : { context: selected.context }),
+    ...(admitted.context === null ? {} : { context: admitted.context }),
   };
 }
 
@@ -601,7 +617,11 @@ export function* inspectSyntax(options: InspectSyntaxOptions): Operation<SyntaxS
     // for syntax. Names were walked in code-point order above, so the two kinds
     // of entry interleave by name rather than grouping by who declared them.
     if (selected.kind === "declared-structural") {
-      structural.push({ kind: "structural", name, ...declaredStructuralContract(selected) });
+      structural.push({
+        kind: "structural",
+        name,
+        ...declaredStructuralContract(name, declarations),
+      });
       continue;
     }
     const entry = yield* componentEntry(name, selected);

@@ -165,21 +165,11 @@ export function* selectComponent(
 
   // Beside declared Markdown, in the same host tier: one execution declares a
   // name once across both arms, so this tier never chooses between them. What
-  // comes back is the declaration's own facts — the handler that expands the
-  // construct stays in the catalog the execution holds.
+  // comes back is the name and where it came from; the contract and the handler
+  // stay on the admitted entry, which whoever needs them already holds.
   const structural = options.declared?.structural(name);
   if (structural !== undefined) {
-    return {
-      kind: "declared-structural",
-      origin: structural.origin,
-      forms: structural.forms,
-      props: structural.props,
-      syntax: structural.syntax,
-      description: structural.description,
-      context: structural.context,
-      parent: structural.parent,
-      children: structural.children,
-    };
+    return { kind: "declared-structural", origin: structural.origin };
   }
 
   // A name some declaration keeps to itself resolves to nothing here. Selection

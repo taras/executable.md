@@ -53,6 +53,8 @@ import type {
   StructuralDeclaration,
 } from "../host.ts";
 import { admitDeclaredMarkdown } from "../src/components/declared-markdown.ts";
+import { admitExecutionDeclarations } from "../src/execution-declarations.ts";
+import { selectComponent } from "../src/components/select.ts";
 import { inspectComponent, inspectSyntax } from "../src/inspect.ts";
 import { validateDocument, validateDocumentStructure } from "../src/document-validation.ts";
 import { registerComponents } from "../src/components/registration.ts";
@@ -63,7 +65,7 @@ import { useTerminalOutput } from "../src/output/terminal.ts";
 import { createExactSource, isExactSource } from "../src/output/exact-source.ts";
 import type { ComponentInvocation } from "../src/invocation-identity.ts";
 import type { ImportedDefinition } from "../src/components/import-authority.ts";
-import type { PropsSchema, Segment } from "../src/types.ts";
+import type { InvocationForm, PropsSchema, Segment } from "../src/types.ts";
 
 const ROOT_PATH = "documents/root.md";
 const ORIGIN = "@executablemd/test/Policy.md";
@@ -2109,5 +2111,184 @@ describe("Tier ED — one catalog, two arms", () => {
     expect(
       String(yield* run("<If condition={true}>branch taken</If>\n", [], [], new InMemoryStream())),
     ).toContain("branch taken");
+  });
+});
+
+describe("Tier ED — the catalog answers for the set", () => {
+  it("ED1: capture refuses an unknown kind before it reads anything else", function* () {
+    // Every other member throws if it is read, and the installation records
+    // whether it ever ran: capture decides about the discriminant before either
+    // could happen.
+    const hostile = { ...declared(POLICY_SOURCE) };
+    Reflect.set(hostile, "kind", "sparkle");
+    for (const member of ["name", "origin", "source", "digest", "forms", "privates"]) {
+      Object.defineProperty(hostile, member, {
+        configurable: true,
+        enumerable: true,
+        get() {
+          throw new Error(`capture read "${member}" before deciding about the kind`);
+        },
+      });
+    }
+
+    const installed: string[] = [];
+    const stream = new InMemoryStream();
+    const error = yield* refusedBy(
+      scoped(function* () {
+        return yield* collect(
+          yield* executeInstalled(
+            { ...retainedSource(ROOT_PATH, "The root ran.\n"), stream, includes: [] },
+            [
+              { declarations: [hostile] },
+              {
+                *install() {
+                  installed.push("install");
+                  yield* Component.operations.registry;
+                },
+              },
+            ],
+          ),
+        );
+      }),
+    );
+
+    expect(error.name).toBe("DeclaredMarkdownError");
+    expect(error.message).toContain("without saying it is exact Markdown");
+    expect(installed).toEqual([]);
+    expect((yield* stream.readAll()).filter((event) => event.type === "yield").length).toBe(0);
+
+    // And it is the same sentence the Markdown admission gives, so the two
+    // spellings of this refusal cannot drift apart.
+    const admission = yield* refusedBy(admitDeclaredMarkdown([hostile], new Map()));
+    expect(error.message).toBe(admission.message);
+  });
+
+  it("ED3: every catalog refusal is an ExecutionDeclarationError", function* () {
+    const malformed: readonly (readonly [string, StructuralDeclaration])[] = [
+      ["no forms", { ...deck(), forms: undefined as unknown as readonly InvocationForm[] }],
+      ["an empty origin", { ...deck(), origin: "" }],
+      ["no syntax examples", { ...deck(), syntax: [] }],
+      ["an empty description", { ...deck(), description: "" }],
+      ["a context that is neither prose nor null", { ...deck(), context: "" }],
+      // The schema rule stays registration's; only the error class is this
+      // catalog's, so a host gets one answer to "is this set installable".
+      ["a schema that will not compile", { ...deck(), props: { type: "not-a-type" } }],
+    ];
+
+    for (const [described, construct] of malformed) {
+      const error = yield* refusedBy(
+        scoped(function* () {
+          return yield* collect(
+            yield* executeInstalled(
+              { ...retainedSource(ROOT_PATH, "x\n"), stream: new InMemoryStream(), includes: [] },
+              [declaring([construct, panel()])],
+            ),
+          );
+        }),
+      );
+      expect(`${described}: ${error.name}`).toBe(`${described}: ExecutionDeclarationError`);
+    }
+
+    // The cross-arm and relationship refusals answer the same way.
+    const crossArm: readonly (readonly [string, readonly ExecutionInstallation[]])[] = [
+      [
+        "a name in both arms",
+        [declaring([deck(), panel(), declared(POLICY_SOURCE, { name: "Deck" })])],
+      ],
+      ["an orphan region", [declaring([panel()])]],
+      ["a construct with no region", [declaring([deck()])]],
+      ["declarations with no handler", [{ declarations: [deck(), panel()] }]],
+    ];
+
+    for (const [described, installations] of crossArm) {
+      const error = yield* refusedBy(
+        scoped(function* () {
+          return yield* collect(
+            yield* executeInstalled(
+              { ...retainedSource(ROOT_PATH, "x\n"), stream: new InMemoryStream(), includes: [] },
+              installations,
+            ),
+          );
+        }),
+      );
+      expect(`${described}: ${error.name}`).toBe(`${described}: ExecutionDeclarationError`);
+    }
+  });
+
+  it("ED5: a construct claims its name ahead of a bundle member and a default", function* () {
+    const declarations = [deck(), panel()];
+
+    // A registered default under the same name loses to the declaration, and
+    // answers for it when nothing is declared.
+    const registering: ExecutionInstallation = {
+      *install() {
+        yield* registerComponents([
+          {
+            name: "Deck",
+            origin: "test://default",
+            props: NO_PROPS,
+            // deno-lint-ignore require-yield
+            *fn() {
+              return "the registered default ran.";
+            },
+          },
+        ]);
+      },
+    };
+
+    const claimed = yield* scoped(function* () {
+      yield* registerComponents([
+        {
+          name: "Deck",
+          origin: "test://default",
+          props: NO_PROPS,
+          // deno-lint-ignore require-yield
+          *fn() {
+            return "the registered default ran.";
+          },
+        },
+      ]);
+      return yield* inspectComponent({ name: "Deck", includes: [], declarations });
+    });
+    expect(claimed.kind).toBe("declared-structural");
+
+    // The control: the same registration, with nothing declared, is what
+    // answers — so the declaration is what moved the decision.
+    const unclaimed = yield* scoped(function* () {
+      yield* registerComponents([
+        {
+          name: "Deck",
+          origin: "test://default",
+          props: NO_PROPS,
+          // deno-lint-ignore require-yield
+          *fn() {
+            return "the registered default ran.";
+          },
+        },
+      ]);
+      return yield* inspectComponent({ name: "Deck", includes: [] });
+    });
+    expect(unclaimed.kind).toBe("registered");
+
+    // And a declared construct is not reached through component import at all,
+    // so the losing default never runs.
+    const message = yield* refusal(run("<Deck />\n", [], [declaring(declarations), registering]));
+    expect(message).toContain("never resolves a component");
+    expect(message).not.toContain("the registered default ran.");
+  });
+
+  it("ED7: the declared-structural selection carries a name and an origin, and nothing else", function* () {
+    const catalog = yield* admitExecutionDeclarations([deck(), panel()], new Map());
+    if (catalog === undefined) {
+      throw new Error("expected a catalog");
+    }
+
+    const selected = yield* selectComponent("Deck", { includes: [], declared: catalog });
+
+    expect(selected).toEqual({ kind: "declared-structural", origin: DECK_ORIGIN });
+    // Spelled as the whole object above, and again as the key set, so a field
+    // added to the selection — a schema, the forms, the regions, a handler —
+    // fails this row rather than passing unnoticed.
+    expect(Object.keys(selected).sort()).toEqual(["kind", "origin"]);
   });
 });
