@@ -183,10 +183,12 @@ export type ComponentInfo =
   /**
    * Structural syntax a trusted host declares to this environment.
    *
-   * Its own `kind` rather than the engine's: a caller asking what `Deck` is
-   * needs to learn that the installation which declared it is what expands it,
-   * and that without that installation the name is not syntax at all. Describing
-   * it reaches no handler — there is none here to reach.
+   * The engine's `kind`, because it is the same thing: syntax. What tells the
+   * two apart is what each carries — the engine's shape names the `construct`
+   * from its own table, and this one names the `origin` of the installation
+   * that declared it, which is what a caller asking about `Deck` needs, since
+   * without that installation the name is not syntax at all. Describing it
+   * reaches no handler — there is none here to reach.
    */
   | ({ kind: "structural" } & InstalledStructuralContract)
   | { kind: "function"; origin: ComponentOrigin }
@@ -714,7 +716,7 @@ function* componentEntry(
 
   if (selected.kind === "registered") {
     const { definition, origin } = selected;
-    // Neither structural kind describes a component, so neither can be a
+    // Neither structural shape describes a component, so neither can be a
     // component entry's origin — a registration reporting one describes
     // something this category has no shape for.
     if (origin.kind === "structural") {

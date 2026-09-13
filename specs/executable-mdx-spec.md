@@ -3504,9 +3504,9 @@ A declared structural construct and each of its regions contribute one entry to
 the **structural** category, sorted by code point beside the constructs the
 engine owns, reporting the declared origin under the same `structural` kind
 and carrying the declared forms, props schema, placement, syntax examples,
-description and content sentence. The two structural kinds are a closed union:
-an engine entry keeps exactly the fields it always had, and neither kind can
-inhabit a component entry. The symbols stay **version 2** — the categories,
+description and content sentence. The two structural entry shapes are a closed
+union: an engine entry keeps exactly the fields it always had, and neither shape
+can inhabit a component entry. The symbols stay **version 2** — the categories,
 their order and every existing member are unchanged, and describing a declared
 construct reaches no handler.
 
