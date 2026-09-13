@@ -258,7 +258,7 @@ export type {
   ExpansionChunk,
   ExpansionRegion,
   ExpansionRequest,
-  StructuralDeclaration,
+  Structural,
 } from "./src/execution-declarations.ts";
 
 /**

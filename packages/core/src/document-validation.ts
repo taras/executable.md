@@ -427,7 +427,7 @@ function* validate(
 class ValidationState {
   readonly #includes: readonly string[];
   readonly #registry: ComponentRegistry;
-  readonly #declarations: ExecutionDeclarationCatalog | undefined;
+  readonly #declarations: ExecutionDeclarationCatalog;
   /** Whether the root's props are checked against the values a run would pass. */
   readonly #rootValues: boolean;
   readonly #diagnostics: DraftDiagnostic[] = [];
@@ -472,7 +472,7 @@ class ValidationState {
   constructor(
     includes: readonly string[],
     registry: ComponentRegistry,
-    declarations: ExecutionDeclarationCatalog | undefined,
+    declarations: ExecutionDeclarationCatalog,
     rootValues: boolean,
   ) {
     this.#includes = includes;
@@ -789,10 +789,13 @@ class ValidationState {
     const selected = yield* selectComponent(segment.name, {
       includes: this.#includes,
       registry: this.#registry,
-      ...(this.#declarations === undefined ? {} : { declared: this.#declarations }),
+      declared: this.#declarations,
     });
 
-    if (selected.kind === "structural") {
+    // The engine's own constructs only. An installation's is checked against
+    // the contract it declared, below, and never through the hard-coded rules
+    // that belong to names this table owns.
+    if (selected.kind === "structural" && "construct" in selected) {
       draft.origin = { kind: "structural", construct: selected.construct };
       for (const violation of this.#structuralViolations(segment, context)) {
         // A violation names the construct it is about and, when the check
@@ -819,12 +822,12 @@ class ValidationState {
       return;
     }
 
-    if (selected.kind === "declared-structural") {
+    if (selected.kind === "structural") {
       draft.origin = { kind: "declared-structural", origin: selected.origin };
       // The contract is the admitted entry, read from the catalog this walk
       // already holds: selection reports which name was chosen, not what the
       // construct accepts.
-      const admitted = this.#declarations?.structural(segment.name);
+      const admitted = this.#declarations.structural(segment.name);
       if (admitted === undefined) {
         throw new Error(`${segment.name} resolved as declared structural syntax nothing admitted`);
       }

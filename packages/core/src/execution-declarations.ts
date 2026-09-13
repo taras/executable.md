@@ -101,7 +101,7 @@ export class ExecutionDeclarationError extends Error {
  * decides it: `null` states that the construct reads no content, so a missing
  * sentence is a fact about the construct instead of an unfinished entry.
  */
-export interface StructuralDeclaration {
+export interface Structural {
   readonly kind: "structural";
   /** The name a document writes. */
   readonly name: string;
@@ -120,7 +120,7 @@ export interface StructuralDeclaration {
 }
 
 /** Everything one installation declares, under one discriminant. */
-export type ExecutionDeclaration = MarkdownComponent | StructuralDeclaration;
+export type ExecutionDeclaration = MarkdownComponent | Structural;
 
 /** One piece of a region's rendered output. */
 export interface ExpansionChunk {
@@ -208,6 +208,11 @@ export interface AdmittedStructural {
  * Markdown answers exactly as it always has — and adds the structural names
  * beside it. Selection, inspection and validation read this one object, which
  * is what stops them disagreeing about which names a host declared.
+ *
+ * Every admission produces one, including an admission of nothing: a host that
+ * declares none has an environment whose declared names are none, which is an
+ * answer rather than an absence, and it spares every reader an optional it
+ * would otherwise have to unwrap.
  */
 export class ExecutionDeclarationCatalog {
   readonly #markdown: DeclaredMarkdownCatalog | undefined;
@@ -280,13 +285,7 @@ const UNKNOWN_KIND =
   "declares exact Markdown with `Markdown({…})`, and a declaration that states something " +
   "else, or nothing, is never read as Markdown.";
 
-/**
- * Refuse a discriminant this version does not know.
- *
- * Takes the value already read rather than the declaration, because the one
- * caller that matters reads `kind` exactly once and must not read it again to
- * decide what to say about it.
- */
+/** Refuse a discriminant this version does not know. */
 export function refuseUnknownKind(): DeclaredMarkdownError {
   return new DeclaredMarkdownError(UNKNOWN_KIND);
 }
@@ -297,17 +296,19 @@ export function isKnownKind(kind: unknown): kind is ExecutionDeclaration["kind"]
 }
 
 /**
- * Run one declaration's shared admission, and answer for it as this catalog.
+ * Answer for one declaration's shared admission as this catalog.
  *
  * The rule stays where it is — a name, a schema and a forms array are admitted
  * on exactly the terms every registration is — and only the *kind* of failure
  * is restated: a host assembling a declaration set gets one error class for
  * "this set is not installable", with the underlying sentence intact and the
- * original failure kept as its cause.
+ * original failure kept as its cause. The admission is an operation rather than
+ * a function returning one, so it stays as lazy and as cancellable here as it
+ * is anywhere else.
  */
-function* admitting(name: string, admission: () => Operation<void>): Operation<void> {
+function* admitting(name: string, admission: Operation<void>): Operation<void> {
   try {
-    yield* admission();
+    yield* admission;
   } catch (error) {
     if (error instanceof ExecutionDeclarationError) {
       throw error;
@@ -332,7 +333,7 @@ function* admitting(name: string, admission: () => Operation<void>): Operation<v
 export function* admitExecutionDeclarations(
   declarations: readonly ExecutionDeclaration[],
   registry: ComponentRegistry,
-): Operation<ExecutionDeclarationCatalog | undefined> {
+): Operation<ExecutionDeclarationCatalog> {
   return yield* admit([{ declarations }], registry, false);
 }
 
@@ -348,7 +349,7 @@ export function* admitExecutionDeclarations(
 export function* admitInstalledDeclarations(
   installations: readonly RetainedInstallation[],
   registry: ComponentRegistry,
-): Operation<ExecutionDeclarationCatalog | undefined> {
+): Operation<ExecutionDeclarationCatalog> {
   return yield* admit(installations, registry, true);
 }
 
@@ -364,7 +365,7 @@ function* admit(
   registry: ComponentRegistry,
   /** Whether the caller is an execution, and so has handlers to be held to. */
   installed: boolean,
-): Operation<ExecutionDeclarationCatalog | undefined> {
+): Operation<ExecutionDeclarationCatalog> {
   const structural: OwnedStructural[] = [];
   const markdown: MarkdownComponent[] = [];
 
@@ -374,16 +375,11 @@ function* admit(
         structural.push({ declaration, installation });
         continue;
       }
-      // Everything else, including a value that states no kind this version
-      // knows. The Markdown admission below reads the discriminant before any
-      // other member, so a value this catalog cannot place is refused there —
-      // in capture order, and in the words that refusal already had.
+      // A value that states no kind this version knows lands here too: the
+      // Markdown admission reads the discriminant before any other member, so
+      // it is refused there, in capture order and in the words it already had.
       markdown.push(declaration);
     }
-  }
-
-  if (markdown.length === 0 && structural.length === 0) {
-    return undefined;
   }
 
   const admittedMarkdown = yield* admitDeclaredMarkdown(markdown, registry);
@@ -420,7 +416,7 @@ function* admit(
 
 /** One structural declaration and the installation that contributed it. */
 interface OwnedStructural {
-  readonly declaration: StructuralDeclaration;
+  readonly declaration: Structural;
   readonly installation: number;
 }
 
@@ -545,16 +541,17 @@ function* admitStructural(
     // refused for exactly the reason it always was — but a host assembling a
     // declaration set is owed one answer to "is this set installable", and a
     // registration error escaping from here would be a second one.
-    yield* admitting(name, function* () {
-      yield* admitDeclaration({
+    yield* admitting(
+      name,
+      admitDeclaration({
         name,
         origin,
         props,
         forms,
         description,
         ...(context === null ? {} : { context }),
-      });
-    });
+      }),
+    );
 
     claimed.add(name);
   }
@@ -651,12 +648,9 @@ export interface StructuralPlacement {
  * alone.
  *
  * Both non-executing validation and canonical expansion read this, so a
- * placement one of them accepts is a placement the other accepts. It evaluates
- * nothing: which regions an occurrence holds, and where a region was written,
- * are facts about the authored text.
- *
- * The construct's own name is the element's, because selection already decided
- * that this element is this declaration.
+ * placement one of them accepts is a placement the other accepts. The
+ * construct's own name is the element's: selection already decided that this
+ * element is this declaration.
  */
 export function structuralPlacement(
   segment: ComponentElement,

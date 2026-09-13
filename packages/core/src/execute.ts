@@ -462,7 +462,7 @@ interface ImportInputs {
   readonly bundle: WorkflowImportAuthority | undefined;
   readonly declared: DeclaredImports | undefined;
   /** Everything this execution declares, as selection reads it. */
-  readonly catalog: ExecutionDeclarationCatalog | undefined;
+  readonly catalog: ExecutionDeclarationCatalog;
   readonly guarded: ReadonlyMap<string, FunctionComponentDefinition>;
 }
 
@@ -514,7 +514,7 @@ function* selectImport(
     includes: searchPaths,
     registry,
     ...(bundle === undefined ? {} : { workflow: bundle }),
-    ...(catalog === undefined ? {} : { declared: catalog }),
+    declared: catalog,
   });
 
   switch (selected.kind) {
@@ -559,15 +559,13 @@ function* selectImport(
         reserved: selected.origin.kind === "registered" && selected.origin.reserved,
       };
     case "structural":
+      // Both arms end here the same way: syntax is expanded where it is
+      // written rather than imported. Which one it is decides only who owns it.
       throw new Error(
-        `${name} is structural syntax the engine owns, so it never resolves a component`,
-      );
-    case "declared-structural":
-      // Structural syntax an installation declared is expanded by the
-      // installation that declared it, so it never reaches component import.
-      throw new Error(
-        `${name} is structural syntax this execution's host declared, so it never resolves a ` +
-          "component",
+        "construct" in selected
+          ? `${name} is structural syntax the engine owns, so it never resolves a component`
+          : `${name} is structural syntax this execution's host declared, so it never resolves ` +
+              "a component",
       );
     case "unresolved":
       throw new Error(unresolvedMessage(name, selected.searched));
@@ -2548,8 +2546,8 @@ function* executeDocument(
       // a host already reserved, or that is half of a structural pair describes
       // a document that cannot mean what it says.
       const catalog = yield* admitInstalledDeclarations(installed, startingRegistry);
-      const admittedDeclarations = catalog?.markdown() ?? [];
-      const declaredMarkdown = catalog?.markdownCatalog();
+      const admittedDeclarations = catalog.markdown();
+      const declaredMarkdown = catalog.markdownCatalog();
 
       // What this execution gives a durable identity to, from what installation
       // declared before anything could observe or replace it. Each factory is

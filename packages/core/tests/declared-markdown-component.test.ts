@@ -50,7 +50,7 @@ import type {
   IdentityComponent,
   MarkdownComponent,
   MarkdownComponentInput,
-  StructuralDeclaration,
+  Structural,
 } from "../host.ts";
 import { admitDeclaredMarkdown } from "../src/components/declared-markdown.ts";
 import { admitExecutionDeclarations } from "../src/execution-declarations.ts";
@@ -1814,7 +1814,7 @@ const PANEL_PROPS: PropsSchema = {
 };
 
 /** The construct this tier declares, with one region, `<Panel>`. */
-function deck(overrides: Partial<StructuralDeclaration> = {}): StructuralDeclaration {
+function deck(overrides: Partial<Structural> = {}): Structural {
   return {
     kind: "structural",
     name: "Deck",
@@ -1830,7 +1830,7 @@ function deck(overrides: Partial<StructuralDeclaration> = {}): StructuralDeclara
 }
 
 /** One region of that construct. */
-function panel(overrides: Partial<StructuralDeclaration> = {}): StructuralDeclaration {
+function panel(overrides: Partial<Structural> = {}): Structural {
   return {
     kind: "structural",
     name: "Panel",
@@ -1852,7 +1852,7 @@ function panel(overrides: Partial<StructuralDeclaration> = {}): StructuralDeclar
  * malformed-discriminant fixtures above are: what a row is about is the value a
  * host actually handed over, not a shape this test described instead.
  */
-function without(declaration: StructuralDeclaration, member: string): StructuralDeclaration {
+function without(declaration: Structural, member: string): Structural {
   const copy = { ...declaration };
   Reflect.deleteProperty(copy, member);
   return copy;
@@ -2178,7 +2178,7 @@ describe("Tier ED — the catalog answers for the set", () => {
   });
 
   it("ED3: every catalog refusal is an ExecutionDeclarationError", function* () {
-    const malformed: readonly (readonly [string, StructuralDeclaration])[] = [
+    const malformed: readonly (readonly [string, Structural])[] = [
       ["no forms", without(deck(), "forms")],
       ["no parent", without(deck(), "parent")],
       ["an empty origin", { ...deck(), origin: "" }],
@@ -2294,9 +2294,6 @@ describe("Tier ED — the catalog answers for the set", () => {
 
   it("ED5: a construct claims its name ahead of a workflow bundle member", function* () {
     const catalog = yield* admitExecutionDeclarations([deck(), panel()], new Map());
-    if (catalog === undefined) {
-      throw new Error("expected a catalog");
-    }
     const bundle = installedBundle(
       [
         {
@@ -2318,7 +2315,7 @@ describe("Tier ED — the catalog answers for the set", () => {
       declared: catalog,
       workflow: bundle,
     });
-    expect(claimed.kind).toBe("declared-structural");
+    expect(claimed).toEqual({ kind: "structural", origin: DECK_ORIGIN });
 
     // The control: the same bundle, with nothing declared, is what answers — so
     // the declaration is what moved the decision, and the bundle member is a
@@ -2332,18 +2329,51 @@ describe("Tier ED — the catalog answers for the set", () => {
     expect(bundled.content).toContain("the bundled component ran.");
   });
 
-  it("ED7: the declared-structural selection carries a name and an origin, and nothing else", function* () {
+  it("ED7: both structural selection arms are `structural`, and reach their own consumers", function* () {
     const catalog = yield* admitExecutionDeclarations([deck(), panel()], new Map());
-    if (catalog === undefined) {
-      throw new Error("expected a catalog");
+
+    const declared = yield* selectComponent("Deck", { includes: [], declared: catalog });
+    const engine = yield* selectComponent("If", { includes: [], declared: catalog });
+
+    // One kind, two arms: what tells them apart is what each carries.
+    expect(declared).toEqual({ kind: "structural", origin: DECK_ORIGIN });
+    expect(engine).toEqual({ kind: "structural", construct: "If" });
+    // Spelled as whole objects above, and again as key sets, so a field added
+    // to either — a schema, the forms, the regions, a handler — fails this row
+    // rather than passing unnoticed.
+    expect(Object.keys(declared).sort()).toEqual(["kind", "origin"]);
+    expect(Object.keys(engine).sort()).toEqual(["construct", "kind"]);
+
+    // And each reaches the consumer that owns it: inspection reports the
+    // engine's construct as the engine's, and the installation's under its own
+    // provenance with the contract the host declared.
+    const engineInfo = yield* inspectComponent({ name: "If", includes: [] });
+    expect(engineInfo.kind).toBe("structural");
+    const declaredInfo = yield* inspectComponent({
+      name: "Deck",
+      includes: [],
+      declarations: [deck(), panel()],
+    });
+    if (declaredInfo.kind !== "declared-structural") {
+      throw new Error(`expected installed structural syntax, got ${declaredInfo.kind}`);
     }
+    expect(declaredInfo.origin).toEqual({ kind: "declared-structural", origin: DECK_ORIGIN });
+  });
 
-    const selected = yield* selectComponent("Deck", { includes: [], declared: catalog });
+  it("ED7: an execution that declares nothing still has a catalog, and it changes nothing", function* () {
+    const empty = yield* admitExecutionDeclarations([], new Map());
 
-    expect(selected).toEqual({ kind: "declared-structural", origin: DECK_ORIGIN });
-    // Spelled as the whole object above, and again as the key set, so a field
-    // added to the selection — a schema, the forms, the regions, a handler —
-    // fails this row rather than passing unnoticed.
-    expect(Object.keys(selected).sort()).toEqual(["kind", "origin"]);
+    expect(empty.names()).toEqual([]);
+    expect(empty.structural("Deck")).toBeUndefined();
+    expect(empty.component("Policy")).toBeUndefined();
+    expect(empty.markdown()).toEqual([]);
+    expect(empty.isPrivate("Secret")).toBe(false);
+
+    // Every selection answers exactly as it does with no catalog at all.
+    for (const name of ["If", "Deck", "Glob"]) {
+      expect(yield* selectComponent(name, { includes: [], declared: empty })).toEqual(
+        yield* selectComponent(name, { includes: [] }),
+      );
+    }
   });
 });

@@ -221,16 +221,22 @@ export function* inspectComponent(options: InspectComponentOptions): Operation<C
   const selected = yield* selectComponent(name, {
     includes,
     registry,
-    ...(declared === undefined ? {} : { declared }),
+    declared,
   });
 
   switch (selected.kind) {
     case "structural":
-      return {
-        kind: "structural",
-        construct: selected.construct,
-        origin: { kind: "structural", construct: selected.construct },
-      };
+      // The engine's own arm names the construct it came from; an installation's
+      // names the origin that declared it. Provenance is what a caller asking
+      // "what is this name" needs, so the two answer under different `kind`s
+      // even though one selection arm chose both.
+      return "construct" in selected
+        ? {
+            kind: "structural",
+            construct: selected.construct,
+            origin: { kind: "structural", construct: selected.construct },
+          }
+        : { kind: "declared-structural", ...declaredStructuralContract(name, declared) };
     case "protected":
       return {
         kind: "protected",
@@ -261,8 +267,7 @@ export function* inspectComponent(options: InspectComponentOptions): Operation<C
         ...describedContract(entry),
       };
     }
-    case "declared-structural":
-      return { kind: "declared-structural", ...declaredStructuralContract(name, declared) };
+
     case "unresolved":
       return { kind: "unresolved", searched: selected.searched, registered: selected.registered };
     case "workflow":
@@ -413,16 +418,15 @@ export interface DeclaredStructuralContract {
 }
 
 /**
- * The contract behind one declared-structural selection.
+ * The contract behind one declared-structural selection, read from the catalog
+ * this caller already holds.
  *
- * Selection reports the name and where it came from; what the construct accepts
- * is the admitted entry, read from the catalog this caller already holds. There
- * is no second copy of the contract to keep in step, and no path from a
- * selection to the handler.
+ * There is no second copy of it to keep in step, and no path from a selection
+ * to the handler.
  */
 function declaredStructuralContract(
   name: string,
-  declared: ExecutionDeclarationCatalog | undefined,
+  declared: ExecutionDeclarationCatalog,
 ): DeclaredStructuralContract {
   const admitted = declared?.structural(name);
   if (admitted === undefined) {
@@ -580,7 +584,7 @@ export function* inspectSyntax(options: InspectSyntaxOptions): Operation<SyntaxS
   const declarations = yield* admitExecutionDeclarations(options.declarations ?? [], registry);
 
   const names = yield* repositoryCandidateNames(includes);
-  for (const name of declarations?.names() ?? []) {
+  for (const name of declarations.names()) {
     names.add(name);
   }
   for (const declaration of STRUCTURAL_DECLARATIONS) {
@@ -609,19 +613,14 @@ export function* inspectSyntax(options: InspectSyntaxOptions): Operation<SyntaxS
       ...(bundled === undefined ? {} : { workflow: bundled }),
       ...(declarations === undefined ? {} : { declared: declarations }),
     });
+    // One category for both, interleaved by name: the loop walks names in
+    // code-point order, so entries are not grouped by who declared them.
     if (selected.kind === "structural") {
-      structural.push(structuralEntry(selected.construct));
-      continue;
-    }
-    // Beside the engine's own constructs, in the one category a reader looks in
-    // for syntax. Names were walked in code-point order above, so the two kinds
-    // of entry interleave by name rather than grouping by who declared them.
-    if (selected.kind === "declared-structural") {
-      structural.push({
-        kind: "structural",
-        name,
-        ...declaredStructuralContract(name, declarations),
-      });
+      structural.push(
+        "construct" in selected
+          ? structuralEntry(selected.construct)
+          : { kind: "structural", name, ...declaredStructuralContract(name, declarations) },
+      );
       continue;
     }
     const entry = yield* componentEntry(name, selected);

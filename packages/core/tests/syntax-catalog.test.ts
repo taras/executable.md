@@ -44,7 +44,7 @@ import type {
   StructuralSyntaxEntry,
   SyntaxSymbols,
 } from "../mod.ts";
-import type { ExecutionDeclaration, IdentityComponent, StructuralDeclaration } from "../host.ts";
+import type { ExecutionDeclaration, IdentityComponent, Structural } from "../host.ts";
 import type { InvocationForm } from "../mod.ts";
 
 /**
@@ -1420,7 +1420,7 @@ function* raised(operation: Operation<unknown>): Operation<Error> {
 
 const DECK_ORIGIN = "@executablemd/test/deck";
 
-const DECK: StructuralDeclaration = {
+const DECK: Structural = {
   kind: "structural",
   name: "Deck",
   origin: DECK_ORIGIN,
@@ -1432,7 +1432,7 @@ const DECK: StructuralDeclaration = {
   parent: null,
 };
 
-const PANEL: StructuralDeclaration = {
+const PANEL: Structural = {
   kind: "structural",
   name: "Panel",
   origin: DECK_ORIGIN,

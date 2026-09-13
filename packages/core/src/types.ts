@@ -414,18 +414,22 @@ export type ComponentSelection =
       exact: boolean;
     }
   /**
-   * Structural syntax this environment declares. It selects no definition and
-   * reaches no component import: the installation that declared the construct
-   * expands it.
+   * Structural syntax this environment declares.
    *
-   * The name and where it came from, and nothing else. What the construct
-   * accepts — its forms, its schema, where its regions sit — is the admitted
-   * contract, and whoever needs it already holds the catalog that has it. A
-   * selection carrying the contract would be a second copy of it, and one
-   * carrying the handler would make *what may run* a selection's answer rather
-   * than the execution's.
+   * `structural` like the engine's own, because that is what it is: syntax
+   * rather than a component, selecting no definition and reaching no component
+   * import. Which one it is shows in what the arm carries — the engine names a
+   * `construct` from its own table, and this names the `origin` that declared
+   * it — so a reader that must tell them apart asks the question that matters
+   * rather than reading a second tag.
+   *
+   * The origin and nothing else. What the construct accepts — its forms, its
+   * schema, where its regions sit — is the admitted contract, and whoever needs
+   * it already holds the catalog that has it. A selection carrying the contract
+   * would be a second copy of it, and one carrying the handler would make *what
+   * may run* a selection's answer rather than the execution's.
    */
-  | { kind: "declared-structural"; origin: string }
+  | { kind: "structural"; origin: string }
   | { kind: "unresolved"; searched: string[]; registered: readonly ComponentOrigin[] };
 
 /** A registered implementation and the origin that named it. */

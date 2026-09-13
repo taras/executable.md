@@ -3282,7 +3282,7 @@ written directly inside it. It crosses on the same `ExecutionInstallation`, in
 the same `declarations` list, on the same terms.
 
 ```typescript
-interface StructuralDeclaration {
+interface Structural {
   readonly kind: "structural";
   readonly name: string;
   readonly origin: string;
@@ -3294,7 +3294,7 @@ interface StructuralDeclaration {
   readonly parent: string | null;
 }
 
-type ExecutionDeclaration = MarkdownComponent | StructuralDeclaration;
+type ExecutionDeclaration = MarkdownComponent | Structural;
 ```
 
 `forms` and `props` are the executable contract an occurrence is held to.

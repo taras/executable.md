@@ -16,7 +16,7 @@
  * itself.
  *
  * Named for the table it belongs to, because an installation declares
- * structural syntax of its own: `StructuralDeclaration` on the host boundary is
+ * structural syntax of its own: `Structural` on the host boundary is
  * that contract, and this is the engine's own entry, which no host contributes
  * to.
  *

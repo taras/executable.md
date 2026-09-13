@@ -47,7 +47,7 @@ import type {
   ValidateDocumentOptions,
   ValidateDocumentSettings,
 } from "../mod.ts";
-import type { IdentityComponent, StructuralDeclaration } from "../host.ts";
+import type { IdentityComponent, Structural } from "../host.ts";
 
 /** A stubbed tree: working-directory-relative path to file content. */
 type Tree = Record<string, string>;
@@ -1454,7 +1454,7 @@ describe("Tier DV: the package boundary", () => {
 
 const DECK_ORIGIN = "@executablemd/test/deck";
 
-const DECK: StructuralDeclaration = {
+const DECK: Structural = {
   kind: "structural",
   name: "Deck",
   origin: DECK_ORIGIN,
@@ -1466,7 +1466,7 @@ const DECK: StructuralDeclaration = {
   parent: null,
 };
 
-const PANEL: StructuralDeclaration = {
+const PANEL: Structural = {
   kind: "structural",
   name: "Panel",
   origin: DECK_ORIGIN,
