@@ -525,9 +525,14 @@ function* admitStructural(
           "unsaid.",
       );
     }
-    if (parent !== null && !isComponentName(parent)) {
+    // `null` or a name, and read as neither before it is read as either: a
+    // declaration that states no parent at all has not said it is a construct,
+    // and asking the name grammar about a value that is not a string would fail
+    // as whatever that read threw rather than as the declaration it is.
+    if (parent !== null && (typeof parent !== "string" || !isComponentName(parent))) {
       throw refuse(
-        `the declared structural construct "${name}" names a parent that is not a component name.`,
+        `the declared structural construct "${name}" states no usable parent. A construct states ` +
+          "`null`, and a region states the name of the construct it belongs to.",
       );
     }
 

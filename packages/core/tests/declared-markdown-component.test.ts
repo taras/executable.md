@@ -55,6 +55,7 @@ import type {
 import { admitDeclaredMarkdown } from "../src/components/declared-markdown.ts";
 import { admitExecutionDeclarations } from "../src/execution-declarations.ts";
 import { selectComponent } from "../src/components/select.ts";
+import { installedBundle } from "../src/components/bundle.ts";
 import { inspectComponent, inspectSyntax } from "../src/inspect.ts";
 import { validateDocument, validateDocumentStructure } from "../src/document-validation.ts";
 import { registerComponents } from "../src/components/registration.ts";
@@ -65,7 +66,7 @@ import { useTerminalOutput } from "../src/output/terminal.ts";
 import { createExactSource, isExactSource } from "../src/output/exact-source.ts";
 import type { ComponentInvocation } from "../src/invocation-identity.ts";
 import type { ImportedDefinition } from "../src/components/import-authority.ts";
-import type { InvocationForm, PropsSchema, Segment } from "../src/types.ts";
+import type { PropsSchema, Segment } from "../src/types.ts";
 
 const ROOT_PATH = "documents/root.md";
 const ORIGIN = "@executablemd/test/Policy.md";
@@ -1844,6 +1845,19 @@ function panel(overrides: Partial<StructuralDeclaration> = {}): StructuralDeclar
   };
 }
 
+/**
+ * A declaration a host built without one of its members.
+ *
+ * Written by removing the member from a complete declaration, the way the
+ * malformed-discriminant fixtures above are: what a row is about is the value a
+ * host actually handed over, not a shape this test described instead.
+ */
+function without(declaration: StructuralDeclaration, member: string): StructuralDeclaration {
+  const copy = { ...declaration };
+  Reflect.deleteProperty(copy, member);
+  return copy;
+}
+
 /** A handler that records what it was asked to expand, and expands nothing. */
 function expanding(seen: string[] = []): (request: ExpansionRequest) => Operation<void> {
   // deno-lint-ignore require-yield
@@ -2165,7 +2179,8 @@ describe("Tier ED — the catalog answers for the set", () => {
 
   it("ED3: every catalog refusal is an ExecutionDeclarationError", function* () {
     const malformed: readonly (readonly [string, StructuralDeclaration])[] = [
-      ["no forms", { ...deck(), forms: undefined as unknown as readonly InvocationForm[] }],
+      ["no forms", without(deck(), "forms")],
+      ["no parent", without(deck(), "parent")],
       ["an empty origin", { ...deck(), origin: "" }],
       ["no syntax examples", { ...deck(), syntax: [] }],
       ["an empty description", { ...deck(), description: "" }],
@@ -2275,6 +2290,46 @@ describe("Tier ED — the catalog answers for the set", () => {
     const message = yield* refusal(run("<Deck />\n", [], [declaring(declarations), registering]));
     expect(message).toContain("never resolves a component");
     expect(message).not.toContain("the registered default ran.");
+  });
+
+  it("ED5: a construct claims its name ahead of a workflow bundle member", function* () {
+    const catalog = yield* admitExecutionDeclarations([deck(), panel()], new Map());
+    if (catalog === undefined) {
+      throw new Error("expected a catalog");
+    }
+    const bundle = installedBundle(
+      [
+        {
+          components: [
+            {
+              name: "Deck",
+              path: "components/Deck.md",
+              sourceHash: "0".repeat(40),
+              content: "the bundled component ran.\n",
+            },
+          ],
+        },
+      ],
+      new Map(),
+    );
+
+    const claimed = yield* selectComponent("Deck", {
+      includes: [],
+      declared: catalog,
+      workflow: bundle,
+    });
+    expect(claimed.kind).toBe("declared-structural");
+
+    // The control: the same bundle, with nothing declared, is what answers — so
+    // the declaration is what moved the decision, and the bundle member is a
+    // component rather than syntax wherever it does answer.
+    const bundled = yield* selectComponent("Deck", { includes: [], workflow: bundle });
+    expect(bundled.kind).toBe("workflow");
+    if (bundled.kind !== "workflow") {
+      throw new Error(`expected the bundle member, got ${bundled.kind}`);
+    }
+    expect(bundled.path).toBe("components/Deck.md");
+    expect(bundled.content).toContain("the bundled component ran.");
   });
 
   it("ED7: the declared-structural selection carries a name and an origin, and nothing else", function* () {
