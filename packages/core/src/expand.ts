@@ -4430,19 +4430,41 @@ function* expandInstalledStructural(
   }
 
   const form: InvocationForm = segment.selfClosing ? "self-closing" : "paired";
-  if (!declaration.forms.includes(form)) {
+  const refusedConstruct = refusedForm(declaration, segment);
+  if (refusedConstruct !== undefined) {
     owner.push(
       yield* raise({
         type: "error",
-        message: positioned(
-          `<${name} /> is not written in a form it accepts: it was invoked ${form}, and it ` +
-            `accepts ${declaration.forms.join(" and ")}.`,
-          segment,
-        ),
+        message: positioned(refusedConstruct, segment),
         source: name,
       }),
     );
     return;
+  }
+
+  // Each accepted region is a declaration in its own right, so the forms it
+  // accepts are its own. They are all checked here, beside the construct's and
+  // before any props: a form is a syntactic fact about what was written, and
+  // settling every one of them first means no expression a construct or region
+  // carries evaluates for an occurrence that was never going to be admitted.
+  const declared = new Map<ComponentElement, AdmittedStructural>();
+  for (const element of placement.regions) {
+    const region = environment.declarations.structural(element.name);
+    if (region === undefined) {
+      throw new Error(`${element.name} was accepted as a region nothing declares`);
+    }
+    declared.set(element, region);
+    const refusedRegion = refusedForm(region, element);
+    if (refusedRegion !== undefined) {
+      owner.push(
+        yield* raise({
+          type: "error",
+          message: positioned(refusedRegion, element),
+          source: element.name,
+        }),
+      );
+      return;
+    }
   }
 
   const requested: RegionRequest[] = [];
@@ -4454,16 +4476,21 @@ function* expandInstalledStructural(
   // Every region's props are evaluated and validated before the handler starts,
   // in the order they were authored: a construct is one occurrence, and half of
   // one having run is not a state a handler should be able to observe.
-  for (const [ordinal, element] of placement.regions.entries()) {
-    const region = environment.declarations.structural(element.name);
-    if (region === undefined) {
-      throw new Error(`${element.name} was accepted as a region nothing declares`);
-    }
+  for (const element of placement.regions) {
+    const region = declared.get(element)!;
     const props = yield* structuralProps(element, region, owner);
     if (props === undefined) {
       return;
     }
-    requested.push({ declaration: region, element, props, ordinal });
+    // Where it sits among the construct's own direct children, whitespace
+    // counted, so a region's identity is the site it was written at rather than
+    // its rank among the ones that happened to be accepted.
+    requested.push({
+      declaration: region,
+      element,
+      props,
+      ordinal: segment.children.indexOf(element),
+    });
   }
 
   const handler = declaration.expand;
@@ -4491,6 +4518,29 @@ function* expandInstalledStructural(
   yield* scoped(function* () {
     yield* handler(request);
   });
+}
+
+/**
+ * The refusal an element written in a form its own declaration does not accept
+ * earns, or `undefined` when the form is one it accepts.
+ *
+ * One rule for the construct and for each of its regions. A region is declared
+ * in its own right — its forms are its own, not its construct's — so a region
+ * declared self-closing cannot be admitted merely because it was written inside
+ * a construct that accepts paired.
+ */
+function refusedForm(
+  declaration: AdmittedStructural,
+  element: ComponentElement,
+): string | undefined {
+  const form: InvocationForm = element.selfClosing ? "self-closing" : "paired";
+  if (declaration.forms.includes(form)) {
+    return undefined;
+  }
+  return (
+    `<${declaration.name} /> is not written in a form it accepts: it was invoked ${form}, ` +
+    `and it accepts ${declaration.forms.join(" and ")}.`
+  );
 }
 
 /** One accepted region, with everything settled before the handler exists. */
@@ -4598,15 +4648,11 @@ function buildExpansionRequest(
     form,
     ...positionOf(segment),
     props,
-    regions: Object.freeze(regions.map((region) => buildExpansionRegion(region, segment, context))),
+    regions: Object.freeze(regions.map((region) => buildExpansionRegion(region, context))),
   });
 }
 
-function buildExpansionRegion(
-  region: RegionRequest,
-  parent: ComponentElement,
-  context: RegionContext,
-): ExpansionRegion {
+function buildExpansionRegion(region: RegionRequest, context: RegionContext): ExpansionRegion {
   const { declaration, element, props, ordinal } = region;
   const form: InvocationForm = element.selfClosing ? "self-closing" : "paired";
   return Object.freeze({
@@ -4617,7 +4663,7 @@ function buildExpansionRegion(
     props,
     *expand(): Operation<Stream<ExpansionChunk, void>> {
       return regionStream(function* (emit) {
-        yield* produceRegion(element, ordinal, parent, context, emit);
+        yield* produceRegion(element, ordinal, context, emit);
       });
     },
   });
@@ -4644,34 +4690,46 @@ function positionOf(element: ComponentElement): { position?: Readonly<SourcePosi
 function* produceRegion(
   element: ComponentElement,
   ordinal: number,
-  parent: ComponentElement,
   context: RegionContext,
   emit: (chunk: ExpansionChunk) => Operation<void>,
 ): Operation<void> {
-  // The region's own frame, under the construct's. Its site falls back to where
-  // it sits among the construct's direct children rather than among the
-  // accepted ones, so a region beside skipped whitespace keeps its identity.
+  // One frame, not two: the path handed to this occurrence already ends in the
+  // construct's own element frame, so adding it again would give a region a
+  // parent it was never written under. Its site falls back to where it sits
+  // among the construct's direct children, whitespace counted, so a region
+  // beside skipped text keeps the identity of the place it was written.
   const regionPath = extendPath(
-    extendPath(context.path, elementFrame(parent.name, elementSite(parent.position, 0))),
+    context.path,
     elementFrame(element.name, elementSite(element.position, ordinal)),
   );
 
   const produced: Segment[] = [];
   let rendered = 0;
   for (const [index, child] of element.children.entries()) {
-    yield* expandSegmentsWithin(
-      [child],
-      context.parentMeta,
-      context.parentProps,
-      context.hideSet,
-      context.counter,
-      produced,
-      regionPath,
-      index,
-      context.checkedFailures,
-      context.environment,
-      context.returnBody,
-    );
+    // A segment that appended output and then threw has still produced that
+    // output, and a reader that asked for it is owed it. The failure is held
+    // until the prefix has crossed under the same demand discipline as any
+    // other chunk, and is then raised unchanged — cancellation is not caught
+    // here, because Effection unwinds a halted task rather than throwing into
+    // it, so this sees real failures only.
+    let failure: { readonly error: unknown } | undefined;
+    try {
+      yield* expandSegmentsWithin(
+        [child],
+        context.parentMeta,
+        context.parentProps,
+        context.hideSet,
+        context.counter,
+        produced,
+        regionPath,
+        index,
+        context.checkedFailures,
+        context.environment,
+        context.returnBody,
+      );
+    } catch (error) {
+      failure = { error };
+    }
     // Only what this segment appended, and only what renders to text: the
     // exactness of each run is the execution's own record, never a field a
     // segment carries.
@@ -4679,6 +4737,9 @@ function* produceRegion(
       yield* emit(chunk);
     }
     rendered = produced.length;
+    if (failure !== undefined) {
+      throw failure.error;
+    }
   }
 }
 

@@ -74,6 +74,16 @@ export function regionStream(produce: RegionProducer): Stream<ExpansionChunk, vo
         yield* wanted.operation;
       }
       demands.shift()?.settle({ done: false, value: chunk });
+      // Demand governs authored work, not only delivery. Returning here would
+      // let the producer run the next segment on the strength of the read that
+      // has just been answered, so the work behind a chunk nobody has asked for
+      // would already have happened. Waiting for a *further* live demand is
+      // what makes a single `next()` buy exactly one segment's work. A reader
+      // already queued behind this one is that further demand, so concurrent
+      // reads still proceed in order rather than one at a time.
+      while (demands.length === 0) {
+        yield* wanted.operation;
+      }
     }
 
     /** Tell a waiting producer that a read is now outstanding. */

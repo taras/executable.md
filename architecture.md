@@ -4609,7 +4609,9 @@ expansion carrying no execution environment declares nothing and reaches none
 of this.
 
 **The handler is entered once, with everything already settled.** Placement
-first, then the authored form against the declared forms, then `as` and `slot` —
+first, then the authored form of the construct and of every accepted region —
+each against its own declaration, because a region declares the forms it accepts
+and does not inherit its construct's — then `as` and `slot` —
 engine-owned, so a valid `as` binds nothing and never becomes a prop, because a
 construct renders through its regions and returns no value. Then the construct's
 expression props are evaluated in the occurrence's own lexical environment and
@@ -4631,6 +4633,9 @@ fresh resource each time it is called, and each subscription owns one producer.
 Authored work is gated on demand: a handler that holds a region runs none of its
 body, one that subscribes without reading runs none of it either, and each
 `next()` is what permits the next segment's work and delivers exactly one chunk.
+A delivered chunk buys nothing beyond itself — the producer waits for a further
+live demand before the next segment runs, so what has not been asked for has not
+happened.
 Nothing buffers output — a channel or an output queue would accept a send and
 let the body run ahead of the reader — while a queue of *consumer* demand is
 what orders concurrent reads.
@@ -4646,7 +4651,9 @@ failing, or being cancelled — halts every producer it entered and waits for
 them before the occurrence settles, so a body blocked on demand cannot outlive
 the construct that asked for it. A body that fails after producing output
 delivers its prefix under the same demand discipline and then raises the
-original failure object on the next read; cancellation stays cancellation and
+original failure object on the next read — including the output one authored
+segment appended before failing partway through, which is the reader's whether or
+not the segment that produced it finished. Cancellation stays cancellation and
 never becomes an ordinary failure.
 
 ## The canonical protected tier

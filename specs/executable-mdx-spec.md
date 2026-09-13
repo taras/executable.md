@@ -3360,12 +3360,16 @@ admitted region written anywhere but inside its own construct refuses through
 the shared placement analysis and reaches no handler.
 
 Before the handler is entered, the occurrence is settled in this order:
-placement, the authored form against the declared forms, `as` and `slot` — which
-remain the engine's, so a valid `as` binds nothing and is not a prop — then the
-construct's expression props evaluated in its own lexical environment and
-validated against its schema, then every accepted region's, in authored source
-order. The first failure is the occurrence's, raised where it was written, and
-the handler is not entered.
+placement; then the authored form of the construct and of every accepted region,
+each against the forms its own declaration accepts, since a region is declared in
+its own right and does not inherit what its construct accepts; then `as` and
+`slot` — which remain the engine's, so a valid `as` binds nothing and is not a
+prop — then the construct's expression props evaluated in its own lexical
+environment and validated against its schema, then every accepted region's, in
+authored source order. Forms are settled before any props evaluate, so no
+expression runs for an occurrence a form has already refused. The first failure
+is the occurrence's, raised where it was written, and the handler is not
+entered.
 
 ```typescript
 interface ExpansionRequest {
@@ -13357,13 +13361,13 @@ ordering and teardown are proved with latches rather than elapsed time.
 |---|------|--------|
 | SR1 | The owner's handler | The installation that declared the construct receives the occurrence exactly once, and a second installation's handler receives nothing |
 | SR2 | The request | Name, origin, form and a frozen copy of the authored position are correct; props carry declared defaults and are frozen through, as are the regions array and each region's props; the public keys are exactly the request and region members, so no segment, children array, execution environment, counter or ledger is reachable |
-| SR3 | Everything validates first | A definitely invalid prop on the last region leaves the handler unentered and every region body at zero |
+| SR3 | Everything validates first | A definitely invalid prop on the last region leaves the handler unentered and every region body at zero; a region written in a form only its own declaration refuses is settled in preflight, before any prop evaluates |
 | SR4 | Authored order | Regions arrive in the order they were written rather than declared, whitespace between them is not content, and a region written on its own refuses through the shared placement analysis and reaches no handler |
 | SR5 | Demand runs the body | A read expands the region's authored body, including a nested component; a region created, expanded and subscribed to but never read runs nothing at all |
 | SR6 | Region output is not document output | Chunks carry the region's rendered text while the construct renders nothing, and no chunk reaches `DocumentOutput` middleware |
-| SR7 | One demand, one chunk | Subscribing runs nothing; the first read delivers the first chunk while the second element's work has not begun; the next element runs only once a later read asks for it |
+| SR7 | One demand, one chunk | Subscribing runs nothing; the first read delivers the first chunk while the second element's work has not begun; the next element runs only once a later read asks for it, so a delivered chunk buys no work beyond itself |
 | SR8 | The handler's scope owns the producer | A handler returning while a producer is blocked on demand halts and joins it before the occurrence settles, so the unreached segment never runs |
-| SR9 | Prefix then failure | A body failing after output delivers its prefix first, then the next read raises the original failure object rather than a rebuilt one |
+| SR9 | Prefix then failure | A body failing after output delivers its prefix first — including output one authored segment appended before failing partway through — then the next read raises the original failure object rather than a rebuilt one |
 | SR10 | Fresh each time | Repeated `expand()` calls are independent expansions with their own producers, and nothing refuses a second one |
 | SR11 | Nothing else moved | Expansion without an execution environment resolves the name as an ordinary component; with declarations present, the engine's own constructs and their refusals are unchanged and no handler is reached |
 

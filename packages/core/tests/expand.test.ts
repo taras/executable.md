@@ -3,6 +3,8 @@ import { expect } from "@executablemd/test-support/expect";
 import { scoped, sleep, spawn, withResolvers } from "effection";
 import type { Subscription } from "effection";
 import { createBlockCounter, expandSegments } from "../src/expand.ts";
+import { regionStream } from "../src/expansion-region.ts";
+import { elementFrame, elementSite, extendPath, getExpansion } from "../src/expansion.ts";
 import { admitInstalledDeclarations, Structural } from "../src/execution-declarations.ts";
 import type {
   ExecutionDeclaration,
@@ -23,6 +25,7 @@ import { renderSegments } from "../src/render.ts";
 import type { Operation } from "effection";
 import { DocumentationError } from "../src/errors.ts";
 import type {
+  ComponentElement,
   Segment,
   ComponentDefinition,
   CodeBlockContext,
@@ -1682,5 +1685,224 @@ describe("Tier SR — expanding installed structural syntax", () => {
     expect(text).toContain("the branch ran");
     expect(text).toContain("ERROR");
     expect(entered).toEqual([]);
+  });
+
+  it("SR3: a region written in a form its own declaration refuses reaches nothing", function* () {
+    // The construct accepts paired and the region accepts only self-closing, so
+    // the pair is the point: an occurrence whose construct is written correctly
+    // is still refused for the region inside it.
+    const reached: string[] = [];
+    const environment = yield* installedEnvironment(
+      [structuralDeclaration(), regionDeclaration({ forms: ["self-closing"] })],
+      // deno-lint-ignore require-yield
+      function* () {
+        reached.push("handler");
+      },
+    );
+
+    const segments = yield* scoped(function* () {
+      yield* useTestComponents({
+        Step: {
+          kind: "function",
+          name: "Step",
+          props: { type: "object", properties: {}, additionalProperties: false },
+          // deno-lint-ignore require-yield
+          *fn() {
+            reached.push("body");
+            return "the region body ran";
+          },
+        },
+      });
+      return yield* expandInstalled(
+        '<Deck>\n  <Panel title="One"><Step /></Panel>\n</Deck>\n',
+        environment,
+      );
+    });
+
+    const rendered = renderSegments(segments);
+    expect(rendered).toContain("<Panel /> is not written in a form it accepts");
+    expect(rendered).toContain("it was invoked paired, and it accepts self-closing");
+    // Neither the handler nor the body: the form is settled in preflight, so
+    // nothing downstream of admission observes the occurrence at all.
+    expect(reached).toEqual([]);
+    expect(rendered).not.toContain("the region body ran");
+  });
+
+  it("SR7: work after a delivered chunk waits for a further demand", function* () {
+    // At the transport, where the claim is: a producer's own statement after an
+    // emit stands in for the authored work a region body would do next.
+    const ran: string[] = [];
+    yield* scoped(function* () {
+      const subscription = yield* regionStream(function* (emit) {
+        yield* emit({ text: "one", exact: false });
+        ran.push("after-first-emit");
+        yield* emit({ text: "two", exact: false });
+        ran.push("after-second-emit");
+      });
+
+      const first = yield* subscription.next();
+      expect(first.done).toBe(false);
+      expect(first.done === false && first.value.text).toBe("one");
+      // The chunk is in hand and the producer has not moved past the emit that
+      // delivered it. A transport that only gated delivery would already have
+      // run the statement behind the next chunk.
+      expect(ran).toEqual([]);
+
+      const second = yield* subscription.next();
+      expect(second.done === false && second.value.text).toBe("two");
+      expect(ran).toEqual(["after-first-emit"]);
+
+      // The producer closes only once a read asks for what follows the last
+      // chunk, and that read is the one that sees the end.
+      const done = yield* subscription.next();
+      expect(done.done).toBe(true);
+      expect(ran).toEqual(["after-first-emit", "after-second-emit"]);
+    });
+  });
+
+  it("SR9: one segment that appends and then fails delivers its prefix first", function* () {
+    // One authored child, not two: the prefix and the failure come from the
+    // same segment's expansion, which is the case a per-segment emit after the
+    // expansion returns would lose entirely.
+    const failure = new Error("the checked body failed");
+    const texts: string[] = [];
+    let raised: unknown;
+    const environment = yield* installedEnvironment(
+      [structuralDeclaration(), regionDeclaration()],
+      function* (request) {
+        const [region] = request.regions;
+        if (region === undefined) {
+          throw new Error("expected a region");
+        }
+        const subscription = yield* yield* region.expand();
+        while (true) {
+          try {
+            const next = yield* subscription.next();
+            if (next.done) {
+              return;
+            }
+            texts.push(next.value.text);
+          } catch (error) {
+            raised = error;
+            return;
+          }
+        }
+      },
+    );
+
+    yield* scoped(function* () {
+      yield* useTestComponents({
+        Step: {
+          kind: "function",
+          name: "Step",
+          props: { type: "object", properties: { n: { type: "number" } }, required: ["n"] },
+          // deno-lint-ignore require-yield
+          *fn(props) {
+            // An `<Each>` writes each item into the region's own buffer as it
+            // goes, so the third item's failure arrives with two already
+            // appended — one authored child that both produced and failed.
+            if (props.n === 3) {
+              throw failure;
+            }
+            return `the prefix ${String(props.n)}`;
+          },
+        },
+      });
+      yield* expandInstalled(
+        '<Deck>\n  <Panel title="One"><Each in={[1, 2, 3]} let="n"><Step n={n} /></Each>' +
+          "</Panel>\n</Deck>\n",
+        environment,
+      );
+    });
+
+    expect(texts.join("")).toContain("the prefix");
+    expect(raised).toBe(failure);
+  });
+
+  it("SR2: a positionless region extends the construct's path exactly once", function* () {
+    // Built rather than scanned, because the scanner always records a position
+    // and the index fallback is what a construct assembling its own elements
+    // reaches. The blank text before the region is skipped as content but still
+    // occupies a place among the construct's children.
+    const probe: ComponentElement = {
+      type: "component",
+      name: "Probe",
+      props: {},
+      expressions: {},
+      children: [],
+      selfClosing: true,
+    };
+    const panel: ComponentElement = {
+      type: "component",
+      name: "Panel",
+      props: { title: "One" },
+      expressions: {},
+      children: [probe],
+      selfClosing: false,
+    };
+    const deck: ComponentElement = {
+      type: "component",
+      name: "Deck",
+      props: {},
+      expressions: {},
+      children: [{ type: "text", content: "\n  " }, panel, { type: "text", content: "\n" }],
+      selfClosing: false,
+    };
+
+    let seen: string | undefined;
+    const environment = yield* installedEnvironment(
+      [structuralDeclaration(), regionDeclaration()],
+      function* (request) {
+        const [region] = request.regions;
+        if (region === undefined) {
+          throw new Error("expected a region");
+        }
+        yield* readRegion(region);
+      },
+    );
+
+    yield* scoped(function* () {
+      yield* useTestComponents({
+        Probe: {
+          kind: "function",
+          name: "Probe",
+          props: { type: "object", properties: {}, additionalProperties: false },
+          *fn() {
+            seen = (yield* getExpansion()).id;
+            return "";
+          },
+        },
+      });
+      yield* expandSegments(
+        [deck],
+        {},
+        {},
+        new Set<string>(),
+        createBlockCounter(),
+        undefined,
+        "",
+        0,
+        undefined,
+        environment,
+      );
+    });
+
+    // The construct's own frame, then the region's, then the probe's. The
+    // region's site is where it sits among the construct's direct children —
+    // index 1, after the blank text — rather than its rank among the accepted
+    // regions.
+    const deckPath = extendPath("", elementFrame("Deck", elementSite(undefined, 0)));
+    const regionPath = extendPath(deckPath, elementFrame("Panel", elementSite(undefined, 1)));
+    expect(seen).toBe(extendPath(regionPath, elementFrame("Probe", elementSite(undefined, 0))));
+
+    // And not what a duplicated construct frame, or the rank among accepted
+    // regions, would have produced.
+    const duplicated = extendPath(
+      extendPath(deckPath, elementFrame("Deck", elementSite(undefined, 0))),
+      elementFrame("Panel", elementSite(undefined, 1)),
+    );
+    expect(seen).not.toBe(extendPath(duplicated, elementFrame("Probe", elementSite(undefined, 0))));
+    const ranked = extendPath(deckPath, elementFrame("Panel", elementSite(undefined, 0)));
+    expect(seen).not.toBe(extendPath(ranked, elementFrame("Probe", elementSite(undefined, 0))));
   });
 });
