@@ -65,7 +65,7 @@ import { useNormalizedOutput } from "../src/output/normalize.ts";
 import { useTerminalOutput } from "../src/output/terminal.ts";
 import { createExactSource, isExactSource } from "../src/output/exact-source.ts";
 import type { ComponentInvocation } from "../src/invocation-identity.ts";
-import type { ImportedDefinition } from "../src/components/import-authority.ts";
+import type { ImportedDefinition } from "../src/components/component-resolution.ts";
 import type { PropsSchema, Segment } from "../src/types.ts";
 
 const ROOT_PATH = "documents/root.md";
@@ -1598,6 +1598,36 @@ function statingKind(declaration: MarkdownComponent, kind: string) {
   return copy;
 }
 
+/**
+ * The three ways a declaration fails to state a known kind.
+ *
+ * `"markdown"` is among them deliberately: it is what installations said before
+ * this version, and a host that has not migrated is refused rather than quietly
+ * admitted on a spelling the catalog no longer knows.
+ */
+const UNKNOWN_KINDS: readonly (string | undefined)[] = [undefined, "sparkle", "markdown"];
+
+/**
+ * The same declaration with every member but `kind` rigged to throw.
+ *
+ * A refusal that arrives anyway is a refusal taken from the discriminant alone:
+ * anything that read a second member to reach it would end the row with that
+ * member's failure instead.
+ */
+function poisoned(declaration: MarkdownComponent, kind: string | undefined): MarkdownComponent {
+  const copy = kind === undefined ? withoutKind(declaration) : statingKind(declaration, kind);
+  for (const member of ["name", "origin", "source", "digest", "forms", "privates", "exact"]) {
+    Object.defineProperty(copy, member, {
+      configurable: true,
+      enumerable: true,
+      get() {
+        throw new Error(`"${member}" was read before the kind was decided`);
+      },
+    });
+  }
+  return copy as MarkdownComponent;
+}
+
 /** What one execution refused with, as the error itself. */
 function* refusedBy(operation: Operation<unknown>): Operation<Error> {
   try {
@@ -1632,7 +1662,7 @@ describe("Tier MDK — the declaration states its kind", () => {
     // A fresh object carrying the fixed discriminant, with the host's own
     // description untouched.
     expect(declaration).not.toBe(input);
-    expect(declaration.kind).toBe("markdown");
+    expect(declaration.kind).toBe("component");
     expect(Reflect.has(input, "kind")).toBe(false);
     expect(declaration.name).toBe(input.name);
     expect(declaration.origin).toBe(input.origin);
@@ -1646,13 +1676,19 @@ describe("Tier MDK — the declaration states its kind", () => {
     // copy an execution makes at capture.
     expect(declaration.props).toBe(props);
     expect(declaration.privates).toBe(privates);
+    // Shallow all the way down, so nothing nested was copied either, and the
+    // host's own objects stay writable: a constructor that validated, hashed,
+    // deep-copied or froze would have to reach one of these.
+    expect(declaration.props?.properties).toBe(props.properties);
+    expect(declaration.privates?.[0]).toBe(privates[0]);
     expect(Object.isFrozen(declaration)).toBe(false);
+    expect(Object.isFrozen(declaration.props)).toBe(false);
 
     // A kind planted on the input cannot decide what the declaration is: the
     // constructor writes its own after spreading.
     const planted = { ...input };
     Reflect.set(planted, "kind", "structural");
-    expect(Markdown(planted).kind).toBe("markdown");
+    expect(Markdown(planted).kind).toBe("component");
   });
 
   it("MDK1: a constructed declaration behaves exactly as it always did", function* () {
@@ -1704,7 +1740,7 @@ describe("Tier MDK — the declaration states its kind", () => {
 
     const error = yield* refusedBy(admitDeclaredMarkdown([hostile], new Map()));
     expect(error.name).toBe("DeclaredMarkdownError");
-    expect(error.message).toContain("without saying it is exact Markdown");
+    expect(error.message).toContain("without stating a known declaration kind");
 
     // The positive control: the same admission, with the kind restored, reads
     // those members and refuses on what they say instead.
@@ -1713,22 +1749,24 @@ describe("Tier MDK — the declaration states its kind", () => {
     expect(mismatch.message).toContain("states a digest its source does not have");
   });
 
-  it("MDK2: a missing or unknown kind refuses before the root import", function* () {
+  it("MDK2: a missing, unknown or superseded kind refuses before the root import", function* () {
     const stated = declared(POLICY_SOURCE);
 
-    for (const broken of [withoutKind(stated), statingKind(stated, "sparkle")]) {
+    for (const kind of UNKNOWN_KINDS) {
       const stream = new InMemoryStream();
-      const error = yield* refusedBy(run("<Policy />\n", [broken], [], stream));
+      const error = yield* refusedBy(run("<Policy />\n", [poisoned(stated, kind)], [], stream));
 
-      expect(error.name).toBe("DeclaredMarkdownError");
-      expect(error.message).toContain("without saying it is exact Markdown");
+      expect(`${String(kind)}: ${error.name}`).toBe(`${String(kind)}: DeclaredMarkdownError`);
+      expect(error.message).toContain("without stating a known declaration kind");
       // Before the root import: nothing was imported, and the root body — which
-      // would have rendered its own text — never ran.
+      // would have rendered its own text — never ran. Every other member was
+      // rigged to throw, so arriving here at all is the claim.
       const events = yield* stream.readAll();
       expect(events.filter((event) => event.type === "yield").length).toBe(0);
     }
 
-    // The positive control: the same bytes, stating their kind, run.
+    // The positive control: the same bytes, stating "component", run.
+    expect(stated.kind).toBe("component");
     expect(String(yield* run("<Policy />\n", [stated]))).toContain("The policy ran.");
   });
 
@@ -1743,7 +1781,7 @@ describe("Tier MDK — the declaration states its kind", () => {
       enumerable: true,
       get() {
         reads++;
-        return reads === 1 ? "markdown" : "sparkle";
+        return reads === 1 ? "component" : "sparkle";
       },
     });
 
@@ -1922,7 +1960,7 @@ describe("Tier ED — one catalog, two arms", () => {
     const broken = { ...declared(POLICY_SOURCE) };
     Reflect.set(broken, "kind", "sparkle");
     const message = yield* refusedBeforeRoot([declaring([broken, deck(), panel()])]);
-    expect(message).toContain("without saying it is exact Markdown");
+    expect(message).toContain("without stating a known declaration kind");
   });
 
   it("ED2: declarations and the handler are captured once, before install()", function* () {
@@ -2131,52 +2169,50 @@ describe("Tier ED — one catalog, two arms", () => {
 });
 
 describe("Tier ED — the catalog answers for the set", () => {
-  it("ED1: capture refuses an unknown kind before it reads anything else", function* () {
+  it("ED1: capture refuses every unknown kind before it reads anything else", function* () {
     // Every other member throws if it is read, and the installation records
     // whether it ever ran: capture decides about the discriminant before either
-    // could happen.
-    const hostile = { ...declared(POLICY_SOURCE) };
-    Reflect.set(hostile, "kind", "sparkle");
-    for (const member of ["name", "origin", "source", "digest", "forms", "privates"]) {
-      Object.defineProperty(hostile, member, {
-        configurable: true,
-        enumerable: true,
-        get() {
-          throw new Error(`capture read "${member}" before deciding about the kind`);
-        },
-      });
+    // could happen. `"markdown"` is one of the three because it is what an
+    // installation written against the previous version states.
+    for (const kind of UNKNOWN_KINDS) {
+      const hostile = poisoned(declared(POLICY_SOURCE), kind);
+      const installed: string[] = [];
+      const stream = new InMemoryStream();
+      const error = yield* refusedBy(
+        scoped(function* () {
+          return yield* collect(
+            yield* executeInstalled(
+              { ...retainedSource(ROOT_PATH, "The root ran.\n"), stream, includes: [] },
+              [
+                { declarations: [hostile] },
+                {
+                  *install() {
+                    installed.push("install");
+                    yield* Component.operations.registry;
+                  },
+                },
+              ],
+            ),
+          );
+        }),
+      );
+
+      expect(`${String(kind)}: ${error.name}`).toBe(`${String(kind)}: DeclaredMarkdownError`);
+      expect(error.message).toContain("without stating a known declaration kind");
+      expect(installed).toEqual([]);
+      expect((yield* stream.readAll()).filter((event) => event.type === "yield").length).toBe(0);
+
+      // And it is the same sentence the Markdown admission gives, so the two
+      // spellings of this refusal cannot drift apart.
+      const admission = yield* refusedBy(admitDeclaredMarkdown([hostile], new Map()));
+      expect(error.message).toBe(admission.message);
     }
 
-    const installed: string[] = [];
-    const stream = new InMemoryStream();
-    const error = yield* refusedBy(
-      scoped(function* () {
-        return yield* collect(
-          yield* executeInstalled(
-            { ...retainedSource(ROOT_PATH, "The root ran.\n"), stream, includes: [] },
-            [
-              { declarations: [hostile] },
-              {
-                *install() {
-                  installed.push("install");
-                  yield* Component.operations.registry;
-                },
-              },
-            ],
-          ),
-        );
-      }),
+    // The positive control: the same bytes stating "component" are admitted and
+    // run, so the three rows above refuse for the kind and nothing else.
+    expect(String(yield* run("<Policy />\n", [declared(POLICY_SOURCE)]))).toContain(
+      "The policy ran.",
     );
-
-    expect(error.name).toBe("DeclaredMarkdownError");
-    expect(error.message).toContain("without saying it is exact Markdown");
-    expect(installed).toEqual([]);
-    expect((yield* stream.readAll()).filter((event) => event.type === "yield").length).toBe(0);
-
-    // And it is the same sentence the Markdown admission gives, so the two
-    // spellings of this refusal cannot drift apart.
-    const admission = yield* refusedBy(admitDeclaredMarkdown([hostile], new Map()));
-    expect(error.message).toBe(admission.message);
   });
 
   it("ED3: every catalog refusal is an ExecutionDeclarationError", function* () {
@@ -2290,7 +2326,7 @@ describe("Tier ED — the catalog answers for the set", () => {
     // And a declared construct is not reached through component import at all,
     // so the losing default never runs.
     const message = yield* refusal(run("<Deck />\n", [], [declaring(declarations), registering]));
-    expect(message).toContain("never resolves a component");
+    expect(message).toContain("is not written in a form it accepts");
     expect(message).not.toContain("the registered default ran.");
   });
 
@@ -2419,7 +2455,7 @@ describe("Tier ED — the structural constructor", () => {
     // A kind planted on the input cannot decide what the declaration is: the
     // constructor writes its own after spreading.
     const planted = { ...input };
-    Reflect.set(planted, "kind", "markdown");
+    Reflect.set(planted, "kind", "component");
     expect(Structural(planted).kind).toBe("structural");
 
     // It admits nothing: a declaration this catalog would refuse is still built.

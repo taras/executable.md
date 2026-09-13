@@ -55,7 +55,7 @@ import type {
   FragmentFileAccess,
 } from "./fragment-capabilities.ts";
 import { isFormDispatcher } from "./invocation-identity.ts";
-import type { ComponentInvocation, ProtectedBodies } from "./invocation-identity.ts";
+import type { ComponentInvocation, ComponentRouting } from "./invocation-identity.ts";
 import type { FetchRequest } from "./fetch-request.ts";
 import { normalizeFetchRequest, requestRecord } from "./fetch-request.ts";
 import { CORE_REVISION, pinnedJson } from "./generated-xmd.ts";
@@ -520,7 +520,7 @@ export interface CapturedEntry {
 }
 
 /** What canonical execution keeps, and what canonical `<Evaluate>` reads. */
-export interface CapturedProfile {
+export interface EvaluationProfile {
   /**
    * The pure components every evaluation may write, whatever `allow` selects.
    *
@@ -627,7 +627,10 @@ export interface PreparedProfile {
   /** End them. Registered by canonical execution before any installation runs. */
   readonly revoke: () => void;
   /** Seal answers, projecting lifetime wrappers through the execution's private operation. */
-  seal(answers: ResolvedAnswers, project?: ProtectedBodies["project"]): Operation<CapturedProfile>;
+  seal(
+    answers: ResolvedAnswers,
+    project?: ComponentRouting["project"],
+  ): Operation<EvaluationProfile>;
 }
 
 /**
@@ -693,8 +696,8 @@ export function* prepareEvaluationProfile(
     // deno-lint-ignore require-yield
     *seal(
       answers: ResolvedAnswers,
-      project?: ProtectedBodies["project"],
-    ): Operation<CapturedProfile> {
+      project?: ComponentRouting["project"],
+    ): Operation<EvaluationProfile> {
       // One sealed implementation per name, built before either table is
       // sealed. A name that holds two entries — the self-closing spelling in
       // `read` and the paired one in `write` — is one component seen from two
@@ -1016,7 +1019,7 @@ function sealAnswers(
   answered: ReadonlyMap<string, FragmentIdentity>,
   answers: ResolvedAnswers,
   capabilities: CapturedCapabilities,
-  project: ProtectedBodies["project"] | undefined,
+  project: ComponentRouting["project"] | undefined,
 ): ReadonlyMap<string, SealedAnswer> {
   const sealed = new Map<string, SealedAnswer>();
   for (const name of answered.keys()) {

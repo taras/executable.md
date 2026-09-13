@@ -1915,7 +1915,7 @@ run but are absent from the diagnostic trace.
 | `src/fetch-journal.ts` | `persistFetch()` — the `fetch` durable effect (§6.18, §10.1) |
 | `src/generated-xmd.ts` | `evaluateGeneratedXmd()`, `pinnedFetch()`, `pinnedFileRead()`, `pinnedFileWrite()`, `pinnedFileDelete()`, `pinnedComponent()`, `pinnedMutation()`, `GeneratedEffectClass`, `GeneratedComponentForm`, `GeneratedMutation`, `GeneratedObservation`, `GeneratedRequest`, `GeneratedXmdError` — admitting Agent-generated source through the trusted-host seam under the always-on trusted composition table and a caller-selected subset of the closed effect classes `read` and `write`, resolving each name and authored form to one exact pinned identity — core Json, the self-closing `<File>` read, the paired `<File>` write and the self-closing `<File.Delete>` among them — and preserving every component's ordinary binding and output behavior. `evaluateGeneratedXmd()` returns `Operation<string>` containing the fragment's rendered text. Its admission and every generated effect use occurrence-owned identities in the existing ordinary durable sequence, with no `ephemeral()` bridge, staging or result envelope |
 | `src/glob-source.ts` | `GLOB_PROPS`, `GLOB_RETURNS`, `globPatterns()`, `globFailure()` — the props, return contract, source rules and sanitized failure sentence one search is held to, shared by the ordinary `<Glob>` component and the Glob capability an evaluation profile admits, so one dialect answers both (§6.14) |
-| `src/components/import-authority.ts` | `CanonicalImports`, `ImportAuthority` — the witness a closed execution issues for the definition it produced and verifies where it is invoked |
+| `src/components/component-resolution.ts` | `CanonicalImports`, `ImportAuthority` — the witness a closed execution issues for the definition it produced and verifies where it is invoked |
 | `src/invocation.ts` | `withInvocation()`, `Invocation`, `InvocationTeardownError` — the component invocation boundary (§4.4) |
 | `src/expansion.ts` | `Expansion`, `getExpansion()` — what an executable element knows about its own expansion (§5.6) |
 | `src/invocation-identity.ts` | `ComponentInvocation`, `IdentityComponent`, `IdentityClaimant`, `ImportSelection`, `installIdentities()`, `issueInvocation()`, `ComponentInvocationError` — what a trusted host declares to an execution, the domains that execution mints for it, and the one-use issuance a claimant answers for (§5.6) |
@@ -2934,7 +2934,7 @@ function Markdown(input: MarkdownComponentInput): MarkdownComponent;
 
 The host writes the description — name, origin, source, digest, forms, schemas
 and privates — and the constructor returns a fresh shallow declaration carrying
-`kind: "markdown"`, written after that description so an input carrying a kind
+`kind: "component"`, written after that description so an input carrying a kind
 of its own does not decide what the declaration is. It is a constructor and
 nothing else: it validates nothing, computes no digest, copies no nested schema,
 array or private declaration, freezes nothing and admits nothing.
@@ -2945,7 +2945,10 @@ can come to exist. The defence is admission: the discriminant is required, and
 admission reads it before anything else about the value, because everything else
 is a statement *about* exact Markdown. A declaration stating a kind this version
 does not know, or stating none, is refused before the root document is imported
-rather than admitted on the strength of having a source and a digest.
+rather than admitted on the strength of having a source and a digest. The known
+kinds are exactly `"component"` and `"structural"`; `"markdown"`, which earlier
+versions stated, is not among them and refuses like any other unknown value.
+There is no compatibility arm.
 
 **It is held to its own bytes.** Canonical core parses the source and refuses
 the declaration before the root document is imported when it does not state that
@@ -3352,6 +3355,57 @@ error anywhere else. A self-closing construct has no regions, and is accepted
 when that form is declared. One analysis answers those questions, so
 non-executing validation and canonical expansion cannot accept different
 documents.
+
+**Expanding one.** Canonical core asks the catalog about a name after every
+construct the engine owns and before any component import, so core holds no
+branch for an installed name. An admitted construct takes the generic path; an
+admitted region written anywhere but inside its own construct refuses through
+the shared placement analysis and reaches no handler.
+
+Before the handler is entered, the occurrence is settled in this order:
+placement; then the authored form of the construct and of every accepted region,
+each against the forms its own declaration accepts, since a region is declared in
+its own right and does not inherit what its construct accepts; then `as` and
+`slot` — which remain the engine's, so a valid `as` binds nothing and is not a
+prop — then the construct's expression props evaluated in its own lexical
+environment and validated against its schema, then every accepted region's, in
+authored source order. Forms are settled before any props evaluate, so no
+expression runs for an occurrence a form has already refused. The first failure
+is the occurrence's, raised where it was written, and the handler is not
+entered.
+
+```typescript
+interface ExpansionRequest {
+  readonly name: string;
+  readonly origin: string;
+  readonly form: InvocationForm;
+  readonly position?: Readonly<SourcePosition>;
+  readonly props: Readonly<Record<string, Json>>;
+  readonly regions: readonly ExpansionRegion[];
+}
+```
+
+Every member is a frozen copy: the authored facts, the validated props with
+their declared defaults, and one region per accepted child. No segment, children
+array, recursion function, counter, ledger, schema or authority is reachable
+from a request. The installation's own captured handler is called directly, once,
+inside a scope of its own; the public `ExecutionApi` is unchanged and receives
+nothing.
+
+**A region is an operation, not output.** `ExpansionRegion.expand()` acquires a
+fresh resource per call, and each subscription owns one producer. Authored work
+is gated on demand: holding a region runs nothing, subscribing runs nothing, and
+each read permits the next segment's work and delivers one
+`{ text, exact }` chunk. Chunks carry the exactness the execution's own record
+decides, never a field a segment carries, and never pass through
+`DocumentOutput` or the journal — the construct itself renders nothing.
+
+**The handler's scope owns what it started.** Returning, failing or being
+cancelled halts every producer the handler entered and waits for it before the
+occurrence settles. A body that fails after producing output delivers its prefix
+first and then raises the original failure on the next read. Cancellation stays
+cancellation. Repeated calls and repeated subscriptions are fresh expansions,
+and neither at-most-once nor single-consumer enforcement exists.
 
 #### Origin
 
@@ -13294,10 +13348,31 @@ can be made to fail if it is read.
 
 | # | Test | Verify |
 |---|------|--------|
-| MDK1 | The constructor | `Markdown({…})` returns a fresh object carrying `kind: "markdown"`, leaves the input unchanged, preserves every supplied member, computes no digest, and hands back the same nested schema, array and private-declaration objects it was given; a kind planted on the input does not survive. A constructed declaration keeps its selection, exact output, private closure, replay, inspection and validation behavior, and the existing suite runs with no changed result |
-| MDK2 | The discriminant is read first | A declaration whose kind was removed or replaced with `Reflect` refuses as `DeclaredMarkdownError` before the root import, with nothing yielded and no output; admission asked about a value whose every other property getter throws still reports that refusal, while the same admission with the kind restored reads those members and refuses on what they say |
+| MDK1 | The constructor | `Markdown({…})` returns a fresh shallow object carrying `kind: "component"` written last, leaves the input unchanged, preserves every supplied member, computes no digest, validates nothing, freezes nothing, admits nothing, and hands back the same nested schema, array and private-declaration objects it was given — nested objects included; a kind planted on the input does not survive. A constructed declaration keeps its selection, exact output, private closure, replay, inspection and validation behavior, and the existing suite runs with no changed result |
+| MDK2 | The discriminant is read first | A missing kind, an unknown one, and the superseded `"markdown"` each refuse as `DeclaredMarkdownError` before the root import, with nothing yielded and no output, while every other member of the declaration is rigged to throw if it is read — so the refusal came from the discriminant alone. The same three refuse identically at capture and in the Markdown admission, in one sentence both spell. `"component"` restored is the positive control and runs |
 | MDK3 | Capture reads once | The kind is read exactly once, before the first `install()`, and the admitted kind is that captured value — a counting getter that answers differently afterwards, and an `install()` that deletes the property, change nothing |
 | MDK4 | The existing fixtures | The three direct declarations in the syntax suite are built through the constructor and remain valid, while `SYN27`'s live inspection still reports symbols version 2 |
+
+### Tier SR — Expanding installed structural syntax (§5.3)
+
+What happens when a document writes a construct an installation declared. Every
+row drives ordinary expansion under an execution environment carrying one
+admitted catalog;
+ordering and teardown are proved with latches rather than elapsed time.
+
+| # | Test | Verify |
+|---|------|--------|
+| SR1 | The owner's handler | The installation that declared the construct receives the occurrence exactly once, and a second installation's handler receives nothing |
+| SR2 | The request | Name, origin, form and a frozen copy of the authored position are correct; props carry declared defaults and are frozen through, as are the regions array and each region's props; the public keys are exactly the request and region members, so no segment, children array, execution environment, counter or ledger is reachable |
+| SR3 | Everything validates first | A definitely invalid prop on the last region leaves the handler unentered and every region body at zero; a region written in a form only its own declaration refuses is settled in preflight, before any prop evaluates |
+| SR4 | Authored order | Regions arrive in the order they were written rather than declared, whitespace between them is not content, and a region written on its own refuses through the shared placement analysis and reaches no handler |
+| SR5 | Demand runs the body | A read expands the region's authored body, including a nested component; a region created, expanded and subscribed to but never read runs nothing at all |
+| SR6 | Region output is not document output | Chunks carry the region's rendered text while the construct renders nothing, and no chunk reaches `DocumentOutput` middleware |
+| SR7 | One demand, one chunk | Subscribing runs nothing; the first read delivers the first chunk while the second element's work has not begun; the next element runs only once a later read asks for it, so a delivered chunk buys no work beyond itself |
+| SR8 | The handler's scope owns the producer | A handler returning while a producer is blocked on demand halts and joins it before the occurrence settles, so the unreached segment never runs |
+| SR9 | Prefix then failure | A body failing after output delivers its prefix first — including output one authored segment appended before failing partway through — then the next read raises the original failure object rather than a rebuilt one |
+| SR10 | Fresh each time | Repeated `expand()` calls are independent expansions with their own producers, and nothing refuses a second one |
+| SR11 | Nothing else moved | Expansion without an execution environment resolves the name as an ordinary component; with declarations present, the engine's own constructs and their refusals are unchanged and no handler is reached |
 
 ### Tier ED — One declaration catalog, holding both arms (§5.3)
 

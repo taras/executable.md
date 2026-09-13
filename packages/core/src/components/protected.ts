@@ -47,7 +47,7 @@
 
 import { EVALUATE_PROTECTED } from "./Evaluate.ts";
 import { SYNTAX_PROTECTED } from "./Syntax.ts";
-import type { ImportRefusal, ImportTier } from "./import-authority.ts";
+import type { ImportRefusal, ImportTier } from "./component-resolution.ts";
 import type { ComponentDocumentation } from "./documentation.ts";
 import type { ProtectedDeclaration } from "../invocation-identity.ts";
 import type { ComponentOrigin } from "../types.ts";

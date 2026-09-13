@@ -14,7 +14,7 @@
  */
 
 import { ensure, Err, Ok, scoped, useScope, withResolvers } from "effection";
-import type { Operation, Result } from "effection";
+import type { Operation, Result, Stream } from "effection";
 import type {
   FunctionComponent,
   Segment,
@@ -100,10 +100,21 @@ import {
   SegmentCauses,
   useSegmentCauses,
 } from "./errors.ts";
+import type { InvocationForm } from "./invocation-identity.ts";
+import { structuralPlacement } from "./execution-declarations.ts";
+import type {
+  AdmittedStructural,
+  ExpansionChunk,
+  ExpansionRegion,
+  ExpansionRequest,
+} from "./execution-declarations.ts";
+import { regionStream } from "./expansion-region.ts";
+import { emissions } from "./render.ts";
 import { printsErrors, usePrintErrors } from "./component-failures.ts";
 import { containedLedger, recoveringLedger } from "./component-failures.ts";
 import type { CheckedFailures } from "./component-failures.ts";
-import type { ExpansionAuthority, ImportedDefinition } from "./components/import-authority.ts";
+import type { ImportedDefinition } from "./components/component-resolution.ts";
+import type { ExecutionEnvironment } from "./execution-environment.ts";
 import { DeclaredMarkdownError } from "./components/declared-markdown.ts";
 import type { PrivateImport } from "./components/declared-markdown.ts";
 import CoreTest from "./components/Test.ts";
@@ -242,7 +253,7 @@ function expandChildrenScoped(
   path: string,
   /** Whether the region that caused this expansion grants recovery (§3.6). */
   checkedFailures: CheckedFailures | undefined,
-  authority: ExpansionAuthority | undefined,
+  environment: ExecutionEnvironment | undefined,
   returnBody: ReturnBody | undefined,
 ): Operation<Segment[]> {
   return scoped(function* () {
@@ -265,7 +276,7 @@ function expandChildrenScoped(
       path,
       0,
       checkedFailures,
-      authority,
+      environment,
       returnBody,
     );
   });
@@ -321,7 +332,7 @@ interface ProjectionState {
    * the invocation is (§3.6).
    */
   checkedFailures: CheckedFailures | undefined;
-  authority: ExpansionAuthority | undefined;
+  environment: ExecutionEnvironment | undefined;
 }
 
 interface ProjectionFrame {
@@ -465,7 +476,7 @@ function createProjectionHandle(state: ProjectionState): ProjectionHandle {
             options.path,
             0,
             state.checkedFailures,
-            state.authority,
+            state.environment,
             options.returnFrame,
           );
           outcome.resolve({ segments: rendered });
@@ -574,7 +585,7 @@ function createProjectionHandle(state: ProjectionState): ProjectionHandle {
               path,
               0,
               state.checkedFailures,
-              state.authority,
+              state.environment,
               request.kind === "markdown" ? undefined : state.callerReturn,
             );
             outcome.resolve({ segments: [...errors, ...rendered] });
@@ -707,7 +718,7 @@ function requirePrivate(
 }
 
 /**
- * The authority a definition's own body expands under.
+ * The environment a definition's own body expands under.
  *
  * Only one member changes: the private closure. A declaration's body carries
  * its own, so the names only those bytes may write resolve while they are being
@@ -716,24 +727,24 @@ function requirePrivate(
  * rather than passing it down.
  *
  * Content the caller projected is not this body. It expands through the
- * invocation's projection handle, which restores the frame and the authority
+ * invocation's projection handle, which restores the frame and the environment
  * read at the invocation site, so a `<Content />` inside a declaration reaches
  * no private name.
  */
-function authorityForBody(
-  authority: ExpansionAuthority | undefined,
+function environmentForBody(
+  environment: ExecutionEnvironment | undefined,
   name: string,
   definition: ComponentDefinition,
-): ExpansionAuthority | undefined {
-  if (authority === undefined) {
+): ExecutionEnvironment | undefined {
+  if (environment === undefined) {
     return undefined;
   }
-  const privates = authority.declared?.closureFor(name, definition);
-  if (privates === authority.privates) {
-    return authority;
+  const scope = environment.installedComponents?.closureFor(name, definition);
+  if (scope === environment.componentBodyScope) {
+    return environment;
   }
-  const { privates: _cleared, ...rest } = authority;
-  return privates === undefined ? rest : { ...rest, privates };
+  const { componentBodyScope: _cleared, ...rest } = environment;
+  return scope === undefined ? rest : { ...rest, componentBodyScope: scope };
 }
 
 const MAX_EXPANSION_DEPTH = 64;
@@ -748,9 +759,9 @@ const ESCAPED_BRACE_PLACEHOLDER = "\uE000";
  *
  * This is the one entry for expansion driven directly — a test, a tool
  * describing a document — and the one place an expansion legitimately starts
- * without an `ExpansionAuthority`. A form-sensitive component under such an
+ * without an `ExecutionEnvironment`. A form-sensitive component under such an
  * expansion refuses rather than running unselected. Everything an execution
- * causes recurses through `expandSegmentsWithin`, where the authority is not
+ * causes recurses through `expandSegmentsWithin`, where the environment is not
  * optional.
  *
  * @param counter - Optional block ID counter. If omitted, a local counter
@@ -767,7 +778,7 @@ export function expandSegments(
   path: string = "",
   indexBase: number = 0,
   checkedFailures?: CheckedFailures,
-  authority?: ExpansionAuthority,
+  environment?: ExecutionEnvironment,
 ): Operation<Segment[]> {
   return expandSegmentsWithin(
     segments,
@@ -779,7 +790,7 @@ export function expandSegments(
     path,
     indexBase,
     checkedFailures,
-    authority,
+    environment,
     undefined,
   );
 }
@@ -788,9 +799,9 @@ export function expandSegments(
  * The recursion inside an expansion already under way.
  *
  * Every parameter travels by hand and none is optional, so an internal caller
- * that drops the authority — or the ledger, or the path — fails to compile
+ * that drops the environment — or the ledger, or the path — fails to compile
  * rather than silently expanding without it. What `execute()` causes must
- * carry the same `ExpansionAuthority` through every recursion that can invoke
+ * carry the same `ExecutionEnvironment` through every recursion that can invoke
  * a component: regions, branches, iterations, captures, answers, component
  * bodies, and projected content alike.
  */
@@ -858,7 +869,7 @@ function* expandListSegments(
    * root, all of which start from the default here and are outside it.
    */
   checkedFailures: CheckedFailures | undefined,
-  authority: ExpansionAuthority | undefined,
+  environment: ExecutionEnvironment | undefined,
   returnBody: ReturnBody | undefined,
 ): Operation<Segment[]> {
   // An execution opens the table its printed errors record their causes in.
@@ -881,7 +892,7 @@ function* expandListSegments(
         path,
         indexBase,
         checkedFailures,
-        authority,
+        environment,
         returnBody,
       );
     });
@@ -1002,7 +1013,7 @@ function* expandListSegments(
               counter,
               elementPath,
               checkedFailures,
-              authority,
+              environment,
               returnBody,
             )),
           );
@@ -1022,7 +1033,7 @@ function* expandListSegments(
               result,
               elementPath,
               checkedFailures,
-              authority,
+              environment,
               returnBody,
             )),
           );
@@ -1043,7 +1054,7 @@ function* expandListSegments(
             result,
             elementPath,
             checkedFailures,
-            authority,
+            environment,
             returnBody,
           );
           break;
@@ -1076,7 +1087,7 @@ function* expandListSegments(
             result,
             elementPath,
             checkedFailures,
-            authority,
+            environment,
             returnBody,
           );
           break;
@@ -1094,7 +1105,7 @@ function* expandListSegments(
             result,
             elementPath,
             checkedFailures,
-            authority,
+            environment,
             returnBody,
           );
           break;
@@ -1115,7 +1126,7 @@ function* expandListSegments(
               frame === undefined ? elementPath : extendPath(elementPath, frame),
               0,
               checkedFailures,
-              authority,
+              environment,
               returnBody,
             );
           // Which placement this is, answered by identity rather than by name:
@@ -1161,7 +1172,7 @@ function* expandListSegments(
             result,
             elementPath,
             checkedFailures,
-            authority,
+            environment,
             returnBody,
           );
           break;
@@ -1224,6 +1235,29 @@ function* expandListSegments(
           break;
         }
 
+        // Structural syntax an installation declared, asked after every branch
+        // the engine owns and before any component import: core holds no branch
+        // for the name, and the catalog this expansion carries is what knows it
+        // at all. An expansion driven without an environment declares nothing and
+        // falls through to the component path, as it always has.
+        const installed = environment?.declarations.structural(segment.name);
+        if (installed !== undefined && environment !== undefined) {
+          yield* expandInstalledStructural(
+            installed,
+            segment,
+            parentMeta,
+            parentProps,
+            hideSet,
+            counter,
+            result,
+            elementPath,
+            checkedFailures,
+            environment,
+            returnBody,
+          );
+          break;
+        }
+
         const expanded = yield* expandComponent(
           segment.name,
           segment.props,
@@ -1240,7 +1274,7 @@ function* expandListSegments(
           result,
           elementPath,
           checkedFailures,
-          authority,
+          environment,
           returnBody,
         );
         // A printed error the callee produced is data, and stays data here: it
@@ -1384,7 +1418,7 @@ function* expandListSegments(
                   source: segment.content,
                 },
                 checkedFailures,
-                authority,
+                environment,
                 returnBody,
               ),
             );
@@ -1446,7 +1480,7 @@ function* expandListSegments(
 function* checkedCommandFailure(
   segment: ErrorSegment,
   checkedFailures: CheckedFailures | undefined,
-  authority: ExpansionAuthority | undefined,
+  environment: ExecutionEnvironment | undefined,
   returnBody: ReturnBody | undefined,
 ): Operation<ErrorSegment> {
   // Written down before it is raised or projected, and before the error mode is
@@ -1551,7 +1585,7 @@ function* expandLet(
   path: string,
   /** Whether the enclosing region grants checked-failure recovery (§3.6). */
   checkedFailures: CheckedFailures | undefined,
-  authority: ExpansionAuthority | undefined,
+  environment: ExecutionEnvironment | undefined,
   returnBody: ReturnBody | undefined,
 ): Operation<ErrorSegment[]> {
   // Every one of these is decided from what the author wrote, so the whole
@@ -1583,7 +1617,7 @@ function* expandLet(
       path,
       0,
       checkedFailures,
-      authority,
+      environment,
       returnBody,
     ),
   );
@@ -1694,7 +1728,7 @@ function* expandEach(
   path: string,
   /** Whether the region that caused this expansion grants recovery (§3.6). */
   checkedFailures: CheckedFailures | undefined,
-  authority: ExpansionAuthority | undefined,
+  environment: ExecutionEnvironment | undefined,
   returnBody: ReturnBody | undefined,
 ): Operation<Segment[]> {
   // Decided from source alone, so the catalog is shared with validation. A
@@ -1753,7 +1787,7 @@ function* expandEach(
       out,
       extendPath(path, { f: "item", i: iteration }),
       checkedFailures,
-      authority,
+      environment,
       returnBody,
     );
     // A `<Break>` in the body exits the enclosing `<Loop>`, so the remaining
@@ -1848,7 +1882,7 @@ function* expandIf(
   path: string,
   /** Whether the enclosing region grants checked-failure recovery (§3.6). */
   checkedFailures: CheckedFailures | undefined,
-  authority: ExpansionAuthority | undefined,
+  environment: ExecutionEnvironment | undefined,
   returnBody: ReturnBody | undefined,
 ): Operation<void> {
   // Decided from source alone and shared with validation: which props were
@@ -1919,7 +1953,7 @@ function* expandIf(
     branchPath,
     0,
     checkedFailures,
-    authority,
+    environment,
     returnBody,
   );
 }
@@ -1988,7 +2022,7 @@ function* expandSwitch(
   path: string,
   /** Whether the enclosing region grants checked-failure recovery (§3.6). */
   checkedFailures: CheckedFailures | undefined,
-  authority: ExpansionAuthority | undefined,
+  environment: ExecutionEnvironment | undefined,
   returnBody: ReturnBody | undefined,
 ): Operation<void> {
   // Decided from source alone and shared with validation: which props were
@@ -2054,7 +2088,7 @@ function* expandSwitch(
     ),
     0,
     checkedFailures,
-    authority,
+    environment,
     returnBody,
   );
 }
@@ -2251,7 +2285,7 @@ function* expandLoop(
   path: string,
   /** Whether the enclosing region grants checked-failure recovery (§3.6). */
   checkedFailures: CheckedFailures | undefined,
-  authority: ExpansionAuthority | undefined,
+  environment: ExecutionEnvironment | undefined,
   returnBody: ReturnBody | undefined,
 ): Operation<void> {
   const unknownProp = loopPropsViolation(segment);
@@ -2308,7 +2342,7 @@ function* expandLoop(
           extendPath(path, { f: "iter", i: iteration }),
           0,
           checkedFailures,
-          authority,
+          environment,
           returnBody,
         );
         if (frame.broken) {
@@ -2417,7 +2451,7 @@ function* expandPrintErrors(
   path: string,
   /** The ledger this region grants recovery on top of (§3.6). */
   checkedFailures: CheckedFailures | undefined,
-  authority: ExpansionAuthority | undefined,
+  environment: ExecutionEnvironment | undefined,
   returnBody: ReturnBody | undefined,
 ): Operation<void> {
   const refusal = printErrorsViolations(segment)[0];
@@ -2443,7 +2477,7 @@ function* expandPrintErrors(
       // The region grants recovery for the work it causes, and a failure it
       // recovers is not one the run suffered.
       recoveringLedger(),
-      authority,
+      environment,
       returnBody,
     );
   });
@@ -2481,7 +2515,7 @@ function* expandComponent(
    * block written there would be.
    */
   checkedFailures: CheckedFailures | undefined,
-  authority: ExpansionAuthority | undefined,
+  environment: ExecutionEnvironment | undefined,
   returnBody: ReturnBody | undefined,
 ): Operation<Segment[]> {
   // Cycle detection — Prosser's algorithm
@@ -2510,7 +2544,7 @@ function* expandComponent(
   // answered: what canonical resolution selected here is what decides whether
   // this invocation is in one of this execution's identity domains, and nothing
   // on the answer or in the chain carries it (`invocation-identity.ts`).
-  const selection = authority?.identities?.beginImport(name);
+  const selection = environment?.componentIdentity?.beginImport(name);
   let selected: IdentityDomain | undefined;
   let dispatcher: FunctionComponent | undefined;
   /**
@@ -2526,14 +2560,14 @@ function* expandComponent(
     // answer is one it produced. In a closed execution — a workflow holding a
     // component bundle, a generated fragment holding an allowlist — a handler
     // may observe this import, delegate it, and refuse it by throwing; nothing
-    // it returns is invoked. Without an authority the answer is whatever the
+    // it returns is invoked. Without an environment the answer is whatever the
     // chain produced, exactly as it always was.
     // The offer is open for exactly this ask. Middleware composes inside it and
     // may observe, delegate or refuse the import; what it cannot do is obtain
     // the declaration for an element that did not author it, because the offer
     // is made from the closure the segments being expanded carry, is spent by
     // whatever asks first, and authorizes only the answer it produced itself.
-    const offered = authority?.declared?.offer(authority.privates, name);
+    const offered = environment?.installedComponents?.offer(environment.componentBodyScope, name);
     let answered: ImportedDefinition;
     try {
       answered = yield* importComponent(name, position);
@@ -2549,11 +2583,14 @@ function* expandComponent(
     // reaches this at all: selection resolves it to nothing, so what arrives is
     // the ordinary unresolved failure.
     let authorizedPrivate = false;
-    if (authority?.declared?.declaresPrivate(name) === true) {
+    if (environment?.installedComponents?.declaresPrivate(name) === true) {
       imported = requirePrivate(offered, name, answered);
       authorizedPrivate = true;
-      authority.forms?.select(name, imported);
-    } else if (authority?.imports === undefined || !authority.imports.closes(name)) {
+      environment.forms?.select(name, imported);
+    } else if (
+      environment?.componentResolution === undefined ||
+      !environment.componentResolution.closes(name)
+    ) {
       // Closed for this exact name, not for the execution that closed it. A
       // bundled run closes every import; a host that declared exact Markdown
       // closed the names it declared, and an unrelated one is the open import it
@@ -2561,7 +2598,7 @@ function* expandComponent(
       // recorded against it.
       imported = answered;
     } else {
-      imported = authority.imports.authorize(name, answered);
+      imported = environment.componentResolution.authorize(name, answered);
       // This import is canonical execution's own answer for a name this
       // execution closed, which is the only provenance exact source is read
       // from. An open import — one no tier claims — never sets it, however its
@@ -2574,8 +2611,8 @@ function* expandComponent(
       // nothing it hands back is canonical resolution's product. The record
       // takes its dispatcher from the copy's own `fn`, identical by retention;
       // a wrapper whose `fn` is no dispatcher records nothing, so a dispatcher
-      // an authority recorded explicitly is never displaced.
-      authority.forms?.select(name, imported);
+      // an environment recorded explicitly is never displaced.
+      environment.forms?.select(name, imported);
     }
     // Whatever tier answered, and whatever this execution declares, an
     // implementation some declaration's private closure built runs only for an
@@ -2590,7 +2627,7 @@ function* expandComponent(
     // Read off the answer rather than from a frame the engine opened: what is
     // recognized is the exact definition canonical resolution produced for this
     // exact name, whenever it produced it.
-    dispatcher = authority?.forms?.dispatcherFor(name, imported);
+    dispatcher = environment?.forms?.dispatcherFor(name, imported);
   } catch (error) {
     selection?.settle();
     // Import is a durable effect, so it is the other place a stale journal
@@ -2630,7 +2667,7 @@ function* expandComponent(
       owner,
       path,
       checkedFailures,
-      authority,
+      environment,
       returnBody,
       selected,
       dispatcher,
@@ -2644,7 +2681,7 @@ function* expandComponent(
   // which for an ordinary document is nothing. Decided from the definition
   // canonical resolution retained — the one this expansion is about to invoke,
   // reporting the origin core declared — rather than from the name alone.
-  const bodyAuthority = authorityForBody(authority, name, definition);
+  const bodyEnvironment = environmentForBody(environment, name, definition);
 
   const placementError = validateBodyStructure(definition.bodySegments, definition.returns);
   if (placementError) {
@@ -2776,7 +2813,7 @@ function* expandComponent(
       ownPath: path,
       printedErrors: bodyContentErrors,
       checkedFailures,
-      authority,
+      environment,
     });
     // Published on the eval scope, which every task the invocation owns
     // descends from — including its persist-eval blocks and its content.
@@ -2850,7 +2887,7 @@ function* expandComponent(
           claimProjection,
           path,
           checkedFailures,
-          bodyAuthority,
+          bodyEnvironment,
           returnBody,
         );
       });
@@ -2898,7 +2935,7 @@ function* expandComponent(
       bodyOwner,
       path,
       checkedFailures,
-      bodyAuthority,
+      bodyEnvironment,
       returnBody,
     );
   });
@@ -2914,9 +2951,9 @@ function* expandComponent(
   // binds instead. Recording it here — against the segments this body produced,
   // after it produced them — is what carries the fact to the emission loop,
   // which is outside every scope the invocation owned.
-  if (authorizedCanonically && authority?.declared?.declaresExact(name) === true) {
+  if (authorizedCanonically && environment?.installedComponents?.declaresExact(name) === true) {
     markExactSource(
-      authority?.exact,
+      environment?.sourceSegments,
       bodyOwner === undefined ? expanded : bodyOwner.slice(renderedFrom),
     );
   }
@@ -3067,7 +3104,7 @@ function* expandFunctionComponent(
   path: string,
   /** This work's checked-failure ledger, inherited from the invoking element. */
   inherited: CheckedFailures | undefined,
-  authority: ExpansionAuthority | undefined,
+  environment: ExecutionEnvironment | undefined,
   returnBody: ReturnBody | undefined,
   /**
    * The identity domain canonical resolution selected for this invocation.
@@ -3243,8 +3280,8 @@ function* expandFunctionComponent(
         // refusing multiple delegations. Only a generated expansion has no such
         // table and issues through its narrowed protected route instead.
         const issued =
-          (authority?.identities === undefined
-            ? authority?.protectedBodies?.issue(
+          (environment?.componentIdentity === undefined
+            ? environment?.componentRouting?.issue(
                 definition.fn,
                 expansion.id,
                 name,
@@ -3255,9 +3292,9 @@ function* expandFunctionComponent(
             : undefined) ??
           issueInvocation(expansion.id, name, selected, frame, !selfClosing, dispatcher);
         const dispatchBody = (body: Operation<unknown>) =>
-          authority?.invoke === undefined
+          environment?.invokeGeneratedComponent === undefined
             ? body
-            : authority.invoke(definition.fn, issued.invocation, body);
+            : environment.invokeGeneratedComponent(definition.fn, issued.invocation, body);
         const projectionState: ProjectionState = {
           invocation,
           projecting: issued.projecting,
@@ -3280,7 +3317,7 @@ function* expandFunctionComponent(
           callerReturn: siteReturn,
           ownPath: path,
           checkedFailures,
-          authority,
+          environment,
         };
         // Only the ordinary handle is published. The richer projection a
         // protected body may reach stays a closure at the dispatch below, so
@@ -3398,10 +3435,10 @@ function* expandFunctionComponent(
           // syntax reference for this site — and the fact changes as expansion
           // descends, so it cannot be closed over when the implementation is
           // built. It is delivered here instead, by the copy of core performing
-          // the expansion, from the authority it is already holding.
-          const guarded = authority?.protectedBodies?.body(definition.fn);
+          // the expansion, from the environment it is already holding.
+          const guarded = environment?.componentRouting?.body(definition.fn);
           if (guarded !== undefined) {
-            // What to project, under which authority and in which scope stays
+            // What to project, under which environment and in which scope stays
             // here, where those things already are. How many times it may
             // answer, and for how long, is the lease's
             // (`protected-content.ts`).
@@ -3416,7 +3453,10 @@ function* expandFunctionComponent(
                   // content scope, not a second expansion.
                   const narrowed = createProjectionHandle({
                     ...projectionState,
-                    authority: { ...authority, syntax },
+                    // Only the reference is replaced, and only where there is an
+                    // environment to replace it on: an expansion driven without
+                    // one narrows nothing because it admitted nothing.
+                    environment: environment === undefined ? undefined : { ...environment, syntax },
                   });
                   const outcome = yield* narrowed.tryProject({
                     kind: "slot",
@@ -3436,11 +3476,11 @@ function* expandFunctionComponent(
             try {
               return yield* dispatchBody(
                 guarded(validatedProps, issued.invocation, {
-                  syntax: authority?.syntax,
-                  evaluation: authority?.evaluation,
+                  syntax: environment?.syntax,
+                  evaluationProfile: environment?.evaluationProfile,
                   projectContent: lease?.project,
-                  narrowProtectedBodies: (implementations: Iterable<unknown>) =>
-                    active ? authority?.protectedBodies?.narrow(implementations) : undefined,
+                  narrowComponentRouting: (implementations: Iterable<unknown>) =>
+                    active ? environment?.componentRouting?.narrow(implementations) : undefined,
                 }),
               );
             } finally {
@@ -4137,7 +4177,7 @@ export function* expandBody(
   path: string,
   /** Whether the invoking element sits inside a `<PrintErrors>` region. */
   checkedFailures: CheckedFailures | undefined,
-  authority: ExpansionAuthority | undefined,
+  environment: ExecutionEnvironment | undefined,
   returnBody: ReturnBody | undefined,
 ): Operation<Segment[]> {
   if (!bodyHasOutput(bodySegments)) {
@@ -4152,7 +4192,7 @@ export function* expandBody(
       path,
       0,
       checkedFailures,
-      authority,
+      environment,
       returnBody,
     );
   }
@@ -4174,7 +4214,7 @@ export function* expandBody(
         chunkPath,
         0,
         checkedFailures,
-        authority,
+        environment,
         returnBody,
       );
     } else if (chunk.output) {
@@ -4190,7 +4230,7 @@ export function* expandBody(
           chunkPath,
           0,
           checkedFailures,
-          authority,
+          environment,
           returnBody,
         );
       });
@@ -4208,7 +4248,7 @@ export function* expandBody(
           chunkPath,
           chunkBase,
           checkedFailures,
-          authority,
+          environment,
           returnBody,
         );
       });
@@ -4236,7 +4276,7 @@ function runDocumentation(
   indexBase: number,
   /** Whether the region that caused this expansion grants recovery (§3.6). */
   checkedFailures: CheckedFailures | undefined,
-  authority: ExpansionAuthority | undefined,
+  environment: ExecutionEnvironment | undefined,
   returnBody: ReturnBody | undefined,
 ): Operation<Segment[]> {
   return scoped(function* () {
@@ -4251,7 +4291,7 @@ function runDocumentation(
       path,
       indexBase,
       checkedFailures,
-      authority,
+      environment,
       returnBody,
     );
   });
@@ -4303,7 +4343,7 @@ function* expandValueBody(
   path: string,
   /** Whether the invoking element sits inside a `<PrintErrors>` region. */
   checkedFailures: CheckedFailures | undefined,
-  authority: ExpansionAuthority | undefined,
+  environment: ExecutionEnvironment | undefined,
   returnBody: ReturnBody | undefined,
 ): Operation<Json> {
   const slots = partitionBySlot(children);
@@ -4329,7 +4369,7 @@ function* expandValueBody(
       path,
       index,
       checkedFailures,
-      authority,
+      environment,
       ownBody,
     );
   }
@@ -4342,4 +4382,391 @@ function* expandValueBody(
     throw new Error(missingReturnMessage(componentName));
   }
   return selected.value;
+}
+
+/**
+ * Expand one occurrence of structural syntax an installation declared
+ * (spec §5.3).
+ *
+ * Everything a handler is given is settled before it is called: where the
+ * regions sit, which forms were written, and every prop the construct and its
+ * regions carry, evaluated and validated in authored source order. A failure
+ * anywhere in that sequence is the occurrence's failure, raised where it was
+ * written, and the handler is not entered — so a construct whose third region
+ * names a prop that does not typecheck runs none of the first two.
+ *
+ * The handler itself is the one the installation supplied with its declaration,
+ * taken from the catalog this expansion carries. It is called directly, inside
+ * a scope of its own: nothing is published, no context is consulted, and the
+ * only authority it gains is over the regions written inside its own occurrence.
+ */
+function* expandInstalledStructural(
+  declaration: AdmittedStructural,
+  segment: ComponentElement,
+  parentMeta: Record<string, unknown>,
+  parentProps: Record<string, Json>,
+  hideSet: Set<string>,
+  counter: BlockCounter,
+  owner: Segment[],
+  path: string,
+  checkedFailures: CheckedFailures | undefined,
+  environment: ExecutionEnvironment,
+  returnBody: ReturnBody | undefined,
+): Operation<void> {
+  const name = segment.name;
+
+  // Placement first. A region reached on its own is outside the construct that
+  // declares it — the accepted ones never arrive here, because their construct
+  // consumed them — so the shared analysis is asked with no enclosing name.
+  const placement = structuralPlacement(segment, declaration, undefined);
+  if (placement.violations.length > 0) {
+    for (const violation of placement.violations) {
+      owner.push(
+        yield* raise({
+          type: "error",
+          message: positioned(violation.message, violation.element ?? segment),
+          source: violation.source,
+        }),
+      );
+    }
+    return;
+  }
+
+  const form: InvocationForm = segment.selfClosing ? "self-closing" : "paired";
+  const refusedConstruct = refusedForm(declaration, segment);
+  if (refusedConstruct !== undefined) {
+    owner.push(
+      yield* raise({
+        type: "error",
+        message: positioned(refusedConstruct, segment),
+        source: name,
+      }),
+    );
+    return;
+  }
+
+  // Each accepted region is a declaration in its own right, so the forms it
+  // accepts are its own. They are all checked here, beside the construct's and
+  // before any props: a form is a syntactic fact about what was written, and
+  // settling every one of them first means no expression a construct or region
+  // carries evaluates for an occurrence that was never going to be admitted.
+  const declared = new Map<ComponentElement, AdmittedStructural>();
+  for (const element of placement.regions) {
+    const region = environment.declarations.structural(element.name);
+    if (region === undefined) {
+      throw new Error(`${element.name} was accepted as a region nothing declares`);
+    }
+    declared.set(element, region);
+    const refusedRegion = refusedForm(region, element);
+    if (refusedRegion !== undefined) {
+      owner.push(
+        yield* raise({
+          type: "error",
+          message: positioned(refusedRegion, element),
+          source: element.name,
+        }),
+      );
+      return;
+    }
+  }
+
+  const requested: RegionRequest[] = [];
+  const parentProps_ = yield* structuralProps(segment, declaration, owner);
+  if (parentProps_ === undefined) {
+    return;
+  }
+
+  // Every region's props are evaluated and validated before the handler starts,
+  // in the order they were authored: a construct is one occurrence, and half of
+  // one having run is not a state a handler should be able to observe.
+  for (const element of placement.regions) {
+    const region = declared.get(element)!;
+    const props = yield* structuralProps(element, region, owner);
+    if (props === undefined) {
+      return;
+    }
+    // Where it sits among the construct's own direct children, whitespace
+    // counted, so a region's identity is the site it was written at rather than
+    // its rank among the ones that happened to be accepted.
+    requested.push({
+      declaration: region,
+      element,
+      props,
+      ordinal: segment.children.indexOf(element),
+    });
+  }
+
+  const handler = declaration.expand;
+  if (handler === undefined) {
+    // Admission pairs a construct with the handler its own installation
+    // supplied, so an admitted entry without one is this engine having lost it
+    // rather than a host having omitted it.
+    throw new Error(`${name} was admitted as structural syntax with no expansion handler`);
+  }
+
+  const request = buildExpansionRequest(declaration, segment, form, parentProps_, requested, {
+    parentMeta,
+    parentProps,
+    hideSet,
+    counter,
+    path,
+    checkedFailures,
+    environment,
+    returnBody,
+    children: segment.children,
+  });
+
+  // One scope, so a producer a handler entered is halted and joined before the
+  // occurrence settles, whether the handler returned, failed or was cancelled.
+  yield* scoped(function* () {
+    yield* handler(request);
+  });
+}
+
+/**
+ * The refusal an element written in a form its own declaration does not accept
+ * earns, or `undefined` when the form is one it accepts.
+ *
+ * One rule for the construct and for each of its regions. A region is declared
+ * in its own right — its forms are its own, not its construct's — so a region
+ * declared self-closing cannot be admitted merely because it was written inside
+ * a construct that accepts paired.
+ */
+function refusedForm(
+  declaration: AdmittedStructural,
+  element: ComponentElement,
+): string | undefined {
+  const form: InvocationForm = element.selfClosing ? "self-closing" : "paired";
+  if (declaration.forms.includes(form)) {
+    return undefined;
+  }
+  return (
+    `<${declaration.name} /> is not written in a form it accepts: it was invoked ${form}, ` +
+    `and it accepts ${declaration.forms.join(" and ")}.`
+  );
+}
+
+/** One accepted region, with everything settled before the handler exists. */
+interface RegionRequest {
+  readonly declaration: AdmittedStructural;
+  readonly element: ComponentElement;
+  readonly props: Record<string, Json>;
+  /** Where the region sits among the construct's own direct children. */
+  readonly ordinal: number;
+}
+
+/** The expansion state a region's producer continues from. */
+interface RegionContext {
+  readonly parentMeta: Record<string, unknown>;
+  readonly parentProps: Record<string, Json>;
+  readonly hideSet: Set<string>;
+  readonly counter: BlockCounter;
+  readonly path: string;
+  readonly checkedFailures: CheckedFailures | undefined;
+  readonly environment: ExecutionEnvironment;
+  readonly returnBody: ReturnBody | undefined;
+  readonly children: Segment[];
+}
+
+/**
+ * The props one structural element carries, evaluated and validated.
+ *
+ * `undefined` means the occurrence failed and said so: the diagnostic is
+ * already in the owner, under the ambient error mode, exactly as every other
+ * construct reports one.
+ */
+function* structuralProps(
+  element: ComponentElement,
+  declaration: AdmittedStructural,
+  owner: Segment[],
+): Operation<Record<string, Json> | undefined> {
+  const name = element.name;
+  const asExpression = asExpressionViolation(name, element.expressions);
+  if (asExpression !== undefined) {
+    owner.push(
+      yield* raise({
+        type: "error",
+        message: positioned(asExpression.message, element),
+        source: name,
+      }),
+    );
+    return undefined;
+  }
+
+  let resolved: Record<string, Json>;
+  try {
+    resolved = yield* resolveExpressionProps(
+      element.props,
+      element.expressions,
+      name,
+      element.projectedEnv,
+    );
+  } catch (error) {
+    owner.push(
+      yield* raise({
+        type: "error",
+        message: error instanceof Error ? error.message : String(error),
+        source: name,
+      }),
+    );
+    return undefined;
+  }
+
+  try {
+    const refused = asBindingViolation(name, resolved.as);
+    if (refused !== undefined) {
+      throw new Error(refused.message);
+    }
+    // `as` and `slot` stay the engine's. A construct renders through its
+    // regions and returns nothing, so a valid `as` binds nothing and is
+    // consumed here rather than reaching the handler as a prop.
+    const { as: _as, slot: _slot, ...forValidation } = resolved;
+    return deepFreeze(yield* validateProps(name, forValidation, declaration.props));
+  } catch (error) {
+    owner.push(yield* raise(schemaValidationErrorSegment(error, name)));
+    return undefined;
+  }
+}
+
+/**
+ * The request one occurrence hands its handler.
+ *
+ * Every member is a copy this engine owns: the authored facts, the validated
+ * props already frozen, and one region object per accepted child. Nothing on it
+ * reaches a segment, the children array, the environment, the counter or the
+ * ledger — a handler holds what its own occurrence said, and the operation that
+ * expands each region.
+ */
+function buildExpansionRequest(
+  declaration: AdmittedStructural,
+  segment: ComponentElement,
+  form: InvocationForm,
+  props: Record<string, Json>,
+  regions: readonly RegionRequest[],
+  context: RegionContext,
+): ExpansionRequest {
+  return Object.freeze({
+    name: declaration.name,
+    origin: declaration.origin,
+    form,
+    ...positionOf(segment),
+    props,
+    regions: Object.freeze(regions.map((region) => buildExpansionRegion(region, context))),
+  });
+}
+
+function buildExpansionRegion(region: RegionRequest, context: RegionContext): ExpansionRegion {
+  const { declaration, element, props, ordinal } = region;
+  const form: InvocationForm = element.selfClosing ? "self-closing" : "paired";
+  return Object.freeze({
+    name: declaration.name,
+    origin: declaration.origin,
+    form,
+    ...positionOf(element),
+    props,
+    *expand(): Operation<Stream<ExpansionChunk, void>> {
+      return regionStream(function* (emit) {
+        yield* produceRegion(element, ordinal, context, emit);
+      });
+    },
+  });
+}
+
+/** The authored position one element reports, copied and frozen. */
+function positionOf(element: ComponentElement): { position?: Readonly<SourcePosition> } {
+  const position = element.position;
+  return position === undefined ? {} : { position: Object.freeze({ ...position }) };
+}
+
+/**
+ * Expand one region's authored body, one segment at a time, into its stream.
+ *
+ * The body is the author's own text and expands as such: the construct's
+ * metadata and props, the region's own lexical environment, and the same hide
+ * set, counter, ledger, return frame and environment the occurrence carries. What
+ * the handler was handed as the region's props is data for the handler; it is
+ * not what the body interpolates against.
+ *
+ * Segments are expanded one at a time so that demand governs authored work
+ * rather than only delivery: what has not been asked for has not run.
+ */
+function* produceRegion(
+  element: ComponentElement,
+  ordinal: number,
+  context: RegionContext,
+  emit: (chunk: ExpansionChunk) => Operation<void>,
+): Operation<void> {
+  // One frame, not two: the path handed to this occurrence already ends in the
+  // construct's own element frame, so adding it again would give a region a
+  // parent it was never written under. Its site falls back to where it sits
+  // among the construct's direct children, whitespace counted, so a region
+  // beside skipped text keeps the identity of the place it was written.
+  const regionPath = extendPath(
+    context.path,
+    elementFrame(element.name, elementSite(element.position, ordinal)),
+  );
+
+  const produced: Segment[] = [];
+  let rendered = 0;
+  for (const [index, child] of element.children.entries()) {
+    // A segment that appended output and then threw has still produced that
+    // output, and a reader that asked for it is owed it. The failure is held
+    // until the prefix has crossed under the same demand discipline as any
+    // other chunk, and is then raised unchanged — cancellation is not caught
+    // here, because Effection unwinds a halted task rather than throwing into
+    // it, so this sees real failures only.
+    let failure: { readonly error: unknown } | undefined;
+    try {
+      yield* expandSegmentsWithin(
+        [child],
+        context.parentMeta,
+        context.parentProps,
+        context.hideSet,
+        context.counter,
+        produced,
+        regionPath,
+        index,
+        context.checkedFailures,
+        context.environment,
+        context.returnBody,
+      );
+    } catch (error) {
+      failure = { error };
+    }
+    // Only what this segment appended, and only what renders to text: the
+    // exactness of each run is the execution's own record, never a field a
+    // segment carries.
+    for (const chunk of emissions(context.environment.sourceSegments, produced.slice(rendered))) {
+      yield* emit(chunk);
+    }
+    rendered = produced.length;
+    if (failure !== undefined) {
+      throw failure.error;
+    }
+  }
+}
+
+/**
+ * One validated props object, frozen through.
+ *
+ * A handler holds this for as long as it likes, and two regions of one
+ * occurrence hold their own: freezing is what keeps one of them from editing
+ * what another was given, or what a later expansion reads.
+ */
+function deepFreeze(props: Record<string, Json>): Record<string, Json> {
+  for (const value of Object.values(props)) {
+    if (typeof value === "object" && value !== null) {
+      freezeJson(value);
+    }
+  }
+  return Object.freeze(props);
+}
+
+function freezeJson(value: object): void {
+  Object.freeze(value);
+  for (const member of Object.values(value)) {
+    if (typeof member === "object" && member !== null) {
+      freezeJson(member);
+    }
+  }
 }

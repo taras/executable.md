@@ -53,7 +53,7 @@ import { printErrors, printsErrors } from "./component-failures.ts";
 import { documentationOf } from "./components/documentation.ts";
 import type { ComponentDocumentation } from "./components/documentation.ts";
 import type { SyntaxReference } from "./syntax-reference.ts";
-import type { CapturedProfile } from "./evaluation-profile.ts";
+import type { EvaluationProfile } from "./evaluation-profile.ts";
 import type {
   FunctionComponent,
   FunctionComponentDefinition,
@@ -217,11 +217,11 @@ export interface ProtectedSite {
    * `undefined` where the host offers no evaluation, which is not an
    * unrestricted one.
    */
-  readonly evaluation: CapturedProfile | undefined;
+  readonly evaluationProfile: EvaluationProfile | undefined;
   /** How this body renders its own paired content, when it has any. */
   readonly projectContent: ProjectProtectedContent | undefined;
   /** Derive a child route from this site's exact admitted implementations. */
-  narrowProtectedBodies(implementations: Iterable<unknown>): ProtectedBodies | undefined;
+  narrowComponentRouting(implementations: Iterable<unknown>): ComponentRouting | undefined;
 }
 
 /**
@@ -235,13 +235,13 @@ export interface ProtectedSite {
  * past this execution's teardown reaches nothing, because the table went with
  * the execution.
  */
-export interface ProtectedBodies {
+export interface ComponentRouting {
   /** The body canonical expansion may enter for this exact implementation. */
   body(fn: unknown): ProtectedBody | undefined;
   /** Project an already routed source; report its documentation origin, never its body. */
   project(source: unknown, wrapper: unknown): string | undefined;
   /** A fresh route seeded only with exact implementations this route holds. */
-  narrow(implementations: Iterable<unknown>): ProtectedBodies;
+  narrow(implementations: Iterable<unknown>): ComponentRouting;
   /** Issue in the routed body's domain without publishing that domain. */
   issue(
     fn: unknown,
@@ -255,7 +255,7 @@ export interface ProtectedBodies {
   close(): void;
 }
 
-interface ProtectedInstallation extends ProtectedBodies {
+interface ComponentRoutingInstallation extends ComponentRouting {
   /**
    * Build one implementation and keep its real body here.
    *
@@ -281,7 +281,7 @@ interface ProtectedInstallation extends ProtectedBodies {
   revoke(): void;
 }
 
-function createProtectedBodies(): ProtectedInstallation {
+function createComponentRouting(): ComponentRoutingInstallation {
   // One liveness flag for the execution's whole route and every route narrowed
   // from it: teardown revokes the lot at once. A retained route still holds its
   // WeakMap, so liveness rather than reachability is what invalidates it.
@@ -291,7 +291,7 @@ function createProtectedBodies(): ProtectedInstallation {
     readonly domain: IdentityDomain;
     readonly origin: string;
   }
-  function route(bodies: WeakMap<object, Entry>, parent: () => boolean): ProtectedBodies {
+  function route(bodies: WeakMap<object, Entry>, parent: () => boolean): ComponentRouting {
     let open = true;
     const active = () => open && parent();
     return {
@@ -317,7 +317,7 @@ function createProtectedBodies(): ProtectedInstallation {
         }
         return body?.origin;
       },
-      narrow(implementations): ProtectedBodies {
+      narrow(implementations): ComponentRouting {
         const narrowed = new WeakMap<object, Entry>();
         if (active()) {
           for (const implementation of implementations) {
@@ -746,7 +746,7 @@ function unusable(_props: Record<string, Json>, form: InvocationForm | undefined
  * component resolved again on another path — recorded into nothing and left a
  * genuine invocation unselected. An identity is timing-free; a stack top is not.
  */
-export interface FormSelections {
+export interface FormSyntax {
   /**
    * Record what canonical resolution produced for the name it was asked.
    *
@@ -772,7 +772,7 @@ export interface FormSelections {
  * component refuses rather than running unselected — the safe direction, and
  * the reason there is no ambient fallback to reach for.
  */
-export function installFormSelections(): FormSelections {
+export function installFormSyntax(): FormSyntax {
   // Keyed on the definition object itself, so what is recognized is the answer
   // canonical resolution produced rather than anything about its shape. Held
   // here for this execution's lifetime and reachable from nowhere else.
@@ -1041,7 +1041,7 @@ export interface IdentityInstallation {
    */
   readonly protected: ReadonlyMap<string, FunctionComponentDefinition>;
   /** The bodies canonical expansion may enter for those implementations. */
-  readonly protectedBodies: ProtectedBodies;
+  readonly componentRouting: ComponentRouting;
   /** Called once the registrations have been validated and committed. */
   activate(): void;
 }
@@ -1073,11 +1073,11 @@ export function installIdentities(
   const registrations: IdentityRegistration[] = [];
   const privates = new Map<string, FunctionComponentDefinition>();
   const guarded = new Map<string, FunctionComponentDefinition>();
-  const protectedBodies = createProtectedBodies();
+  const componentRouting = createComponentRouting();
   for (const component of protectedComponents) {
     const domain = mintDomain(component.name);
     minted.set(component.name, domain);
-    const implementation = protectedBodies.implementation(
+    const implementation = componentRouting.implementation(
       component.name,
       component.build,
       domain.claim,
@@ -1188,13 +1188,13 @@ export function installIdentities(
         // The route goes with the domains: a wrapper projected into it, or a
         // route narrowed from it, answers for nothing once the execution that
         // minted the bodies is gone.
-        protectedBodies.revoke();
+        componentRouting.revoke();
       },
     },
     registrations,
     privates,
     protected: guarded,
-    protectedBodies,
+    componentRouting,
     activate: () => {
       for (const domain of minted.values()) {
         domain.activate();

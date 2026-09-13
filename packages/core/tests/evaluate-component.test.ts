@@ -116,7 +116,7 @@ describe("protected generated component answers", () => {
       }
       const captured = yield* prepared.seal(
         new Map([["Syntax", { definition }]]),
-        identity.protectedBodies.project,
+        identity.componentRouting.project,
       );
       const symbols = admittedSymbols(captured.read);
       expect(symbols.categories[2].entries).toMatchObject([
@@ -260,8 +260,8 @@ describe("protected generated component answers", () => {
     expect(failed).toContain("canonical execution");
     expect(seen).toHaveLength(2);
     for (const keys of surfaces) {
-      expect(keys).not.toContain("protectedBodies");
-      expect(keys).not.toContain("narrowProtectedBodies");
+      expect(keys).not.toContain("componentRouting");
+      expect(keys).not.toContain("narrowComponentRouting");
       expect(keys).not.toContain("syntax");
     }
     expect(
@@ -302,8 +302,8 @@ describe("protected generated component answers", () => {
       if (typeof value === "object" && value !== null) {
         for (const key of Reflect.ownKeys(value)) {
           expect([
-            "protectedBodies",
-            "narrowProtectedBodies",
+            "componentRouting",
+            "narrowComponentRouting",
             "projectContent",
             "protectedOrigin",
           ]).not.toContain(String(key));

@@ -75,7 +75,7 @@ import type { Operation } from "effection";
 
 import { getExpansion } from "../expansion.ts";
 import { NO_PROFILE, REVOKED } from "../evaluation-profile.ts";
-import type { CapturedEntry, CapturedProfile } from "../evaluation-profile.ts";
+import type { CapturedEntry, EvaluationProfile } from "../evaluation-profile.ts";
 import { evaluateProtectedGeneratedXmd } from "../generated-xmd.ts";
 import type {
   GeneratedEffectClass,
@@ -214,7 +214,7 @@ function evaluate(claim: IdentityClaimant): ProtectedBody {
     // Every refusal a selection or a spelling can produce happens before the
     // durable name is claimed and before any program exists, so an element this
     // host cannot answer for leaves no admission record and performs no effect.
-    const profile = site.evaluation;
+    const profile = site.evaluationProfile;
     if (profile === undefined) {
       throw new ComponentInvocationError(NO_PROFILE);
     }
@@ -258,7 +258,7 @@ function evaluate(claim: IdentityClaimant): ProtectedBody {
     // fragment produced inside another fragment's producer leaves the outer one
     // where it was, and a failed one leaves nothing behind.
     const leave = yield* profile.enterFragment();
-    const narrowedBodies = site.narrowProtectedBodies(
+    const narrowedBodies = site.narrowComponentRouting(
       entries.admitted.map((entry) => entry.definition.fn),
     );
     try {
@@ -280,7 +280,7 @@ function evaluate(claim: IdentityClaimant): ProtectedBody {
  */
 function statedText(
   elementProps: Record<string, Json>,
-  profile: CapturedProfile,
+  profile: EvaluationProfile,
   form: "self-closing" | "paired",
 ): string | undefined {
   const text = elementProps.text;
@@ -358,7 +358,7 @@ interface SelectedTables {
  * does not change what a fragment's props are validated against.
  */
 function selectedTables(
-  profile: CapturedProfile,
+  profile: EvaluationProfile,
   allow: readonly GeneratedEffectClass[],
 ): SelectedTables {
   const observations: GeneratedObservation[] = [];

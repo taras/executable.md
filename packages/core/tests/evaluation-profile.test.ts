@@ -17,7 +17,7 @@ import { expect } from "@executablemd/test-support/expect";
 import type { Operation } from "effection";
 import { scoped, useScope } from "effection";
 import { installIdentities } from "../src/invocation-identity.ts";
-import type { ProtectedBodies, ProtectedSite } from "../src/invocation-identity.ts";
+import type { ComponentRouting, ProtectedSite } from "../src/invocation-identity.ts";
 
 import {
   fileReadEntry,
@@ -29,7 +29,7 @@ import { CORE_ORIGIN } from "../src/components/registry.ts";
 import { props as globProps } from "../src/components/Glob.ts";
 import type {
   CapabilityEntry,
-  CapturedProfile,
+  EvaluationProfile,
   ComponentAnswerEntry,
   FragmentEvaluationInput,
   ResolvedAnswer,
@@ -55,7 +55,7 @@ describe("protected route projection", () => {
     );
   }
 
-  function invoke(route: ProtectedBodies, fn: unknown): Operation<unknown> {
+  function invoke(route: ComponentRouting, fn: unknown): Operation<unknown> {
     return scoped(function* () {
       const body = route.body(fn);
       const issued = route.issue(fn, "occurrence", "Admitted", yield* useScope(), false);
@@ -65,9 +65,9 @@ describe("protected route projection", () => {
       try {
         const site: ProtectedSite = {
           syntax: undefined,
-          evaluation: undefined,
+          evaluationProfile: undefined,
           projectContent: undefined,
-          narrowProtectedBodies: route.narrow,
+          narrowComponentRouting: route.narrow,
         };
         return yield* body({}, issued.invocation, site);
       } finally {
@@ -98,18 +98,18 @@ describe("protected route projection", () => {
       });
       const captured = yield* prepared.seal(
         new Map([["Admitted", { definition: original }]]),
-        owner.protectedBodies.project,
+        owner.componentRouting.project,
       );
       const sealed = captured.read[0]?.definition.fn;
-      expect(yield* invoke(owner.protectedBodies, sealed)).toBe("Admitted:occurrence");
-      const child = owner.protectedBodies.narrow([sealed]);
+      expect(yield* invoke(owner.componentRouting, sealed)).toBe("Admitted:occurrence");
+      const child = owner.componentRouting.narrow([sealed]);
       const wrapper = function* (): Operation<never> {
         throw new Error("unrouted wrapper ran");
       };
       child.project(sealed, wrapper);
       expect(yield* invoke(child, wrapper)).toBe("Admitted:occurrence");
-      expect(yield* invoke(owner.protectedBodies, wrapper)).toBe("unrouted");
-      expect(yield* invoke(other.protectedBodies, sealed)).toBe("unrouted");
+      expect(yield* invoke(owner.componentRouting, wrapper)).toBe("unrouted");
+      expect(yield* invoke(other.componentRouting, sealed)).toBe("unrouted");
       const independent = function* Admitted(): Operation<string> {
         return "independent";
       };
@@ -129,7 +129,7 @@ describe("protected route projection", () => {
       }
       child.close();
       expect(yield* invoke(child, wrapper)).toBe("unrouted");
-      expect(yield* invoke(owner.protectedBodies, sealed)).toBe("Admitted:occurrence");
+      expect(yield* invoke(owner.componentRouting, sealed)).toBe("Admitted:occurrence");
       prepared.revoke();
     } finally {
       owner.identities.revoke();
@@ -141,7 +141,7 @@ describe("protected route projection", () => {
     const owner = installation();
     owner.activate();
     const original = owner.protected.get("Admitted")?.fn;
-    const child = owner.protectedBodies.narrow([original]);
+    const child = owner.componentRouting.narrow([original]);
     const project = child.project;
     const narrow = child.narrow;
     const wrapper = function* (): Operation<string> {
@@ -164,9 +164,9 @@ describe("protected route projection", () => {
         { hasContent: () => false },
         {
           syntax: undefined,
-          evaluation: undefined,
+          evaluationProfile: undefined,
           projectContent: undefined,
-          narrowProtectedBodies: narrow,
+          narrowComponentRouting: narrow,
         },
       );
     } catch (error) {
@@ -176,9 +176,9 @@ describe("protected route projection", () => {
     const later = installation();
     later.activate();
     try {
-      later.protectedBodies.project(wrapper, later.protected.get("Admitted")?.fn);
-      expect(yield* invoke(later.protectedBodies, wrapper)).toBe("unrouted");
-      expect(yield* invoke(later.protectedBodies, later.protected.get("Admitted")?.fn)).toBe(
+      later.componentRouting.project(wrapper, later.protected.get("Admitted")?.fn);
+      expect(yield* invoke(later.componentRouting, wrapper)).toBe("unrouted");
+      expect(yield* invoke(later.componentRouting, later.protected.get("Admitted")?.fn)).toBe(
         "Admitted:occurrence",
       );
     } finally {
@@ -210,7 +210,7 @@ function entry(overrides: Partial<CapabilityEntry> = {}): CapabilityEntry {
  * about what capture does with a profile a host *can* state, so they all supply
  * them and none of them restates the fact.
  */
-function* capture(overrides: Partial<FragmentEvaluationInput> = {}): Operation<CapturedProfile> {
+function* capture(overrides: Partial<FragmentEvaluationInput> = {}): Operation<EvaluationProfile> {
   // Preparation copies and binds; sealing settles the provider-backed names.
   // A capability-only profile resolves none, which is why every row here seals
   // against no answers at all.

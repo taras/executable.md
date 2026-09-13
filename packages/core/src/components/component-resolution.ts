@@ -19,17 +19,6 @@
  */
 
 import type { ComponentDefinition, FunctionComponentDefinition, SourcePosition } from "../types.ts";
-import type { Operation } from "effection";
-import type { ComponentInvocation } from "../invocation-identity.ts";
-import type {
-  FormSelections,
-  InvocationIdentities,
-  ProtectedBodies,
-} from "../invocation-identity.ts";
-import type { DeclaredImports, PrivateClosure } from "./declared-markdown.ts";
-import type { ExactSource } from "../output/exact-source.ts";
-import type { SyntaxReference } from "../syntax-reference.ts";
-import type { CapturedProfile } from "../evaluation-profile.ts";
 
 /** A definition an import may answer with. */
 export type ImportedDefinition = ComponentDefinition | FunctionComponentDefinition;
@@ -56,105 +45,6 @@ export interface ImportAuthority {
    * invoke none. Asked only for a name `closes()` answered for.
    */
   authorize(name: string, answer: ImportedDefinition): ImportedDefinition;
-}
-
-/**
- * What core's own expansion is given, beside the segments.
- *
- * Two things travel here, and both for the same reason: they decide what a
- * document may invoke and what it may name, and a decision like that never
- * reads replaceable state. This object is built by the execution, held by
- * value, and passed into core's own expansion — no document, component or
- * middleware can reach it, replace it, or add to it.
- */
-export interface ExpansionAuthority {
-  /** What a closed execution may invoke for a name. Absent for an open one. */
-  readonly imports?: ImportAuthority;
-  /**
-   * The exact Markdown this execution declares, and the register one private
-   * import is offered through.
-   *
-   * Held by the execution and handed here by value, like everything else on
-   * this object: an expansion reaching it is core's own, and nothing a
-   * document, a component or middleware can name reaches it.
-   */
-  readonly declared?: DeclaredImports;
-  /**
-   * The private names the segments being expanded may write, when they are a
-   * declaration's own body.
-   *
-   * This is the one member that changes as expansion descends. A declared
-   * component's body carries its closure; everything else — the caller, the
-   * content the caller projected, an imported component, a sibling invocation —
-   * carries whatever it carried, which for an ordinary document is nothing.
-   */
-  readonly privates?: PrivateClosure;
-  /** The domains this execution minted, for the components it gave one. */
-  readonly identities?: InvocationIdentities;
-  /**
-   * Which segments this execution produced as a program's source.
-   *
-   * Held by the execution and handed here by value, like everything else on
-   * this object. It is on the private authority rather than in a context
-   * because a context resolves by name, and a name is not a secret: a component
-   * could build one, reach the record and answer that everything is exact.
-   */
-  readonly exact?: ExactSource;
-  /**
-   * What canonical resolution selected for each import, for the components
-   * whose authored form selects an effect.
-   *
-   * Held by the execution and handed here by value, like the identities beside
-   * it: an expansion reaching this object is core's own, and nothing a document,
-   * a component or middleware can name reaches it.
-   */
-  readonly forms?: FormSelections;
-  /**
-   * What a document may write at the site being expanded.
-   *
-   * The execution builds one at its root from the selection inputs it captured,
-   * and hands it here by value like everything else on this object — not through
-   * a Context, because a context resolves by name and a name is not a secret, so
-   * a document could build one and answer for the vocabulary it is shown.
-   *
-   * It is lexical. A trusted canonical evaluation boundary that has already
-   * admitted the exact vocabulary a subtree may write replaces this member for
-   * that subtree, and leaving the subtree restores the enclosing one. Nothing
-   * else changes it: an ordinary component's body, the content a caller
-   * projected and an imported definition each carry what the site carried.
-   */
-  readonly syntax?: SyntaxReference;
-  /**
-   * The maximum authority a generated fragment may be evaluated under.
-   *
-   * Stated by the trusted host at the installation boundary, before the root
-   * import and before any document, component or middleware code exists, and
-   * handed here by value like everything else on this object. It is on the
-   * private authority rather than in a context for the reason the rest are, and
-   * one more: `<Evaluate>` is a *public* component, so any author may write it,
-   * and what keeps that from being a capability is that the ceiling it narrows
-   * from was settled by somebody the document cannot reach.
-   *
-   * Absent for a host that offers no evaluation. That is not an unrestricted
-   * evaluation — it is no evaluation, and `<Evaluate>` refuses.
-   */
-  readonly evaluation?: CapturedProfile;
-  /**
-   * The bodies this execution will enter for the components canonical core
-   * protects.
-   *
-   * Held by the execution and handed here by value, like the identity domains
-   * beside it. It is what makes a protected implementation reachable at all: an
-   * implementation another loaded copy built is in that copy's table, and one
-   * kept past this execution's teardown reaches a table that is gone.
-   */
-  readonly protectedBodies?: ProtectedBodies;
-  /** The generated import's form check and result collection, around either body kind. */
-  readonly invoke?: (
-    fn: unknown,
-    invocation: ComponentInvocation,
-    body: Operation<unknown>,
-  ) => Operation<unknown>;
 }
 
 /** Why an answer is not the one canonical execution produced for this name. */
