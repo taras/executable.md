@@ -228,10 +228,9 @@ export function* inspectComponent(options: InspectComponentOptions): Operation<C
 
   switch (selected.kind) {
     case "structural":
-      // The engine's own arm names the construct it came from; an installation's
-      // names the origin that declared it. Provenance is what a caller asking
-      // "what is this name" needs, so the two answer under different `kind`s
-      // even though one selection arm chose both.
+      // One kind, two provenance shapes: engine-owned syntax carries
+      // `construct`; installed syntax carries the declaring installation's
+      // `origin`.
       return "construct" in selected
         ? {
             kind: "structural",
