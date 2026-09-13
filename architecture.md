@@ -4411,10 +4411,18 @@ durable is written.
 A trusted host may ship first-party Markdown, name it, and hand it to one
 execution. Everything about it is decided before the root document is imported.
 
-**The declaration is held to its own bytes.** The host states the name, the
-origin, the source and its SHA-256, and may state the props schema, the return
-and the accepted forms. Canonical core parses that source and refuses the
-declaration when the digest is not the digest of those bytes, when a stated
+**A declaration says what it is.** Every declaration states
+`kind: "markdown"`, and admission reads that before it reads anything else.
+Everything else a declaration carries is a statement *about* exact Markdown, so
+a value admitted on the strength of merely having a source and a digest would be
+one whose shape decided what it meant. A declaration stating a kind this version
+does not know, or stating none, is refused before the root document is imported
+rather than read as Markdown.
+
+**The declaration is held to its own bytes.** The host states the kind, the
+name, the origin, the source and its SHA-256, and may state the props schema,
+the return and the accepted forms. Canonical core parses that source and refuses
+the declaration when the digest is not the digest of those bytes, when a stated
 schema is not the schema they declare, when the forms are not canonical, when
 the name is not a component name or is structural syntax, when one name is
 declared twice, or when a reserved registration already claims it. A build that
@@ -4446,10 +4454,13 @@ other name in the execution stays the ordinary open import it has always been.
 Declaring one asset does not take component substitution away from every
 document the host runs.
 
-**Every declaration is read once, before any installation runs.** Name, origin,
-source, digest, forms, prose and each private declaration are captured by the
-invocation and held by it — factory bound, arrays and schemas copied — on the
-same terms as the admissions and the bundle. A schema is copied rather than
+**Every declaration is read once, before any installation runs.** Kind, name,
+origin, source, digest, forms, prose and each private declaration are captured
+by the invocation and held by it — factory bound, arrays and schemas copied — on
+the same terms as the admissions and the bundle. The kind is copied rather than
+decided: what admission is held to is what the host stated at the moment of
+capture, so a capture that read fewer members than it was given cannot turn an
+unknown declaration into a Markdown one. A schema is copied rather than
 referenced because it is a whole object graph, and holding the caller's object
 would leave the contract mutable after capture. A host that hands a declaration
 over and then replaces a member of it, or mutates a schema it still holds, has
@@ -4953,7 +4964,7 @@ Status is measured against main.
 | standard-input root documents | `xmd run -` and `xmd run -- -` read the whole root document from standard input, once, to end of file, and run it through the ordinary run profile. Fixed grammar selects it — the explicit `run` command form plus a document argument that is exactly `-`, read from the parser's own unconsumed remainder so a `-` another option took as its value is not one — and every other spelling keeps the meaning it had: the shorthand `xmd -` executes the file named `-`, `xmd run -#Section` executes that file's `Section`, another command's `-` is that command's, and `--eval -` keeps its refusal. `-` is the one filename the option grammar leaves unwritable, so the reference grammar reaches it and nothing else beginning with `-` is read as a document. The parsed path and every recovered reference stay separate facts until the grammar is settled, so a command line naming two roots refuses in either order, before the read and before either candidate is inspected. The reader is a value each runtime-named entrypoint supplies and the shared CLI never reaches a stdin global; what comes back is `retainedSource("<stdin>", source)`, adding no root-source variant, constructor, digest member or public API. The complete input is acquired before inspection, provider setup, the secret-detection announcement, journal creation, root admission and execution, inside the run's existing deadline; a failed read is one fixed sentence carrying no host error, input or path, and cancellation tears the reader down without becoming one | built on this stack |
 | targeted `xmd run` | reads a file argument as a document reference and executes the one exact target its selector resolved to, replacing the selector before execution rereads the file | built on the #412 stack |
 | targeted workflow definition | the V1 workflow definition optionally carries the exact canonical document target, which takes part in definition identity and in compatible reuse | built on the #412 stack; the workflow CLI does not supply one yet |
-| declared Markdown component | a trusted host declares exact first-party Markdown to one execution as immutable data on an `ExecutionInstallation`: name, origin, source, its SHA-256, the accepted forms, an optional statement of the props and return that must agree with the parsed source, and an optional private component closure. Admission parses the bytes and refuses a mismatched digest or schema, a non-canonical form, a name that is not a component name or is structural, a duplicate, a reserved-registration collision and a private name a registration also claims. Resolution places it in the protected tier with reserved registrations, above the workflow component bundle, repository files and every registered default. Live import and retained history are held to the declared origin, digest and bytes, private names resolve only while canonical core expands the declaring bytes' own body — by the authored occurrence rather than by the name, so an answer kept from a legitimate private import authorizes no later site, no alias, no copy of the definition, no invocation that is over and no later execution — including one that declares no Markdown at all — while a private name written anywhere else resolves to nothing before the bundle, the repository or a registration can answer for it — and `xmd syntax` and document validation describe the declared contract from the same declaration without describing the closure. Closure is per name: only the declared component and its private closure become canonical imports, and every other name in the execution stays the ordinary open import middleware may still answer | built on the #660 stack; no public component uses it yet (#660 PR 2) |
+| declared Markdown component | a trusted host declares exact first-party Markdown to one execution as immutable data on an `ExecutionInstallation`: the required `kind: "markdown"`, name, origin, source, its SHA-256, the accepted forms, an optional statement of the props and return that must agree with the parsed source, and an optional private component closure. Admission reads the kind first and refuses a missing or unknown one rather than reading the value as Markdown, then parses the bytes and refuses a mismatched digest or schema, a non-canonical form, a name that is not a component name or is structural, a duplicate, a reserved-registration collision and a private name a registration also claims. Resolution places it in the protected tier with reserved registrations, above the workflow component bundle, repository files and every registered default. Live import and retained history are held to the declared origin, digest and bytes, private names resolve only while canonical core expands the declaring bytes' own body — by the authored occurrence rather than by the name, so an answer kept from a legitimate private import authorizes no later site, no alias, no copy of the definition, no invocation that is over and no later execution — including one that declares no Markdown at all — while a private name written anywhere else resolves to nothing before the bundle, the repository or a registration can answer for it — and `xmd syntax` and document validation describe the declared contract from the same declaration without describing the closure. Closure is per name: only the declared component and its private closure become canonical imports, and every other name in the execution stays the ordinary open import middleware may still answer | built on the #660 stack; no public component uses it yet (#660 PR 2) |
 | workflow component bundle | a workflow root declares a closed set of authored Markdown components; the V1 workflow definition optionally carries them as one array sorted by component name, each entry holding the name, its canonical repository-relative path inside the pinned commit and that blob's object ID, and an absent member identifies a run closed over no components — so a definition retained before the member existed reads unchanged. `start` and `resume` read every component from the definition's own pinned commit; the array takes part in definition identity and is compared as part of the same V1 descriptor in compatible reuse; and canonical core resolves those names and holds both live import and retained history to that exact bundle | built on the #301 stack; the full adversarial implementation loop and its scheduling remain unbuilt (#300), and generated XMD admits no bundled Markdown component (#369) |
 | `workflowInstallation()` / `getWorkflowRun()` | associates one document execution with a workflow run, through an `ExecutionInstallation` the trusted host passes to `executeInstalled()` | built on the #366 stack |
 | `retainedWorkflowInstallation()` | associates one document execution with a run storage already created, requiring exact journal agreement | built on the #366 stack |

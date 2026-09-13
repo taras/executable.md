@@ -1534,6 +1534,7 @@ describe("Tier SYN — the name canonical core owns", () => {
   it("SYN9: a host that declares Markdown called Syntax is refused before the root import", function* () {
     const source = "declared symbols\n";
     const declaration: DeclaredMarkdownComponent = {
+      kind: "markdown",
       name: "Syntax",
       origin: "@executablemd/test/Syntax.md",
       source,
@@ -1550,6 +1551,7 @@ describe("Tier SYN — the name canonical core owns", () => {
     // The positive control: an adjacent declaration under another name is
     // admitted and runs, so the refusal is about the name.
     const adjacent: DeclaredMarkdownComponent = {
+      kind: "markdown",
       name: "Policy",
       origin: "@executablemd/test/Policy.md",
       source,
@@ -1868,6 +1870,7 @@ describe("Tier SYN — the site the symbols describe", () => {
   it("SYN18: a declared Markdown component's own body reports the site it inherited", function* () {
     const source = ['<Syntax as="symbols" />', "policy sees {symbols}", ""].join("\n");
     const declaration: DeclaredMarkdownComponent = {
+      kind: "markdown",
       name: "Policy",
       origin: "@executablemd/test/Policy.md",
       source,

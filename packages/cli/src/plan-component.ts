@@ -382,6 +382,7 @@ export function* planComponentDeclaration(
   // gate after this declaration is gone.
   const validate = assembly.validate ?? structuralValidation(assembly.includes, declared);
   const declaration: DeclaredMarkdownComponent = {
+    kind: "markdown",
     name: PLAN_COMPONENT,
     origin: PLAN_ORIGIN,
     source,
@@ -426,6 +427,7 @@ export function* planComponentDeclaration(
 export function* planComponentDescription(): Operation<DeclaredMarkdownComponent> {
   const source = yield* readPackagedDocument(PLAN_DOCUMENT);
   return {
+    kind: "markdown",
     name: PLAN_COMPONENT,
     origin: PLAN_ORIGIN,
     source,

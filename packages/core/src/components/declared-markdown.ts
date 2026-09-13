@@ -86,7 +86,15 @@ export class DeclaredMarkdownError extends Error {
  * exactly as they are for any other Markdown component, so the asset and the
  * catalog entry describing it are one text.
  */
-export interface DeclaredMarkdownComponent {
+export interface MarkdownDeclaration {
+  /**
+   * Which kind of declaration this is.
+   *
+   * Stated rather than inferred, and required: a host declares what it is
+   * handing over, so a value whose shape happens to resemble exact Markdown is
+   * never admitted as exact Markdown on that resemblance alone.
+   */
+  readonly kind: "markdown";
   /** The name a document writes. */
   readonly name: string;
   /** Stable, human-readable source identity — reported by inspection. */
@@ -115,6 +123,15 @@ export interface DeclaredMarkdownComponent {
    */
   readonly exact?: boolean;
 }
+
+/**
+ * The name this declaration has always had.
+ *
+ * Kept because a host, a profile and a test all import it by this name. It is
+ * the same type: what changed is that a declaration now states which kind it
+ * is, so constructing one states `kind: "markdown"`.
+ */
+export type DeclaredMarkdownComponent = MarkdownDeclaration;
 
 /** One declaration, admitted: what the host stated, checked against its bytes. */
 export interface AdmittedDeclaredMarkdown {
@@ -157,7 +174,7 @@ function refuse(message: string): DeclaredMarkdownError {
  * have, and a set a run would refuse is refused for them too.
  */
 export function* admitDeclaredMarkdown(
-  declarations: readonly DeclaredMarkdownComponent[],
+  declarations: readonly MarkdownDeclaration[],
   registry: ComponentRegistry,
 ): Operation<readonly AdmittedDeclaredMarkdown[]> {
   const admitted: AdmittedDeclaredMarkdown[] = [];
@@ -166,6 +183,20 @@ export function* admitDeclaredMarkdown(
 
   for (const declaration of declarations) {
     const { name, origin, source, digest } = declaration;
+
+    // Read before anything else is read from this value, because everything
+    // after it is a statement *about* exact Markdown. A declaration that does
+    // not say it is Markdown is not held to Markdown's checks and quietly
+    // admitted — it is refused, which is what makes the discriminant a fact a
+    // host states rather than one this admission assumes. The received value is
+    // not printed: it is text of unknown provenance, exactly as a name is.
+    if (declaration.kind !== "markdown") {
+      throw refuse(
+        "a declaration was handed to one execution without saying it is exact Markdown. A host " +
+          'states `kind: "markdown"`, and a declaration that states something else, or nothing, ' +
+          "is never read as Markdown.",
+      );
+    }
 
     // The name is printed only once it has passed the grammar a document
     // writes: until then it is text of unknown provenance, and a refusal is not

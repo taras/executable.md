@@ -2915,17 +2915,32 @@ outside a workflow run learns that a bundle exists.
 
 #### Declared Markdown
 
-A trusted host may hand one execution exact first-party Markdown: the public
-name, the reported origin, the source, the SHA-256 of those bytes, the accepted
-forms, an optional statement of the props schema and return, and an optional
-private component closure. It crosses on an `ExecutionInstallation`, by value,
-before any installation, middleware or document code exists — the same terms the
-component bundle crosses on — so no caller-facing option selects one, adds one,
-or names its source.
+A trusted host may hand one execution exact first-party Markdown: the kind of
+declaration it is, the public name, the reported origin, the source, the SHA-256
+of those bytes, the accepted forms, an optional statement of the props schema
+and return, and an optional private component closure. It crosses on an
+`ExecutionInstallation`, by value, before any installation, middleware or
+document code exists — the same terms the component bundle crosses on — so no
+caller-facing option selects one, adds one, or names its source.
+
+**A declaration says what it is.** Exact Markdown states `kind: "markdown"`:
+
+```typescript
+interface MarkdownDeclaration {
+  readonly kind: "markdown";
+  // the name, origin, source, digest, forms, schemas and privates above
+}
+```
+
+The discriminant is required and is read before anything else about the value
+is, because everything else is a statement *about* exact Markdown. A declaration
+stating a kind this version does not know, or stating none, is refused before
+the root document is imported rather than admitted on the strength of having a
+source and a digest.
 
 **It is held to its own bytes.** Canonical core parses the source and refuses
-the declaration before the root document is imported when the stated digest is
-not the digest of those bytes, when a stated schema is not the schema they
+the declaration before the root document is imported when it does not state that
+it is Markdown, when the stated digest is not the digest of those bytes, when a stated schema is not the schema they
 declare, when the forms are not canonical, when the name is not a component name
 or is structural syntax, when one name is declared twice, or when a reserved
 registration already claims it. A build that ships different bytes under a

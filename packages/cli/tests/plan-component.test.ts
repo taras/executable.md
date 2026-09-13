@@ -1882,3 +1882,33 @@ describe("Tier FE — Plan produces text, Evaluate runs it", () => {
     });
   });
 });
+
+/**
+ * Tier MDK — the Plan declarations state their kind.
+ *
+ * `<Plan>` is the production declared Markdown component: one declaration for
+ * the execution that runs it, and one for the paths that only describe it. Both
+ * are built from the same packaged bytes, and both now say what kind of
+ * declaration they are — which an execution reads before it admits either.
+ */
+describe("Tier MDK — the Plan declarations state their kind", () => {
+  it("MDK2: both constructors state kind markdown for the same packaged bytes", function* () {
+    yield* useWorkingDirectory(function* (dir) {
+      const harness = yield* planDeclarationHarness({
+        surface: "component",
+        planWriterRoot: `${dir}-profile`,
+      });
+
+      const described = yield* planComponentDescription();
+
+      expect(harness.declaration.kind).toBe("markdown");
+      expect(described.kind).toBe("markdown");
+      // The same asset either way: only the private closure differs between the
+      // declaration a run installs and the one inspection describes.
+      expect(described.name).toBe(harness.declaration.name);
+      expect(described.origin).toBe(harness.declaration.origin);
+      expect(described.digest).toBe(harness.declaration.digest);
+      expect(described.digest).toBe(sourceDigest(yield* readPackagedDocument(PLAN_DOCUMENT)));
+    });
+  });
+});
