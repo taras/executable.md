@@ -114,8 +114,8 @@ import type { Operation } from "effection";
 import { ExecutionDeclarationCatalog } from "./execution-declarations.ts";
 import { Component } from "./component-api.ts";
 import { ErrorMode } from "./errors.ts";
-import { CanonicalImports, retain } from "./components/import-authority.ts";
-import type { ImportAuthority, ImportedDefinition } from "./components/import-authority.ts";
+import { CanonicalImports, retain } from "./components/component-resolution.ts";
+import type { ImportAuthority, ImportedDefinition } from "./components/component-resolution.ts";
 import { isComponentName } from "./components/registration.ts";
 import { CORE_ORIGIN, CORE_REGISTRY } from "./components/registry.ts";
 import { createBlockCounter, expandSegmentsWithin } from "./expand.ts";
@@ -1400,7 +1400,7 @@ function policyRecord(policy: Policy): JsonObject {
  * a policy, not because this build writes one.
  *
  * Distinct from the one-line spelling a *diagnostic* uses
- * (`components/import-authority.ts`): that one is for a reader, and this one is
+ * (`components/component-resolution.ts`): that one is for a reader, and this one is
  * what a continuation compares, so they are named apart rather than allowed to
  * drift into each other.
  */

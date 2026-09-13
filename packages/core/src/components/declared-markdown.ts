@@ -47,8 +47,8 @@ import { formsRefusal } from "../invocation-identity.ts";
 import type { IdentityComponent } from "../invocation-identity.ts";
 import { RESERVED_STRUCTURAL } from "../structural.ts";
 import { PROTECTED_COMPONENT_NAMES, protectedNameRefusal } from "./protected.ts";
-import { CanonicalImports, retain } from "./import-authority.ts";
-import type { ImportedDefinition, ImportRefusal, ImportTier } from "./import-authority.ts";
+import { CanonicalImports, retain } from "./component-resolution.ts";
+import type { ImportedDefinition, ImportRefusal, ImportTier } from "./component-resolution.ts";
 import { admitDeclaration, isComponentName } from "./registration.ts";
 import { documentationOf } from "./documentation.ts";
 import type {

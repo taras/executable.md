@@ -46,10 +46,10 @@ import type {
   ComponentAnswerRequest,
   ImportedDefinition,
   ProviderInstallation,
-} from "./components/import-authority.ts";
+} from "./components/component-resolution.ts";
 import type { SourcePosition } from "./types.ts";
 
-export type { ComponentAnswerRequest } from "./components/import-authority.ts";
+export type { ComponentAnswerRequest } from "./components/component-resolution.ts";
 
 /**
  * One handler a provider registers, invoked once per import it observes.

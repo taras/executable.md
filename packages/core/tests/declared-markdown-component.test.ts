@@ -65,7 +65,7 @@ import { useNormalizedOutput } from "../src/output/normalize.ts";
 import { useTerminalOutput } from "../src/output/terminal.ts";
 import { createExactSource, isExactSource } from "../src/output/exact-source.ts";
 import type { ComponentInvocation } from "../src/invocation-identity.ts";
-import type { ImportedDefinition } from "../src/components/import-authority.ts";
+import type { ImportedDefinition } from "../src/components/component-resolution.ts";
 import type { PropsSchema, Segment } from "../src/types.ts";
 
 const ROOT_PATH = "documents/root.md";

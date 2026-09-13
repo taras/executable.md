@@ -113,7 +113,7 @@ import { emissions } from "./render.ts";
 import { printsErrors, usePrintErrors } from "./component-failures.ts";
 import { containedLedger, recoveringLedger } from "./component-failures.ts";
 import type { CheckedFailures } from "./component-failures.ts";
-import type { ImportedDefinition } from "./components/import-authority.ts";
+import type { ImportedDefinition } from "./components/component-resolution.ts";
 import type { ExecutionEnvironment } from "./execution-environment.ts";
 import { DeclaredMarkdownError } from "./components/declared-markdown.ts";
 import type { PrivateImport } from "./components/declared-markdown.ts";

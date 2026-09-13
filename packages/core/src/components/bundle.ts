@@ -36,7 +36,7 @@
  * different sources resolve their own and can observe neither.
  */
 
-import type { ImportRefusal, ImportTier } from "./import-authority.ts";
+import type { ImportRefusal, ImportTier } from "./component-resolution.ts";
 import { PROTECTED_COMPONENT_NAMES, protectedNameRefusal } from "./protected.ts";
 import { CORE_COMPONENT_NAMES } from "./registry.ts";
 import { isComponentName } from "./registration.ts";

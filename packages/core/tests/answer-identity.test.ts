@@ -35,14 +35,14 @@ import {
   AnswerIdentityError,
   CanonicalImports,
   identityRecord,
-} from "../src/components/import-authority.ts";
+} from "../src/components/component-resolution.ts";
 import type {
   AnswerIdentity,
   ComponentAnswerRequest,
   ImportedDefinition,
   ProviderInstallation,
   ResolutionWindow,
-} from "../src/components/import-authority.ts";
+} from "../src/components/component-resolution.ts";
 import type { Json } from "../src/types.ts";
 
 const ORIGIN = "test://provider";

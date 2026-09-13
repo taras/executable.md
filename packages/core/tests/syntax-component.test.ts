@@ -73,7 +73,7 @@ import {
 import { executeReadingAssetsWith } from "../src/execute.ts";
 import type { DocumentationContribution } from "../src/component-documentation.ts";
 import { SYNTAX_COMPONENT } from "../src/components/Syntax.ts";
-import type { ImportedDefinition } from "../src/components/import-authority.ts";
+import type { ImportedDefinition } from "../src/components/component-resolution.ts";
 import type { ComponentOrigin, FunctionComponent, SyntaxSymbols } from "../mod.ts";
 import { answerProvider, implementation } from "./support/answer-provider.ts";
 

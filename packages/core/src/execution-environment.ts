@@ -22,7 +22,7 @@
 
 import type { Operation } from "effection";
 
-import type { ImportAuthority } from "./components/import-authority.ts";
+import type { ImportAuthority } from "./components/component-resolution.ts";
 import type { InstalledComponents, PrivateClosure } from "./components/declared-markdown.ts";
 import type { ExecutionDeclarationCatalog } from "./execution-declarations.ts";
 import type { EvaluationProfile } from "./evaluation-profile.ts";

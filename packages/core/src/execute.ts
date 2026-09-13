@@ -147,8 +147,8 @@ import {
   CanonicalImports,
   ExecutionImports,
   identityRecord,
-} from "./components/import-authority.ts";
-import type { AnswerIdentity, ImportTier } from "./components/import-authority.ts";
+} from "./components/component-resolution.ts";
+import type { AnswerIdentity, ImportTier } from "./components/component-resolution.ts";
 import type { ExecutionEnvironment } from "./execution-environment.ts";
 import { PROTECTED_COMPONENTS, ProtectedImports } from "./components/protected.ts";
 import { CORE_ORIGIN } from "./components/registry.ts";
