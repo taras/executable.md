@@ -10,8 +10,20 @@
  */
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { checkpoint, command, name, option, parse, schema } from "configliere";
-import type { Execute, ModelsByRoute, Result, RoutePath, ValueSource } from "configliere";
+import {
+  argument,
+  checkpoint,
+  cli,
+  command,
+  dynamic,
+  extend,
+  name,
+  option,
+  parse,
+  routes,
+  schema,
+} from "configliere";
+import type { AnyRoute, Execute, ModelsByRoute, Result, RoutePath, ValueSource } from "configliere";
 import { z } from "zod";
 import {
   commandToken,
@@ -60,6 +72,59 @@ function selection(argv: string[]): string {
 function refusal(argv: string[]): string {
   const outcome = run(argv);
   return outcome.ok ? "" : parseFailure(outcome).message;
+}
+
+/** A settled parse, read back from a value whose type stopped describing it. */
+interface Settled {
+  route: string;
+  model: Record<string, unknown>;
+}
+
+/**
+ * Drive a definition whose dynamic phase builds its elements from the run.
+ *
+ * Every step here is read back by parsing the value rather than by reading a
+ * declared member, and that is the finding rather than a style choice: for a
+ * runtime-derived element list the parse type carries no increment, `resume`
+ * types as `unknown`, and the model type describes the wrong phase. A cast
+ * would hide exactly what this test exists to show.
+ */
+function driveDynamic(app: AnyRoute, argv: string[], declared: string[]): Settled | undefined {
+  let step: unknown = parse(app, { argv });
+  for (let guard = 0; guard < 8; guard += 1) {
+    const resume = readResume(step);
+    if (resume === undefined) {
+      return readSettled(step);
+    }
+    step = resume({ ok: true, value: declared });
+  }
+  return undefined;
+}
+
+/** The resume of an increment, when the value is one. */
+function readResume(
+  step: unknown,
+): ((result: { ok: true; value: string[] }) => unknown) | undefined {
+  if (typeof step !== "object" || step === null || !("resume" in step)) {
+    return undefined;
+  }
+  const { resume } = step;
+  if (typeof resume !== "function") {
+    return undefined;
+  }
+  return (result) => resume(result);
+}
+
+function readSettled(step: unknown): Settled | undefined {
+  if (typeof step !== "object" || step === null || !("route" in step) || !("model" in step)) {
+    return undefined;
+  }
+  const { route, model } = step;
+  if (typeof route !== "string" || typeof model !== "object" || model === null) {
+    return undefined;
+  }
+  const entries = Object.entries(model).filter(([, value]) => value !== undefined);
+  return { route, model: Object.fromEntries(entries) };
 }
 
 /**
@@ -228,19 +293,77 @@ describe("Tier CFE — the xmd route definitions", () => {
     // none, and the command line still outranks it when it did.
     expect(settled.model.channel).toBe("beta");
 
-    // And the limitation the migration turns on: a value source cannot make a
-    // parameter exist. `generated` is in the loaded object and in no model,
-    // and no `--generated` option was created for the command line to write.
+    // A value source cannot make a parameter exist: `generated` is in the
+    // loaded object and in no model, and no `--generated` option was created
+    // for the command line to write.
     expect(Object.hasOwn(settled.model, "generated")).toBe(false);
     const generated = parse(app, { argv: ["--generated", "value"] });
     expect("resume" in generated).toBe(true);
+  });
 
-    // Which is why the CLI still lifts every `--props-*` occurrence out of
-    // argv before parsing: the document is inspected first, and the options it
-    // declares cannot be added to the route it would have been added to.
-    const supplied = run(["run", "doc.md", "--props-name", "Ada"]);
-    expect(supplied.ok).toBe(false);
-    expect(unexpectedOnly(supplied)).toBe(true);
+  it("CFE4b: a dynamic phase adds options and routes, and loses their type", function* () {
+    // `dynamic()` is what `checkpoint()` is built from, and it does add
+    // parameters and routes — at runtime. This is the phase the document
+    // properties would migrate into.
+    const app = command(
+      name("probe"),
+      argument({ ...name("path") }, schema(z.string().optional())),
+      dynamic((declared: string[]) =>
+        extend(
+          ...declared.map((property) =>
+            option({ ...name(property) }, cli([`--${property}`]), schema(z.string().optional())),
+          ),
+          routes(command(name("child"))),
+        ),
+      ),
+      option({ ...name("raw") }, cli(["--raw"], { switch: true }), schema(z.boolean().optional())),
+    );
+
+    // A generated option binds, even written before the phase that declares it.
+    expect(driveDynamic(app, ["doc.md", "--props-name", "Ada"], ["props-name"])).toEqual({
+      route: "/",
+      model: { path: "doc.md", "props-name": "Ada" },
+    });
+
+    // A route the phase introduced is *not* reachable here, and the reason is
+    // ordering rather than depth: the argument in the earlier phase claims the
+    // word before the route it names exists.
+    expect(driveDynamic(app, ["child"], [])).toEqual({ route: "/", model: { path: "child" } });
+
+    // Without a positional competing for the token, the same construction
+    // reaches a dynamic route, and one nested below it.
+    const addressed = command(
+      name("probe"),
+      dynamic(() =>
+        extend(
+          routes(
+            command(
+              name("child"),
+              dynamic(() => extend(routes(command(name("deeper"))))),
+            ),
+          ),
+        ),
+      ),
+    );
+    expect(driveDynamic(addressed, ["child"], [])).toEqual({ route: "/child", model: {} });
+    expect(driveDynamic(addressed, ["child", "deeper"], [])).toEqual({
+      route: "/child/deeper",
+      model: {},
+    });
+
+    // What stops the migration is the *type*, not the behaviour. With a
+    // runtime-derived element list the parse type collapses to a fully resolved
+    // union: the increment is absent from it, `resume` types as `unknown`, and
+    // the model describes the phase after the boundary rather than the one
+    // before it. Driving this would take a cast, which is why the CLI still
+    // prepares argv before parsing — see `dispatch` in cli.ts.
+    //
+    // The same definition with a statically known element list types exactly,
+    // so the limitation is specific to a list only the run knows.
+    expect(driveDynamic(app, ["doc.md", "--props-name", "Ada", "--raw"], ["props-name"])).toEqual({
+      route: "/",
+      model: { path: "doc.md", raw: true, "props-name": "Ada" },
+    });
   });
 
   it("CFE5: help and version render what the released CLI rendered", function* () {

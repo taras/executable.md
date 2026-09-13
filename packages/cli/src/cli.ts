@@ -2376,13 +2376,18 @@ function* dispatch(
     return;
   }
 
-  // The second parse of this invocation, and the checkpoint gap is why there
-  // is one. The first ran in the props phase to find the document; this one
-  // runs against the argv that phase stripped of the options that document
-  // declares. `checkpoint()` can only add values to parameters that already
-  // exist, so a document's generated options cannot be introduced by a
-  // dynamic phase and the argv has to be prepared before parsing. This is not
-  // a checkpoint migration.
+  // The second parse of this invocation, and the dynamic-phase typing gap is
+  // why there is one. The first ran in the props phase to find the document;
+  // this one runs against the argv that phase stripped of the options that
+  // document declares.
+  //
+  // `dynamic()` can add those options at runtime — measured, including nested
+  // routes at arbitrary depth. What it cannot do is describe them: when the
+  // resolver's element list is derived at runtime, as a document's declared
+  // properties are, the parse type collapses to a fully resolved union. The
+  // increment disappears from it, `resume` types as `unknown`, and the model
+  // reports the phase after the boundary instead of the one before it. Driving
+  // it would take a cast, so the argv is prepared before parsing instead.
   //
   // Two parses of the same command line, and they answer different questions.
   // The control parse keeps `-h` and `--version` in argv, so Configliere
