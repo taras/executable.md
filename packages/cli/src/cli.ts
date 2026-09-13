@@ -73,7 +73,7 @@ import {
   useTerminalOutput,
 } from "@executablemd/core";
 import { executeInstalled } from "@executablemd/core/host";
-import type { DeclaredMarkdownComponent, ExecutionInstallation } from "@executablemd/core/host";
+import type { ExecutionInstallation, MarkdownComponent } from "@executablemd/core/host";
 import type {
   DocumentTargetInfo,
   FileRootDocument,
@@ -1018,7 +1018,7 @@ function* runDocument(
   // it settled, the Plan writer root it owns and the scope its host acts run in;
   // everything else about the Component is this entrypoint's and identical for
   // all of them.
-  const planDeclaration = (request: ChildPlanDeclaration): Operation<DeclaredMarkdownComponent> =>
+  const planDeclaration = (request: ChildPlanDeclaration): Operation<MarkdownComponent> =>
     planComponentDeclaration({
       surface: "component",
       includes: include,

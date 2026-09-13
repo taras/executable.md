@@ -2915,17 +2915,41 @@ outside a workflow run learns that a bundle exists.
 
 #### Declared Markdown
 
-A trusted host may hand one execution exact first-party Markdown: the public
-name, the reported origin, the source, the SHA-256 of those bytes, the accepted
-forms, an optional statement of the props schema and return, and an optional
-private component closure. It crosses on an `ExecutionInstallation`, by value,
-before any installation, middleware or document code exists — the same terms the
-component bundle crosses on — so no caller-facing option selects one, adds one,
-or names its source.
+A trusted host may hand one execution exact first-party Markdown: the kind of
+declaration it is, the public name, the reported origin, the source, the SHA-256
+of those bytes, the accepted forms, an optional statement of the props schema
+and return, and an optional private component closure. It crosses on an
+`ExecutionInstallation`, by value, before any installation, middleware or
+document code exists — the same terms the component bundle crosses on — so no
+caller-facing option selects one, adds one, or names its source.
+
+**A declaration says what it is, and `Markdown({…})` is how it says it.** A host
+builds exact Markdown with the canonical constructor:
+
+```typescript
+type MarkdownComponentInput = Omit<MarkdownComponent, "kind">;
+
+function Markdown(input: MarkdownComponentInput): MarkdownComponent;
+```
+
+The host writes the description — name, origin, source, digest, forms, schemas
+and privates — and the constructor returns a fresh shallow declaration carrying
+`kind: "markdown"`, written after that description so an input carrying a kind
+of its own does not decide what the declaration is. It is a constructor and
+nothing else: it validates nothing, computes no digest, copies no nested schema,
+array or private declaration, freezes nothing and admits nothing.
+
+`MarkdownComponent` remains an ordinary structural type, so the constructor is
+the canonical way to build one rather than the only way a value of that shape
+can come to exist. The defence is admission: the discriminant is required, and
+admission reads it before anything else about the value, because everything else
+is a statement *about* exact Markdown. A declaration stating a kind this version
+does not know, or stating none, is refused before the root document is imported
+rather than admitted on the strength of having a source and a digest.
 
 **It is held to its own bytes.** Canonical core parses the source and refuses
-the declaration before the root document is imported when the stated digest is
-not the digest of those bytes, when a stated schema is not the schema they
+the declaration before the root document is imported when it does not state that
+it is Markdown, when the stated digest is not the digest of those bytes, when a stated schema is not the schema they
 declare, when the forms are not canonical, when the name is not a component name
 or is structural syntax, when one name is declared twice, or when a reserved
 registration already claims it. A build that ships different bytes under a
@@ -3434,7 +3458,7 @@ type ValidateDocumentOptions = RootDocumentSource & {
   readonly props?: Record<string, Json>;
   readonly includes?: readonly string[];
   readonly components?: readonly IdentityComponent[];
-  readonly declarations?: readonly DeclaredMarkdownComponent[];
+  readonly declarations?: readonly MarkdownComponent[];
 };
 
 function* validateDocument(
@@ -13162,6 +13186,20 @@ what they observe is what a person's terminal would show.
 | DM50 | An ordinary declaration is prose | The same bytes from a declaration the host did not call exact are stripped, collapsed and formatted |
 | DM51 | A middleware answer cannot claim it | `Component.importComponent` middleware answering an open name with a definition carrying the disposition gets prose; nothing admitted that definition, so nothing about it is exact |
 | DM52 | A mark this engine did not make is nothing | A segment carrying the disposition as a field is not exact, whoever supplied it; expansion also rebuilds text segments, so such a field never reaches emission in the first place |
+
+### Tier MDK — Declaring exact Markdown with `Markdown({…})` (§5.3)
+
+The construction boundary and the discriminant it writes. The rows run against
+declarations a trusted host supplied on an `ExecutionInstallation`, except the
+admission-order row, which calls admission directly so that every other member
+can be made to fail if it is read.
+
+| # | Test | Verify |
+|---|------|--------|
+| MDK1 | The constructor | `Markdown({…})` returns a fresh object carrying `kind: "markdown"`, leaves the input unchanged, preserves every supplied member, computes no digest, and hands back the same nested schema, array and private-declaration objects it was given; a kind planted on the input does not survive. A constructed declaration keeps its selection, exact output, private closure, replay, inspection and validation behavior, and the existing suite runs with no changed result |
+| MDK2 | The discriminant is read first | A declaration whose kind was removed or replaced with `Reflect` refuses as `DeclaredMarkdownError` before the root import, with nothing yielded and no output; admission asked about a value whose every other property getter throws still reports that refusal, while the same admission with the kind restored reads those members and refuses on what they say |
+| MDK3 | Capture reads once | The kind is read exactly once, before the first `install()`, and the admitted kind is that captured value — a counting getter that answers differently afterwards, and an `install()` that deletes the property, change nothing |
+| MDK4 | The existing fixtures | The three direct declarations in the syntax suite are built through the constructor and remain valid, while `SYN27`'s live inspection still reports symbols version 2 |
 
 ### Tier ORC — Repository composition under an ordinary run (§5.3, §8.1)
 

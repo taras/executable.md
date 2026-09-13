@@ -86,7 +86,15 @@ export class DeclaredMarkdownError extends Error {
  * exactly as they are for any other Markdown component, so the asset and the
  * catalog entry describing it are one text.
  */
-export interface DeclaredMarkdownComponent {
+export interface MarkdownComponent {
+  /**
+   * Which kind of declaration this is.
+   *
+   * Stated rather than inferred, and required: a host declares what it is
+   * handing over, so a value whose shape happens to resemble exact Markdown is
+   * never admitted as exact Markdown on that resemblance alone.
+   */
+  readonly kind: "markdown";
   /** The name a document writes. */
   readonly name: string;
   /** Stable, human-readable source identity — reported by inspection. */
@@ -114,6 +122,34 @@ export interface DeclaredMarkdownComponent {
    * gets the presentation every other document gets.
    */
   readonly exact?: boolean;
+}
+
+/** Everything a host states about exact Markdown, apart from what kind it is. */
+export type MarkdownComponentInput = Omit<MarkdownComponent, "kind">;
+
+/**
+ * Declare exact Markdown to one execution.
+ *
+ * The canonical way to build a declaration, and what every declaration this
+ * repository owns is built with. A host describes its asset and this states
+ * what that description is: `kind` is written after the input is spread, so an
+ * input carrying one of its own is overwritten rather than believed.
+ *
+ * It is a convenience and a convention, not a gate. {@link MarkdownComponent}
+ * is an ordinary structural type, so a caller can still write the object out by
+ * hand, and nothing here can stop one. What defends the execution is admission,
+ * which reads the discriminant before any other member and refuses a missing or
+ * unknown one.
+ *
+ * It is a constructor and nothing more. Nothing is validated, hashed, copied
+ * deeply, frozen or admitted here: the digest is the host's own statement about
+ * its bytes, and the schemas, arrays and private declarations that arrive are
+ * the same objects that leave. What this execution *holds* is copied where
+ * every other installed value is — at capture, before any `install()` runs —
+ * and checked where every other declaration is, at admission.
+ */
+export function Markdown(input: MarkdownComponentInput): MarkdownComponent {
+  return { ...input, kind: "markdown" };
 }
 
 /** One declaration, admitted: what the host stated, checked against its bytes. */
@@ -157,7 +193,7 @@ function refuse(message: string): DeclaredMarkdownError {
  * have, and a set a run would refuse is refused for them too.
  */
 export function* admitDeclaredMarkdown(
-  declarations: readonly DeclaredMarkdownComponent[],
+  declarations: readonly MarkdownComponent[],
   registry: ComponentRegistry,
 ): Operation<readonly AdmittedDeclaredMarkdown[]> {
   const admitted: AdmittedDeclaredMarkdown[] = [];
@@ -165,6 +201,21 @@ export function* admitDeclaredMarkdown(
   const privateNames = new Set<string>();
 
   for (const declaration of declarations) {
+    // Read first, and before any other member is read at all — the destructuring
+    // below is deliberately after it. Everything else a declaration carries is a
+    // statement *about* exact Markdown, so reading one of those from a value
+    // that never said it was Markdown is already treating it as Markdown. A
+    // declaration that states something else, or nothing, is refused here. The
+    // received value is not printed: it is text of unknown provenance, exactly
+    // as a name is.
+    if (declaration.kind !== "markdown") {
+      throw refuse(
+        "a declaration was handed to one execution without saying it is exact Markdown. A host " +
+          "declares exact Markdown with `Markdown({…})`, and a declaration that states something " +
+          "else, or nothing, is never read as Markdown.",
+      );
+    }
+
     const { name, origin, source, digest } = declaration;
 
     // The name is printed only once it has passed the grammar a document

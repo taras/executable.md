@@ -22,7 +22,7 @@
  * installed reaches the child.
  */
 
-import type { DeclaredMarkdownComponent } from "@executablemd/core/host";
+import type { MarkdownComponent } from "@executablemd/core/host";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import type { DurableEvent } from "@executablemd/durable-streams";
 import { forEach } from "@effectionx/stream-helpers";
@@ -101,7 +101,7 @@ export interface TestingHostSettings {
    * of an Agent context before any child configuration had been read, which is
    * why a configured child could not write a Plan.
    */
-  readonly planDeclaration: (request: ChildPlanDeclaration) => Operation<DeclaredMarkdownComponent>;
+  readonly planDeclaration: (request: ChildPlanDeclaration) => Operation<MarkdownComponent>;
   /** Whether durable events are scanned for credentials before they persist. */
   readonly secretDetection: boolean;
   /** The native service adapter this entrypoint supplies. */

@@ -41,13 +41,15 @@ import type { DurableEvent, Json } from "@executablemd/durable-streams";
 import { Component } from "../src/component-api.ts";
 import { collect } from "../src/collect.ts";
 import { execute } from "../src/execute.ts";
-import { executeInstalled, sourceDigest } from "../host.ts";
+import { executeInstalled, Markdown, sourceDigest } from "../host.ts";
 import type {
-  DeclaredMarkdownComponent,
   ExecutionInstallation,
   IdentityClaimant,
   IdentityComponent,
+  MarkdownComponent,
+  MarkdownComponentInput,
 } from "../host.ts";
+import { admitDeclaredMarkdown } from "../src/components/declared-markdown.ts";
 import { inspectComponent, inspectSyntax } from "../src/inspect.ts";
 import { validateDocument, validateDocumentStructure } from "../src/document-validation.ts";
 import { registerComponents } from "../src/components/registration.ts";
@@ -67,15 +69,15 @@ const NO_PROPS = { type: "object", properties: {}, additionalProperties: false }
 /** The declared Markdown this tier runs against, with its digest computed. */
 function declared(
   source: string,
-  overrides: Partial<DeclaredMarkdownComponent> = {},
-): DeclaredMarkdownComponent {
-  return {
+  overrides: Partial<MarkdownComponentInput> = {},
+): MarkdownComponent {
+  return Markdown({
     name: "Policy",
     origin: ORIGIN,
     source,
     digest: sourceDigest(source),
     ...overrides,
-  };
+  });
 }
 
 const POLICY_SOURCE = ["The policy ran.", ""].join("\n");
@@ -224,14 +226,14 @@ function claiming(seen: string[], name = "Claiming"): IdentityComponent {
   };
 }
 
-function installation(declarations: readonly DeclaredMarkdownComponent[]): ExecutionInstallation {
+function installation(declarations: readonly MarkdownComponent[]): ExecutionInstallation {
   return { declarations };
 }
 
 /** Run one root against a set of declarations, with no component search path. */
 function run(
   source: string,
-  declarations: readonly DeclaredMarkdownComponent[] = [declared(POLICY_SOURCE)],
+  declarations: readonly MarkdownComponent[] = [declared(POLICY_SOURCE)],
   extra: readonly ExecutionInstallation[] = [],
   stream: InMemoryStream = new InMemoryStream(),
   includes: readonly string[] = [],
@@ -1379,7 +1381,7 @@ function unpresented(published: string): boolean {
  */
 function* published(
   source: string,
-  declarations: readonly DeclaredMarkdownComponent[],
+  declarations: readonly MarkdownComponent[],
   extra: readonly ExecutionInstallation[],
 ): Operation<string> {
   const chunks: string[] = [];
@@ -1551,5 +1553,221 @@ describe("Tier DM — exact source is a provenance, not a field", () => {
 
     expect(unpresented(output)).toBe(false);
     expect(output).not.toContain("**these**");
+  });
+});
+
+/**
+ * Tier MDK — `Markdown({…})` is how a declaration says what it is.
+ *
+ * A host hands an execution declarations as plain immutable data, and the value
+ * now says what it is. That matters because everything else about a declaration
+ * is a statement *about* exact Markdown: a value that never said it was
+ * Markdown, admitted on the strength of having a `source` and a `digest`, would
+ * be one whose shape decided what it meant.
+ *
+ * `Markdown({…})` is the canonical way to build one, and it writes the
+ * discriminant after the host's description, so an input carrying a `kind` of
+ * its own is overwritten rather than believed. It is a constructor and nothing
+ * else — nothing is hashed, copied deeply, frozen or admitted there — and it is
+ * a convention rather than a gate: the declaration type is structural, so what
+ * actually defends the execution is admission.
+ *
+ * Admission reads the discriminant before it reads any other member, and what
+ * it reads is what the execution captured before any installation ran — so a
+ * declaration that states something else, or nothing, is refused where it is
+ * installed rather than where a document writes the name.
+ */
+
+/** A declaration as a host that states no kind at all would hand it over. */
+function withoutKind(declaration: MarkdownComponent): MarkdownComponent {
+  const copy = { ...declaration };
+  Reflect.deleteProperty(copy, "kind");
+  return copy;
+}
+
+/** A declaration stating a kind this version does not know. */
+function statingKind(declaration: MarkdownComponent, kind: string) {
+  const copy = { ...declaration };
+  Reflect.set(copy, "kind", kind);
+  return copy;
+}
+
+/** What one execution refused with, as the error itself. */
+function* refusedBy(operation: Operation<unknown>): Operation<Error> {
+  try {
+    yield* operation;
+  } catch (error) {
+    if (error instanceof Error) {
+      return error;
+    }
+    throw new Error(`expected an Error, got ${String(error)}`);
+  }
+  throw new Error("expected the operation to be refused");
+}
+
+describe("Tier MDK — the declaration states its kind", () => {
+  // deno-lint-ignore require-yield
+  it("MDK1: the constructor states the kind and changes nothing else", function* () {
+    const props: PropsSchema = { type: "object", properties: {}, additionalProperties: false };
+    const privates = [secret()];
+    const input: MarkdownComponentInput = {
+      name: "Policy",
+      origin: ORIGIN,
+      source: POLICY_SOURCE,
+      digest: sourceDigest(POLICY_SOURCE),
+      forms: ["paired"],
+      props,
+      privates,
+      exact: true,
+    };
+
+    const declaration = Markdown(input);
+
+    // A fresh object carrying the fixed discriminant, with the host's own
+    // description untouched.
+    expect(declaration).not.toBe(input);
+    expect(declaration.kind).toBe("markdown");
+    expect(Reflect.has(input, "kind")).toBe(false);
+    expect(declaration.name).toBe(input.name);
+    expect(declaration.origin).toBe(input.origin);
+    expect(declaration.source).toBe(input.source);
+    // The digest is the host's statement about its own bytes; the constructor
+    // neither computes nor replaces one.
+    expect(declaration.digest).toBe(input.digest);
+    expect(declaration.forms).toEqual(["paired"]);
+    expect(declaration.exact).toBe(true);
+    // Shallow by contract: what arrives is what leaves, so nothing here is the
+    // copy an execution makes at capture.
+    expect(declaration.props).toBe(props);
+    expect(declaration.privates).toBe(privates);
+    expect(Object.isFrozen(declaration)).toBe(false);
+
+    // A kind planted on the input cannot decide what the declaration is: the
+    // constructor writes its own after spreading.
+    const planted = { ...input };
+    Reflect.set(planted, "kind", "structural");
+    expect(Markdown(planted).kind).toBe("markdown");
+  });
+
+  it("MDK1: a constructed declaration behaves exactly as it always did", function* () {
+    const declarations = [declared(POLICY_SOURCE)];
+
+    // Selection and expansion.
+    expect(String(yield* run("<Policy />\n", declarations))).toContain("The policy ran.");
+
+    // Inspection reports the same declared contract.
+    const info = yield* inspectComponent({ name: "Policy", includes: [], declarations });
+    expect(info.kind).toBe("markdown");
+    expect(info.kind === "markdown" ? info.origin : undefined).toEqual({
+      kind: "declared-markdown",
+      origin: ORIGIN,
+      digest: sourceDigest(POLICY_SOURCE),
+    });
+
+    // Validation resolves it rather than reporting it unresolved.
+    const validation = yield* validateDocumentStructure({
+      ...retainedSource(ROOT_PATH, "<Policy />\n"),
+      includes: [],
+      declarations,
+    });
+    expect(validation.outcome).toBe("valid");
+
+    // And the private closure still resolves only inside the declaring bytes.
+    const withPrivate = [declared(WITH_PRIVATE, { privates: [secret()] })];
+    expect(String(yield* run("<Policy />\n", withPrivate))).toContain("policy says");
+    expect(yield* refusal(run('<Secret as="answer" />\n', withPrivate))).toContain(
+      "Cannot resolve component: Secret",
+    );
+  });
+
+  it("MDK2: the kind is what admission reads first, before any other member", function* () {
+    // Every other member fails if it is read at all, so an admission that
+    // reached one before deciding about the kind ends this row with that
+    // failure instead of the refusal.
+    const hostile = declared(POLICY_SOURCE);
+    Reflect.set(hostile, "kind", "structural");
+    for (const member of ["name", "origin", "source", "digest", "forms", "privates"]) {
+      Object.defineProperty(hostile, member, {
+        configurable: true,
+        enumerable: true,
+        get() {
+          throw new Error(`admission read "${member}" before deciding about the kind`);
+        },
+      });
+    }
+
+    const error = yield* refusedBy(admitDeclaredMarkdown([hostile], new Map()));
+    expect(error.name).toBe("DeclaredMarkdownError");
+    expect(error.message).toContain("without saying it is exact Markdown");
+
+    // The positive control: the same admission, with the kind restored, reads
+    // those members and refuses on what they say instead.
+    const readable = declared("Other bytes.\n", { digest: sourceDigest(POLICY_SOURCE) });
+    const mismatch = yield* refusedBy(admitDeclaredMarkdown([readable], new Map()));
+    expect(mismatch.message).toContain("states a digest its source does not have");
+  });
+
+  it("MDK2: a missing or unknown kind refuses before the root import", function* () {
+    const stated = declared(POLICY_SOURCE);
+
+    for (const broken of [withoutKind(stated), statingKind(stated, "structural")]) {
+      const stream = new InMemoryStream();
+      const error = yield* refusedBy(run("<Policy />\n", [broken], [], stream));
+
+      expect(error.name).toBe("DeclaredMarkdownError");
+      expect(error.message).toContain("without saying it is exact Markdown");
+      // Before the root import: nothing was imported, and the root body — which
+      // would have rendered its own text — never ran.
+      const events = yield* stream.readAll();
+      expect(events.filter((event) => event.type === "yield").length).toBe(0);
+    }
+
+    // The positive control: the same bytes, stating their kind, run.
+    expect(String(yield* run("<Policy />\n", [stated]))).toContain("The policy ran.");
+  });
+
+  it("MDK3: the admitted kind is the one capture read, once, before install()", function* () {
+    const declaration = declared(POLICY_SOURCE);
+    let reads = 0;
+    // After the first read this declaration says it is something else. If
+    // anything downstream of capture read the host's object again — admission,
+    // selection, the symbols — it would get that second answer and refuse.
+    Object.defineProperty(declaration, "kind", {
+      configurable: true,
+      enumerable: true,
+      get() {
+        reads++;
+        return reads === 1 ? "markdown" : "structural";
+      },
+    });
+
+    const order: string[] = [];
+    const mutating: ExecutionInstallation = {
+      declarations: [declaration],
+      *install() {
+        order.push(`install after ${reads} read`);
+        Reflect.deleteProperty(declaration, "kind");
+        yield* Component.operations.registry;
+      },
+    };
+
+    const output = String(
+      yield* scoped(function* () {
+        return yield* collect(
+          yield* executeInstalled(
+            {
+              ...retainedSource(ROOT_PATH, "<Policy />\n"),
+              stream: new InMemoryStream(),
+              includes: [],
+            },
+            [mutating],
+          ),
+        );
+      }),
+    );
+
+    expect(output).toContain("The policy ran.");
+    expect(reads).toBe(1);
+    expect(order).toEqual(["install after 1 read"]);
   });
 });

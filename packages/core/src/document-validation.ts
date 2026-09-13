@@ -36,10 +36,7 @@ import type { BodyStructureFacts } from "./body-structure.ts";
 import { Component } from "./component-api.ts";
 import { declaredRegistry } from "./components/declared-registry.ts";
 import { admitDeclaredMarkdown, declaredCatalog } from "./components/declared-markdown.ts";
-import type {
-  DeclaredMarkdownCatalog,
-  DeclaredMarkdownComponent,
-} from "./components/declared-markdown.ts";
+import type { DeclaredMarkdownCatalog, MarkdownComponent } from "./components/declared-markdown.ts";
 import { admitDeclaration, mergeRegistry } from "./components/registration.ts";
 import { DEFAULT_INCLUDES, selectComponent, unresolvedMessage } from "./components/select.ts";
 import {
@@ -129,7 +126,7 @@ export interface ValidateDocumentSettings {
    * the names only they may write resolve nowhere else — so reporting on them
    * would be reporting a document's author for the engine's own asset.
    */
-  readonly declarations?: readonly DeclaredMarkdownComponent[];
+  readonly declarations?: readonly MarkdownComponent[];
 }
 
 /** The root to validate, and the environment to validate it against. */

@@ -64,12 +64,13 @@ import {
 import {
   classifyPlanResponse,
   generatedRequestRefusal,
+  Markdown,
   sourceDigest,
 } from "@executablemd/core/host";
 import type {
-  DeclaredMarkdownComponent,
   IdentityClaimant,
   IdentityComponent,
+  MarkdownComponent,
 } from "@executablemd/core/host";
 import type { DocumentValidation } from "@executablemd/core";
 import type { ComponentInvocation } from "@executablemd/core";
@@ -136,7 +137,7 @@ export type StructuralValidation = (candidate: string) => Operation<DocumentVali
  */
 export function structuralValidation(
   includes: readonly string[],
-  declarations: readonly DeclaredMarkdownComponent[],
+  declarations: readonly MarkdownComponent[],
 ): StructuralValidation {
   return (candidate: string) =>
     // The registry is installed around the question rather than around the
@@ -369,19 +370,19 @@ const INFORMATION_RETURNS = {
  */
 export function* planComponentDeclaration(
   assembly: PlanComponentAssembly,
-): Operation<DeclaredMarkdownComponent> {
+): Operation<MarkdownComponent> {
   const source = yield* readPackagedDocument(PLAN_DOCUMENT);
   // The admission validates against the profile a Plan will run in, and that
   // profile now contains `<Plan>` — the symbols the agent was shown say so. So
   // the declaration has to be able to describe itself, which is why it is
   // assigned back rather than rebuilt: a second copy of these bytes would be a
   // second Component identity.
-  const declared: DeclaredMarkdownComponent[] = [];
+  const declared: MarkdownComponent[] = [];
   // One structural question for this invocation, asked by the draft check and by
   // the admission alike — and, when the command supplied it, by the command's own
   // gate after this declaration is gone.
   const validate = assembly.validate ?? structuralValidation(assembly.includes, declared);
-  const declaration: DeclaredMarkdownComponent = {
+  const declaration = Markdown({
     name: PLAN_COMPONENT,
     origin: PLAN_ORIGIN,
     source,
@@ -403,7 +404,7 @@ export function* planComponentDeclaration(
       classifyPlanResponseComponent(),
       planInformation(),
     ],
-  };
+  });
   declared.push(declaration);
   return declaration;
 }
@@ -423,9 +424,9 @@ export function* planComponentDeclaration(
  * bytes. That is what makes `xmd syntax` a check on which Component a build
  * ships.
  */
-export function* planComponentDescription(): Operation<DeclaredMarkdownComponent> {
+export function* planComponentDescription(): Operation<MarkdownComponent> {
   const source = yield* readPackagedDocument(PLAN_DOCUMENT);
-  return {
+  return Markdown({
     name: PLAN_COMPONENT,
     origin: PLAN_ORIGIN,
     source,
@@ -438,7 +439,7 @@ export function* planComponentDescription(): Operation<DeclaredMarkdownComponent
     // file called `CheckDraft.md` would be listed and validated as though a
     // document could write it, and only the run would say otherwise.
     privates: describedPrivates(),
-  };
+  });
 }
 
 /**

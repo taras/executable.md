@@ -49,10 +49,9 @@ import { API, useHostFiles } from "@executablemd/runtime";
 import { Component, content } from "../src/component-api.ts";
 import { collect } from "../src/collect.ts";
 import { execute } from "../src/execute.ts";
-import { executeInstalled, sourceDigest } from "../host.ts";
+import { executeInstalled, Markdown, sourceDigest } from "../host.ts";
 import type {
   ComponentAnswerRequest,
-  DeclaredMarkdownComponent,
   ExecutionInstallation,
   FragmentEvaluationInput,
 } from "../host.ts";
@@ -1533,12 +1532,12 @@ describe("Tier SYN — the name canonical core owns", () => {
 
   it("SYN9: a host that declares Markdown called Syntax is refused before the root import", function* () {
     const source = "declared symbols\n";
-    const declaration: DeclaredMarkdownComponent = {
+    const declaration = Markdown({
       name: "Syntax",
       origin: "@executablemd/test/Syntax.md",
       source,
       digest: sourceDigest(source),
-    };
+    });
     const stream = new InMemoryStream();
     expect(
       yield* refusal(run("<Syntax />\n", [{ declarations: [declaration] }], stream)),
@@ -1549,12 +1548,12 @@ describe("Tier SYN — the name canonical core owns", () => {
 
     // The positive control: an adjacent declaration under another name is
     // admitted and runs, so the refusal is about the name.
-    const adjacent: DeclaredMarkdownComponent = {
+    const adjacent = Markdown({
       name: "Policy",
       origin: "@executablemd/test/Policy.md",
       source,
       digest: sourceDigest(source),
-    };
+    });
     expect(String(yield* run("<Policy />\n", [{ declarations: [adjacent] }]))).toContain(
       "declared symbols",
     );
@@ -1867,12 +1866,12 @@ describe("Tier SYN — the site the symbols describe", () => {
 
   it("SYN18: a declared Markdown component's own body reports the site it inherited", function* () {
     const source = ['<Syntax as="symbols" />', "policy sees {symbols}", ""].join("\n");
-    const declaration: DeclaredMarkdownComponent = {
+    const declaration = Markdown({
       name: "Policy",
       origin: "@executablemd/test/Policy.md",
       source,
       digest: sourceDigest(source),
-    };
+    });
     const { installation } = stating(symbolsOf("Marker"));
     const output = String(
       yield* run("<Policy />\n", [installation, { declarations: [declaration] }]),

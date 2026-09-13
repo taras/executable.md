@@ -219,9 +219,22 @@ export type { WorkflowBundleComponent, WorkflowComponentBundle } from "./src/com
  * the host said about them is not what they say about themselves. `sourceDigest`
  * is the same hash core checks against, so a build states the digest of what it
  * actually shipped rather than a constant someone updates by hand.
+ *
+ * A declaration states which kind it is, and `Markdown({…})` is how this
+ * repository states it: a host describes its asset, and the constructor writes
+ * the discriminant after the description, so an input carrying a `kind` of its
+ * own does not decide what the declaration is. `MarkdownComponentInput` is what
+ * a host writes and `MarkdownComponent` is what comes back.
  */
-export { DeclaredMarkdownError, sourceDigest } from "./src/components/declared-markdown.ts";
-export type { DeclaredMarkdownComponent } from "./src/components/declared-markdown.ts";
+export {
+  DeclaredMarkdownError,
+  Markdown,
+  sourceDigest,
+} from "./src/components/declared-markdown.ts";
+export type {
+  MarkdownComponent,
+  MarkdownComponentInput,
+} from "./src/components/declared-markdown.ts";
 
 /**
  * Installing one Agent provider for the invocation that projects the content it

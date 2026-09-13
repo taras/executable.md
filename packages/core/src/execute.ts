@@ -126,7 +126,7 @@ import {
   DeclaredImports,
   privateClosure,
 } from "./components/declared-markdown.ts";
-import type { DeclaredMarkdownComponent } from "./components/declared-markdown.ts";
+import type { MarkdownComponent } from "./components/declared-markdown.ts";
 import { documentationOf } from "./components/documentation.ts";
 import { registerComponents } from "./components/registration.ts";
 import {
@@ -2397,7 +2397,7 @@ function* executeDocument(
   preparations: readonly DurablePreparation[] = [],
   bundles: readonly WorkflowComponentBundle[] = [],
   identityComponents: readonly IdentityComponent[] = [],
-  declarations: readonly DeclaredMarkdownComponent[] = [],
+  declarations: readonly MarkdownComponent[] = [],
   providers: readonly SyntaxSymbolsProvider[] = [],
   /**
    * The documentation each bootstrapped package contributed.
@@ -2878,13 +2878,14 @@ export interface ExecutionInstallation {
   /**
    * The exact Markdown this host declares to the execution.
    *
-   * Plain immutable data: the public name, the reported origin, the bytes,
-   * their digest, the forms and any private declarations those bytes alone may
-   * write. Captured by value alongside the admissions, before any installation
-   * runs, so what a declared name resolves to — and which answers a document
-   * may invoke — is fixed before anything can observe or replace it.
+   * Plain immutable data: the kind of declaration it is, the public name, the
+   * reported origin, the bytes, their digest, the forms and any private
+   * declarations those bytes alone may write. Captured by value alongside the
+   * admissions, before any installation runs, so what a declared name resolves
+   * to — and which answers a document may invoke — is fixed before anything can
+   * observe or replace it.
    */
-  readonly declarations?: readonly DeclaredMarkdownComponent[];
+  readonly declarations?: readonly MarkdownComponent[];
   /**
    * What this installation records inside the durable root.
    *
@@ -3347,6 +3348,12 @@ function* invoke(
     installations.flatMap((installation) =>
       [...(installation.declarations ?? [])].map((declaration) =>
         Object.freeze({
+          // Copied rather than decided. Capture states what the host stated, so
+          // a declaration that says it is something else — or says nothing —
+          // reaches admission as it was written and is refused there, instead
+          // of being turned into Markdown by a capture that read fewer of its
+          // members than it was given.
+          kind: declaration.kind,
           name: declaration.name,
           origin: declaration.origin,
           source: declaration.source,
