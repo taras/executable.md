@@ -64,6 +64,7 @@ import {
 import {
   classifyPlanResponse,
   generatedRequestRefusal,
+  Markdown,
   sourceDigest,
 } from "@executablemd/core/host";
 import type {
@@ -381,8 +382,7 @@ export function* planComponentDeclaration(
   // the admission alike — and, when the command supplied it, by the command's own
   // gate after this declaration is gone.
   const validate = assembly.validate ?? structuralValidation(assembly.includes, declared);
-  const declaration: DeclaredMarkdownComponent = {
-    kind: "markdown",
+  const declaration = Markdown({
     name: PLAN_COMPONENT,
     origin: PLAN_ORIGIN,
     source,
@@ -404,7 +404,7 @@ export function* planComponentDeclaration(
       classifyPlanResponseComponent(),
       planInformation(),
     ],
-  };
+  });
   declared.push(declaration);
   return declaration;
 }
@@ -426,8 +426,7 @@ export function* planComponentDeclaration(
  */
 export function* planComponentDescription(): Operation<DeclaredMarkdownComponent> {
   const source = yield* readPackagedDocument(PLAN_DOCUMENT);
-  return {
-    kind: "markdown",
+  return Markdown({
     name: PLAN_COMPONENT,
     origin: PLAN_ORIGIN,
     source,
@@ -440,7 +439,7 @@ export function* planComponentDescription(): Operation<DeclaredMarkdownComponent
     // file called `CheckDraft.md` would be listed and validated as though a
     // document could write it, and only the run would say otherwise.
     privates: describedPrivates(),
-  };
+  });
 }
 
 /**

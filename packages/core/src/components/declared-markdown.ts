@@ -129,9 +129,33 @@ export interface MarkdownDeclaration {
  *
  * Kept because a host, a profile and a test all import it by this name. It is
  * the same type: what changed is that a declaration now states which kind it
- * is, so constructing one states `kind: "markdown"`.
+ * is, and {@link Markdown} is what states it.
  */
 export type DeclaredMarkdownComponent = MarkdownDeclaration;
+
+/** Everything a host states about exact Markdown, apart from what kind it is. */
+export type MarkdownDeclarationInput = Omit<MarkdownDeclaration, "kind">;
+
+/**
+ * Declare exact Markdown to one execution.
+ *
+ * The construction boundary, and the only place the discriminant is written. A
+ * host describes its asset and this states what that description *is*, so a
+ * declaration cannot be assembled member by member and end up saying it is
+ * Markdown by accident — or, having been built from data, be talked into saying
+ * something else: `kind` is written after the input is spread, so a value
+ * carrying one of its own is overwritten rather than believed.
+ *
+ * It is a constructor and nothing more. Nothing is validated, hashed, copied
+ * deeply, frozen or admitted here: the digest is the host's own statement about
+ * its bytes, and the schemas, arrays and private declarations that arrive are
+ * the same objects that leave. What this execution *holds* is copied where
+ * every other installed value is — at capture, before any `install()` runs —
+ * and checked where every other declaration is, at admission.
+ */
+export function Markdown(input: MarkdownDeclarationInput): DeclaredMarkdownComponent {
+  return { ...input, kind: "markdown" };
+}
 
 /** One declaration, admitted: what the host stated, checked against its bytes. */
 export interface AdmittedDeclaredMarkdown {
@@ -182,21 +206,22 @@ export function* admitDeclaredMarkdown(
   const privateNames = new Set<string>();
 
   for (const declaration of declarations) {
-    const { name, origin, source, digest } = declaration;
-
-    // Read before anything else is read from this value, because everything
-    // after it is a statement *about* exact Markdown. A declaration that does
-    // not say it is Markdown is not held to Markdown's checks and quietly
-    // admitted — it is refused, which is what makes the discriminant a fact a
-    // host states rather than one this admission assumes. The received value is
-    // not printed: it is text of unknown provenance, exactly as a name is.
+    // Read first, and before any other member is read at all — the destructuring
+    // below is deliberately after it. Everything else a declaration carries is a
+    // statement *about* exact Markdown, so reading one of those from a value
+    // that never said it was Markdown is already treating it as Markdown. A
+    // declaration that states something else, or nothing, is refused here. The
+    // received value is not printed: it is text of unknown provenance, exactly
+    // as a name is.
     if (declaration.kind !== "markdown") {
       throw refuse(
         "a declaration was handed to one execution without saying it is exact Markdown. A host " +
-          'states `kind: "markdown"`, and a declaration that states something else, or nothing, ' +
-          "is never read as Markdown.",
+          "declares exact Markdown with `Markdown({…})`, and a declaration that states something " +
+          "else, or nothing, is never read as Markdown.",
       );
     }
+
+    const { name, origin, source, digest } = declaration;
 
     // The name is printed only once it has passed the grammar a document
     // writes: until then it is text of unknown provenance, and a refusal is not

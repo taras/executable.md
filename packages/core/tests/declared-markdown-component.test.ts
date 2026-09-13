@@ -41,13 +41,15 @@ import type { DurableEvent, Json } from "@executablemd/durable-streams";
 import { Component } from "../src/component-api.ts";
 import { collect } from "../src/collect.ts";
 import { execute } from "../src/execute.ts";
-import { executeInstalled, sourceDigest } from "../host.ts";
+import { executeInstalled, Markdown, sourceDigest } from "../host.ts";
 import type {
   DeclaredMarkdownComponent,
   ExecutionInstallation,
   IdentityClaimant,
   IdentityComponent,
+  MarkdownDeclarationInput,
 } from "../host.ts";
+import { admitDeclaredMarkdown } from "../src/components/declared-markdown.ts";
 import { inspectComponent, inspectSyntax } from "../src/inspect.ts";
 import { validateDocument, validateDocumentStructure } from "../src/document-validation.ts";
 import { registerComponents } from "../src/components/registration.ts";
@@ -67,16 +69,15 @@ const NO_PROPS = { type: "object", properties: {}, additionalProperties: false }
 /** The declared Markdown this tier runs against, with its digest computed. */
 function declared(
   source: string,
-  overrides: Partial<DeclaredMarkdownComponent> = {},
+  overrides: Partial<MarkdownDeclarationInput> = {},
 ): DeclaredMarkdownComponent {
-  return {
-    kind: "markdown",
+  return Markdown({
     name: "Policy",
     origin: ORIGIN,
     source,
     digest: sourceDigest(source),
     ...overrides,
-  };
+  });
 }
 
 const POLICY_SOURCE = ["The policy ran.", ""].join("\n");
@@ -1556,7 +1557,7 @@ describe("Tier DM — exact source is a provenance, not a field", () => {
 });
 
 /**
- * Tier MDK — a declaration states which kind it is.
+ * Tier MDK — `Markdown({…})` is how a declaration says what it is.
  *
  * A host hands an execution declarations as plain immutable data, and the value
  * now says what it is. That matters because everything else about a declaration
@@ -1564,10 +1565,15 @@ describe("Tier DM — exact source is a provenance, not a field", () => {
  * Markdown, admitted on the strength of having a `source` and a `digest`, would
  * be one whose shape decided what it meant.
  *
- * So the discriminant is read first, from what the execution captured before
- * any installation ran, and a value that states something else — or nothing —
- * is refused where it is installed rather than where a document writes the
- * name.
+ * The constructor is the only place the discriminant is written, and it writes
+ * it after the host's description, so an input carrying a `kind` of its own is
+ * overwritten rather than believed. It is a constructor and nothing else:
+ * nothing is hashed, copied deeply, frozen or admitted there.
+ *
+ * Admission reads the discriminant before it reads any other member, and what
+ * it reads is what the execution captured before any installation ran — so a
+ * declaration that states something else, or nothing, is refused where it is
+ * installed rather than where a document writes the name.
  */
 
 /** A declaration as a host that states no kind at all would hand it over. */
@@ -1598,7 +1604,50 @@ function* refusedBy(operation: Operation<unknown>): Operation<Error> {
 }
 
 describe("Tier MDK — the declaration states its kind", () => {
-  it("MDK1: a declaration stating its kind behaves exactly as it always did", function* () {
+  // deno-lint-ignore require-yield
+  it("MDK1: the constructor states the kind and changes nothing else", function* () {
+    const props: PropsSchema = { type: "object", properties: {}, additionalProperties: false };
+    const privates = [secret()];
+    const input = {
+      name: "Policy",
+      origin: ORIGIN,
+      source: POLICY_SOURCE,
+      digest: sourceDigest(POLICY_SOURCE),
+      forms: ["paired"] as const,
+      props,
+      privates,
+      exact: true,
+    };
+
+    const declaration = Markdown(input);
+
+    // A fresh object carrying the fixed discriminant, with the host's own
+    // description untouched.
+    expect(declaration).not.toBe(input);
+    expect(declaration.kind).toBe("markdown");
+    expect(Reflect.has(input, "kind")).toBe(false);
+    expect(declaration.name).toBe(input.name);
+    expect(declaration.origin).toBe(input.origin);
+    expect(declaration.source).toBe(input.source);
+    // The digest is the host's statement about its own bytes; the constructor
+    // neither computes nor replaces one.
+    expect(declaration.digest).toBe(input.digest);
+    expect(declaration.forms).toEqual(["paired"]);
+    expect(declaration.exact).toBe(true);
+    // Shallow by contract: what arrives is what leaves, so nothing here is the
+    // copy an execution makes at capture.
+    expect(declaration.props).toBe(props);
+    expect(declaration.privates).toBe(privates);
+    expect(Object.isFrozen(declaration)).toBe(false);
+
+    // A kind planted on the input cannot decide what the declaration is: the
+    // constructor writes its own after spreading.
+    const planted = { ...input };
+    Reflect.set(planted, "kind", "structural");
+    expect(Markdown(planted).kind).toBe("markdown");
+  });
+
+  it("MDK1: a constructed declaration behaves exactly as it always did", function* () {
     const declarations = [declared(POLICY_SOURCE)];
 
     // Selection and expansion.
@@ -1627,6 +1676,33 @@ describe("Tier MDK — the declaration states its kind", () => {
     expect(yield* refusal(run('<Secret as="answer" />\n', withPrivate))).toContain(
       "Cannot resolve component: Secret",
     );
+  });
+
+  it("MDK2: the kind is what admission reads first, before any other member", function* () {
+    // Every other member fails if it is read at all, so an admission that
+    // reached one before deciding about the kind ends this row with that
+    // failure instead of the refusal.
+    const hostile = declared(POLICY_SOURCE);
+    Reflect.set(hostile, "kind", "structural");
+    for (const member of ["name", "origin", "source", "digest", "forms", "privates"]) {
+      Object.defineProperty(hostile, member, {
+        configurable: true,
+        enumerable: true,
+        get() {
+          throw new Error(`admission read "${member}" before deciding about the kind`);
+        },
+      });
+    }
+
+    const error = yield* refusedBy(admitDeclaredMarkdown([hostile], new Map()));
+    expect(error.name).toBe("DeclaredMarkdownError");
+    expect(error.message).toContain("without saying it is exact Markdown");
+
+    // The positive control: the same admission, with the kind restored, reads
+    // those members and refuses on what they say instead.
+    const readable = declared("Other bytes.\n", { digest: sourceDigest(POLICY_SOURCE) });
+    const mismatch = yield* refusedBy(admitDeclaredMarkdown([readable], new Map()));
+    expect(mismatch.message).toContain("states a digest its source does not have");
   });
 
   it("MDK2: a missing or unknown kind refuses before the root import", function* () {
