@@ -120,7 +120,7 @@ import {
   unresolvedMessage,
 } from "./components/select.ts";
 import { installedBundle } from "./components/bundle.ts";
-import { DeclaredImports, privateClosure } from "./components/declared-markdown.ts";
+import { InstalledComponents, privateClosure } from "./components/declared-markdown.ts";
 import {
   admitInstalledDeclarations,
   isKnownKind,
@@ -138,7 +138,7 @@ import { registerComponents } from "./components/registration.ts";
 import {
   declaredForms,
   formDispatcher,
-  installFormSelections,
+  installFormSyntax,
   installIdentities,
   parseFormDeclaration,
 } from "./invocation-identity.ts";
@@ -457,7 +457,7 @@ interface ImportInputs {
   readonly searchPaths: string[];
   readonly registry: ComponentRegistry;
   readonly bundle: WorkflowImportAuthority | undefined;
-  readonly declared: DeclaredImports | undefined;
+  readonly declared: InstalledComponents | undefined;
   /** Everything this execution declares, as selection reads it. */
   readonly catalog: ExecutionDeclarationCatalog;
   readonly guarded: ReadonlyMap<string, FunctionComponentDefinition>;
@@ -570,7 +570,7 @@ function* selectImport(
 }
 
 /** What a declaration offered this element, when the element is inside one. */
-type PrivateOffer = ReturnType<DeclaredImports["claim"]> | undefined;
+type PrivateOffer = ReturnType<InstalledComponents["claim"]> | undefined;
 
 /**
  * The definition one decided selection produces.
@@ -2052,7 +2052,7 @@ function* runValueRoot(
         environment,
         ownBody,
       );
-      const exactRecord = environment.exact;
+      const exactRecord = environment.sourceSegments;
       for (const resolved of expanded) {
         const text = renderSegment(resolved);
         if (text) {
@@ -2105,7 +2105,7 @@ function* documentWorkflow(
   const root = yield* ephemeral(
     (function* (): Operation<ComponentDefinition | FunctionComponentDefinition> {
       const imported = yield* importComponent("__root__");
-      const imports = environment.imports;
+      const imports = environment.componentResolution;
       // Asked only when a tier actually closes this name, exactly as an
       // ordinary import is. The environment used to be absent altogether for a
       // run with no bundle and no declarations, so this could authorize
@@ -2135,7 +2135,7 @@ function* documentWorkflow(
   // Which segments this run produced as source. Read off the private environment
   // this execution built, so the emission paths below reach it without a
   // context — there is nothing here for a document to name.
-  const exactRecord = environment.exact;
+  const exactRecord = environment.sourceSegments;
 
   // What the document rendered before it stopped, held outside the expansion
   // scope so a failure still leaves it here (§6.9 Partial output). The buffered
@@ -2528,15 +2528,15 @@ function* executeDocument(
       // This execution's own selection frames, held here and handed to core's
       // expansion by value. Nothing a document, a component or middleware can
       // name reaches them.
-      const forms = installFormSelections();
+      const forms = installFormSyntax();
       // The private closures, built from the minted implementations rather than
       // from the declarations: what a private name resolves to is the function
       // this execution built, and it names nothing once the execution is torn
       // down above.
-      const declaredImports =
+      const installedComponents =
         declaredMarkdown === undefined
           ? undefined
-          : new DeclaredImports(
+          : new InstalledComponents(
               declaredMarkdown,
               identity.privates,
               new Map(
@@ -2553,8 +2553,8 @@ function* executeDocument(
       if (bundle !== undefined) {
         tiers.push(bundle);
       }
-      if (declaredImports !== undefined) {
-        tiers.push(declaredImports);
+      if (installedComponents !== undefined) {
+        tiers.push(installedComponents);
       }
       // Last, because a tier that claims a name answers for it and the earlier
       // ones claim names of their own; a bundled execution still words every
@@ -2569,7 +2569,7 @@ function* executeDocument(
       // are all established, and the root import has not been asked for. So the
       // chain a capture resolves through is the ordinary one, and no document
       // code has run to arrange it.
-      const evaluation =
+      const evaluationProfile =
         prepared === undefined
           ? undefined
           : yield* prepared.seal(
@@ -2577,27 +2577,27 @@ function* executeDocument(
                 searchPaths: includes,
                 registry: startingRegistry,
                 bundle,
-                declared: declaredImports,
+                declared: installedComponents,
                 catalog,
                 guarded: identity.protected,
               }),
-              identity.protectedBodies.project,
+              identity.componentRouting.project,
             );
 
       const environment: ExecutionEnvironment = {
-        imports,
+        componentResolution: imports,
         // Everything this host declared, admitted above. Expansion asks it
         // about every name it reaches, which is how an installed construct is
         // dispatched without core holding a branch for its name.
         declarations: catalog,
-        ...(declaredImports === undefined ? {} : { declared: declaredImports }),
-        identities: identity.identities,
-        protectedBodies: identity.protectedBodies,
+        ...(installedComponents === undefined ? {} : { installedComponents }),
+        componentIdentity: identity.identities,
+        componentRouting: identity.componentRouting,
         forms,
         // Created here, held here, and reclaimed with this execution. Nothing a
         // document, a component, middleware or a separately loaded copy can
         // name reaches this object.
-        exact: createExactSource(),
+        sourceSegments: createExactSource(),
         // Built from what this execution captured before any installation,
         // middleware or document code ran, and asked only when an occurrence
         // renders: a run whose document never writes `<Syntax />` enumerates
@@ -2616,7 +2616,7 @@ function* executeDocument(
         // The ceiling a generated fragment is evaluated under, when this host
         // offers evaluation at all. Absent is a host that offers none, and
         // `<Evaluate>` refuses on that rather than inventing one.
-        ...(evaluation === undefined ? {} : { evaluation }),
+        ...(evaluationProfile === undefined ? {} : { evaluationProfile }),
       };
 
       // Install the document's runtime Component providers before durableRun
@@ -2636,7 +2636,7 @@ function* executeDocument(
                 searchPaths: includes,
                 registry: registered,
                 bundle,
-                declared: declaredImports,
+                declared: installedComponents,
                 catalog,
                 guarded: identity.protected,
               },

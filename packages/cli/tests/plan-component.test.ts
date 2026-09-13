@@ -1901,8 +1901,8 @@ describe("Tier MDK — the Plan declarations state their kind", () => {
 
       const described = yield* planComponentDescription();
 
-      expect(harness.declaration.kind).toBe("markdown");
-      expect(described.kind).toBe("markdown");
+      expect(harness.declaration.kind).toBe("component");
+      expect(described.kind).toBe("component");
       // The same asset either way: only the private closure differs between the
       // declaration a run installs and the one inspection describes.
       expect(described.name).toBe(harness.declaration.name);

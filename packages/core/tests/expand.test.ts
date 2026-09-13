@@ -1152,7 +1152,7 @@ function* installedEnvironment(
     [{ declarations, expand }, ...extra],
     new Map(),
   );
-  return { declarations: catalog, exact: createExactSource() };
+  return { declarations: catalog, sourceSegments: createExactSource() };
 }
 
 /** Expand one source under an environment, returning what it rendered. */

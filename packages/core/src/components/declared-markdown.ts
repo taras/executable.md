@@ -94,7 +94,7 @@ export interface MarkdownComponent {
    * handing over, so a value whose shape happens to resemble exact Markdown is
    * never admitted as exact Markdown on that resemblance alone.
    */
-  readonly kind: "markdown";
+  readonly kind: "component";
   /** The name a document writes. */
   readonly name: string;
   /** Stable, human-readable source identity — reported by inspection. */
@@ -149,7 +149,7 @@ export type MarkdownComponentInput = Omit<MarkdownComponent, "kind">;
  * and checked where every other declaration is, at admission.
  */
 export function Markdown(input: MarkdownComponentInput): MarkdownComponent {
-  return { ...input, kind: "markdown" };
+  return { ...input, kind: "component" };
 }
 
 /** One declaration, admitted: what the host stated, checked against its bytes. */
@@ -208,11 +208,12 @@ export function* admitDeclaredMarkdown(
     // declaration that states something else, or nothing, is refused here. The
     // received value is not printed: it is text of unknown provenance, exactly
     // as a name is.
-    if (declaration.kind !== "markdown") {
+    if (declaration.kind !== "component") {
       throw refuse(
-        "a declaration was handed to one execution without saying it is exact Markdown. A host " +
-          "declares exact Markdown with `Markdown({…})`, and a declaration that states something " +
-          "else, or nothing, is never read as Markdown.",
+        "a declaration was handed to one execution without stating a known declaration kind. A " +
+          'host declares exact Markdown with `Markdown({…})`, which states "component"; ' +
+          'structural syntax states "structural". A declaration that states something else, or ' +
+          "nothing, is refused before any other member is read.",
       );
     }
 
@@ -482,7 +483,7 @@ const REFUSED: Record<ImportRefusal, string> = {
     "produced before it was invoked.",
 };
 
-export class DeclaredImports implements ImportTier {
+export class InstalledComponents implements ImportTier {
   readonly #catalog: DeclaredMarkdownCatalog;
   readonly #privates: ReadonlyMap<string, FunctionComponentDefinition>;
   readonly #closures: ReadonlyMap<string, PrivateClosure>;

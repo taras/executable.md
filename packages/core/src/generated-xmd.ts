@@ -151,8 +151,8 @@ import {
   switchStructure,
 } from "./structural-rules.ts";
 import type { StructuralViolation } from "./structural-rules.ts";
-import { installFormSelections, invocationForm } from "./invocation-identity.ts";
-import type { FormSelections, ProtectedBodies } from "./invocation-identity.ts";
+import { installFormSyntax, invocationForm } from "./invocation-identity.ts";
+import type { FormSyntax, ComponentRouting } from "./invocation-identity.ts";
 import type { ComponentInvocation } from "./invocation-identity.ts";
 import type { SyntaxReference } from "./syntax-reference.ts";
 import type {
@@ -974,10 +974,10 @@ class GeneratedImportAuthority implements ImportAuthority {
    * document's resolver, so it records what it selected here too — the same
    * boundary, owned by the same object that owns the admission.
    */
-  readonly #forms = installFormSelections();
+  readonly #forms = installFormSyntax();
   /** The form authority under each admitted name's wrapper. */
   readonly #dispatchers = new Map<string, unknown>();
-  readonly #protectedBodies: ProtectedBodies | undefined;
+  readonly #componentRouting: ComponentRouting | undefined;
   readonly #invocations = new WeakMap<object, Map<AuthoredForm, Planned>>();
 
   /**
@@ -990,7 +990,7 @@ class GeneratedImportAuthority implements ImportAuthority {
     return true;
   }
 
-  constructor(named: readonly Planned[], protectedBodies?: ProtectedBodies) {
+  constructor(named: readonly Planned[], componentRouting?: ComponentRouting) {
     const planned = new Map<string, Map<AuthoredForm, Planned>>();
     for (const invocation of named) {
       const byForm = planned.get(invocation.name) ?? new Map<AuthoredForm, Planned>();
@@ -998,7 +998,7 @@ class GeneratedImportAuthority implements ImportAuthority {
       planned.set(invocation.name, byForm);
     }
     this.#planned = planned;
-    this.#protectedBodies = protectedBodies;
+    this.#componentRouting = componentRouting;
   }
 
   /** The answer canonical execution produces for this name. */
@@ -1048,7 +1048,7 @@ class GeneratedImportAuthority implements ImportAuthority {
     // is core's guard around somebody else's would otherwise offer the guard,
     // and a form authority read off the guard selects no body at all.
     this.#dispatchers.set(name, entry.dispatch ?? implementation);
-    this.#protectedBodies?.project(implementation, admitted.fn);
+    this.#componentRouting?.project(implementation, admitted.fn);
     return this.#imports.issue(name, admitted);
   }
 
@@ -1068,7 +1068,7 @@ class GeneratedImportAuthority implements ImportAuthority {
   }
 
   /** The frames this fragment's own imports record into. */
-  get forms(): FormSelections {
+  get forms(): FormSyntax {
     return this.#forms;
   }
 
@@ -2413,7 +2413,7 @@ function expand(
   id: string,
   segments: Segment[],
   named: readonly Planned[],
-  protectedBodies: ProtectedBodies | undefined,
+  componentRouting: ComponentRouting | undefined,
   syntax: SyntaxReference | undefined,
 ): Operation<string> {
   return scoped(function* () {
@@ -2423,7 +2423,7 @@ function expand(
     // trusted-document evaluator. Set on this scope, so it ends with the
     // fragment and reaches nothing the document expands afterwards.
     yield* GeneratedDataExpressions.set(true);
-    const authority = new GeneratedImportAuthority(named, protectedBodies);
+    const authority = new GeneratedImportAuthority(named, componentRouting);
     yield* Component.around(
       {
         // deno-lint-ignore require-yield
@@ -2447,15 +2447,15 @@ function expand(
       // through the narrowed route. Import and form selection belong to this
       // fragment, while the reference preserves the admitting site's documentation.
       {
-        imports: authority,
+        componentResolution: authority,
         forms: authority.forms,
         // A fragment writes the admitted composition table and nothing else, so
         // it declares none. The empty catalog states that explicitly rather than
         // inheriting the host's: a generated fragment's execution environment
         // admits no installed structural syntax.
         declarations: new ExecutionDeclarationCatalog([], []),
-        invoke: (fn, invocation, body) => authority.invoke(fn, invocation, body),
-        ...(protectedBodies === undefined ? {} : { protectedBodies }),
+        invokeGeneratedComponent: (fn, invocation, body) => authority.invoke(fn, invocation, body),
+        ...(componentRouting === undefined ? {} : { componentRouting }),
         ...(syntax === undefined ? {} : { syntax }),
       },
       // A generated fragment is the engine's own text, so it owns no value body
@@ -2486,7 +2486,7 @@ export function evaluateGeneratedXmd(request: GeneratedXmdRequest): Operation<st
 /** Canonical Evaluate's internal handoff; absent from the public host surface. */
 export function* evaluateProtectedGeneratedXmd(
   request: GeneratedXmdRequest,
-  protectedBodies: ProtectedBodies | undefined,
+  componentRouting: ComponentRouting | undefined,
   syntax: SyntaxReference | undefined,
 ): Operation<string> {
   const allow = selection(request.allow);
@@ -2538,5 +2538,5 @@ export function* evaluateProtectedGeneratedXmd(
   // The retained source is what expands, so a continuation runs exactly the
   // bytes this run admitted rather than a caller's copy of them.
   const restored = yield* preflight(decided.source, table, ceilings);
-  return yield* expand(request.id, restored.segments, restored.named, protectedBodies, syntax);
+  return yield* expand(request.id, restored.segments, restored.named, componentRouting, syntax);
 }

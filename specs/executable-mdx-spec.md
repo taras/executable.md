@@ -2934,7 +2934,7 @@ function Markdown(input: MarkdownComponentInput): MarkdownComponent;
 
 The host writes the description — name, origin, source, digest, forms, schemas
 and privates — and the constructor returns a fresh shallow declaration carrying
-`kind: "markdown"`, written after that description so an input carrying a kind
+`kind: "component"`, written after that description so an input carrying a kind
 of its own does not decide what the declaration is. It is a constructor and
 nothing else: it validates nothing, computes no digest, copies no nested schema,
 array or private declaration, freezes nothing and admits nothing.
@@ -2945,7 +2945,10 @@ can come to exist. The defence is admission: the discriminant is required, and
 admission reads it before anything else about the value, because everything else
 is a statement *about* exact Markdown. A declaration stating a kind this version
 does not know, or stating none, is refused before the root document is imported
-rather than admitted on the strength of having a source and a digest.
+rather than admitted on the strength of having a source and a digest. The known
+kinds are exactly `"component"` and `"structural"`; `"markdown"`, which earlier
+versions stated, is not among them and refuses like any other unknown value.
+There is no compatibility arm.
 
 **It is held to its own bytes.** Canonical core parses the source and refuses
 the declaration before the root document is imported when it does not state that
@@ -13345,8 +13348,8 @@ can be made to fail if it is read.
 
 | # | Test | Verify |
 |---|------|--------|
-| MDK1 | The constructor | `Markdown({…})` returns a fresh object carrying `kind: "markdown"`, leaves the input unchanged, preserves every supplied member, computes no digest, and hands back the same nested schema, array and private-declaration objects it was given; a kind planted on the input does not survive. A constructed declaration keeps its selection, exact output, private closure, replay, inspection and validation behavior, and the existing suite runs with no changed result |
-| MDK2 | The discriminant is read first | A declaration whose kind was removed or replaced with `Reflect` refuses as `DeclaredMarkdownError` before the root import, with nothing yielded and no output; admission asked about a value whose every other property getter throws still reports that refusal, while the same admission with the kind restored reads those members and refuses on what they say |
+| MDK1 | The constructor | `Markdown({…})` returns a fresh shallow object carrying `kind: "component"` written last, leaves the input unchanged, preserves every supplied member, computes no digest, validates nothing, freezes nothing, admits nothing, and hands back the same nested schema, array and private-declaration objects it was given — nested objects included; a kind planted on the input does not survive. A constructed declaration keeps its selection, exact output, private closure, replay, inspection and validation behavior, and the existing suite runs with no changed result |
+| MDK2 | The discriminant is read first | A missing kind, an unknown one, and the superseded `"markdown"` each refuse as `DeclaredMarkdownError` before the root import, with nothing yielded and no output, while every other member of the declaration is rigged to throw if it is read — so the refusal came from the discriminant alone. The same three refuse identically at capture and in the Markdown admission, in one sentence both spell. `"component"` restored is the positive control and runs |
 | MDK3 | Capture reads once | The kind is read exactly once, before the first `install()`, and the admitted kind is that captured value — a counting getter that answers differently afterwards, and an `install()` that deletes the property, change nothing |
 | MDK4 | The existing fixtures | The three direct declarations in the syntax suite are built through the constructor and remain valid, while `SYN27`'s live inspection still reports symbols version 2 |
 

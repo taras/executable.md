@@ -296,17 +296,18 @@ function refuse(message: string): ExecutionDeclarationError {
 /**
  * What a value that states neither arm is refused with.
  *
- * PR A settled this sentence for exact Markdown, and it is still the right one:
- * a value that never said what it is has not said it is structural syntax
- * either. It is spelled here as well as in the Markdown admission because
+ * One sentence for both arms, because a value that never said what it is has
+ * said neither "component" nor "structural". It is spelled here as well as in
+ * the Markdown admission because
  * *capture* refuses before that admission is reached, and capture may read the
  * discriminant only once — delegating would read it a second time. `ED1` holds
  * the two spellings against each other, so they cannot drift apart silently.
  */
 const UNKNOWN_KIND =
-  "a declaration was handed to one execution without saying it is exact Markdown. A host " +
-  "declares exact Markdown with `Markdown({…})`, and a declaration that states something " +
-  "else, or nothing, is never read as Markdown.";
+  "a declaration was handed to one execution without stating a known declaration kind. A host " +
+  'declares exact Markdown with `Markdown({…})`, which states "component"; structural syntax ' +
+  'states "structural". A declaration that states something else, or nothing, is refused ' +
+  "before any other member is read.";
 
 /** Refuse a discriminant this version does not know. */
 export function refuseUnknownKind(): DeclaredMarkdownError {
@@ -315,7 +316,7 @@ export function refuseUnknownKind(): DeclaredMarkdownError {
 
 /** Whether this discriminant names an arm of the catalog. */
 export function isKnownKind(kind: unknown): kind is ExecutionDeclaration["kind"] {
-  return kind === "markdown" || kind === "structural";
+  return kind === "component" || kind === "structural";
 }
 
 /**

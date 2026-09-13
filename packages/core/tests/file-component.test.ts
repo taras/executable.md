@@ -25,7 +25,7 @@ import { collect } from "../src/collect.ts";
 import { useTempFileCompiler } from "../src/temp-file-compiler.ts";
 import { FileAccessError } from "../src/components/File.ts";
 import { CORE_REGISTRY } from "../src/components/registry.ts";
-import { installFormSelections } from "../src/invocation-identity.ts";
+import { installFormSyntax } from "../src/invocation-identity.ts";
 import { createContext } from "effection";
 import { registerComponents } from "../src/components/registration.ts";
 import { hasContent } from "../src/content-context.ts";
@@ -201,7 +201,7 @@ function observe(fixture: Fixture, source: string, mode: ErrorMode): Operation<O
     yield* useWorkspaceCwd(fixture);
     // This expansion's own frames, held here the way an execution holds its
     // own. They are handed to `expandSegments` by value below.
-    const forms = installFormSelections();
+    const forms = installFormSyntax();
     yield* Component.around({
       *raise([error], next) {
         raised.push(error);

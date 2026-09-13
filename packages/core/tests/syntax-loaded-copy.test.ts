@@ -58,7 +58,7 @@ interface LoadedCopy {
     protectedComponents: readonly unknown[],
   ): {
     protected: ReadonlyMap<string, { fn: unknown }>;
-    protectedBodies: {
+    componentRouting: {
       body(fn: unknown): unknown;
       project(source: unknown, wrapper: unknown): unknown;
     };
@@ -203,7 +203,7 @@ describe("Tier SYN — a separately loaded protected implementation", () => {
     }
     // The premise, stated as a fact rather than assumed: that copy holds a body
     // for its own implementation.
-    expect(installed.protectedBodies.body(foreign.fn)).toBeDefined();
+    expect(installed.componentRouting.body(foreign.fn)).toBeDefined();
 
     const refused = yield* refusal(runRoot([answering(foreign)]));
     expect(refused).toContain("canonical core owns");
@@ -252,7 +252,7 @@ describe("Tier SYN — a separately loaded protected implementation", () => {
               const answer = yield* next();
               if (request.name === "Syntax" && answer.kind === "function") {
                 observed.push(request.name);
-                projected.push(installed.protectedBodies.project(answer.fn, forged));
+                projected.push(installed.componentRouting.project(answer.fn, forged));
                 if (!captured) {
                   captured = true;
                   return request.claim(answer, { key: "Syntax", revision: "1" });
@@ -272,6 +272,6 @@ describe("Tier SYN — a separately loaded protected implementation", () => {
     expect(String(generated)).not.toContain("foreign projection");
     expect(observed).toEqual(["Syntax", "Syntax"]);
     expect(projected).toEqual([undefined, undefined]);
-    expect(installed.protectedBodies.body(forged)).toBeUndefined();
+    expect(installed.componentRouting.body(forged)).toBeUndefined();
   });
 });

@@ -739,12 +739,12 @@ function environmentForBody(
   if (environment === undefined) {
     return undefined;
   }
-  const privates = environment.declared?.closureFor(name, definition);
-  if (privates === environment.privates) {
+  const scope = environment.installedComponents?.closureFor(name, definition);
+  if (scope === environment.componentBodyScope) {
     return environment;
   }
-  const { privates: _cleared, ...rest } = environment;
-  return privates === undefined ? rest : { ...rest, privates };
+  const { componentBodyScope: _cleared, ...rest } = environment;
+  return scope === undefined ? rest : { ...rest, componentBodyScope: scope };
 }
 
 const MAX_EXPANSION_DEPTH = 64;
@@ -2544,7 +2544,7 @@ function* expandComponent(
   // answered: what canonical resolution selected here is what decides whether
   // this invocation is in one of this execution's identity domains, and nothing
   // on the answer or in the chain carries it (`invocation-identity.ts`).
-  const selection = environment?.identities?.beginImport(name);
+  const selection = environment?.componentIdentity?.beginImport(name);
   let selected: IdentityDomain | undefined;
   let dispatcher: FunctionComponent | undefined;
   /**
@@ -2567,7 +2567,7 @@ function* expandComponent(
     // the declaration for an element that did not author it, because the offer
     // is made from the closure the segments being expanded carry, is spent by
     // whatever asks first, and authorizes only the answer it produced itself.
-    const offered = environment?.declared?.offer(environment.privates, name);
+    const offered = environment?.installedComponents?.offer(environment.componentBodyScope, name);
     let answered: ImportedDefinition;
     try {
       answered = yield* importComponent(name, position);
@@ -2583,11 +2583,14 @@ function* expandComponent(
     // reaches this at all: selection resolves it to nothing, so what arrives is
     // the ordinary unresolved failure.
     let authorizedPrivate = false;
-    if (environment?.declared?.declaresPrivate(name) === true) {
+    if (environment?.installedComponents?.declaresPrivate(name) === true) {
       imported = requirePrivate(offered, name, answered);
       authorizedPrivate = true;
       environment.forms?.select(name, imported);
-    } else if (environment?.imports === undefined || !environment.imports.closes(name)) {
+    } else if (
+      environment?.componentResolution === undefined ||
+      !environment.componentResolution.closes(name)
+    ) {
       // Closed for this exact name, not for the execution that closed it. A
       // bundled run closes every import; a host that declared exact Markdown
       // closed the names it declared, and an unrelated one is the open import it
@@ -2595,7 +2598,7 @@ function* expandComponent(
       // recorded against it.
       imported = answered;
     } else {
-      imported = environment.imports.authorize(name, answered);
+      imported = environment.componentResolution.authorize(name, answered);
       // This import is canonical execution's own answer for a name this
       // execution closed, which is the only provenance exact source is read
       // from. An open import — one no tier claims — never sets it, however its
@@ -2948,9 +2951,9 @@ function* expandComponent(
   // binds instead. Recording it here — against the segments this body produced,
   // after it produced them — is what carries the fact to the emission loop,
   // which is outside every scope the invocation owned.
-  if (authorizedCanonically && environment?.declared?.declaresExact(name) === true) {
+  if (authorizedCanonically && environment?.installedComponents?.declaresExact(name) === true) {
     markExactSource(
-      environment?.exact,
+      environment?.sourceSegments,
       bodyOwner === undefined ? expanded : bodyOwner.slice(renderedFrom),
     );
   }
@@ -3277,8 +3280,8 @@ function* expandFunctionComponent(
         // refusing multiple delegations. Only a generated expansion has no such
         // table and issues through its narrowed protected route instead.
         const issued =
-          (environment?.identities === undefined
-            ? environment?.protectedBodies?.issue(
+          (environment?.componentIdentity === undefined
+            ? environment?.componentRouting?.issue(
                 definition.fn,
                 expansion.id,
                 name,
@@ -3289,9 +3292,9 @@ function* expandFunctionComponent(
             : undefined) ??
           issueInvocation(expansion.id, name, selected, frame, !selfClosing, dispatcher);
         const dispatchBody = (body: Operation<unknown>) =>
-          environment?.invoke === undefined
+          environment?.invokeGeneratedComponent === undefined
             ? body
-            : environment.invoke(definition.fn, issued.invocation, body);
+            : environment.invokeGeneratedComponent(definition.fn, issued.invocation, body);
         const projectionState: ProjectionState = {
           invocation,
           projecting: issued.projecting,
@@ -3433,7 +3436,7 @@ function* expandFunctionComponent(
           // descends, so it cannot be closed over when the implementation is
           // built. It is delivered here instead, by the copy of core performing
           // the expansion, from the environment it is already holding.
-          const guarded = environment?.protectedBodies?.body(definition.fn);
+          const guarded = environment?.componentRouting?.body(definition.fn);
           if (guarded !== undefined) {
             // What to project, under which environment and in which scope stays
             // here, where those things already are. How many times it may
@@ -3474,10 +3477,10 @@ function* expandFunctionComponent(
               return yield* dispatchBody(
                 guarded(validatedProps, issued.invocation, {
                   syntax: environment?.syntax,
-                  evaluation: environment?.evaluation,
+                  evaluationProfile: environment?.evaluationProfile,
                   projectContent: lease?.project,
-                  narrowProtectedBodies: (implementations: Iterable<unknown>) =>
-                    active ? environment?.protectedBodies?.narrow(implementations) : undefined,
+                  narrowComponentRouting: (implementations: Iterable<unknown>) =>
+                    active ? environment?.componentRouting?.narrow(implementations) : undefined,
                 }),
               );
             } finally {
@@ -4733,7 +4736,7 @@ function* produceRegion(
     // Only what this segment appended, and only what renders to text: the
     // exactness of each run is the execution's own record, never a field a
     // segment carries.
-    for (const chunk of emissions(context.environment.exact, produced.slice(rendered))) {
+    for (const chunk of emissions(context.environment.sourceSegments, produced.slice(rendered))) {
       yield* emit(chunk);
     }
     rendered = produced.length;
