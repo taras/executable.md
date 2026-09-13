@@ -25,14 +25,15 @@
  * reads of one region are two expansions rather than two views of one. Leaving
  * the scope — a handler returning, failing, or being cancelled — halts that
  * producer and waits for it, which is what stops authored work from outliving
- * the invocation that asked for it.
+ * the invocation that asked for it. That is the resource's own teardown doing
+ * it, not anything arranged here.
  *
  * Cancellation stays cancellation: a halted producer never becomes an ordinary
  * failure, and a read halted while waiting takes its demand with it rather than
  * leaving one behind to swallow a later chunk.
  */
 
-import { ensure, Err, Ok, resource, spawn, withResolvers } from "effection";
+import { Err, Ok, resource, spawn, withResolvers } from "effection";
 import type { Operation, Result, Stream, Subscription } from "effection";
 
 import type { ExpansionChunk } from "./execution-declarations.ts";
@@ -107,11 +108,12 @@ export function regionStream(produce: RegionProducer): Stream<ExpansionChunk, vo
       }
     }
 
-    // The producer is this subscription's own, and the `ensure` below is
-    // registered after it so teardown halts and joins it before the resource
-    // returns — a producer blocked on demand cannot survive the handler that
-    // asked for it.
-    const producer = yield* spawn(function* () {
+    // The producer is this subscription's own, and spawning it here is what
+    // binds its lifetime: this resource's body is a task, so leaving the scope
+    // halts every child it spawned and waits for each one. A producer blocked
+    // on demand therefore cannot survive the handler that asked for it, and
+    // nothing here has to arrange that separately.
+    yield* spawn(function* () {
       // Authored work starts when the first read does, not when the stream is
       // subscribed: a handler that holds a region and never reads it runs none
       // of its body.
@@ -155,10 +157,6 @@ export function regionStream(produce: RegionProducer): Stream<ExpansionChunk, vo
         }
       },
     };
-
-    yield* ensure(function* () {
-      yield* producer.halt();
-    });
 
     yield* provide(subscription);
   });
