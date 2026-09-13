@@ -3353,6 +3353,53 @@ when that form is declared. One analysis answers those questions, so
 non-executing validation and canonical expansion cannot accept different
 documents.
 
+**Expanding one.** Canonical core asks the catalog about a name after every
+construct the engine owns and before any component import, so core holds no
+branch for an installed name. An admitted construct takes the generic path; an
+admitted region written anywhere but inside its own construct refuses through
+the shared placement analysis and reaches no handler.
+
+Before the handler is entered, the occurrence is settled in this order:
+placement, the authored form against the declared forms, `as` and `slot` — which
+remain the engine's, so a valid `as` binds nothing and is not a prop — then the
+construct's expression props evaluated in its own lexical environment and
+validated against its schema, then every accepted region's, in authored source
+order. The first failure is the occurrence's, raised where it was written, and
+the handler is not entered.
+
+```typescript
+interface ExpansionRequest {
+  readonly name: string;
+  readonly origin: string;
+  readonly form: InvocationForm;
+  readonly position?: Readonly<SourcePosition>;
+  readonly props: Readonly<Record<string, Json>>;
+  readonly regions: readonly ExpansionRegion[];
+}
+```
+
+Every member is a frozen copy: the authored facts, the validated props with
+their declared defaults, and one region per accepted child. No segment, children
+array, recursion function, counter, ledger, schema or authority is reachable
+from a request. The installation's own captured handler is called directly, once,
+inside a scope of its own; the public `ExecutionApi` is unchanged and receives
+nothing.
+
+**A region is an operation, not output.** `ExpansionRegion.expand()` acquires a
+fresh resource per call, and each subscription owns one producer. Authored work
+is gated on demand: holding a region runs nothing, subscribing runs nothing, and
+each read permits the next segment's work and delivers one
+`{ text, exact }` chunk. Chunks carry the exactness the execution's own record
+decides, never a field a segment carries, and never pass through
+`DocumentOutput` or the journal — the construct itself renders nothing.
+
+**The handler's scope owns what it started.** Returning, failing or being
+cancelled halts every producer the handler entered and waits for it before the
+occurrence settles. A body that fails after producing output delivers its prefix
+first and then raises the original failure on the next read. Cancellation stays
+cancellation. Repeated calls and repeated subscriptions are fresh expansions,
+and neither at-most-once nor single-consumer enforcement exists.
+
 #### Origin
 
 Every selected implementation has a structured origin, and one resolver answers
@@ -13298,6 +13345,27 @@ can be made to fail if it is read.
 | MDK2 | The discriminant is read first | A declaration whose kind was removed or replaced with `Reflect` refuses as `DeclaredMarkdownError` before the root import, with nothing yielded and no output; admission asked about a value whose every other property getter throws still reports that refusal, while the same admission with the kind restored reads those members and refuses on what they say |
 | MDK3 | Capture reads once | The kind is read exactly once, before the first `install()`, and the admitted kind is that captured value — a counting getter that answers differently afterwards, and an `install()` that deletes the property, change nothing |
 | MDK4 | The existing fixtures | The three direct declarations in the syntax suite are built through the constructor and remain valid, while `SYN27`'s live inspection still reports symbols version 2 |
+
+### Tier SR — Expanding installed structural syntax (§5.3)
+
+What happens when a document writes a construct an installation declared. Every
+row drives ordinary expansion under an execution environment carrying one
+admitted catalog;
+ordering and teardown are proved with latches rather than elapsed time.
+
+| # | Test | Verify |
+|---|------|--------|
+| SR1 | The owner's handler | The installation that declared the construct receives the occurrence exactly once, and a second installation's handler receives nothing |
+| SR2 | The request | Name, origin, form and a frozen copy of the authored position are correct; props carry declared defaults and are frozen through, as are the regions array and each region's props; the public keys are exactly the request and region members, so no segment, children array, execution environment, counter or ledger is reachable |
+| SR3 | Everything validates first | A definitely invalid prop on the last region leaves the handler unentered and every region body at zero |
+| SR4 | Authored order | Regions arrive in the order they were written rather than declared, whitespace between them is not content, and a region written on its own refuses through the shared placement analysis and reaches no handler |
+| SR5 | Demand runs the body | A read expands the region's authored body, including a nested component; a region created, expanded and subscribed to but never read runs nothing at all |
+| SR6 | Region output is not document output | Chunks carry the region's rendered text while the construct renders nothing, and no chunk reaches `DocumentOutput` middleware |
+| SR7 | One demand, one chunk | Subscribing runs nothing; the first read delivers the first chunk while the second element's work has not begun; the next element runs only once a later read asks for it |
+| SR8 | The handler's scope owns the producer | A handler returning while a producer is blocked on demand halts and joins it before the occurrence settles, so the unreached segment never runs |
+| SR9 | Prefix then failure | A body failing after output delivers its prefix first, then the next read raises the original failure object rather than a rebuilt one |
+| SR10 | Fresh each time | Repeated `expand()` calls are independent expansions with their own producers, and nothing refuses a second one |
+| SR11 | Nothing else moved | Expansion without an execution environment resolves the name as an ordinary component; with declarations present, the engine's own constructs and their refusals are unchanged and no handler is reached |
 
 ### Tier ED — One declaration catalog, holding both arms (§5.3)
 

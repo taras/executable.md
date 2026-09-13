@@ -1,7 +1,19 @@
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { scoped } from "effection";
-import { expandSegments } from "../src/expand.ts";
+import { scoped, sleep, spawn, withResolvers } from "effection";
+import type { Subscription } from "effection";
+import { createBlockCounter, expandSegments } from "../src/expand.ts";
+import { admitInstalledDeclarations, Structural } from "../src/execution-declarations.ts";
+import type {
+  ExecutionDeclaration,
+  ExpansionChunk,
+  ExpansionRegion,
+  ExpansionRequest,
+  StructuralInput,
+} from "../src/execution-declarations.ts";
+import type { ExecutionEnvironment } from "../src/execution-environment.ts";
+import { createExactSource } from "../src/output/exact-source.ts";
+import { DocumentOutput } from "../src/api.ts";
 import { Component, content } from "../src/component-api.ts";
 import { printErrors } from "../src/component-failures.ts";
 import { scanSegments } from "../src/scanner.ts";
@@ -1075,5 +1087,600 @@ describe("function component content", () => {
     const segments = scanSegments('<Card>\n<Note slot="header" />\nBODY\n</Card>');
     const output = yield* expand(segments, { Card: card, Note: note });
     expect(output).toBe("[HEADER|BODY]");
+  });
+});
+
+/**
+ * Tier SR — expanding structural syntax an installation declared.
+ *
+ * The catalog decides what a name means; this is what happens when a document
+ * writes one. Everything a handler receives is settled first — placement, the
+ * authored forms, and every prop the construct and its regions carry — and the
+ * handler is then called directly, once, inside a scope that owns whatever it
+ * starts.
+ *
+ * A region is not output. It is an operation the handler may run, whose chunks
+ * it reads one at a time, and whose authored body does no work until a read is
+ * waiting for it. That is what makes a region something a construct arranges
+ * rather than something the document prints.
+ */
+
+const DECK_ORIGIN = "@executablemd/test/deck";
+
+function structuralDeclaration(overrides: Partial<StructuralInput> = {}): Structural {
+  return Structural({
+    name: "Deck",
+    origin: DECK_ORIGIN,
+    forms: ["paired"],
+    props: { type: "object", properties: {}, additionalProperties: false },
+    syntax: ["<Deck><Panel /></Deck>"],
+    description: "Lay out the panels written inside it.",
+    context: "The panels this deck lays out.",
+    parent: null,
+    ...overrides,
+  });
+}
+
+function regionDeclaration(overrides: Partial<StructuralInput> = {}): Structural {
+  return Structural({
+    name: "Panel",
+    origin: DECK_ORIGIN,
+    forms: ["self-closing", "paired"],
+    props: {
+      type: "object",
+      properties: { title: { type: "string" }, tone: { type: "string", default: "plain" } },
+      additionalProperties: false,
+    },
+    syntax: ['<Panel title="One">…</Panel>'],
+    description: "One panel of a deck.",
+    context: "Markdown the panel holds.",
+    parent: "Deck",
+    ...overrides,
+  });
+}
+
+/** The environment one expansion carries, with this installation's handler on it. */
+function* installedEnvironment(
+  declarations: readonly ExecutionDeclaration[],
+  expand: (request: ExpansionRequest) => Operation<void>,
+  extra: readonly { declarations: readonly ExecutionDeclaration[]; expand?: typeof expand }[] = [],
+): Operation<ExecutionEnvironment> {
+  const catalog = yield* admitInstalledDeclarations(
+    [{ declarations, expand }, ...extra],
+    new Map(),
+  );
+  return { declarations: catalog, exact: createExactSource() };
+}
+
+/** Expand one source under an environment, returning what it rendered. */
+function expandInstalled(source: string, environment: ExecutionEnvironment): Operation<Segment[]> {
+  return expandSegments(
+    scanSegments(source),
+    {},
+    {},
+    new Set<string>(),
+    createBlockCounter(),
+    undefined,
+    "",
+    0,
+    undefined,
+    environment,
+  );
+}
+
+/**
+ * The next chunk carrying something to read.
+ *
+ * A region's whitespace renders as its own chunk, exactly as it does anywhere
+ * else, so a reader after the next element's text keeps asking — and each ask
+ * is what lets the body do the work behind it.
+ */
+function* readText(subscription: Subscription<ExpansionChunk, void>): Operation<string> {
+  while (true) {
+    const next = yield* subscription.next();
+    if (next.done) {
+      return "";
+    }
+    const text = next.value.text.trim();
+    if (text !== "") {
+      return text;
+    }
+  }
+}
+
+/** Read one region to completion, as a handler would. */
+function* readRegion(region: ExpansionRegion): Operation<ExpansionChunk[]> {
+  const chunks: ExpansionChunk[] = [];
+  const subscription = yield* yield* region.expand();
+  while (true) {
+    const next = yield* subscription.next();
+    if (next.done) {
+      return chunks;
+    }
+    chunks.push(next.value);
+  }
+}
+
+describe("Tier SR — expanding installed structural syntax", () => {
+  it("SR1: the declaring installation's own handler receives the occurrence", function* () {
+    const seen: ExpansionRequest[] = [];
+    const other: string[] = [];
+    const environment = yield* installedEnvironment(
+      [structuralDeclaration(), regionDeclaration()],
+      function* (request) {
+        seen.push(request);
+      },
+      [
+        {
+          declarations: [
+            structuralDeclaration({ name: "Shelf", syntax: ["<Shelf><Card /></Shelf>"] }),
+            regionDeclaration({ name: "Card", parent: "Shelf", syntax: ["<Card />"] }),
+          ],
+          // deno-lint-ignore require-yield
+          expand: function* (request: ExpansionRequest) {
+            other.push(request.name);
+          },
+        },
+      ],
+    );
+
+    yield* scoped(function* () {
+      yield* useTestComponents({});
+      yield* expandInstalled("<Deck>\n  <Panel />\n</Deck>\n", environment);
+    });
+
+    expect(seen.map((request) => request.name)).toEqual(["Deck"]);
+    // The other installation declared its own pair and answered for none of
+    // this one: a handler expands the constructs it declared, and no others.
+    expect(other).toEqual([]);
+  });
+
+  it("SR2: the request carries copied authored facts and frozen validated props", function* () {
+    let request: ExpansionRequest | undefined;
+    const environment = yield* installedEnvironment(
+      [
+        structuralDeclaration({
+          props: {
+            type: "object",
+            properties: { columns: { type: "number" } },
+            additionalProperties: false,
+          },
+        }),
+        regionDeclaration(),
+      ],
+      // deno-lint-ignore require-yield
+      function* (received) {
+        request = received;
+      },
+    );
+
+    yield* scoped(function* () {
+      yield* useTestComponents({});
+      yield* expandInstalled('<Deck columns={2}>\n  <Panel title="One" />\n</Deck>\n', environment);
+    });
+
+    if (request === undefined) {
+      throw new Error("the handler was not called");
+    }
+    expect(request.name).toBe("Deck");
+    expect(request.origin).toBe(DECK_ORIGIN);
+    expect(request.form).toBe("paired");
+    expect(request.props).toEqual({ columns: 2 });
+    expect(request.regions).toHaveLength(1);
+
+    const [region] = request.regions;
+    expect(region?.name).toBe("Panel");
+    expect(region?.origin).toBe(DECK_ORIGIN);
+    expect(region?.form).toBe("self-closing");
+    // The declared default is applied before the handler sees it.
+    expect(region?.props).toEqual({ title: "One", tone: "plain" });
+
+    // Frozen through, and the regions array with it: what one handler holds
+    // cannot be edited by anything else that holds it.
+    expect(Object.isFrozen(request)).toBe(true);
+    expect(Object.isFrozen(request.props)).toBe(true);
+    expect(Object.isFrozen(request.regions)).toBe(true);
+    expect(Object.isFrozen(region?.props)).toBe(true);
+
+    // The authored position travels, as its own frozen copy.
+    expect(request.position?.line).toBe(1);
+    expect(Object.isFrozen(request.position)).toBe(true);
+
+    // Exactly the public keys: no segment, children array, environment, counter
+    // or ledger reaches a handler.
+    expect(Object.keys(request).sort()).toEqual([
+      "form",
+      "name",
+      "origin",
+      "position",
+      "props",
+      "regions",
+    ]);
+    expect(Object.keys(region ?? {}).sort()).toEqual([
+      "expand",
+      "form",
+      "name",
+      "origin",
+      "position",
+      "props",
+    ]);
+  });
+
+  it("SR3: every prop validates before the handler starts", function* () {
+    const entered: string[] = [];
+    const bodies: string[] = [];
+    const environment = yield* installedEnvironment(
+      [structuralDeclaration(), regionDeclaration()],
+      // deno-lint-ignore require-yield
+      function* (request) {
+        entered.push(request.name);
+      },
+    );
+
+    const rendered = yield* scoped(function* () {
+      yield* useTestComponents({
+        Tripwire: {
+          kind: "function",
+          name: "Tripwire",
+          props: { type: "object", properties: {}, additionalProperties: false },
+          // deno-lint-ignore require-yield
+          *fn() {
+            bodies.push("ran");
+            return "";
+          },
+        },
+      });
+      // The second region's prop is definitely wrong, and it is the last one
+      // read: nothing before it has started the handler or a body.
+      return yield* expandInstalled(
+        '<Deck>\n  <Panel title="One"><Tripwire /></Panel>\n  <Panel title={5} />\n</Deck>\n',
+        environment,
+      );
+    });
+
+    expect(entered).toEqual([]);
+    expect(bodies).toEqual([]);
+    expect(renderSegments(rendered)).toContain("ERROR");
+  });
+
+  it("SR4: accepted regions arrive in authored order, and a stray one refuses", function* () {
+    let names: string[] = [];
+    const environment = yield* installedEnvironment(
+      [
+        structuralDeclaration(),
+        regionDeclaration(),
+        regionDeclaration({ name: "Cover", syntax: ["<Cover />"] }),
+      ],
+      // deno-lint-ignore require-yield
+      function* (request) {
+        names = request.regions.map((region) => region.name);
+      },
+    );
+
+    yield* scoped(function* () {
+      yield* useTestComponents({});
+      // Declaration order is Panel then Cover; authored order is the reverse,
+      // and whitespace between them is not content.
+      yield* expandInstalled(
+        '<Deck>\n  <Cover />\n  <Panel title="One" />\n  <Cover />\n</Deck>\n',
+        environment,
+      );
+    });
+    expect(names).toEqual(["Cover", "Panel", "Cover"]);
+
+    // A region written on its own reaches no handler and says where it belongs.
+    const entered: string[] = [];
+    const stray = yield* installedEnvironment(
+      [structuralDeclaration(), regionDeclaration()],
+      // deno-lint-ignore require-yield
+      function* (request) {
+        entered.push(request.name);
+      },
+    );
+    const rendered = yield* scoped(function* () {
+      yield* useTestComponents({});
+      return yield* expandInstalled('<Panel title="One" />\n', stray);
+    });
+    expect(entered).toEqual([]);
+    expect(renderSegments(rendered)).toContain("is a region of <Deck>");
+  });
+
+  it("SR5: a demanded region expands its authored body; an unread one runs nothing", function* () {
+    const bodies: string[] = [];
+    let chunks: ExpansionChunk[] = [];
+    const environment = yield* installedEnvironment(
+      [structuralDeclaration(), regionDeclaration()],
+      function* (request) {
+        const [first, second] = request.regions;
+        if (first === undefined || second === undefined) {
+          throw new Error("expected two regions");
+        }
+        // The first is read; the second is created, expanded and subscribed to,
+        // and never read.
+        chunks = yield* readRegion(first);
+        yield* yield* second.expand();
+      },
+    );
+
+    yield* scoped(function* () {
+      yield* useTestComponents({
+        Marker: {
+          kind: "function",
+          name: "Marker",
+          props: { type: "object", properties: {}, additionalProperties: false },
+          // deno-lint-ignore require-yield
+          *fn() {
+            bodies.push("ran");
+            return "marked";
+          },
+        },
+      });
+      yield* expandInstalled(
+        '<Deck>\n  <Panel title="One">read <Marker /></Panel>\n' +
+          '  <Panel title="Two"><Marker /></Panel>\n</Deck>\n',
+        environment,
+      );
+    });
+
+    // Only the region that was read ran a body, and its nested component ran
+    // once.
+    expect(bodies).toEqual(["ran"]);
+    expect(chunks.map((chunk) => chunk.text).join("")).toContain("marked");
+  });
+
+  it("SR6: region chunks never reach the document's own output", function* () {
+    const written: string[] = [];
+    let chunks: ExpansionChunk[] = [];
+    const environment = yield* installedEnvironment(
+      [structuralDeclaration(), regionDeclaration()],
+      function* (request) {
+        const [region] = request.regions;
+        if (region === undefined) {
+          throw new Error("expected a region");
+        }
+        chunks = yield* readRegion(region);
+      },
+    );
+
+    const rendered = yield* scoped(function* () {
+      yield* useTestComponents({});
+      yield* DocumentOutput.around({
+        *output([text, exact], next) {
+          written.push(text);
+          return yield* next(text, exact);
+        },
+      });
+      return yield* expandInstalled(
+        '<Deck>\n  <Panel title="One">inside the region</Panel>\n</Deck>\n',
+        environment,
+      );
+    });
+
+    expect(chunks.map((chunk) => chunk.text).join("")).toContain("inside the region");
+    // The construct itself rendered nothing, and no chunk passed through the
+    // document's output middleware.
+    expect(renderSegments(rendered).trim()).toBe("");
+    expect(written.join("")).not.toContain("inside the region");
+  });
+
+  it("SR7: one demand permits one chunk, and later work waits for later demand", function* () {
+    const order: string[] = [];
+    const released = withResolvers<void>();
+    const environment = yield* installedEnvironment(
+      [structuralDeclaration(), regionDeclaration()],
+      function* (request) {
+        const [region] = request.regions;
+        if (region === undefined) {
+          throw new Error("expected a region");
+        }
+        const subscription = yield* yield* region.expand();
+        order.push("subscribed");
+        // Nothing has run yet: subscribing is not demand. Whitespace between
+        // the two elements is a chunk of its own, so a reader wanting the next
+        // element's text asks again — each ask is one more permission to work.
+        const first = yield* readText(subscription);
+        order.push(`first:${first}`);
+        yield* released.operation;
+        const second = yield* readText(subscription);
+        order.push(`second:${second}`);
+      },
+    );
+
+    yield* scoped(function* () {
+      yield* useTestComponents({
+        Step: {
+          kind: "function",
+          name: "Step",
+          props: { type: "object", properties: { n: { type: "number" } }, required: ["n"] },
+          // deno-lint-ignore require-yield
+          *fn(props) {
+            order.push(`ran:${String(props.n)}`);
+            return `step ${String(props.n)}`;
+          },
+        },
+      });
+      yield* spawn(function* () {
+        // Released only once the first chunk has been delivered, so the second
+        // segment's authored work cannot have run before this point.
+        while (!order.some((entry) => entry.startsWith("first:"))) {
+          yield* sleep(0);
+        }
+        expect(order).not.toContain("ran:2");
+        released.resolve();
+      });
+      yield* expandInstalled(
+        '<Deck>\n  <Panel title="One"><Step n={1} />\n\n<Step n={2} /></Panel>\n</Deck>\n',
+        environment,
+      );
+    });
+
+    expect(order[0]).toBe("subscribed");
+    expect(order).toContain("ran:1");
+    expect(order).toContain("ran:2");
+    expect(order.indexOf("ran:2")).toBeGreaterThan(order.indexOf("first:step 1"));
+  });
+
+  it("SR8: a handler's return halts and joins a blocked producer", function* () {
+    const order: string[] = [];
+    const environment = yield* installedEnvironment(
+      [structuralDeclaration(), regionDeclaration()],
+      function* (request) {
+        const [region] = request.regions;
+        if (region === undefined) {
+          throw new Error("expected a region");
+        }
+        const subscription = yield* yield* region.expand();
+        yield* subscription.next();
+        order.push("handler returning");
+      },
+    );
+
+    yield* scoped(function* () {
+      yield* useTestComponents({
+        Step: {
+          kind: "function",
+          name: "Step",
+          props: { type: "object", properties: { n: { type: "number" } }, required: ["n"] },
+          // deno-lint-ignore require-yield
+          *fn(props) {
+            order.push(`ran:${String(props.n)}`);
+            return `step ${String(props.n)}`;
+          },
+        },
+      });
+      yield* expandInstalled(
+        '<Deck>\n  <Panel title="One"><Step n={1} />\n\n<Step n={2} /></Panel>\n</Deck>\n',
+        environment,
+      );
+      order.push("occurrence settled");
+    });
+
+    // The producer was blocked on demand when the handler returned. It is
+    // halted with the handler's scope, so the second segment never ran and the
+    // occurrence settled after the handler rather than racing it.
+    expect(order).toEqual(["ran:1", "handler returning", "occurrence settled"]);
+  });
+
+  it("SR9: a failing body delivers its prefix, then raises the original failure", function* () {
+    const failure = new Error("the region body failed");
+    const texts: string[] = [];
+    let raised: unknown;
+    const environment = yield* installedEnvironment(
+      [structuralDeclaration(), regionDeclaration()],
+      function* (request) {
+        const [region] = request.regions;
+        if (region === undefined) {
+          throw new Error("expected a region");
+        }
+        const subscription = yield* yield* region.expand();
+        while (true) {
+          try {
+            const next = yield* subscription.next();
+            if (next.done) {
+              return;
+            }
+            texts.push(next.value.text);
+          } catch (error) {
+            raised = error;
+            return;
+          }
+        }
+      },
+    );
+
+    yield* scoped(function* () {
+      yield* useTestComponents({
+        Boom: {
+          kind: "function",
+          name: "Boom",
+          props: { type: "object", properties: {}, additionalProperties: false },
+          // deno-lint-ignore require-yield
+          *fn() {
+            throw failure;
+          },
+        },
+      });
+      yield* expandInstalled(
+        '<Deck>\n  <Panel title="One">before\n\n<Boom /></Panel>\n</Deck>\n',
+        environment,
+      );
+    });
+
+    // The prefix arrived before the failure did, and the failure is the object
+    // the body threw rather than a rebuilt one.
+    expect(texts.join("")).toContain("before");
+    expect(raised).toBe(failure);
+  });
+
+  it("SR10: each expansion and each subscription is its own", function* () {
+    const runs: string[] = [];
+    let first: string[] = [];
+    let second: string[] = [];
+    const environment = yield* installedEnvironment(
+      [structuralDeclaration(), regionDeclaration()],
+      function* (request) {
+        const [region] = request.regions;
+        if (region === undefined) {
+          throw new Error("expected a region");
+        }
+        first = (yield* readRegion(region)).map((chunk) => chunk.text);
+        // A second call is a second expansion, refused by nothing.
+        second = (yield* readRegion(region)).map((chunk) => chunk.text);
+      },
+    );
+
+    yield* scoped(function* () {
+      yield* useTestComponents({
+        Count: {
+          kind: "function",
+          name: "Count",
+          props: { type: "object", properties: {}, additionalProperties: false },
+          // deno-lint-ignore require-yield
+          *fn() {
+            runs.push("ran");
+            return `run ${String(runs.length)}`;
+          },
+        },
+      });
+      yield* expandInstalled(
+        '<Deck>\n  <Panel title="One"><Count /></Panel>\n</Deck>\n',
+        environment,
+      );
+    });
+
+    expect(runs).toHaveLength(2);
+    expect(first.join("")).toContain("run 1");
+    expect(second.join("")).toContain("run 2");
+  });
+
+  it("SR11: without an environment, and for the engine's own syntax, nothing changed", function* () {
+    // No environment at all: the name is an ordinary component lookup.
+    const rendered = yield* scoped(function* () {
+      yield* useTestComponents({ Deck: makeComponent("Deck", "the repository file ran") });
+      return yield* expandSegments(scanSegments("<Deck />\n"), {}, {}, new Set());
+    });
+    expect(renderSegments(rendered)).toContain("the repository file ran");
+
+    // And an execution that declares a construct still expands the engine's own
+    // constructs itself, with no branch for any installed name.
+    const entered: string[] = [];
+    const environment = yield* installedEnvironment(
+      [structuralDeclaration(), regionDeclaration()],
+      // deno-lint-ignore require-yield
+      function* (request) {
+        entered.push(request.name);
+      },
+    );
+    const engine = yield* scoped(function* () {
+      yield* useTestComponents({});
+      return yield* expandInstalled(
+        '<If condition={true}>the branch ran</If>\n<Terminal title="Stray" />\n',
+        environment,
+      );
+    });
+    const text = renderSegments(engine);
+    expect(text).toContain("the branch ran");
+    expect(text).toContain("ERROR");
+    expect(entered).toEqual([]);
   });
 });

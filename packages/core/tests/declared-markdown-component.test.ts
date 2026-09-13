@@ -2290,7 +2290,7 @@ describe("Tier ED — the catalog answers for the set", () => {
     // And a declared construct is not reached through component import at all,
     // so the losing default never runs.
     const message = yield* refusal(run("<Deck />\n", [], [declaring(declarations), registering]));
-    expect(message).toContain("never resolves a component");
+    expect(message).toContain("is not written in a form it accepts");
     expect(message).not.toContain("the registered default ran.");
   });
 

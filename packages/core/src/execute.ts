@@ -95,7 +95,7 @@ import {
 } from "./errors.ts";
 import { Component, importComponent, raise } from "./component-api.ts";
 import { sourceDescription } from "./source-position.ts";
-import { renderSegment } from "./render.ts";
+import { emissions, exactly, renderSegment } from "./render.ts";
 import { createExactSource } from "./output/exact-source.ts";
 import type { ExactSource as ExactSourceRecord } from "./output/exact-source.ts";
 import { DocumentOutput } from "./api.ts";
@@ -148,11 +148,8 @@ import {
   ExecutionImports,
   identityRecord,
 } from "./components/import-authority.ts";
-import type {
-  AnswerIdentity,
-  ExpansionAuthority,
-  ImportTier,
-} from "./components/import-authority.ts";
+import type { AnswerIdentity, ImportTier } from "./components/import-authority.ts";
+import type { ExecutionEnvironment } from "./execution-environment.ts";
 import { PROTECTED_COMPONENTS, ProtectedImports } from "./components/protected.ts";
 import { CORE_ORIGIN } from "./components/registry.ts";
 import { CORE_REVISION } from "./generated-xmd.ts";
@@ -2023,7 +2020,7 @@ function* runValueRoot(
   path: string,
   /** This run's record of an unauthorized checked command failure (#441). */
   checkedFailures: CheckedFailures,
-  authority: ExpansionAuthority,
+  environment: ExecutionEnvironment,
 ): Operation<DocumentResult> {
   // Created outside the scope the body runs in, so the value it selected is
   // still readable after that scope — and its teardown — has finished.
@@ -2052,10 +2049,10 @@ function* runValueRoot(
         path,
         0,
         checkedFailures,
-        authority,
+        environment,
         ownBody,
       );
-      const exactRecord = authority.exact;
+      const exactRecord = environment.exact;
       for (const resolved of expanded) {
         const text = renderSegment(resolved);
         if (text) {
@@ -2086,47 +2083,6 @@ function* runValueRoot(
  * that exited nonzero failed the run is not theirs to decide, and this is where
  * the run says so (#441).
  */
-/** Whether one expanded segment carries exact bytes rather than prose. */
-function exactly(exact: ExactSourceRecord | undefined, segment: Segment): boolean {
-  return exact !== undefined && exact.has(segment);
-}
-
-/**
- * What a buffered region emits: consecutive segments of one exactness, joined.
- *
- * Buffering is what makes this necessary. A streaming root hands the Output Api
- * one segment at a time and each write says what it is; a region that renders
- * as a whole would otherwise join a program's approved source to the prose
- * beside it and present the pair as one thing. Segments of the same kind still
- * travel together, so a region holding no exact bytes emits exactly once, as it
- * always has.
- */
-interface Emission {
-  readonly text: string;
-  readonly exact: boolean;
-}
-
-function emissions(
-  record: ExactSourceRecord | undefined,
-  segments: readonly Segment[],
-): Emission[] {
-  const runs: Emission[] = [];
-  for (const segment of segments) {
-    const text = renderSegment(segment);
-    if (!text) {
-      continue;
-    }
-    const exact = exactly(record, segment);
-    const last = runs[runs.length - 1];
-    if (last !== undefined && last.exact === exact) {
-      runs[runs.length - 1] = { text: last.text + text, exact };
-      continue;
-    }
-    runs.push({ text, exact });
-  }
-  return runs;
-}
-
 function* refuseCheckedFailure(checkedFailures: CheckedFailures): Operation<void> {
   const segment = checkedFailures.failure;
   if (segment !== undefined) {
@@ -2136,7 +2092,7 @@ function* refuseCheckedFailure(checkedFailures: CheckedFailures): Operation<void
 
 function* documentWorkflow(
   props: Record<string, Json>,
-  authority: ExpansionAuthority,
+  environment: ExecutionEnvironment,
 ): Workflow<DocumentResult> {
   // This run's memory of a checked command failure it never authorized. Passed
   // by value into core's own expansion and reachable from nowhere else, so no
@@ -2149,9 +2105,9 @@ function* documentWorkflow(
   const root = yield* ephemeral(
     (function* (): Operation<ComponentDefinition | FunctionComponentDefinition> {
       const imported = yield* importComponent("__root__");
-      const imports = authority.imports;
+      const imports = environment.imports;
       // Asked only when a tier actually closes this name, exactly as an
-      // ordinary import is. The authority used to be absent altogether for a
+      // ordinary import is. The environment used to be absent altogether for a
       // run with no bundle and no declarations, so this could authorize
       // unconditionally; the protected tier is present in *every* execution, so
       // an unguarded call now refuses the root of every ordinary run — nothing
@@ -2176,10 +2132,10 @@ function* documentWorkflow(
   // per-segment expansion calls (see spec §6.1).
   const counter = createBlockCounter();
 
-  // Which segments this run produced as source. Read off the private authority
+  // Which segments this run produced as source. Read off the private environment
   // this execution built, so the emission paths below reach it without a
   // context — there is nothing here for a document to name.
-  const exactRecord = authority.exact;
+  const exactRecord = environment.exact;
 
   // What the document rendered before it stopped, held outside the expansion
   // scope so a failure still leaves it here (§6.9 Partial output). The buffered
@@ -2239,7 +2195,7 @@ function* documentWorkflow(
         streamed,
         rootPath,
         checkedFailures,
-        authority,
+        environment,
       );
     }
 
@@ -2262,7 +2218,7 @@ function* documentWorkflow(
         selected,
         rootPath,
         checkedFailures,
-        authority,
+        environment,
         undefined,
       );
       // An empty buffered root emits no output event.
@@ -2290,7 +2246,7 @@ function* documentWorkflow(
         rootPath,
         0,
         checkedFailures,
-        authority,
+        environment,
         undefined,
       );
 
@@ -2437,7 +2393,7 @@ function* executeDocument(
    *
    * Carried by value like the symbols provider beside it. It is sealed below,
    * once the provider-backed names it admits have been resolved, and the sealed
-   * result is handed to core's own expansion on the private authority rather
+   * result is handed to core's own expansion on the private environment rather
    * than through any context: it is the ceiling `<Evaluate>` narrows from, and a
    * document that could reach it could raise it.
    */
@@ -2608,7 +2564,7 @@ function* executeDocument(
       const imports = new ExecutionImports(tiers, canonicalImports);
 
       // The one place a provider-backed profile name is resolved, and the last
-      // thing that happens before the authority exists: the registry, the
+      // thing that happens before the environment exists: the registry, the
       // bundle, the declarations, the protected table and the identity domains
       // are all established, and the root import has not been asked for. So the
       // chain a capture resolves through is the ordinary one, and no document
@@ -2628,8 +2584,12 @@ function* executeDocument(
               identity.protectedBodies.project,
             );
 
-      const authority: ExpansionAuthority = {
+      const environment: ExecutionEnvironment = {
         imports,
+        // Everything this host declared, admitted above. Expansion asks it
+        // about every name it reaches, which is how an installed construct is
+        // dispatched without core holding a branch for its name.
+        declarations: catalog,
         ...(declaredImports === undefined ? {} : { declared: declaredImports }),
         identities: identity.identities,
         protectedBodies: identity.protectedBodies,
@@ -2732,7 +2692,7 @@ function* executeDocument(
       const returned = yield* durableRun(
         function* (): Operation<DocumentResult> {
           const issued = issueDocument<DocumentResult>(props, (claimed) =>
-            documentWorkflow(claimed, authority),
+            documentWorkflow(claimed, environment),
           );
           try {
             return yield* beforeAnyImport(issued);

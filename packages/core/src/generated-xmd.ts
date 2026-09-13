@@ -111,6 +111,7 @@ import type { Json as DurableJson } from "@executablemd/durable-streams";
 import { scoped } from "effection";
 import type { Operation } from "effection";
 
+import { ExecutionDeclarationCatalog } from "./execution-declarations.ts";
 import { Component } from "./component-api.ts";
 import { ErrorMode } from "./errors.ts";
 import { CanonicalImports, retain } from "./components/import-authority.ts";
@@ -2448,6 +2449,11 @@ function expand(
       {
         imports: authority,
         forms: authority.forms,
+        // A fragment writes the admitted composition table and nothing else, so
+        // it declares none. The empty catalog states that explicitly rather than
+        // inheriting the host's: a generated fragment's execution environment
+        // admits no installed structural syntax.
+        declarations: new ExecutionDeclarationCatalog([], []),
         invoke: (fn, invocation, body) => authority.invoke(fn, invocation, body),
         ...(protectedBodies === undefined ? {} : { protectedBodies }),
         ...(syntax === undefined ? {} : { syntax }),

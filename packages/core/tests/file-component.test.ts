@@ -32,6 +32,7 @@ import { hasContent } from "../src/content-context.ts";
 import type { ComponentInvocation } from "../src/invocation-identity.ts";
 import { Component } from "../src/component-api.ts";
 import { printErrors } from "../src/component-failures.ts";
+import { ExecutionDeclarationCatalog } from "../src/execution-declarations.ts";
 import { expandSegments } from "../src/expand.ts";
 import { scanSegments } from "../src/scanner.ts";
 import {
@@ -251,7 +252,9 @@ function observe(fixture: Fixture, source: string, mode: ErrorMode): Operation<O
         undefined,
         undefined,
         undefined,
-        { forms },
+        // This expansion declares nothing; the empty catalog is what an execution
+        // environment carrying no installed structural syntax holds.
+        { forms, declarations: new ExecutionDeclarationCatalog([], []) },
       );
     } catch (error) {
       thrown = error;
