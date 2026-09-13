@@ -428,7 +428,7 @@ function declaredStructuralContract(
   name: string,
   declared: ExecutionDeclarationCatalog,
 ): DeclaredStructuralContract {
-  const admitted = declared?.structural(name);
+  const admitted = declared.structural(name);
   if (admitted === undefined) {
     throw new Error(`${name} resolved as declared structural syntax nothing admitted`);
   }
@@ -611,7 +611,7 @@ export function* inspectSyntax(options: InspectSyntaxOptions): Operation<SyntaxS
       includes,
       registry,
       ...(bundled === undefined ? {} : { workflow: bundled }),
-      ...(declarations === undefined ? {} : { declared: declarations }),
+      declared: declarations,
     });
     // One category for both, interleaved by name: the loop walks names in
     // code-point order, so entries are not grouped by who declared them.
