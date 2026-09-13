@@ -1,0 +1,14 @@
+{
+  "name": "@executablemd/terminal",
+  "version": "0.12.1",
+  "exports": {
+    ".": "./mod.ts",
+    "./lifecycle": "./lifecycle.ts",
+    "./processes": "./processes.ts",
+    "./posix": "./posix.ts",
+    "./test": "./test/mod.ts"
+  },
+  "imports": {
+    "starfx": "npm:starfx@0.16.1"
+  }
+}

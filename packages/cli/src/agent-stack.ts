@@ -21,7 +21,8 @@ import {
   registerAgentProvider,
 } from "@executablemd/core";
 import type { AgentProviderFactory, PermissionMode } from "@executablemd/core";
-import { installForegroundLauncher, env as readEnv } from "@executablemd/runtime";
+import { env as readEnv } from "@executablemd/runtime";
+import { installForegroundLauncher } from "@executablemd/terminal/posix";
 import { createAcpxProvider, DEFAULT_AGENT_NAME } from "@executablemd/acp";
 import type { AcpxProviderDependencies } from "@executablemd/acp";
 // A separate entrypoint because the embedded adapters are temporary (#636) and

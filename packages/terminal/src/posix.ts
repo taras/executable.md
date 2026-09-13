@@ -1,33 +1,16 @@
 /**
- * The native launcher — how a host hands one child process the terminal.
+ * The POSIX host: how this process hands a child its own terminal, and how it
+ * establishes that a child stopped.
  *
- * This is not `exec`. An ordinary command is a captured child: its stdout and
- * stderr are piped so a document can display, capture and journal them, and
- * its exit status is a value the document reads. A native coding-agent UI is
- * the opposite of that. It draws on the terminal, reads the person's
- * keystrokes, and owns the conversation it has with them. None of that may
- * become an XMD process result or a journaled transcript, and a piped child
- * cannot be interactive at all.
+ * XMD stays the parent. It does not replace itself with the child, because a
+ * process that has execed away cannot cancel the document, reap the child, own
+ * its exit status, or continue after the UI closes.
  *
- * So a launch asks for three things in order, and each is refusable on its
- * own:
- *
- * 1. `reserve()` takes the one foreground-terminal lease for the run. A host
- *    with no terminal refuses here, which is before any session ownership has
- *    moved. Two launches cannot hold it at once even when they name different
- *    sessions, so native UIs are sequential by construction.
- * 2. `flush()` gives the reader everything the document has produced so far,
- *    so the native UI does not open on top of half-written output.
- * 3. `launch()` spawns the child with the terminal inherited, waits for it,
- *    and reports its terminal status and nothing else.
- *
- * There is no host default. `xmd run` installs the foreground launcher;
- * a test or embedding host installs a controlled one that needs no terminal.
- * Until one is installed every operation refuses, which is what keeps
- * document help and inspection free of any of this.
+ * Everything host-specific about a native launch is here rather than beside
+ * the neutral contracts, so a host that is not POSIX installs something else
+ * and a package that only describes grids imports none of it.
  */
 
-import { type Api, createApi } from "@effectionx/context-api";
 import { ensure, race, resource, scoped, until } from "effection";
 import { once } from "@effectionx/node/events";
 import type { Operation } from "effection";
@@ -35,85 +18,11 @@ import { spawn as spawnChild } from "node:child_process";
 import type { ChildProcess } from "node:child_process";
 import process from "node:process";
 
-/**
- * What a provider asks the host to run.
- *
- * `command` is the complete argv, built by the provider's adapter from the
- * provider-native session identity. Raw prepared instructions never appear in
- * it, and never in `env`: a process's arguments and environment are readable
- * by other processes, so the instruction layer travels through the provider's
- * own session API instead.
- */
-export interface NativeLaunchRequest {
-  command: string[];
-  cwd: string;
-  env?: Record<string, string>;
-}
-
-/**
- * How the native UI ended. A child that exited on a signal reports the signal
- * and no code, which is how a signalled exit stays distinguishable from
- * status 0.
- */
-export interface NativeLaunchOutcome {
-  exitCode?: number;
-  signal?: string;
-}
-
-export interface NativeLauncherHandler {
-  reserve(): Operation<void>;
-  flush(): Operation<void>;
-  launch(request: NativeLaunchRequest): Operation<NativeLaunchOutcome>;
-}
-
-export const NATIVE_LAUNCHER_UNAVAILABLE =
-  "no native launcher is installed — this host does not hand a native agent UI " +
-  "the terminal. `xmd run` installs one; a test or embedding host installs its own.";
-
-export class NativeLauncherUnavailableError extends Error {
-  override name = "NativeLauncherUnavailableError";
-  constructor(message: string = NATIVE_LAUNCHER_UNAVAILABLE) {
-    super(message);
-  }
-}
-
-export const NativeLauncher: Api<NativeLauncherHandler> = createApi<NativeLauncherHandler>(
-  "runtime.nativeLauncher",
-  {
-    // deno-lint-ignore require-yield
-    *reserve(): Operation<void> {
-      throw new NativeLauncherUnavailableError();
-    },
-    // deno-lint-ignore require-yield
-    *flush(): Operation<void> {
-      throw new NativeLauncherUnavailableError();
-    },
-    // deno-lint-ignore require-yield
-    *launch(_request: NativeLaunchRequest): Operation<NativeLaunchOutcome> {
-      throw new NativeLauncherUnavailableError();
-    },
-  },
-);
-
-/** Hold the foreground-terminal lease for the calling scope. */
-export function reserveTerminal(): Operation<void> {
-  return NativeLauncher.operations.reserve();
-}
-
-/** Give the reader everything the document has produced so far. */
-export function flushOutput(): Operation<void> {
-  return NativeLauncher.operations.flush();
-}
-
-/** Run one native UI as a foreground child and report how it ended. */
-export function nativeLaunch(request: NativeLaunchRequest): Operation<NativeLaunchOutcome> {
-  return NativeLauncher.operations.launch(request);
-}
-
-export const NO_TERMINAL =
-  "<Session.Launch> needs a terminal: a native agent UI reads keystrokes and " +
-  "draws on the screen, and this invocation has none. Run xmd from a terminal, " +
-  "or use a host that installs its own launcher.";
+import { NativeLauncherUnavailableError, NO_TERMINAL } from "./errors.ts";
+import { NativeLauncher } from "./launch.ts";
+import type { NativeLaunchOutcome, NativeLaunchRequest } from "./launch.ts";
+import { ProcessObservation } from "./processes.ts";
+import type { SignalDelivery, TerminalSignal } from "./processes.ts";
 
 /**
  * How long an interrupted child is given to leave on its own before the
@@ -128,6 +37,23 @@ const REAP_POLL_MS = 25;
 /** How long an unanswerable kill is given before the child is called gone. */
 const KILL_SETTLE_MS = 500;
 
+/** Install the POSIX answer to "is this process still there". */
+export function* installPosixProcessObservation(): Operation<void> {
+  yield* ProcessObservation.around(
+    {
+      // deno-lint-ignore require-yield
+      *reachable([pid]) {
+        return isReachable(pid);
+      },
+      // deno-lint-ignore require-yield
+      *deliver([pid, name]) {
+        return signal(pid, name);
+      },
+    },
+    { at: "min" },
+  );
+}
+
 interface ForegroundLauncherOptions {
   /**
    * Whether this host can hand a child the terminal. Read once, when the
@@ -140,10 +66,6 @@ interface ForegroundLauncherOptions {
 
 /**
  * Install the launcher that hands a native UI this process's own terminal.
- *
- * XMD stays the parent. It does not replace itself with the child, because a
- * process that has execed away cannot cancel the document, reap the child,
- * own its exit status, or continue after the UI closes.
  */
 export function* installForegroundLauncher(
   options: ForegroundLauncherOptions = {},
@@ -244,13 +166,13 @@ function runForeground(request: NativeLaunchRequest): Operation<NativeLaunchOutc
     // a turn later. Whichever loses is halted, which is what detaches it.
     return yield* race([
       (function* (): Operation<NativeLaunchOutcome> {
-        const [code, signal] = yield* once<[number | null, string | null]>(started, "exit");
+        const [code, signalName] = yield* once<[number | null, string | null]>(started, "exit");
         const outcome: NativeLaunchOutcome = {};
         if (code !== null) {
           outcome.exitCode = code;
         }
-        if (signal !== null) {
-          outcome.signal = signal;
+        if (signalName !== null) {
+          outcome.signal = signalName;
         }
         return outcome;
       })(),
@@ -265,10 +187,10 @@ function runForeground(request: NativeLaunchRequest): Operation<NativeLaunchOutc
 /**
  * End one foreground child and wait for it to be gone.
  *
- * Exported for `packages/runtime/tests/native-launcher.test.ts` and not from
- * `mod.ts`: the listener this installs belongs to a bounded Promise, and the
- * only way to observe that it is released on every settlement path is to hold
- * the child.
+ * Exported for `packages/terminal/tests/native-launcher.test.ts` and not from
+ * an entrypoint: the listener this installs belongs to a bounded Promise, and
+ * the only way to observe that it is released on every settlement path is to
+ * hold the child.
  *
  * Deliberately one promise rather than an Effection race: this runs while the
  * scope is already being dismantled, and the cheapest correct thing to do
@@ -292,7 +214,7 @@ export function reap(child: ChildProcess): Promise<void> {
     // permission error — leaves a child that may still be running, and
     // reporting that as a successful reap would let the document continue
     // while a native UI still owns the terminal.
-    let fatal: Delivery | undefined;
+    let fatal: SignalDelivery | undefined;
 
     const done = (outcome?: Error) => {
       if (settled) {
@@ -355,9 +277,6 @@ export function reap(child: ChildProcess): Promise<void> {
   });
 }
 
-/** What one signal delivery established about the process it was aimed at. */
-type Delivery = "delivered" | "absent" | "refused";
-
 /**
  * Send one signal to the child by pid, and report what that established.
  *
@@ -367,7 +286,7 @@ type Delivery = "delivered" | "absent" | "refused";
  * run would keep waiting on a native UI still holding the terminal. Addressing
  * the process directly is what makes escalation real.
  */
-function signal(pid: number, name: "SIGINT" | "SIGKILL"): Delivery {
+function signal(pid: number, name: TerminalSignal): SignalDelivery {
   try {
     process.kill(pid, name);
     return "delivered";
@@ -380,12 +299,10 @@ function signal(pid: number, name: "SIGINT" | "SIGKILL"): Delivery {
 }
 
 function isNoSuchProcess(error: unknown): boolean {
-  return (
-    typeof error === "object" &&
-    error !== null &&
-    "code" in error &&
-    (error as { code?: unknown }).code === "ESRCH"
-  );
+  if (typeof error !== "object" || error === null || !("code" in error)) {
+    return false;
+  }
+  return Reflect.get(error, "code") === "ESRCH";
 }
 
 /**
@@ -399,59 +316,4 @@ function isReachable(pid: number): boolean {
   } catch {
     return false;
   }
-}
-
-/**
- * A launcher a host installs when it has no terminal to give away, and no
- * intention of starting a native UI.
- *
- * `record` sees each request in the order the provider made it; `outcome`
- * decides what the child did; and `wait` is the operation the launch blocks
- * on, so a test controls exactly how long the document stays suspended.
- */
-export interface ControlledLauncherOptions {
-  record?: (request: NativeLaunchRequest) => void;
-  outcome?: (request: NativeLaunchRequest) => NativeLaunchOutcome;
-  wait?: (request: NativeLaunchRequest) => Operation<void>;
-  onReserve?: () => void;
-  onFlush?: () => void;
-}
-
-export function* installControlledLauncher(
-  options: ControlledLauncherOptions = {},
-): Operation<void> {
-  let held = false;
-  yield* NativeLauncher.around(
-    {
-      reserve() {
-        return resource<void>(function* (provide) {
-          if (held) {
-            throw new Error(
-              "another <Session.Launch> already holds this run's terminal — one " +
-                "native UI owns the terminal at a time",
-            );
-          }
-          held = true;
-          options.onReserve?.();
-          try {
-            yield* provide();
-          } finally {
-            held = false;
-          }
-        });
-      },
-      // deno-lint-ignore require-yield
-      *flush() {
-        options.onFlush?.();
-      },
-      *launch([request]) {
-        options.record?.(request);
-        if (options.wait) {
-          yield* options.wait(request);
-        }
-        return options.outcome?.(request) ?? { exitCode: 0 };
-      },
-    },
-    { at: "min" },
-  );
 }

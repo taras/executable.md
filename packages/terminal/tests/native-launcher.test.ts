@@ -23,14 +23,8 @@ import * as path from "node:path";
 import * as os from "node:os";
 import process from "node:process";
 import { spawn as spawnChild } from "node:child_process";
-import {
-  flushOutput,
-  installForegroundLauncher,
-  nativeLaunch,
-  NO_TERMINAL,
-  reap,
-  reserveTerminal,
-} from "../launcher.ts";
+import { flushOutput, nativeLaunch, reserveTerminal } from "../mod.ts";
+import { installForegroundLauncher, NO_TERMINAL, reap } from "../posix.ts";
 
 const SENTINEL = "SENTINEL-PREPARED-CONTEXT-4b17";
 

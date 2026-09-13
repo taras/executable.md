@@ -152,6 +152,13 @@ export { DocumentOutput } from "./src/api.ts";
 export type { DocumentOutputApi } from "./src/api.ts";
 export { useNormalizedOutput } from "./src/output/normalize.ts";
 export { useTerminalOutput } from "./src/output/terminal.ts";
+// A host reaches the whole terminal-grid capability through
+// `installTerminalGridProfile`; the contracts a provider composes against live
+// in `@executablemd/terminal` and are imported from there.
+export { installTerminalGridProfile } from "./src/terminal/profile.ts";
+export type { TerminalGridProfileOptions } from "./src/terminal/profile.ts";
+export { createTerminalGridJournal } from "./src/terminal/journal.ts";
+export type { GridIdentity } from "./src/terminal/journal.ts";
 
 export { execute, Execution } from "./src/execute.ts";
 export type {

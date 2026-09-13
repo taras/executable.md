@@ -45,6 +45,7 @@
     "remark": "15",
     "remend": "^1.2.2",
     "semver": "^7.8.5",
+    "starfx": "0.16.1",
     "zod": "^4.3.6",
     "unist-util-select": "^5",
     "mdast-util-to-string": "^4"
@@ -57,6 +58,7 @@
     "@executablemd/core": "workspace:*",
     "@executablemd/durable-streams": "workspace:*",
     "@executablemd/runtime": "workspace:*",
+    "@executablemd/terminal": "workspace:*",
     "@executablemd/test-agent": "workspace:*",
     "@executablemd/test-support": "workspace:*",
     "@executablemd/testing": "workspace:*",

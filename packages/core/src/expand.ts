@@ -13,8 +13,8 @@
  * middleware installation) execute before children's code blocks.
  */
 
-import { ensure, Err, Ok, scoped, useScope, withResolvers } from "effection";
-import type { Operation, Result } from "effection";
+import { createContext, ensure, Err, Ok, scoped, useScope, withResolvers } from "effection";
+import type { Context, Operation, Result } from "effection";
 import type {
   FunctionComponent,
   Segment,
@@ -66,8 +66,10 @@ import {
   terminalTitleMissingMessage,
 } from "./structural-rules.ts";
 import type { StructuralViolation, SwitchCase, TerminalPane } from "./structural-rules.ts";
-import { terminalGridLayout } from "./terminal-grid.ts";
-import type { PlacedPane } from "./terminal-grid.ts";
+import { terminalGridLayout, useTerminalCellUI } from "@executablemd/terminal";
+import type { PlacedCell, TerminalCellUI, TerminalCellWork } from "@executablemd/terminal";
+import { appendTerminalCellOutput, terminalGrid } from "@executablemd/terminal/lifecycle";
+import { createTerminalGridJournal } from "./terminal/journal.ts";
 import {
   asBindingViolation,
   asExpressionViolation,
@@ -143,7 +145,7 @@ import {
 import { remark } from "remark";
 import { select as cssSelect } from "unist-util-select";
 import { toString as mdastToString } from "mdast-util-to-string";
-import { liveEnvironment } from "./live-env.ts";
+import { derivedEnvironment, liveEnvironment } from "./live-env.ts";
 import { TestHarnessComponentDefinition } from "./test-harness.ts";
 import type { TestHarnessBinding } from "./test-harness.ts";
 
@@ -891,6 +893,11 @@ function* expandListSegments(
   // Read once: `<Loop>` publishes its frame for the nested call that expands
   // its body, so the frame ambient here cannot change while this list runs.
   const loop = yield* ActiveLoop.get();
+  // Whether what this list renders is a terminal cell's own output. Compared by
+  // identity, because that is the question: these segments reach the cell only
+  // if they are landing in the array the cell publishes from.
+  const region = yield* TerminalCellOutput.get();
+  const publisher = region !== undefined && region.owner === result ? region : undefined;
 
   for (const [index, segment] of segments.entries()) {
     // A checked failure the document did not authorize ends the work: whatever
@@ -1185,7 +1192,14 @@ function* expandListSegments(
         if (segment.name === "Terminal.Grid") {
           // No raise() here, like the branches above: expandTerminalGrid
           // reports every error it creates.
-          yield* expandTerminalGrid(segment, result);
+          yield* expandTerminalGrid(segment, result, {
+            parentMeta,
+            parentProps,
+            hideSet,
+            path: elementPath,
+            checkedFailures,
+            authority,
+          });
           break;
         }
 
@@ -1415,6 +1429,14 @@ function* expandListSegments(
           result.push(segment);
         }
       }
+    }
+
+    // One completed output boundary, at whatever depth this list is running:
+    // a branch, a loop iteration, a component body and projected content all
+    // append into this same owner, so the cell's state has the bytes before the
+    // next authored effect anywhere beneath it begins.
+    if (publisher !== undefined) {
+      yield* publisher.publish();
     }
 
     // A `<Break>` anywhere below this segment ends the iteration here: what the
@@ -2106,7 +2128,21 @@ function* resolveStructuralProp(
  * does, which is what makes the refusal a closed one rather than a partial grid
  * left behind.
  */
-function* expandTerminalGrid(segment: ComponentElement, owner: Segment[]): Operation<void> {
+/** Everything a pane's own content needs to expand where the grid was written. */
+interface GridSite {
+  readonly parentMeta: Record<string, unknown>;
+  readonly parentProps: Record<string, Json>;
+  readonly hideSet: Set<string>;
+  readonly path: string;
+  readonly checkedFailures: CheckedFailures | undefined;
+  readonly authority: ExpansionAuthority | undefined;
+}
+
+function* expandTerminalGrid(
+  segment: ComponentElement,
+  owner: Segment[],
+  site: GridSite,
+): Operation<void> {
   const structure = terminalGridStructure(segment);
   if (structure.violations.length > 0) {
     for (const violation of structure.violations) {
@@ -2130,7 +2166,7 @@ function* expandTerminalGrid(segment: ComponentElement, owner: Segment[]): Opera
     return;
   }
 
-  const placed: PlacedPane[] = [];
+  const placed: PlacedCell[] = [];
   for (const pane of structure.panes) {
     const title = yield* resolvePaneTitle(pane);
     if (!title.ok) {
@@ -2141,23 +2177,188 @@ function* expandTerminalGrid(segment: ComponentElement, owner: Segment[]): Opera
   }
 
   const layout = terminalGridLayout(columns.value, placed);
-  owner.push(
-    yield* raise({
-      type: "error",
-      message: positioned(noTerminalProviderMessage(), segment),
-      source: "Terminal.Grid",
-      // The grid the author asked for, carried beside the sentence so an
-      // assertion is about the layout that was derived rather than about the
-      // wording of a refusal.
-      cause: {
-        layout: {
-          columns: layout.columns,
-          rows: layout.rows,
-          cells: layout.cells.map((cell) => ({ ...cell })),
-        },
-      },
-    }),
+  // The grid renders nothing into the document: what a cell shows belongs to
+  // that cell, and the sibling after `</Terminal.Grid>` renders to the root
+  // again only once the provider has restored it.
+  const identity = {
+    path: site.path,
+    ...(segment.position === undefined ? {} : { position: segment.position }),
+  };
+
+  try {
+    // One fresh live identity per authored position, minted here and nowhere
+    // else. It is never retained, replayed, diagnosed, or copied into a native
+    // or Agent request: array position is what a resumed run reads.
+    const cells: TerminalCellWork[] = structure.panes.map((pane, index) => ({
+      cellId: Symbol(`terminal-cell:${index}`),
+      operation: cellWork(pane, layout.cells[index]!.title, index, site),
+    }));
+    const journal = createTerminalGridJournal(identity, cells.length);
+
+    // The grid is one computational unit: acquiring the resource starts it
+    // beneath this expansion, and awaiting the task it returns is how this
+    // expansion learns what the grid retained. Releasing it early cancels and
+    // joins the same work rather than detaching it.
+    const running = yield* terminalGrid(layout, cells, journal);
+    const retained = yield* running;
+
+    const failed = retained.cells.find((cell) => cell.status === "failed");
+    if (failed !== undefined) {
+      owner.push(yield* raise(terminalGridError(segment, failed.reason)));
+    }
+  } catch (error) {
+    owner.push(
+      yield* raise(
+        terminalGridError(segment, error instanceof Error ? error.message : String(error)),
+      ),
+    );
+  }
+}
+
+/**
+ * What one authored cell does once its terminal exists.
+ *
+ * Constructed lazily and interpreted exactly once, by the terminal lifecycle,
+ * with that cell's issued handle and output sink installed in its scope. Making
+ * one performs no expansion, shell, Agent, provider or journal work at all.
+ *
+ * A self-closing cell runs the host's default shell; a paired cell expands its
+ * own content in a scope of its own. It inherits the bindings, providers,
+ * configuration and working directory visible where the grid was written, and
+ * everything it creates afterwards stays inside the cell. Its `<Break>` cannot
+ * reach a loop outside the grid, its `<Return>` cannot claim an enclosing body,
+ * and a checked failure settles the cell rather than poisoning the root or a
+ * sibling.
+ */
+function cellWork(
+  pane: TerminalPane,
+  title: string,
+  position: number,
+  site: GridSite,
+): Operation<void> {
+  if (pane.form === "self-closing") {
+    return (function* (): Operation<void> {
+      const cell = yield* requireCellUI(position, title);
+      // The shell is this cell's one terminal activity, and acquiring it is
+      // what makes the cell ready — the same boundary a paired cell's content
+      // crosses, rather than a second way in.
+      const outcome = yield* cell.shell();
+      if (outcome.signal !== undefined) {
+        throw new Error(`terminal ${position} ("${title}") shell ended on ${outcome.signal}`);
+      }
+      if (outcome.exitCode !== undefined && outcome.exitCode !== 0) {
+        throw new Error(
+          `terminal ${position} ("${title}") shell exited with status ${outcome.exitCode}`,
+        );
+      }
+    })();
+  }
+
+  return scoped(function* () {
+    // A cell is not inside the loop the grid was written in, so a <Break>
+    // in its content has no loop to exit and says so.
+    yield* ActiveLoop.set(undefined);
+    const siteEnv = yield* env;
+    // Starts from what the grid site can see and keeps its own writes: a
+    // binding this cell makes is visible to later work in this cell and to
+    // nothing else.
+    yield* provideEnv(derivedEnvironment(siteEnv, { ...(siteEnv?.values ?? {}) }));
+
+    yield* expandCellContent(pane, site);
+  });
+}
+
+/**
+ * The issued handle for the cell being interpreted.
+ *
+ * Absent means this operation is running outside the cell scope that issued it,
+ * which is a lifecycle defect rather than something an author can write.
+ */
+function* requireCellUI(position: number, title: string): Operation<TerminalCellUI> {
+  const cell = yield* useTerminalCellUI();
+  if (cell === undefined) {
+    throw new Error(
+      `terminal ${position} ("${title}") ran outside the cell scope that issued its handle`,
+    );
+  }
+  return cell;
+}
+
+/**
+ * Expand a paired cell's content into the cell's own output owner.
+ *
+ * The owner is what makes the appends land where the bytes do. Every construct
+ * that renders into the document — a branch, a loop iteration, a component
+ * body, projected content — appends into this same array, so installing it as
+ * the cell's output region is what puts a boundary at each of those rather than
+ * only between the cell's direct children.
+ */
+function* expandCellContent(pane: TerminalPane, site: GridSite): Operation<void> {
+  const shown: Segment[] = [];
+  const region = createCellOutputRegion(shown);
+  yield* TerminalCellOutput.set(region);
+  yield* expandSegmentsWithin(
+    pane.element.children,
+    site.parentMeta,
+    site.parentProps,
+    site.hideSet,
+    // A counter of its own. Cells expand concurrently, and a shared mutable
+    // counter would hand two of them block identities that depend on which
+    // happened to run first.
+    createBlockCounter(),
+    shown,
+    extendPath(
+      site.path,
+      elementFrame(pane.element.name, elementSite(pane.element.position, pane.index)),
+    ),
+    0,
+    // The cell's own ledger: a checked failure settles this cell and cannot
+    // reach the root or a sibling.
+    containedLedger(site.checkedFailures),
+    site.authority,
+    // No enclosing value body: a <Return> written in a cell cannot claim one
+    // outside the grid.
+    undefined,
   );
+  yield* region.publish();
+}
+
+/**
+ * Where a paired terminal cell's rendered output goes, and how much of it has
+ * been published.
+ *
+ * The region is identified by the array it owns rather than by being ambient.
+ * A region that produces a binding, a value or a string expands into a private
+ * buffer that never merges into the cell, and a buffer that is not this owner
+ * publishes nothing — its text reaches the cell later, as one segment its
+ * caller appends, and is published at that boundary instead.
+ */
+interface TerminalCellOutputRegion {
+  readonly owner: Segment[];
+  /** Append whatever the owner has gained since the last append. */
+  publish(): Operation<void>;
+}
+
+const TerminalCellOutput: Context<TerminalCellOutputRegion | undefined> = createContext<
+  TerminalCellOutputRegion | undefined
+>("core.terminalCellOutput", undefined);
+
+function createCellOutputRegion(owner: Segment[]): TerminalCellOutputRegion {
+  let published = 0;
+  return {
+    owner,
+    *publish() {
+      const rendered = renderSegments(owner);
+      if (rendered.length <= published) {
+        return;
+      }
+      const fresh = rendered.slice(published);
+      // Recorded before the append is awaited, so a boundary reached while this
+      // one is still committing cannot send the same bytes twice.
+      published = rendered.length;
+      yield* appendTerminalCellOutput(fresh);
+    },
+  };
 }
 
 /** The label one pane displays, from the value its own `title` prop produced. */
@@ -2170,15 +2371,6 @@ function* resolvePaneTitle(pane: TerminalPane): Operation<Result<string>> {
     return Err(new Error(terminalTitleMissingMessage()));
   }
   return terminalTitle(value.value);
-}
-
-/** What a complete grid says on a host where nothing can open one. */
-function noTerminalProviderMessage(): string {
-  return (
-    "no terminal provider opened this grid. A host installs the terminal-grid capability " +
-    "explicitly, and this one installs none, so no pane expanded its content and no default " +
-    "shell started."
-  );
 }
 
 function loopError(segment: ComponentElement, message: string): ErrorSegment {

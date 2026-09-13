@@ -441,11 +441,13 @@ Given `xmd AGENTS.md#Implementor`:
 5. File reads, captures, parsing, and deterministic evaluation finish or fail.
 6. `Session.Launch` takes its applicable terminal lease. At the document root
    this is the run's foreground-terminal lease; inside `<Terminal>` it is that
-   pane's lease through the pane-scoped native launcher. A host with no
+   cell's lease through the cell-scoped native launcher. A host with no
    applicable terminal refuses here — before an agent is resolved, so learning
    that this invocation cannot launch anything costs no availability probe.
-7. The host flushes what that terminal has pending, so the native UI does not
-   open over half-written output.
+7. At the root, the host flushes what that terminal has pending. In a grid cell,
+   the cell action commits `launching`, captures that live state revision after
+   all causally prior Markdown output, and awaits provider convergence through
+   it. In either case the native UI cannot open over pending document output.
 8. The provider resolves the logical Agent and Session against the contextual
    cwd, and takes exclusive ownership of that session.
 
@@ -505,10 +507,10 @@ owner to release — what has to be settled first is which conversation this is:
 From there both rejoin:
 
 13. The provider spawns the native UI as an interactive child with the selected
-    root or pane terminal inherited — resuming the native session ID for a
-    provider-returned adapter, and for a client-allocated one creating it under
-    the allocated identity from the private file, or resuming it by the same
-    name when the route already named it.
+    root or terminal-cell endpoint inherited — resuming the native session ID
+    for a provider-returned adapter, and for a client-allocated one creating it
+    under the allocated identity from the private file, or resuming it by the
+    same name when the route already named it.
 14. `Session.Launch` suspends while the child runs.
 15. The child handles prompts, tools, permission dialogs, rendering, and native
     transcript persistence directly.
@@ -730,39 +732,41 @@ session coordinator
   └─ natural key for logical session B
 ```
 
-The grid owns the root foreground-terminal lease. The terminal authority mints
-one private one-use claim per authored pane ordinal, and core installs a native
-launcher in each pane scope that closes over that claim. `Session.Launch` uses
-the launcher already in scope; it receives no pane prop, token, identifier, or
-mode. The launcher validates the claim through the host's direct terminal
-authority and reserves that pane for the launch. A claim from another grid,
-provider installation generation, pane ordinal, or completed invocation
-authorizes nothing.
+The grid owns the root foreground-terminal lease. Its lifecycle creates one
+stable `TerminalCellUI` per authored cell, closes that handle over a fresh
+live-only `cellId`, and owns the private state that admits work, observes
+readiness, and stops admission at close. Core supplies lazy cell operations; the
+terminal lifecycle installs the exact cell UI while interpreting each one in
+its position-derived durable child. `Session.Launch` uses the launcher already in scope; it
+receives no cell prop, token, identifier, or mode. Context is composition rather
+than authority: a constructed lookalike cannot reach a live provider host, and
+the issued cell UI admits nothing after its grid closes.
 
-Different pane claims do not contend, so native launches in different panes can
-hold their terminals concurrently. One pane remains exclusive: a second launch
-cannot begin while the first is live there, and sequential launches work after
-the first releases it. Release requires the child, its observable descendants
-and process-group members, and every other holder of that pane terminal to be
-gone; the pane remains busy if the launcher cannot establish those facts. A
-root launch and a terminal grid contend for the root foreground lease, so
-neither can overlap the other.
+Different terminal cells do not contend, so native launches in different cells
+can hold their terminals concurrently. `TerminalCellUI.launch()` keeps one cell
+exclusive: a second launch cannot begin while the first is live there, and
+sequential launches work after the first releases it. An overlap refuses as
+busy rather than entering a hidden queue. Release requires the child, its
+observable descendants and process-group members, and every other holder of
+that cell's terminal to be gone; the cell remains busy if the provider cannot
+establish those facts. A root launch and a terminal grid contend for the root
+foreground lease, so neither can overlap the other.
 
 None of that changes the coordinator key or acquisition. Two panes naming the
 same provider, agent, and logical session still ask for one natural-key owner;
 one succeeds and the other receives `session-busy` without waiting. Two distinct
-sessions may be owned concurrently. A terminal claim grants no permission to
+sessions may be owned concurrently. A terminal cell grants no permission to
 ensure, detach, create, resume, prompt, or attach to an Agent session, and a
 session lease grants no terminal.
 
-The pane-scoped launcher keeps the same launch request and provider authority
+The cell-scoped launcher keeps the same launch request and provider authority
 division as the root launcher. Public middleware can route or refuse a request
-but cannot settle it, replace the pane, or mint a launch. Provider-specific grid
-or pane identities never enter the `AgentLaunchRequest`, terminal result,
+but cannot settle it, select another cell, or mint a launch. Provider-specific
+grid or pane identities never enter the `AgentLaunchRequest`, terminal result,
 `agent_session_launch` record, construction route, ownership key, diagnostic,
 or private instruction file.
 
-The grid's readiness barrier observes the launch only at the existing successful
+The grid's readiness barrier observes the launch only at the successful
 interactive-child start boundary. Session preparation, route publication,
 private-file creation, and detach do not make a pane ready. If spawn fails, the
 launch keeps the durable phases its contract already completed, fails the pane's
@@ -771,20 +775,44 @@ not roll those phases back. A child that successfully starts and exits before
 the other panes become ready has nevertheless crossed readiness and retains its
 ordinary exit outcome.
 
-The pane claim carries a private one-use readiness latch. The native launcher
-acknowledges it from the runtime's child-spawn event and before waiting for
-exit; allocating a PID or observing output is not readiness, and a startup error
-never acknowledges. A root launch carries no such latch. It is not added to
-`AgentLaunchRequest`, `AgentLaunchResult`, the public Agent Api, a retained
-launch phase, or a process handle, so readiness composition changes neither the
-launch's authored nor durable contract.
+A native launch runs through `TerminalCellUI.launch()`. The private controller
+first admits the cell, commits `launching`, captures the resulting live grid
+revision after all causally prior cell output, and awaits provider convergence
+through it. Only then does it ask the provider host for a terminal activity: a
+resource whose acquisition happens only once the child has actually spawned.
+Core publishes paired Markdown at each completed output boundary through the
+issued integration-only cell-output sink and awaits that private store commit,
+not rendering, before expansion continues. Therefore output written before the
+launch invocation is already in the complete snapshot whose revision the
+controller captures; no public content setter or provider mutation participates.
+Acquisition is readiness, so nobody is handed an acknowledgement to call —
+allocating a PID or observing output is not acquisition, and preparation,
+convergence, reservation, or spawn failure occurs before it. Cancellation while
+convergence is blocked invokes no provider launch and creates no native child.
+The controller publishes `running` only after acquisition, awaits the acquired
+operation, and does not complete the action until the activity's cleanup has
+swept whatever the launch still holds. A root launch has no cell activity at
+all. Readiness is not added to `AgentLaunchRequest`,
+`AgentLaunchResult`, the public Agent Api, a retained launch phase, or a process
+handle, so it changes neither the launch's authored nor its durable contract.
 
-Under the tmux provider the pane-scoped launcher sends exact argv, cwd, and
+The provider-neutral terminal package exports the cell UI action contract and
+the host convergence and activity boundaries, not readiness, busy-state, or
+closing authority.
+Pane work receives its issued contextual cell UI; the grid lifecycle alone
+waits for readiness, publishes final cell status, and closes admission. The
+provider receives only the live `cellId` needed to select its physical endpoint;
+that value enters no Agent request, retained record, diagnostic, or provider
+identity.
+
+Under the tmux provider the cell-scoped launcher sends exact argv, cwd, and
 environment values over a private authenticated socket to the persistent pane
 worker. The worker, not a tmux command line, creates the native child with all
-three standard streams inherited from the pane terminal. It forwards the spawn
-event, writes pane display without reading input, and refuses a concurrent
-launch. It uses Effection's `run()` rather than `main()` so Effection does not
+three standard streams inherited from the pane terminal. It provides the
+activity once that child is running — its own observation of the child starting
+is provider-private input to that acquisition, not a callback, an
+acknowledgement, or a second readiness protocol — writes pane display without
+reading input, and refuses a concurrent launch. It uses Effection's `run()` rather than `main()` so Effection does not
 convert terminal `SIGINT` into worker exit 130 while the foreground child is
 handling job control.
 
@@ -909,15 +937,15 @@ session than the one this operation prepared.
 
 At the root, V1 holds the foreground-terminal lease for the CLI execution. In a
 terminal grid, the grid holds that root lease and a launch holds only its current
-pane lease. Two launches cannot concurrently own the same root or pane terminal,
-even when they name different sessions. Launches on distinct panes may run
-concurrently, and sequential launches on one terminal are ordinary composition.
+cell lease. Two launches cannot concurrently own the same root terminal or cell,
+even when they name different sessions. Launches in distinct cells may run
+concurrently, and sequential launches in one cell are ordinary composition.
 
 Cancellation interrupts the native interactive process, establishes that it can
-no longer execute or hold its root or pane terminal, restores that terminal's
-state, and runs every provider finalizer. A process that ignores the initial
-interruption is terminated according to the host process adapter's bounded
-shutdown policy.
+no longer execute or hold its root or terminal-cell endpoint, restores that
+terminal's state, and runs every provider finalizer. A process that ignores the
+initial interruption is terminated according to the host process adapter's
+bounded shutdown policy.
 The adapter attempts to collect the native exit status, but a runtime-retained
 defunct PID or a lost exit event is not live process ownership. After a fatal
 signal was accepted, or the process was already absent, bounded settlement may
@@ -1044,10 +1072,10 @@ a replacement or reconstructs state from a transcript.
 When the launch is a pane child, completed replay of the enclosing completed
 grid claims the whole structured region before this operation is reached, so it
 also contacts nothing. Partial grid replay restores a completed launch as a
-settled pane status. An incomplete launch is reached under a newly created live
-pane terminal and follows the same phase rules above; neither the new provider
-layout nor the pane ordinal changes its retained launch or logical-session
-identity.
+settled cell status. An incomplete launch is reached through a newly created
+live terminal-cell UI and follows the same phase rules above; neither the fresh
+`cellId` nor the new provider layout changes its retained launch or
+logical-session identity.
 
 Those are operation/runtime replay semantics: they define how an execution
 behaves when an embedder, a test, or a future retained execution host supplies
@@ -1186,9 +1214,9 @@ starts Claude, Codex, or a model.
 
 Terminal-grid tests additionally install a controlled provider that is not
 tmux. It exposes readiness, independent pane settlement, reader close, provider
-failure, parent cancellation, and teardown completion as test-controlled
-operations while using the same core terminal authority and pane-scoped native
-launchers. Separate tmux integration evidence exercises the production adapter;
+failure, revision convergence, parent cancellation, and teardown completion as
+test-controlled operations while using the same core terminal authority and
+cell-scoped native launchers. Separate tmux integration evidence exercises the production adapter;
 core semantics are not inferred from tmux identifiers or process behavior. The
 tmux evidence covers exact argv over private IPC, the runtime spawn boundary,
 display that cannot become child input, real terminal job control, explicit
@@ -1249,11 +1277,13 @@ Focused tests prove:
     failed releases nothing and withholds quiescence; and
 23. a canonical version parse accepts exactly one matching line, and refuses
     zero or several without repeating the output; and
-24. launches on distinct pane terminals run concurrently while launches in one
-    pane remain exclusive, the same logical Agent session still contends across
-    panes, pane readiness occurs only after successful native-child start, grid
-    close awaits launch cancellation and session quiescence, and completed and
-    partial grid replay preserve the launch's existing identity rules.
+24. launches in distinct terminal cells run concurrently while launches in one
+    cell remain exclusive, the same logical Agent session still contends across
+    cells, a launch invokes no provider child until the captured cell-output
+    revision has converged, cancellation during that wait launches nothing,
+    cell readiness occurs only after successful native-child start, grid close
+    awaits launch cancellation and session quiescence, and completed and partial
+    grid replay preserve the launch's existing identity rules.
 
 The authored half of this is one executable Markdown document,
 `packages/test-agent/src/NativeSessionLaunch.test.md`, run whole. It authors the
@@ -1332,8 +1362,8 @@ in a released unbound form and a bound one; the host-owned executable observer
 and the build binding it produces; ACP attachment to a bound client-native
 session under its exact retained identity, through runtime partitions keyed by
 agent command and build;
-an inherited root- or pane-terminal interactive child with cancellation and
-bounded reaping; composition with the terminal grid's independent pane leases
+an inherited root- or terminal-cell interactive child with cancellation and
+bounded reaping; composition with the terminal grid's independent cell leases
 without changing session ownership or durable launch identity;
 and the controlled TestAgent fixture that proves all of it without starting a
 model.
@@ -1437,9 +1467,10 @@ Implementation review checks these frozen invariants:
     holders from the prior launch are gone.
 25. Pane terminal ownership never replaces or weakens natural-key Agent-session
     ownership, so two panes naming one session still contend without waiting.
-26. A pane is ready only at the runtime child-spawn event; preparation, PID
-    allocation, route publication, detach, private-file creation and first
-    output are not readiness, and a failed spawn rolls none of them back.
+26. A pane is ready only when its terminal activity is acquired, which happens
+    at the runtime child-spawn event; preparation, PID allocation, route
+    publication, detach, private-file creation and first output are not
+    readiness, and a failed spawn rolls none of them back.
 27. Grid cancellation reaches every live launch, awaits its child teardown and
     session quiescence, and exposes no provider-specific layout identity in an
     authored, durable, result, or diagnostic surface.

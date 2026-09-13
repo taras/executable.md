@@ -1,0 +1,20 @@
+{
+  "name": "@executablemd/terminal",
+  "version": "0.12.1",
+  "description": "Provider-neutral interactive terminal grids for executable.md documents.",
+  "type": "module",
+  "exports": {
+    ".": "./mod.ts",
+    "./lifecycle": "./lifecycle.ts",
+    "./processes": "./processes.ts",
+    "./posix": "./posix.ts",
+    "./test": "./test/mod.ts"
+  },
+  "dependencies": {
+    "@effectionx/context-api": "0.6.0",
+    "@effectionx/node": "0.2.5",
+    "@executablemd/durable-streams": "workspace:*",
+    "effection": "4.1.0",
+    "starfx": "0.16.1"
+  }
+}
