@@ -120,13 +120,15 @@ import {
   unresolvedMessage,
 } from "./components/select.ts";
 import { installedBundle } from "./components/bundle.ts";
-import {
-  admitDeclaredMarkdown,
-  declaredCatalog,
-  DeclaredImports,
-  privateClosure,
-} from "./components/declared-markdown.ts";
-import type { MarkdownComponent } from "./components/declared-markdown.ts";
+import { DeclaredImports, privateClosure } from "./components/declared-markdown.ts";
+import { admitInstalledDeclarations } from "./execution-declarations.ts";
+import type {
+  ExecutionDeclaration,
+  ExecutionDeclarationCatalog,
+  ExpansionHandler,
+  ExpansionRequest,
+  RetainedInstallation,
+} from "./execution-declarations.ts";
 import { documentationOf } from "./components/documentation.ts";
 import { registerComponents } from "./components/registration.ts";
 import {
@@ -455,6 +457,8 @@ interface ImportInputs {
   readonly registry: ComponentRegistry;
   readonly bundle: WorkflowImportAuthority | undefined;
   readonly declared: DeclaredImports | undefined;
+  /** Everything this execution declares, as selection reads it. */
+  readonly catalog: ExecutionDeclarationCatalog | undefined;
   readonly guarded: ReadonlyMap<string, FunctionComponentDefinition>;
 }
 
@@ -501,12 +505,12 @@ function* selectImport(
     return { kind: "declared-private", origin: claimed.origin };
   }
 
-  const { searchPaths, registry, bundle, declared } = inputs;
+  const { searchPaths, registry, bundle, declared, catalog } = inputs;
   const selected = yield* selectComponent(name, {
     includes: searchPaths,
     registry,
     ...(bundle === undefined ? {} : { workflow: bundle }),
-    ...(declared === undefined ? {} : { declared: declared.catalog }),
+    ...(catalog === undefined ? {} : { declared: catalog }),
   });
 
   switch (selected.kind) {
@@ -553,6 +557,13 @@ function* selectImport(
     case "structural":
       throw new Error(
         `${name} is structural syntax the engine owns, so it never resolves a component`,
+      );
+    case "declared-structural":
+      // Structural syntax an installation declared is expanded by the
+      // installation that declared it, so it never reaches component import.
+      throw new Error(
+        `${name} is structural syntax this execution's host declared, so it never resolves a ` +
+          "component",
       );
     case "unresolved":
       throw new Error(unresolvedMessage(name, selected.searched));
@@ -2397,7 +2408,7 @@ function* executeDocument(
   preparations: readonly DurablePreparation[] = [],
   bundles: readonly WorkflowComponentBundle[] = [],
   identityComponents: readonly IdentityComponent[] = [],
-  declarations: readonly MarkdownComponent[] = [],
+  installed: readonly RetainedInstallation[] = [],
   providers: readonly SyntaxSymbolsProvider[] = [],
   /**
    * The documentation each bootstrapped package contributed.
@@ -2527,13 +2538,14 @@ function* executeDocument(
       const startingRegistry = yield* Component.operations.registry;
       const bundle = installedBundle(bundles, startingRegistry);
 
-      // The exact Markdown this host declares, admitted against its own bytes
-      // before the journal is read, before the root document is imported, and
-      // before any component runs. A declaration that disagrees with the source
-      // it names, or that claims a name a host already reserved, describes a
-      // document that cannot mean what it says.
-      const admittedDeclarations = yield* admitDeclaredMarkdown(declarations, startingRegistry);
-      const catalog = declaredCatalog(admittedDeclarations);
+      // Everything this host declares, admitted before the journal is read,
+      // before the root document is imported, and before any component runs. A
+      // declaration that disagrees with the source it names, that claims a name
+      // a host already reserved, or that is half of a structural pair describes
+      // a document that cannot mean what it says.
+      const catalog = yield* admitInstalledDeclarations(installed, startingRegistry);
+      const admittedDeclarations = catalog?.markdown() ?? [];
+      const declaredMarkdown = catalog?.markdownCatalog();
 
       // What this execution gives a durable identity to, from what installation
       // declared before anything could observe or replace it. Each factory is
@@ -2564,10 +2576,10 @@ function* executeDocument(
       // this execution built, and it names nothing once the execution is torn
       // down above.
       const declaredImports =
-        catalog === undefined
+        declaredMarkdown === undefined
           ? undefined
           : new DeclaredImports(
-              catalog,
+              declaredMarkdown,
               identity.privates,
               new Map(
                 admittedDeclarations.map((declaration) => [
@@ -2608,6 +2620,7 @@ function* executeDocument(
                 registry: startingRegistry,
                 bundle,
                 declared: declaredImports,
+                catalog,
                 guarded: identity.protected,
               }),
               identity.protectedBodies.project,
@@ -2632,7 +2645,7 @@ function* executeDocument(
             includes,
             registry: startingRegistry,
             components: identityComponents,
-            declarations,
+            declarations: installed.flatMap((one) => [...one.declarations]),
             ...(bundle === undefined ? {} : { workflow: bundle }),
           },
           providers[0],
@@ -2662,6 +2675,7 @@ function* executeDocument(
                 registry: registered,
                 bundle,
                 declared: declaredImports,
+                catalog,
                 guarded: identity.protected,
               },
             );
@@ -2876,16 +2890,27 @@ export interface ExecutionInstallation {
    */
   readonly bundle?: WorkflowComponentBundle;
   /**
-   * The exact Markdown this host declares to the execution.
+   * What this host declares to the execution, under one discriminant.
    *
-   * Plain immutable data: the kind of declaration it is, the public name, the
-   * reported origin, the bytes, their digest, the forms and any private
-   * declarations those bytes alone may write. Captured by value alongside the
-   * admissions, before any installation runs, so what a declared name resolves
-   * to — and which answers a document may invoke — is fixed before anything can
-   * observe or replace it.
+   * Plain immutable data. Exact Markdown states the public name, the reported
+   * origin, the bytes, their digest, the forms and any private declarations
+   * those bytes alone may write; structural syntax states the name, the origin,
+   * the forms, the props schema, its documentation, and whether it is a
+   * construct or one of that construct's regions. Captured by value alongside
+   * the admissions, before any installation runs, so what a declared name
+   * resolves to — and which answers a document may invoke — is fixed before
+   * anything can observe or replace it.
    */
-  readonly declarations?: readonly MarkdownComponent[];
+  readonly declarations?: readonly ExecutionDeclaration[];
+  /**
+   * How this installation expands the structural syntax it declared.
+   *
+   * Read once and bound with the declarations it belongs to, before any
+   * installation runs. An installation that declares structural syntax supplies
+   * one, and one that supplies it declares structural syntax: either half alone
+   * is refused before the root document is read.
+   */
+  expand?(request: ExpansionRequest): Operation<void>;
   /**
    * What this installation records inside the durable root.
    *
@@ -3255,6 +3280,52 @@ function retainedIdentityComponent(component: IdentityComponent): IdentityCompon
 }
 
 /**
+ * One declaration, read once and held by this execution.
+ *
+ * Every member is copied here, for the reason the identity components above are
+ * copied: a host that hands over a declaration and then rewrites its schema, its
+ * forms or its prose from inside `install()` has rewritten nothing.
+ *
+ * The discriminant is copied rather than decided. A value that states neither
+ * arm is carried through as it was written and refused where the declarations
+ * are admitted, so capture never turns an unknown declaration into a Markdown
+ * one by reading fewer of its members than it was given.
+ */
+function retainedDeclaration(declaration: ExecutionDeclaration): ExecutionDeclaration {
+  // Read once, and used for both the branch and the copy: reading it a second
+  // time to write it down would let a value answer one way about which arm it
+  // belongs to and another about what this execution retains.
+  const kind = declaration.kind;
+  if (kind === "structural") {
+    return Object.freeze({
+      kind,
+      name: declaration.name,
+      origin: declaration.origin,
+      forms: Object.freeze([...declaration.forms]),
+      props: detachedSchema(declaration.props),
+      syntax: Object.freeze([...declaration.syntax]),
+      description: declaration.description,
+      context: declaration.context,
+      parent: declaration.parent,
+    });
+  }
+  return Object.freeze({
+    kind,
+    name: declaration.name,
+    origin: declaration.origin,
+    source: declaration.source,
+    digest: declaration.digest,
+    ...(declaration.forms === undefined ? {} : { forms: Object.freeze([...declaration.forms]) }),
+    ...(declaration.props === undefined ? {} : { props: detachedSchema(declaration.props) }),
+    ...(declaration.returns === undefined ? {} : { returns: detachedSchema(declaration.returns) }),
+    ...(declaration.privates === undefined
+      ? {}
+      : { privates: Object.freeze([...declaration.privates].map(retainedIdentityComponent)) }),
+    ...(declaration.exact === undefined ? {} : { exact: declaration.exact }),
+  });
+}
+
+/**
  * A schema this execution owns, copied out of the object the host handed over.
  *
  * A schema is the one member of a declaration that is a whole object graph
@@ -3344,32 +3415,24 @@ function* invoke(
   // the reason the rest are: what a declared name means here is settled before
   // anything can observe it, and the execution closes over its own values
   // rather than over an array a host still holds.
-  const declarations = Object.freeze(
-    installations.flatMap((installation) =>
-      [...(installation.declarations ?? [])].map((declaration) =>
-        Object.freeze({
-          // Copied rather than decided. Capture states what the host stated, so
-          // a declaration that says it is something else — or says nothing —
-          // reaches admission as it was written and is refused there, instead
-          // of being turned into Markdown by a capture that read fewer of its
-          // members than it was given.
-          kind: declaration.kind,
-          name: declaration.name,
-          origin: declaration.origin,
-          source: declaration.source,
-          digest: declaration.digest,
-          ...(declaration.forms === undefined ? {} : { forms: [...declaration.forms] }),
-          ...(declaration.props === undefined ? {} : { props: detachedSchema(declaration.props) }),
-          ...(declaration.returns === undefined
-            ? {}
-            : { returns: detachedSchema(declaration.returns) }),
-          ...(declaration.privates === undefined
-            ? {}
-            : { privates: [...declaration.privates].map(retainedIdentityComponent) }),
-          ...(declaration.exact === undefined ? {} : { exact: declaration.exact }),
-        }),
-      ),
-    ),
+  // Kept as the installations rather than as one flat list, because two facts
+  // are about the installation and not about any declaration: which structural
+  // constructs belong to one pair, and which handler expands them.
+  const installed = Object.freeze(
+    installations.map((installation) => {
+      // Read once, like the preparation and the harness installer above. A
+      // property that answered differently the second time would otherwise let
+      // a host be tested for one handler and have another called.
+      const expand = installation.expand;
+      const bound: ExpansionHandler | undefined =
+        expand === undefined ? undefined : expand.bind(installation);
+      return Object.freeze({
+        declarations: Object.freeze(
+          [...(installation.declarations ?? [])].map(retainedDeclaration),
+        ),
+        ...(bound === undefined ? {} : { expand: bound }),
+      });
+    }),
   );
 
   // Read once and frozen with the rest, and before any installation runs: which
@@ -3502,7 +3565,7 @@ function* invoke(
     preparations,
     bundles,
     identityComponents,
-    declarations,
+    installed,
     providers,
     documentation,
     readAsset,

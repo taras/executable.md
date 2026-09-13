@@ -208,6 +208,12 @@ function describeOrigin(info: ComponentInfo): string {
       return `workflow:${info.origin.path}@${info.origin.sourceHash}`;
     case "declared-markdown":
       return `declared-markdown:${info.origin.origin}`;
+    case "declared-structural":
+      // Its own line rather than folded into `structural`: what the engine owns
+      // is in every execution, and this exists only while the installation that
+      // declared it does — a regression that swapped one for the other would
+      // read as no difference at all.
+      return `declared-structural:${info.origin.origin}`;
   }
 }
 

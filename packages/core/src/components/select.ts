@@ -8,9 +8,10 @@
  * 2. a component canonical core protects. The engine's own claim rather than a
  *    host's, so a protected name means the same thing in every execution,
  *    whichever host assembled it and whatever a repository holds;
- * 3. a host claiming the name — a reserved registration, or exact Markdown this
- *    environment declares. Two claims on one name are refused where they are
- *    installed, so this tier never has to choose between them;
+ * 3. a host claiming the name — a reserved registration, or the exact Markdown
+ *    and structural syntax this environment declares. Two claims on one name
+ *    are refused where they are installed, so this tier never has to choose
+ *    between them;
  * 4. the workflow component bundle this execution is closed over;
  * 5. a repository-local file;
  * 6. a registered default, including core's own components;
@@ -30,7 +31,7 @@
 import { stat } from "@executablemd/runtime";
 import type { Operation } from "effection";
 import type { WorkflowImportAuthority } from "./bundle.ts";
-import type { DeclaredMarkdownCatalog } from "./declared-markdown.ts";
+import type { ExecutionDeclarationCatalog } from "../execution-declarations.ts";
 import { mergeRegistry } from "./registration.ts";
 import { protectedComponent, protectedOrigin } from "./protected.ts";
 import { CORE_REGISTRY } from "./registry.ts";
@@ -62,7 +63,7 @@ export interface SelectOptions {
    * it is declared as. Inspection and validation read the same catalog, which is
    * what stops them describing an environment execution would not have.
    */
-  declared?: DeclaredMarkdownCatalog;
+  declared?: ExecutionDeclarationCatalog;
 }
 
 /** Strip leading ./ from paths for workspace-relative normalization. */
@@ -159,6 +160,25 @@ export function* selectComponent(
       forms: declared.forms,
       definition: declared.definition,
       exact: declared.exact,
+    };
+  }
+
+  // Beside declared Markdown, in the same host tier: one execution declares a
+  // name once across both arms, so this tier never chooses between them. What
+  // comes back is the declaration's own facts — the handler that expands the
+  // construct stays in the catalog the execution holds.
+  const structural = options.declared?.structural(name);
+  if (structural !== undefined) {
+    return {
+      kind: "declared-structural",
+      origin: structural.origin,
+      forms: structural.forms,
+      props: structural.props,
+      syntax: structural.syntax,
+      description: structural.description,
+      context: structural.context,
+      parent: structural.parent,
+      children: structural.children,
     };
   }
 

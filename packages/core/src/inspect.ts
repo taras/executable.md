@@ -19,8 +19,8 @@ import { Component } from "./component-api.ts";
 import { DEFAULT_INCLUDES, effectiveRegistry, selectComponent } from "./components/select.ts";
 import { admitDeclaration, mergeRegistry } from "./components/registration.ts";
 import { declaredRegistry } from "./components/declared-registry.ts";
-import { admitDeclaredMarkdown, declaredCatalog } from "./components/declared-markdown.ts";
-import type { MarkdownComponent } from "./components/declared-markdown.ts";
+import { admitExecutionDeclarations } from "./execution-declarations.ts";
+import type { ExecutionDeclaration } from "./execution-declarations.ts";
 import { repositoryCandidateNames } from "./components/candidates.ts";
 import { PROTECTED_COMPONENT_NAMES } from "./components/protected.ts";
 import type { WorkflowImportAuthority } from "./components/bundle.ts";
@@ -138,7 +138,7 @@ export interface InspectComponentOptions {
    * included. Private declarations are never described: nothing a document can
    * write resolves one.
    */
-  declarations?: readonly MarkdownComponent[];
+  declarations?: readonly ExecutionDeclaration[];
 }
 
 /**
@@ -177,6 +177,15 @@ export type ComponentInfo =
       props: PropsSchema;
       returns?: ReturnsSchema;
     } & DescribedContract)
+  /**
+   * Structural syntax a trusted host declares to this environment.
+   *
+   * Its own `kind` rather than the engine's: a caller asking what `Deck` is
+   * needs to learn that the installation which declared it is what expands it,
+   * and that without that installation the name is not syntax at all. Describing
+   * it reaches no handler — there is none here to reach.
+   */
+  | ({ kind: "declared-structural" } & DeclaredStructuralContract)
   | { kind: "function"; origin: ComponentOrigin }
   | { kind: "unresolved"; searched: string[]; registered: readonly ComponentOrigin[] };
 
@@ -205,9 +214,7 @@ export interface DescribedContract extends ComponentDocumentation {
 export function* inspectComponent(options: InspectComponentOptions): Operation<ComponentInfo> {
   const { name, includes } = options;
   const registry = yield* Component.operations.registry;
-  const declared = declaredCatalog(
-    yield* admitDeclaredMarkdown(options.declarations ?? [], registry),
-  );
+  const declared = yield* admitExecutionDeclarations(options.declarations ?? [], registry);
   const selected = yield* selectComponent(name, {
     includes,
     registry,
@@ -251,6 +258,8 @@ export function* inspectComponent(options: InspectComponentOptions): Operation<C
         ...describedContract(entry),
       };
     }
+    case "declared-structural":
+      return { kind: "declared-structural", ...declaredStructuralContract(selected) };
     case "unresolved":
       return { kind: "unresolved", searched: selected.searched, registered: selected.registered };
     case "workflow":
@@ -344,8 +353,21 @@ export interface SyntaxSymbols {
   ];
 }
 
+/**
+ * One entry of the structural category: a construct the engine owns, or one a
+ * trusted host declared to this environment.
+ *
+ * A closed union rather than one shape with optional members, because the two
+ * answer differently to the only question a reader has about them. The engine's
+ * own constructs are the language's syntax — what they accept is the engine's,
+ * and there is no schema to print. An installed construct carries a contract
+ * somebody else wrote, so its entry states the forms and props a document is
+ * actually held to. Their origins are what tell them apart.
+ */
+export type StructuralSyntaxEntry = EngineSyntaxEntry | DeclaredStructuralSyntaxEntry;
+
 /** One construct the engine owns, with the forms an author writes it in. */
-export interface StructuralSyntaxEntry {
+export interface EngineSyntaxEntry {
   readonly kind: "structural";
   readonly name: string;
   readonly origin: Extract<ComponentOrigin, { kind: "structural" }>;
@@ -353,6 +375,54 @@ export interface StructuralSyntaxEntry {
   readonly description: string;
   readonly as?: string;
   readonly context?: string;
+}
+
+/**
+ * One structural construct a trusted host declared to this environment.
+ *
+ * It reports where its regions sit — `parent` is `null` for the construct and
+ * names the construct for one of its regions — because a reader deciding what
+ * to type needs to know a region is written directly inside one thing and
+ * nowhere else.
+ */
+export type DeclaredStructuralSyntaxEntry = {
+  readonly kind: "structural";
+  readonly name: string;
+} & DeclaredStructuralContract;
+
+/**
+ * What a declared structural construct states about itself.
+ *
+ * One shape for both answers, built by one function, so describing the name and
+ * describing the whole environment cannot disagree about a construct's
+ * contract. There is no return and no capture here: a construct renders through
+ * its regions rather than answering with a value.
+ */
+export interface DeclaredStructuralContract {
+  readonly origin: Extract<ComponentOrigin, { kind: "declared-structural" }>;
+  readonly forms: readonly InvocationForm[];
+  readonly props: PropsSchema;
+  /** `null` for a construct; the construct's name for one of its regions. */
+  readonly parent: string | null;
+  readonly syntax: readonly string[];
+  readonly description: string;
+  readonly context?: string;
+}
+
+function declaredStructuralContract(
+  selected: Extract<ComponentSelection, { kind: "declared-structural" }>,
+): DeclaredStructuralContract {
+  return {
+    origin: { kind: "declared-structural", origin: selected.origin },
+    forms: selected.forms,
+    props: selected.props,
+    parent: selected.parent,
+    syntax: selected.syntax,
+    description: selected.description,
+    // `null` is the construct stating that its content means nothing, which
+    // contributes no field — exactly as the engine's own table states it.
+    ...(selected.context === null ? {} : { context: selected.context }),
+  };
 }
 
 /**
@@ -366,7 +436,10 @@ export interface StructuralSyntaxEntry {
 export interface CompleteComponentSyntaxEntry {
   readonly kind: "component";
   readonly name: string;
-  readonly origin: Exclude<ComponentOrigin, { kind: "structural" }>;
+  readonly origin: Exclude<
+    ComponentOrigin,
+    { kind: "structural" } | { kind: "declared-structural" }
+  >;
   /**
    * What kind of thing supplied the contract above.
    *
@@ -451,7 +524,7 @@ export interface InspectSyntaxOptions {
    * document can write, so symbols that listed it would describe syntax that
    * does not exist.
    */
-  readonly declarations?: readonly MarkdownComponent[];
+  readonly declarations?: readonly ExecutionDeclaration[];
 }
 
 /**
@@ -488,9 +561,7 @@ export function* inspectSyntax(options: InspectSyntaxOptions): Operation<SyntaxS
   // Admitted on exactly the terms an execution installs declarations on, and
   // for the same reason the identity components above are: a set a run would
   // refuse describes an environment no document could ever run in.
-  const declarations = declaredCatalog(
-    yield* admitDeclaredMarkdown(options.declarations ?? [], registry),
-  );
+  const declarations = yield* admitExecutionDeclarations(options.declarations ?? [], registry);
 
   const names = yield* repositoryCandidateNames(includes);
   for (const name of declarations?.names() ?? []) {
@@ -524,6 +595,13 @@ export function* inspectSyntax(options: InspectSyntaxOptions): Operation<SyntaxS
     });
     if (selected.kind === "structural") {
       structural.push(structuralEntry(selected.construct));
+      continue;
+    }
+    // Beside the engine's own constructs, in the one category a reader looks in
+    // for syntax. Names were walked in code-point order above, so the two kinds
+    // of entry interleave by name rather than grouping by who declared them.
+    if (selected.kind === "declared-structural") {
+      structural.push({ kind: "structural", name, ...declaredStructuralContract(selected) });
       continue;
     }
     const entry = yield* componentEntry(name, selected);
@@ -576,7 +654,7 @@ function byCodePoint(left: string, right: string): number {
   return a.length - b.length;
 }
 
-function structuralEntry(construct: string): StructuralSyntaxEntry {
+function structuralEntry(construct: string): EngineSyntaxEntry {
   const declaration = STRUCTURAL_DECLARATIONS.find((candidate) => candidate.name === construct);
   if (declaration === undefined) {
     throw new Error(`structural construct ${construct} has no declaration`);
@@ -619,7 +697,10 @@ function* componentEntry(
 
   if (selected.kind === "registered") {
     const { definition, origin } = selected;
-    if (origin.kind === "structural") {
+    // Neither structural kind describes a component, so neither can be a
+    // component entry's origin — a registration reporting one describes
+    // something this category has no shape for.
+    if (origin.kind === "structural" || origin.kind === "declared-structural") {
       return undefined;
     }
     return complete(name, origin, "registered", {
@@ -709,7 +790,7 @@ interface CompleteContract {
 
 function complete(
   name: string,
-  origin: Exclude<ComponentOrigin, { kind: "structural" }>,
+  origin: Exclude<ComponentOrigin, { kind: "structural" } | { kind: "declared-structural" }>,
   sourceKind: CompleteComponentSyntaxEntry["sourceKind"],
   contract: CompleteContract,
 ): CompleteComponentSyntaxEntry {

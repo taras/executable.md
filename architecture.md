@@ -4535,6 +4535,58 @@ and a name is not a secret, so a component could build one, reach the record and
 answer that everything is exact. It is reclaimed with its execution, reaches no
 public entrypoint, and marks nothing on the segments themselves.
 
+## The installed structural syntax boundary
+
+A trusted host may declare a structural construct and the regions written
+directly inside it — syntax the engine has no branch for — on the same
+`ExecutionInstallation` its exact Markdown crosses on, in the same `declarations`
+list. Those declarations are the one source selection, inspection and
+non-executing validation read.
+
+**A pair is declared, never assembled.** A structural declaration states its
+name, origin, accepted forms, props schema, authored syntax examples,
+description, what its content means, and whether it is the construct itself
+(`parent: null`) or a region of one (the construct's name). What a construct
+accepts is derived from the regions that named it, so the accepted regions and
+the declarations describing them are one fact rather than two lists that can
+drift. A region whose construct this execution does not declare, a region of a
+region, a pair split across two installations, and a construct with no region
+are each refused before the root document is read.
+
+**The installation that declares a construct expands it.** The same
+installation supplies one `expand`, read once and bound at capture beside the
+declarations it belongs to, and held on the admitted catalog entry.
+Declarations with no handler, and a handler with no declarations, are each half
+of something that could admit syntax it can never expand, and both are refused
+at admission. The association is a field of that entry rather than an entry in
+a registry, a contextual slot or a second dispatch protocol, so the only way to
+reach a handler is to hold the catalog canonical core built.
+
+**The name is claimed on the declared-Markdown terms.** A declared construct
+answers ahead of the workflow component bundle, repository files and every
+registered default, and never over the engine's own structural table or the
+canonical protected tier. One name is declared once across both arms and across
+installations: a duplicate, a collision with declared Markdown, a collision with
+a private closure name, and a reserved registration already holding the name are
+configuration failures refused where they are installed rather than precedence
+questions resolved by order.
+
+**Placement is decided from source.** A construct holds whitespace and the
+regions it declares and nothing else; a region is written directly inside its
+own construct and is an error anywhere else; a self-closing construct has no
+regions and is accepted when that form is declared. The analysis is pure and
+shared, so what non-executing validation accepts and what canonical expansion
+accepts cannot come apart, and reading it evaluates nothing, invokes no handler
+and expands no region body.
+
+**The symbols stay version 2.** A construct and each of its regions contribute
+one entry to the structural category, sorted by code point beside the engine's
+own and carrying the declared forms, props schema, placement, syntax examples,
+description and origin. The two structural entry kinds are a closed union: an
+engine entry keeps exactly the fields it always had, neither kind can inhabit a
+component entry, and no category, order or existing member changed — so a
+version-2 reader is owed nothing new.
+
 ## The canonical protected tier
 
 Resolution already had a protected tier — a reserved registration, or exact
@@ -4979,6 +5031,7 @@ Status is measured against main.
 | standard-input root documents | `xmd run -` and `xmd run -- -` read the whole root document from standard input, once, to end of file, and run it through the ordinary run profile. Fixed grammar selects it — the explicit `run` command form plus a document argument that is exactly `-`, read from the parser's own unconsumed remainder so a `-` another option took as its value is not one — and every other spelling keeps the meaning it had: the shorthand `xmd -` executes the file named `-`, `xmd run -#Section` executes that file's `Section`, another command's `-` is that command's, and `--eval -` keeps its refusal. `-` is the one filename the option grammar leaves unwritable, so the reference grammar reaches it and nothing else beginning with `-` is read as a document. The parsed path and every recovered reference stay separate facts until the grammar is settled, so a command line naming two roots refuses in either order, before the read and before either candidate is inspected. The reader is a value each runtime-named entrypoint supplies and the shared CLI never reaches a stdin global; what comes back is `retainedSource("<stdin>", source)`, adding no root-source variant, constructor, digest member or public API. The complete input is acquired before inspection, provider setup, the secret-detection announcement, journal creation, root admission and execution, inside the run's existing deadline; a failed read is one fixed sentence carrying no host error, input or path, and cancellation tears the reader down without becoming one | built on this stack |
 | targeted `xmd run` | reads a file argument as a document reference and executes the one exact target its selector resolved to, replacing the selector before execution rereads the file | built on the #412 stack |
 | targeted workflow definition | the V1 workflow definition optionally carries the exact canonical document target, which takes part in definition identity and in compatible reuse | built on the #412 stack; the workflow CLI does not supply one yet |
+| installed structural syntax | a trusted host declares a structural construct and the regions written directly inside it, as the second arm of the same `declarations` list: name, origin, accepted forms, props schema, syntax examples, description, what the content means, and `parent` — `null` for the construct, the construct's name for one of its regions. The accepted regions are derived from the regions that named the construct rather than restated by it. The installation that declares them supplies the one `expand` handler, read once and bound at capture, and held on the admitted catalog entry rather than in any registry, context or second dispatch protocol. Admission refuses an invalid name, an empty origin, absent or non-canonical forms, an uncompilable schema, missing syntax examples or description, a context that is neither prose nor `null`, a name the engine's structural table or the canonical protected tier owns, a name a reserved registration claims, a duplicate across either arm or across installations, a collision with a private closure name, an orphan region, a region of a region, a pair split across two installations, a construct with no region, declarations with no handler, and a handler with no declarations — all of it before the root document is read. Resolution places a declared construct in the host tier beside declared Markdown; `inspectComponent()`, `inspectSyntax()` and document validation describe and check it from the same catalog, with the structural entries sorted by code point beside the engine's own and the symbols unchanged at version 2 | built on the #806 stack; canonical core captures the handler and does not yet call one |
 | declared Markdown component | a trusted host declares exact first-party Markdown to one execution as immutable data on an `ExecutionInstallation`, built with `Markdown({…})`: the host states the name, origin, source, its SHA-256, the accepted forms, an optional statement of the props and return that must agree with the parsed source, and an optional private component closure, and the constructor returns a fresh declaration carrying the required `kind: "markdown"` written after that description. It validates, hashes, copies and freezes nothing. Admission reads the kind before any other member and refuses a missing or unknown one rather than reading the value as Markdown, then parses the bytes and refuses a mismatched digest or schema, a non-canonical form, a name that is not a component name or is structural, a duplicate, a reserved-registration collision and a private name a registration also claims. Resolution places it in the protected tier with reserved registrations, above the workflow component bundle, repository files and every registered default. Live import and retained history are held to the declared origin, digest and bytes, private names resolve only while canonical core expands the declaring bytes' own body — by the authored occurrence rather than by the name, so an answer kept from a legitimate private import authorizes no later site, no alias, no copy of the definition, no invocation that is over and no later execution — including one that declares no Markdown at all — while a private name written anywhere else resolves to nothing before the bundle, the repository or a registration can answer for it — and `xmd syntax` and document validation describe the declared contract from the same declaration without describing the closure. Closure is per name: only the declared component and its private closure become canonical imports, and every other name in the execution stays the ordinary open import middleware may still answer | built on the #660 stack; no public component uses it yet (#660 PR 2) |
 | workflow component bundle | a workflow root declares a closed set of authored Markdown components; the V1 workflow definition optionally carries them as one array sorted by component name, each entry holding the name, its canonical repository-relative path inside the pinned commit and that blob's object ID, and an absent member identifies a run closed over no components — so a definition retained before the member existed reads unchanged. `start` and `resume` read every component from the definition's own pinned commit; the array takes part in definition identity and is compared as part of the same V1 descriptor in compatible reuse; and canonical core resolves those names and holds both live import and retained history to that exact bundle | built on the #301 stack; the full adversarial implementation loop and its scheduling remain unbuilt (#300), and generated XMD admits no bundled Markdown component (#369) |
 | `workflowInstallation()` / `getWorkflowRun()` | associates one document execution with a workflow run, through an `ExecutionInstallation` the trusted host passes to `executeInstalled()` | built on the #366 stack |

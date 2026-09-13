@@ -356,7 +356,14 @@ export type ComponentOrigin =
    * first-party asset the bytes came from, never a path a repository could
    * supply and never the root that invoked it.
    */
-  | { kind: "declared-markdown"; origin: string; digest: string };
+  | { kind: "declared-markdown"; origin: string; digest: string }
+  /**
+   * Structural syntax a trusted host declared to this environment. It names the
+   * installation the construct came from rather than a path, because there is
+   * no file: the declaration and the handler that expands it crossed together
+   * on an `ExecutionInstallation`.
+   */
+  | { kind: "declared-structural"; origin: string };
 
 /**
  * What resolving a name decided, before anything is loaded.
@@ -405,6 +412,26 @@ export type ComponentSelection =
        * host declared about the *name*.
        */
       exact: boolean;
+    }
+  /**
+   * Structural syntax this environment declares. It selects no definition and
+   * reaches no component import: the installation that declared the construct
+   * expands it. Selection reports the declaration's own facts and never the
+   * captured handler — what may run is the execution's, not a selection's.
+   */
+  | {
+      kind: "declared-structural";
+      origin: string;
+      forms: readonly InvocationForm[];
+      props: PropsSchema;
+      syntax: readonly string[];
+      description: string;
+      /** What the construct's content means, or `null` when it reads none. */
+      context: string | null;
+      /** `null` for a construct; the construct's name for one of its regions. */
+      parent: string | null;
+      /** The direct regions a construct accepts, derived from their declarations. */
+      children: readonly string[];
     }
   | { kind: "unresolved"; searched: string[]; registered: readonly ComponentOrigin[] };
 
