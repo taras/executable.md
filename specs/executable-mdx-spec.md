@@ -2923,8 +2923,8 @@ and return, and an optional private component closure. It crosses on an
 document code exists — the same terms the component bundle crosses on — so no
 caller-facing option selects one, adds one, or names its source.
 
-**A declaration says what it is, and one constructor says it.** A host builds
-exact Markdown with `Markdown({…})`:
+**A declaration says what it is, and `Markdown({…})` is how it says it.** A host
+builds exact Markdown with the canonical constructor:
 
 ```typescript
 type MarkdownDeclarationInput = Omit<MarkdownDeclaration, "kind">;
@@ -2933,17 +2933,19 @@ function Markdown(input: MarkdownDeclarationInput): MarkdownDeclaration;
 ```
 
 The host writes the description — name, origin, source, digest, forms, schemas
-and privates — and the constructor returns a fresh declaration carrying
+and privates — and the constructor returns a fresh shallow declaration carrying
 `kind: "markdown"`, written after that description so an input carrying a kind
-of its own cannot decide what the declaration is. It is a constructor and
+of its own does not decide what the declaration is. It is a constructor and
 nothing else: it validates nothing, computes no digest, copies no nested schema,
 array or private declaration, freezes nothing and admits nothing.
 
-The discriminant is required, and admission reads it before anything else about
-the value, because everything else is a statement *about* exact Markdown. A
-declaration stating a kind this version does not know, or stating none, is
-refused before the root document is imported rather than admitted on the
-strength of having a source and a digest.
+`MarkdownDeclaration` remains an ordinary structural type, so the constructor is
+the canonical way to build one rather than the only way a value of that shape
+can come to exist. The defence is admission: the discriminant is required, and
+admission reads it before anything else about the value, because everything else
+is a statement *about* exact Markdown. A declaration stating a kind this version
+does not know, or stating none, is refused before the root document is imported
+rather than admitted on the strength of having a source and a digest.
 
 **It is held to its own bytes.** Canonical core parses the source and refuses
 the declaration before the root document is imported when it does not state that

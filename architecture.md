@@ -4411,12 +4411,16 @@ durable is written.
 A trusted host may ship first-party Markdown, name it, and hand it to one
 execution. Everything about it is decided before the root document is imported.
 
-**A declaration says what it is, and one constructor says it.** A host builds
-exact Markdown with `Markdown({…})`: it describes its asset, and the constructor
-returns a fresh declaration carrying `kind: "markdown"`. The discriminant is
-written *after* the host's description, so an input that carries a kind of its
-own is overwritten rather than believed, and there is no assembling a
-declaration member by member that ends up claiming to be Markdown.
+**A declaration says what it is, and `Markdown({…})` is how it says it.** A host
+describes its asset and the constructor returns a fresh shallow declaration
+carrying `kind: "markdown"`, written *after* the description, so an input that
+carries a kind of its own is overwritten rather than believed. Every declaration
+this repository owns is built that way.
+
+It is the canonical construction and a convention, not a gate. The declaration
+type is an ordinary structural one, so a caller can still write the object out
+by hand and no constructor can stop one — which is why the discriminant is
+defended where it matters rather than where it is written.
 
 It is a constructor and nothing else. Nothing is validated, hashed, copied
 deeply, frozen or admitted there: the digest stays the host's own statement

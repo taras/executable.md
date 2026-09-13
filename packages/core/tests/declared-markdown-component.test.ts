@@ -1565,10 +1565,12 @@ describe("Tier DM — exact source is a provenance, not a field", () => {
  * Markdown, admitted on the strength of having a `source` and a `digest`, would
  * be one whose shape decided what it meant.
  *
- * The constructor is the only place the discriminant is written, and it writes
- * it after the host's description, so an input carrying a `kind` of its own is
- * overwritten rather than believed. It is a constructor and nothing else:
- * nothing is hashed, copied deeply, frozen or admitted there.
+ * `Markdown({…})` is the canonical way to build one, and it writes the
+ * discriminant after the host's description, so an input carrying a `kind` of
+ * its own is overwritten rather than believed. It is a constructor and nothing
+ * else — nothing is hashed, copied deeply, frozen or admitted there — and it is
+ * a convention rather than a gate: the declaration type is structural, so what
+ * actually defends the execution is admission.
  *
  * Admission reads the discriminant before it reads any other member, and what
  * it reads is what the execution captured before any installation ran — so a
@@ -1608,12 +1610,12 @@ describe("Tier MDK — the declaration states its kind", () => {
   it("MDK1: the constructor states the kind and changes nothing else", function* () {
     const props: PropsSchema = { type: "object", properties: {}, additionalProperties: false };
     const privates = [secret()];
-    const input = {
+    const input: MarkdownDeclarationInput = {
       name: "Policy",
       origin: ORIGIN,
       source: POLICY_SOURCE,
       digest: sourceDigest(POLICY_SOURCE),
-      forms: ["paired"] as const,
+      forms: ["paired"],
       props,
       privates,
       exact: true,

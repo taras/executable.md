@@ -129,7 +129,7 @@ export interface MarkdownDeclaration {
  *
  * Kept because a host, a profile and a test all import it by this name. It is
  * the same type: what changed is that a declaration now states which kind it
- * is, and {@link Markdown} is what states it.
+ * is, and {@link Markdown} is how this repository states it.
  */
 export type DeclaredMarkdownComponent = MarkdownDeclaration;
 
@@ -139,12 +139,16 @@ export type MarkdownDeclarationInput = Omit<MarkdownDeclaration, "kind">;
 /**
  * Declare exact Markdown to one execution.
  *
- * The construction boundary, and the only place the discriminant is written. A
- * host describes its asset and this states what that description *is*, so a
- * declaration cannot be assembled member by member and end up saying it is
- * Markdown by accident — or, having been built from data, be talked into saying
- * something else: `kind` is written after the input is spread, so a value
- * carrying one of its own is overwritten rather than believed.
+ * The canonical way to build a declaration, and what every declaration this
+ * repository owns is built with. A host describes its asset and this states
+ * what that description is: `kind` is written after the input is spread, so an
+ * input carrying one of its own is overwritten rather than believed.
+ *
+ * It is a convenience and a convention, not a gate. {@link MarkdownDeclaration}
+ * is an ordinary structural type, so a caller can still write the object out by
+ * hand, and nothing here can stop one. What defends the execution is admission,
+ * which reads the discriminant before any other member and refuses a missing or
+ * unknown one.
  *
  * It is a constructor and nothing more. Nothing is validated, hashed, copied
  * deeply, frozen or admitted here: the digest is the host's own statement about
