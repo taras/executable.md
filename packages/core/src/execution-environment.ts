@@ -53,7 +53,9 @@ export interface ExecutionEnvironment {
    * returns the execution's own retained definition instead. An unrelated open
    * import keeps whatever the public chain answered.
    *
-   * TODO(#811): Rename ImportAuthority to ComponentResolution and replace the remaining authority terminology.
+   * TODO(#811): Rename ImportAuthority to ComponentResolution — with closes() and
+   * authorize() renamed for what they decide — and replace the remaining
+   * authority terminology.
    */
   readonly componentResolution?: ImportAuthority;
   /**

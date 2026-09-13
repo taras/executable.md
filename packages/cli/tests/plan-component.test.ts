@@ -1892,7 +1892,7 @@ describe("Tier FE — Plan produces text, Evaluate runs it", () => {
  * declaration they are — which an execution reads before it admits either.
  */
 describe("Tier MDK — the Plan declarations state their kind", () => {
-  it("MDK2: both constructors state kind markdown for the same packaged bytes", function* () {
+  it("MDK2: both constructors state kind component for the same packaged bytes", function* () {
     yield* useWorkingDirectory(function* (dir) {
       const harness = yield* planDeclarationHarness({
         surface: "component",
