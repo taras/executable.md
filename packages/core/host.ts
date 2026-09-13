@@ -252,13 +252,16 @@ export type {
  * the regions written inside its own construct — everything else a request
  * carries is an authored fact about where the occurrence was written.
  */
-export { ExecutionDeclarationError } from "./src/execution-declarations.ts";
+// `Structural` is the interface and the constructor that builds one, so the one
+// export carries both — a host writes `Structural({…})` and types with the same
+// name.
+export { ExecutionDeclarationError, Structural } from "./src/execution-declarations.ts";
 export type {
   ExecutionDeclaration,
   ExpansionChunk,
   ExpansionRegion,
   ExpansionRequest,
-  Structural,
+  StructuralInput,
 } from "./src/execution-declarations.ts";
 
 /**

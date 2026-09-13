@@ -47,7 +47,8 @@ import type {
   ValidateDocumentOptions,
   ValidateDocumentSettings,
 } from "../mod.ts";
-import type { IdentityComponent, Structural } from "../host.ts";
+import { Structural } from "../host.ts";
+import type { IdentityComponent } from "../host.ts";
 
 /** A stubbed tree: working-directory-relative path to file content. */
 type Tree = Record<string, string>;
@@ -1454,8 +1455,7 @@ describe("Tier DV: the package boundary", () => {
 
 const DECK_ORIGIN = "@executablemd/test/deck";
 
-const DECK: Structural = {
-  kind: "structural",
+const DECK = Structural({
   name: "Deck",
   origin: DECK_ORIGIN,
   forms: ["paired"],
@@ -1464,10 +1464,9 @@ const DECK: Structural = {
   description: "Lay out the panels written inside it.",
   context: "The panels this deck lays out.",
   parent: null,
-};
+});
 
-const PANEL: Structural = {
-  kind: "structural",
+const PANEL = Structural({
   name: "Panel",
   origin: DECK_ORIGIN,
   forms: ["self-closing", "paired"],
@@ -1481,7 +1480,7 @@ const PANEL: Structural = {
   description: "One panel of a deck.",
   context: "Markdown the panel holds.",
   parent: "Deck",
-};
+});
 
 const DECLARED: ValidateDocumentSettings = { declarations: [DECK, PANEL] };
 
@@ -1505,7 +1504,7 @@ describe("Tier ED — declared structural placement", () => {
     if (deck.outcome !== "valid") {
       throw new Error(`<Deck> is ${deck.outcome}, not valid`);
     }
-    expect(deck.origin).toEqual({ kind: "declared-structural", origin: DECK_ORIGIN });
+    expect(deck.origin).toEqual({ kind: "structural", origin: DECK_ORIGIN });
     // Nothing ran to decide any of it: there is no handler here to call.
     expect(seen.effects).toEqual([]);
 

@@ -188,7 +188,7 @@ export type ComponentInfo =
    * and that without that installation the name is not syntax at all. Describing
    * it reaches no handler — there is none here to reach.
    */
-  | ({ kind: "declared-structural" } & DeclaredStructuralContract)
+  | ({ kind: "structural" } & InstalledStructuralContract)
   | { kind: "function"; origin: ComponentOrigin }
   | { kind: "unresolved"; searched: string[]; registered: readonly ComponentOrigin[] };
 
@@ -236,7 +236,7 @@ export function* inspectComponent(options: InspectComponentOptions): Operation<C
             construct: selected.construct,
             origin: { kind: "structural", construct: selected.construct },
           }
-        : { kind: "declared-structural", ...declaredStructuralContract(name, declared) };
+        : { kind: "structural", ...installedStructuralContract(name, declared) };
     case "protected":
       return {
         kind: "protected",
@@ -372,13 +372,13 @@ export interface SyntaxSymbols {
  * somebody else wrote, so its entry states the forms and props a document is
  * actually held to. Their origins are what tell them apart.
  */
-export type StructuralSyntaxEntry = EngineSyntaxEntry | DeclaredStructuralSyntaxEntry;
+export type StructuralSyntaxEntry = EngineSyntaxEntry | InstalledStructuralSyntaxEntry;
 
 /** One construct the engine owns, with the forms an author writes it in. */
 export interface EngineSyntaxEntry {
   readonly kind: "structural";
   readonly name: string;
-  readonly origin: Extract<ComponentOrigin, { kind: "structural" }>;
+  readonly origin: Extract<ComponentOrigin, { kind: "structural"; construct: string }>;
   readonly syntax: readonly string[];
   readonly description: string;
   readonly as?: string;
@@ -393,10 +393,10 @@ export interface EngineSyntaxEntry {
  * to type needs to know a region is written directly inside one thing and
  * nowhere else.
  */
-export type DeclaredStructuralSyntaxEntry = {
+export type InstalledStructuralSyntaxEntry = {
   readonly kind: "structural";
   readonly name: string;
-} & DeclaredStructuralContract;
+} & InstalledStructuralContract;
 
 /**
  * What a declared structural construct states about itself.
@@ -406,8 +406,8 @@ export type DeclaredStructuralSyntaxEntry = {
  * contract. There is no return and no capture here: a construct renders through
  * its regions rather than answering with a value.
  */
-export interface DeclaredStructuralContract {
-  readonly origin: Extract<ComponentOrigin, { kind: "declared-structural" }>;
+export interface InstalledStructuralContract {
+  readonly origin: Extract<ComponentOrigin, { kind: "structural"; origin: string }>;
   readonly forms: readonly InvocationForm[];
   readonly props: PropsSchema;
   /** `null` for a construct; the construct's name for one of its regions. */
@@ -418,22 +418,22 @@ export interface DeclaredStructuralContract {
 }
 
 /**
- * The contract behind one declared-structural selection, read from the catalog
+ * The contract behind one installed structural selection, read from the catalog
  * this caller already holds.
  *
  * There is no second copy of it to keep in step, and no path from a selection
  * to the handler.
  */
-function declaredStructuralContract(
+function installedStructuralContract(
   name: string,
   declared: ExecutionDeclarationCatalog,
-): DeclaredStructuralContract {
+): InstalledStructuralContract {
   const admitted = declared.structural(name);
   if (admitted === undefined) {
     throw new Error(`${name} resolved as declared structural syntax nothing admitted`);
   }
   return {
-    origin: { kind: "declared-structural", origin: admitted.origin },
+    origin: { kind: "structural", origin: admitted.origin },
     forms: admitted.forms,
     props: admitted.props,
     parent: admitted.parent,
@@ -456,10 +456,8 @@ function declaredStructuralContract(
 export interface CompleteComponentSyntaxEntry {
   readonly kind: "component";
   readonly name: string;
-  readonly origin: Exclude<
-    ComponentOrigin,
-    { kind: "structural" } | { kind: "declared-structural" }
-  >;
+  /** Neither structural shape: syntax is described in its own category. */
+  readonly origin: Exclude<ComponentOrigin, { kind: "structural" }>;
   /**
    * What kind of thing supplied the contract above.
    *
@@ -619,7 +617,7 @@ export function* inspectSyntax(options: InspectSyntaxOptions): Operation<SyntaxS
       structural.push(
         "construct" in selected
           ? structuralEntry(selected.construct)
-          : { kind: "structural", name, ...declaredStructuralContract(name, declarations) },
+          : { kind: "structural", name, ...installedStructuralContract(name, declarations) },
       );
       continue;
     }
@@ -719,7 +717,7 @@ function* componentEntry(
     // Neither structural kind describes a component, so neither can be a
     // component entry's origin — a registration reporting one describes
     // something this category has no shape for.
-    if (origin.kind === "structural" || origin.kind === "declared-structural") {
+    if (origin.kind === "structural") {
       return undefined;
     }
     return complete(name, origin, "registered", {
@@ -809,7 +807,7 @@ interface CompleteContract {
 
 function complete(
   name: string,
-  origin: Exclude<ComponentOrigin, { kind: "structural" } | { kind: "declared-structural" }>,
+  origin: Exclude<ComponentOrigin, { kind: "structural" }>,
   sourceKind: CompleteComponentSyntaxEntry["sourceKind"],
   contract: CompleteContract,
 ): CompleteComponentSyntaxEntry {

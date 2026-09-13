@@ -220,7 +220,12 @@ function identityOf(entry: { name: string; origin: ComponentOrigin }): string {
   const origin = entry.origin;
   const parts: readonly string[] =
     origin.kind === "structural"
-      ? [origin.construct]
+      ? // One kind, two shapes: the engine names the construct it owns, and an
+        // installation names the origin that declared it, so the two cannot
+        // produce one identity.
+        "construct" in origin
+        ? [origin.construct]
+        : [origin.origin]
       : origin.kind === "repository"
         ? [origin.path]
         : origin.kind === "registered"
@@ -229,9 +234,7 @@ function identityOf(entry: { name: string; origin: ComponentOrigin }): string {
             ? [origin.origin]
             : origin.kind === "workflow"
               ? [origin.path, origin.sourceHash]
-              : origin.kind === "declared-structural"
-                ? [origin.origin]
-                : [origin.origin, origin.digest];
+              : [origin.origin, origin.digest];
   // Length-prefixed, so no member's content can spell a separator and make two
   // different identities collide.
   return [entry.name, origin.kind, ...parts].map((part) => `${part.length}:${part}`).join("");

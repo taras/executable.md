@@ -41,7 +41,7 @@ import type { DurableEvent, Json } from "@executablemd/durable-streams";
 import { Component } from "../src/component-api.ts";
 import { collect } from "../src/collect.ts";
 import { execute } from "../src/execute.ts";
-import { executeInstalled, Markdown, sourceDigest } from "../host.ts";
+import { executeInstalled, Markdown, sourceDigest, Structural } from "../host.ts";
 import type {
   ExecutionDeclaration,
   ExecutionInstallation,
@@ -50,7 +50,7 @@ import type {
   IdentityComponent,
   MarkdownComponent,
   MarkdownComponentInput,
-  Structural,
+  StructuralInput,
 } from "../host.ts";
 import { admitDeclaredMarkdown } from "../src/components/declared-markdown.ts";
 import { admitExecutionDeclarations } from "../src/execution-declarations.ts";
@@ -1814,9 +1814,8 @@ const PANEL_PROPS: PropsSchema = {
 };
 
 /** The construct this tier declares, with one region, `<Panel>`. */
-function deck(overrides: Partial<Structural> = {}): Structural {
-  return {
-    kind: "structural",
+function deck(overrides: Partial<StructuralInput> = {}): Structural {
+  return Structural({
     name: "Deck",
     origin: DECK_ORIGIN,
     forms: ["paired"],
@@ -1826,13 +1825,12 @@ function deck(overrides: Partial<Structural> = {}): Structural {
     context: "The panels this deck lays out.",
     parent: null,
     ...overrides,
-  };
+  });
 }
 
 /** One region of that construct. */
-function panel(overrides: Partial<Structural> = {}): Structural {
-  return {
-    kind: "structural",
+function panel(overrides: Partial<StructuralInput> = {}): Structural {
+  return Structural({
     name: "Panel",
     origin: DECK_ORIGIN,
     forms: ["self-closing", "paired"],
@@ -1842,7 +1840,7 @@ function panel(overrides: Partial<Structural> = {}): Structural {
     context: "Markdown the panel holds.",
     parent: "Deck",
     ...overrides,
-  };
+  });
 }
 
 /**
@@ -1914,7 +1912,10 @@ describe("Tier ED — one catalog, two arms", () => {
 
     // The structural arm, from the same list.
     const construct = yield* inspectComponent({ name: "Deck", includes: [], declarations });
-    expect(construct.kind).toBe("declared-structural");
+    if (construct.kind !== "structural") {
+      throw new Error(`expected structural syntax, got ${construct.kind}`);
+    }
+    expect(construct.origin).toEqual({ kind: "structural", origin: DECK_ORIGIN });
 
     // A value that states neither arm is refused as it always was, in the words
     // the Markdown admission owns.
@@ -2066,10 +2067,11 @@ describe("Tier ED — one catalog, two arms", () => {
     const declarations = [deck(), panel()];
 
     const claimed = yield* inspectComponent({ name: "Deck", includes: [root], declarations });
-    if (claimed.kind !== "declared-structural") {
-      throw new Error(`expected installed structural syntax, got ${claimed.kind}`);
+    // One kind for both structural shapes; the origin says which this is.
+    if (claimed.kind !== "structural") {
+      throw new Error(`expected structural syntax, got ${claimed.kind}`);
     }
-    expect(claimed.origin).toEqual({ kind: "declared-structural", origin: DECK_ORIGIN });
+    expect(claimed.origin).toEqual({ kind: "structural", origin: DECK_ORIGIN });
 
     // The control: the same file, with nothing declared, is what answers.
     const unclaimed = yield* inspectComponent({ name: "Deck", includes: [root] });
@@ -2265,7 +2267,7 @@ describe("Tier ED — the catalog answers for the set", () => {
       ]);
       return yield* inspectComponent({ name: "Deck", includes: [], declarations });
     });
-    expect(claimed.kind).toBe("declared-structural");
+    expect(claimed.kind).toBe("structural");
 
     // The control: the same registration, with nothing declared, is what
     // answers — so the declaration is what moved the decision.
@@ -2348,16 +2350,21 @@ describe("Tier ED — the catalog answers for the set", () => {
     // engine's construct as the engine's, and the installation's under its own
     // provenance with the contract the host declared.
     const engineInfo = yield* inspectComponent({ name: "If", includes: [] });
-    expect(engineInfo.kind).toBe("structural");
-    const declaredInfo = yield* inspectComponent({
+    if (engineInfo.kind !== "structural") {
+      throw new Error(`expected structural syntax, got ${engineInfo.kind}`);
+    }
+    const installedInfo = yield* inspectComponent({
       name: "Deck",
       includes: [],
       declarations: [deck(), panel()],
     });
-    if (declaredInfo.kind !== "declared-structural") {
-      throw new Error(`expected installed structural syntax, got ${declaredInfo.kind}`);
+    if (installedInfo.kind !== "structural") {
+      throw new Error(`expected structural syntax, got ${installedInfo.kind}`);
     }
-    expect(declaredInfo.origin).toEqual({ kind: "declared-structural", origin: DECK_ORIGIN });
+    expect(installedInfo.origin).toEqual({ kind: "structural", origin: DECK_ORIGIN });
+    // And the engine's own reports the construct it came from, under the same
+    // kind, so the two are told apart by what each carries.
+    expect(engineInfo.origin).toEqual({ kind: "structural", construct: "If" });
   });
 
   it("ED7: an execution that declares nothing still has a catalog, and it changes nothing", function* () {
@@ -2375,5 +2382,48 @@ describe("Tier ED — the catalog answers for the set", () => {
         yield* selectComponent(name, { includes: [] }),
       );
     }
+  });
+});
+
+describe("Tier ED — the structural constructor", () => {
+  // deno-lint-ignore require-yield
+  it("ED3: Structural() states the kind and changes nothing else", function* () {
+    const props: PropsSchema = { type: "object", properties: {}, additionalProperties: false };
+    const syntax = ["<Deck><Panel /></Deck>"];
+    const input: StructuralInput = {
+      name: "Deck",
+      origin: DECK_ORIGIN,
+      forms: ["paired"],
+      props,
+      syntax,
+      description: "Lay out the panels written inside it.",
+      context: null,
+      parent: null,
+    };
+
+    const declaration = Structural(input);
+
+    expect(declaration).not.toBe(input);
+    expect(declaration.kind).toBe("structural");
+    expect(Reflect.has(input, "kind")).toBe(false);
+    expect(declaration.name).toBe(input.name);
+    expect(declaration.origin).toBe(input.origin);
+    expect(declaration.description).toBe(input.description);
+    expect(declaration.parent).toBe(null);
+    // Shallow by contract: what arrives is what leaves, so nothing here is the
+    // copy an execution makes at capture.
+    expect(declaration.props).toBe(props);
+    expect(declaration.syntax).toBe(syntax);
+    expect(Object.isFrozen(declaration)).toBe(false);
+
+    // A kind planted on the input cannot decide what the declaration is: the
+    // constructor writes its own after spreading.
+    const planted = { ...input };
+    Reflect.set(planted, "kind", "markdown");
+    expect(Structural(planted).kind).toBe("structural");
+
+    // It admits nothing: a declaration this catalog would refuse is still built.
+    const refused = Structural({ ...input, origin: "" });
+    expect(refused.origin).toBe("");
   });
 });

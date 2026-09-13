@@ -38,13 +38,14 @@ import {
 } from "../mod.ts";
 import type {
   CompleteComponentSyntaxEntry,
-  DeclaredStructuralSyntaxEntry,
+  InstalledStructuralSyntaxEntry,
   EngineSyntaxEntry,
   OriginOnlyComponentSyntaxEntry,
   StructuralSyntaxEntry,
   SyntaxSymbols,
 } from "../mod.ts";
-import type { ExecutionDeclaration, IdentityComponent, Structural } from "../host.ts";
+import { Structural } from "../host.ts";
+import type { ExecutionDeclaration, IdentityComponent } from "../host.ts";
 import type { InvocationForm } from "../mod.ts";
 
 /**
@@ -203,13 +204,13 @@ function structural(catalog: SyntaxSymbols): readonly StructuralSyntaxEntry[] {
 }
 
 /** Whether this structural entry is one an installation declared. */
-function isDeclared(entry: StructuralSyntaxEntry): entry is DeclaredStructuralSyntaxEntry {
-  return entry.origin.kind === "declared-structural";
+function isInstalled(entry: StructuralSyntaxEntry): entry is InstalledStructuralSyntaxEntry {
+  return "origin" in entry.origin;
 }
 
 /** Whether this structural entry is one the engine owns. */
 function isEngine(entry: StructuralSyntaxEntry): entry is EngineSyntaxEntry {
-  return entry.origin.kind === "structural";
+  return "construct" in entry.origin;
 }
 
 /**
@@ -1420,8 +1421,7 @@ function* raised(operation: Operation<unknown>): Operation<Error> {
 
 const DECK_ORIGIN = "@executablemd/test/deck";
 
-const DECK: Structural = {
-  kind: "structural",
+const DECK = Structural({
   name: "Deck",
   origin: DECK_ORIGIN,
   forms: ["paired"],
@@ -1430,10 +1430,9 @@ const DECK: Structural = {
   description: "Lay out the panels written inside it.",
   context: "The panels this deck lays out.",
   parent: null,
-};
+});
 
-const PANEL: Structural = {
-  kind: "structural",
+const PANEL = Structural({
   name: "Panel",
   origin: DECK_ORIGIN,
   forms: ["self-closing", "paired"],
@@ -1448,7 +1447,7 @@ const PANEL: Structural = {
   // Decided rather than omitted: this construct reads no content.
   context: null,
   parent: "Deck",
-};
+});
 
 function declaredCatalogFor(
   declarations: readonly ExecutionDeclaration[],
@@ -1471,10 +1470,10 @@ describe("Tier ED — declared structural syntax", () => {
         });
       });
 
-      if (info.kind !== "declared-structural") {
+      if (info.kind !== "structural" || !("forms" in info)) {
         throw new Error(`expected installed structural syntax, got ${info.kind}`);
       }
-      expect(info.origin).toEqual({ kind: "declared-structural", origin: DECK_ORIGIN });
+      expect(info.origin).toEqual({ kind: "structural", origin: DECK_ORIGIN });
       expect(info.forms).toEqual(declaration.forms);
       expect(info.props).toEqual(declaration.props);
       expect(info.syntax).toEqual(declaration.syntax);
@@ -1521,10 +1520,10 @@ describe("Tier ED — declared structural syntax", () => {
       "user-provided",
     ]);
 
-    expect(find(entries.filter(isDeclared), "Deck")).toEqual({
+    expect(find(entries.filter(isInstalled), "Deck")).toEqual({
       kind: "structural",
       name: "Deck",
-      origin: { kind: "declared-structural", origin: DECK_ORIGIN },
+      origin: { kind: "structural", origin: DECK_ORIGIN },
       forms: ["paired"],
       props: DECK.props,
       parent: null,
@@ -1533,7 +1532,7 @@ describe("Tier ED — declared structural syntax", () => {
       context: DECK.context,
     });
 
-    const panel = find(entries.filter(isDeclared), "Panel");
+    const panel = find(entries.filter(isInstalled), "Panel");
     expect(panel.parent).toBe("Deck");
     expect(panel.forms).toEqual(["self-closing", "paired"]);
     // Declared subfield order survives, and `context: null` contributes nothing.
@@ -1552,7 +1551,7 @@ describe("Tier ED — declared structural syntax", () => {
 
     for (const category of [catalog.categories[1], catalog.categories[2]]) {
       for (const entry of category.entries) {
-        expect(entry.origin.kind).not.toBe("declared-structural");
+        // Neither structural shape: a component entry describes a component.
         expect(entry.origin.kind).not.toBe("structural");
       }
       expect(category.entries.map((entry) => entry.name)).not.toContain("Deck");

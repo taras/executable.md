@@ -358,12 +358,16 @@ export type ComponentOrigin =
    */
   | { kind: "declared-markdown"; origin: string; digest: string }
   /**
-   * Structural syntax a trusted host declared to this environment. It names the
-   * installation the construct came from rather than a path, because there is
-   * no file: the declaration and the handler that expands it crossed together
-   * on an `ExecutionInstallation`.
+   * Structural syntax a trusted host declared to this environment.
+   *
+   * `structural` like the engine's own, because that is what it is. It names the
+   * installation the construct came from rather than a path, because there is no
+   * file: the declaration and the handler that expands it crossed together on an
+   * `ExecutionInstallation`. A reader telling the two apart asks which of them
+   * this is — the engine names a `construct` from its own table, and this names
+   * the `origin` that declared it.
    */
-  | { kind: "declared-structural"; origin: string };
+  | { kind: "structural"; origin: string };
 
 /**
  * What resolving a name decided, before anything is loaded.

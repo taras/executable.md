@@ -3282,6 +3282,10 @@ written directly inside it. It crosses on the same `ExecutionInstallation`, in
 the same `declarations` list, on the same terms.
 
 ```typescript
+type StructuralInput = Omit<Structural, "kind">;
+
+function Structural(input: StructuralInput): Structural;
+
 interface Structural {
   readonly kind: "structural";
   readonly name: string;
@@ -3297,10 +3301,24 @@ interface Structural {
 type ExecutionDeclaration = MarkdownComponent | Structural;
 ```
 
+A host builds one with `Structural({…})`, the canonical constructor: it returns
+a fresh shallow declaration carrying `kind: "structural"`, written after the
+description so an input carrying a kind of its own does not decide what the
+declaration is. Like `Markdown({…})` it validates nothing, compiles no schema,
+copies nothing deeply, freezes nothing and admits nothing — capture and
+admission are the defenses.
+
 `forms` and `props` are the executable contract an occurrence is held to.
 `syntax`, `description` and `context` are documentation, and `context` is
 decided rather than omitted: `null` states that the construct reads no content,
 exactly as the engine's own table states it.
+
+**Both structural shapes report one kind.** A selection, an origin and an
+inspection result all say `structural`, because that is what each of them is.
+Which one it is shows in what it carries: the engine names the `construct` from
+its own table, and an installation names the `origin` that declared it. There is
+no second discriminant, and ownership is never inferred from the text of a
+name.
 
 **The pair is derived from the regions.** `parent: null` declares the construct;
 a name declares a direct region of that construct in the same installation. What
@@ -3346,7 +3364,7 @@ type ComponentOrigin =
   | { kind: "repository"; path: string }
   | { kind: "registered"; origin: string; reserved: boolean }
   | { kind: "declared-markdown"; origin: string; digest: string }
-  | { kind: "declared-structural"; origin: string };
+  | { kind: "structural"; origin: string };
 ```
 
 `inspectComponent(name)` reports the selected kind and origin without running
@@ -3484,7 +3502,7 @@ that does not exist.
 
 A declared structural construct and each of its regions contribute one entry to
 the **structural** category, sorted by code point beside the constructs the
-engine owns, reporting the declared origin under the `declared-structural` kind
+engine owns, reporting the declared origin under the same `structural` kind
 and carrying the declared forms, props schema, placement, syntax examples,
 description and content sentence. The two structural kinds are a closed union:
 an engine entry keeps exactly the fields it always had, and neither kind can
@@ -13297,8 +13315,8 @@ invokes a handler: this layer captures one and calls none.
 | ED3 | The pair is declared | Several constructs and interleaved regions pair inside one installation; an orphan region, a region of a region, a pair split across two installations, a construct with no region, declarations with no handler and a handler with no declarations each refuse with nothing yielded |
 | ED4 | One name, one answer | Distinct names coexist across installations and arms; the same name twice in one arm, across the arms, across installations, and against a private closure name each refuse whichever order they arrive in |
 | ED5 | The name is claimed | A declared construct answers ahead of a repository file of the same name, which answers when nothing is declared; the engine's structural table, the canonical protected tier and a reserved registration cannot be claimed |
-| ED6 | Described from the declaration | `inspectComponent()` reports a construct and a region under the `declared-structural` origin with their forms, props, placement, syntax, description and context, and no handler; a malformed relationship refuses for inspection exactly as it does for a run |
-| ED7 | Version 2, one category | The symbols stay version 2 with their three categories in order, carry the construct and its regions sorted by code point beside the engine's own, and render the installed contract; neither structural kind inhabits a component entry, and an engine entry carries no forms, props or placement |
+| ED6 | Described from the declaration | `inspectComponent()` reports a construct and a region as `structural`, carrying the declared origin with their forms, props, placement, syntax, description and context, and no handler; a malformed relationship refuses for inspection exactly as it does for a run |
+| ED7 | Version 2, one category, one kind | The symbols stay version 2 with their three categories in order, carry the construct and its regions sorted by code point beside the engine's own, and render the installed contract; both structural selections are `structural` and are told apart by `construct` versus `origin`, neither shape inhabits a component entry, and an engine entry carries no forms, props or placement |
 | ED8 | Placement | A construct holding its declared regions is valid and every region body is walked; a region outside its construct, a region under something else, substantive text, a code block, a foreign element, a refused form and a failed literal schema are deterministic diagnostics with nothing executed, and the foreign element is reported where it was written |
 | ED9 | Opacity | A required prop written as an expression is present and makes the occurrence opaque; a definitely missing required prop still fails, opacity hides no placement error, and the engine's own constructs keep the results they always had |
 | ED10 | Absence | With nothing declared, the new names are unresolved, the structural category holds only the engine's own constructs, and a repository file under one of those names is an ordinary component rather than syntax |

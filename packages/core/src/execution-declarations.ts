@@ -119,6 +119,29 @@ export interface Structural {
   readonly parent: string | null;
 }
 
+/** Everything a host states about one construct, apart from what kind it is. */
+export type StructuralInput = Omit<Structural, "kind">;
+
+/**
+ * Declare structural syntax to one execution.
+ *
+ * The canonical way to build one, on the same terms `Markdown({…})` is: the host
+ * describes the construct and this states what that description is, writing
+ * `kind` after the input so an input carrying one of its own is overwritten
+ * rather than believed.
+ *
+ * It is a convenience and a convention, not a gate. {@link Structural} is an
+ * ordinary structural type, so a caller can still write the object out by hand.
+ * What defends the execution is capture, which refuses a value that states
+ * neither arm, and admission, which decides everything else.
+ *
+ * It is a constructor and nothing more: nothing is validated, no schema is
+ * compiled, nothing is copied deeply or frozen, and nothing is admitted here.
+ */
+export function Structural(input: StructuralInput): Structural {
+  return { ...input, kind: "structural" };
+}
+
 /** Everything one installation declares, under one discriminant. */
 export type ExecutionDeclaration = MarkdownComponent | Structural;
 

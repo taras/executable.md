@@ -197,7 +197,13 @@ function describeOrigin(info: ComponentInfo): string {
   }
   switch (info.origin.kind) {
     case "structural":
-      return `structural:${info.origin.construct}`;
+      // One kind, two shapes. They stay two lines because what the engine owns
+      // is in every execution, while an installation's exists only while that
+      // installation does — a regression that swapped one for the other would
+      // otherwise read as no difference at all.
+      return "construct" in info.origin
+        ? `structural:${info.origin.construct}`
+        : `structural-installed:${info.origin.origin}`;
     case "registered":
       return `registered:${info.origin.origin}${info.origin.reserved ? " (reserved)" : ""}`;
     case "protected":
@@ -208,12 +214,6 @@ function describeOrigin(info: ComponentInfo): string {
       return `workflow:${info.origin.path}@${info.origin.sourceHash}`;
     case "declared-markdown":
       return `declared-markdown:${info.origin.origin}`;
-    case "declared-structural":
-      // Its own line rather than folded into `structural`: what the engine owns
-      // is in every execution, and this exists only while the installation that
-      // declared it does — a regression that swapped one for the other would
-      // read as no difference at all.
-      return `declared-structural:${info.origin.origin}`;
   }
 }
 

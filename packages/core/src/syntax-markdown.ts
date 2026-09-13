@@ -18,7 +18,7 @@
 
 import type {
   CompleteComponentSyntaxEntry,
-  DeclaredStructuralSyntaxEntry,
+  InstalledStructuralSyntaxEntry,
   EngineSyntaxEntry,
   OriginOnlyComponentSyntaxEntry,
   StructuralSyntaxEntry,
@@ -109,16 +109,16 @@ function heading(name: string): string {
 }
 
 function renderStructural(entry: StructuralSyntaxEntry): string[] {
-  return isDeclaredStructural(entry)
-    ? renderDeclaredStructural(entry)
+  return isInstalledStructural(entry)
+    ? renderInstalledStructural(entry)
     : renderEngineStructural(entry);
 }
 
 /** Whether this structural entry is one an installation declared. */
-function isDeclaredStructural(
+function isInstalledStructural(
   entry: StructuralSyntaxEntry,
-): entry is DeclaredStructuralSyntaxEntry {
-  return entry.origin.kind === "declared-structural";
+): entry is InstalledStructuralSyntaxEntry {
+  return "origin" in entry.origin;
 }
 
 function renderEngineStructural(entry: EngineSyntaxEntry): string[] {
@@ -136,7 +136,7 @@ function renderEngineStructural(entry: EngineSyntaxEntry): string[] {
  * construct the engine owns this one has a schema somebody else wrote and a
  * placement a document has to get right.
  */
-function renderDeclaredStructural(entry: DeclaredStructuralSyntaxEntry): string[] {
+function renderInstalledStructural(entry: InstalledStructuralSyntaxEntry): string[] {
   const blocks = [heading(entry.name), entry.description];
   blocks.push("**Syntax:**", fence("md", entry.syntax.join("\n")));
   blocks.push(`**Forms:** ${entry.forms.map((form) => invocation(entry.name, form)).join(", ")}`);
@@ -315,10 +315,10 @@ function describeOrigin(origin: ComponentOrigin): string {
   if (origin.kind === "declared-markdown") {
     return `${code(origin.origin)} (declared Markdown)`;
   }
-  if (origin.kind === "declared-structural") {
-    // Not "structural syntax": a reader deciding whether this name exists
-    // without the installation that declared it gets the opposite answer from
-    // the phrase the engine's own constructs use.
+  if (origin.kind === "structural" && "origin" in origin) {
+    // Not "structural syntax" unqualified: a reader deciding whether this name
+    // exists without the installation that declared it gets the opposite answer
+    // from the phrase the engine's own constructs use.
     return `${code(origin.origin)} (installed structural syntax)`;
   }
   return `structural syntax (${code(origin.construct)})`;

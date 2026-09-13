@@ -4579,13 +4579,25 @@ shared, so what non-executing validation accepts and what canonical expansion
 accepts cannot come apart, and reading it evaluates nothing, invokes no handler
 and expands no region body.
 
+**One kind, two shapes.** A selection, an origin and an inspection result all
+report `structural`, because that is what each of them is. Which one it is shows
+in what it carries — the engine names the `construct` from its own table, an
+installation names the `origin` that declared it — so there is no second
+discriminant and ownership is never read out of a name's text. An installed
+construct never enters the branch that belongs to the engine's table.
+
 **The symbols stay version 2.** A construct and each of its regions contribute
 one entry to the structural category, sorted by code point beside the engine's
 own and carrying the declared forms, props schema, placement, syntax examples,
-description and origin. The two structural entry kinds are a closed union: an
-engine entry keeps exactly the fields it always had, neither kind can inhabit a
+description and origin. The two structural entry shapes are a closed union: an
+engine entry keeps exactly the fields it always had, neither shape can inhabit a
 component entry, and no category, order or existing member changed — so a
 version-2 reader is owed nothing new.
+
+**`Structural({…})` is how a host builds one**, on the terms `Markdown({…})`
+already set: a fresh shallow declaration with `kind` written after the
+description, validating nothing, compiling no schema, copying nothing deeply and
+freezing nothing. Capture and admission are the defenses.
 
 ## The canonical protected tier
 

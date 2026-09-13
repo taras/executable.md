@@ -823,7 +823,7 @@ class ValidationState {
     }
 
     if (selected.kind === "structural") {
-      draft.origin = { kind: "declared-structural", origin: selected.origin };
+      draft.origin = { kind: "structural", origin: selected.origin };
       // The contract is the admitted entry, read from the catalog this walk
       // already holds: selection reports which name was chosen, not what the
       // construct accepts.
