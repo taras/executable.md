@@ -701,7 +701,9 @@ describe("Tier CR — inspection describes without running", () => {
   it("CR26: a structural name inspects as the construct, with no definition", function* () {
     const info = yield* inspectComponent({ name: "Each" });
     expect(info.kind).toBe("structural");
-    expect(info.kind === "structural" && info.construct).toBe("Each");
+    // The engine's own shape is the one carrying `construct`; structural syntax
+    // a host declares reports the same kind and names its origin instead.
+    expect(info.kind === "structural" && "construct" in info && info.construct).toBe("Each");
   });
 
   it("CR27: inspecting a repository TypeScript component does not import it", function* () {

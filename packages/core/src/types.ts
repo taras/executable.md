@@ -356,7 +356,18 @@ export type ComponentOrigin =
    * first-party asset the bytes came from, never a path a repository could
    * supply and never the root that invoked it.
    */
-  | { kind: "declared-markdown"; origin: string; digest: string };
+  | { kind: "declared-markdown"; origin: string; digest: string }
+  /**
+   * Structural syntax a trusted host declared to this environment.
+   *
+   * `structural` like the engine's own, because that is what it is. It names the
+   * installation the construct came from rather than a path, because there is no
+   * file: the declaration and the handler that expands it crossed together on an
+   * `ExecutionInstallation`. A reader telling the two apart asks which of them
+   * this is — the engine names a `construct` from its own table, and this names
+   * the `origin` that declared it.
+   */
+  | { kind: "structural"; origin: string };
 
 /**
  * What resolving a name decided, before anything is loaded.
@@ -406,6 +417,23 @@ export type ComponentSelection =
        */
       exact: boolean;
     }
+  /**
+   * Structural syntax this environment declares.
+   *
+   * `structural` like the engine's own, because that is what it is: syntax
+   * rather than a component, selecting no definition and reaching no component
+   * import. Which one it is shows in what the arm carries — the engine names a
+   * `construct` from its own table, and this names the `origin` that declared
+   * it — so a reader that must tell them apart asks the question that matters
+   * rather than reading a second tag.
+   *
+   * The origin and nothing else. What the construct accepts — its forms, its
+   * schema, where its regions sit — is the admitted contract, and whoever needs
+   * it already holds the catalog that has it. A selection carrying the contract
+   * would be a second copy of it, and one carrying the handler would make *what
+   * may run* a selection's answer rather than the execution's.
+   */
+  | { kind: "structural"; origin: string }
   | { kind: "unresolved"; searched: string[]; registered: readonly ComponentOrigin[] };
 
 /** A registered implementation and the origin that named it. */

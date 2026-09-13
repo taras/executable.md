@@ -29,6 +29,7 @@ import {
   AGENT_REGISTRATIONS,
   agentIdentityComponents,
   CORE_COMPONENT_NAMES,
+  inspectComponent,
   inspectSyntax,
   PROTECTED_COMPONENT_NAMES,
   registerComponents,
@@ -37,11 +38,14 @@ import {
 } from "../mod.ts";
 import type {
   CompleteComponentSyntaxEntry,
+  InstalledStructuralSyntaxEntry,
+  EngineSyntaxEntry,
   OriginOnlyComponentSyntaxEntry,
   StructuralSyntaxEntry,
   SyntaxSymbols,
 } from "../mod.ts";
-import type { IdentityComponent } from "../host.ts";
+import { Structural } from "../host.ts";
+import type { ExecutionDeclaration, IdentityComponent } from "../host.ts";
 import type { InvocationForm } from "../mod.ts";
 
 /**
@@ -199,6 +203,25 @@ function structural(catalog: SyntaxSymbols): readonly StructuralSyntaxEntry[] {
   return catalog.categories[0].entries;
 }
 
+/** Whether this structural entry is one an installation declared. */
+function isInstalled(entry: StructuralSyntaxEntry): entry is InstalledStructuralSyntaxEntry {
+  return "origin" in entry.origin;
+}
+
+/** Whether this structural entry is one the engine owns. */
+function isEngine(entry: StructuralSyntaxEntry): entry is EngineSyntaxEntry {
+  return "construct" in entry.origin;
+}
+
+/**
+ * The engine's own constructs, which is what every row about the reserved
+ * vocabulary asks about. A declared construct carries a contract of its own and
+ * is described by the ED rows below.
+ */
+function engineEntries(catalog: SyntaxSymbols): readonly EngineSyntaxEntry[] {
+  return structural(catalog).filter(isEngine);
+}
+
 function builtIn(catalog: SyntaxSymbols): readonly CompleteComponentSyntaxEntry[] {
   return catalog.categories[1].entries;
 }
@@ -292,7 +315,7 @@ describe("Tier SY: structural vocabulary", () => {
 
   it("SY4: states the authored forms and applicability the representatives have", function* () {
     const catalog = yield* catalogFor({}, []);
-    const entries = structural(catalog);
+    const entries = engineEntries(catalog);
 
     expect(find(entries, "Let").syntax).toEqual([
       '<Let as="name">…</Let>',
@@ -319,7 +342,7 @@ describe("Tier SY: structural vocabulary", () => {
 
   it("SY4b: freezes the <Switch> and <Case> entries the catalog publishes", function* () {
     const catalog = yield* catalogFor({}, []);
-    const entries = structural(catalog);
+    const entries = engineEntries(catalog);
 
     expect(catalog.version).toBe(2);
     expect(find(entries, "Switch")).toEqual({
@@ -350,7 +373,7 @@ describe("Tier SY: structural vocabulary", () => {
 
   it("TG3: freezes the <Terminal.Grid> and <Terminal> entries the catalog publishes", function* () {
     const catalog = yield* catalogFor({}, []);
-    const entries = structural(catalog);
+    const entries = engineEntries(catalog);
 
     expect(catalog.version).toBe(2);
     expect(find(entries, "Terminal.Grid")).toEqual({
@@ -1384,4 +1407,190 @@ function* raised(operation: Operation<unknown>): Operation<Error> {
     return error instanceof Error ? error : new Error(String(error));
   }
   throw new Error("expected the operation to fail");
+}
+
+/**
+ * Tier ED — structural syntax an installation declared.
+ *
+ * A declared construct is described from the declaration alone. Inspection
+ * mints no execution, so there is no handler to call and no region body to
+ * expand — and the entry it produces still states the whole contract a document
+ * is held to, because that contract is what the host declared rather than
+ * something the handler decides.
+ */
+
+const DECK_ORIGIN = "@executablemd/test/deck";
+
+const DECK = Structural({
+  name: "Deck",
+  origin: DECK_ORIGIN,
+  forms: ["paired"],
+  props: { type: "object", properties: {}, additionalProperties: false },
+  syntax: ['<Deck><Panel title="One">…</Panel></Deck>'],
+  description: "Lay out the panels written inside it.",
+  context: "The panels this deck lays out.",
+  parent: null,
+});
+
+const PANEL = Structural({
+  name: "Panel",
+  origin: DECK_ORIGIN,
+  forms: ["self-closing", "paired"],
+  props: {
+    type: "object",
+    properties: { title: { type: "string", description: "The panel's heading." } },
+    required: ["title"],
+    additionalProperties: false,
+  },
+  syntax: ['<Panel title="One">…</Panel>', '<Panel title="One" />'],
+  description: "One panel of a deck.",
+  // Decided rather than omitted: this construct reads no content.
+  context: null,
+  parent: "Deck",
+});
+
+function declaredCatalogFor(
+  declarations: readonly ExecutionDeclaration[],
+): Operation<SyntaxSymbols> {
+  return scoped(function* () {
+    yield* useTree({}, {});
+    return yield* inspectSyntax({ includes: [], declarations });
+  });
+}
+
+describe("Tier ED — declared structural syntax", () => {
+  it("ED6: inspectComponent reports the construct and its region, with no handler", function* () {
+    for (const declaration of [DECK, PANEL]) {
+      const info = yield* scoped(function* () {
+        yield* useTree({}, {});
+        return yield* inspectComponent({
+          name: declaration.name,
+          includes: [],
+          declarations: [DECK, PANEL],
+        });
+      });
+
+      if (info.kind !== "structural" || !("forms" in info)) {
+        throw new Error(`expected installed structural syntax, got ${info.kind}`);
+      }
+      expect(info.origin).toEqual({ kind: "structural", origin: DECK_ORIGIN });
+      expect(info.forms).toEqual(declaration.forms);
+      expect(info.props).toEqual(declaration.props);
+      expect(info.syntax).toEqual(declaration.syntax);
+      expect(info.description).toBe(declaration.description);
+      expect(info.parent).toBe(declaration.parent);
+      // `null` states that the construct reads no content, and contributes no
+      // field — exactly as the engine's own table states it.
+      expect(info.context).toBe(declaration.context ?? undefined);
+    }
+  });
+
+  it("ED6: a malformed relationship is refused for inspection as it is for a run", function* () {
+    const cases: readonly (readonly [string, readonly ExecutionDeclaration[], string])[] = [
+      ["an orphan region", [DECK, { ...PANEL, parent: "Missing" }], 'is a region of "Missing"'],
+      ["a construct with no region", [DECK], "declares no region"],
+      [
+        "a region of a region",
+        [DECK, PANEL, { ...PANEL, name: "Cover", parent: "Panel" }],
+        "which is itself a region",
+      ],
+    ];
+
+    for (const [described, declarations, expected] of cases) {
+      let refused = "";
+      try {
+        yield* declaredCatalogFor(declarations);
+      } catch (error) {
+        refused = error instanceof Error ? error.message : String(error);
+      }
+      expect(`${described}: ${refused}`).toContain(expected);
+    }
+  });
+
+  it("ED7: version 2 carries the construct and its region in the structural category", function* () {
+    const catalog = yield* declaredCatalogFor([DECK, PANEL]);
+    const entries = structural(catalog);
+
+    // The version is unchanged: the categories, their order and every existing
+    // member are what a version-2 reader was promised.
+    expect(catalog.version).toBe(2);
+    expect(catalog.categories.map((category) => category.kind)).toEqual([
+      "structural",
+      "built-in",
+      "user-provided",
+    ]);
+
+    expect(find(entries.filter(isInstalled), "Deck")).toEqual({
+      kind: "structural",
+      name: "Deck",
+      origin: { kind: "structural", origin: DECK_ORIGIN },
+      forms: ["paired"],
+      props: DECK.props,
+      parent: null,
+      syntax: DECK.syntax,
+      description: DECK.description,
+      context: DECK.context,
+    });
+
+    const panel = find(entries.filter(isInstalled), "Panel");
+    expect(panel.parent).toBe("Deck");
+    expect(panel.forms).toEqual(["self-closing", "paired"]);
+    // Declared subfield order survives, and `context: null` contributes nothing.
+    expect(panel.syntax).toEqual(PANEL.syntax);
+    expect("context" in panel).toBe(false);
+
+    // Sorted by code point beside the engine's own constructs rather than
+    // appended after them.
+    const names = entries.map((entry) => entry.name);
+    expect([...names].sort(compareByCodePoint)).toEqual(names);
+    expect(names).toContain("If");
+  });
+
+  it("ED7: a declared construct never inhabits a component entry", function* () {
+    const catalog = yield* declaredCatalogFor([DECK, PANEL]);
+
+    for (const category of [catalog.categories[1], catalog.categories[2]]) {
+      for (const entry of category.entries) {
+        // Neither structural shape: a component entry describes a component.
+        expect(entry.origin.kind).not.toBe("structural");
+      }
+      expect(category.entries.map((entry) => entry.name)).not.toContain("Deck");
+    }
+
+    // And the engine's own entries keep exactly the shape they had.
+    for (const entry of engineEntries(catalog)) {
+      expect("props" in entry).toBe(false);
+      expect("forms" in entry).toBe(false);
+      expect("parent" in entry).toBe(false);
+    }
+  });
+
+  it("ED10: with nothing declared the structural category is the engine's alone", function* () {
+    const catalog = yield* declaredCatalogFor([]);
+    const entries = structural(catalog);
+
+    expect(entries.every(isEngine)).toBe(true);
+    expect(new Set(entries.map((entry) => entry.name))).toEqual(new Set(RESERVED_STRUCTURAL));
+    expect(entries.map((entry) => entry.name)).not.toContain("Deck");
+
+    const info = yield* scoped(function* () {
+      yield* useTree({}, {});
+      return yield* inspectComponent({ name: "Deck", includes: [] });
+    });
+    expect(info.kind).toBe("unresolved");
+  });
+});
+
+/** The order the catalog sorts names in: by code point, as the contract says. */
+function compareByCodePoint(left: string, right: string): number {
+  const a = [...left];
+  const b = [...right];
+  for (let i = 0; i < Math.min(a.length, b.length); i++) {
+    const one = a[i]?.codePointAt(0) ?? 0;
+    const other = b[i]?.codePointAt(0) ?? 0;
+    if (one !== other) {
+      return one - other;
+    }
+  }
+  return a.length - b.length;
 }

@@ -35,8 +35,11 @@ import {
 import type { BodyStructureFacts } from "./body-structure.ts";
 import { Component } from "./component-api.ts";
 import { declaredRegistry } from "./components/declared-registry.ts";
-import { admitDeclaredMarkdown, declaredCatalog } from "./components/declared-markdown.ts";
-import type { DeclaredMarkdownCatalog, MarkdownComponent } from "./components/declared-markdown.ts";
+import { admitExecutionDeclarations, structuralPlacement } from "./execution-declarations.ts";
+import type {
+  ExecutionDeclaration,
+  ExecutionDeclarationCatalog,
+} from "./execution-declarations.ts";
 import { admitDeclaration, mergeRegistry } from "./components/registration.ts";
 import { DEFAULT_INCLUDES, selectComponent, unresolvedMessage } from "./components/select.ts";
 import {
@@ -126,7 +129,7 @@ export interface ValidateDocumentSettings {
    * the names only they may write resolve nowhere else — so reporting on them
    * would be reporting a document's author for the engine's own asset.
    */
-  readonly declarations?: readonly MarkdownComponent[];
+  readonly declarations?: readonly ExecutionDeclaration[];
 }
 
 /** The root to validate, and the environment to validate it against. */
@@ -317,6 +320,15 @@ interface LexicalContext {
   readonly insideTerminalGrid: boolean;
   /** Whether the immediate parent is an `<Answers>`. */
   readonly underAnswers: boolean;
+  /**
+   * The element this point is written directly inside, when one encloses it.
+   *
+   * A declared region belongs to its own construct and to nothing else, and
+   * that is a fact about the element it sits in rather than about anything
+   * enclosing it further out — so this is the immediate parent's name, never a
+   * flag that survives one.
+   */
+  readonly enclosing: string | undefined;
 }
 
 /**
@@ -397,9 +409,7 @@ function* validate(
     yield* admitDeclaration(component);
   }
   const registry = mergeRegistry(yield* Component.operations.registry, declaredRegistry(declared));
-  const declarations = declaredCatalog(
-    yield* admitDeclaredMarkdown(options.declarations ?? [], registry),
-  );
+  const declarations = yield* admitExecutionDeclarations(options.declarations ?? [], registry);
 
   const state = new ValidationState(includes, registry, declarations, rootValues);
   yield* state.run(options);
@@ -417,7 +427,7 @@ function* validate(
 class ValidationState {
   readonly #includes: readonly string[];
   readonly #registry: ComponentRegistry;
-  readonly #declarations: DeclaredMarkdownCatalog | undefined;
+  readonly #declarations: ExecutionDeclarationCatalog;
   /** Whether the root's props are checked against the values a run would pass. */
   readonly #rootValues: boolean;
   readonly #diagnostics: DraftDiagnostic[] = [];
@@ -462,7 +472,7 @@ class ValidationState {
   constructor(
     includes: readonly string[],
     registry: ComponentRegistry,
-    declarations: DeclaredMarkdownCatalog | undefined,
+    declarations: ExecutionDeclarationCatalog,
     rootValues: boolean,
   ) {
     this.#includes = includes;
@@ -495,6 +505,7 @@ class ValidationState {
         insideSwitch: false,
         insideTerminalGrid: false,
         underAnswers: false,
+        enclosing: undefined,
       });
     }
   }
@@ -778,10 +789,13 @@ class ValidationState {
     const selected = yield* selectComponent(segment.name, {
       includes: this.#includes,
       registry: this.#registry,
-      ...(this.#declarations === undefined ? {} : { declared: this.#declarations }),
+      declared: this.#declarations,
     });
 
-    if (selected.kind === "structural") {
+    // The engine's own constructs only. An installation's is checked against
+    // the contract it declared, below, and never through the hard-coded rules
+    // that belong to names this table owns.
+    if (selected.kind === "structural" && "construct" in selected) {
       draft.origin = { kind: "structural", construct: selected.construct };
       for (const violation of this.#structuralViolations(segment, context)) {
         // A violation names the construct it is about and, when the check
@@ -805,6 +819,49 @@ class ValidationState {
       if (draft.tokens.length === 0 && hasDynamicOperand(segment)) {
         draft.reasons.push("dynamic-props");
       }
+      return;
+    }
+
+    if (selected.kind === "structural") {
+      draft.origin = { kind: "structural", origin: selected.origin };
+      // The contract is the admitted entry, read from the catalog this walk
+      // already holds: selection reports which name was chosen, not what the
+      // construct accepts.
+      const admitted = this.#declarations.structural(segment.name);
+      if (admitted === undefined) {
+        throw new Error(`${segment.name} resolved as declared structural syntax nothing admitted`);
+      }
+      // Placement first, from the shared analysis canonical expansion reads, so
+      // a region reported for sitting outside its construct is not also
+      // reported for the props it wrote there. Both are decided from source;
+      // neither reaches the installation's handler or expands a region body.
+      for (const violation of structuralPlacement(segment, admitted, context.enclosing)
+        .violations) {
+        const anchor = violation.element ?? segment;
+        const token = this.#draft(context.entry.ordinal, violation.code, {
+          message: violation.message,
+          component: violation.source,
+          ...positionOf(anchor),
+        });
+        draft.tokens.push(token);
+        if (anchor !== segment) {
+          this.#defer(anchor, token);
+        }
+      }
+      yield* this.#checkContract(
+        segment,
+        context,
+        draft,
+        {
+          props: admitted.props,
+          captures: [],
+          forms: admitted.forms,
+          // A construct renders through its regions, so there is no value for a
+          // site to capture and no `as` for one to have forgotten.
+          hasReturns: false,
+        },
+        { refused: false },
+      );
       return;
     }
 
@@ -1294,6 +1351,7 @@ function childContext(segment: ComponentElement, context: LexicalContext): Lexic
     insideSwitch: context.insideSwitch || segment.name === "Switch",
     insideTerminalGrid: context.insideTerminalGrid || segment.name === "Terminal.Grid",
     underAnswers: segment.name === "Answers",
+    enclosing: segment.name,
   };
 }
 

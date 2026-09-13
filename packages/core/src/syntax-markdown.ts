@@ -18,6 +18,8 @@
 
 import type {
   CompleteComponentSyntaxEntry,
+  InstalledStructuralSyntaxEntry,
+  EngineSyntaxEntry,
   OriginOnlyComponentSyntaxEntry,
   StructuralSyntaxEntry,
   SyntaxSymbols,
@@ -107,9 +109,45 @@ function heading(name: string): string {
 }
 
 function renderStructural(entry: StructuralSyntaxEntry): string[] {
+  return isInstalledStructural(entry)
+    ? renderInstalledStructural(entry)
+    : renderEngineStructural(entry);
+}
+
+/** Whether this structural entry is one an installation declared. */
+function isInstalledStructural(
+  entry: StructuralSyntaxEntry,
+): entry is InstalledStructuralSyntaxEntry {
+  return "origin" in entry.origin;
+}
+
+function renderEngineStructural(entry: EngineSyntaxEntry): string[] {
   const blocks = [heading(entry.name), entry.description];
   blocks.push("**Syntax:**", fence("md", entry.syntax.join("\n")));
   blocks.push(...prose(entry));
+  return blocks;
+}
+
+/**
+ * One construct an installation declared, with the contract it is held to.
+ *
+ * It prints the engine's shape first — the syntax a reader copies — and then
+ * the forms, the props schema and where the construct sits, because unlike a
+ * construct the engine owns this one has a schema somebody else wrote and a
+ * placement a document has to get right.
+ */
+function renderInstalledStructural(entry: InstalledStructuralSyntaxEntry): string[] {
+  const blocks = [heading(entry.name), entry.description];
+  blocks.push("**Syntax:**", fence("md", entry.syntax.join("\n")));
+  blocks.push(`**Forms:** ${entry.forms.map((form) => invocation(entry.name, form)).join(", ")}`);
+  blocks.push(
+    entry.parent === null
+      ? "**Placement:** written wherever a document may write structure."
+      : `**Placement:** written directly inside ${code(`<${entry.parent}>`)}, and nowhere else.`,
+  );
+  blocks.push(...renderProps(entry.props));
+  blocks.push(...prose(entry));
+  blocks.push(`**Origin:** ${describeOrigin(entry.origin)}`);
   return blocks;
 }
 
@@ -276,6 +314,12 @@ function describeOrigin(origin: ComponentOrigin): string {
   }
   if (origin.kind === "declared-markdown") {
     return `${code(origin.origin)} (declared Markdown)`;
+  }
+  if (origin.kind === "structural" && "origin" in origin) {
+    // Not "structural syntax" unqualified: a reader deciding whether this name
+    // exists without the installation that declared it gets the opposite answer
+    // from the phrase the engine's own constructs use.
+    return `${code(origin.origin)} (installed structural syntax)`;
   }
   return `structural syntax (${code(origin.construct)})`;
 }

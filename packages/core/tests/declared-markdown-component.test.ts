@@ -41,15 +41,21 @@ import type { DurableEvent, Json } from "@executablemd/durable-streams";
 import { Component } from "../src/component-api.ts";
 import { collect } from "../src/collect.ts";
 import { execute } from "../src/execute.ts";
-import { executeInstalled, Markdown, sourceDigest } from "../host.ts";
+import { executeInstalled, Markdown, sourceDigest, Structural } from "../host.ts";
 import type {
+  ExecutionDeclaration,
   ExecutionInstallation,
+  ExpansionRequest,
   IdentityClaimant,
   IdentityComponent,
   MarkdownComponent,
   MarkdownComponentInput,
+  StructuralInput,
 } from "../host.ts";
 import { admitDeclaredMarkdown } from "../src/components/declared-markdown.ts";
+import { admitExecutionDeclarations } from "../src/execution-declarations.ts";
+import { selectComponent } from "../src/components/select.ts";
+import { installedBundle } from "../src/components/bundle.ts";
 import { inspectComponent, inspectSyntax } from "../src/inspect.ts";
 import { validateDocument, validateDocumentStructure } from "../src/document-validation.ts";
 import { registerComponents } from "../src/components/registration.ts";
@@ -1685,7 +1691,7 @@ describe("Tier MDK — the declaration states its kind", () => {
     // reached one before deciding about the kind ends this row with that
     // failure instead of the refusal.
     const hostile = declared(POLICY_SOURCE);
-    Reflect.set(hostile, "kind", "structural");
+    Reflect.set(hostile, "kind", "sparkle");
     for (const member of ["name", "origin", "source", "digest", "forms", "privates"]) {
       Object.defineProperty(hostile, member, {
         configurable: true,
@@ -1710,7 +1716,7 @@ describe("Tier MDK — the declaration states its kind", () => {
   it("MDK2: a missing or unknown kind refuses before the root import", function* () {
     const stated = declared(POLICY_SOURCE);
 
-    for (const broken of [withoutKind(stated), statingKind(stated, "structural")]) {
+    for (const broken of [withoutKind(stated), statingKind(stated, "sparkle")]) {
       const stream = new InMemoryStream();
       const error = yield* refusedBy(run("<Policy />\n", [broken], [], stream));
 
@@ -1737,7 +1743,7 @@ describe("Tier MDK — the declaration states its kind", () => {
       enumerable: true,
       get() {
         reads++;
-        return reads === 1 ? "markdown" : "structural";
+        return reads === 1 ? "markdown" : "sparkle";
       },
     });
 
@@ -1769,5 +1775,655 @@ describe("Tier MDK — the declaration states its kind", () => {
     expect(output).toContain("The policy ran.");
     expect(reads).toBe(1);
     expect(order).toEqual(["install after 1 read"]);
+  });
+});
+
+/**
+ * Tier ED — one declaration catalog, holding both arms.
+ *
+ * A host declares exact Markdown and structural syntax in one list, and every
+ * path that decides what a name means reads that one catalog. Three things
+ * follow.
+ *
+ * **A structural pair is declared, not assembled.** A construct declares
+ * itself, each region declares which construct it belongs to, and what a
+ * construct accepts is derived from the regions that named it. A half — a
+ * region whose construct nobody declared, a construct with no region,
+ * declarations with no handler, a handler with no declarations — describes an
+ * execution that could admit syntax it can never expand, and is refused before
+ * the root document is read.
+ *
+ * **One name, one answer.** A declared name is claimed across both arms and
+ * across installations, ahead of a repository file and every ordinary
+ * registration, and never over the engine's own syntax or a protected
+ * component.
+ *
+ * **The handler is captured, not called.** The installation that declares a
+ * construct supplies the one handler for it, read once before any `install()`.
+ * Nothing here invokes one: what a document writing a declared construct does
+ * is the next layer's contract.
+ */
+
+const DECK_ORIGIN = "@executablemd/test/deck";
+
+const PANEL_PROPS: PropsSchema = {
+  type: "object",
+  properties: { title: { type: "string" } },
+  required: ["title"],
+  additionalProperties: false,
+};
+
+/** The construct this tier declares, with one region, `<Panel>`. */
+function deck(overrides: Partial<StructuralInput> = {}): Structural {
+  return Structural({
+    name: "Deck",
+    origin: DECK_ORIGIN,
+    forms: ["paired"],
+    props: { type: "object", properties: {}, additionalProperties: false },
+    syntax: ['<Deck><Panel title="One">…</Panel></Deck>'],
+    description: "Lay out the panels written inside it.",
+    context: "The panels this deck lays out.",
+    parent: null,
+    ...overrides,
+  });
+}
+
+/** One region of that construct. */
+function panel(overrides: Partial<StructuralInput> = {}): Structural {
+  return Structural({
+    name: "Panel",
+    origin: DECK_ORIGIN,
+    forms: ["self-closing", "paired"],
+    props: structuredClone(PANEL_PROPS),
+    syntax: ['<Panel title="One">…</Panel>'],
+    description: "One panel of a deck.",
+    context: "Markdown the panel holds.",
+    parent: "Deck",
+    ...overrides,
+  });
+}
+
+/**
+ * A declaration a host built without one of its members.
+ *
+ * Written by removing the member from a complete declaration, the way the
+ * malformed-discriminant fixtures above are: what a row is about is the value a
+ * host actually handed over, not a shape this test described instead.
+ */
+function without(declaration: Structural, member: string): Structural {
+  const copy = { ...declaration };
+  Reflect.deleteProperty(copy, member);
+  return copy;
+}
+
+/** A handler that records what it was asked to expand, and expands nothing. */
+function expanding(seen: string[] = []): (request: ExpansionRequest) => Operation<void> {
+  // deno-lint-ignore require-yield
+  return function* expand(request: ExpansionRequest): Operation<void> {
+    seen.push(request.name);
+  };
+}
+
+/** An installation declaring structural syntax, with the handler that expands it. */
+function declaring(
+  declarations: readonly ExecutionDeclaration[],
+  expand: (request: ExpansionRequest) => Operation<void> = expanding(),
+): ExecutionInstallation {
+  return { declarations, expand };
+}
+
+/**
+ * What a run refused with, having read no root and imported nothing.
+ *
+ * Both halves are the claim: a declaration set that cannot describe one
+ * environment is refused where it is installed, which is before the root
+ * document is read and therefore before anything it says can happen.
+ */
+function* refusedBeforeRoot(
+  installations: readonly ExecutionInstallation[],
+  source = "The root ran.\n",
+): Operation<string> {
+  const stream = new InMemoryStream();
+  const message = yield* refusal(
+    scoped(function* () {
+      return yield* collect(
+        yield* executeInstalled(
+          { ...retainedSource(ROOT_PATH, source), stream, includes: [] },
+          installations,
+        ),
+      );
+    }),
+  );
+  const events = yield* stream.readAll();
+  expect(events.filter((event) => event.type === "yield").length).toBe(0);
+  return message;
+}
+
+describe("Tier ED — one catalog, two arms", () => {
+  it("ED1: both arms coexist in capture order, and Markdown keeps its behavior", function* () {
+    const declarations = [declared(POLICY_SOURCE), deck(), panel()];
+
+    // The Markdown arm, unchanged: it selects, expands and describes itself.
+    expect(String(yield* run("<Policy />\n", [], [declaring(declarations)]))).toContain(
+      "The policy ran.",
+    );
+    const policy = yield* inspectComponent({ name: "Policy", includes: [], declarations });
+    expect(policy.kind).toBe("markdown");
+
+    // The structural arm, from the same list.
+    const construct = yield* inspectComponent({ name: "Deck", includes: [], declarations });
+    if (construct.kind !== "structural") {
+      throw new Error(`expected structural syntax, got ${construct.kind}`);
+    }
+    expect(construct.origin).toEqual({ kind: "structural", origin: DECK_ORIGIN });
+
+    // A value that states neither arm is refused as it always was, in the words
+    // the Markdown admission owns.
+    const broken = { ...declared(POLICY_SOURCE) };
+    Reflect.set(broken, "kind", "sparkle");
+    const message = yield* refusedBeforeRoot([declaring([broken, deck(), panel()])]);
+    expect(message).toContain("without saying it is exact Markdown");
+  });
+
+  it("ED2: declarations and the handler are captured once, before install()", function* () {
+    const properties: Record<string, Json> = { title: { type: "string" } };
+    const props: PropsSchema = { type: "object", properties, additionalProperties: false };
+    const construct = { ...deck(), description: "As captured.", props };
+    const region = panel();
+    const markdown = declared(POLICY_SOURCE);
+    let reads = 0;
+    const order: string[] = [];
+
+    const installation: ExecutionInstallation = {
+      declarations: [markdown, construct, region],
+      get expand() {
+        reads++;
+        return expanding();
+      },
+      *install() {
+        // Everything a host could still be holding, rewritten after capture.
+        Reflect.set(construct, "description", "Rewritten after capture.");
+        Reflect.set(construct, "name", "Rewritten");
+        Reflect.set(properties, "smuggled", { type: "string" });
+        Reflect.set(region, "parent", "Rewritten");
+        Reflect.set(markdown, "source", "The policy was replaced.\n");
+        order.push(`install after ${reads} handler read`);
+        yield* Component.operations.registry;
+      },
+    };
+
+    const output = String(yield* run("<Syntax />\n<Policy />\n", [], [installation]));
+
+    expect(reads).toBe(1);
+    expect(order).toEqual(["install after 1 handler read"]);
+    // What the run describes and expands is what it captured.
+    expect(output).toContain("As captured.");
+    expect(output).not.toContain("Rewritten after capture.");
+    expect(output).toContain("### `<Deck>`");
+    expect(output).not.toContain("### `<Rewritten>`");
+    expect(output).not.toContain("smuggled");
+    expect(output).toContain("The policy ran.");
+  });
+
+  it("ED3: several constructs and interleaved regions pair inside one installation", function* () {
+    const declarations = [
+      deck(),
+      deck({ name: "Shelf", syntax: ["<Shelf><Card /></Shelf>"] }),
+      panel(),
+      panel({ name: "Card", syntax: ["<Card />"], parent: "Shelf" }),
+      panel({ name: "Cover", syntax: ["<Cover />"] }),
+    ];
+
+    const catalog = yield* inspectSyntax({ includes: [], declarations });
+    const names = catalog.categories[0].entries.map((entry) => entry.name);
+    expect(names).toContain("Deck");
+    expect(names).toContain("Shelf");
+    expect(names).toContain("Card");
+    // Beside the engine's own constructs rather than instead of them.
+    expect(names).toContain("If");
+  });
+
+  it("ED3: a pair that cannot expand refuses before the root is read", function* () {
+    const cases: readonly (readonly [string, readonly ExecutionInstallation[], string])[] = [
+      [
+        "a region whose construct nobody declared",
+        [declaring([panel()])],
+        'is a region of "Deck", which this execution does not declare',
+      ],
+      [
+        "a region of a region",
+        [declaring([deck(), panel(), panel({ name: "Cover", parent: "Panel" })])],
+        "which is itself a region",
+      ],
+      [
+        "a pair split across two installations",
+        [declaring([deck(), panel()]), declaring([panel({ name: "Cover" })])],
+        "which another installation declared",
+      ],
+      ["a construct with no region", [declaring([deck()])], "declares no region"],
+      [
+        "declarations with no handler",
+        [{ declarations: [deck(), panel()] }],
+        "declared structural syntax and supplied no expansion handler",
+      ],
+      [
+        "a handler with no declarations",
+        [{ declarations: [declared(POLICY_SOURCE)], expand: expanding() }],
+        "supplied a structural expansion handler and declared no structural syntax",
+      ],
+    ];
+
+    for (const [described, installations, expected] of cases) {
+      const message = yield* refusedBeforeRoot(installations);
+      expect(`${described}: ${message}`).toContain(expected);
+    }
+  });
+
+  it("ED4: one name twice refuses, whichever arm and order it arrives in", function* () {
+    const collisions: readonly (readonly [string, readonly ExecutionInstallation[], string])[] = [
+      [
+        "the same arm twice",
+        [declaring([deck(), panel(), deck()])],
+        "was declared as structural syntax twice",
+      ],
+      [
+        "structural after Markdown",
+        [declaring([declared(POLICY_SOURCE, { name: "Deck" }), deck(), panel()])],
+        "declared as both structural syntax and Markdown",
+      ],
+      [
+        "Markdown after structural, in another installation",
+        [
+          declaring([deck(), panel()]),
+          { declarations: [declared(POLICY_SOURCE, { name: "Deck" })] },
+        ],
+        "declared as both structural syntax and Markdown",
+      ],
+      [
+        "a structural name some declaration keeps to itself",
+        [
+          { declarations: [declared(WITH_PRIVATE, { privates: [secret()] })] },
+          declaring([deck({ name: "Secret" }), panel({ parent: "Secret" })]),
+        ],
+        "both declared structural syntax and a private declaration",
+      ],
+    ];
+
+    for (const [described, installations, expected] of collisions) {
+      expect(`${described}: ${yield* refusedBeforeRoot(installations)}`).toContain(expected);
+    }
+
+    // The positive control: distinct names across two installations coexist.
+    const catalog = yield* inspectSyntax({
+      includes: [],
+      declarations: [declared(POLICY_SOURCE), deck(), panel()],
+    });
+    expect(catalog.categories[1].entries.map((entry) => entry.name)).toContain("Policy");
+    expect(catalog.categories[0].entries.map((entry) => entry.name)).toContain("Deck");
+  });
+
+  it("ED5: a declared construct claims its name ahead of a repository file", function* () {
+    const root = yield* workspace({ "Deck.md": "The repository file ran.\n" });
+    const declarations = [deck(), panel()];
+
+    const claimed = yield* inspectComponent({ name: "Deck", includes: [root], declarations });
+    // One kind for both structural shapes; the origin says which this is.
+    if (claimed.kind !== "structural") {
+      throw new Error(`expected structural syntax, got ${claimed.kind}`);
+    }
+    expect(claimed.origin).toEqual({ kind: "structural", origin: DECK_ORIGIN });
+
+    // The control: the same file, with nothing declared, is what answers.
+    const unclaimed = yield* inspectComponent({ name: "Deck", includes: [root] });
+    expect(unclaimed.kind).toBe("markdown");
+  });
+
+  it("ED5: engine syntax, a protected name and a reserved registration cannot be claimed", function* () {
+    const engine = yield* refusedBeforeRoot([
+      declaring([deck({ name: "If" }), panel({ parent: "If" })]),
+    ]);
+    expect(engine).toContain("structural syntax the engine owns");
+
+    const owned = yield* refusedBeforeRoot([
+      declaring([deck({ name: "Syntax" }), panel({ parent: "Syntax" })]),
+    ]);
+    expect(owned).toContain("canonical core owns that name");
+
+    const reserved = yield* refusedBeforeRoot([
+      declaring([deck(), panel()]),
+      {
+        *install() {
+          yield* registerComponents([
+            {
+              name: "Deck",
+              origin: "test://reserved",
+              props: NO_PROPS,
+              reserved: true,
+              // deno-lint-ignore require-yield
+              *fn() {
+                return "reserved";
+              },
+            },
+          ]);
+        },
+      },
+    ]);
+    expect(reserved).toContain("both declared structural syntax and a reserved registration");
+  });
+
+  it("ED10: with nothing declared, the names are unresolved and a file is a component", function* () {
+    const info = yield* inspectComponent({ name: "Deck", includes: [] });
+    expect(info.kind).toBe("unresolved");
+
+    // A repository file under the name is an ordinary component, not syntax.
+    const root = yield* workspace({ "Deck.md": "The repository file ran.\n" });
+    const repository = yield* inspectComponent({ name: "Deck", includes: [root] });
+    expect(repository.kind).toBe("markdown");
+    expect(String(yield* run("<Deck />\n", [], [], new InMemoryStream(), [root]))).toContain(
+      "The repository file ran.",
+    );
+
+    // And the engine's own structural behavior is what it always was.
+    expect(
+      String(yield* run("<If condition={true}>branch taken</If>\n", [], [], new InMemoryStream())),
+    ).toContain("branch taken");
+  });
+});
+
+describe("Tier ED — the catalog answers for the set", () => {
+  it("ED1: capture refuses an unknown kind before it reads anything else", function* () {
+    // Every other member throws if it is read, and the installation records
+    // whether it ever ran: capture decides about the discriminant before either
+    // could happen.
+    const hostile = { ...declared(POLICY_SOURCE) };
+    Reflect.set(hostile, "kind", "sparkle");
+    for (const member of ["name", "origin", "source", "digest", "forms", "privates"]) {
+      Object.defineProperty(hostile, member, {
+        configurable: true,
+        enumerable: true,
+        get() {
+          throw new Error(`capture read "${member}" before deciding about the kind`);
+        },
+      });
+    }
+
+    const installed: string[] = [];
+    const stream = new InMemoryStream();
+    const error = yield* refusedBy(
+      scoped(function* () {
+        return yield* collect(
+          yield* executeInstalled(
+            { ...retainedSource(ROOT_PATH, "The root ran.\n"), stream, includes: [] },
+            [
+              { declarations: [hostile] },
+              {
+                *install() {
+                  installed.push("install");
+                  yield* Component.operations.registry;
+                },
+              },
+            ],
+          ),
+        );
+      }),
+    );
+
+    expect(error.name).toBe("DeclaredMarkdownError");
+    expect(error.message).toContain("without saying it is exact Markdown");
+    expect(installed).toEqual([]);
+    expect((yield* stream.readAll()).filter((event) => event.type === "yield").length).toBe(0);
+
+    // And it is the same sentence the Markdown admission gives, so the two
+    // spellings of this refusal cannot drift apart.
+    const admission = yield* refusedBy(admitDeclaredMarkdown([hostile], new Map()));
+    expect(error.message).toBe(admission.message);
+  });
+
+  it("ED3: every catalog refusal is an ExecutionDeclarationError", function* () {
+    const malformed: readonly (readonly [string, Structural])[] = [
+      ["no forms", without(deck(), "forms")],
+      ["no parent", without(deck(), "parent")],
+      ["an empty origin", { ...deck(), origin: "" }],
+      ["no syntax examples", { ...deck(), syntax: [] }],
+      ["an empty description", { ...deck(), description: "" }],
+      ["a context that is neither prose nor null", { ...deck(), context: "" }],
+      // The schema rule stays registration's; only the error class is this
+      // catalog's, so a host gets one answer to "is this set installable".
+      ["a schema that will not compile", { ...deck(), props: { type: "not-a-type" } }],
+    ];
+
+    for (const [described, construct] of malformed) {
+      const error = yield* refusedBy(
+        scoped(function* () {
+          return yield* collect(
+            yield* executeInstalled(
+              { ...retainedSource(ROOT_PATH, "x\n"), stream: new InMemoryStream(), includes: [] },
+              [declaring([construct, panel()])],
+            ),
+          );
+        }),
+      );
+      expect(`${described}: ${error.name}`).toBe(`${described}: ExecutionDeclarationError`);
+    }
+
+    // The cross-arm and relationship refusals answer the same way.
+    const crossArm: readonly (readonly [string, readonly ExecutionInstallation[]])[] = [
+      [
+        "a name in both arms",
+        [declaring([deck(), panel(), declared(POLICY_SOURCE, { name: "Deck" })])],
+      ],
+      ["an orphan region", [declaring([panel()])]],
+      ["a construct with no region", [declaring([deck()])]],
+      ["declarations with no handler", [{ declarations: [deck(), panel()] }]],
+    ];
+
+    for (const [described, installations] of crossArm) {
+      const error = yield* refusedBy(
+        scoped(function* () {
+          return yield* collect(
+            yield* executeInstalled(
+              { ...retainedSource(ROOT_PATH, "x\n"), stream: new InMemoryStream(), includes: [] },
+              installations,
+            ),
+          );
+        }),
+      );
+      expect(`${described}: ${error.name}`).toBe(`${described}: ExecutionDeclarationError`);
+    }
+  });
+
+  it("ED5: a construct claims its name ahead of a bundle member and a default", function* () {
+    const declarations = [deck(), panel()];
+
+    // A registered default under the same name loses to the declaration, and
+    // answers for it when nothing is declared.
+    const registering: ExecutionInstallation = {
+      *install() {
+        yield* registerComponents([
+          {
+            name: "Deck",
+            origin: "test://default",
+            props: NO_PROPS,
+            // deno-lint-ignore require-yield
+            *fn() {
+              return "the registered default ran.";
+            },
+          },
+        ]);
+      },
+    };
+
+    const claimed = yield* scoped(function* () {
+      yield* registerComponents([
+        {
+          name: "Deck",
+          origin: "test://default",
+          props: NO_PROPS,
+          // deno-lint-ignore require-yield
+          *fn() {
+            return "the registered default ran.";
+          },
+        },
+      ]);
+      return yield* inspectComponent({ name: "Deck", includes: [], declarations });
+    });
+    expect(claimed.kind).toBe("structural");
+
+    // The control: the same registration, with nothing declared, is what
+    // answers — so the declaration is what moved the decision.
+    const unclaimed = yield* scoped(function* () {
+      yield* registerComponents([
+        {
+          name: "Deck",
+          origin: "test://default",
+          props: NO_PROPS,
+          // deno-lint-ignore require-yield
+          *fn() {
+            return "the registered default ran.";
+          },
+        },
+      ]);
+      return yield* inspectComponent({ name: "Deck", includes: [] });
+    });
+    expect(unclaimed.kind).toBe("registered");
+
+    // And a declared construct is not reached through component import at all,
+    // so the losing default never runs.
+    const message = yield* refusal(run("<Deck />\n", [], [declaring(declarations), registering]));
+    expect(message).toContain("never resolves a component");
+    expect(message).not.toContain("the registered default ran.");
+  });
+
+  it("ED5: a construct claims its name ahead of a workflow bundle member", function* () {
+    const catalog = yield* admitExecutionDeclarations([deck(), panel()], new Map());
+    const bundle = installedBundle(
+      [
+        {
+          components: [
+            {
+              name: "Deck",
+              path: "components/Deck.md",
+              sourceHash: "0".repeat(40),
+              content: "the bundled component ran.\n",
+            },
+          ],
+        },
+      ],
+      new Map(),
+    );
+
+    const claimed = yield* selectComponent("Deck", {
+      includes: [],
+      declared: catalog,
+      workflow: bundle,
+    });
+    expect(claimed).toEqual({ kind: "structural", origin: DECK_ORIGIN });
+
+    // The control: the same bundle, with nothing declared, is what answers — so
+    // the declaration is what moved the decision, and the bundle member is a
+    // component rather than syntax wherever it does answer.
+    const bundled = yield* selectComponent("Deck", { includes: [], workflow: bundle });
+    expect(bundled.kind).toBe("workflow");
+    if (bundled.kind !== "workflow") {
+      throw new Error(`expected the bundle member, got ${bundled.kind}`);
+    }
+    expect(bundled.path).toBe("components/Deck.md");
+    expect(bundled.content).toContain("the bundled component ran.");
+  });
+
+  it("ED7: both structural selection arms are `structural`, and reach their own consumers", function* () {
+    const catalog = yield* admitExecutionDeclarations([deck(), panel()], new Map());
+
+    const declared = yield* selectComponent("Deck", { includes: [], declared: catalog });
+    const engine = yield* selectComponent("If", { includes: [], declared: catalog });
+
+    // One kind, two arms: what tells them apart is what each carries.
+    expect(declared).toEqual({ kind: "structural", origin: DECK_ORIGIN });
+    expect(engine).toEqual({ kind: "structural", construct: "If" });
+    // Spelled as whole objects above, and again as key sets, so a field added
+    // to either — a schema, the forms, the regions, a handler — fails this row
+    // rather than passing unnoticed.
+    expect(Object.keys(declared).sort()).toEqual(["kind", "origin"]);
+    expect(Object.keys(engine).sort()).toEqual(["construct", "kind"]);
+
+    // And each reaches the consumer that owns it: inspection reports the
+    // engine's construct as the engine's, and the installation's under its own
+    // provenance with the contract the host declared.
+    const engineInfo = yield* inspectComponent({ name: "If", includes: [] });
+    if (engineInfo.kind !== "structural") {
+      throw new Error(`expected structural syntax, got ${engineInfo.kind}`);
+    }
+    const installedInfo = yield* inspectComponent({
+      name: "Deck",
+      includes: [],
+      declarations: [deck(), panel()],
+    });
+    if (installedInfo.kind !== "structural") {
+      throw new Error(`expected structural syntax, got ${installedInfo.kind}`);
+    }
+    expect(installedInfo.origin).toEqual({ kind: "structural", origin: DECK_ORIGIN });
+    // And the engine's own reports the construct it came from, under the same
+    // kind, so the two are told apart by what each carries.
+    expect(engineInfo.origin).toEqual({ kind: "structural", construct: "If" });
+  });
+
+  it("ED7: an execution that declares nothing still has a catalog, and it changes nothing", function* () {
+    const empty = yield* admitExecutionDeclarations([], new Map());
+
+    expect(empty.names()).toEqual([]);
+    expect(empty.structural("Deck")).toBeUndefined();
+    expect(empty.component("Policy")).toBeUndefined();
+    expect(empty.markdown()).toEqual([]);
+    expect(empty.isPrivate("Secret")).toBe(false);
+
+    // Every selection answers exactly as it does with no catalog at all.
+    for (const name of ["If", "Deck", "Glob"]) {
+      expect(yield* selectComponent(name, { includes: [], declared: empty })).toEqual(
+        yield* selectComponent(name, { includes: [] }),
+      );
+    }
+  });
+});
+
+describe("Tier ED — the structural constructor", () => {
+  // deno-lint-ignore require-yield
+  it("ED3: Structural() states the kind and changes nothing else", function* () {
+    const props: PropsSchema = { type: "object", properties: {}, additionalProperties: false };
+    const syntax = ["<Deck><Panel /></Deck>"];
+    const input: StructuralInput = {
+      name: "Deck",
+      origin: DECK_ORIGIN,
+      forms: ["paired"],
+      props,
+      syntax,
+      description: "Lay out the panels written inside it.",
+      context: null,
+      parent: null,
+    };
+
+    const declaration = Structural(input);
+
+    expect(declaration).not.toBe(input);
+    expect(declaration.kind).toBe("structural");
+    expect(Reflect.has(input, "kind")).toBe(false);
+    expect(declaration.name).toBe(input.name);
+    expect(declaration.origin).toBe(input.origin);
+    expect(declaration.description).toBe(input.description);
+    expect(declaration.parent).toBe(null);
+    // Shallow by contract: what arrives is what leaves, so nothing here is the
+    // copy an execution makes at capture.
+    expect(declaration.props).toBe(props);
+    expect(declaration.syntax).toBe(syntax);
+    expect(Object.isFrozen(declaration)).toBe(false);
+
+    // A kind planted on the input cannot decide what the declaration is: the
+    // constructor writes its own after spreading.
+    const planted = { ...input };
+    Reflect.set(planted, "kind", "markdown");
+    expect(Structural(planted).kind).toBe("structural");
+
+    // It admits nothing: a declaration this catalog would refuse is still built.
+    const refused = Structural({ ...input, origin: "" });
+    expect(refused.origin).toBe("");
   });
 });

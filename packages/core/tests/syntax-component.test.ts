@@ -77,7 +77,13 @@ import type { ImportedDefinition } from "../src/components/import-authority.ts";
 import type { ComponentOrigin, FunctionComponent, SyntaxSymbols } from "../mod.ts";
 import { answerProvider, implementation } from "./support/answer-provider.ts";
 
-/** An origin a *component* symbol entry can carry — everything but structural. */
+/**
+ * An origin a *component* symbol entry can carry.
+ *
+ * Everything structural: the engine's own constructs and the structural syntax
+ * a host declares are both syntax rather than components, and each is described
+ * in the structural category instead.
+ */
 type NamedOrigin = Exclude<ComponentOrigin, { kind: "structural" }>;
 
 const ROOT_PATH = "documents/root.md";

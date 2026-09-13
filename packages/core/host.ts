@@ -237,6 +237,34 @@ export type {
 } from "./src/components/declared-markdown.ts";
 
 /**
+ * Structural syntax a trusted host declares to an execution — see
+ * `src/execution-declarations.ts`.
+ *
+ * The seventh act of infrastructure, and the same shape as the rest: plain
+ * immutable data the host holds and passes, beside the handler that expands it.
+ * A declaration states a construct and the regions written directly inside it;
+ * the installation that declares them supplies the one `expand` captured with
+ * them. Both arms cross on one `declarations` list, so what a name means here
+ * is decided by one catalog rather than by two that can disagree.
+ *
+ * The expansion types are exported because a host types its own handler with
+ * them. `ExpansionRegion.expand()` is the capability a handler is given over
+ * the regions written inside its own construct — everything else a request
+ * carries is an authored fact about where the occurrence was written.
+ */
+// `Structural` is the interface and the constructor that builds one, so the one
+// export carries both — a host writes `Structural({…})` and types with the same
+// name.
+export { ExecutionDeclarationError, Structural } from "./src/execution-declarations.ts";
+export type {
+  ExecutionDeclaration,
+  ExpansionChunk,
+  ExpansionRegion,
+  ExpansionRequest,
+  StructuralInput,
+} from "./src/execution-declarations.ts";
+
+/**
  * Installing one Agent provider for the invocation that projects the content it
  * covers.
  *

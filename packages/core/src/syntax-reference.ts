@@ -39,7 +39,7 @@ import type { DocumentationContribution } from "./component-documentation.ts";
 import type { DocumentationIndex } from "./documentation-index.ts";
 import { UnknownComponentError } from "./documentation-index.ts";
 import type { WorkflowImportAuthority } from "./components/bundle.ts";
-import type { MarkdownComponent } from "./components/declared-markdown.ts";
+import type { ExecutionDeclaration } from "./execution-declarations.ts";
 import type { IdentityComponent } from "./invocation-identity.ts";
 import { SyntaxSelectionRefusal } from "./syntax-refusal.ts";
 import type { ComponentOrigin, ComponentRegistry } from "./types.ts";
@@ -105,7 +105,7 @@ export interface CapturedSymbolInputs {
   /** The registrations this execution started with, captured before it ran. */
   readonly registry: ComponentRegistry;
   readonly components: readonly IdentityComponent[];
-  readonly declarations: readonly MarkdownComponent[];
+  readonly declarations: readonly ExecutionDeclaration[];
   /** The bundle this execution is closed over, when a trusted host installed one. */
   readonly workflow?: WorkflowImportAuthority;
 }
@@ -220,7 +220,12 @@ function identityOf(entry: { name: string; origin: ComponentOrigin }): string {
   const origin = entry.origin;
   const parts: readonly string[] =
     origin.kind === "structural"
-      ? [origin.construct]
+      ? // One kind, two shapes: the engine names the construct it owns, and an
+        // installation names the origin that declared it, so the two cannot
+        // produce one identity.
+        "construct" in origin
+        ? [origin.construct]
+        : [origin.origin]
       : origin.kind === "repository"
         ? [origin.path]
         : origin.kind === "registered"

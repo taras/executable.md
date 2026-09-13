@@ -205,9 +205,12 @@ export type {
   ComponentInfo,
   DescribedContract,
   DocumentInfo,
+  EngineSyntaxEntry,
   InspectComponentOptions,
   InspectOptions,
   InspectSyntaxOptions,
+  InstalledStructuralContract,
+  InstalledStructuralSyntaxEntry,
   OriginOnlyComponentSyntaxEntry,
   StructuralSyntaxEntry,
   SyntaxSymbols,
@@ -284,7 +287,7 @@ export { DEFAULT_INCLUDES, selectComponent } from "./src/components/select.ts";
 export type { SelectOptions } from "./src/components/select.ts";
 export { CORE_COMPONENT_NAMES } from "./src/components/registry.ts";
 export { RESERVED_STRUCTURAL, STRUCTURAL_DECLARATIONS } from "./src/structural.ts";
-export type { StructuralDeclaration } from "./src/structural.ts";
+export type { EngineStructuralDeclaration } from "./src/structural.ts";
 export { documented, documentationOf } from "./src/components/documentation.ts";
 export type {
   ComponentDocumentation,

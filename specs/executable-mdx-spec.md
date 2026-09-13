@@ -3275,6 +3275,84 @@ scope removes it. One retention answers for every closed tier an execution has,
 so which tier closed a name decides how its refusal reads and never whether an
 answer is authorized.
 
+#### Declared structural syntax
+
+A trusted host may also declare structural syntax: a construct, and the regions
+written directly inside it. It crosses on the same `ExecutionInstallation`, in
+the same `declarations` list, on the same terms.
+
+```typescript
+type StructuralInput = Omit<Structural, "kind">;
+
+function Structural(input: StructuralInput): Structural;
+
+interface Structural {
+  readonly kind: "structural";
+  readonly name: string;
+  readonly origin: string;
+  readonly forms: readonly InvocationForm[];
+  readonly props: PropsSchema;
+  readonly syntax: readonly string[];
+  readonly description: string;
+  readonly context: string | null;
+  readonly parent: string | null;
+}
+
+type ExecutionDeclaration = MarkdownComponent | Structural;
+```
+
+A host builds one with `Structural({…})`, the canonical constructor: it returns
+a fresh shallow declaration carrying `kind: "structural"`, written after the
+description so an input carrying a kind of its own does not decide what the
+declaration is. Like `Markdown({…})` it validates nothing, compiles no schema,
+copies nothing deeply, freezes nothing and admits nothing — capture and
+admission are the defenses.
+
+`forms` and `props` are the executable contract an occurrence is held to.
+`syntax`, `description` and `context` are documentation, and `context` is
+decided rather than omitted: `null` states that the construct reads no content,
+exactly as the engine's own table states it.
+
+**Both structural shapes report one kind.** A selection, an origin and an
+inspection result all say `structural`, because that is what each of them is.
+Which one it is shows in what it carries: the engine names the `construct` from
+its own table, and an installation names the `origin` that declared it. There is
+no second discriminant, and ownership is never inferred from the text of a
+name.
+
+**The pair is derived from the regions.** `parent: null` declares the construct;
+a name declares a direct region of that construct in the same installation. What
+a construct accepts is the set of regions that named it, so there is no second
+list to drift from. A region whose construct this execution does not declare, a
+region of a region, a pair whose halves came from two installations, and a
+construct with no region are each refused before the root document is read.
+
+**The declaring installation expands it.** The same installation supplies one
+`expand`, read once and held beside the declarations it was captured with.
+Declarations with no handler, and a handler with no declarations, are each
+refused at admission: both describe an execution that could admit syntax it can
+never expand. The handler is held on the admitted entry and published nowhere.
+
+**One name, one answer.** A structural declaration is admitted on the terms
+every other declaration is: the name is a component name, the origin is not
+empty, the forms are canonical, the schema compiles, and the syntax examples and
+description are present. It may not claim a name the engine's structural table
+owns, a name the canonical protected tier owns, a name a reserved registration
+claims, a name declared elsewhere in either arm, or a name some declaration
+keeps to itself. Resolution places it in the host tier beside declared Markdown,
+above the workflow component bundle, repository files and every registered
+default. A declaration that states neither arm is refused as it always was,
+before any other member of it is read.
+
+**Placement is a fact about the source.** A construct holds whitespace and the
+regions it declares; ordinary text, a code block, a foreign element, another
+construct and a region belonging to a different construct are each a structural
+placement error. A region is written directly inside its own construct and is an
+error anywhere else. A self-closing construct has no regions, and is accepted
+when that form is declared. One analysis answers those questions, so
+non-executing validation and canonical expansion cannot accept different
+documents.
+
 #### Origin
 
 Every selected implementation has a structured origin, and one resolver answers
@@ -3285,7 +3363,8 @@ type ComponentOrigin =
   | { kind: "structural"; construct: string }
   | { kind: "repository"; path: string }
   | { kind: "registered"; origin: string; reserved: boolean }
-  | { kind: "declared-markdown"; origin: string; digest: string };
+  | { kind: "declared-markdown"; origin: string; digest: string }
+  | { kind: "structural"; origin: string };
 ```
 
 `inspectComponent(name)` reports the selected kind and origin without running
@@ -3421,6 +3500,16 @@ digest as its origin. Its private closure contributes nothing: those names are
 not syntax a document may write, so listing them would describe an environment
 that does not exist.
 
+A declared structural construct and each of its regions contribute one entry to
+the **structural** category, sorted by code point beside the constructs the
+engine owns, reporting the declared origin under the same `structural` kind
+and carrying the declared forms, props schema, placement, syntax examples,
+description and content sentence. The two structural entry shapes are a closed
+union: an engine entry keeps exactly the fields it always had, and neither shape
+can inhabit a component entry. The symbols stay **version 2** — the categories,
+their order and every existing member are unchanged, and describing a declared
+construct reaches no handler.
+
 **Inspection is observation, never authority.** Building symbols installs only
 the declarative registration layer selection needs. It enters no execution,
 constructs no durable stream, installs no Files, Service, Agent or elicitation
@@ -3458,7 +3547,7 @@ type ValidateDocumentOptions = RootDocumentSource & {
   readonly props?: Record<string, Json>;
   readonly includes?: readonly string[];
   readonly components?: readonly IdentityComponent[];
-  readonly declarations?: readonly MarkdownComponent[];
+  readonly declarations?: readonly ExecutionDeclaration[];
 };
 
 function* validateDocument(
@@ -3537,6 +3626,15 @@ answer is independent runs, and every one that fails is reported: where
 expansion refuses a construct at its first violation and expands nothing
 further, validation reads the whole of that construct's shared facts, because an
 author reading a result is owed all of them at once.
+
+**A declared structural construct is checked where it was written.** An
+occurrence is held to the declared forms and props exactly as a registration's
+invocation is, and its placement to the shared analysis: a construct holds
+whitespace and its declared regions, and a region is written directly inside its
+own construct. A foreign element inside a construct is reported at the element
+that was written as well as at the construct that refused it. A region's body is
+the author's own text and is walked recursively like any other body; nothing
+here invokes the installation's handler, which validation is not given.
 
 **A declared Markdown component is checked as the contract it declares.** An
 invocation of one is held to the props, forms and return mode parsed from the
@@ -13200,6 +13298,28 @@ can be made to fail if it is read.
 | MDK2 | The discriminant is read first | A declaration whose kind was removed or replaced with `Reflect` refuses as `DeclaredMarkdownError` before the root import, with nothing yielded and no output; admission asked about a value whose every other property getter throws still reports that refusal, while the same admission with the kind restored reads those members and refuses on what they say |
 | MDK3 | Capture reads once | The kind is read exactly once, before the first `install()`, and the admitted kind is that captured value — a counting getter that answers differently afterwards, and an `install()` that deletes the property, change nothing |
 | MDK4 | The existing fixtures | The three direct declarations in the syntax suite are built through the constructor and remain valid, while `SYN27`'s live inspection still reports symbols version 2 |
+
+### Tier ED — One declaration catalog, holding both arms (§5.3)
+
+Exact Markdown and structural syntax cross on one list, and every path that
+decides what a name means reads the catalog built from it. The rows run against
+declarations a trusted host supplied on an `ExecutionInstallation`; the
+inspection and validation rows supply the same declarations with no execution at
+all, because that is the environment those operations describe. Nothing here
+invokes a handler: this layer captures one and calls none.
+
+| # | Test | Verify |
+|---|------|--------|
+| ED1 | Both arms, one catalog | Markdown and structural declarations coexist in one captured list in catalog order, and declared Markdown keeps its selection, expansion, inspection and validation behavior; a value that states neither arm refuses in the words the Markdown admission owns, before the root is read |
+| ED2 | Capture reads once | Nested schemas, arrays, private declarations and the handler property are read once before the first `install()`; an installation that rewrites its own declarations, names and schemas from inside `install()` changes neither the symbols a document is shown nor what it expands |
+| ED3 | The pair is declared | Several constructs and interleaved regions pair inside one installation; an orphan region, a region of a region, a pair split across two installations, a construct with no region, declarations with no handler and a handler with no declarations each refuse with nothing yielded |
+| ED4 | One name, one answer | Distinct names coexist across installations and arms; the same name twice in one arm, across the arms, across installations, and against a private closure name each refuse whichever order they arrive in |
+| ED5 | The name is claimed | A declared construct answers ahead of a repository file of the same name, which answers when nothing is declared; the engine's structural table, the canonical protected tier and a reserved registration cannot be claimed |
+| ED6 | Described from the declaration | `inspectComponent()` reports a construct and a region as `structural`, carrying the declared origin with their forms, props, placement, syntax, description and context, and no handler; a malformed relationship refuses for inspection exactly as it does for a run |
+| ED7 | Version 2, one category, one kind | The symbols stay version 2 with their three categories in order, carry the construct and its regions sorted by code point beside the engine's own, and render the installed contract; both structural selections are `structural` and are told apart by `construct` versus `origin`, neither shape inhabits a component entry, and an engine entry carries no forms, props or placement |
+| ED8 | Placement | A construct holding its declared regions is valid and every region body is walked; a region outside its construct, a region under something else, substantive text, a code block, a foreign element, a refused form and a failed literal schema are deterministic diagnostics with nothing executed, and the foreign element is reported where it was written |
+| ED9 | Opacity | A required prop written as an expression is present and makes the occurrence opaque; a definitely missing required prop still fails, opacity hides no placement error, and the engine's own constructs keep the results they always had |
+| ED10 | Absence | With nothing declared, the new names are unresolved, the structural category holds only the engine's own constructs, and a repository file under one of those names is an ordinary component rather than syntax |
 
 ### Tier ORC — Repository composition under an ordinary run (§5.3, §8.1)
 

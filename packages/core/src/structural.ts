@@ -12,7 +12,13 @@
  */
 
 /**
- * One construct, as both a reservation and a description of itself.
+ * One construct the engine owns, as both a reservation and a description of
+ * itself.
+ *
+ * Named for the table it belongs to, because an installation declares
+ * structural syntax of its own: `Structural` on the host boundary is
+ * that contract, and this is the engine's own entry, which no host contributes
+ * to.
  *
  * `syntax` holds the canonical authored forms — documentation a reader copies,
  * not a grammar anything parses. Optional props stay in `description` rather
@@ -22,7 +28,7 @@
  * construct takes no binding, or reads no content, so a missing sentence is a
  * fact about the construct instead of an unfinished entry.
  */
-export interface StructuralDeclaration {
+export interface EngineStructuralDeclaration {
   readonly name: string;
   readonly syntax: readonly string[];
   readonly description: string;
@@ -32,7 +38,7 @@ export interface StructuralDeclaration {
   readonly context: string | null;
 }
 
-export const STRUCTURAL_DECLARATIONS: readonly StructuralDeclaration[] = [
+export const STRUCTURAL_DECLARATIONS: readonly EngineStructuralDeclaration[] = [
   {
     name: "Content",
     syntax: ["<Content />", '<Content slot="name" />'],

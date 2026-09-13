@@ -47,6 +47,7 @@ import type {
   ValidateDocumentOptions,
   ValidateDocumentSettings,
 } from "../mod.ts";
+import { Structural } from "../host.ts";
 import type { IdentityComponent } from "../host.ts";
 
 /** A stubbed tree: working-directory-relative path to file content. */
@@ -1439,5 +1440,209 @@ describe("Tier DV: the package boundary", () => {
     expect(diagnostic.code).toBe("component-unresolved");
     expect(answered.version).toBe(1);
     expect(records).toEqual([]);
+  });
+});
+
+/**
+ * Tier ED — structural syntax an installation declared.
+ *
+ * Validation is handed the declarations and no installation, so there is no
+ * handler to call and no region to expand. What it decides from the
+ * declarations alone is where each construct was written and what each
+ * occurrence's literal props say — the same two questions it already answers
+ * for every other contract.
+ */
+
+const DECK_ORIGIN = "@executablemd/test/deck";
+
+const DECK = Structural({
+  name: "Deck",
+  origin: DECK_ORIGIN,
+  forms: ["paired"],
+  props: { type: "object", properties: {}, additionalProperties: false },
+  syntax: ['<Deck><Panel title="One">…</Panel></Deck>'],
+  description: "Lay out the panels written inside it.",
+  context: "The panels this deck lays out.",
+  parent: null,
+});
+
+const PANEL = Structural({
+  name: "Panel",
+  origin: DECK_ORIGIN,
+  forms: ["self-closing", "paired"],
+  props: {
+    type: "object",
+    properties: { title: { type: "string" } },
+    required: ["title"],
+    additionalProperties: false,
+  },
+  syntax: ['<Panel title="One">…</Panel>'],
+  description: "One panel of a deck.",
+  context: "Markdown the panel holds.",
+  parent: "Deck",
+});
+
+const DECLARED: ValidateDocumentSettings = { declarations: [DECK, PANEL] };
+
+describe("Tier ED — declared structural placement", () => {
+  it("ED8: accepts a construct holding its declared regions, and walks each body", function* () {
+    const { result, seen } = yield* validateText(
+      [
+        "<Deck>",
+        '  <Panel title="One">Ready.</Panel>',
+        '  <Panel title="Two" />',
+        "</Deck>",
+        "",
+      ].join("\n"),
+      DECLARED,
+    );
+
+    expect(result.outcome).toBe("valid");
+    expect(names(result)).toEqual(["Deck", "Panel", "Panel"]);
+    expect(outcomes(result)).toEqual(["valid", "valid", "valid"]);
+    const deck = named(result, "Deck");
+    if (deck.outcome !== "valid") {
+      throw new Error(`<Deck> is ${deck.outcome}, not valid`);
+    }
+    expect(deck.origin).toEqual({ kind: "structural", origin: DECK_ORIGIN });
+    // Nothing ran to decide any of it: there is no handler here to call.
+    expect(seen.effects).toEqual([]);
+
+    // A region's body is the author's own text, so it is walked like any other.
+    const nested = yield* validateText(
+      ["<Deck>", '  <Panel title="One"><Missing /></Panel>', "</Deck>", ""].join("\n"),
+      DECLARED,
+    );
+    expect(codes(nested.result)).toEqual(["component-unresolved"]);
+    expect(named(nested.result, "Missing").outcome).toBe("invalid");
+    expect(nested.seen.effects).toEqual([]);
+  });
+
+  it("ED8: every placement, form and literal-prop error is a diagnostic", function* () {
+    const cases: readonly (readonly [string, string, readonly DocumentValidationCode[]])[] = [
+      [
+        "a region written outside its construct",
+        '<Panel title="One" />\n',
+        ["structural-usage-invalid"],
+      ],
+      [
+        "a region written under something else",
+        ["<If condition={true}>", '  <Panel title="One" />', "</If>", ""].join("\n"),
+        ["structural-usage-invalid"],
+      ],
+      [
+        "substantive text directly inside the construct",
+        ["<Deck>", "  Loose prose.", '  <Panel title="One" />', "</Deck>", ""].join("\n"),
+        ["structural-usage-invalid"],
+      ],
+      [
+        "a code block directly inside the construct",
+        ["<Deck>", "", "```sh", "echo hi", "```", "", "</Deck>", ""].join("\n"),
+        ["structural-usage-invalid"],
+      ],
+      [
+        "a construct written in a form it does not accept",
+        "<Deck />\n",
+        ["invocation-form-invalid"],
+      ],
+      [
+        "a region missing a required literal prop",
+        ["<Deck>", "  <Panel />", "</Deck>", ""].join("\n"),
+        ["props-invalid"],
+      ],
+      [
+        "a literal the region's schema rejects",
+        ["<Deck>", "  <Panel title={5} />", "</Deck>", ""].join("\n"),
+        ["props-invalid"],
+      ],
+      [
+        "a construct written where one of its own regions belongs",
+        ["<Deck>", "  <Deck>", '    <Panel title="One" />', "  </Deck>", "</Deck>", ""].join("\n"),
+        ["structural-usage-invalid"],
+      ],
+      [
+        "a literal the construct's own schema rejects",
+        ['<Deck extra="no">', '  <Panel title="One" />', "</Deck>", ""].join("\n"),
+        ["props-invalid"],
+      ],
+    ];
+
+    for (const [described, source, expected] of cases) {
+      const { result, seen } = yield* validateText(source, DECLARED);
+      expect(`${described}: ${result.outcome}`).toBe(`${described}: invalid`);
+      expect(`${described}: ${codes(result).join(", ")}`).toBe(
+        `${described}: ${expected.join(", ")}`,
+      );
+      expect(seen.effects).toEqual([]);
+    }
+  });
+
+  it("ED8: a foreign element inside the construct is reported where it was written", function* () {
+    const { result } = yield* validateText(
+      ["<Deck>", '  <Panel title="One" />', "  <Break />", "</Deck>", ""].join("\n"),
+      DECLARED,
+    );
+
+    expect(result.outcome).toBe("invalid");
+    // Both records point at the finding: the construct's own structure is
+    // wrong, and the element that is wrong is the one written inside it.
+    expect(diagnosticsOf(result, named(result, "Deck")).map((one) => one.code)).toContain(
+      "structural-usage-invalid",
+    );
+    expect(diagnosticsOf(result, named(result, "Break")).map((one) => one.message)).toContain(
+      "<Deck> holds only the regions it declares: <Panel>. Found <Break> directly inside it.",
+    );
+  });
+
+  it("ED9: a dynamic prop is opaque, and opacity hides no placement mistake", function* () {
+    const dynamic = yield* validateText(
+      ["<Deck>", "  <Panel title={heading} />", "</Deck>", ""].join("\n"),
+      DECLARED,
+    );
+    expect(dynamic.result.outcome).toBe("valid");
+    const panel = named(dynamic.result, "Panel");
+    if (panel.outcome !== "not-statically-checkable") {
+      throw new Error(`<Panel /> is ${panel.outcome}, not opaque`);
+    }
+    // A required prop written as an expression is present, whatever it resolves
+    // to, so nothing here is a definite failure.
+    expect(panel.reasons).toEqual(["dynamic-props"]);
+
+    // The same expression written outside the construct is still misplaced.
+    const misplaced = yield* validateText("<Panel title={heading} />\n", DECLARED);
+    expect(codes(misplaced.result)).toEqual(["structural-usage-invalid"]);
+
+    // A required prop that is definitely absent still fails beside one nothing
+    // can resolve.
+    const missing = yield* validateText(
+      ["<Deck>", "  <Panel heading={heading} />", "</Deck>", ""].join("\n"),
+      DECLARED,
+    );
+    expect(codes(missing.result)).toEqual(["props-invalid"]);
+  });
+
+  it("ED9: the engine's own constructs keep their results with declarations present", function* () {
+    const { result } = yield* validateText(
+      [
+        "<Deck>",
+        '  <Panel title="One">',
+        "    <If condition={ready}>ready</If>",
+        "  </Panel>",
+        "</Deck>",
+        "<Else>stray</Else>",
+        "",
+      ].join("\n"),
+      DECLARED,
+    );
+
+    // The declared structure is fine; the misplaced engine construct is not,
+    // and it is reported by the rule that always reported it.
+    expect(codes(result)).toEqual(["structural-usage-invalid"]);
+    expect(named(result, "Else").outcome).toBe("invalid");
+    expect(named(result, "Deck").outcome).toBe("valid");
+    // `<If>` decides its whole contract from source, so an expression condition
+    // leaves it valid rather than opaque — which is what it reported before a
+    // declaration existed, and what it reports beside one.
+    expect(named(result, "If").outcome).toBe("valid");
   });
 });
