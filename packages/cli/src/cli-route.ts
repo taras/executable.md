@@ -20,6 +20,7 @@ import {
   command,
   description,
   extend,
+  multiple,
   name,
   option,
   parse,
@@ -60,7 +61,7 @@ export const XMD_VERSION: string = denoJson.version;
  * here, over the same Standard Schema interface the parser validates through.
  */
 interface MarkedSchema<T> extends Schema<T> {
-  readonly xmd: { readonly required: boolean };
+  readonly xmd: { readonly required?: boolean; readonly display?: unknown };
 }
 
 function withDefault<T>(inner: Schema<T>, value: T, required = false): Schema<T> {
@@ -85,29 +86,50 @@ function withDefault<T>(inner: Schema<T>, value: T, required = false): Schema<T>
   return marked;
 }
 
-/** Whether help describes this parameter as one a caller must supply. */
-function describedAsRequired(param: Param<string, unknown>): boolean {
+/**
+ * A schema that keeps absence absent, and the default help displays for it.
+ *
+ * `--pattern` is the one parameter whose absence is a fact the command needs:
+ * `xmd test` refuses a pattern written against a single document, and a default
+ * is a real value indistinguishable from a written one. So the value cannot
+ * come from the schema — but help has always shown the glob the command would
+ * apply, and that display is carried here.
+ */
+function shownDefault<T>(inner: Schema<T | undefined>, display: T): Schema<T | undefined> {
+  const marked: MarkedSchema<T | undefined> = {
+    "~standard": inner["~standard"],
+    xmd: { display },
+  };
+  return marked;
+}
+
+/** The marker help reads when the schema alone does not say enough. */
+function helpMarker(param: Param<string, unknown>): MarkedSchema<unknown>["xmd"] | undefined {
   const schema: unknown = param.schema;
   if (typeof schema !== "object" || schema === null || !("xmd" in schema)) {
-    return false;
+    return undefined;
   }
   const marker = schema.xmd;
-  return typeof marker === "object" && marker !== null && "required" in marker &&
-    marker.required === true;
+  return typeof marker === "object" && marker !== null ? marker : undefined;
+}
+
+/** Whether help describes this parameter as one a caller must supply. */
+function describedAsRequired(param: Param<string, unknown>): boolean {
+  const marker = helpMarker(param);
+  return marker !== undefined && "required" in marker && marker.required === true;
 }
 
 /**
  * `--include`, as `run`, `test`, `plan` and `syntax` each declare it.
  *
- * A repeatable option cannot be read from argv through this API. `bindPhase`
- * truncates every reader's view at the first unclaimed word, so a reader never
- * sees an occurrence written after a value, and it settles its parameter on
- * the first success either way. The occurrences are lifted out of argv by the
- * CLI's own scanner and handed back as a route value source, which is the one
- * channel that carries a list.
+ * `multiple()` is what makes a repeatable option expressible: the binding loop
+ * shows a multiple parameter the whole phase rather than truncating its view at
+ * the first unclaimed word, so an occurrence written after the document binds,
+ * and the reader returns the occurrences in the order they were written.
  */
 const includeOption = option(
   { ...name("include"), description: "component search directory" },
+  multiple(),
   schema(withDefault(z.array(z.string()), ["components", "."])),
 );
 
@@ -314,7 +336,8 @@ const testCommand = command(
       ...name("pattern"),
       description: "glob for test documents, relative to a directory target (repeatable)",
     },
-    schema(withDefault(z.array(z.string()), ["**/*.test.md"])),
+    multiple(),
+    schema(shownDefault(z.array(z.string()).optional(), ["**/*.test.md"])),
   ),
   includeOption,
   verboseSwitch,
@@ -661,21 +684,6 @@ export function valueFlags(): Set<string> {
   return flags;
 }
 
-/** One source of already-decoded values, addressed by route. */
-export function routeValues(
-  path: readonly string[],
-  values: Record<string, unknown>,
-): ValueSource[] {
-  if (Object.keys(values).length === 0) {
-    return [];
-  }
-  let value: Record<string, unknown> = values;
-  for (const segment of [...path].reverse()) {
-    value = { [segment]: value };
-  }
-  return [{ name: "command line", value }];
-}
-
 /**
  * Parse one command line against the tree its first token selects.
  *
@@ -890,6 +898,10 @@ function describeParam(param: Param<string, unknown>): string {
 
 /** What the parameter resolves to when nothing supplies it, if anything. */
 function defaultOf(param: Param<string, unknown>): string | undefined {
+  const display = helpMarker(param)?.display;
+  if (display !== undefined) {
+    return `${display}`;
+  }
   const validated = param.schema["~standard"].validate(undefined);
   if (validated instanceof Promise || validated.issues || validated.value === undefined) {
     return undefined;
@@ -903,7 +915,9 @@ function accepts(param: Param<string, unknown>, value: unknown): boolean {
 }
 
 function argumentLabel(param: Param<string, unknown>): string {
-  if (Array.isArray(defaultValue(param))) {
+  // A repeatable parameter says so itself now, rather than being inferred from
+  // the shape of whatever its schema returns for absence.
+  if (param.multiple === true) {
     return `<${param.name}>...`;
   }
   if (describedAsRequired(param)) {

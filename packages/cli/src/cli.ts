@@ -67,7 +67,6 @@ import {
   renderRouteHelp,
   renderVersion,
   routeFor,
-  routeValues,
   unexpectedOnly,
   valueFlags,
 } from "./cli-route.ts";
@@ -1032,7 +1031,13 @@ interface TestConfig extends Omit<DocumentConfig, "root"> {
    * schema still produces "." for an omitted argument.
    */
   path?: string;
-  pattern: string[];
+  /**
+   * Absent when the caller wrote no `--pattern`, which is a fact this command
+   * needs: a pattern written against a single document is refused, so the
+   * default cannot come from the schema. {@link DEFAULT_PATTERN} is applied
+   * here instead.
+   */
+  pattern?: string[];
 }
 
 /**
@@ -1044,35 +1049,26 @@ interface TestConfig extends Omit<DocumentConfig, "root"> {
  */
 function* test(
   config: TestConfig,
-  /**
-   * What the caller wrote, rather than what the model resolved to. The model
-   * cannot say whether `--pattern` was written at all — its default is a real
-   * value — and the scan that lifted the occurrences out of argv can.
-   */
-  patterns: PatternFlags,
   installService: HostServiceInstaller,
   /** What a `<Execution host="run">` child installs. This command installs none. */
   installRepositories: RepositoryInstaller,
 ): Operation<void> {
-  if (patterns.missingValue) {
-    console.error(
-      `${PATTERN_OPTION} requires a value — write \`${PATTERN_OPTION} <glob>\`, or ` +
-        `\`${PATTERN_OPTION}=<glob>\` for a glob that begins with "-"`,
-    );
-    yield* exit(1);
-    return;
-  }
-  if (patterns.values.some((value) => value.length === 0)) {
+  // What the caller wrote, which the model states directly: the parameter is
+  // declared repeatable and carries no schema default, so absence is absence.
+  // A missing or dash-leading value was already refused by the parse.
+  const written = config.pattern ?? [];
+  if (written.some((value) => value.length === 0)) {
     console.error(`${PATTERN_OPTION} requires a glob — an empty pattern matches nothing`);
     yield* exit(1);
     return;
   }
 
   const path = config.path ?? ".";
-  const target = yield* resolveTestTarget(path, config.pattern);
+  const patterns = written.length > 0 ? written : DEFAULT_PATTERN;
+  const target = yield* resolveTestTarget(path, patterns);
 
   if (target.kind === "file") {
-    if (patterns.values.length > 0) {
+    if (written.length > 0) {
       console.error(
         `unrecognized option for xmd test: ${PATTERN_OPTION} — ${path} is a single document, ` +
           `so there is nothing to search`,
@@ -1110,7 +1106,7 @@ function* test(
   }
 
   if (target.documents.length === 0) {
-    console.error(`no documents matched ${config.pattern.join(", ")} in ${path}`);
+    console.error(`no documents matched ${patterns.join(", ")} in ${path}`);
     yield* exit(1);
     return;
   }
@@ -1223,72 +1219,8 @@ function findPropsFlag(args: string[]): string | undefined {
 
 const PATTERN_OPTION = "--pattern";
 
-interface PatternFlags {
-  /** Values the caller wrote, in the order they wrote them. */
-  values: string[];
-  /** A `--pattern` that ran out of argv or was followed by another option. */
-  missingValue: boolean;
-}
-
-/**
- * Read one repeatable option out of argv, and remove every occurrence.
- *
- * The route grammar cannot express a repeatable option at all: a reader
- * settles its parameter on the first occurrence, and the binding loop
- * truncates its view at the first unclaimed word, so an occurrence written
- * after a value is invisible to it and then reported as an unexpected token.
- * The occurrences are therefore lifted here and handed back to the parse as a
- * route value source, which is the one channel that carries a list.
- *
- * The scan also answers what a resolved model cannot. It says whether the
- * option was written at all — a default is a real value, indistinguishable
- * from a typed one — and it refuses unusable input: a separated value that
- * begins with `-` is another option rather than a value, and
- * `--option=<value>` expresses a value that really does begin with one.
- */
-function readRepeatedOption(args: readonly string[], option: string): RepeatedOption {
-  const values: string[] = [];
-  const rest: string[] = [];
-  let missingValue = false;
-  let separated = false;
-
-  for (let index = 0; index < args.length; index += 1) {
-    const arg = args[index];
-    if (arg === undefined) {
-      continue;
-    }
-    if (arg === "--") {
-      separated = true;
-      rest.push(...args.slice(index));
-      break;
-    }
-    if (!separated && arg === option) {
-      const value = args[index + 1];
-      if (value === undefined || value.startsWith("-")) {
-        missingValue = true;
-        continue;
-      }
-      values.push(value);
-      index += 1;
-      continue;
-    }
-    if (!separated && arg.startsWith(`${option}=`)) {
-      values.push(arg.slice(option.length + 1));
-      continue;
-    }
-    rest.push(arg);
-  }
-
-  return { values, rest, missingValue };
-}
-
-/** Every occurrence of one repeatable option, and the argv without them. */
-interface RepeatedOption extends PatternFlags {
-  /** argv with every occurrence of the option removed. */
-  rest: string[];
-}
-
-const INCLUDE_OPTION = "--include";
+/** The globs `xmd test` searches a directory with when nobody writes one. */
+const DEFAULT_PATTERN = ["**/*.test.md"];
 
 /**
  * The refusal a command owns for an option that belongs to another one.
@@ -1302,20 +1234,26 @@ function strayCommandOption(command: string, args: string[]): string | undefined
   if (command === "test") {
     const strayTimeout = findTimeoutFlag(args);
     if (strayTimeout) {
-      return `unrecognized option for xmd test: ${strayTimeout} — timeout options are exclusive ` +
-        `to ${belongsTo(strayTimeout)}`;
+      return (
+        `unrecognized option for xmd test: ${strayTimeout} — timeout options are exclusive ` +
+        `to ${belongsTo(strayTimeout)}`
+      );
     }
   }
   const agentFlag = findAgentOnlyFlag(args);
   if (agentFlag) {
-    return `unrecognized option for xmd ${command}: ${agentFlag} — agent options are exclusive ` +
-      `to ${belongsTo(agentFlag)}`;
+    return (
+      `unrecognized option for xmd ${command}: ${agentFlag} — agent options are exclusive ` +
+      `to ${belongsTo(agentFlag)}`
+    );
   }
   if (command === "test") {
     const propsFlag = findPropsFlag(args);
     if (propsFlag) {
-      return `unrecognized option for xmd test: ${propsFlag} — document properties are ` +
-        "exclusive to xmd run";
+      return (
+        `unrecognized option for xmd test: ${propsFlag} — document properties are ` +
+        "exclusive to xmd run"
+      );
     }
   }
   return undefined;
@@ -1358,16 +1296,13 @@ interface LiftedArgs {
   /**
    * argv with the root references removed and nothing else.
    *
-   * What the document phase reads. Truncating at the first property and
-   * lifting the repeatable options serve the parse alone: the properties are
-   * classified later against the bindings the document declares, and the
-   * repeatable occurrences are read by their own scanner.
+   * What the document phase reads. Truncating at the first property serves the
+   * parse alone: the properties are classified later, against the bindings the
+   * document declares.
    */
   retained: string[];
   /** Every root document reference the option grammar leaves unwritable. */
   references: string[];
-  include: RepeatedOption;
-  pattern: RepeatedOption;
   /** Whether the caller wrote a version control anywhere in argv. */
   version: boolean;
 }
@@ -1377,31 +1312,23 @@ const VERSION_CONTROLS = new Set(["-v", "--version"]);
 /**
  * Lift what the route grammar cannot bind, and say what was lifted.
  *
- * `--pattern` belongs to `xmd test` alone, so it is lifted only there; on any
- * other command it stays in argv and is reported as the unrecognized option it
- * is. The version control is lifted everywhere, because the parse this
- * produces is the one that has to yield a model.
+ * Two things only: the version control, because the parse this produces is the
+ * one that has to yield a model, and the root document references the option
+ * grammar leaves unwritable. Repeatable options are the routes' own now.
  */
 function liftArgs(args: string[]): LiftedArgs {
   const command = commandToken(args);
   const version = args.some((arg) => VERSION_CONTROLS.has(arg));
   const controlled = beforeProperties(args).filter((arg) => !VERSION_CONTROLS.has(arg));
-  const include = readRepeatedOption(controlled, INCLUDE_OPTION);
-  const pattern =
-    command === "test"
-      ? readRepeatedOption(include.rest, PATTERN_OPTION)
-      : { values: [], rest: include.rest, missingValue: false };
   // Only a run names a root document, and only a run's grammar leaves `-`
   // unwritable. Every other command keeps the meaning it already gives the
   // token, which is what `xmd test -` relies on.
   const recover = command === undefined || command === "run";
-  const recovered = readDocumentArguments(pattern.rest, recover);
+  const recovered = readDocumentArguments(controlled, recover);
   return {
     args: recovered.args,
     retained: readDocumentArguments(args, recover).args,
     references: recovered.references,
-    include,
-    pattern,
     version,
   };
 }
@@ -1423,25 +1350,11 @@ function controlOutcome(help: boolean, lifted: LiftedArgs): ParseOutcome | undef
   return parseLifted({ ...lifted, args: [control, ...lifted.args] });
 }
 
-/** The value sources the lifted options supply to the route that owns them. */
-function liftedValues(command: string | undefined, lifted: LiftedArgs): ValueSource[] {
-  const supplied: Record<string, unknown> = {};
-  if (lifted.include.values.length > 0) {
-    supplied.include = lifted.include.values;
-  }
-  if (lifted.pattern.values.length > 0) {
-    supplied.pattern = lifted.pattern.values;
-  }
-  return routeValues(command === undefined ? [] : [command], supplied);
-}
-
 /** Parse one lifted command line against the tree its first token selects. */
 function parseLifted(lifted: LiftedArgs): ParseOutcome {
-  const command = commandToken(lifted.args);
-  const values = liftedValues(command, lifted);
-  return command === undefined
-    ? parseShorthand(lifted.args, values)
-    : parseCommands(lifted.args, values);
+  return commandToken(lifted.args) === undefined
+    ? parseShorthand(lifted.args)
+    : parseCommands(lifted.args);
 }
 
 /** The intent one parse settled on, when it settled on one. */
@@ -2768,7 +2681,6 @@ function* dispatch(
       }
       yield* test(
         { ...command.model, retainProcessOutput: keepsProcessOutput(command.model.journal) },
-        lifted.pattern,
         installService,
         installRepositories,
       );

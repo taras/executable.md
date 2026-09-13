@@ -8,10 +8,10 @@
     "packages/workflow/vendor/cloudflare-computer-dofs/generated/**/*.d.ts",
     "packages/acp/vendor/acpx/upstream",
     "packages/acp/vendor/acpx/generated/**/*.d.ts",
-    "packages/cli/vendor/configliere-pr30"
+    "packages/cli/vendor/configliere-pr32"
   ],
   "nodeModulesDir": "auto",
-  "links": ["./packages/cli/vendor/configliere-pr30"],
+  "links": ["./packages/cli/vendor/configliere-pr32"],
   "lock": {
     "frozen": true
   },

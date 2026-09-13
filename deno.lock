@@ -79,7 +79,7 @@
     "npm:acpx@0.12.0": "0.12.0",
     "npm:ajv@8.20.0": "8.20.0",
     "npm:ajv@^8.17.1": "8.20.0",
-    "npm:configliere@~0.4.0-pr": "0.4.0-pr+dbd7d191ab8aff37c71cc03bc4688ad372ec7e23",
+    "npm:configliere@~0.4.0-pr": "0.4.0-pr+08b3a6835a0c8be9c7b946e26f0e4f0706155964",
     "npm:effection@4.1.0": "4.1.0",
     "npm:esbuild-wasm@~0.25.11": "0.25.12",
     "npm:esbuild@0.25.7": "0.25.7",
@@ -2431,7 +2431,7 @@
     "commander@15.0.0": {
       "integrity": "sha512-z67u4ZhzCL/Tydu1lJARtEZYWbWaN7oYLHbsuzocr6y4N6WZAagG3RQ4FW61V1/0+jImpj293XfrcYnd1qxtPg=="
     },
-    "configliere@0.4.0-pr+dbd7d191ab8aff37c71cc03bc4688ad372ec7e23": {
+    "configliere@0.4.0-pr+08b3a6835a0c8be9c7b946e26f0e4f0706155964": {
       "dependencies": [
         "@standard-schema/spec"
       ]
@@ -4230,7 +4230,7 @@
       }
     },
     "links": {
-      "npm:configliere@0.4.0-pr+dbd7d191ab8aff37c71cc03bc4688ad372ec7e23": {
+      "npm:configliere@0.4.0-pr+08b3a6835a0c8be9c7b946e26f0e4f0706155964": {
         "dependencies": [
           "npm:@standard-schema/spec@^1.1.0"
         ]

@@ -25,7 +25,6 @@ import {
   renderRouteHelp,
   renderVersion,
   routeFor,
-  routeValues,
   unexpectedOnly,
   valueFlags,
   XMD_VERSION,
@@ -294,32 +293,55 @@ describe("Tier CFE — the xmd route definitions", () => {
     expect([...planned.literals].map((token) => token.text)).toEqual(["-request"]);
   });
 
-  it("CFE7: a repeatable option is a value source, not a reader", function* () {
-    // Written twice, the ordinary reader claims one occurrence and reports the
-    // rest as unexpected tokens — which is why the CLI lifts them.
-    const written = run(["run", "doc.md", "--include", "a", "--include", "b"]);
-    expect(written.ok).toBe(false);
-
-    // Lifted and handed back as the route's own value source, the model holds
-    // the ordered list and it replaces the default.
-    const supplied = intent(["run", "doc.md"], routeValues(["run"], { include: ["a", "b"] }));
-    expect(isExecute(supplied) && supplied.route === "/run" ? supplied.model.include : []).toEqual([
+  it("CFE7: a repeatable option binds every occurrence from argv, in order", function* () {
+    // `multiple()` shows the parameter the whole phase, so an occurrence
+    // written after the document binds. Under the previous preview this was the
+    // case no reader could see, and the CLI had to lift the tokens out of argv
+    // and hand them back as a value source.
+    const named = intent(["run", "doc.md", "--include", "a", "--include", "b"]);
+    expect(isExecute(named) && named.route === "/run" ? named.model.include : []).toEqual([
       "a",
       "b",
     ]);
 
-    // Absent, the default stands.
+    const straddling = intent(["--include", "a", "doc.md", "--include", "b"]);
+    expect(
+      isExecute(straddling) && straddling.route === "/" ? straddling.model.include : [],
+    ).toEqual(["a", "b"]);
+
+    const mixed = intent(["run", "doc.md", "--include=a", "--include", "b"]);
+    expect(isExecute(mixed) && mixed.route === "/run" ? mixed.model.include : []).toEqual([
+      "a",
+      "b",
+    ]);
+
+    // Absent, the schema's default stands.
     const bare = intent(["run", "doc.md"]);
     expect(isExecute(bare) && bare.route === "/run" ? bare.model.include : []).toEqual([
       "components",
       ".",
     ]);
 
-    // The same channel carries `--pattern` for the one command that has it.
-    const patterned = intent(["test", "suite"], routeValues(["test"], { pattern: ["**/*.md"] }));
+    // A missing value is refused by the parse rather than by a scanner.
+    expect(refusal(["run", "doc.md", "--include"])).toContain("--include requires a value");
+    expect(refusal(["run", "doc.md", "--include", "--raw"])).toContain(
+      "--include requires a value",
+    );
+
+    // `--pattern` carries no schema default, because `xmd test` needs to know
+    // whether the caller wrote one: a pattern against a single document is
+    // refused, and a default is not a refusal.
+    const patterned = intent(["test", "suite", "--pattern", "a", "--pattern", "b"]);
     expect(
       isExecute(patterned) && patterned.route === "/test" ? patterned.model.pattern : [],
-    ).toEqual(["**/*.md"]);
+    ).toEqual(["a", "b"]);
+
+    const unpatterned = intent(["test", "suite"]);
+    expect(
+      isExecute(unpatterned) && unpatterned.route === "/test"
+        ? unpatterned.model.pattern
+        : ["unset"],
+    ).toBe(undefined);
   });
 
   it("CFE8: malformed input fails with the first thing wrong", function* () {
