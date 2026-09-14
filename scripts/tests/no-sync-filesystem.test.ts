@@ -19,7 +19,7 @@ import { oxlint, ROOT, violations } from "./oxlint.ts";
 const RULE = "no-sync-filesystem";
 
 /** The directories `deno task lint` passes to oxlint. */
-const LINTED = ["packages", "scripts", ".reviews/components"];
+const LINTED = ["packages", "scripts"];
 
 /** What the lint task's `--ignore-pattern` arguments keep out. */
 const UNLINTED = [

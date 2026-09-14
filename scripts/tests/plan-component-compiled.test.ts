@@ -21,13 +21,13 @@
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { ensure, until } from "effection";
-import { exists, readTextFile, rm } from "@effectionx/fs";
+import { exists, readTextFile, rm, writeTextFile } from "@effectionx/fs";
 import { exec } from "@effectionx/process";
 import { timebox } from "@effectionx/timebox";
 import type { ProcessResult } from "@effectionx/process";
 import { createHash } from "node:crypto";
 import { fileURLToPath as fromFileUrl } from "node:url";
-import { mkdtemp, readdir } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -340,3 +340,183 @@ describe("compiled xmd", { sanitizeOps: false, sanitizeResources: false }, () =>
     expect((yield* until(readdir(elsewhere))).length).toBe(0);
   });
 });
+
+/**
+ * Its own suite rather than a case inside the one above, because the name is
+ * how this is run on its own: `deno test --filter` matches the registered test,
+ * which is the `describe`, and a step buried in another suite could not be
+ * asked for by name.
+ */
+describe(
+  "the trusted review graph, as both installations ship it",
+  { sanitizeOps: false, sanitizeResources: false },
+  () => {
+    /**
+     * The review graph is the installation's, in both installations, and a
+     * checkout cannot take a name back from it.
+     *
+     * A review is the one program that must not be answerable by the thing it is
+     * reviewing. While its components lived in `.reviews/` and every entrypoint
+     * reached them with `--include`, a pull request could add its own
+     * `Finding.md` and the review would run the branch's copy while reporting on
+     * it. So the graph moved into the package, and this is the proof that the
+     * move actually reaches a person's installation.
+     *
+     * Everything here is deliberately hostile to the mechanism. The working
+     * directory is not the checkout, so a lookup that resolved relative to the
+     * process or to a subject tree finds nothing. No review include is passed, so
+     * a build that still depended on one renders nothing. And the one include
+     * that *is* passed contains a same-named `Finding.md` that accepts exactly the
+     * props the real one accepts — it would succeed and quietly emit its own
+     * marker if selection preferred it, rather than failing in a way that would
+     * pass this case for the wrong reason.
+     *
+     * The unrelated `CustomProbe.md` in the same directory is the other half:
+     * claiming forty-one names is not the same as turning discovery off, and a
+     * change that secured the review by disabling `--include` would be a
+     * regression this would catch.
+     *
+     * No agent, no network, no credential and no browser: the components chosen
+     * here render from their own bytes, which is what makes this cheap enough to
+     * be an ordinary case.
+     */
+    it("supplies the trusted review graph to both installations", function* () {
+      if (!(yield* exists(BINARY))) {
+        throw new Error(`${BINARY} is missing — run \`deno task build\` before this case`);
+      }
+
+      const FINDING = path.join(
+        ROOT,
+        "packages/code-review-agent/src/documents/components/Finding.md",
+      );
+      const trusted = yield* readTextFile(FINDING);
+      const digest = createHash("sha256").update(trusted, "utf8").digest("hex");
+
+      const elsewhere = yield* until(mkdtemp(path.join(tmpdir(), "xmd-trusted-review-")));
+      yield* ensure(() => rm(elsewhere, { recursive: true, force: true }));
+      const custom = path.join(elsewhere, "custom");
+      yield* until(mkdir(custom));
+
+      yield* writeTextFile(
+        path.join(custom, "Finding.md"),
+        [
+          "---",
+          "props:",
+          "  type: object",
+          "  properties:",
+          "    when: { type: boolean }",
+          "    severity: { type: string }",
+          "    message: { type: string }",
+          "  required: [when, message]",
+          "  additionalProperties: false",
+          "---",
+          "",
+          "HOSTILE-FINDING {props.message}",
+        ].join("\n"),
+      );
+      yield* writeTextFile(path.join(custom, "CustomProbe.md"), "the caller's own component ran");
+      yield* writeTextFile(
+        path.join(elsewhere, "doc.md"),
+        ['<Finding when={true} severity="error" message="probe" />', "", "<CustomProbe />"].join(
+          "\n",
+        ),
+      );
+
+      const installations = [
+        ["compiled", BINARY, [] as string[]],
+        ["source", Deno.execPath(), ["run", "--allow-all", path.join(ROOT, SOURCE_ENTRY)]],
+      ] as const;
+
+      const rendered: Record<string, string> = {};
+      const reported: Record<string, unknown> = {};
+
+      for (const [label, command, args] of installations) {
+        const attempt = yield* timebox<ProcessResult>(TIMEOUT, function* () {
+          return yield* exec(command, {
+            // One include, and it is the caller's. Nothing names the review
+            // components, which is the entire claim.
+            arguments: [...args, "run", "doc.md", "--include", "custom"],
+            cwd: elsewhere,
+          }).join();
+        });
+        if (attempt.timeout) {
+          throw new Error(`the ${label} installation timed out running the review components`);
+        }
+        const run = attempt.value;
+        expect(`${label}: ${run.code}\n${run.stderr}`).toBe(`${label}: 0\n`);
+        rendered[label] = run.stdout;
+
+        // The declared component rendered: its own `ts eval` chose the icon from
+        // the severity it was given, which the caller's plain-prose copy could
+        // not have produced.
+        expect(`${label}: ${run.stdout.includes("🔴 probe")}`).toBe(`${label}: true`);
+        // And the checkout's same-named component never ran.
+        expect(`${label}: ${run.stdout.includes("HOSTILE-FINDING")}`).toBe(`${label}: false`);
+        // While the caller's unrelated component resolved exactly as it always
+        // did. A change that secured the review by disabling inclusion fails here.
+        expect(`${label}: ${run.stdout.includes("the caller's own component ran")}`).toBe(
+          `${label}: true`,
+        );
+
+        const described = yield* timebox<ProcessResult>(TIMEOUT, function* () {
+          return yield* exec(command, {
+            arguments: [...args, "syntax", "--json", "--include", "custom"],
+            cwd: elsewhere,
+          }).join();
+        });
+        if (described.timeout) {
+          throw new Error(`the ${label} installation timed out describing its syntax`);
+        }
+        expect(`${label}: ${described.value.code}`).toBe(`${label}: 0`);
+        const catalog = JSON.parse(described.value.stdout);
+        const entries = catalog.categories.flatMap(
+          (category: { entries: unknown[] }) => category.entries,
+        );
+
+        const finding = entries.filter((entry: { name?: string }) => entry?.name === "Finding");
+        // Once. A build listing it twice would be describing the caller's copy
+        // beside the declared one, which is a vocabulary no run has.
+        expect(`${label}: ${finding.length}`).toBe(`${label}: 1`);
+        // The identity, whole: the package and the asset rather than a path, and
+        // the digest of the bytes this build actually ships. A build carrying
+        // different bytes under this name answers differently here.
+        expect(finding[0].origin).toEqual({
+          kind: "declared-markdown",
+          origin: "@executablemd/code-review-agent/components/Finding.md",
+          digest,
+        });
+        expect(finding[0].sourceKind).toBe("declared-markdown");
+        reported[label] = finding[0];
+
+        // The TypeScript half of the same graph is equally claimed. Moving only
+        // the Markdown would have left shadowable exactly the six components that
+        // run processes, read credentials and reach the network.
+        const context = entries.filter(
+          (entry: { name?: string }) => entry?.name === "ReviewContext",
+        );
+        expect(`${label}: ${context.length}`).toBe(`${label}: 1`);
+        expect(context[0].origin).toEqual({
+          kind: "registered",
+          origin: "@executablemd/code-review-agent",
+          reserved: true,
+        });
+
+        // And the whole graph is present, not just the two probed above. A build
+        // that shipped a partial `src/documents/` would resolve some names and
+        // fail on the rest at a reviewer's first run.
+        const declared = entries.filter(
+          (entry: { sourceKind?: string; origin?: { origin?: string } }) =>
+            entry?.sourceKind === "declared-markdown" &&
+            entry.origin?.origin?.startsWith("@executablemd/code-review-agent/"),
+        );
+        expect(`${label}: ${declared.length}`).toBe(`${label}: 35`);
+      }
+
+      // The two installations are one product. A compiled binary has no checkout
+      // to read from and a source run has nothing else, so an asset that reached
+      // one and not the other would show up here rather than at a reviewer's.
+      expect(rendered.compiled).toBe(rendered.source);
+      expect(reported.compiled).toEqual(reported.source);
+    });
+  },
+);

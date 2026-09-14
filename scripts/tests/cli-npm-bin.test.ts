@@ -15,6 +15,7 @@
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { runShell, shellQuote } from "@executablemd/test-support/launch";
+import { REVIEW_DOCUMENTS } from "../../packages/code-review-agent/src/review-components.ts";
 import { ensure, until } from "effection";
 import { exists, readTextFile, rm } from "@effectionx/fs";
 import { createHash } from "node:crypto";
@@ -149,6 +150,39 @@ describe("npm CLI package", { sanitizeOps: false, sanitizeResources: false }, ()
         yield* readTextFile(path.join(ROOT, PKG_DIR, "src/documents", asset)),
       );
     }
+
+    // The same contract for the review graph, which is where it actually bit.
+    // Those documents sit in `components/` and `policies/` subdirectories, and
+    // the recursive listing that finds them also names the directories
+    // themselves — so the build copied a directory as a file and produced no
+    // package at all. A build that skipped them instead would have produced a
+    // package that installs cleanly and cannot resolve a single review
+    // component, on Node and Bun, while Deno read them from the source tree and
+    // stayed green.
+    //
+    // Driven by the manifest rather than by a count or a list written here: the
+    // thing that has to fail is a component added to the graph and not shipped,
+    // and a second copy of the list maintained by hand is exactly what would
+    // not notice.
+    const reviewSource = path.join(ROOT, "packages/code-review-agent/src");
+    const reviewEmitted = path.join(ROOT, "packages/code-review-agent/npm/esm/src");
+    for (const document of REVIEW_DOCUMENTS) {
+      const asset = path.join("documents", document.group, `${document.name}.md`);
+      const emitted = path.join(reviewEmitted, asset);
+      // Told apart on purpose: an absent asset and one whose bytes differ are
+      // different build failures, and a bare read would report the first as an
+      // unexplained ENOENT.
+      expect([asset, yield* exists(emitted)]).toEqual([asset, true]);
+      expect([asset, yield* readTextFile(emitted)]).toEqual([
+        asset,
+        yield* readTextFile(path.join(reviewSource, asset)),
+      ]);
+    }
+    // And the documentation for the six reserved registrations, which is named
+    // individually rather than swept out of `src/documents/`.
+    expect(yield* readTextFile(path.join(reviewEmitted, "components.md"))).toBe(
+      yield* readTextFile(path.join(reviewSource, "components.md")),
+    );
   });
 
   /**

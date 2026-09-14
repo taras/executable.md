@@ -10,8 +10,8 @@ const ROOT = new URL("../../../", import.meta.url);
 const COMPONENT_DIRS = [
   "packages/core/components",
   "smoke-test",
-  ".reviews/components",
-  ".reviews/policies",
+  "packages/code-review-agent/src/documents/components",
+  "packages/code-review-agent/src/documents/policies",
 ];
 
 describe("component schema conformance", () => {

@@ -2,6 +2,7 @@
   "name": "@executablemd/code-review-agent",
   "version": "0.12.1",
   "exports": {
-    ".": "./mod.ts"
+    ".": "./mod.ts",
+    "./review-components": "./src/review-components.ts"
   }
 }

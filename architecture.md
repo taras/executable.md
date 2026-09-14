@@ -4536,6 +4536,69 @@ and a name is not a secret, so a component could build one, reach the record and
 answer that everything is exact. It is reclaimed with its execution, reaches no
 public entrypoint, and marks nothing on the segments themselves.
 
+### The review graph is the mechanism's first whole consumer
+
+`<Plan>` declares one component. The code-review agent declares thirty-five, and
+reserves six registrations beside them, which is what the boundary looks like
+when a complete program graph moves into an installation.
+
+**Why it moved.** The review and repository-analysis components were Markdown
+and TypeScript files in `.reviews/`, and every entrypoint reached them through
+checkout-relative component includes. That made the component graph a property of
+the checkout being reviewed: a pull request could add a file named `Finding.md`
+and the review would run the branch's own copy while reporting on it. A review is
+precisely the program that must not be answerable by its subject.
+
+The five review and analysis tasks and the two Actions workflows now pass no
+component include at all, and the retired definitions are gone. What stays in
+`.reviews/` is this repository's own review programs and the sensor
+configuration, journals and runtime state they read and write — inputs and
+outputs, not component definitions.
+
+**Who owns it.** `@executablemd/code-review-agent` does, and
+`packages/code-review-agent/src/review-components.ts` is the only assembly
+boundary. The Markdown lives at `src/documents/components/` and
+`src/documents/policies/` and is read from that module's own URL, so one lookup
+is correct in a source checkout, a published npm package and a compiled binary
+with no checkout at all. The read goes to the Effection filesystem directly
+rather than through `API.Fs` or the document-facing `Files` authority, both of
+which are middleware a running document could compose around — a review whose
+own components could be answered by the document under review would have moved
+the problem rather than solved it.
+
+**Two tiers, one meaning.** The thirty-five Markdown components cross as
+declarations, carrying the packaged bytes, a stable origin naming the package and
+the asset rather than a path, and the digest of what that build shipped. The six
+TypeScript components — `CommentReviewData`, `CommentReviewState`, `Doctor`,
+`OxlintDiagnostics`, `RepositoryInventory` and `ReviewContext` — cross as
+reserved registrations. The mechanisms differ in what they carry and agree in
+what they mean. Moving only the Markdown would have left shadowable exactly the
+six components that run processes, read credentials and reach the network.
+
+**Where it is installed.** Everywhere the production `run` profile is assembled,
+from one helper rather than a list spelled at each site: ordinary non-testing
+execution, a nested `<Execution host="run">`, the registry `xmd syntax` and
+structural validation enter, `<Plan>`'s internal admission validator, and
+`xmd plan`'s candidate validation. A Plan is therefore checked against the
+vocabulary the later `xmd run` supplies, rather than a narrower one that would
+refuse a program the run would have accepted. `xmd test` at its root is a
+different profile and gains none of it; the run child it can launch gains all of
+it.
+
+**What it does not change.** Ordinary inclusion and repository discovery are
+untouched. A caller's own component of an unclaimed name resolves as it always
+did; only these forty-one names are spoken for. The claims do include generic
+ones — `Format`, `Pattern`, `Threshold`, `Instruction`, `Sample` — which is the
+intended consequence of the anti-shadowing contract rather than an oversight, and
+a collision with another host claim is refused at assembly rather than settled by
+order.
+
+**One deliberate duplication.** The package ships its own copies of `Sample.md`
+and `Instruction.md` rather than pointing at `packages/core/components/`, so the
+graph a review runs is complete in one package. A regression holds the copies
+byte-identical to core's, which makes a future divergence an explicit decision in
+the code-review package instead of something that happens to one of them.
+
 ## The installed structural syntax boundary
 
 A trusted host may declare a structural construct and the regions written

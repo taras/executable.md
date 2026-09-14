@@ -110,7 +110,11 @@ documents at the revision it checks.
   releasing an unattested one.
 - **`review.yml`** and **`repo-analysis.yml`**: install the repository-pinned
   Deno and pnpm actions, run `deno task setup` and `deno task build`, and
-  execute the checked-out `./dist/xmd` against the checked-out Markdown. Their CI roots use `<Output>`
+  execute the checked-out `./dist/xmd` against the checked-out Markdown root.
+  Neither passes a component include: the review and repository-analysis
+  component graph is declared by the code-review package embedded in that
+  binary (§10), so the components a review runs come from the installation
+  rather than from the checkout being reviewed. Their CI roots use `<Output>`
   error mode, so execution failures fail the workflow through the CLI exit
   status. Journals and reports are uploaded with `if: always()`; Actions does
   not interpret journal records or rendered error markers.
@@ -682,10 +686,18 @@ dropped `--target` would compile the runner's own platform and upload it under
 another platform's artifact name. `verify:clean` builds the same argv from the
 module directly, since it spawns its phases inside a clone of `HEAD`.
 
+The three lists partition the assets rather than overlapping. A whole entry in
+`EMBEDDED_PACKAGES` already carries every `src/documents/` directory and every
+`components.md` nested inside it, so those are **not** added to the individual
+lists as well — the code-review package ships both, and naming either
+individually would compile the same bytes twice while reading as the coverage the
+whole-package entry already provides.
+
 `scripts/tests/packaged-document.test.ts` walks the repository for both
 discoverable kinds and holds the lists to what it finds in **both** directions —
-a missing entry ships a binary without its asset, and a stale one embeds nothing
-while reading as coverage.
+a missing entry ships a binary without its asset, a stale one embeds nothing
+while reading as coverage, and a redundant one is rejected against the
+whole-package entry that already covers it.
 
 ### The documentation smoke
 

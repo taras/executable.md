@@ -84,7 +84,7 @@ import type { PlanWriter, PlanWriterObservation } from "./plan-writer-profile.ts
 import type { CandidateAssessment } from "./plan-writer-profile.ts";
 import type { MachineSessionAssembly } from "./session-coordinator.ts";
 import { PLAN_DOCUMENT, readPackagedDocument } from "./packaged-document.ts";
-import { useRunProfileRegistry } from "./syntax.ts";
+import { runProfileDeclarations, useRunProfileRegistry } from "./syntax.ts";
 
 /**
  * The origin `<Plan>` reports, in every distribution.
@@ -150,7 +150,12 @@ export function structuralValidation(
         ...retainedSource(PLAN_IDENTITY, candidate),
         includes: [...includes],
         components: agentIdentityComponents(),
-        declarations: [...declarations],
+        // The review graph travels with the profile, so a Plan is checked
+        // against the same vocabulary the later `xmd run` supplies. Checking it
+        // against a narrower one would refuse a program the run would have
+        // accepted — and accepting a wider one would admit a Plan that fails
+        // the first time somebody runs it.
+        declarations: yield* runProfileDeclarations(...declarations),
       });
     });
 }

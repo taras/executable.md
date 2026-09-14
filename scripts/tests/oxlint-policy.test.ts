@@ -21,7 +21,7 @@ const SENSOR = ".reviews/.oxlintrc.json";
 const SUBJECTS = [
   "packages/code-review-agent/src/doctor.ts",
   "packages/code-review-agent/tests/doctor.test.ts",
-  ".reviews/components/Doctor.ts",
+  "packages/code-review-agent/src/components/Doctor.ts",
 ];
 
 const PLUGINS = ["typescript", "unicorn", "import"];
@@ -396,7 +396,7 @@ describe("Oxlint policy", () => {
 
   it("pins one Oxlint and one tsgolint version across the toolchain", function* () {
     const provisioning = yield* readTextFile(
-      path.join(ROOT, ".reviews", "components", "EnsureOxlint.md"),
+      path.join(ROOT, "packages/code-review-agent/src/documents/components/EnsureOxlint.md"),
     );
     const oxlint = /const OXLINT_TAG = "apps_v([\d.]+)";/u.exec(provisioning);
     const tsgolint = /const TSGOLINT_VERSION = "([\d.]+)";/u.exec(provisioning);

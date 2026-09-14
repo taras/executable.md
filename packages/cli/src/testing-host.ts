@@ -58,6 +58,7 @@ import type {
   TestAgentChildConfiguration,
 } from "@executablemd/testing";
 import { installDocumentComponents } from "./cli.ts";
+import { runProfileDeclarations } from "./syntax.ts";
 import { ordinaryEvaluationProfile } from "./evaluation-profile.ts";
 import type { HostServiceInstaller } from "./cli.ts";
 import type { RepositoryInstaller } from "./run-repositories.ts";
@@ -320,7 +321,7 @@ function* runProfileChild(
     // whose own document is a different profile — still evaluates a generated
     // fragment under exactly what `xmd run` states.
     evaluation: ordinaryEvaluationProfile(),
-    declarations: [
+    declarations: yield* runProfileDeclarations(
       yield* settings.planDeclaration({
         context,
         ...(planWriterRoot === undefined ? {} : { planWriterRoot }),
@@ -334,7 +335,7 @@ function* runProfileChild(
           ? {}
           : { observePlanWriter: settings.observePlanWriter }),
       }),
-    ],
+    ),
   });
   // A child gets what `xmd run` gets, and the browser form is part of that.
   // Installed here rather than inherited: this scope is isolated from the

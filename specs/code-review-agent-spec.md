@@ -65,8 +65,9 @@ All executable.md core changes and the full agent implementation are complete:
 - **Renamed `Instruction.md` input** `text` → `system` for clarity
 - **Fixed broken providers** — `OllamaProvider`,
   `AnthropicProvider` updated to use direct `fetch()` calls
-- **Component resolution** — review components resolved via
-  `--include .reviews/components --include packages/core/components`
+- **Component resolution** — the review component graph is owned and declared by
+  the installed `@executablemd/code-review-agent` package (§3.5), not resolved
+  through a checkout-relative `--include`
 - **AST-based user import extraction** (DEC-93) — eval blocks can use
   standard `import` declarations; extracted via acorn's
   `allowImportExportEverywhere` and hoisted to module level
@@ -163,12 +164,56 @@ function parseDiff(
 ```
 packages/code-review-agent/
   src/
+    components/            # the six reserved TypeScript components
+    documents/
+      components/          # 28 review components + Sample.md + Instruction.md
+      policies/            # the five policy documents
+    components.md          # long-form documentation for the six registrations
+    review-components.ts   # the one assembly boundary
     parse-diff.ts
     types.ts
   mod.ts
 ```
 
-Zero dependencies beyond Deno stdlib.
+The package depends on `@executablemd/core`, `@executablemd/runtime`,
+`@effectionx/fs`, `@effectionx/fetch` and `effection`.
+
+### 3.5 The declared component graph
+
+`src/review-components.ts` is the only assembly boundary, exported as
+`@executablemd/code-review-agent/review-components`. It supplies forty-one
+components in two tiers:
+
+- **Thirty-five declared Markdown components.** The twenty-eight review
+  components, the five policies, and the package's own copies of `Sample.md` and
+  `Instruction.md`. Each is read from its packaged asset and declared with
+  `Markdown({…})`, carrying the exact bytes, their SHA-256, and the origin
+  `@executablemd/code-review-agent/components/<Name>.md` or
+  `…/policies/<Name>.md`. `forms` is deliberately unstated, so both invocation
+  spellings keep working.
+- **Six reserved registrations.** `CommentReviewData`, `CommentReviewState`,
+  `Doctor`, `OxlintDiagnostics`, `RepositoryInventory` and `ReviewContext`, with
+  origin `@executablemd/code-review-agent`. `useReviewComponents()` installs them
+  together with the documentation in `src/components.md`, which the
+  documentation index validates against this same registration list.
+
+Both tiers claim their names: a checkout under review cannot supply a component
+of any of these forty-one names and have a review run it, and a second claim on
+one name is refused at admission rather than ordered. Names outside the forty-one
+resolve through ordinary inclusion and repository discovery, unchanged.
+
+The assets are located from the module's own URL, never from the working
+directory and never through the component search path, so a source checkout, an
+npm install and a compiled binary select the same bytes and report the same
+digests. The reads use the Effection filesystem directly rather than `API.Fs` or
+the document-facing `Files` authority, neither of which may decide what a
+review's own components are.
+
+The CLI attaches this graph wherever the production `run` profile is assembled:
+ordinary non-testing execution, a nested `<Execution host="run">`,
+`useRunProfileRegistry()` for syntax and structural validation, `<Plan>`'s
+admission validator, and `xmd plan`'s candidate validation. `xmd test` at its
+root does not gain it; its nested run child does.
 
 ---
 
@@ -950,7 +995,8 @@ normalization live in typed function components or package modules.
 
 The review workflow checks out the requested revision, installs the pinned
 Deno toolchain, runs `deno task setup`, and executes that checkout's
-`./dist/xmd` binary with the review component directories. Credentials stay
+`./dist/xmd` binary. It passes no component include: the review graph comes
+from the code-review package embedded in that binary. Credentials stay
 in the workflow environment and are consumed by the scoped `GitHubAuth`
 provider. The CI root uses `<Output>` so execution errors fail the CLI while
 ordinary review findings remain successful report text. The journal is
@@ -973,40 +1019,82 @@ These block merges. The executable.md review is advisory.
 
 ## 10. File Tree
 
+The component graph is package-owned and declared to every run (§3.5). The
+`.reviews/` tree holds this repository's own review programs and the sensor
+configuration and runtime state they read and write — no component definitions,
+and no command passes a component `--include`.
+
 ```
+packages/code-review-agent/
+  src/
+    review-components.ts         The one assembly boundary
+    components.md                Long-form docs for the six registrations
+
+    components/                  Reserved TypeScript registrations
+      CommentReviewData.ts       Pair extraction + GitHub response parsing
+      CommentReviewState.ts      Model-response and checklist state
+      Doctor.ts                  Checkout readiness for review analysis
+      OxlintDiagnostics.ts       Pinned Oxlint sensor run + normalization
+      RepositoryInventory.ts     Repository source paths and totals
+      ReviewContext.ts           Revision range, PR metadata, changed files
+
+    documents/
+      components/                Declared Markdown components
+        # Standard library
+        Finding.md               Severity icon + message
+        ReviewSection.md         Heading + children or clean message
+        Instruction.md           System prompt middleware
+        Sample.md                Sample invocation (review-owned copy)
+        Format.md                Shared formatting helper
+        GitHubAuth.md            Host-scoped credential middleware
+        GitHubComment.md         Post/update PR comment
+        DeepInfraProvider.md     DeepInfra Sample Api provider
+        OllamaProvider.md        Ollama Sample Api provider
+        ReviewSetup.md           Review preamble composition
+        ThinkFilter.md           Strips model reasoning from output
+
+        # Rule primitives (one eval block each, written once)
+        Threshold.md             Numeric comparison
+        Pattern.md               Regex match on added lines
+        Ratio.md                 Ratio of two regex counts
+        UnusedInDiff.md          Declarations with no references
+        DescriptionCheck.md      PR body length
+        LinkedIssue.md           Issue linkage
+        ConfigSourceMix.md       Config + source mixing
+        AbstractionNames.md      Suspicious file names
+        NewDependencies.md       Dependency justification
+        ReleaseSpecWarning.md    Release-spec change warning
+        SuggestRemoval.md        Removal suggestion rendering
+        CommentReview.md         Prompt composition for comment review
+
+        # Oxlint sensor surface
+        EnsureOxlint.md          Provisions the pinned sensor toolchain
+        OxlintConfig.md          Sensor profile selection
+        OxlintSignals.md         Diagnostic signal extraction
+        OxlintSummary.md         Sensor summary or unavailable warning
+        CleanupIssues.md         Idempotent GitHub issue lifecycle
+
+        # Policy report composition
+        PrPolicyReport.md        Composes PR policies
+        RepoPolicyReport.md      Composes repo policies
+
+      policies/                  Declared policy documents
+        ScopePolicy.md           PR size and scoping hygiene
+        BloatPolicy.md           Structural bloat patterns
+        SlopPolicy.md            Verbosity/slop indicators
+        ExtraneousCodePolicy.md  Semantic/correctness-focused review
+        RepoCleanupPolicy.md     Repo-wide cleanup policy analysis
+
 .reviews/
   ReviewPR.md                    CI entry point (DeepInfra + GitHubComment)
   ReviewPR.local.md              Local entry point (Ollama + stdout)
-
-  components/
-    # Standard library
-    Finding.md                   Severity icon + message
-    ReviewSection.md             Heading + children or clean message
-    Instructions.md              System prompt middleware
-    GitHubComment.md             Post/update PR comment
-    DeepInfraProvider.md         DeepInfra Sample Api provider
-    OllamaProvider.md            Ollama Sample Api provider
-
-    # Rule primitives (one eval block each, written once)
-    Threshold.md                 Numeric comparison
-    Pattern.md                   Regex match on added lines
-    Ratio.md                     Ratio of two regex counts
-    UnusedInDiff.md              Declarations with no references
-    DescriptionCheck.md          PR body length
-    LinkedIssue.md               Issue linkage
-    ConfigSourceMix.md           Config + source mixing
-    AbstractionNames.md          Suspicious file names
-    NewDependencies.md           Dependency justification
-    CommentReview.md             Prompt composition for comment review
-    CommentReviewData.ts         Pair extraction + GitHub response parsing
-    CommentReviewState.ts        Model-response and checklist state
-
-    # Policy documents (zero JavaScript)
-    ScopeCheck.md                Composes Threshold, Finding checks
-    StructuralBloat.md           Composes Pattern, Ratio, UnusedInDiff
-    VerbosityCheck.md            Composes Ratio, CommentReview
-    SemanticReview.md            Prompt template + If + Sample
-    ReviewBody.md                Composes all four checks
+  AnalyzeRepo.md                 Local repository analysis
+  AnalyzeRepoCI.md               CI repository analysis
+  DispatchRepoAnalysis.md        Repository-analysis dispatch
+  policies/README.md             Points at the package-owned policies
+  .oxlintrc.json                 Sensor profile (committed)
+  .oxlint/                       Provisioned sensor binaries (runtime state)
+  tsconfig.oxlint.json           Generated type-aware config (runtime state)
 ```
 
 ---
@@ -1175,8 +1263,9 @@ oxlint.shared.json                 Canonical Oxlint policy both profiles extend
 
 .reviews/
   .oxlintrc.json                   Sensor profile (committed)
-  components/
-    CleanupIssues.md               Idempotent GitHub issue lifecycle
+
+packages/code-review-agent/src/documents/components/
+  CleanupIssues.md                 Idempotent GitHub issue lifecycle
 
 .github/
   pull_request_template.md         Process enforcement
@@ -1217,7 +1306,8 @@ of curated signals; Doctor derives its available and missing rules from it
 rather than keeping a second list. The catalog is internal policy structure and
 is not a published export.
 
-`.reviews/components/EnsureOxlint.md` provisions the sensor's Oxlint 1.74.0 and
+`packages/code-review-agent/src/documents/components/EnsureOxlint.md` provisions
+the sensor's Oxlint 1.74.0 and
 tsgolint 0.25.0 by checksum, and the repository dependency inputs name the same
 two exact versions, so the policy the gate applies and the policy the sensor
 applies are evaluated by the same linter.

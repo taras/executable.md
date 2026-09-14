@@ -33,11 +33,14 @@ import {
   fromFileUrl,
   readTextFile,
   rm,
+  stat,
   writeTextFile,
 } from "@effectionx/fs";
 import { listWorkspacePaths } from "./lib/workspace.ts";
 import { join, sep } from "node:path";
-// Recursive directory copy and temp-dir creation are not part of @effectionx/fs.
+// Only what `@effectionx/fs` does not provide: recursive directory copy,
+// temp-dir creation, and a recursive listing — its own `readdir` takes no
+// options. Everything else on this path goes through the package.
 import { cp, mkdtemp, readdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { z } from "npm:zod@^4";
@@ -72,8 +75,21 @@ function* packagedDocuments(pkgDir: URL): Operation<string[]> {
   if (!(yield* exists(documents))) {
     return shipped;
   }
-  const names = yield* until(readdir(fromFileUrl(documents), { recursive: true }));
-  return [...shipped, ...names.map((name) => `src/documents/${name.split(sep).join("/")}`)];
+  const root = fromFileUrl(documents);
+  const names = yield* until(readdir(root, { recursive: true }));
+  const found: string[] = [];
+  for (const name of names) {
+    // A recursive listing names the directories as well as what is in them, and
+    // each entry here becomes a `copyFile`. Packages whose documents sit flat in
+    // `src/documents/` never noticed; the review graph keeps its documents under
+    // `components/` and `policies/`, and copying a directory as a file fails the
+    // whole npm build with `EINVAL`.
+    const info = yield* stat(join(root, name));
+    if (info.isFile()) {
+      found.push(`src/documents/${name.split(sep).join("/")}`);
+    }
+  }
+  return [...shipped, ...found];
 }
 
 const ExportsSchema = z.union([z.string(), z.record(z.string(), z.string())]);
