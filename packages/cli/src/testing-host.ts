@@ -355,10 +355,10 @@ function* runProfileChild(
   // it — `API.Files` has no host default, and a child without one refuses
   // every document filesystem operation.
   yield* useHostFiles();
-  // Native service authority belongs only to document execution, here as in the
+  // Attaching a native service belongs only to document execution, here as in the
   // command that owns it.
   yield* settings.installService();
-  // And repository authority the same way, from the same installer the command
+  // And Repository selection the same way, from the same installer the command
   // used — a fresh instance for this child alone.
   yield* settings.installRepositories();
 

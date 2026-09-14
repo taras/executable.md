@@ -11,7 +11,7 @@
  * distinct slots even when their stems collapse to the same characters — and the
  * stem is what makes a retained path legible to somebody reading the database.
  * Neither half is parsed back: the retained `checkout_path` column is the
- * authority on where a checkout is, and this is only how the first one was
+ * record of where a checkout is, and this is only how the first one was
  * chosen.
  */
 

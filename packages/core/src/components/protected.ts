@@ -26,7 +26,7 @@
  * verified at the call site against core's own retained copy, and core's copy is
  * what is invoked.
  *
- * Protection is not authority to do anything. A protected implementation is
+ * Protection is not permission to do anything. A protected implementation is
  * handed the site canonical execution built for it and nothing else: the
  * lexical syntax reference, the evaluation profile a trusted host stated at the
  * installation boundary, and a one-shot projection of its own content. No

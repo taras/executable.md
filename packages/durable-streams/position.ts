@@ -21,12 +21,12 @@
  * — which is what makes the index a coroutine reaches at one point in its
  * procedure the same index it reaches there next time.
  *
- * ## Observation, never authority
+ * ## Observation, never enforcement
  *
  * A position describes where execution is. It authorizes nothing, proves
  * nothing about who is executing, and is not durable state: it is derived by
  * counting what the journal already holds. Anything that must be trusted is
- * checked by whoever owns the authority to check it.
+ * checked by whoever owns the decision to check it.
  */
 
 import { type Operation } from "effection";

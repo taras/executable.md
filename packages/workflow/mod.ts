@@ -44,7 +44,7 @@
  * `withGitHostProvider()` installs the provider that answers those phases. A
  * provider need not implement every kind: a plain Git server may support
  * `git-push` and refuse pull requests and issues. Routing is one contextual
- * operation that carries no completion authority — middleware may inspect,
+ * operation that settles no completion — middleware may inspect,
  * narrow or refuse a request, and nothing it can hold or combine can answer
  * one.
  */
@@ -73,7 +73,7 @@ export {
   GitCompositionProviderError,
   GitOperationError,
   GitOperationProtocolError,
-  PullRequestAuthorityError,
+  PullRequestAdmissionError,
   RepositoryCompositionError,
   RepositoryCompositionProtocolError,
   RepositoryCompositionProviderError,
@@ -82,7 +82,7 @@ export {
 } from "./src/composition/errors.ts";
 export type {
   GitFailureReason,
-  PullRequestAuthorityReason,
+  PullRequestAdmissionReason,
   RepositoryFailureReason,
   WorktreeFailureReason,
 } from "./src/composition/errors.ts";

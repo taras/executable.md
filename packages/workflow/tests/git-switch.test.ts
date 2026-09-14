@@ -26,7 +26,7 @@ import { API, cwd } from "@executablemd/runtime";
 import type { Operation } from "effection";
 import {
   GitCompositionProviderError,
-  GitOperationAuthorityError,
+  GitOperationAdmissionError,
   GitOperationError,
   GitOperationInfrastructureError,
 } from "../src/composition/errors.ts";
@@ -105,8 +105,8 @@ function isProviderError(value: unknown): value is GitCompositionProviderError {
   return value instanceof GitCompositionProviderError;
 }
 
-function isAuthorityFailure(value: unknown): value is GitOperationAuthorityError {
-  return value instanceof GitOperationAuthorityError;
+function isAdmissionFailure(value: unknown): value is GitOperationAdmissionError {
+  return value instanceof GitOperationAdmissionError;
 }
 
 function isInfrastructureFailure(value: unknown): value is GitOperationInfrastructureError {
@@ -191,7 +191,7 @@ function document(locator: string, ...lines: string[]): string {
 /**
  * A working directory inside the selected checkout that is not a directory.
  *
- * The subject of the case below is the Git provider's own authority check: a
+ * The subject of the case below is the Git provider's own admission check: a
  * contextual working directory the retained checkout does not actually hold is
  * refused, before the provider spawns anything. Reaching that state needs a cwd
  * that names something which is not there.
@@ -578,7 +578,7 @@ describe("workflow Git.Switch selection", () => {
 
       // Nobody asked for a checkout that is not there, so nothing was published
       // to say an operation happened.
-      expect(causedBy(failure, isAuthorityFailure)).toBeInstanceOf(GitOperationAuthorityError);
+      expect(causedBy(failure, isAdmissionFailure)).toBeInstanceOf(GitOperationAdmissionError);
       expect(causedBy(failure, isGitFailure)).toBe(undefined);
       expect(yield* gitEvents(database)).toHaveLength(0);
       expect(subcommands(counting.counters)).not.toContain("switch");
@@ -605,13 +605,13 @@ describe("workflow Git.Switch selection", () => {
         ),
       );
 
-      expect(causedBy(failure, isAuthorityFailure)).toBeInstanceOf(GitOperationAuthorityError);
+      expect(causedBy(failure, isAdmissionFailure)).toBeInstanceOf(GitOperationAdmissionError);
       expect(yield* gitEvents(database)).toHaveLength(0);
       expect(subcommands(counting.counters)).not.toContain("switch");
     });
   });
 
-  it("gives a forged Repository context no authority over anything", function* () {
+  it("gives a forged Repository context no admission over anything", function* () {
     const root = yield* useStorageRoot();
     const remote = yield* useBareRemote(REMOTE);
 
@@ -628,7 +628,7 @@ describe("workflow Git.Switch selection", () => {
       const unretained = yield* raised(
         runForged(unretainedRun, FORGED, source, countingOptions(counting)),
       );
-      expect(causedBy(unretained, isAuthorityFailure)).toBeInstanceOf(GitOperationAuthorityError);
+      expect(causedBy(unretained, isAdmissionFailure)).toBeInstanceOf(GitOperationAdmissionError);
       expect(causedBy(unretained, isGitFailure)).toBe(undefined);
       // Not an outcome: nothing about it is in this run's history.
       expect(yield* gitEvents(unretainedRun)).toHaveLength(0);
@@ -645,12 +645,12 @@ describe("workflow Git.Switch selection", () => {
           countingOptions(counting),
         ),
       );
-      expect(causedBy(substituted, isAuthorityFailure)).toBeInstanceOf(GitOperationAuthorityError);
+      expect(causedBy(substituted, isAdmissionFailure)).toBeInstanceOf(GitOperationAdmissionError);
       expect(yield* retainedRepositories(substitutedRun)).toHaveLength(1);
       expect(yield* gitEvents(substitutedRun)).toHaveLength(0);
 
       // And a context carrying the retained Repository's own facts, exactly,
-      // still supplies no authority: a selection is what this provider minted,
+      // still admits nothing: a selection is what this provider minted,
       // not what a value says about itself. The identity here is the one the
       // first run retained, which the same fixture retains again here —
       // creation identity is a function of the name, the url and the base.
@@ -671,7 +671,7 @@ describe("workflow Git.Switch selection", () => {
           countingOptions(counting),
         ),
       );
-      expect(causedBy(exact, isAuthorityFailure)).toBeInstanceOf(GitOperationAuthorityError);
+      expect(causedBy(exact, isAdmissionFailure)).toBeInstanceOf(GitOperationAdmissionError);
       expect(subcommands(counting.counters)).not.toContain("switch");
     });
   });
@@ -683,9 +683,9 @@ describe("workflow Git.Switch selection", () => {
       const database = yield* createRun();
       const failure = yield* raised(runDocument(database, `<Git.Switch branch="release" />`));
 
-      // No repository in scope is missing authority, not an outcome a document
+      // No repository in scope is a failed admission, not an outcome a document
       // asked for and did not get.
-      expect(causedBy(failure, isAuthorityFailure)).toBeInstanceOf(GitOperationAuthorityError);
+      expect(causedBy(failure, isAdmissionFailure)).toBeInstanceOf(GitOperationAdmissionError);
       expect(causedBy(failure, isGitFailure)).toBe(undefined);
       expect(yield* gitEvents(database)).toHaveLength(0);
 
@@ -700,7 +700,7 @@ describe("workflow Git.Switch selection", () => {
           ),
         ),
       );
-      expect(causedBy(printed, isAuthorityFailure)).toBeInstanceOf(GitOperationAuthorityError);
+      expect(causedBy(printed, isAdmissionFailure)).toBeInstanceOf(GitOperationAdmissionError);
       expect(yield* gitEvents(printing)).toHaveLength(0);
     });
   });
@@ -916,12 +916,12 @@ describe("workflow Git.Switch failure kinds", () => {
  * State shared across loaded copies is shared by stable name, not by module
  * identity: two copies of `git-api.ts` create two different `Api` objects, and
  * both have to reach the one provider a host installed. What a copy does not get
- * is authority — its request is read by the same provider, against the same
+ * is admitted — its request is read by the same provider, against the same
  * retained rows, and a request naming something this run does not hold is
  * refused exactly as the packaged component's would be.
  */
 describe("workflow Git composition routing", () => {
-  it("routes a loaded copy's Api to the installed provider without sharing authority", function* () {
+  it("routes a loaded copy's Api to the installed provider without sharing admission", function* () {
     const root = yield* useStorageRoot();
     const remote = yield* useBareRemote(REMOTE);
     const copy = yield* physicalGitApiCopy();
@@ -958,7 +958,7 @@ describe("workflow Git composition routing", () => {
       const outcomes = yield* gitOutcomes(database);
       expect(outcomes.map((outcome) => outcome.status)).toEqual(["ok"]);
 
-      // What the copy does not get is authority. Its request is read against the
+      // What the copy does not get is admission. Its request is read against the
       // same retained rows, and one naming something this run does not hold
       // fails the run rather than being answered.
       const forgedRun = yield* createRun({ runId: "loaded-copy-forged" });
@@ -978,7 +978,7 @@ describe("workflow Git composition routing", () => {
           );
         }),
       );
-      expect(causedBy(failure, isAuthorityFailure)).toBeInstanceOf(GitOperationAuthorityError);
+      expect(causedBy(failure, isAdmissionFailure)).toBeInstanceOf(GitOperationAdmissionError);
       expect(causedBy(failure, isProviderError)).toBe(undefined);
       expect(yield* gitEvents(forgedRun)).toHaveLength(0);
     });

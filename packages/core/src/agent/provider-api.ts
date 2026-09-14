@@ -2,7 +2,7 @@
  * How an agent provider is installed, and what installing one grants.
  *
  * A provider is the only thing that can perform a launch, so *selecting* one is
- * itself an authority decision. The old shape resolved a name to a factory and
+ * itself a coordination decision. The old shape resolved a name to a factory and
  * handed that factory back up the public chain, which meant any handler could
  * answer with a factory of its own — or take the one it was given and install
  * it somewhere else.
@@ -13,7 +13,7 @@
  * handler sits at the terminal end of that chain and holds its own captured
  * continuation — a parameter of its generator, carried by no request and no
  * return value. Through that continuation, and only through it, the invocation
- * terminal hands the factory this document's launch authority and records that
+ * terminal hands the factory this document's launch coordinator and records that
  * the provider acknowledged installation.
  *
  * Registration is scope-local: a nested registration overrides an outer one for
@@ -23,7 +23,7 @@
 import { type Api, createApi } from "@effectionx/context-api";
 import { ensure, type Operation } from "effection";
 import type { PermissionMode } from "./agent-api.ts";
-import type { AgentProviderAuthority } from "./launch-authority.ts";
+import type { AgentLaunchCoordinator } from "./launch-coordinator.ts";
 
 export interface AgentProviderOptions {
   defaultAgent: string;
@@ -33,14 +33,14 @@ export interface AgentProviderOptions {
 /**
  * A provider factory installs `Agent` middleware for its scope.
  *
- * The authority is the second argument because it is delivered, not published:
+ * The coordinator is the second argument because it is delivered, not published:
  * there is no reader for it, no context holding one, and no request member
  * carrying one. A factory closes over it, and only the handler that closed over
  * it can pair a routed launch request with it.
  */
 export type AgentProviderFactory = (
   options: AgentProviderOptions,
-  authority: AgentProviderAuthority,
+  launchCoordinator: AgentLaunchCoordinator,
 ) => Operation<void>;
 
 /** The stable name every loaded copy composes through. */
@@ -121,7 +121,7 @@ export function* registerAgentProvider(
         // refuses a copied, reused or stale request here, before the factory
         // installs anything.
         const delivery = deliveryOf(yield* next({ intent: "inspect", install: call }));
-        yield* factory(delivery.options, delivery.authority);
+        yield* factory(delivery.options, delivery.launchCoordinator);
         yield* next({ intent: "acknowledge", install: call });
         return undefined;
       },
@@ -139,7 +139,7 @@ export function* registerAgentProvider(
  */
 function deliveryOf(value: unknown): {
   options: AgentProviderOptions;
-  authority: AgentProviderAuthority;
+  launchCoordinator: AgentLaunchCoordinator;
 } {
   if (typeof value !== "object" || value === null) {
     throw new AgentProviderInstallError(
@@ -147,13 +147,13 @@ function deliveryOf(value: unknown): {
     );
   }
   const options = Reflect.get(value, "options");
-  const authority = Reflect.get(value, "authority");
+  const launchCoordinator = Reflect.get(value, "launchCoordinator");
   if (typeof options !== "object" || options === null) {
     throw new AgentProviderInstallError("the live agent provider installation named no options");
   }
-  if (typeof authority !== "object" || authority === null) {
+  if (typeof launchCoordinator !== "object" || launchCoordinator === null) {
     throw new AgentProviderInstallError(
-      "the live agent provider installation carried no authority",
+      "the live agent provider installation carried no launch coordinator",
     );
   }
   const defaultAgent = Reflect.get(options, "defaultAgent");
@@ -161,10 +161,10 @@ function deliveryOf(value: unknown): {
   if (typeof defaultAgent !== "string" || permissionMode === undefined) {
     throw new AgentProviderInstallError("the live agent provider options are not readable");
   }
-  const perform = Reflect.get(authority, "perform");
-  const refuse = Reflect.get(authority, "refuse");
-  const sessionIdentity = Reflect.get(authority, "sessionIdentity");
-  const checkpoint = Reflect.get(authority, "checkpoint");
+  const perform = Reflect.get(launchCoordinator, "perform");
+  const refuse = Reflect.get(launchCoordinator, "refuse");
+  const sessionIdentity = Reflect.get(launchCoordinator, "sessionIdentity");
+  const checkpoint = Reflect.get(launchCoordinator, "checkpoint");
   if (
     typeof perform !== "function" ||
     typeof refuse !== "function" ||
@@ -172,16 +172,17 @@ function deliveryOf(value: unknown): {
     typeof checkpoint !== "function"
   ) {
     throw new AgentProviderInstallError(
-      "the live agent provider installation carried no launch authority",
+      "the live agent provider installation carried no launch coordination",
     );
   }
   return {
     options: { defaultAgent, permissionMode },
-    authority: {
-      perform: (request, phases) => Reflect.apply(perform, authority, [request, phases]),
-      refuse: (request, preparation) => Reflect.apply(refuse, authority, [request, preparation]),
+    launchCoordinator: {
+      perform: (request, phases) => Reflect.apply(perform, launchCoordinator, [request, phases]),
+      refuse: (request, preparation) =>
+        Reflect.apply(refuse, launchCoordinator, [request, preparation]),
       sessionIdentity: (request) => {
-        const identity = Reflect.apply(sessionIdentity, authority, [request]);
+        const identity = Reflect.apply(sessionIdentity, launchCoordinator, [request]);
         if (typeof identity !== "string" || identity === "") {
           throw new AgentProviderInstallError(
             "the live agent provider installation answered a session placement with no identity",
@@ -190,7 +191,7 @@ function deliveryOf(value: unknown): {
         return identity;
       },
       checkpoint: (terminal, token) => {
-        Reflect.apply(checkpoint, authority, [terminal, token]);
+        Reflect.apply(checkpoint, launchCoordinator, [terminal, token]);
       },
     },
   };
@@ -212,7 +213,7 @@ function permissionModeOf(value: unknown): PermissionMode | undefined {
  * content it exists for. Installing into the caller's own operation is what
  * puts it where the content can reach it.
  *
- * The authority reaches whichever factory answers, and nothing else: a handler
+ * The coordinator reaches whichever factory answers, and nothing else: a handler
  * that short-circuits, fabricates a return, or never acknowledges installs no
  * provider, and this refuses rather than leaving the caller believing one is
  * there.
@@ -220,7 +221,7 @@ function permissionModeOf(value: unknown): PermissionMode | undefined {
 export function installAgentProvider(
   name: string,
   options: AgentProviderOptions,
-  authority: AgentProviderAuthority,
+  launchCoordinator: AgentLaunchCoordinator,
 ): Operation<void> {
   return (function* (): Operation<void> {
     const request: AgentProviderInstallRequest = Object.freeze({
@@ -228,7 +229,7 @@ export function installAgentProvider(
       name,
       options: Object.freeze({ ...options }),
     });
-    const terminal = installationTerminal(request, options, authority);
+    const terminal = installationTerminal(request, options, launchCoordinator);
     // Same stable name, so the shared middleware chain applies; own descriptor,
     // so the chain ends in this invocation's terminal rather than in the public
     // refusing default.
@@ -249,7 +250,7 @@ export function installAgentProvider(
 function installationTerminal(
   request: AgentProviderInstallRequest,
   options: AgentProviderOptions,
-  authority: AgentProviderAuthority,
+  launchCoordinator: AgentLaunchCoordinator,
 ): {
   install: (call: AgentProviderCall) => Operation<unknown>;
   acknowledged: () => boolean;
@@ -265,7 +266,7 @@ function installationTerminal(
         throw new AgentProviderInstallError(`Unknown agent provider "${call.name}"`);
       }
       // Object identity, not shape: a request rebuilt with the same members
-      // describes the same ask and authorizes nothing.
+      // describes the same ask and is admitted nowhere.
       if (!Object.is(call.install, request)) {
         throw new AgentProviderInstallError(
           "the live agent provider installation received a copied, substituted or foreign request",
@@ -278,7 +279,7 @@ function installationTerminal(
           );
         }
         state = "inspected";
-        return { options, authority };
+        return { options, launchCoordinator };
       }
       if (state !== "inspected") {
         throw new AgentProviderInstallError(

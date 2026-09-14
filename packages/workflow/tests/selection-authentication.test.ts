@@ -5,7 +5,7 @@
  * one to a child, and — since it is an ordinary frozen object — build one that
  * looks exactly like it. So the seam this suite guards is that naming a target
  * and being allowed to reach it are different things. The registry keeps the
- * authority; the value keeps only the name.
+ * permission; the value keeps only the name.
  *
  * Every case here is a *refusal* that must happen. A registry that answered a
  * forged selection, or one whose members were edited after it was minted, would
@@ -43,7 +43,7 @@ function refusal(): Error {
   return new Error("refused");
 }
 
-describe("a Repository selection names a target and carries no authority", () => {
+describe("a Repository selection names a target and admits nothing", () => {
   it("answers a selection the registry itself minted", function* () {
     const { registry, selection } = held();
     expect(registry.authenticate(selection, refusal)).toBe("held value");

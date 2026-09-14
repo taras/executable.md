@@ -12,7 +12,7 @@ import { Agent, Config } from "@executablemd/core";
 import type {
   AgentLaunchRequest,
   AgentPromptEvent,
-  AgentProviderAuthority,
+  AgentLaunchCoordinator,
   PromptOptions,
   Session,
 } from "@executablemd/core";
@@ -51,7 +51,7 @@ function* installProvider(harness: FakeRuntimeHarness): Operation<void> {
     sessionStore: makeStore(),
     agentRegistry: makeRegistry({ codex: "codex-cmd", other: "other-cmd" }),
   });
-  yield* factory({ defaultAgent: "codex", permissionMode: "deny-all" }, stubAuthority());
+  yield* factory({ defaultAgent: "codex", permissionMode: "deny-all" }, stubCoordinator());
 }
 
 function* collectPrompt(
@@ -178,7 +178,7 @@ describe("Tier AP — ACPX provider", () => {
         sessionStore: store,
         agentRegistry: makeRegistry({ codex: "codex-cmd" }),
       });
-      yield* factory({ defaultAgent: "codex", permissionMode: "deny-all" }, stubAuthority());
+      yield* factory({ defaultAgent: "codex", permissionMode: "deny-all" }, stubCoordinator());
 
       // Simulate a prior turn's reconnect: the persisted record now
       // carries a replaced ACP session id that the handle predates.
@@ -238,7 +238,7 @@ describe("Tier AP — ACPX provider", () => {
         sessionStore: store,
         agentRegistry: makeRegistry({ codex: "codex-cmd" }),
       });
-      yield* factory({ defaultAgent: "codex", permissionMode: "deny-all" }, stubAuthority());
+      yield* factory({ defaultAgent: "codex", permissionMode: "deny-all" }, stubCoordinator());
 
       // The persisted record carries the authoritative ids after a
       // prior reconnect replaced both.
@@ -321,7 +321,7 @@ describe("Tier AP — ACPX provider", () => {
         sessionStore: store,
         agentRegistry: makeRegistry({ codex: "codex-cmd" }),
       });
-      yield* factory({ defaultAgent: "codex", permissionMode: "deny-all" }, stubAuthority());
+      yield* factory({ defaultAgent: "codex", permissionMode: "deny-all" }, stubCoordinator());
 
       const sessionKey = deriveSessionKey("codex-cmd", CWD);
       const record = makeRecord("codex-cmd", CWD);
@@ -400,7 +400,7 @@ describe("Tier AP — ACPX provider", () => {
         sessionStore: store,
         agentRegistry: makeRegistry({ codex: "codex-cmd" }),
       });
-      yield* factory({ defaultAgent: "codex", permissionMode: "deny-all" }, stubAuthority());
+      yield* factory({ defaultAgent: "codex", permissionMode: "deny-all" }, stubCoordinator());
 
       // Pre-seed the repo-root session so the walk from a subdir reuses it.
       const rootKey = deriveSessionKey("codex-cmd", "/repo");
@@ -451,7 +451,7 @@ describe("Tier AP — ACPX provider", () => {
         agentRegistry: makeRegistry({ codex: "codex-cmd" }),
         withSessionRoute: (_context, op) => routeQueue.withSlot("route", op),
       });
-      yield* factory({ defaultAgent: "codex", permissionMode: "deny-all" }, stubAuthority());
+      yield* factory({ defaultAgent: "codex", permissionMode: "deny-all" }, stubCoordinator());
 
       const a1 = yield* spawn(() => collectPrompt("a1"));
       yield* sleep(10);
@@ -723,7 +723,7 @@ function* usePartition(harness: FakeRuntimeHarness): Operation<Partition> {
 }
 
 /** A stand-in for what core delivers to an installed factory. */
-interface AuthorityLog extends AgentProviderAuthority {
+interface CoordinatorLog extends AgentLaunchCoordinator {
   performed: number;
   refused: number;
   /**
@@ -736,8 +736,8 @@ interface AuthorityLog extends AgentProviderAuthority {
   checkpoints: unknown[];
 }
 
-function stubAuthority(): AuthorityLog {
-  const log: AuthorityLog = {
+function stubCoordinator(): CoordinatorLog {
+  const log: CoordinatorLog = {
     performed: 0,
     refused: 0,
     checkpoints: [],
@@ -748,7 +748,7 @@ function stubAuthority(): AuthorityLog {
     // rather than answering means a placement that did reach here fails
     // loudly instead of being handed an identity nobody derived.
     sessionIdentity: () => {
-      throw new Error("this stub authority routes no session placement");
+      throw new Error("this stub coordinator routes no session placement");
     },
     // deno-lint-ignore require-yield
     *perform() {
@@ -784,7 +784,7 @@ function fakeRequest(): AgentLaunchRequest {
 function* installPartitioned(
   harness: FakeRuntimeHarness,
   options: { select?: () => AcpxProvider | undefined } = {},
-): Operation<{ authority: AuthorityLog; selections: () => number }> {
+): Operation<{ launchCoordinator: CoordinatorLog; selections: () => number }> {
   yield* useFlatWorld(CWD);
   const owned = options.select ? undefined : yield* usePartition(harness);
   let selections = 0;
@@ -792,16 +792,16 @@ function* installPartitioned(
     selections += 1;
     return options.select ? options.select() : owned!.handle;
   });
-  const authority = stubAuthority();
-  yield* factory({ defaultAgent: "codex", permissionMode: "deny-all" }, authority);
-  return { authority, selections: () => selections };
+  const launchCoordinator = stubCoordinator();
+  yield* factory({ defaultAgent: "codex", permissionMode: "deny-all" }, launchCoordinator);
+  return { launchCoordinator, selections: () => selections };
 }
 
 /**
  * Tier PT — one installed factory over isolated provider partitions
  * (issue-518-test-agent-provider-partition-architect-amendment.md).
  *
- * Authority has to be installed where the content it serves is projected, and
+ * The provider has to be installed where the content it serves is projected, and
  * isolation has to be per `<Test>`. Both hold because installation and state
  * are different things: one factory is installed, and it selects which complete
  * provider state to act on for each dispatch.
@@ -835,7 +835,7 @@ describe("Tier SM — session placement and materialization", () => {
         sessionStore: store,
         agentRegistry: makeRegistry({ codex: "codex-cmd" }),
       });
-      yield* factory({ defaultAgent: "codex", permissionMode: "deny-all" }, stubAuthority());
+      yield* factory({ defaultAgent: "codex", permissionMode: "deny-all" }, stubCoordinator());
 
       const session = yield* Agent.operations.session();
 
@@ -1262,16 +1262,16 @@ describe("Tier PT — partitioned provider installation", () => {
 
   it("PT7: a launch reaches the selected partition through the installed factory", function* () {
     // The other direction, and the one the whole shape exists for: the factory
-    // core installed is what pairs a routed request with its authority, and the
+    // core installed is what pairs a routed request with its coordinator, and the
     // work lands on whichever partition was selected for that dispatch.
     const harness = createFakeRuntime();
     yield* scoped(function* () {
-      const { authority, selections } = yield* installPartitioned(harness);
+      const { launchCoordinator, selections } = yield* installPartitioned(harness);
 
       yield* Agent.operations.launch(fakeRequest());
 
       expect(selections()).toBe(1);
-      expect(authority.performed).toBe(1);
+      expect(launchCoordinator.performed).toBe(1);
     });
   });
 });
@@ -1298,7 +1298,7 @@ const SESSION_DIR = "/runs/sessions/cwd/8f2a";
 
 const WORKFLOW_SESSION_KEY = "xmd:workflow:v1:run:acpx:codex-cmd:default";
 
-const INSTRUCTIONS = "You have no native tool authority here.";
+const INSTRUCTIONS = "You have no native tool permissions here.";
 
 /** The ACP session id a seeded record routes a permission request under. */
 const ACP_SESSION_ID = "acp-session-workflow";
@@ -1354,7 +1354,7 @@ function* installStrictProvider(
     permissions: "strict",
     sessions,
   });
-  yield* factory({ defaultAgent: "codex", permissionMode: "deny-all" }, stubAuthority());
+  yield* factory({ defaultAgent: "codex", permissionMode: "deny-all" }, stubCoordinator());
   // An authored approve-all scope, installed the way `<ApproveAll>` installs
   // one. Under this profile it must reach no decision at all.
   yield* Agent.around({
@@ -1467,7 +1467,7 @@ describe("Tier WAP — strict workflow Agent profile", () => {
       // A rejection where ACP offered one, and never the allow the authored
       // policy would have selected.
       expect(decision).toEqual({ outcome: "reject_once" });
-      // The public chain is not consulted: there is no authority to widen.
+      // The public chain is not consulted: there is no permission to widen.
       expect(log.consulted).toBe(0);
 
       // The adapter carries on regardless and reports success.
@@ -1529,7 +1529,7 @@ describe("Tier WAP — strict workflow Agent profile", () => {
         sessionStore: store,
         agentRegistry: makeRegistry({ codex: "codex-cmd" }),
       });
-      yield* factory({ defaultAgent: "codex", permissionMode: "deny-all" }, stubAuthority());
+      yield* factory({ defaultAgent: "codex", permissionMode: "deny-all" }, stubCoordinator());
       yield* Agent.around({
         // deno-lint-ignore require-yield
         *requestPermission([request]) {
@@ -1631,7 +1631,7 @@ describe("Tier WAP — strict workflow Agent profile", () => {
  * everything else in `_meta` is discarded, and a turn that did not succeed
  * names nothing however the adapter labelled it.
  *
- * The authority records what it was told, unparsed. It stands in for what core
+ * The coordinator records what it was told, unparsed. It stands in for what core
  * delivers to an installed factory, which is the only way this provider can
  * state a checkpoint at all.
  */
@@ -1651,7 +1651,7 @@ describe("Tier APR — preparing an agent before it is probed", () => {
         order.push(`prepare:${agentName}`);
       },
     });
-    yield* factory({ defaultAgent: "codex", permissionMode: "deny-all" }, stubAuthority());
+    yield* factory({ defaultAgent: "codex", permissionMode: "deny-all" }, stubCoordinator());
 
     // Nothing yet: installing a provider resolves no agent.
     expect(order).toEqual([]);
@@ -1674,16 +1674,16 @@ describe("Tier APC — Prompt checkpoint metadata", () => {
   ): Operation<{ checkpoints: unknown[]; events: AgentPromptEvent[] }> {
     const harness = createFakeRuntime();
     harness.script({ result });
-    const authority = stubAuthority();
+    const launchCoordinator = stubCoordinator();
     yield* useFlatWorld(CWD);
     const factory = createAcpxProvider({
       createRuntime: harness.create,
       sessionStore: makeStore(),
       agentRegistry: makeRegistry({ codex: "codex-cmd" }),
     });
-    yield* factory({ defaultAgent: "codex", permissionMode: "deny-all" }, authority);
+    yield* factory({ defaultAgent: "codex", permissionMode: "deny-all" }, launchCoordinator);
     const { events } = yield* collectPrompt("hello");
-    return { checkpoints: authority.checkpoints, events };
+    return { checkpoints: launchCoordinator.checkpoints, events };
   }
 
   function completed(meta: Record<string, unknown>): AcpRuntimeTurnResult {

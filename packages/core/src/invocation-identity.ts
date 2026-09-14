@@ -3,7 +3,7 @@
  * (architecture.md, *Capability-backed invocation identity*).
  *
  * A component that names a durable operation after its own invocation is making
- * an authority claim: the name decides which retained record a replay restores,
+ * an ownership claim: the name decides which retained record a replay restores,
  * so two invocations arriving at one name each replay the other's work, and an
  * implementation running under somebody else's identity commits against its own
  * storage under their expansion. Code Rule 15 says such a decision never trusts
@@ -42,7 +42,7 @@
  * asked all settle to nothing. Nothing travels on the answer, so a handler that
  * short-circuits the import, redirects the name, replaces the definition, wraps
  * it, or hands back a registration record from somewhere else moves no
- * authority: what it can change is which implementation runs, and an
+ * ownership: what it can change is which implementation runs, and an
  * implementation running where canonical resolution did not select it names
  * nothing.
  */
@@ -162,7 +162,7 @@ export interface IdentityDomain {
  * reads — the syntax reference in scope where the element was written — and
  * that changes as expansion descends, so it cannot be closed over when the
  * implementation is built. It is delivered here instead, by the copy of core
- * performing the expansion, from the authority that copy is already holding.
+ * performing the expansion, from the resolution that copy is already holding.
  *
  * The observation is `undefined` where an expansion carries none. The body
  * refuses rather than inventing symbols: a component that answered without one
@@ -200,7 +200,7 @@ export type ProjectProtectedContent = (syntax: SyntaxReference) => Operation<str
  * All three change as expansion descends or belong to this invocation alone, so
  * none of them can be closed over when the implementation is built. They are
  * delivered here instead, by the copy of core performing the expansion, from
- * the private authority it is already holding.
+ * the private resolution it is already holding.
  */
 export interface ProtectedSite {
   /**
@@ -212,7 +212,7 @@ export interface ProtectedSite {
    */
   readonly syntax: SyntaxReference | undefined;
   /**
-   * The maximum authority a generated fragment may be evaluated under here.
+   * The maximum permission a generated fragment may be evaluated under here.
    *
    * `undefined` where the host offers no evaluation, which is not an
    * unrestricted one.
@@ -386,7 +386,7 @@ export interface ProtectedDeclaration {
  * What one execution knows about the components it gave identity to.
  *
  * Built by the execution from what installation declared, held by value, and
- * passed into core's own expansion beside the import authority — so no
+ * passed into core's own expansion beside component resolution — so no
  * document, component or middleware can reach it, replace it, or add to it.
  */
 export interface InvocationIdentities {
@@ -513,7 +513,7 @@ export type FormRefusal = (props: Record<string, Json>, form: InvocationForm | u
  * What a form-sensitive component declares to canonical definition
  * construction.
  *
- * A declaration is **input**, not authority: it says which bodies exist and
+ * A declaration is **input**, not the decision: it says which bodies exist and
  * which forms they answer, and canonical core turns it into the dispatcher that
  * decides. A component that declares nothing is form-insensitive and reaches
  * expansion exactly as it always has.
@@ -593,7 +593,7 @@ export function isFormDispatcher(fn: unknown): boolean {
 /**
  * The engine-owned body a form-sensitive component is invoked through.
  *
- * This is the authority. The raw handlers stay closed over here and never
+ * This is what decides. The raw handlers stay closed over here and never
  * travel on an import answer, so the only route into one is a call that
  * satisfies all of:
  *
@@ -778,14 +778,14 @@ export function installFormSyntax(): FormSyntax {
   // here for this execution's lifetime and reachable from nowhere else.
   const canonical = new WeakMap<object, { name: string; dispatcher: FunctionComponent }>();
   return {
-    select(name: string, definition: object, dispatcher?: unknown): void {
+    select(name: string, definition: object, stated?: unknown): void {
       // The dispatcher is named explicitly where the answer is not the
       // dispatcher itself: a trusted host that wraps a pinned definition to
-      // collect what it returned is still the answer to the import, and the
-      // form authority is the canonical dispatcher underneath its wrapper.
-      const authority = dispatcher ?? Reflect.get(definition, "fn");
-      if (isFormDispatcher(authority)) {
-        canonical.set(definition, { name, dispatcher: authority as FunctionComponent });
+      // collect what it returned is still the answer to the import, and what
+      // decides the form is the canonical dispatcher underneath its wrapper.
+      const dispatcher = stated ?? Reflect.get(definition, "fn");
+      if (isFormDispatcher(dispatcher)) {
+        canonical.set(definition, { name, dispatcher: dispatcher as FunctionComponent });
       }
     },
     dispatcherFor(name: string, definition: unknown): FunctionComponent | undefined {

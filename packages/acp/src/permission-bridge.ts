@@ -19,7 +19,7 @@
  *
  * What a routed request is answered with is injected. The default asks the
  * public, author-composable Agent chain, which is what `<ApproveAll>` composes
- * around. A host with no native tool authority to grant installs
+ * around. A host with no native tool permission to grant installs
  * `strictPermissions()` instead: it denies, tells the provider which turn asked,
  * and reaches `Agent.requestPermission` at no point — so no public handler can
  * widen a ceiling that has nothing in it. Routing, and every fail-closed answer
@@ -45,7 +45,7 @@ const CANCEL: AcpPermissionDecision = { outcome: "cancel" };
 
 /**
  * What a native permission request is refused with under a profile that grants
- * no native tool authority.
+ * no native tool permission.
  *
  * Fixed, and naming nothing the request carried. A tool title, its raw input, a
  * path or a command line are the agent's own text, and a host that denies a
@@ -129,7 +129,7 @@ function* composablePermissions(
  * Deny every request, and tell the caller which turn asked.
  *
  * It reaches `Agent.requestPermission` at no point, so an authored `<ApproveAll>`
- * composes around nothing: under this policy there is no native tool authority
+ * composes around nothing: under this policy there is no native tool permission
  * to widen. A reject option is selected where ACP offered one, because a
  * rejection is what the adapter is being told; cancelling is the answer only
  * when it offered no way to say no.

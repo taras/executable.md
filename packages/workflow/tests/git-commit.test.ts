@@ -22,7 +22,7 @@ import { useTempDirectory } from "@executablemd/test-support/temp";
 import { cwd } from "@executablemd/runtime";
 import {
   GitCompositionProviderError,
-  GitOperationAuthorityError,
+  GitOperationAdmissionError,
   GitOperationError,
   GitOperationInfrastructureError,
 } from "../src/composition/errors.ts";
@@ -100,8 +100,8 @@ function isGitFailure(value: unknown): value is GitOperationError {
   return value instanceof GitOperationError;
 }
 
-function isAuthorityFailure(value: unknown): value is GitOperationAuthorityError {
-  return value instanceof GitOperationAuthorityError;
+function isAdmissionFailure(value: unknown): value is GitOperationAdmissionError {
+  return value instanceof GitOperationAdmissionError;
 }
 
 function isProviderError(value: unknown): value is GitCompositionProviderError {
@@ -880,13 +880,13 @@ describe("workflow Git.Commit selection", () => {
         ),
       );
 
-      expect(causedBy(failure, isAuthorityFailure)).toBeInstanceOf(GitOperationAuthorityError);
+      expect(causedBy(failure, isAdmissionFailure)).toBeInstanceOf(GitOperationAdmissionError);
       expect(subcommands(counting.counters)).not.toContain("commit");
       expect(yield* gitEvents(database)).toHaveLength(0);
     });
   });
 
-  it("gives a forged Repository context no authority to commit", function* () {
+  it("gives a forged Repository context no admission to commit", function* () {
     const root = yield* useStorageRoot();
     const remote = yield* useBareRemote(REMOTE);
 
@@ -901,7 +901,7 @@ describe("workflow Git.Commit selection", () => {
       const unretained = yield* createRun({ runId: "ghost" });
       const counting = countingHost();
       const ghost = yield* raised(runForged(unretained, FORGED, source, countingOptions(counting)));
-      expect(causedBy(ghost, isAuthorityFailure)).toBeInstanceOf(GitOperationAuthorityError);
+      expect(causedBy(ghost, isAdmissionFailure)).toBeInstanceOf(GitOperationAdmissionError);
       expect(causedBy(ghost, isGitFailure)).toBe(undefined);
       expect(yield* gitEvents(unretained)).toHaveLength(0);
 
@@ -910,7 +910,7 @@ describe("workflow Git.Commit selection", () => {
       const failure = yield* raised(
         runForged(substituted, { ...FORGED, name: "project" }, source, countingOptions(counting)),
       );
-      expect(causedBy(failure, isAuthorityFailure)).toBeInstanceOf(GitOperationAuthorityError);
+      expect(causedBy(failure, isAdmissionFailure)).toBeInstanceOf(GitOperationAdmissionError);
       expect(yield* retainedRepositories(substituted)).toHaveLength(1);
       expect(yield* gitEvents(substituted)).toHaveLength(0);
       expect(subcommands(counting.counters)).not.toContain("commit");
@@ -926,7 +926,7 @@ describe("workflow Git.Commit selection", () => {
         runDocument(database, `<Git.Commit message="nowhere" as="sha" />`),
       );
 
-      expect(causedBy(failure, isAuthorityFailure)).toBeInstanceOf(GitOperationAuthorityError);
+      expect(causedBy(failure, isAdmissionFailure)).toBeInstanceOf(GitOperationAdmissionError);
       expect(yield* gitEvents(database)).toHaveLength(0);
     });
   });

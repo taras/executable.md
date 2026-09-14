@@ -52,7 +52,7 @@ import {
   REMOTE,
   TOKEN,
   evidenceRoutes,
-  isAuthorityFailure,
+  isAdmissionFailure,
 } from "./support/run-composition-tier.ts";
 
 describe("ORC14 — live Push evidence", () => {
@@ -703,14 +703,14 @@ describe("ORC17 — live PullRequests", () => {
 });
 
 /**
- * A checkout is authority only under the whole repository identity.
+ * A checkout is admitted only under the whole repository identity.
  *
  * Two `<Repository>` elements naming one url under two names are two
  * repositories: two slots, two advisory leases, two lines of Push evidence.
  * Every member of their identities is equal except `name`, which is exactly the
  * case a comparison that stops at the locator fingerprint cannot see — and a
  * `<Dir>` into the second, written where the first is the Repository in scope,
- * would carry the first's authority into a checkout it never selected.
+ * would carry the first's admission into a checkout it never selected.
  *
  * The refusal is asked for at the three surfaces that reach different things: a
  * local mutation, a publication, and a Git host. The two cases after it are the
@@ -730,7 +730,7 @@ function refsOf(remote: BareRemote): string[] {
   return [...remoteRefs(remote)].map(([name, commit]) => `${name} ${commit}`).sort();
 }
 
-describe("checkout authority is the whole repository identity", () => {
+describe("checkout admission is the whole repository identity", () => {
   /** Deterministic, so no case depends on who this host says its user is. */
   const IDENT = "Tester <tester@example.test> 0 +0000";
 
@@ -812,10 +812,10 @@ describe("checkout authority is the whole repository identity", () => {
         ),
       );
 
-      // The checkout-authority refusal, named for the element that was written
+      // The checkout-admission refusal, named for the element that was written
       // — not a later failure that happens to stop the same document.
-      const authority = causedBy(failure, isAuthorityFailure);
-      expect(`${element} ${authority?.operation}`).toBe(`${element} ${element}`);
+      const admission = causedBy(failure, isAdmissionFailure);
+      expect(`${element} ${admission?.operation}`).toBe(`${element} ${element}`);
       expect(`${element} ${String(failure)}`).toContain(
         "is inside none of the checkouts this execution selected for the repository in scope",
       );

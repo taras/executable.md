@@ -879,7 +879,7 @@ class ValidationState {
     }
 
     if (selected.kind === "workflow") {
-      // A component bundle is authority one document execution runs under.
+      // A component bundle is canonical resolution one document execution runs under.
       // Validation installs none, so this tier answers for no validation.
       throw new Error(
         `Component ${segment.name} resolved through a workflow component bundle, which ` +

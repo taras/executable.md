@@ -141,7 +141,7 @@ function assemblyFor(phases: Phases): UpgradeAssembly {
     architecture: "arm64",
     target: TARGET,
     // deno-lint-ignore require-yield
-    *authority() {
+    *components() {
       return seams(phases);
     },
   };

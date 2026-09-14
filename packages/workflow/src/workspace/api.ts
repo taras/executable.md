@@ -15,7 +15,7 @@ export class WorkspaceCoordinationProviderError extends Error {
   }
 }
 
-/** Selects a Workspace provider without carrying live-operation authority. */
+/** Selects a Workspace provider without carrying a live operation's credential. */
 export const WorkspaceCoordination: Api<WorkspaceCoordinationApi> =
   createApi<WorkspaceCoordinationApi>("executablemd.workflow.workspace.coordination", {
     provider: undefined,

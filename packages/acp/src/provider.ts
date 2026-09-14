@@ -42,7 +42,7 @@ import type {
   ExecutableBuildBindingV1,
   AgentSessionRequest,
   AgentLaunchRequest,
-  AgentProviderAuthority,
+  AgentLaunchCoordinator,
   AgentPromptEvent,
   AgentProviderFactory,
   AgentProviderOptions,
@@ -129,7 +129,7 @@ export interface AcpxSessionContext {
    * routed a placement.
    *
    * The only thing here a document cannot change. It arrives through the
-   * authority delivered to this provider rather than on the public chain, so a
+   * coordinator delivered to this provider rather than on the public chain, so a
    * handler that rewrote the name above did not rewrite this.
    */
   readonly sessionIdentity?: string;
@@ -524,7 +524,7 @@ interface LaunchInvocation {
  * several independent states in sibling scopes.
  *
  * Deliberately no launch. A launch is authoritative — it retains durable phases
- * and settles what the document believes happened — and authority reaches a
+ * and settles what the document believes happened — and coordination reaches a
  * provider only when core installs its factory. An embedder that needs one
  * registers a provider and lets it be installed; what this surface offers is
  * the non-authoritative half: resolving an agent, establishing a session, and
@@ -548,7 +548,7 @@ export class AcpxPartitionError extends Error {
  * One installed factory over any number of complete provider states.
  *
  * Installation and state are different things, and only one of them carries
- * authority. Installing once says where this provider can be reached from —
+ * coordinator. Installing once says where this provider can be reached from —
  * which has to be the operation enclosing the content it serves, or it is not
  * reachable at all. Selecting says which state to act on, which is how sibling
  * `<Test>` elements keep sessions, queues and records of their own under a
@@ -563,7 +563,7 @@ export class AcpxPartitionError extends Error {
 export function createPartitionedAcpxProvider(select: AcpxPartitionSelector): AgentProviderFactory {
   return function* (
     _providerOptions: AgentProviderOptions,
-    authority: AgentProviderAuthority,
+    launchCoordinator: AgentLaunchCoordinator,
   ): Operation<void> {
     /**
      * The state behind the selected handle, or a refusal.
@@ -596,7 +596,7 @@ export function createPartitionedAcpxProvider(select: AcpxPartitionSelector): Ag
           return yield* (yield* selected()).agent(name);
         },
         *session([name], _next) {
-          return yield* (yield* selected()).placeSession(name, authority);
+          return yield* (yield* selected()).placeSession(name, launchCoordinator);
         },
         *prompt([content, options], _next) {
           // Selection belongs inside the subscription, with the rest of the
@@ -605,17 +605,17 @@ export function createPartitionedAcpxProvider(select: AcpxPartitionSelector): Ag
           return {
             *[Symbol.iterator]() {
               const state = yield* selected();
-              return yield* state.promptStream(content, options, authority);
+              return yield* state.promptStream(content, options, launchCoordinator);
             },
           };
         },
         // The terminal end of the public chain, and the only handler holding
-        // this authority. Everything outside it routed a request; this is where
+        // this coordinator. Everything outside it routed a request; this is where
         // a request becomes work, and the verdict still belongs to core. The
-        // authority is passed as a live argument and never stored on a
+        // the coordinator is passed as a live argument and never stored on a
         // partition, so resolving a handle yields work, never permission.
         *launch([request], _next) {
-          yield* (yield* selected()).launch(request, authority);
+          yield* (yield* selected()).launch(request, launchCoordinator);
         },
       },
       { at: "min" },
@@ -633,23 +633,23 @@ export function createPartitionedAcpxProvider(select: AcpxPartitionSelector): Ag
 export function createAcpxProvider(dependencies?: AcpxProviderDependencies): AgentProviderFactory {
   return function* (
     providerOptions: AgentProviderOptions,
-    authority: AgentProviderAuthority,
+    launchCoordinator: AgentLaunchCoordinator,
   ): Operation<void> {
     const handle = yield* useAcpxProvider(providerOptions, dependencies);
     yield* createPartitionedAcpxProvider(function* () {
       return handle;
-    })(providerOptions, authority);
+    })(providerOptions, launchCoordinator);
   };
 }
 
 /** Everything the provider does, including the authoritative launch path. */
 interface AcpxProviderState extends AcpxProvider {
-  launch(request: AgentLaunchRequest, authority: AgentProviderAuthority): Operation<void>;
+  launch(request: AgentLaunchRequest, launchCoordinator: AgentLaunchCoordinator): Operation<void>;
   /**
-   * The same turn, with the authority that can name which turn it was.
+   * The same turn, with the coordinator that can name which turn it was.
    *
    * Optional here and absent from {@link AcpxProvider}: an embedder holding a
-   * partition drives turns without an authority and names none, and the public
+   * partition drives turns without a coordinator and names none, and the public
    * handle forwards no third argument. A checkpoint is durable identity, so the
    * ability to state one arrives the way a launch's does — delivered to the
    * installed factory, never reachable from a handle.
@@ -657,18 +657,18 @@ interface AcpxProviderState extends AcpxProvider {
   promptStream(
     content: string,
     options?: PromptOptions,
-    authority?: AgentProviderAuthority,
+    launchCoordinator?: AgentLaunchCoordinator,
   ): Stream<AgentPromptEvent, string>;
   /**
-   * The same resolution, with the authority that can read a placement.
+   * The same resolution, with the coordinator that can read a placement.
    *
    * Delivered as a live argument for the same reason a launch's is: the engine
    * identity a `<Session>` routes is readable only through it, and a provider
-   * state holding one would be holding authority it could hand anywhere.
+   * state holding one would be holding coordination it could hand anywhere.
    */
   placeSession(
     option: string | Session | AgentSessionRequest | undefined,
-    authority: AgentProviderAuthority,
+    launchCoordinator: AgentLaunchCoordinator,
   ): Operation<Session>;
 }
 
@@ -697,7 +697,7 @@ let withdrawPartition: (handle: AcpxProvider) => void;
  * Reached by nothing: it is on no object, exported from nowhere, and named only
  * here. A caller who reaches the class through `handle.constructor` still
  * cannot build an instance, which matters because an instance carrying a state
- * of the caller's own would be handed this document's launch authority.
+ * of the caller's own would be handed this document's launch coordinator.
  */
 const ADMIT: unique symbol = Symbol("executablemd.acpx.partition.admit");
 
@@ -2015,7 +2015,7 @@ function* useAcpxProviderState(
   function promptStream(
     content: string,
     options: PromptOptions | undefined,
-    authority?: AgentProviderAuthority,
+    launchCoordinator?: AgentLaunchCoordinator,
   ): Stream<AgentPromptEvent, string> {
     return {
       *[Symbol.iterator]() {
@@ -2177,9 +2177,9 @@ function* useAcpxProviderState(
                 completed = true;
               },
               () => (denials.denied ? new AgentToolPermissionRefused() : undefined),
-              authority === undefined
+              launchCoordinator === undefined
                 ? undefined
-                : (terminal, token) => authority.checkpoint(terminal, token),
+                : (terminal, token) => launchCoordinator.checkpoint(terminal, token),
             ),
           );
           return subscription;
@@ -2709,7 +2709,7 @@ function* useAcpxProviderState(
   }
 
   /**
-   * Perform one launch the authority routed here.
+   * Perform one launch the coordinator routed here.
    *
    * The order is the contract: the terminal is already held by the time this
    * runs, so what happens here is session ownership, then preparation, then the
@@ -2718,7 +2718,10 @@ function* useAcpxProviderState(
    * earlier would be telling the next process the session is free while a UI is
    * still drawing in it.
    */
-  function launch(request: AgentLaunchRequest, authority: AgentProviderAuthority): Operation<void> {
+  function launch(
+    request: AgentLaunchRequest,
+    launchCoordinator: AgentLaunchCoordinator,
+  ): Operation<void> {
     return scoped(function* (): Operation<void> {
       const agentName = request.agent;
       const callerCwd = resolve(yield* agentCwd());
@@ -2756,7 +2759,7 @@ function* useAcpxProviderState(
             // the reader's terminal while offering no way to reach the owner it
             // was waiting for. It refuses instead, and the coordinator is what
             // refuses it.
-            yield* authority.perform(request, {
+            yield* launchCoordinator.perform(request, {
               prepare: () =>
                 withSessionRoute(context, () =>
                   prepareLaunch(invocation, agentName, callerCwd, request.instructions, placement),
@@ -2784,7 +2787,7 @@ function* useAcpxProviderState(
         if (!refusal) {
           throw error;
         }
-        yield* authority.refuse(request, refusal);
+        yield* launchCoordinator.refuse(request, refusal);
         return;
       }
     });
@@ -3025,7 +3028,7 @@ function* useAcpxProviderState(
 
   /**
    * Resolve one session, reading a routed placement's engine identity through
-   * the authority when there is one.
+   * the coordinator when there is one.
    *
    * The name and the identity arrive by different routes on purpose: a handler
    * on the public chain may change the name it routes, and the identity it
@@ -3033,18 +3036,18 @@ function* useAcpxProviderState(
    */
   function* resolveSession(
     option: string | Session | AgentSessionRequest | undefined,
-    authority: AgentProviderAuthority | undefined,
+    launchCoordinator: AgentLaunchCoordinator | undefined,
   ): Operation<Session> {
     let named: string | Session | undefined;
     let sessionIdentity: string | undefined;
     if (option !== undefined && typeof option === "object" && isSessionRequest(option)) {
-      if (authority === undefined) {
+      if (launchCoordinator === undefined) {
         throw new Error(
-          "a session placement reached this provider without the authority that reads it",
+          "a session placement reached this provider without the coordinator that reads it",
         );
       }
       named = option.name;
-      sessionIdentity = authority.sessionIdentity(option);
+      sessionIdentity = launchCoordinator.sessionIdentity(option);
     } else {
       named = option;
     }
@@ -3156,8 +3159,8 @@ function* useAcpxProviderState(
     *session(option) {
       return yield* resolveSession(option, undefined);
     },
-    *placeSession(option, authority) {
-      return yield* resolveSession(option, authority);
+    *placeSession(option, launchCoordinator) {
+      return yield* resolveSession(option, launchCoordinator);
     },
     promptStream,
     launch,

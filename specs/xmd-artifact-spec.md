@@ -96,7 +96,7 @@ Artifact status JSON is the retained-run snapshot with one added member:
 ```
 
 `retrieval` is absent, and absent as a fact: an artifact excludes where its
-definition could be fetched from now, because that is authority belonging to the
+definition could be fetched from now, because that is ownership belonging to the
 machine that exported rather than something true about the run. The shared
 inspection result declares the members both forms have, the retained-run result
 alone declares `retrieval`, and the artifact result declares the artifact
@@ -181,7 +181,7 @@ discovered only from the path the caller supplies. It has no sidecars, no live
 connection identity and no location derived from its source run ID. Renaming or
 copying it does not change its identity.
 
-No command treats `.xmd` as execution authority. In particular, these forms do
+No command treats `.xmd` as permission to execute. In particular, these forms do
 not exist:
 
 ```text
@@ -258,7 +258,7 @@ The closure contains:
 Export authenticates every source against the immutable object identity in the
 workflow definition. It may satisfy a source from already-retained bytes or from
 reauthorized retrieval metadata. A fetch is an export input operation, not
-inspection and not part of artifact identity. Missing retrieval authority,
+inspection and not part of artifact identity. Missing retrieval permission,
 missing objects, an object-format mismatch or bytes that do not hash to the
 declared identity refuse export.
 
@@ -308,7 +308,7 @@ artifact holding no Agent Prompt and neither Agent kind is valid, and legacy and
 finalized writers are deliberately indistinguishable for that inventory.
 
 A checkpoint token is opaque retained evidence about where a conversation
-reached, not authority over the host that issued it, and is never derived from
+reached, not control over the host that issued it, and is never derived from
 event position, transcript text, another token or a provider head. A bundle is
 opaque bytes that nothing scans or scrubs, and §3.1 applies to it in full.
 Ordinary status and history presentation renders neither.
@@ -371,7 +371,7 @@ their providers. An interrupted or otherwise unsettled external effect is
 forkable only when the existing reconciliation contract establishes a safe
 continuation. A checkpoint that cannot establish it is
 `external-state-unavailable`. New live effects in the fork use the local host's
-current authority and credentials; the artifact grants neither.
+current permissions and credentials; the artifact grants neither.
 
 The same `workspace-root-unavailable` and `unsupported-effect` blockers apply to
 artifact history. `history --artifact --forkable` calculates them without
@@ -582,7 +582,7 @@ credentials or retrieval metadata.
 
 Architecture review freezes these invariants before implementation:
 
-1. An artifact is immutable evidence and never authority to advance the source
+1. An artifact is immutable evidence and never permission to advance the source
    run ID.
 2. Export chooses one committed frontier while holding the source executor lock
    and leaves the source unchanged.
@@ -593,7 +593,7 @@ Architecture review freezes these invariants before implementation:
 5. Continuation creates a new history fork, copies state, records the artifact
    identity in lineage and passes the existing compatibility and forkability
    gates.
-6. Credentials, live host authority, provider-owned Agent state, locks and host
+6. Credentials, live host permissions, provider-owned Agent state, locks and host
    paths do not cross the artifact boundary.
 7. Arbitrary Workspace content is preserved exactly and is treated as
    confidential rather than silently scrubbed.

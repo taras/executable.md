@@ -1512,7 +1512,7 @@ the retained note
   // WGAC17: `allow={["write"]}` admits the versioned paired `<Dir>`, and that
   // entry now authorizes persistent recursive creation. The former identity
   // authorized placement that created nothing, so a run admitted under it must
-  // not silently receive the wider authority.
+  // not silently receive the wider permission.
   //
   // Two halves, and neither is evidence alone. The control shows the current
   // admission really does execute its generated `<Dir>` and really does resume

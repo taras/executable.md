@@ -100,10 +100,10 @@ export function ordinaryEvaluationProfile(): FragmentEvaluationInput {
 /**
  * Whether the host that attached this execution already stated a ceiling.
  *
- * One execution offers one maximum authority, so a workflow attachment — which
+ * One execution offers one maximum permission, so a workflow attachment — which
  * states its own Workspace-bound profile — is not also given the run profile's.
  * Asked about the installations rather than resolved by order, because
- * "whichever came last wins" is exactly how authority stops being auditable.
+ * "whichever came last wins" is exactly how permission stops being auditable.
  */
 export function statesEvaluation(
   installations: readonly ExecutionInstallation[] | undefined,

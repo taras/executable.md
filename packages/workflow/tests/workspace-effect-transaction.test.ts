@@ -680,7 +680,7 @@ describe("Tier WAC — atomic provider-level Workspace effects", () => {
     });
   });
 
-  it("WAC10: closed and foreign database authority reaches no mutation", function* () {
+  it("WAC10: a closed and a foreign database handle reach no mutation", function* () {
     const root = yield* useStorageRoot();
     let closed: WorkflowRunDatabase | undefined;
     const savepoints: string[] = [];
@@ -691,8 +691,8 @@ describe("Tier WAC — atomic provider-level Workspace effects", () => {
     });
 
     yield* withStorage(root, function* () {
-      const first = yield* createRun({ runId: "atomic-authority-first" });
-      const second = yield* createRun({ runId: "atomic-authority-second" });
+      const first = yield* createRun({ runId: "atomic-handle-first" });
+      const second = yield* createRun({ runId: "atomic-handle-second" });
       closed = first;
       let foreignMutations = 0;
       function* foreignWorkflow(): Workflow<void> {
@@ -713,7 +713,7 @@ describe("Tier WAC — atomic provider-level Workspace effects", () => {
       let missingMutations = 0;
       function* missingWorkflow(): Workflow<void> {
         yield createDurableWorkspaceOperation(
-          { type: "workspace-proof", name: "missing-authority" },
+          { type: "workspace-proof", name: "missing-handle" },
           function* () {
             missingMutations += 1;
             return null;
@@ -740,7 +740,7 @@ describe("Tier WAC — atomic provider-level Workspace effects", () => {
       );
       function* forgedWorkflow(): Workflow<void> {
         yield createDurableWorkspaceOperation(
-          { type: "workspace-proof", name: "forged-authority" },
+          { type: "workspace-proof", name: "forged-handle" },
           forgedExecute,
         );
       }
@@ -759,7 +759,7 @@ describe("Tier WAC — atomic provider-level Workspace effects", () => {
     }
     const stale = closed;
     yield* withStorage(root, function* () {
-      const current = yield* createRun({ runId: "atomic-authority-first" });
+      const current = yield* createRun({ runId: "atomic-handle-first" });
       let mutations = 0;
       function* workflow(): Workflow<void> {
         yield* workspaceStep(stale, "closed", function* () {
@@ -860,7 +860,7 @@ describe("Tier WAC — atomic provider-level Workspace effects", () => {
         // nothing on its own.
         ["ordinary-guard", guardDurableStream(selected.journal, function* () {})],
         // Another loaded copy holds no association for this journal, so its
-        // preservation carries nothing into this copy's authority.
+        // preservation carries nothing into this copy's provenance.
         [
           "foreign-copy",
           foreignCopy.preserveJournalProvenance(

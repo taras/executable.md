@@ -140,7 +140,7 @@ describe("ORC4 — the ambient linked worktree", () => {
   });
 });
 
-describe("ORC5 — origin is not local authority", () => {
+describe("ORC5 — origin is not local admission", () => {
   it("does local work with no origin, and refuses to publish before reaching anything", function* () {
     const root = yield* useManagedRoot();
     const solo = yield* useOriginlessCheckout();

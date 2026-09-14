@@ -2,7 +2,7 @@
  * Retained events — what a run reads a journal as.
  *
  * A journal is data supplied by a backend, and every phase of a replay reads
- * the same events: a private authority gate, the replay index, public guard
+ * the same events: a private admission gate, the replay index, public guard
  * policy, and the replay path itself. If those are separate reads of the
  * backend's own objects, a source that answers differently between them decides
  * one thing for validation and another for execution, and nothing downstream
@@ -156,7 +156,7 @@ function detachResult(result: Result): Result {
   if (status === "ok") {
     // Every successful shape, including the one that settled to nothing. A
     // `Result<void>` carries no value to detach, but the envelope is still
-    // authority — left writable, a caller of a public observation could add one
+    // the retained settlement — left writable, a caller of a public observation could add one
     // before replay reads it.
     if (!("value" in result)) {
       return Object.freeze({ status });
@@ -399,7 +399,7 @@ function isRetained(event: DurableEvent): boolean {
  * history the execution already validated: the authoritative graph is what
  * admission accepted and what replay consumes, and a guard that could rewrite a
  * root selection or an effect description after admission would hold exactly
- * the authority the private gate exists to keep out of public hands.
+ * the enforcement the private gate exists to keep out of public hands.
  *
  * So policy reads a copy. It is deep and mutable, so middleware may compose over
  * it as freely as it likes, and nothing it does reaches replay.
@@ -437,7 +437,7 @@ function observeDescription(description: EffectDescription): EffectDescription {
  *
  * The authoritative copy is frozen so policy cannot rewrite it. A document
  * that resumes on a restored binding writes to it, so what a workflow receives
- * is a fresh copy taken from that authority rather than the authority itself.
+ * is a fresh copy taken from that retained history rather than the retained history itself.
  */
 export function consumable(result: Result): Result {
   if (result.status === "ok") {

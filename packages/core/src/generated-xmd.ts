@@ -115,7 +115,7 @@ import { ExecutionDeclarationCatalog } from "./execution-declarations.ts";
 import { Component } from "./component-api.ts";
 import { ErrorMode } from "./errors.ts";
 import { CanonicalImports, retain } from "./components/component-resolution.ts";
-import type { ImportAuthority, ImportedDefinition } from "./components/component-resolution.ts";
+import type { ComponentResolution, ImportedDefinition } from "./components/component-resolution.ts";
 import { isComponentName } from "./components/registration.ts";
 import { CORE_ORIGIN, CORE_REGISTRY } from "./components/registry.ts";
 import { createBlockCounter, expandSegmentsWithin } from "./expand.ts";
@@ -205,7 +205,7 @@ const CONSTRUCT: Record<Construct, string> = {
     "paired form.",
   construct: "a generated fragment carries a construct this evaluator does not admit.",
   // Distinct from `component`, because the two refuse different things. A
-  // structural construct is language rather than authority: writing one badly,
+  // structural construct is language rather than an admission: writing one badly,
   // or writing one where the generated root supplies no context for it, refuses
   // the request's own source — not a statement that the host withheld
   // something.
@@ -321,7 +321,7 @@ export type GeneratedEffectClass = "read" | "write";
  * answered with are different grants even under one origin, key and revision —
  * the first cannot be composed around and the second was resolved through
  * middleware — so a record that confused them would compare a fragment's
- * authority equal to authority it never had.
+ * admission equal to an admission it never had.
  *
  * Never derived from a function. An implementation is not an identity, and
  * serializing or inspecting one would make the retained policy depend on how a
@@ -468,13 +468,13 @@ export interface GeneratedObservation {
   readonly identity: RetainedFragmentIdentity;
   readonly definition: FunctionComponentDefinition;
   /**
-   * The form authority underneath this entry's implementation, when the
+   * The form dispatcher underneath this entry's implementation, when the
    * definition wraps one.
    *
    * A host whose admitted definition is core's own guard around somebody else's
    * implementation still has to say which function decides the authored form,
    * because a selection reads that off the definition it was handed. Absent is
-   * the ordinary case: the definition's own `fn` is the authority.
+   * the ordinary case: the definition's own `fn` is the dispatcher.
    */
   readonly dispatch?: unknown;
   /**
@@ -509,14 +509,14 @@ export interface GeneratedObservation {
  *
  * One number for all of them, bumped whenever what any of these entries
  * authorizes changes, so a continuation admitted under an earlier revision is
- * refused rather than silently granted the newer authority.
+ * refused rather than silently granted the newer admission.
  *
  * One constant rather than one per table. The pinned constructors here and the
  * evaluation profile's entries describe the same operations, and a reader
  * comparing two admissions has to be able to trust that they say so — two
  * numbers that had to be moved together would eventually not be.
  *
- * Revision 2 is where the authority behind these entries changed: an admitted
+ * Revision 2 is where the operations behind these entries changed: an admitted
  * element used to invoke the ordinary component and resolve `API.Files` or
  * `API.Fetch` wherever it happened to run, and now it invokes a body closed over
  * the operations the host handed the profile.
@@ -609,7 +609,7 @@ export function pinnedFileRead(): GeneratedObservation {
  *
  * It is the one component every generated fragment may write whatever `allow`
  * selects, because rendering a value it already holds performs nothing: there
- * is no operation behind it to grant, so admitting it widens no authority. The
+ * is no operation behind it to grant, so admitting it widens no permission. The
  * exact core definition, so a same-name replacement anywhere reaches nothing
  * here — purity is a property of this identity, never inferred from a name.
  *
@@ -681,7 +681,7 @@ export interface GeneratedMutation {
   readonly name: string;
   readonly identity: RetainedFragmentIdentity;
   readonly definition: FunctionComponentDefinition;
-  /** The form authority underneath this entry's implementation, when it wraps one. */
+  /** The form dispatcher underneath this entry's implementation, when it wraps one. */
   readonly dispatch?: unknown;
   /** The exact version-1 identity strings this entry states it succeeds. */
   readonly legacy?: readonly string[];
@@ -805,7 +805,7 @@ interface Entry {
   readonly name: string;
   readonly identity: RetainedFragmentIdentity;
   readonly definition: FunctionComponentDefinition;
-  /** The form authority under this entry's definition, when a host stated one. */
+  /** The form dispatcher under this entry's definition, when a host stated one. */
   readonly dispatch?: unknown;
   readonly forms: readonly AuthoredForm[];
   /**
@@ -938,7 +938,7 @@ function holdForm(form: AuthoredForm, invocation: ComponentInvocation): void {
 }
 
 /**
- * The authority a generated fragment imports through.
+ * Canonical resolution a generated fragment imports through.
  *
  * Resolution is closed over what preflight decided and consults nothing else —
  * no component search path, no registration, no bundle. Each import mints a
@@ -953,7 +953,7 @@ function holdForm(form: AuthoredForm, invocation: ComponentInvocation): void {
  * whether the value it produced is collected, and that is a property of the
  * entry preflight selected rather than of what the component returned.
  */
-class GeneratedImportAuthority implements ImportAuthority {
+class GeneratedComponentResolution implements ComponentResolution {
   /**
    * Every admission, by the name and the authored form it was made for.
    *
@@ -975,7 +975,7 @@ class GeneratedImportAuthority implements ImportAuthority {
    * boundary, owned by the same object that owns the admission.
    */
   readonly #forms = installFormSyntax();
-  /** The form authority under each admitted name's wrapper. */
+  /** The form dispatcher under each admitted name's wrapper. */
   readonly #dispatchers = new Map<string, unknown>();
   readonly #componentRouting: ComponentRouting | undefined;
   readonly #invocations = new WeakMap<object, Map<AuthoredForm, Planned>>();
@@ -986,7 +986,7 @@ class GeneratedImportAuthority implements ImportAuthority {
    * allowlist does not hold, which is refused rather than answered.
    */
   // deno-lint-ignore no-unused-vars
-  closes(_name: string): boolean {
+  resolves(_name: string): boolean {
     return true;
   }
 
@@ -1022,7 +1022,7 @@ class GeneratedImportAuthority implements ImportAuthority {
     }
     const implementation = copy.fn;
     // The wrapper below is the answer to the import; the dispatcher underneath
-    // it is the form authority. Recording the dispatcher is what binds the
+    // it is the form dispatcher. Recording it is what binds the
     // invocation to it — a wrapper that collected results is trusted host code
     // and takes no part in deciding which form-specific body runs.
 
@@ -1040,13 +1040,13 @@ class GeneratedImportAuthority implements ImportAuthority {
     };
     this.#invocations.set(admitted.fn, byForm);
     // The wrapper above is the answer to the import; the dispatcher underneath
-    // it is the form authority. Remembered by name so `authorize` can record it
+    // it is the form dispatcher. Remembered by name so `verify` can record it
     // against core's own copy — the object expansion actually invokes — because
     // a trusted collection wrapper takes no part in deciding which
     // form-specific body runs. A host that admitted a definition of its own
-    // states that authority explicitly, because an entry whose implementation
+    // states that dispatcher explicitly, because an entry whose implementation
     // is core's guard around somebody else's would otherwise offer the guard,
-    // and a form authority read off the guard selects no body at all.
+    // and a form dispatcher read off the guard selects no body at all.
     this.#dispatchers.set(name, entry.dispatch ?? implementation);
     this.#componentRouting?.project(implementation, admitted.fn);
     return this.#imports.issue(name, admitted);
@@ -1072,14 +1072,14 @@ class GeneratedImportAuthority implements ImportAuthority {
     return this.#forms;
   }
 
-  authorize(name: string, answer: ImportedDefinition): ImportedDefinition {
-    const canonical = this.#imports.authorize(
+  verify(name: string, answer: ImportedDefinition): ImportedDefinition {
+    const canonical = this.#imports.verify(
       name,
       answer,
       (refusal) => new GeneratedXmdError(WITNESS[refusal]),
     );
     // Recorded here rather than at issue, because this is the object expansion
-    // invokes: `authorize` answers with core's own copy of the definition
+    // invokes: `verify` answers with core's own copy of the definition
     // rather than the one the chain handed back.
     this.#forms.select(name, canonical, this.#dispatchers.get(name));
     return canonical;
@@ -1239,7 +1239,7 @@ function admitted(entries: readonly Entry[]): Map<string, Entry[]> {
 /**
  * Whether this text would read anything.
  *
- * The two interpolation passes a text segment goes through are the authority
+ * The two interpolation passes a text segment goes through are definitive
  * on what a reference is, so this asks them rather than guessing: `\{` is
  * protected exactly as expansion protects it, and what remains is matched by
  * the same shapes `interpolate()` and `interpolateEvalBindings()` consume.
@@ -1732,7 +1732,7 @@ function policyHolds(retained: Policy, current: Policy): boolean {
   // A version-1 record predates the trusted composition table, so it is
   // reconciled against the effect entries alone. Composition grants nothing —
   // its entries carry no effect operation — so a continuation held to the
-  // remainder is held to exactly the authority it was admitted under.
+  // remainder is held to exactly the permissions it was admitted under.
   const stated =
     retained.recordVersion === 1
       ? current.allowed.slice(current.composition ?? 0)
@@ -1877,7 +1877,7 @@ function* walk(
         throw new Refusal("block");
       }
       case "component": {
-        // Structural names are language, not authority, so they are decided
+        // Structural names are language, not admission, so they are decided
         // before the admitted table is consulted — exactly as expansion decides
         // them before it resolves a component. A construct that reached the
         // table lookup would be refused as a component the host withheld, which
@@ -2010,7 +2010,7 @@ const CONSUMED_BY_PARENT: ReadonlySet<string> = new Set(["Else", "Case", "Answer
  *
  * Each of these is ordinary language wherever its context exists, and a
  * fragment is simply not that place. Refused as a structural mistake rather
- * than as withheld authority, because nothing about the host's tables would
+ * than as a withheld permission, because nothing about the host's tables would
  * make one of them work.
  */
 const NO_GENERATED_CONTEXT: ReadonlySet<string> = new Set(["Content", "Output", "Return"]);
@@ -2028,7 +2028,7 @@ const NO_GENERATED_CONTEXT: ReadonlySet<string> = new Set(["Content", "Output", 
  *
  * What stays at runtime stays at runtime. A condition, a matcher, a `max` an
  * expression computes and a read that fails are values, and preflight proves
- * the source and the authority of every possible path without fabricating one.
+ * the source and the admission of every possible path without fabricating one.
  */
 function* structural(
   segment: ComponentElement,
@@ -2423,12 +2423,12 @@ function expand(
     // trusted-document evaluator. Set on this scope, so it ends with the
     // fragment and reaches nothing the document expands afterwards.
     yield* GeneratedDataExpressions.set(true);
-    const authority = new GeneratedImportAuthority(named, componentRouting);
+    const resolution = new GeneratedComponentResolution(named, componentRouting);
     yield* Component.around(
       {
         // deno-lint-ignore require-yield
         *importComponent([name], _next) {
-          return authority.issue(name);
+          return resolution.issue(name);
         },
       },
       { at: "min" },
@@ -2447,14 +2447,14 @@ function expand(
       // through the narrowed route. Import and form selection belong to this
       // fragment, while the reference preserves the admitting site's documentation.
       {
-        componentResolution: authority,
-        forms: authority.forms,
+        componentResolution: resolution,
+        forms: resolution.forms,
         // A fragment writes the admitted composition table and nothing else, so
         // it declares none. The empty catalog states that explicitly rather than
         // inheriting the host's: a generated fragment's execution environment
         // admits no installed structural syntax.
         declarations: new ExecutionDeclarationCatalog([], []),
-        invokeGeneratedComponent: (fn, invocation, body) => authority.invoke(fn, invocation, body),
+        invokeGeneratedComponent: (fn, invocation, body) => resolution.invoke(fn, invocation, body),
         ...(componentRouting === undefined ? {} : { componentRouting }),
         ...(syntax === undefined ? {} : { syntax }),
       },

@@ -349,7 +349,7 @@ export class XmdArtifactForeignContainerError extends XmdArtifactError {
  *
  * Its own category rather than a foreign container, because this file is XMD's
  * and the mistake is what it is being used *as*. A run store is writable
- * authority over a run id; an artifact is evidence nobody can advance. Reading
+ * ownership of a run id; an artifact is evidence nobody can advance. Reading
  * one as the other is how two downloaded copies would come to believe they
  * coordinate a single live identity.
  */
@@ -360,7 +360,7 @@ export class XmdArtifactLiveRunError extends XmdArtifactError {
     super(
       path,
       `The file at ${path} is a live workflow-run database, not an XMD artifact. A run store ` +
-        "is writable authority over its run; export it as an artifact rather than renaming it.",
+        "is writable ownership of its run; export it as an artifact rather than renaming it.",
     );
   }
 }

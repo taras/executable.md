@@ -369,7 +369,7 @@ describe(
 
       const eligible = compiledUpgradeAssembly({ ...host, ...PLATFORM });
       expect(eligible.provenance).toBe("compiled");
-      expect(typeof eligible.authority).toBe("function");
+      expect(typeof eligible.components).toBe("function");
 
       const windows = compiledUpgradeAssembly({
         ...host,
@@ -377,7 +377,7 @@ describe(
         architecture: "x64",
       });
       expect(windows.provenance).toBe("compiled-windows");
-      expect(windows.authority).toBe(undefined);
+      expect(windows.components).toBe(undefined);
 
       // A compiled binary on a platform no release targets has nothing to ask
       // for, so it is handed no way to ask.
@@ -388,7 +388,7 @@ describe(
       });
       expect(untargeted.provenance).toBe("compiled");
       expect(untargeted.target).toBe(undefined);
-      expect(untargeted.authority).toBe(undefined);
+      expect(untargeted.components).toBe(undefined);
     });
 
     it("UH3: a successful upgrade replaces the bytes once and reports the facts", function* () {
@@ -995,7 +995,7 @@ describe(
     });
 
     it("UH25: only this invocation's own identities authorize a phase", function* () {
-      // The whole authority boundary, exercised through the real components. An
+      // The whole admission boundary, exercised through the real components. An
       // opaque string is not a capability: what authorizes a phase is being in
       // this invocation's private map, in the state that phase accepts.
       yield* useInstallation(function* (_dir, exe) {
@@ -1004,9 +1004,9 @@ describe(
           { transport: scripted(healthyRoutes({}), []) },
         );
         const phases =
-          assembly.authority === undefined
+          assembly.components === undefined
             ? []
-            : yield* assembly.authority({
+            : yield* assembly.components({
                 requestedTag: null,
                 status: true,
                 allowDowngrade: false,
@@ -1417,9 +1417,9 @@ describe(
           },
         );
         const phases =
-          assembly.authority === undefined
+          assembly.components === undefined
             ? []
-            : yield* assembly.authority({
+            : yield* assembly.components({
                 requestedTag: null,
                 status: false,
                 allowDowngrade: false,

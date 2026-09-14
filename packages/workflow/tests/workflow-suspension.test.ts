@@ -65,7 +65,7 @@ const RUN: WorkflowRun = Object.freeze({
  * One begun run, whose journal is what a suspension is verified against.
  *
  * A real database rather than a stream in memory, because entering a wait now
- * asks the run what it retained — the authority is the retained request, so a
+ * asks the run what it retained — what admits a wait is the retained request, so a
  * suite that stubbed the journal would be proving nothing about it.
  */
 function withRun<T>(body: (database: WorkflowRunDatabase) => Operation<T>): Operation<T> {
@@ -331,7 +331,7 @@ describe("Tier WS — a durable wait's request and identity", () => {
     });
   });
 
-  it("WS5: reconstructing the provider's own name mints no authority", function* () {
+  it("WS5: reconstructing the provider's own name admits nothing", function* () {
     yield* withRun(function* (database) {
       // Document-side code that knows every public name: the API this provider
       // installs under, and the identifier shape it would want to claim.

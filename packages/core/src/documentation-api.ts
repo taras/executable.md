@@ -61,7 +61,7 @@ export interface DocumentationApi {
   /**
    * Every bootstrapped package's documentation, in bootstrap order.
    *
-   * Order is not authority: it decides how the list reads, and nothing else.
+   * Order decides nothing: it fixes how the list reads, and nothing else.
    * Two contributions naming one component of one package refuse wherever they
    * sit in it.
    */
@@ -75,7 +75,7 @@ export interface DocumentationApi {
  * too: what makes two copies agree is the Api's name, not a shared module
  * instance. It carries documentation and nothing else — no definitions, no
  * import witnesses, no registration handle — so composing with it grants a
- * package no authority it did not already have.
+ * package no permission it did not already have.
  */
 export const Documentation: Api<DocumentationApi> = createApi<DocumentationApi>("Documentation", {
   /**

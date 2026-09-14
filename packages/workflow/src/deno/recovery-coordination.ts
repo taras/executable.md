@@ -11,7 +11,7 @@
  * is rewriting.
  *
  * So both wait for the same sidecar. This is arrangement between hosts, not
- * authority over the run: holding it proves only that nobody else is recovering
+ * ownership of the run: holding it proves only that nobody else is recovering
  * or copying this pair right now. It says nothing about who may advance the
  * run, which is the executor lock's separate question, in a separate file, with
  * a separate refusal. Nothing is handed back — no lock object, no run id, no

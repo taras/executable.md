@@ -105,7 +105,7 @@ Each owns a result collector, the final flush of the last staged result, and
 the completion policy that settles the run — and each is package-owned, private
 to `@executablemd/testing`, and expires with the scope or boundary that
 established it. Registration plus a `testing` override is not a substitute:
-neither the boolean nor a contextual name is accepted as activation authority,
+neither the boolean nor a contextual name is accepted as activation,
 so a separately loaded copy composing policy around the public surface
 composes policy and nothing else.
 
@@ -471,7 +471,7 @@ are not child journal records. Prompts and elicitations the child actually
 performs retain their ordinary production results and replay without contacting
 either controlled provider.
 
-### Authority
+### What may run a child
 
 Canonical core mints one opaque harness per `<Test>` invocation and expires it
 with that invocation; each `<Execution>` spends a single-use authorization from
@@ -550,7 +550,7 @@ inactive: `<Test>` is skipped, assertion components stay usable, and an
 explicit `<Testing>` boundary still activates its subtree and turns its
 failures — or an empty boundary — into an `Err` outcome for the execution.
 
-`TestApi` middleware is policy rather than activation authority. Overriding
+`TestApi` middleware is policy rather than activation. Overriding
 `testing` to `true` over that registration activates nothing, and a `<Test>`
 reached under it refuses before its body expands, as *Registration, mode, and
 activation* describes.

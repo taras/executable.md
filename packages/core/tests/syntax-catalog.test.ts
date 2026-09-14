@@ -1209,7 +1209,7 @@ describe("Tier SY: complete component contracts", () => {
   });
 });
 
-describe("Tier SY: inspection is observation, never authority", () => {
+describe("Tier SY: inspection is observation, never execution", () => {
   it("SY26: describes a declared identity component without calling its factory", function* () {
     const calls: string[] = [];
     const ledger: IdentityComponent = {

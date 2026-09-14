@@ -55,7 +55,7 @@ can act without guessing or rereading.
 A plan is decision-complete when the Implementor does not need to choose:
 
 - user-visible behavior or failure semantics;
-- authority, identity, persistence or lifecycle boundaries;
+- permission, identity, persistence or lifecycle boundaries;
 - provider-neutral versus runtime-specific ownership;
 - compatibility or migration policy;
 - delivery order or PR boundaries; or

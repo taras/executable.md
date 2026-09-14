@@ -4,7 +4,7 @@
  *
  * A route says how a logical session was first constructed, and nothing else.
  * It grants no right to ensure, prompt, detach, spawn or resume — the merged
- * coordinator remains the single live authority — so every case here is about
+ * coordinator remains the one live owner — so every case here is about
  * one question: can a later attachment be made to believe something about a
  * session that is not true?
  *

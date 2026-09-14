@@ -14,7 +14,7 @@
  * **The answer is the site's.** The reference is built from the selection
  * inputs the execution captured before any installation, middleware or document
  * code ran, and it travels lexically on canonical core's own expansion
- * authority — not through a context, where a name is not a secret.
+ * resolution — not through a context, where a name is not a secret.
  *
  * **One occurrence renders once.** It claims the identity this execution minted
  * and records a closed payload carrying exactly one member:
@@ -467,7 +467,7 @@ describe("Tier SYN — the named form", () => {
 
     // A repository component that wraps the named form, with `API.Fs` middleware
     // planted around it. If package documentation were read through the
-    // filesystem Api a document can compose — or through the `Files` authority —
+    // filesystem Api a document can compose — or through the `Files` provider —
     // this would answer for the product's own reference, and an agent could be
     // handed instructions the product never wrote.
     yield* useWorkingDirectory(function* (dir) {
@@ -1118,7 +1118,7 @@ describe("Tier SYN — the named form", () => {
   it("FE30: the bootstrap's own names are still not admitted ones", function* () {
     // The negative half. `<Probe />` is registered by the inner layer and its
     // package is documented, and the provider's answer is admitted — and none
-    // of the first two is authority. The profile admits exactly `<Open />`, and
+    // of the first two is permission. The profile admits exactly `<Open />`, and
     // the fragment naming `<Probe />` is refused before the component is
     // reached.
     const probed: string[] = [];
@@ -1978,7 +1978,7 @@ describe("Tier SYN — the record one occurrence keeps", () => {
   });
 });
 
-describe("Tier SYN — reference is never authority", () => {
+describe("Tier SYN — reference never permits", () => {
   it("SYN23: symbols naming a component neither register nor resolve it", function* () {
     // The strongest form: the trusted host itself states symbols naming a
     // component nothing supplies.

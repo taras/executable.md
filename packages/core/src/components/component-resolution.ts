@@ -24,27 +24,30 @@ import type { ComponentDefinition, FunctionComponentDefinition, SourcePosition }
 export type ImportedDefinition = ComponentDefinition | FunctionComponentDefinition;
 
 /**
- * The authority one closed execution imports through.
+ * Canonical resolution of the component names one closed execution imports.
  *
  * Held by canonical core and passed by value into core's own expansion, so no
  * document, component, or middleware can reach it, replace it, or add to it.
  */
-export interface ImportAuthority {
+export interface ComponentResolution {
   /**
-   * Whether canonical execution answers for this name rather than the chain.
+   * Whether canonical execution owns this name's resolution rather than the
+   * chain.
    *
-   * Closing an import is a claim about *that name*, not about the execution
-   * that made it. A workflow bundle closes every import because a workflow run
-   * is a run of one pinned tree; a host declaring exact Markdown closes only
-   * the names it declared, so an unrelated name resolves and composes exactly
-   * as it does in an execution with no authority at all.
+   * Owning a name's resolution includes refusing it canonically when no
+   * definition is admitted; it does not mean a usable definition was found.
+   * It is a claim about *that name*, not about the execution that made it. A
+   * workflow bundle closes every import because a workflow run is a run of one
+   * pinned tree; a host declaring exact Markdown closes only the names it
+   * declared, so an unrelated name resolves and composes exactly as it does in
+   * an execution that closes nothing.
    */
-  closes(name: string): boolean;
+  resolves(name: string): boolean;
   /**
    * The definition this import may invoke, or the refusal saying why it may
-   * invoke none. Asked only for a name `closes()` answered for.
+   * invoke none. Asked only for a name `resolves()` answered for.
    */
-  authorize(name: string, answer: ImportedDefinition): ImportedDefinition;
+  verify(name: string, answer: ImportedDefinition): ImportedDefinition;
 }
 
 /** Why an answer is not the one canonical execution produced for this name. */
@@ -71,7 +74,7 @@ interface Witness {
  * reference so a function component is invoked as exactly the function core
  * selected. Definitions core produces hold parsed JSON and scanned segments,
  * both of which clone; anything that does not is a value core did not build, so
- * the copy is absent and authorization fails closed.
+ * the copy is absent and verification fails closed.
  */
 export function retain(definition: ImportedDefinition): ImportedDefinition | undefined {
   try {
@@ -137,8 +140,8 @@ function describesSame(canonical: unknown, answer: unknown): boolean {
 /**
  * Whether `answer` still describes what core produced, reading it defensively.
  *
- * Shared, because two authorities ask it: the execution-wide one below, and the
- * per-occurrence one a private import is authorized through. Reading the answer
+ * Shared, because two resolutions ask it: the execution-wide one below, and the
+ * per-occurrence one a private import is verified through. Reading the answer
  * runs whatever it is made of — a proxy's traps, an exotic object's own
  * machinery — so a value that refuses to be compared is a value that failed the
  * comparison.
@@ -161,7 +164,7 @@ function read<T>(inspect: () => T): T | undefined {
  * produced them.
  *
  * Weak, and keyed by the object itself: an answer that reaches the call site is
- * authorized because it *is* the object the terminal minted, not because it
+ * verified because it *is* the object the terminal minted, not because it
  * resembles one.
  */
 /**
@@ -218,7 +221,7 @@ interface Claim {
 }
 
 /** A provider request used after its execution ended. */
-export const REVOKED_ANSWER_AUTHORITY =
+export const REVOKED_ANSWER_IDENTIFICATION =
   "the execution that installed this answer provider has ended, so nothing it states identifies " +
   "an implementation here";
 
@@ -255,7 +258,7 @@ export interface ResolutionWindow {
  * What one handler invocation may state about the import it was asked.
  *
  * Minted per invocation, and closed the moment that invocation returns, throws
- * or is cancelled. This is the authority a provider actually claims through:
+ * or is cancelled. This is what a provider actually claims through:
  * the installation gives a provider the right to *be asked*, and the request
  * gives it the right to answer this one asking. Separating them is what makes a
  * claim provable — a stable installation handle can only say "some provider",
@@ -289,7 +292,7 @@ export interface OpenAnswerRequest {
 }
 
 /**
- * One provider installation's private authority.
+ * One provider installation's private right to be asked.
  *
  * Holding this is the right to be asked, fixed to one origin. It is not the
  * right to answer: every statement goes through a request this mints for one
@@ -319,7 +322,7 @@ export class CanonicalImports {
    * One owner rather than two registries: retention, exact-object lookup, the
    * `stillDescribes` comparison and the lifecycle are one question asked about
    * one table, and a parallel WeakMap would be a second place for an answer to
-   * be authorized from.
+   * be verified from.
    */
   readonly #claims = new WeakMap<object, Claim>();
   /**
@@ -327,7 +330,7 @@ export class CanonicalImports {
    *
    * Starts inactive. Canonical execution registers teardown, then activates,
    * then creates provider installations — so a failure between construction
-   * and activation cannot leave live answer authority with no teardown behind
+   * and activation cannot leave a live answer owner with no teardown behind
    * it.
    */
   #active = false;
@@ -391,7 +394,7 @@ export class CanonicalImports {
    */
   beginResolution(name: string): ResolutionWindow {
     if (!this.#active) {
-      throw new AnswerIdentityError(REVOKED_ANSWER_AUTHORITY);
+      throw new AnswerIdentityError(REVOKED_ANSWER_IDENTIFICATION);
     }
     this.#occurrences += 1;
     const occurrence = this.#occurrences;
@@ -414,7 +417,7 @@ export class CanonicalImports {
   }
 
   /**
-   * One provider installation's authority, fixed to that origin.
+   * One provider installation's right to be asked, fixed to that origin.
    *
    * Holding this is the right to be *asked*. It states nothing on its own:
    * every answer goes through a request this mints for one handler invocation,
@@ -473,7 +476,7 @@ export class CanonicalImports {
     stated: ClaimedIdentity,
   ): ImportedDefinition {
     if (!this.#active) {
-      throw new AnswerIdentityError(REVOKED_ANSWER_AUTHORITY);
+      throw new AnswerIdentityError(REVOKED_ANSWER_IDENTIFICATION);
     }
     // Four questions, and each of them is about the invocation rather than
     // about the provider: is this handler still deciding; is the resolution it
@@ -590,9 +593,9 @@ export class CanonicalImports {
    *
    * Verified at the call site, after the public chain has returned and before
    * anything is expanded or called. Each closed execution words its own
-   * refusal, so `refuse` builds the error this authority throws.
+   * refusal, so `refuse` builds the error this resolution throws.
    */
-  authorize(
+  verify(
     name: string,
     answer: ImportedDefinition,
     refuse: (refusal: ImportRefusal) => Error,
@@ -687,14 +690,13 @@ export interface ImportTier {
 }
 
 /**
- * The authority one closed execution imports through, however many tiers close
- * it.
+ * Canonical resolution for one closed execution, however many tiers close it.
  *
  * One `CanonicalImports` for the whole execution: a witness is issued where the
  * answer is produced and verified where it is invoked, so which tier produced
- * an answer decides only how a refusal reads, never whether one is authorized.
+ * an answer decides only how a refusal reads, never whether one is admitted.
  */
-export class ExecutionImports implements ImportAuthority {
+export class ExecutionImports implements ComponentResolution {
   readonly #imports: CanonicalImports;
   readonly #tiers: readonly ImportTier[];
 
@@ -703,7 +705,7 @@ export class ExecutionImports implements ImportAuthority {
    * object at both ends. Canonical execution constructs it before any
    * installation runs — inactive, with its teardown already registered — so a
    * provider can state identities during profile capture, long before the tiers
-   * this authority is built from exist.
+   * this resolution is built from exist.
    */
   constructor(tiers: readonly ImportTier[], imports: CanonicalImports) {
     this.#tiers = tiers;
@@ -715,17 +717,17 @@ export class ExecutionImports implements ImportAuthority {
     return this.#imports.issue(name, definition);
   }
 
-  /** Whether canonical execution answers for this name rather than the chain. */
-  closes(name: string): boolean {
+  /** Whether canonical execution owns this name's resolution. */
+  resolves(name: string): boolean {
     return this.#answering(name) !== undefined;
   }
 
   /** Core's own copy of the definition this import may invoke. */
-  authorize(name: string, answer: ImportedDefinition): ImportedDefinition {
+  verify(name: string, answer: ImportedDefinition): ImportedDefinition {
     const tier = this.#answering(name);
-    return this.#imports.authorize(name, answer, (refusal) => {
+    return this.#imports.verify(name, answer, (refusal) => {
       if (tier === undefined) {
-        return new Error("this execution authorizes no import of this name");
+        return new Error("this execution admits no import of this name");
       }
       return tier.refuse(refusal);
     });

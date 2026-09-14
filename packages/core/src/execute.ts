@@ -173,7 +173,7 @@ import type { ComponentAnswerInstallation } from "./component-answers.ts";
 import { packagedAssetReader } from "./component-documentation.ts";
 import type { DocumentationContribution, DocumentationReader } from "./component-documentation.ts";
 import type { SyntaxSymbolsProvider } from "./syntax-reference.ts";
-import type { WorkflowComponentBundle, WorkflowImportAuthority } from "./components/bundle.ts";
+import type { WorkflowComponentBundle, WorkflowComponentCatalog } from "./components/bundle.ts";
 import type { CodeBlockContext, CodeBlockResult, EvalEnv } from "./types.ts";
 import { readRootSource, rootSourcePath } from "./root-source.ts";
 import type { RootDocumentSource } from "./root-source.ts";
@@ -456,7 +456,7 @@ function targetFailureRecord(failure: DocumentTargetFailure): TargetFailureRecor
 interface ImportInputs {
   readonly searchPaths: string[];
   readonly registry: ComponentRegistry;
-  readonly bundle: WorkflowImportAuthority | undefined;
+  readonly bundle: WorkflowComponentCatalog | undefined;
   readonly declared: InstalledComponents | undefined;
   /** Everything this execution declares, as selection reads it. */
   readonly catalog: ExecutionDeclarationCatalog;
@@ -1193,7 +1193,7 @@ function describeSelection(selection: SelectionOutcome): string {
  * The journal a document execution reads and appends through, with the
  * definition-identity check that a resumed run must pass built into the read.
  *
- * **This authority is not middleware.** Exact canonical target is
+ * **This check is not middleware.** Exact canonical target is
  * workflow-definition identity, and identity may not be decided by anything a
  * document, a component, or an enclosing scope can replace. A public
  * `ReplayGuard` handler installed further out can decline to call `next`, which
@@ -2112,8 +2112,8 @@ function* documentWorkflow(
       // unconditionally; the protected tier is present in *every* execution, so
       // an unguarded call now refuses the root of every ordinary run — nothing
       // claims `__root__` unless a bundle closes the execution.
-      return imports?.closes("__root__") === true
-        ? imports.authorize("__root__", imported)
+      return imports?.resolves("__root__") === true
+        ? imports.verify("__root__", imported)
         : imported;
     })(),
   );
@@ -2383,7 +2383,7 @@ function* executeDocument(
    * identifies.
    *
    * Built before any installation ran, so a provider could state identities
-   * during profile capture; handed here so the import authority this execution
+   * during profile capture; handed here so the component resolution this execution
    * imports through is the same table those claims went into.
    */
   canonicalImports: CanonicalImports = new CanonicalImports(),
@@ -2458,7 +2458,7 @@ function* executeDocument(
       // through caller-installed normalize/terminal middleware first, then here).
       // A live chunk the execution's scanner cannot clear is withheld in full —
       // not sent, accumulated, or described — while the durable journal gate
-      // stays the authority that fails the run. Restored output crossed that
+      // stays what fails the run. Restored output crossed that
       // gate when it was journaled, so restoration is not screened again.
       yield* DocumentOutput.around({
         *output([text]) {
@@ -2887,10 +2887,10 @@ export interface ExecutionInstallation {
    * invocations.
    *
    * Captured by value alongside the admissions, before any installation runs,
-   * for the same reason: what a test may deliver its authority to is fixed
+   * for the same reason: what a test may deliver its harness to is fixed
    * before anything can observe or replace it. Nothing is published — the
    * capability exists only as the argument of this call — so a document run by
-   * a host that attaches none has no nested-execution authority anywhere in it.
+   * a host that attaches none has no nested-execution permission anywhere in it.
    */
   readonly testHarness?: TestHarnessInstaller;
   /**
@@ -2927,7 +2927,7 @@ export interface ExecutionInstallation {
    */
   readonly symbols?: SyntaxSymbolsProvider;
   /**
-   * The maximum authority a generated fragment may be evaluated under here.
+   * The maximum permission a generated fragment may be evaluated under here.
    *
    * Captured by value alongside the rest, before any installation runs, for a
    * reason the others share and this one sharpens: `<Evaluate>` is a public
@@ -3345,7 +3345,7 @@ function* invoke(
     }),
   );
   // Read once and frozen for the same reason, and copied entry by entry so the
-  // authority is closed over this run's own values rather than over an array a
+  // catalog is closed over this run's own values rather than over an array a
   // host still holds.
   const bundles = Object.freeze(
     installations.flatMap((installation) => {
@@ -3451,10 +3451,10 @@ function* invoke(
     ),
   );
 
-  // The maximum authority a generated fragment may be evaluated under here,
+  // The maximum permission a generated fragment may be evaluated under here,
   // read on the same terms and for a stronger reason: two profiles would be two
   // answers to what a fragment may *do*, and choosing between them by
-  // installation order would make authority depend on assembly. A host that
+  // installation order would make permission depend on assembly. A host that
   // stated none offers no evaluation at all, which `<Evaluate>` refuses with
   // rather than inventing a ceiling for.
   const stated = installations.flatMap((installation) => {

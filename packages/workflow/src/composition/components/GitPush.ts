@@ -43,7 +43,7 @@
  * `<Git.Switch>`'s policy, with one refusal of its own. A checkout whose HEAD
  * names no branch has nothing for this to publish, and that is something the
  * document can act on: it arrives as a fixed `GitOperationError` before any
- * remote is contacted. No Repository in scope is missing authority and travels
+ * remote is contacted. No Repository in scope is a failed admission and travels
  * past every printing boundary, because a document that continued past one
  * would run later siblings as though a branch had been published.
  */
@@ -55,7 +55,7 @@ import type { Operation } from "effection";
 import type { Json } from "@executablemd/durable-streams";
 import { GitComposition } from "../git-api.ts";
 import { selectedRepository } from "../context.ts";
-import { GitOperationAuthorityError, GitOperationError } from "../errors.ts";
+import { GitOperationAdmissionError, GitOperationError } from "../errors.ts";
 
 /** The component name, as a document writes it and as a refusal names it. */
 export const PUSH = "<Git.Push>";
@@ -77,7 +77,7 @@ export default function* GitPush(_props: Record<string, Json>): Operation<string
 
   const repository = yield* selectedRepository();
   if (repository === undefined) {
-    throw new GitOperationAuthorityError(
+    throw new GitOperationAdmissionError(
       PUSH,
       "it is written outside a lexical <Repository>, so there is no repository in scope whose " +
         "origin a branch could be published to",

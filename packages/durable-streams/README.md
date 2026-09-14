@@ -391,17 +391,17 @@ The separation between generator and synchronous stages is necessary because the
 
 ### Three views of one history
 
-A replay distinguishes three things, and conflating any two of them hands authority to whoever holds the wrong one:
+A replay distinguishes three things, and conflating any two of them gives the wrong holder the decision:
 
 1. **The authoritative retained history.** What a consumer's own admission validated and what replay consumes. Detached from the backend and immutable to policy — its descriptions and results are frozen through, so nothing that receives it can rewrite what replay will decide.
 2. **Isolated guard observations.** What `check`, `admit`, and `decide` receive: a deep, mutable copy made per invocation. Middleware may read, annotate, and compose over it freely; nothing it writes reaches replay.
-3. **Values delivered to workflow code.** A fresh mutable copy taken from the authority at the moment of consumption — for a replayed effect and for a completed run's own return value alike. This is the only thing "mutable replayed value" ever means: a document that resumes on a restored binding writes to its copy, and writing to it cannot reach the authority or the next replay.
+3. **Values delivered to workflow code.** A fresh mutable copy taken from the retained history at the moment of consumption — for a replayed effect and for a completed run's own return value alike. This is the only thing "mutable replayed value" ever means: a document that resumes on a restored binding writes to its copy, and writing to it cannot reach the retained history or the next replay.
 
-The authority is frozen through in **every** settlement shape — a success with a value, a `Result<void>` with none, a failure, and a cancellation, on `Yield` and `Close` alike. An envelope left writable is one a public observation could add a value to before replay reads it.
+The retained history is frozen through in **every** settlement shape — a success with a value, a `Result<void>` with none, a failure, and a cancellation, on `Yield` and `Close` alike. An envelope left writable is one a public observation could add a value to before replay reads it.
 
 Handing policy the authoritative events would let a guard rename effect A to B — so a workflow asking for B consumes A's result without B ever running — or rewrite a recorded root selection after admission accepted it.
 
-### Guards are policy, not authority
+### Guards are policy, not enforcement
 
 A replay guard is **composable policy**. Guards compose through `Api.around`, and a handler installed further out may decline to call `next` — declining is what composition is for, and it means any single guard's opinion can be suppressed by another.
 

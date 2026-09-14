@@ -245,9 +245,9 @@ child whose declaration created it.
 One ACP provider is *installed*, and it is installed once: `<TestAgent>`
 registers a partition-selecting factory and installs it in its own invocation,
 before projecting its content. Installation and state are different things, and
-only one of them carries authority. Installing in the invocation is what makes
+only one of them carries the coordinator. Installing in the invocation is what makes
 the provider reachable from the content at all, and it is what makes that one
-factory closure the only holder of the document's launch authority. Selecting
+factory closure the only holder of the document's launch coordinator. Selecting
 per test is what keeps one test's sessions, queues and records out of the next.
 
 For nested-run configuration, the trusted child host performs that one install

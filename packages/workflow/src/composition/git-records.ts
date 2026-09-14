@@ -4,10 +4,10 @@
  * A Git operation is not identified by a path a document wrote. It runs in the
  * checkout the enclosing `<Repository>` and the contextual working directory
  * select, so what a component sends is the whole Repository record it observed
- * and the logical directory it observed — neither of which carries authority.
+ * and the logical directory it observed — neither of which admits anything.
  * The provider authenticates both against what this run retained; a record that
  * is not the retained one, or a directory inside no retained checkout, is a
- * failure of authority rather than an outcome, and nothing is published for it.
+ * failure of admission rather than an outcome, and nothing is published for it.
  *
  * What comes back is evidence rather than a summary. The checkout the operation
  * ran in, and the branch, commit, HEAD tree and index tree the checkout held

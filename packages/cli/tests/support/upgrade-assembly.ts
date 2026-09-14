@@ -2,10 +2,10 @@
  * The upgrade assembly a suite driving `runXmd` in-process stands in for.
  *
  * A runtime entrypoint states what this `xmd` is, and `runXmd` requires one
- * because inheriting installation authority by omission is exactly what the
+ * because inheriting the installing components by omission is exactly what the
  * parameter exists to prevent. A suite about something else says the honest
  * thing about a test process: it is running from source, it carries no
- * authority, and `xmd upgrade` under it refuses before reading anything.
+ * components, and `xmd upgrade` under it refuses before reading anything.
  */
 
 import type { UpgradeAssembly } from "../../src/upgrade.ts";

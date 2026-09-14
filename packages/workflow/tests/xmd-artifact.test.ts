@@ -11,7 +11,7 @@
  * than the encoding, that the inventory is complete, that verification finishes
  * before any of it is returned, that each way of not being an artifact has its
  * own answer, that opening never writes, that the returned value carries no
- * authority, that the reader holds the semantic invariants a live run holds,
+ * ownership, that the reader holds the semantic invariants a live run holds,
  * and that none of the private encoding is public API.
  */
 
@@ -850,16 +850,16 @@ describe("XMD artifact container version 1", () => {
     }
   });
 
-  it("C7 returns a value carrying no host authority", function* () {
+  it("C7 returns a value carrying no host capability", function* () {
     const directory = yield* useArtifactDirectory();
     const contents = richArtifact();
     const { path } = yield* sealed(directory, "evidence.xmd", contents);
     const read = yield* opened(path);
     const sealedFixture = richArtifact();
 
-    // A provider checkpoint token is retained evidence rather than authority
+    // A provider checkpoint token is retained evidence rather than a capability
     // over the host that issued it, so the ban is on the names that would carry
-    // authority — and the two members that may be called `token` are named.
+    // capability — and the two members that may be called `token` are named.
     const forbiddenNames =
       /retrieval|credential|authentication|password|secret|connection|statement|transaction|database|lock|handle|sessionDirectory|hostPath/i;
     const detached = (value: unknown) => {
@@ -1896,7 +1896,7 @@ describe("XMD artifact version 1 Agent portability evidence", () => {
     }
   });
 
-  it("F6 admits no host authority into a descriptor and keeps bundles opaque", function* () {
+  it("F6 admits no host capability into a descriptor and keeps bundles opaque", function* () {
     const directory = yield* useArtifactDirectory();
     const { path } = yield* sealed(directory, "finalized.xmd", finalizedArtifact());
     const portableKey = FINALIZED_SESSIONS.portable.sessionKey;

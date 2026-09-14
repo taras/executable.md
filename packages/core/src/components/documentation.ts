@@ -2,7 +2,7 @@
  * What a component says about itself, for a reader rather than for the engine.
  *
  * These three fields are descriptive only. They take no part in expansion,
- * resolution, validation, authority or the journal, and a component that states
+ * resolution, validation, permission or the journal, and a component that states
  * none of them behaves exactly as it always has. `xmd syntax` prints them; a
  * document run never reads them.
  */

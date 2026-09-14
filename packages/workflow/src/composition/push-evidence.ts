@@ -39,13 +39,13 @@ import {
   parseGitPushRecord,
   pushExpectation,
 } from "./git-push-records.ts";
-import { PullRequestAuthorityError } from "./errors.ts";
+import { PullRequestAdmissionError } from "./errors.ts";
 import type { PullRequestInputs } from "./pull-request-records.ts";
 
 import { sameRepositoryIdentity } from "./selection.ts";
 function refuse(reason: "missing" | "conflicting" | "unreadable"): never {
   if (reason === "missing") {
-    throw new PullRequestAuthorityError(
+    throw new PullRequestAdmissionError(
       "missing-push-evidence",
       "this run holds no successful <Git.Push> result for the branch and commit it would open a " +
         "pull request from. Write <Git.Push /> before <PullRequest>: a pull request names work " +
@@ -53,13 +53,13 @@ function refuse(reason: "missing" | "conflicting" | "unreadable"): never {
     );
   }
   if (reason === "conflicting") {
-    throw new PullRequestAuthorityError(
+    throw new PullRequestAdmissionError(
       "conflicting-push-evidence",
       "this run published that branch at a different commit than the one the checkout is on " +
         "now, so a pull request opened from it would name a head this run never published.",
     );
   }
-  throw new PullRequestAuthorityError(
+  throw new PullRequestAdmissionError(
     "unreadable-push-evidence",
     "this run holds a successful Git-host result whose record cannot be read, so whether the " +
       "branch was published cannot be decided. Nothing is assumed about a record this version " +

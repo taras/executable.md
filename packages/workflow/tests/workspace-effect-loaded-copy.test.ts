@@ -27,7 +27,7 @@ import { collect, inlineSource, registerComponents } from "@executablemd/core";
 import { executeInstalled } from "@executablemd/core/host";
 import { WorkspaceCoordination, WorkspaceCoordinationProviderError } from "../src/workspace/api.ts";
 import {
-  type WorkspaceCoordinationAuthority,
+  type WorkspaceEffectExecution,
   type WorkspaceCoordinationProvider,
   withWorkspaceCoordinationProvider,
 } from "../src/workspace/effect.ts";
@@ -284,7 +284,7 @@ function gitHostYields(stream: InMemoryStream): DurableEvent[] {
 }
 
 describe("Tier DLC — physical Workspace package composition", () => {
-  it("DLC16: provider selection composes without sharing invocation authority", function* () {
+  it("DLC16: provider selection composes without sharing invocation execution", function* () {
     const copy = yield* physicalWorkspaceCopy();
     const stream = new InMemoryStream();
     establishJournalProvenance(stream);
@@ -292,15 +292,15 @@ describe("Tier DLC — physical Workspace package composition", () => {
     let transactions = 0;
     let executions = 0;
     let publications = 0;
-    let capturedAuthority: WorkspaceCoordinationAuthority | undefined;
+    let capturedExecution: WorkspaceEffectExecution | undefined;
     const provider: WorkspaceCoordinationProvider = {
-      *run(authority: WorkspaceCoordinationAuthority): Operation<Result> {
+      *run(execution: WorkspaceEffectExecution): Operation<Result> {
         providers += 1;
         transactions += 1;
-        capturedAuthority = authority;
-        const result: Result = { status: "ok", value: yield* authority.execute() };
+        capturedExecution = execution;
+        const result: Result = { status: "ok", value: yield* execution.execute() };
         publications += 1;
-        yield* authority.publish(result);
+        yield* execution.publish(result);
         return result;
       },
     };
@@ -323,16 +323,16 @@ describe("Tier DLC — physical Workspace package composition", () => {
       publications: 1,
     });
     expect(stream.snapshot().filter((event) => event.type === "yield")).toHaveLength(1);
-    if (capturedAuthority === undefined) {
+    if (capturedExecution === undefined) {
       throw new Error("the provider did not receive the physical copy invocation");
     }
-    expect(yield* raised(capturedAuthority.execute())).toBeInstanceOf(
+    expect(yield* raised(capturedExecution.execute())).toBeInstanceOf(
       WorkspaceCoordinationProviderError,
     );
     expect(
-      yield* raised(capturedAuthority.publish({ status: "ok", value: "reused" })),
+      yield* raised(capturedExecution.publish({ status: "ok", value: "reused" })),
     ).toBeInstanceOf(WorkspaceCoordinationProviderError);
-    expect(yield* raised(capturedAuthority.activateFailure(new Error("reused")))).toBeInstanceOf(
+    expect(yield* raised(capturedExecution.activateFailure(new Error("reused")))).toBeInstanceOf(
       WorkspaceCoordinationProviderError,
     );
 
@@ -379,7 +379,7 @@ describe("Tier DLC — physical Workspace package composition", () => {
  * package, and they compose only because both address the same stable
  * operation name.
  *
- * What must not compose is authority. Reconstructing that name from a second
+ * What must not compose is execution. Reconstructing that name from a second
  * copy buys a place in the middleware chain and nothing else: no credential, no
  * capability, no answer, and no route to the invocation's own terminal.
  */

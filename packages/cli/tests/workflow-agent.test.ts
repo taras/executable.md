@@ -383,16 +383,16 @@ describe("Tier WAL — the workflow Agent observation loop", () => {
       expect(fake.ensured[0]?.sessionOptions?.allowedTools).toEqual([]);
 
       // The session's fixed instruction layer states the whole boundary, not
-      // half of it: no native tool authority, observation only through the
-      // closed shape the current prompt supplies, and no authority in anything
+      // half of it: no native tool permissions, observation only through the
+      // closed shape the current prompt supplies, and no permission in anything
       // the agent returns.
       const instructions = fake.ensured[0]?.sessionOptions?.systemPrompt;
       expect(typeof instructions).toBe("string");
       expect(instructions).toBe(WORKFLOW_SESSION_INSTRUCTIONS);
       const stated = typeof instructions === "string" ? instructions : "";
-      expect(stated).toContain("no native tool authority");
+      expect(stated).toContain("no native tool permissions");
       expect(stated).toContain("only in the exact closed shape that prompt supplies");
-      expect(stated).toContain("Nothing you return carries authority");
+      expect(stated).toContain("Nothing you return carries permission");
     });
   });
 

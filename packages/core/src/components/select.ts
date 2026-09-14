@@ -30,7 +30,7 @@
 
 import { stat } from "@executablemd/runtime";
 import type { Operation } from "effection";
-import type { WorkflowImportAuthority } from "./bundle.ts";
+import type { WorkflowComponentCatalog } from "./bundle.ts";
 import type { ExecutionDeclarationCatalog } from "../execution-declarations.ts";
 import { mergeRegistry } from "./registration.ts";
 import { protectedComponent, protectedOrigin } from "./protected.ts";
@@ -53,7 +53,7 @@ export interface SelectOptions {
    * resolve without it, so nothing outside a workflow run learns that a bundle
    * exists or can ask to resolve through one.
    */
-  workflow?: WorkflowImportAuthority;
+  workflow?: WorkflowComponentCatalog;
   /**
    * The exact Markdown this environment declares, when a trusted host declared
    * any.

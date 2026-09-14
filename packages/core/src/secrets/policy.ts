@@ -218,7 +218,7 @@ export function* scanSecrets(content: string): Operation<SecretFinding[]> {
  *
  * An emit-or-withhold answer for the execution's own output bridge, and
  * nothing more: it makes no durable decision and supplies no error, because
- * the journal gate remains the authority that fails the run. Doubt withholds —
+ * the journal gate remains what fails the run. Doubt withholds —
  * findings, a scanner that fails, and an absent or unauthentic policy all
  * answer `false`. Only an execution whose host explicitly disabled detection
  * clears everything, without a scanner existing to invoke.

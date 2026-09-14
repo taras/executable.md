@@ -9,13 +9,13 @@
  * ```
  *
  * Each phase a provider completes is retained by the invocation that issued
- * the launch, through the authority core delivers to the selected provider.
+ * the launch, through the coordinator core delivers to the selected provider.
  * The provider hands each phase's work over rather than performing it and
  * reporting afterwards, so a replay of that phase never runs the work again: a
  * resumed launch reuses the provider-native identity the first attempt
  * retained instead of creating a replacement session.
  *
- * That is what keeps operational authority with the launch invocation. Public
+ * That is what keeps operational ownership with the launch invocation. Public
  * middleware composed around the Agent Api receives a request and may refuse
  * it; there is nothing on that chain it can use to retain a phase, and a value
  * it returns settles nothing.
@@ -51,6 +51,11 @@ export type InstructionReconciliation = "installed" | "resumed" | "replaced";
  * The class is stable and retained; the message is diagnostic. Neither
  * carries provider credentials, adapter settings, executable paths, argv,
  * environment, temporary paths, or native transcript content.
+ *
+ * `directory-authority` means the launch could not use the directory it was
+ * asked for. It keeps that spelling because it is a serialized durable value: a
+ * retained record written by an earlier build is parsed by an exact match, so
+ * renaming it would stop those records from replaying.
  */
 export type LaunchFailureClass =
   | "unsupported-capability"

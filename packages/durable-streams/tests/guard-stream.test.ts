@@ -209,7 +209,7 @@ describe("journal provenance", () => {
     // The foreign copy sees nothing about this copy's association…
     expect(loadedCopy.getJournalProvenance(backend)).toBe(undefined);
 
-    // …so its preservation carries nothing into this copy's authority, whether
+    // …so its preservation carries nothing into this copy's provenance, whether
     // it wraps the stream itself or is handed a canonical wrapper.
     const foreignGuard = loadedCopy.guardDurableStream(backend, function* () {});
     loadedCopy.preserveJournalProvenance(backend, foreignGuard);

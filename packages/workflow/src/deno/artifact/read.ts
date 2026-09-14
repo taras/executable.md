@@ -14,7 +14,7 @@
  * `-journal`, `-wal`, `-shm` or lock beside it. A host that cannot open the
  * file read-only refuses rather than opening it any other way.
  *
- * The stored manifest is evidence, never authority. The inventory is
+ * The stored manifest is evidence, never live state. The inventory is
  * enumerated from the content rows themselves, every record is parsed, the
  * manifest is then rebuilt from what was accepted, and only then is the stored
  * copy compared with it. A reader that trusted the stored manifest would be

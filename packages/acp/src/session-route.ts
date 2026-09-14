@@ -8,7 +8,7 @@
  *     construction route: how this logical session was first constructed
  *     session coordinator: who may act on it now
  *
- * The coordinator is the single live authority and owns crash behavior. A route
+ * The coordinator is the one live owner and owns crash behavior. A route
  * grants no right to ensure, prompt, detach, spawn, resume, or accept history —
  * it only says which kind of thing this session is, so that a later attachment
  * cannot quietly treat an ACP-created conversation as a client-allocated one.

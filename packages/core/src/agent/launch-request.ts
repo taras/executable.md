@@ -2,15 +2,15 @@
  * The opaque launch request, and the invocation that owns one
  * (architecture.md §Capability-backed execution).
  *
- * A launch used to be authorized by whatever reached the end of the public
+ * A launch used to be settled by whatever reached the end of the public
  * chain: middleware could hand back a `SessionLaunchResult`, or replace the
  * phase callbacks the journal lent out, and the invocation settled on it. Both
- * are the same mistake — putting authority somewhere every handler can reach.
+ * are the same mistake — putting launch coordination somewhere every handler can reach.
  *
  * So the public surface routes and nothing more. Middleware receives one frozen
  * request describing the launch, and may inspect it, narrow it through
  * `with()`, refuse by throwing, or delegate it. What it returns is discarded.
- * Authority to run and retain a phase never travels on that chain: it reaches
+ * The right to run and retain a phase never travels on that chain: it reaches
  * the selected provider directly, when its factory is installed.
  *
  * The request is the capability, and it is one-use. Identity is object
@@ -41,7 +41,7 @@ export interface AgentLaunchRequest {
    *
    * Only the three members a handler is entitled to change: what the session is
    * told, which agent answers, and which session it belongs to. Everything else
-   * describes authority the document already settled.
+   * describes what the document already settled.
    */
   with(changes: {
     instructions?: string;

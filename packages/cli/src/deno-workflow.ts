@@ -9,7 +9,7 @@
  * this one rather than each carrying a copy.
  *
  * A run's Agent profile is attached here too. It is strict — an empty
- * provider-owned working directory, no MCP servers, no native tool authority —
+ * provider-owned working directory, no MCP servers, no native tool permissions —
  * and it is `packages/cli` rather than `@executablemd/workflow` that composes
  * it, because the workflow package names no agent client.
  *

@@ -43,7 +43,7 @@ function failures(observation: ScenarioObservation): string[] {
 /**
  * One document's outcome, checked against its own session.
  *
- * The execution outcome is the authority. A suite that failed a test settles
+ * The execution outcome is definitive. A suite that failed a test settles
  * `Err`, and so does a suite that discovered none — so a document whose tests
  * never ran cannot pass here by having nothing to fail. The named failures are
  * asserted first only because they read better than the wrapped message.

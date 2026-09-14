@@ -46,7 +46,7 @@
  *
  * ## What it owns
  *
- * Nothing. No authority, no context, no provider, no resource, and no durable
+ * Nothing. No permission, no context, no provider, no resource, and no durable
  * operation of its own — the only journal activity around it is what ordinary
  * execution already owns, importing the selected component and recording the
  * root's outcome. Replay of a completed root restores that outcome without

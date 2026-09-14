@@ -22,7 +22,7 @@ import { tmpdir } from "node:os";
 import { scoped, spawn, suspend, until, withResolvers } from "effection";
 import type { Operation } from "effection";
 import {
-  GitOperationAuthorityError,
+  GitOperationAdmissionError,
   GitOperationError,
   GitOperationProtocolError,
 } from "../src/composition/errors.ts";
@@ -112,8 +112,8 @@ function isProtocolFailure(value: unknown): value is GitOperationProtocolError {
   return value instanceof GitOperationProtocolError;
 }
 
-function isAuthorityFailure(value: unknown): value is GitOperationAuthorityError {
-  return value instanceof GitOperationAuthorityError;
+function isAdmissionFailure(value: unknown): value is GitOperationAdmissionError {
+  return value instanceof GitOperationAdmissionError;
 }
 
 function isDivergence(value: unknown): value is DivergenceError {
@@ -497,7 +497,7 @@ describe("workflow Git.Switch durability", () => {
         ),
       );
 
-      expect(causedBy(failure, isAuthorityFailure)).toBeInstanceOf(GitOperationAuthorityError);
+      expect(causedBy(failure, isAdmissionFailure)).toBeInstanceOf(GitOperationAdmissionError);
       expect(causedBy(failure, isGitFailure)).toBe(undefined);
       expect(subcommands(second.counters)).not.toContain("switch");
       expect(yield* gitEvents(database)).toHaveLength(recorded.length);

@@ -12,7 +12,7 @@
  * destination. A deployment that wants to read pull requests says so.
  *
  * **It does not disable `<PullRequest>`.** An upsert names a branch this run
- * published rather than a URL a document wrote, and its authority is this run's
+ * published rather than a URL a document wrote, and what admits it is this run's
  * own matching Push evidence and the Git-host reconciliation behind it. Nothing
  * here is what admits it, so nothing here can withdraw it.
  *
@@ -21,7 +21,7 @@
  * empty set — they have made a mistake, and running with fewer targets than
  * they wrote would hide it until the day it mattered.
  *
- * The member is `allowed`, not `ceiling`. "Authority ceiling" is what the
+ * The member is `allowed`, not `ceiling`. "Permission ceiling" is what the
  * architecture calls the bound; what an operator writes is the list of places
  * this host is allowed to read, and naming it after the thing they are stating
  * is the difference between configuration and jargon. `XMD_WORKFLOW_GITHUB_ISSUES`

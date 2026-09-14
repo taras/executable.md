@@ -32,11 +32,11 @@
  *
  * The activation operation's name is stable, because a copy of this package
  * loaded beside another must compose with it. A stable name is reachable by
- * anyone, so the name cannot be the authority: a same-name descriptor, a
+ * anyone, so the name cannot be what admits: a same-name descriptor, a
  * middleware return, a boolean or a structural marker would each let something
  * outside this package declare a complete boundary.
  *
- * Authority is a conjunction instead, and no part of it is published. Each
+ * Admission is a conjunction instead, and no part of it is published. Each
  * `<Test>` mints a private request nobody else holds; each live boundary mints
  * a private credential nobody else can construct; and the terminal that records
  * acceptance is the default handler of an Api instance created for that one

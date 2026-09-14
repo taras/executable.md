@@ -76,7 +76,7 @@ import type { Operation } from "effection";
 import type { Json } from "@executablemd/durable-streams";
 import { PullRequestOperations } from "../pull-request-operations.ts";
 import { selectedRepository } from "../context.ts";
-import { PullRequestAuthorityError } from "../errors.ts";
+import { PullRequestAdmissionError } from "../errors.ts";
 import { pullRequestResultJson } from "../pull-request-records.ts";
 
 /** The component name, as a document writes it and as a refusal names it. */
@@ -147,7 +147,7 @@ export default function* PullRequest(props: Record<string, Json>): Operation<Jso
 
   const repository = yield* selectedRepository();
   if (repository === undefined) {
-    throw new PullRequestAuthorityError(
+    throw new PullRequestAdmissionError(
       "no-repository-context",
       "it is written outside a lexical <Repository>, so there is no repository in scope for a " +
         "pull request to be opened in.",

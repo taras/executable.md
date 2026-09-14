@@ -5,7 +5,7 @@
  * `<Testing>` and beneath a `useTesting()` session, which is what makes
  * `xmd test` equivalent to wrapping the entrypoint in `<Testing>`.
  *
- * It is policy, not authority. Middleware may narrow it to false, observe it,
+ * It is policy, not activation. Middleware may narrow it to false, observe it,
  * refuse, and compose recording behavior around `record`; what an answer of
  * `true` cannot say is that a collector, a final flush and a completion policy
  * exist. That is complete activation, it is package-private, and a `<Test>`

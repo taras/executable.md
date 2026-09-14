@@ -851,7 +851,7 @@ describe("Tier FT — who is allowed to perform the request", () => {
     expect(result.failure?.message).toContain("does not reach that destination");
   });
 
-  it("FT28: a repository Fetch shadows core and acquires no authority from the name", function* () {
+  it("FT28: a repository Fetch shadows core and acquires no permission from the name", function* () {
     const workspace = yield* useWorkspace();
     const components = join(workspace, "components");
     yield* ensureDir(components);

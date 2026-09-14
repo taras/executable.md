@@ -7,7 +7,7 @@
  * around that is here, because every one of them needs the same thing done in
  * the same order.
  *
- * ## Authority, before anything
+ * ## Admission, before anything
  *
  * A document says which checkout it means by where it writes the element: the
  * enclosing `<Repository>` supplies the record, the contextual working directory
@@ -65,7 +65,7 @@ import {
 } from "../../composition/records.ts";
 import { beneath, canonicalWorkspacePath } from "../../composition/parse.ts";
 import {
-  GitOperationAuthorityError,
+  GitOperationAdmissionError,
   GitOperationInfrastructureError,
 } from "../../composition/errors.ts";
 import type { DenoWorkspaceFilesystem } from "../workspace/filesystem.ts";
@@ -190,7 +190,7 @@ export interface GitCheckoutSelection {
 }
 
 function unauthorized(operation: string, reason: string): never {
-  throw new GitOperationAuthorityError(operation, reason);
+  throw new GitOperationAdmissionError(operation, reason);
 }
 
 /**

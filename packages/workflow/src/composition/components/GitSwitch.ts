@@ -13,7 +13,7 @@
  * the repository, and the contextual working directory names the checkout
  * inside it, so the same element inside a `<Dir path={worktree}>` moves that
  * linked worktree instead. Both are observations. This component holds no
- * authority over either, and the installed provider rereads what this run
+ * permission over either, and the installed provider rereads what this run
  * retained rather than believing what it was handed.
  *
  * It renders nothing and binds nothing. A switch is a state change, not a value
@@ -30,12 +30,12 @@
  * operation it is part of, and an authored `<PrintErrors>` region decides
  * otherwise for its whole region.
  *
- * Authority is not that. No Repository in scope, a Repository this run does not
+ * Admission is not that. No Repository in scope, a Repository this run does not
  * retain, a working directory inside none of its checkouts, retained state that
  * has stopped agreeing with the identity naming it — none of these is an outcome
  * a document could have avoided by asking for something else, and continuing
  * past one would run later siblings as though a branch had moved. They travel as
- * `GitOperationAuthorityError`, past every printing boundary, and nothing is
+ * `GitOperationAdmissionError`, past every printing boundary, and nothing is
  * published for them.
  */
 
@@ -45,7 +45,7 @@ import type { Operation } from "effection";
 import type { Json } from "@executablemd/durable-streams";
 import { GitComposition } from "../git-api.ts";
 import { selectedRepository } from "../context.ts";
-import { GitOperationAuthorityError, GitOperationError } from "../errors.ts";
+import { GitOperationAdmissionError, GitOperationError } from "../errors.ts";
 
 /** The component name, as a document writes it and as a refusal names it. */
 export const SWITCH = "<Git.Switch>";
@@ -90,7 +90,7 @@ export default function* GitSwitch(props: Record<string, Json>): Operation<strin
 
   const repository = yield* selectedRepository();
   if (repository === undefined) {
-    throw new GitOperationAuthorityError(
+    throw new GitOperationAdmissionError(
       SWITCH,
       "it is written outside a lexical <Repository>, so there is no repository in scope for a " +
         "branch to be a branch of",

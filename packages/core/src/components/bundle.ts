@@ -5,8 +5,8 @@
  * a run is a run *of* that set: the same pinned Git tree supplies the root and
  * every component, and nothing about the checkout beside it takes part. That
  * makes the bundle two things at once — immutable workflow-definition identity,
- * which the workflow package retains, and execution authority, which is what
- * this module is.
+ * which the workflow package retains, and canonical resolution for one
+ * execution, which is what this module is.
  *
  * ## How it enters core
  *
@@ -18,7 +18,7 @@
  * the sources it read, and there is nothing anyone else can reach, replace, or
  * agree on a name for.
  *
- * ## What it authorizes
+ * ## What it resolves
  *
  * Resolution: a declared name resolves to its exact pinned source, ahead of
  * every registered default and without the filesystem being asked anything.
@@ -31,7 +31,7 @@
  * import before the component is invoked, because canonical core issues a
  * witness for the answer it produced and verifies it at the call site.
  *
- * All of it is execution-local. The authority is created per invocation and
+ * All of it is execution-local. The catalog is created per invocation and
  * reclaimed with it, so two concurrent workflows declaring one name with
  * different sources resolve their own and can observe neither.
  */
@@ -103,7 +103,7 @@ const REFUSED: Record<ImportRefusal, string> = {
  * decides whether an import is *refused* and nothing a handler still holds
  * decides what is *invoked*.
  */
-export class WorkflowImportAuthority implements ImportTier {
+export class WorkflowComponentCatalog implements ImportTier {
   readonly #components: ReadonlyMap<string, WorkflowBundleComponent>;
 
   constructor(components: ReadonlyMap<string, WorkflowBundleComponent>) {
@@ -137,11 +137,11 @@ export class WorkflowImportAuthority implements ImportTier {
 }
 
 /**
- * The authority one invocation runs under, or nothing when no bundle is
+ * The component catalog one invocation runs under, or nothing when no bundle is
  * installed.
  *
  * Two installations carrying bundles is a host mistake rather than a merge: two
- * authorities for one execution would make what a name resolves to depend on
+ * catalogs for one execution would make what a name resolves to depend on
  * which was consulted first.
  *
  * The collision checks run here, before the root document is imported, because
@@ -153,7 +153,7 @@ export class WorkflowImportAuthority implements ImportTier {
 export function installedBundle(
   bundles: readonly WorkflowComponentBundle[],
   registry: ComponentRegistry,
-): WorkflowImportAuthority | undefined {
+): WorkflowComponentCatalog | undefined {
   if (bundles.length === 0) {
     return undefined;
   }
@@ -209,5 +209,5 @@ export function installedBundle(
         "workflow with no bundle, which is a different definition.",
     );
   }
-  return new WorkflowImportAuthority(components);
+  return new WorkflowComponentCatalog(components);
 }

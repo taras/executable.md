@@ -30,7 +30,7 @@
 
 import type { Operation } from "effection";
 import {
-  GitOperationAuthorityError,
+  GitOperationAdmissionError,
   GitOperationInfrastructureError,
 } from "../../composition/errors.ts";
 import type {
@@ -127,7 +127,7 @@ export interface PushEvidence {
  * repository came from*, and two Repositories selected from one locator under
  * different names are different repositories with separate leases, separate
  * placements and separate Push evidence. Admitting on the fingerprint would let
- * a `<Dir>` into the second one carry the first one's authority — the element
+ * a `<Dir>` into the second one carry the first one's permission — the element
  * would be authenticated against the Repository in scope and then act in a
  * checkout that Repository never selected.
  *
@@ -154,7 +154,7 @@ export function selectCheckout(
     }
   }
   if (selected === undefined) {
-    throw new GitOperationAuthorityError(
+    throw new GitOperationAdmissionError(
       operation,
       "the directory it was written in is inside none of the checkouts this execution selected " +
         "for the repository in scope",
@@ -283,7 +283,7 @@ export function* livePush(
   checkout: RegisteredCheckout,
 ): Operation<{ outcome: GitPushOutcome; evidence: PushEvidence }> {
   if (checkout.origin === undefined) {
-    throw new GitOperationAuthorityError(
+    throw new GitOperationAdmissionError(
       PUSH,
       "the checkout it selected records no usable origin, so there is nowhere for this branch " +
         "to be published to. No credential was read and nothing was contacted",

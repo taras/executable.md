@@ -283,7 +283,7 @@ function* upgrade(scenario: Scenario): Operation<Run> {
     // Only an eligible compiled host states one, which is what an unsupported
     // provenance case is about: there is nothing for the document to reach.
     ...(provenance === "compiled" && target !== null
-      ? { authority: () => seamsOperation(scenario, run) }
+      ? { components: () => seamsOperation(scenario, run) }
       : {}),
   };
 

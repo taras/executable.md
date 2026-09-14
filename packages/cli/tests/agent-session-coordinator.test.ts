@@ -20,7 +20,7 @@ import { fileURLToPath } from "node:url";
 import { Agent } from "@executablemd/core";
 import type {
   AgentLaunchRequest,
-  AgentProviderAuthority,
+  AgentLaunchCoordinator,
   LaunchRecord,
   PreparedLaunchRecord,
 } from "@executablemd/core";
@@ -104,19 +104,19 @@ function probeRuntime(probe: RuntimeProbe) {
 }
 
 /** What core does with each phase, minus the journal. */
-function collectingAuthority(records: LaunchRecord[]): AgentProviderAuthority {
+function collectingCoordinator(records: LaunchRecord[]): AgentLaunchCoordinator {
   return {
     // These suites route launches, never a `<Session>` placement. Throwing
     // rather than answering means a placement that did reach here fails
     // loudly instead of being handed an identity nobody derived.
     sessionIdentity: () => {
-      throw new Error("this stub authority routes no session placement");
+      throw new Error("this stub coordinator routes no session placement");
     },
     // As with a placement, these suites name no provider turn. Throwing means a
     // checkpoint that did reach here fails loudly rather than being recorded by
-    // an authority nothing is asserting against.
+    // a coordinator nothing is asserting against.
     checkpoint: () => {
-      throw new Error("this stub authority names no provider turn");
+      throw new Error("this stub coordinator names no provider turn");
     },
     *perform(_request, phases) {
       const prepared = yield* phases.prepare();
@@ -132,22 +132,22 @@ function collectingAuthority(records: LaunchRecord[]): AgentProviderAuthority {
 /**
  * The whole phase sequence, the way core drives it.
  *
- * `collectingAuthority` stops after preparation, which is all the ownership
+ * `collectingCoordinator` stops after preparation, which is all the ownership
  * cases need. A case about what the host hands the launcher has to go the
  * distance, and stops at the first phase that carries a failure — exactly as
- * the real authority does before deriving a result.
+ * the real coordinator does before deriving a result.
  */
-function performingAuthority(records: LaunchRecord[]): AgentProviderAuthority {
+function performingCoordinator(records: LaunchRecord[]): AgentLaunchCoordinator {
   return {
     // As above: these suites route launches, never a `<Session>` placement.
     sessionIdentity: () => {
-      throw new Error("this stub authority routes no session placement");
+      throw new Error("this stub coordinator routes no session placement");
     },
     // As with a placement, these suites name no provider turn. Throwing means a
     // checkpoint that did reach here fails loudly rather than being recorded by
-    // an authority nothing is asserting against.
+    // a coordinator nothing is asserting against.
     checkpoint: () => {
-      throw new Error("this stub authority names no provider turn");
+      throw new Error("this stub coordinator names no provider turn");
     },
     *perform(_request, phases) {
       const prepared = yield* phases.prepare();
@@ -302,7 +302,7 @@ function* launchUnder(
     });
     yield* factory(
       { defaultAgent: agent, permissionMode: "deny-all" },
-      options.perform ? performingAuthority(records) : collectingAuthority(records),
+      options.perform ? performingCoordinator(records) : collectingCoordinator(records),
     );
     yield* Agent.operations.launch(launchRequest(agent));
   });

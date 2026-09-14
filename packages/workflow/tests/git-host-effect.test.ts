@@ -117,7 +117,7 @@ const PERFORMED: GitHostCompletion = Object.freeze({
  *
  * Independently constructed, exactly as a repository component or a second
  * loaded copy would construct it: sharing the name is how composition works,
- * and is deliberately not how authority works.
+ * and is deliberately not how admission works.
  */
 const GitHostWitness = createApi<GitHostApi>(GIT_HOST_API, {
   // deno-lint-ignore require-yield

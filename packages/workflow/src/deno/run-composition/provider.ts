@@ -4,7 +4,7 @@
  *
  * It answers the same four Apis the workflow provider answers, so a document
  * writes the same thirteen components either way. What differs is everything
- * about lifetime and authority.
+ * about lifetime and ownership.
  *
  * A workflow run's checkouts are rows in its own database, restored from
  * retained history under a WorkflowRun the document must never be able to name.
@@ -47,7 +47,7 @@ import type {
   GitPushInvocation,
   GitSwitchInvocation,
 } from "../../composition/git-api.ts";
-import { GitOperationAuthorityError, RepositorySelectionError } from "../../composition/errors.ts";
+import { GitOperationAdmissionError, RepositorySelectionError } from "../../composition/errors.ts";
 import type {
   GitAddResult,
   GitCommitResult,
@@ -68,7 +68,7 @@ import type {
   PullRequestInputs,
   PullRequestResult,
 } from "../../composition/pull-request-records.ts";
-import { PullRequestAuthorityError } from "../../composition/errors.ts";
+import { PullRequestAdmissionError } from "../../composition/errors.ts";
 import type { RepositoryIdentity, RepositorySelection } from "../../composition/selection.ts";
 import { IssueApi } from "../../issue/api.ts";
 import type { IssueDetails, IssueReference } from "../../issue/api.ts";
@@ -288,7 +288,7 @@ export function* useRunComposition(options: RunCompositionOptions): Operation<vo
     const selected = selections.authenticate(
       invocationRepository,
       () =>
-        new GitOperationAuthorityError(
+        new GitOperationAdmissionError(
           operation,
           "the Repository in scope is not one this execution selected, so it names no checkout",
         ),
@@ -442,7 +442,7 @@ export function* useRunComposition(options: RunCompositionOptions): Operation<vo
           PULL_REQUEST_ELEMENT,
         );
         if (checkout.origin === undefined) {
-          throw new PullRequestAuthorityError(
+          throw new PullRequestAdmissionError(
             "no-repository-context",
             "the checkout it selected records no usable origin, so there is no repository at a " +
               "Git host for a pull request to be opened in.",
@@ -450,7 +450,7 @@ export function* useRunComposition(options: RunCompositionOptions): Operation<vo
         }
         const headBranch = yield* currentBranch(git, checkout.root);
         if (headBranch === undefined) {
-          throw new PullRequestAuthorityError(
+          throw new PullRequestAdmissionError(
             "unnamed-branch",
             "the checkout it selected has no branch checked out, so there is no head branch to " +
               "open a pull request from — and a detached HEAD is not something this run could " +
@@ -459,7 +459,7 @@ export function* useRunComposition(options: RunCompositionOptions): Operation<vo
         }
         const headSha = yield* resolveCommit(git, checkout.root, "HEAD");
         if (headSha === undefined) {
-          throw new PullRequestAuthorityError(
+          throw new PullRequestAdmissionError(
             "unnamed-branch",
             "the checkout it selected did not report the commit its branch holds.",
           );

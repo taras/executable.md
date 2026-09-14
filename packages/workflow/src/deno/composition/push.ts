@@ -11,7 +11,7 @@
  *
  * ## What happens before the remote exists in the story
  *
- * Authority first, and all of it locally. The enclosing `<Repository>` and the
+ * Admission first, and all of it locally. The enclosing `<Repository>` and the
  * contextual working directory select a retained checkout the way they do for
  * every other Git operation; the observed record is compared with the retained
  * row member for member, every row is held to the identity naming it, and the

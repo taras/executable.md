@@ -36,7 +36,7 @@
  * than resolving the name and finding nothing behind it.
  *
  * The read goes to the Effection filesystem directly rather than through
- * `API.Fs` or the document-facing `Files` authority. Both of those are
+ * `API.Fs` or the document-facing `Files` provider. Both of those are
  * middleware a running document can compose around, and a review whose own
  * components could be answered by the document under review would have moved the
  * shadowing problem rather than solved it.

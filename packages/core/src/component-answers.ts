@@ -7,7 +7,7 @@
  * a provider must have claimed for that name. This module is the seam a
  * provider uses to make that claim.
  *
- * ## Being asked and answering are two authorities
+ * ## Being asked and answering are two separate rights
  *
  * A provider installs through a *registrar*, and receives no handle it can keep
  * and state an answer with. The registrar is the right to be asked; each
@@ -29,9 +29,9 @@
  * context name behind any of these objects, which is what lets a separately
  * loaded copy of core hold one without any of those being a way in.
  *
- * ## Claiming is not authority
+ * ## Claiming is not permission
  *
- * Claiming identifies an answer. It authorizes nothing. A fragment still needs
+ * Claiming identifies an answer. It permits nothing. A fragment still needs
  * the host entry, an exact identity match, the right `allow` class, whole-
  * fragment preflight and canonical generated import — all of them
  * independently. Middleware that answers an import without claiming anything is

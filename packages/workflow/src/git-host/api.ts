@@ -12,7 +12,7 @@
  * narrower policy, or delegate that exact request onward. It receives no
  * credential, no capability, no answer operation and no phase evidence, and the
  * value it returns is ignored. Nothing a handler can hold or combine adds up to
- * completion authority — which is the whole reason there is one surface here
+ * completion ownership — which is the whole reason there is one surface here
  * rather than two.
  *
  * A provider is provider-neutral by construction. It receives the frozen

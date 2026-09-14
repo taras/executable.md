@@ -11,7 +11,7 @@
  * The cases drive core's registered component through `execute()`, because the
  * form this component accepts is decided by canonical dispatch against the
  * invocation the engine issued (§5.6): expanding segments directly would refuse
- * every invocation for want of that authority, and prove nothing about the
+ * every invocation for want of that capability, and prove nothing about the
  * component.
  *
  * Three fixtures travel with each document. `<Value>` puts an arbitrary string

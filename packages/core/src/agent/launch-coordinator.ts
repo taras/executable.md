@@ -1,12 +1,12 @@
 /**
- * The authority that runs and retains one launch's phases
+ * Coordination that runs and retains one launch's phases
  * (architecture.md §Authoritative behavior).
  *
  * This is what public middleware never gets. It is delivered, never published:
  * core hands one of these to a provider factory as it installs it, and the
  * factory closes over it. There is no reader, no context holding one, and no
- * member of a request that carries one — an authority reachable by name would
- * be an authority every same-name context and every loaded copy could reach.
+ * member of a request that carries one — a coordinator reachable by name would
+ * be one every same-name context and every loaded copy could reach.
  *
  * What it owns is everything that decides whether a launch happened: which
  * request is live, whether this provider is the one installed for it, the order
@@ -36,7 +36,7 @@ export interface AgentLaunchPhases {
   exit(prepared: PreparedLaunchRecord): Operation<ExitedLaunchRecord>;
 }
 
-export interface AgentProviderAuthority {
+export interface AgentLaunchCoordinator {
   /**
    * Perform the launch `request` names, using `phases` for the work.
    *
@@ -58,7 +58,7 @@ export interface AgentProviderAuthority {
    *
    * Delivered rather than published, for the same reason `perform` is: the
    * authored name travels the public chain where a handler may change it, and
-   * this does not travel there at all. A provider asks the authority it was
+   * this does not travel there at all. A provider asks the coordinator it was
    * installed with; a handler holding the same request reads only the name.
    *
    * It retains nothing, but it is not repeatable: a placement is bound to the
@@ -90,7 +90,7 @@ export interface LaunchRetention {
   exited(live: () => Operation<ExitedLaunchRecord>): Operation<ExitedLaunchRecord>;
 }
 
-/** One launch, from the authority's side. */
+/** One launch, from the coordinator's side. */
 export interface LiveLaunch {
   issued: IssuedLaunch;
   retention: LaunchRetention;
@@ -156,15 +156,15 @@ function crossCheck(request: AgentLaunchRequest, record: PreparedLaunchRecord): 
 }
 
 /**
- * The one authority a document installation hands its providers.
+ * The one coordinator a document installation hands its providers.
  *
  * It resolves which launch a routed request belongs to rather than being told,
  * because being told is what a forged request would do.
  */
-export function createLaunchAuthority(
+export function createLaunchCoordinator(
   generation: object,
   live: () => readonly LiveLaunch[],
-): AgentProviderAuthority {
+): AgentLaunchCoordinator {
   function locate(request: AgentLaunchRequest): LiveLaunch {
     const found = live().find((candidate) => candidate.issued.owns(request));
     if (!found) {

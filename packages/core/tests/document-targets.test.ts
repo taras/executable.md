@@ -1081,7 +1081,7 @@ describe("Tier DT — structural recognition", () => {
   /**
    * `.` and `..` are ordinary heading labels — a document may really have a
    * section called `..` — so `../../etc/passwd` is a well-formed four-level
-   * canonical *heading path*, never filesystem authority, and nothing here
+   * canonical *heading path*, never filesystem permission, and nothing here
    * resolves it against a filesystem.
    *
    * Structural parsing therefore accepts it when the rest of the failure is

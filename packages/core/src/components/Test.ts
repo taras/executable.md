@@ -21,7 +21,7 @@
  * behavior surface is ordinary public middleware, so a handler there must not
  * be able to answer for a decision that precedes it.
  *
- * What this function does own, beside the containment grant, is the authority a
+ * What this function does own, beside the containment grant, is what a
  * nested execution is run under. It is minted here, in this invocation's frame,
  * for the same reason containment is decided here: an invocation of *this*
  * definition is the only thing that may hold it. It is handed to whoever the

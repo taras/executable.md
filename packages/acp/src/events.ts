@@ -10,7 +10,7 @@
  *
  * A successfully completed turn may also name itself. When the adapter said
  * which turn this was, that name is associated with the exact terminal event
- * this produces, through the authority core delivered to this provider — never
+ * this produces, through the coordinator core delivered to this provider — never
  * as a property on the event, which every holder of the event could read and
  * every builder of one could write. A turn that was cancelled, failed, or
  * refused by the host names nothing.
@@ -39,7 +39,7 @@ export type TurnRefusal = () => Error | undefined;
 /**
  * How this turn says which provider turn it was.
  *
- * Supplied by the caller that holds this provider's delivered authority, and by
+ * Supplied by the caller that holds this provider's delivered coordinator, and by
  * nothing else. A turn consumed without one — an embedder driving the provider
  * directly — names no turn, which retains nothing.
  */

@@ -335,7 +335,7 @@ function* parseComponent(name: string, path: string, content: string): Operation
 /**
  * Rebuild the execution view of a bundle a run already retained.
  *
- * The retained entries are the authority: each is read from the retained
+ * The retained entries are definitive: each is read from the retained
  * commit, at the retained path, and the blob's object id must be the hash the
  * definition holds. A component whose object changed, went missing, or is no
  * longer a blob refuses the resume — it does not resolve to whatever is there

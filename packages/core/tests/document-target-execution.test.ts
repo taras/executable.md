@@ -1287,7 +1287,7 @@ describe("Tier TX — a terminal journal without its root import", () => {
  *
  * These install exactly such a handler and assert the answer does not change.
  */
-describe("Tier TX — identity authority is execution-owned", () => {
+describe("Tier TX — identity is execution-owned", () => {
   /** A guard that swallows every stage it is given, calling `next` for none. */
   function* useSuppressingGuard(stage: "check" | "admit"): Operation<void> {
     if (stage === "check") {
@@ -1874,14 +1874,14 @@ describe("Tier TX — a terminal result cannot be replaced after admission", () 
 });
 
 /**
- * Tier TX — public policy observes; it does not hold authority.
+ * Tier TX — public policy observes; it does not enforce.
  *
  * The execution-owned gate validates a history and replay consumes it. Between
  * those, public `ReplayGuard` policy runs — `check`, then `admit`, then `decide`
  * during replay — and it is code any enclosing scope may install. Handing it the
  * retained events themselves would let it rewrite the root selection, the
  * recorded content, an effect description, or a result *after* admission had
- * accepted them, which is exactly the authority the private gate exists to keep
+ * accepted them, which is exactly the enforcement the private gate exists to keep
  * out of public hands.
  *
  * Recorded before the fix, resuming a partial Alpha journal as Alpha with

@@ -2,7 +2,7 @@
  * What inspecting a sealed artifact answers with.
  *
  * A retained run and an artifact are addressed differently on purpose. A run id
- * names live lifecycle authority — something a caller may still advance, cancel
+ * names live lifecycle ownership — something a caller may still advance, cancel
  * or delete — while an artifact path names immutable evidence that left the
  * machine which produced it. So they are sibling operations rather than one
  * operation over a union: widening `inspect()` to accept either would make the
@@ -47,7 +47,7 @@ export interface WorkflowArtifactIdentity {
  * It extends the shared inspection base rather than the retained-run snapshot,
  * so `retrieval` is not a key of this type. That is the whole point: an
  * artifact excludes where its definition could be fetched from now, because
- * that is authority belonging to the machine that exported rather than
+ * that is ownership belonging to the machine that exported rather than
  * something true about the run — and a type that merely never assigned the
  * member would leave the exclusion resting on what one projection happens to
  * write.

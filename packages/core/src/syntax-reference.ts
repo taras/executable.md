@@ -22,9 +22,9 @@
  * than ordered, because ordering them would make which profile a document is
  * shown depend on installation order.
  *
- * The reference carries no authority at all. It answers with text. Seeing a
+ * The reference decides nothing at all. It answers with text. Seeing a
  * component named in the symbols neither registers it, resolves it, nor
- * authorizes it: what a name means is still `selectComponent()`'s decision, and
+ * admits it: what a name means is still `selectComponent()`'s decision, and
  * what may run is still the execution's.
  */
 
@@ -38,7 +38,7 @@ import { documentationIndexFor } from "./component-documentation.ts";
 import type { DocumentationContribution } from "./component-documentation.ts";
 import type { DocumentationIndex } from "./documentation-index.ts";
 import { UnknownComponentError } from "./documentation-index.ts";
-import type { WorkflowImportAuthority } from "./components/bundle.ts";
+import type { WorkflowComponentCatalog } from "./components/bundle.ts";
 import type { ExecutionDeclaration } from "./execution-declarations.ts";
 import type { IdentityComponent } from "./invocation-identity.ts";
 import { SyntaxSelectionRefusal } from "./syntax-refusal.ts";
@@ -48,7 +48,7 @@ import type { ComponentOrigin, ComponentRegistry } from "./types.ts";
  * The symbols in scope for the segments being expanded.
  *
  * Held by the execution and handed to core's own expansion by value, beside the
- * import authority and the identity domains. It is not a Context: a context
+ * component resolution and the identity domains. It is not a Context: a context
  * resolves by name, and a name is not a secret, so a document could build one
  * and answer for the vocabulary it is shown.
  */
@@ -68,7 +68,7 @@ export interface SyntaxReference {
    * nested Plan can be told how `<Elicit>` works even where it may not run one,
    * and each rendered entry states whether it is available in the current
    * evaluation. Collapsing the two would either hide reference material an
-   * author needs or imply an authority they do not have.
+   * author needs or imply a permission they do not have.
    */
   documentation(names: readonly string[]): Operation<string>;
   /**
@@ -107,7 +107,7 @@ export interface CapturedSymbolInputs {
   readonly components: readonly IdentityComponent[];
   readonly declarations: readonly ExecutionDeclaration[];
   /** The bundle this execution is closed over, when a trusted host installed one. */
-  readonly workflow?: WorkflowImportAuthority;
+  readonly workflow?: WorkflowComponentCatalog;
 }
 
 /**

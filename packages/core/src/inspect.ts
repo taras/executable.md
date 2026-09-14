@@ -26,7 +26,7 @@ import type {
 } from "./execution-declarations.ts";
 import { repositoryCandidateNames } from "./components/candidates.ts";
 import { PROTECTED_COMPONENT_NAMES } from "./components/protected.ts";
-import type { WorkflowImportAuthority } from "./components/bundle.ts";
+import type { WorkflowComponentCatalog } from "./components/bundle.ts";
 import { documentationOf } from "./components/documentation.ts";
 import type { ComponentDocumentation } from "./components/documentation.ts";
 import { STRUCTURAL_DECLARATIONS } from "./structural.ts";
@@ -272,7 +272,7 @@ export function* inspectComponent(options: InspectComponentOptions): Operation<C
     case "unresolved":
       return { kind: "unresolved", searched: selected.searched, registered: selected.registered };
     case "workflow":
-      // A component bundle is authority one document execution runs under.
+      // A component bundle is canonical resolution one document execution runs under.
       // Inspection installs none, so this tier answers for no inspection.
       throw new Error(
         `Component ${name} resolved through a workflow component bundle, which describes a ` +
@@ -524,7 +524,7 @@ export interface InspectSyntaxOptions {
    * bundle member: the pinned source is already in hand, and describing it
    * parses the same bytes execution would.
    */
-  readonly workflow?: WorkflowImportAuthority;
+  readonly workflow?: WorkflowComponentCatalog;
   /**
    * Identity components the host would declare to an execution, with the same
    * meaning `ExecuteOptions.components` gives them — admissibility included.
@@ -550,7 +550,7 @@ export interface InspectSyntaxOptions {
  * Every structural construct and every selected component a document could
  * write here, without running any of it.
  *
- * Observation, never authority. This installs nothing, executes nothing,
+ * Observation, never execution. This installs nothing, executes nothing,
  * constructs no durable stream, mints no invocation, calls no identity
  * factory and expands no body; the registrations it selects against are
  * whatever the calling scope already installed. What it reads from the

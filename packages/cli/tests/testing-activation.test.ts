@@ -1,5 +1,5 @@
 /**
- * A real workflow installation grants no testing authority.
+ * A real workflow installation grants no testing capability.
  *
  * `executeInstalled()` is how a trusted host attaches what an execution needs,
  * and a retained workflow installation is the most privileged thing this

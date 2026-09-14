@@ -943,7 +943,7 @@ describe("deterministic dependencies declared for a nested run", () => {
    * root the declaration — and therefore an Agent context to be refused for — is a
    * change somebody has to make deliberately.
    */
-  it("gives a direct test root no Plan authorship authority", function* () {
+  it("gives a direct test root no Plan authorship permission", function* () {
     const project = yield* useProject({
       "README.md": doc(
         '<Test name="a test root cannot write a Plan">',

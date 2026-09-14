@@ -771,7 +771,7 @@ describe("Tier WFF — xmd workflow fork", () => {
         sourceEventId: pushed.eventId,
       });
 
-      // And the fork is the authority for what it ran itself.
+      // And the fork is definitive for what it ran itself.
       const live = at(entries, "exec");
       expect(live.inherited).toBe(undefined);
       expect(live.eventId).not.toBe(at(source, "exec").eventId);

@@ -67,7 +67,7 @@ export interface CheckedFailures {
   failure?: ErrorSegment;
 }
 
-/** The ledger an execution starts with: no authority, nothing suffered yet. */
+/** The ledger an execution starts with: no recovery, nothing suffered yet. */
 export function checkedFailureLedger(): CheckedFailures {
   return { authorized: false };
 }
@@ -83,7 +83,7 @@ export function recoveringLedger(): CheckedFailures {
 /**
  * The ledger for the body of a contained invocation.
  *
- * A fresh record with the inherited authority: a checked failure inside it
+ * A fresh record with the inherited recovery: a checked failure inside it
  * fails that invocation — which is how a test reports a failing test — and the
  * run's own record stays clear, so the tests after it still run and the testing
  * session's completion policy is what decides the run.

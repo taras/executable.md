@@ -12,7 +12,7 @@
  * So the two travel apart. The **authored name** stays on the public chain,
  * where it is descriptive and a handler may observe or change it. The
  * **engine-derived expansion identity** travels inside this request, reachable
- * only through the authority delivered to the installed provider. A handler
+ * only through the coordinator delivered to the installed provider. A handler
  * holds the request and can read the name; it cannot read, copy or forge the
  * identity, and a look-alike it builds carries none.
  *
@@ -60,7 +60,7 @@ interface Issuance {
   readonly sessionIdentity: string;
   /** False once the element it belongs to finished placing. */
   live: boolean;
-  /** True once the authority read it; a second read refuses. */
+  /** True once the coordinator read it; a second read refuses. */
   accepted: boolean;
 }
 
@@ -160,7 +160,7 @@ export function isSessionRequest(value: unknown): value is AgentSessionRequest {
 }
 
 /**
- * The engine identity `routed` carries, for the holder of provider authority.
+ * The engine identity `routed` carries, for the holder of launch coordination.
  *
  * One use, and only while the element that opened it is still placing. A
  * placement a handler saved from an earlier `<Session>` is not live; one it

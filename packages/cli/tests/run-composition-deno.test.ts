@@ -155,10 +155,10 @@ describe("ORC7 — a Session launched in a managed Worktree", () => {
     // what it is handed is the placement: the directory the session belongs to.
     const capture = function* (): Operation<void> {
       // A registered provider, reached the way `<AgentProvider>` reaches one.
-      // Only a registered provider is handed the launch authority, so only one
+      // Only a registered provider is handed the launch coordinator, so only one
       // can settle a launch — middleware can route a request and cannot
       // perform it, which is the boundary this uses rather than works around.
-      yield* registerAgentProvider("probe", function* (options, authority) {
+      yield* registerAgentProvider("probe", function* (options, launchCoordinator) {
         yield* Agent.around(
           {
             // deno-lint-ignore require-yield
@@ -173,7 +173,7 @@ describe("ORC7 — a Session launched in a managed Worktree", () => {
               // Settled as a refusal rather than performed: this suite is about
               // where a launch is placed, and starting a native UI would need a
               // terminal nothing here has.
-              yield* authority.refuse(request, {
+              yield* launchCoordinator.refuse(request, {
                 phase: "prepared",
                 agent: "codex",
                 sessionKey: deriveSessionKey(

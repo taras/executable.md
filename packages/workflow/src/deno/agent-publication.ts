@@ -17,7 +17,7 @@
  * ## What is retained, and what is not
  *
  * Only a completion the provider named, in a session this run retains. Both are
- * supplied — the token by the provider through core's delivered authority, the
+ * supplied — the token by the provider through core's delivered coordinator, the
  * logical session key by the placement that made the session — and neither is
  * derived. In particular the retained key is never recovered from the spelling
  * of the provider's own session key: those are two different namespaces that

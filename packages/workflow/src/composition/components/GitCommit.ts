@@ -42,7 +42,7 @@ import type { Operation } from "effection";
 import type { Json } from "@executablemd/durable-streams";
 import { GitComposition } from "../git-api.ts";
 import { selectedRepository } from "../context.ts";
-import { GitOperationAuthorityError, GitOperationError } from "../errors.ts";
+import { GitOperationAdmissionError, GitOperationError } from "../errors.ts";
 import { wellFormedText } from "../parse.ts";
 import { parseGitCommitMessageSource } from "../git-records.ts";
 import type { GitCommitMessageSource } from "../git-records.ts";
@@ -190,7 +190,7 @@ export default function* GitCommit(props: Record<string, Json>): Operation<strin
 
   const repository = yield* selectedRepository();
   if (repository === undefined) {
-    throw new GitOperationAuthorityError(
+    throw new GitOperationAdmissionError(
       COMMIT,
       "it is written outside a lexical <Repository>, so there is no repository in scope for a " +
         "commit to be a commit in",

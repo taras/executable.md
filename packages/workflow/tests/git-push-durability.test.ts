@@ -853,7 +853,7 @@ describe("workflow Git.Push durability", () => {
             throw new Error("the probe was written outside a Repository");
           }
           // A second physical module holding the same Api name. Sharing the
-          // name is how composition works; it is deliberately not how authority
+          // name is how composition works; it is deliberately not how admission
           // works, so this still reaches the one installed provider.
           yield* loaded.GitComposition.operations.pushCurrentBranch({
             repository: selected,

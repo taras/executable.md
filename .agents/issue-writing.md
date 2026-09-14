@@ -205,11 +205,11 @@ evidence rather than the transcript of how the design was discovered.
     control, mutation, failure case, or comparison that would fail if the claimed
     behavior were absent.
 16. **Put security guarantees before enforcement machinery.** Describe what is
-    protected, from which action or authority, and the exact limitation before
+    protected, from which action or permission, and the exact limitation before
     discussing scanners, adapters, namespaces, transactions, or lint rules.
 17. **Show complex lifecycle boundaries in sequence.** For orchestration,
     concurrency, replay, or ownership stories, first show the reader-visible
-    sequence. Then assign authority and state to its components.
+    sequence. Then assign ownership and state to its components.
 18. **Separate final outcome from the first slice.** A proof of concept or first
     delivery slice explains which part of the Story it establishes and which
     acceptance remains for the complete outcome.

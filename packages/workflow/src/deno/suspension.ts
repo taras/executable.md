@@ -5,7 +5,7 @@
  * published a request — that is journal state, and `suspendFor()` owns it. The
  * *execution* must now end without a Close, its executor lock held until every
  * finalizer has run, and the run settled `suspended`. That second half is
- * lifecycle authority, and it belongs to whoever holds the lock.
+ * lifecycle ownership, and it belongs to whoever holds the lock.
  *
  * So this controller is the seam between them, and it is deliberately narrow:
  * it reports a wait to the lock owner and then does not return. It halts
@@ -37,7 +37,7 @@
  * There is deliberately nothing to hold and nothing to present. A capability
  * object has to be reachable to be used, and in this runtime anything reachable
  * by name is reachable by anyone who knows the name — which is selection, not
- * authority. Position is not like that: a caller cannot stand somewhere it is
+ * ownership. Position is not like that: a caller cannot stand somewhere it is
  * not.
  */
 
@@ -63,7 +63,7 @@ import { durablePosition } from "@executablemd/durable-streams";
 import type { Json } from "@executablemd/durable-streams";
 import { SUSPENSION_REQUEST, suspensionId } from "../suspension/suspend.ts";
 import {
-  type SuspensionAnswerAuthority,
+  type SuspensionAnswerPublication,
   type SuspensionAnswerProvider,
   useSuspensionAnswerProvider,
 } from "../suspension/answer.ts";
@@ -113,7 +113,7 @@ export interface SuspensionController {
 /**
  * Whether this execution is, right now, at the wait it says it is.
  *
- * Authority is the *current* execution reaching its own request, not the
+ * What admits a wait is the *current* execution reaching its own request, not the
  * existence of a matching row. Retained history alone cannot decide this: on a
  * resume the request from the previous execution is already in the journal, so
  * a caller that ran before replay reached it could present its identifier and be
@@ -299,11 +299,11 @@ function answerProvider(
   connections: WorkflowRunConnections,
 ): SuspensionAnswerProvider {
   return {
-    *claim(authority: SuspensionAnswerAuthority): Operation<Json | undefined> {
+    *claim(publication: SuspensionAnswerPublication): Operation<Json | undefined> {
       // Where the execution stands, before what the run retains. An execution
       // that is not at this wait has nothing to claim, and the public route
       // reports that refusal authoritatively a moment later.
-      const refused = yield* atOwnRequest(database, authority.suspensionId, authority.request);
+      const refused = yield* atOwnRequest(database, publication.suspensionId, publication.request);
       if (refused !== undefined) {
         return undefined;
       }
@@ -312,14 +312,14 @@ function answerProvider(
       const pending = yield* scoped(function* () {
         yield* connection.lock.hold();
         return readTransaction(connection.database, () =>
-          readRetainedAnswer(connection.database, authority.suspensionId),
+          readRetainedAnswer(connection.database, publication.suspensionId),
         );
       });
       if (pending === undefined || pending.state !== "pending") {
         return undefined;
       }
 
-      connections.validateJournalProvenance(database, authority.journalProvenance);
+      connections.validateJournalProvenance(database, publication.journalProvenance);
 
       const claimed = yield* database.transact(function* (transaction) {
         const active = connections.authorizeTransaction(database, transaction);
@@ -335,16 +335,16 @@ function answerProvider(
         // have been claimed by another execution, and the publication that
         // commits with the consumption has to be of the value that consumption
         // took.
-        const retained = readRetainedAnswer(writable.database, authority.suspensionId);
+        const retained = readRetainedAnswer(writable.database, publication.suspensionId);
         if (retained === undefined || retained.state !== "pending") {
           throw new WorkflowRequestError(
-            `the answer retained for ${authority.suspensionId} was consumed by another ` +
+            `the answer retained for ${publication.suspensionId} was consumed by another ` +
               "execution before this one could publish it.",
           );
         }
-        if (retained.requestFingerprint !== suspensionRequestFingerprint(authority.request)) {
+        if (retained.requestFingerprint !== suspensionRequestFingerprint(publication.request)) {
           throw new WorkflowRequestError(
-            `the answer retained for ${authority.suspensionId} was delivered against a ` +
+            `the answer retained for ${publication.suspensionId} was delivered against a ` +
               "different request, so it is not an answer to the wait this execution reached.",
           );
         }
@@ -353,18 +353,18 @@ function answerProvider(
           database,
           transaction,
           token,
-          authority.publish(retained.answer),
+          publication.publish(retained.answer),
         );
 
         if (
           !consumeRetainedAnswer(
             writable.database,
-            authority.suspensionId,
+            publication.suspensionId,
             new Date().toISOString(),
           )
         ) {
           throw new WorkflowRequestError(
-            `the answer retained for ${authority.suspensionId} could not be consumed, so its ` +
+            `the answer retained for ${publication.suspensionId} could not be consumed, so its ` +
               "publication is discarded with this transaction.",
           );
         }

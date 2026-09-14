@@ -12,7 +12,7 @@ import {
 import { ensure, type Operation, scoped } from "effection";
 import { WorkspaceCoordination, WorkspaceCoordinationProviderError } from "./api.ts";
 
-export interface WorkspaceCoordinationAuthority {
+export interface WorkspaceEffectExecution {
   readonly executionIdentity: object;
   readonly journalProvenance: JournalProvenance | undefined;
   execute(): Operation<Json>;
@@ -21,7 +21,7 @@ export interface WorkspaceCoordinationAuthority {
 }
 
 export interface WorkspaceCoordinationProvider {
-  run(authority: WorkspaceCoordinationAuthority): Operation<Result>;
+  run(execution: WorkspaceEffectExecution): Operation<Result>;
 }
 
 interface StartRequest {
@@ -115,41 +115,35 @@ export function withWorkspaceCoordinationProvider<T>(
           }
 
           const details = yield* request.invocation.inspect(credential);
-          let authorityOpen = true;
-          const authority: WorkspaceCoordinationAuthority = Object.freeze({
+          let executionOpen = true;
+          const execution: WorkspaceEffectExecution = Object.freeze({
             executionIdentity: details.executionIdentity,
             journalProvenance: details.journalProvenance,
             *execute(): Operation<Json> {
-              if (!authorityOpen) {
-                throw unavailable(
-                  "the live Workspace coordination authority is completed or stale",
-                );
+              if (!executionOpen) {
+                throw unavailable("the live Workspace effect execution is completed or stale");
               }
               return yield* request.invocation.execute(credential);
             },
             *publish(result: Result): Operation<void> {
-              if (!authorityOpen) {
-                throw unavailable(
-                  "the live Workspace coordination authority is completed or stale",
-                );
+              if (!executionOpen) {
+                throw unavailable("the live Workspace effect execution is completed or stale");
               }
               yield* request.invocation.publish(credential, result);
             },
             *activateFailure(failure: unknown): Operation<Error> {
-              if (!authorityOpen) {
-                throw unavailable(
-                  "the live Workspace coordination authority is completed or stale",
-                );
+              if (!executionOpen) {
+                throw unavailable("the live Workspace effect execution is completed or stale");
               }
               return yield* request.invocation.activateFailure(credential, failure);
             },
           });
 
           try {
-            const result = yield* provider.run(authority);
+            const result = yield* provider.run(execution);
             yield* request.invocation.complete(credential, result);
           } finally {
-            authorityOpen = false;
+            executionOpen = false;
           }
         },
       },
@@ -184,7 +178,7 @@ function invocationCapability(
 
   function requireCredential(candidate: object): void {
     if (candidate !== credential) {
-      throw unavailable("the live Workspace coordination invocation has foreign authority");
+      throw unavailable("the live Workspace coordination invocation has a foreign credential");
     }
   }
 

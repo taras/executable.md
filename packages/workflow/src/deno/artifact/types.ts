@@ -5,7 +5,7 @@
  * rest of the provider. A caller hands the writer one of them and receives one
  * back from the reader; neither side ever sees a database, a statement, a
  * transaction, a lock, a connection or a host path, because an artifact that
- * carried any of those would be authority over a run rather than evidence about
+ * carried any of those would be control over a run rather than evidence about
  * one.
  *
  * Every member is a value the live workflow contract already retains, spelled
@@ -21,7 +21,7 @@
  * host paths, executor and recovery locks, credentials and endpoints. Retrieval
  * is where a definition can be fetched from *now*, which is a fact about the
  * machine that exported rather than about the run — so an artifact carrying it
- * would arrive on a second machine describing the first one's authority.
+ * would arrive on a second machine describing the first one's live state.
  */
 
 import type { Json } from "@executablemd/durable-streams";
@@ -107,7 +107,7 @@ export interface XmdArtifactDefinitionClosure {
  *
  * A token is opaque: it is whatever the provider that issued it can later
  * present, and nothing here derives, normalizes or infers one. It is retained
- * evidence rather than authentication authority — it names a place in a
+ * evidence rather than a credential — it names a place in a
  * conversation, not permission to reach the host that had it.
  */
 export interface XmdArtifactAgentCheckpoint {

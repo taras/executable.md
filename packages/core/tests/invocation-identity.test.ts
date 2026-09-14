@@ -3,7 +3,7 @@
  * (specs/executable-mdx-spec.md §5.6).
  *
  * A component that names a durable operation after its own invocation is making
- * an authority claim: the name decides which retained record a replay restores,
+ * an ownership claim: the name decides which retained record a replay restores,
  * and an implementation running under somebody else's identity commits against
  * its own storage under their expansion. Code Rule 15 says a decision like that
  * never trusts replaceable state, so nothing here is read from one.
@@ -472,7 +472,7 @@ describe("Tier CIV — the identity a host's component names its work after", ()
     expect(second.taken).toEqual([]);
   });
 
-  it("CIV10: a registration's whole record, transplanted, carries no authority", function* () {
+  it("CIV10: a registration's whole record, transplanted, carries no identity", function* () {
     const first = record();
     const second = record();
     let kept: unknown;
@@ -611,7 +611,7 @@ describe("Tier CIV — the identity a host's component names its work after", ()
     // The declared site named itself. The nested site ran the retained
     // implementation with its own genuine invocation and named nothing:
     // canonical resolution selected the nested registration there, so that
-    // invocation is in no domain. Restoring authority by authored-name equality
+    // invocation is in no domain. Restoring identity by authored-name equality
     // would put a second identity in `taken` and fail this.
     expect(seen.taken).toHaveLength(1);
     expect(nested).toEqual([]);
@@ -943,7 +943,7 @@ describe("Tier CIV — the authored form on the invocation", () => {
   // CIV22: what a dispatcher requires before it enters a form-specific body.
   //
   // The method on the object stays readable and stays honest, which is CIV21's
-  // contract. What it is not is authority: a component is handed whatever its
+  // contract. What it is not is a permission: a component is handed whatever its
   // caller passes, and every check expressible against the shape is one a
   // forger satisfies by construction. So the dispatcher asks this copy of core
   // instead — the same private field a claim is recognized by — and also asks

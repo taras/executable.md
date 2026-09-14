@@ -74,7 +74,7 @@ export type { ExecutionInstallation, JournalAdmission } from "./src/execute.ts";
  * Only the input a host writes, and only here, because this is the trusted
  * surface `ExecutionInstallation` already lives on. What canonical execution
  * captures from it — the bound operations and their revocation — is unexported:
- * ordinary core publishes no getter for active authority and no way to install
+ * ordinary core publishes no getter for the active permissions and no way to install
  * a provider.
  */
 export type {
@@ -174,7 +174,7 @@ export { generatedRequestRefusal } from "./src/generated-request-refusal.ts";
  * Whether an Agent answered with a Plan draft or a read-only information
  * request — see `src/plan-response.ts`.
  *
- * A pure function over text, carrying no authority. It is core's because the
+ * A pure function over text, deciding nothing. It is core's because the
  * rule has to agree with core about where a Markdown body begins and what a
  * heading is; a classifier that disagreed would send a draft to evaluation.
  */

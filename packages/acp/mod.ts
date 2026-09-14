@@ -92,8 +92,8 @@ export type { AcpxProvider, ProbeCapableRuntime } from "./src/provider.ts";
 
 // The construction route: how a logical session was first constructed, kept
 // strictly and create-once beside the coordinator's own records. It is not an
-// Agent Api, a component, or a source of launch authority — the coordinator
-// remains the single live authority.
+// Agent Api, a component, or a source of launch coordination — the coordinator
+// remains the one live owner.
 export {
   AgentSessionRouteError,
   createDenoSessionRouteStore,

@@ -48,7 +48,7 @@
  * ends where it is written and it expands with the assertions — which is the
  * same rule canonical `<Test>` is decided by.
  *
- * ## Authority
+ * ## What may run a child
  *
  * The definitions that can run a child are the ones canonical `<Test>` handed a
  * harness to: `testHarnessInstallation()` is called from inside the invocation
@@ -622,7 +622,7 @@ function writtenAs(kind: ChildConfiguration["kind"]): string {
  *
  * Set in the invocation's own frame, so the content projected into it reads it
  * and the child — which runs in a scope that does not descend from this one —
- * does not. It carries no authority: what it records is read back from this
+ * does not. It carries no capability: what it records is read back from this
  * invocation's own closure, so a recorder set further in records into nothing
  * anybody reads.
  */
@@ -1100,7 +1100,7 @@ export const HARNESS_REGISTRATIONS = [
 /**
  * What a trusted host attaches so its tests can run nested executions.
  *
- * The whole of the authority path, and it is a closure: canonical `<Test>` calls
+ * The whole of the harness path, and it is a closure: canonical `<Test>` calls
  * this with the harness it minted, inside that invocation, and what this does is
  * register definitions that have the harness and the host's provider in scope.
  * Neither value is written anywhere — not a context, not a prop, not an Api

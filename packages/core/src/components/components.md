@@ -54,9 +54,9 @@ the point: the answer is what *this* element may write.
 Inside an evaluation that narrows what may execute, the bare form reports the
 narrowed vocabulary, while the named form still explains components from the
 enclosing authoring symbols and states for each whether it is available in the
-current evaluation. Reference material and execution authority are different
+current evaluation. Reference material and execution permission are different
 questions, and conflating them would either hide documentation an author needs
-or imply an authority they do not have.
+or imply a permission they do not have.
 
 ### What it refuses
 

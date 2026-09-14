@@ -315,7 +315,7 @@ export interface WorkflowRequest {
  * What an inspection was pointed at.
  *
  * A discriminated value rather than two optional members, because exactly one
- * of them is ever right: a run id addresses live lifecycle authority in this
+ * of them is ever right: a run id addresses live lifecycle ownership in this
  * host's run store, and a path addresses immutable evidence somebody is
  * holding. Two optional fields would let both, or neither, be written down and
  * leave every reader to re-derive the rule.

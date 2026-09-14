@@ -206,7 +206,7 @@ The assets are located from the module's own URL, never from the working
 directory and never through the component search path, so a source checkout, an
 npm install and a compiled binary select the same bytes and report the same
 digests. The reads use the Effection filesystem directly rather than `API.Fs` or
-the document-facing `Files` authority, neither of which may decide what a
+the document-facing `Files` provider, neither of which may decide what a
 review's own components are.
 
 The CLI attaches this graph wherever the production `run` profile is assembled:

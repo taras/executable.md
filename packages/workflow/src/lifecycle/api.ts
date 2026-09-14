@@ -4,12 +4,12 @@
  *
  * Storage serialization decides who uses a connection next. It does not decide
  * who may advance a workflow run. That is this contract: one executor lock per
- * run, and an inspection surface that holds no authority at all.
+ * run, and an inspection surface that owns nothing at all.
  *
  * ## Routing selects a host; it grants nothing
  *
  * Reaching a provider through a contextual Api says which host answers. The
- * authority is the opaque object the provider hands back after taking the
+ * ownership is the opaque object the provider hands back after taking the
  * executor lock. It registered that object for one run and one acquisition and
  * checks it by identity — together with its open scope and run — inside every
  * mutating transaction. A run id, a database handle, a structural look-alike or

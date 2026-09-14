@@ -28,7 +28,7 @@
  * connection closes, and every later call on the handle fails rather than
  * reopening anything behind the caller's back.
  *
- * ## A handle is not authority
+ * ## A handle is not permission
  *
  * Holding one lets a caller read the run, append to its journal and take part in
  * its transactions. It does not let a caller move the run's lifecycle: beginning

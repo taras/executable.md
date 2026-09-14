@@ -42,7 +42,7 @@
  * It has to agree with two things core owns: where a Markdown body begins, and
  * what a heading is. `remark` and the `---` delimiters are both here, and the
  * classifier that disagreed with the structural check about where frontmatter
- * ended would send a draft to evaluation. It carries no authority of its own —
+ * ended would send a draft to evaluation. It decides nothing of its own —
  * a pure function over text, offered to a trusted host through `core/host`.
  */
 

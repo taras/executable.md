@@ -107,7 +107,7 @@ export interface AgentApi {
    * `name` is descriptive and compositional: a handler may observe it, change
    * it, or supply one. A `<Session>` element routes an opaque placement instead,
    * which reads as its name to every handler and carries the engine-derived
-   * identity where only the installed provider's authority can reach it — a
+   * identity where only the installed provider's coordinator can reach it — a
    * durable identity on this chain would be one any middleware could rewrite.
    */
   session(name?: string | AgentSessionRequest): Operation<Session>;

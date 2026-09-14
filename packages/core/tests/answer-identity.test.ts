@@ -10,7 +10,7 @@
  * the answer being replaced or edited, or being overwritten by a second
  * provider.
  *
- * The shape under test is the split between two authorities. A provider
+ * The shape under test is the split between two separate rights. A provider
  * installation is the right to be asked, and it is deliberately reusable: one
  * installation answers several admitted names and the same name resolved more
  * than once. A request is the right to answer one asking, and it is closed the
@@ -569,7 +569,7 @@ describe("Tier CIV — an identity belongs to one answer of one import", () => {
 
   it("CIV23: an answer nobody claimed identifies nothing", function* () {
     const imports = owner();
-    // The ordinary case, and the reason this is not authority: an unidentified
+    // The ordinary case, and the reason this is not a permission: an unidentified
     // answer is a perfectly good answer. What it cannot be is the thing a
     // fragment runs, because a continuation would have nothing to compare.
     resolving(imports, "Open", (resolution) => {

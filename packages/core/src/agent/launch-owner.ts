@@ -4,7 +4,7 @@
  * `<Session.Launch>` renders its body and calls this; a repository function
  * component may call it directly. There is exactly one implementation of the
  * phases, so the component and the programmatic caller cannot drift, and
- * neither of them is where authority lives.
+ * neither of them is where launch coordination lives.
  *
  * The order here is the contract. The terminal is reserved before an agent is
  * resolved, because a host with no terminal cannot launch anything and learning
@@ -36,7 +36,7 @@ import type {
 } from "./launch.ts";
 import { AgentLaunchProtocolError, issueLaunch } from "./launch-request.ts";
 import type { AgentLaunchRequest } from "./launch-request.ts";
-import type { LiveLaunch } from "./launch-authority.ts";
+import type { LiveLaunch } from "./launch-coordinator.ts";
 import { persistDetach, persistExit, persistPreparation } from "./launch-journal.ts";
 import type { LaunchIdentity } from "./launch-journal.ts";
 import { getExpansion } from "../expansion.ts";
@@ -74,7 +74,7 @@ export function* launchSite(): Operation<LaunchSite> {
   };
 }
 
-/** Registered live launches, so the authority can resolve a routed request. */
+/** Registered live launches, so the coordinator can resolve a routed request. */
 export interface LaunchRegistry {
   live(): readonly LiveLaunch[];
   add(launch: LiveLaunch): void;
@@ -159,7 +159,7 @@ function unaccepted(request: AgentLaunchRequest, site: LaunchSite): PreparedLaun
 /**
  * Perform one launch and return what the invocation retained.
  *
- * The registry is this document installation's; the authority handed to
+ * The registry is this document installation's; the coordinator handed to
  * providers resolves a routed request through it.
  */
 export function launchSession(

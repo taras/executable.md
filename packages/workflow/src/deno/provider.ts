@@ -116,7 +116,7 @@ export function* useWorkflowRunStorage(options: WorkflowRunStorageOptions): Oper
  *
  * Kept apart from the published entrypoint on purpose: `internal` carries a
  * decorator for the authoritative Workspace filesystem, which is provider
- * authority rather than host arrangement. It is captured in the provider's
+ * ownership rather than host arrangement. It is captured in the provider's
  * closure here and never handed to a scope, a context or a descendant.
  */
 export function* installWorkflowRunStorage(

@@ -85,7 +85,7 @@ export function* readCoreDocumentation(
       owner: CORE_ORIGIN,
       asset: "packages/core/src/components/components.md",
       // The direct Effection filesystem, not `API.Fs` and not the document
-      // facing `Files` authority. Both of those are middleware a running
+      // facing `Files` provider. Both of those are middleware a running
       // document can compose around: a repository component, an eval block or
       // an installed handler could answer the read and decide what the product's
       // own documentation says. This is the engine reading an immutable asset

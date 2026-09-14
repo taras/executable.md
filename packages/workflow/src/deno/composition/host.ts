@@ -100,7 +100,7 @@ export interface GitInvocation {
    * What this command's provider invocation borrowed from the host.
    *
    * Handed down rather than acquired here. One invocation opens one session,
-   * after the authority checks that operation requires, and every native
+   * after the admission checks that operation requires, and every native
    * command it runs attaches that same one — so an observation and the mutation
    * that follows it go out under one identity rather than two. Absent for every
    * command that stays inside the materialization.

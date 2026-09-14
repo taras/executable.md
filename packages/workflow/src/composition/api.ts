@@ -3,7 +3,7 @@
  *
  * Repository and Worktree components ask this Api for work; the installed
  * provider decides how to do it. This package names no subprocess, no host
- * filesystem and no runtime: whichever host has the authority to touch a Git
+ * filesystem and no runtime: whichever host has the permission to touch a Git
  * checkout installs a concrete provider, and there are two of them. A workflow
  * host installs one inside its `withWorkflowWorkspace()` attachment, where a
  * checkout is a retained Workspace root; the Deno and compiled `xmd run`
@@ -11,7 +11,7 @@
  * own filesystem held open by an advisory lock.
  *
  * Every operation answers with a {@link RepositorySelection} — plain structural
- * data naming a target, carrying no authority. What a provider does with a
+ * data naming a target, admitting nothing. What a provider does with a
  * selection it is handed afterwards is authenticate it against private state,
  * so a selection that was copied, replaced or rebuilt can misname a target and
  * be refused; it cannot reach one.

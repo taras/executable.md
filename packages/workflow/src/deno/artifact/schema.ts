@@ -10,7 +10,7 @@
  * Recognition answers four different questions and keeps their answers apart,
  * because a host acts on each differently. A file belonging to another program
  * is **foreign**: nothing here will ever read it. A live workflow-run database
- * is **XMD's own writable authority** offered where evidence was expected, and
+ * is **XMD's own writable run state** offered where evidence was expected, and
  * says so in its own sentence rather than as a confusing foreign refusal. A
  * version this build does not implement is **unsupported**: a later build may
  * read it, and this one must not touch it. A file that claims version 1 and is

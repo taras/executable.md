@@ -15,7 +15,7 @@
  * element it is being asked about is a direct child of the list it is scanning
  * or something a construct reached on its own.
  *
- * This carries no authority. What a scanner records is data it reads back from
+ * This decides nothing. What a scanner records is data it reads back from
  * its own closure, so a second one installed further in follows an expansion
  * nobody is asking about.
  */
