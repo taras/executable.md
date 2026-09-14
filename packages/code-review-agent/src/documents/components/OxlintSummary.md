@@ -8,6 +8,11 @@ props:
       type: object
   required: [diagnostics, doctor]
   additionalProperties: false
+description: >-
+  Report what the Oxlint sensor found. `<OxlintSummary diagnostics={diagnostics}
+  doctor={doctor} />` renders a Static Analysis section that says the sensor was
+  unavailable rather than reporting a clean run it never measured, and notes type-
+  aware rules that could not run.
 ---
 
 <ReviewSection heading="Static Analysis"

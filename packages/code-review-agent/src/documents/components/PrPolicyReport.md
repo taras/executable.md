@@ -10,6 +10,10 @@ props:
       type: object
   required: [pr, diagnostics, doctor]
   additionalProperties: false
+description: >-
+  Compose the whole pull-request review. `<PrPolicyReport pr={pr}
+  diagnostics={diagnostics} doctor={doctor} />` renders the scope, structural, slop,
+  static-analysis and correctness sections under one heading.
 ---
 
 ## PR #{props.pr.meta.number}: {props.pr.meta.title}

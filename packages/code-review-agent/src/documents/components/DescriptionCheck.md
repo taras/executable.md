@@ -15,6 +15,9 @@ props:
       default: "PR description must explain what and why."
   required: [pr]
   additionalProperties: false
+description: >-
+  Require a pull-request description that explains the change. `<DescriptionCheck
+  pr={pr} minLength={50} />` reports a body shorter than `minLength`.
 ---
 
 <Finding when={props.pr.meta.body.length < props.minLength}

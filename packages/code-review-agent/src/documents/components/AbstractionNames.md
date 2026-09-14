@@ -15,6 +15,10 @@ props:
       default: "New abstraction files: {names}. Verify 3+ consumers."
   required: [pr]
   additionalProperties: false
+description: >-
+  Flag new files whose names suggest a speculative abstraction. `<AbstractionNames
+  pr={pr} />` reports created TypeScript files named like factories, adapters or
+  helpers, so a reviewer can ask what consumes them.
 ---
 
 ```ts eval

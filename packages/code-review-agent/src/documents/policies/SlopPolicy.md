@@ -8,6 +8,10 @@ props:
       type: object
   required: [pr, diagnostics]
   additionalProperties: false
+description: >-
+  Report verbosity indicators in a pull request. `<SlopPolicy pr={pr}
+  diagnostics={diagnostics} />` renders a Slop section covering comment ratio,
+  comments that restate the code, and the sensor's verbosity signals.
 ---
 
 <ReviewSection heading="Slop" clean="✅ Slop indicators look low.">

@@ -1,6 +1,13 @@
 ---
 meta:
   componentName: Instruction
+  description: >-
+    Add a system prompt to the `<Sample>` calls inside it. `<Instruction
+    system="Answer in one sentence.">…</Instruction>` appends to whatever
+    instruction is already in scope, so an enclosing instruction is read first and
+    nesting narrows rather than replaces.
+  context: >-
+    The Markdown whose samples carry this instruction.
 
 props:
   type: object
@@ -15,6 +22,8 @@ props:
         from enclosing scopes appear first, inner instructions are appended.
   required: [system]
   additionalProperties: false
+context: >-
+  The Markdown whose samples carry this instruction.
 ---
 
 ```js persist eval

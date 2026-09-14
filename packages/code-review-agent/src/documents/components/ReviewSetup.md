@@ -9,6 +9,10 @@ props:
       type: string
       default: "qwen3:30b-a3b"
   additionalProperties: false
+description: >-
+  Prepare the checkout for a review run. `<ReviewSetup />` installs the pinned Oxlint
+  sensor and writes its configuration; with `pullModel` it also provisions the local
+  Ollama model first.
 ---
 
 <EnsureOxlint />

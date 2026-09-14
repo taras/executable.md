@@ -6,6 +6,11 @@ props:
       type: object
   required: [pr]
   additionalProperties: false
+description: >-
+  Review the pull request's code comments for ones that only restate the code.
+  `<CommentReview pr={pr} />` asks the model in scope which are redundant, reads the
+  replies to earlier suggestions to see which a person rejected, and renders what is
+  still outstanding.
 ---
 
 <CommentReviewData pr={props.pr} as="reviewData" />

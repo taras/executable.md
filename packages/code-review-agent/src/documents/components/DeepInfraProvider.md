@@ -6,6 +6,13 @@ props:
       type: string
   required: [model]
   additionalProperties: false
+description: >-
+  Answer this document's `<Sample>` calls from DeepInfra. `<DeepInfraProvider
+  model="Qwen/Qwen3-235B">…</DeepInfraProvider>` handles samples that name that model
+  and samples that name none, and passes the rest outward. It requires
+  `DEEPINFRA_TOKEN`.
+context: >-
+  The Markdown whose samples this provider answers.
 ---
 
 ```ts persist eval

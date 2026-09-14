@@ -6,6 +6,10 @@ props:
       type: string
       default: ".reviews/tsconfig.oxlint.json"
   additionalProperties: false
+description: >-
+  Write the TypeScript configuration the Oxlint sensor's type-aware pass reads.
+  `<OxlintConfig />` generates it in the checkout, so a type-aware run has a project
+  to resolve against.
 ---
 
 ```ts eval

@@ -9,6 +9,12 @@ props:
       default: []
   required: [findings]
   additionalProperties: false
+description: >-
+  Leave the review's removal suggestions on the pull request. `<SuggestRemoval
+  findings={state.pendingFindings} dismissedReplies={state.newDismissReplies} />`
+  replaces the previous bot review rather than stacking another, and answers the
+  suggestions a person already declined. It does nothing without the GitHub
+  environment.
 ---
 
 ```ts eval

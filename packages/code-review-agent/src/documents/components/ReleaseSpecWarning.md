@@ -8,6 +8,10 @@ props:
         type: string
   required: [files]
   additionalProperties: false
+description: >-
+  Warn when release configuration changes without its specification.
+  `<ReleaseSpecWarning files={changedPaths} />` renders a warning if any release file
+  changed and `specs/release-process-spec.md` did not.
 ---
 
 # Release Config Files

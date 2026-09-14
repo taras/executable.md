@@ -13,6 +13,11 @@ props:
       type: string
   required: [pr, construct, message]
   additionalProperties: false
+description: >-
+  Report declarations the change adds and nothing references. `<UnusedInDiff pr={pr}
+  construct="type" message="Unused: {names}." />` scans added TypeScript for that
+  keyword where a declaration starts, so an import specifier naming the same keyword
+  is not mistaken for one.
 ---
 
 ```ts eval

@@ -8,6 +8,11 @@ props:
       type: object
   required: [pr, diagnostics]
   additionalProperties: false
+description: >-
+  Report structural bloat in a pull request. `<BloatPolicy pr={pr}
+  diagnostics={diagnostics} />` renders a Structural section covering unreferenced
+  type and interface declarations, `any` density, empty function bodies, console
+  statements and the sensor's structural signals.
 ---
 
 <ReviewSection heading="Structural" clean="✅ No structural bloat detected.">

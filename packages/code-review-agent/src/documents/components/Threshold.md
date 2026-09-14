@@ -17,6 +17,11 @@ props:
       type: string
   required: [pr, metric, op, value, message]
   additionalProperties: false
+description: >-
+  Report when a pull-request metric crosses a limit. `<Threshold pr={pr}
+  metric="totalChanges" op=">" value={800} message="{actual} lines changed." />`
+  compares one of `totalChanges`, `totalFiles`, `additions`, `deletions` or
+  `directories`, and substitutes `{actual}` and `{value}` into the message.
 ---
 
 ```ts eval

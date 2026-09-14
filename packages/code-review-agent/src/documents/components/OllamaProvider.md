@@ -9,6 +9,12 @@ props:
       default: "http://localhost:11434"
   required: [model]
   additionalProperties: false
+description: >-
+  Answer this document's `<Sample>` calls from a local Ollama server. `<OllamaProvider
+  model="qwen3:30b-a3b">…</OllamaProvider>` handles samples that name that model and
+  samples that name none, and passes the rest outward.
+context: >-
+  The Markdown whose samples this provider answers.
 ---
 
 ```ts persist eval

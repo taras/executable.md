@@ -6,6 +6,11 @@ props:
       type: string
       default: ".reviews/.oxlint"
   additionalProperties: false
+description: >-
+  Install the review's pinned Oxlint and tsgolint binaries. `<EnsureOxlint />`
+  downloads them into the sensor directory and verifies each against a known checksum,
+  so a review measures the version it expects. It fails on a platform it ships no
+  build for.
 ---
 
 ```ts eval

@@ -6,6 +6,10 @@ props:
       type: object
   required: [pr]
   additionalProperties: false
+description: >-
+  Report the scope and hygiene of a pull request. `<ScopePolicy pr={pr} />` renders a
+  Scope section covering size, file and directory counts, description length, issue
+  linkage and config/source mixing.
 ---
 
 <ReviewSection heading="Scope" clean="✅ PR scope looks good.">

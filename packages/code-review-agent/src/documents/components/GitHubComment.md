@@ -6,6 +6,13 @@ props:
       type: string
       default: "<!-- xmd-review -->"
   additionalProperties: false
+description: >-
+  Publish the review as one comment on the pull request.
+  `<GitHubComment>…</GitHubComment>` posts its content the first time and edits that
+  same comment afterwards, so repeated runs leave one comment rather than a thread. It
+  requires `GITHUB_REPOSITORY` and `PR_NUMBER`.
+context: >-
+  The comment body.
 ---
 
 ```ts eval

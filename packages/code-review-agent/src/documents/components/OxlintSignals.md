@@ -8,6 +8,11 @@ props:
       type: string
   required: [groups, label]
   additionalProperties: false
+description: >-
+  List one category of Oxlint diagnostics. `<OxlintSignals
+  groups={diagnostics.byCategory.verbosity} label="slop signals" />` names each rule
+  with how often it fired and the first few files, and renders nothing when the
+  category is empty.
 ---
 
 ```ts eval

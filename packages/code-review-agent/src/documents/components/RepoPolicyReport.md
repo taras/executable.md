@@ -16,6 +16,10 @@ props:
       type: object
   required: [diagnostics, doctor, fileList, fileCount, lineCount]
   additionalProperties: false
+description: >-
+  Compose the whole repository analysis. `<RepoPolicyReport diagnostics={diagnostics}
+  doctor={doctor} fileList={files} fileCount={count} lineCount={lines} />` renders the
+  static-analysis and cleanup sections and files the cleanup issues they justify.
 ---
 
 ## Repository Analysis

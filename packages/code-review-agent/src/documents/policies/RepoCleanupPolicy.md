@@ -12,6 +12,11 @@ props:
       type: object
   required: [diagnostics, doctor, fileList]
   additionalProperties: false
+description: >-
+  Explain the repository's top cleanup clusters. `<RepoCleanupPolicy
+  diagnostics={diagnostics} doctor={doctor} fileList={files}
+  cleanupAnalysis={analysis} />` asks the model in scope why each already-ranked
+  cluster matters and what to do about it, rather than re-ranking them.
 ---
 
 <ReviewSection heading="Cleanup Policy"

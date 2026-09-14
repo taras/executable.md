@@ -15,6 +15,9 @@ props:
       default: "Large PR with no linked issue."
   required: [pr]
   additionalProperties: false
+description: >-
+  Ask a large change to link an issue. `<LinkedIssue pr={pr} whenLinesExceed={200} />`
+  reports when the description names no issue and the change is bigger than that.
 ---
 
 ```ts eval

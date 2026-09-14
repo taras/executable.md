@@ -15,6 +15,9 @@ props:
       default: "PR mixes config and source changes."
   required: [pr]
   additionalProperties: false
+description: >-
+  Flag a change that mixes configuration and source edits. `<ConfigSourceMix pr={pr}
+  minFiles={5} />` reports when both appear in a pull request larger than `minFiles`.
 ---
 
 ```ts eval

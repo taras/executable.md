@@ -12,6 +12,10 @@ props:
       default: "package.json changed without dependency justification."
   required: [pr]
   additionalProperties: false
+description: >-
+  Ask a change that edits `package.json` to account for its dependencies.
+  `<NewDependencies pr={pr} />` reports when the manifest moved and the description
+  never mentions dependencies.
 ---
 
 ```ts eval

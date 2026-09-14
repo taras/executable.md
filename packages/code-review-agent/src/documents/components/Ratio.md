@@ -23,6 +23,11 @@ props:
       type: string
   required: [pr, numerator, denominator, threshold, message]
   additionalProperties: false
+description: >-
+  Report when one pattern is too common relative to another. `<Ratio pr={pr}
+  numerator=":\s*any\b" denominator=":\s*\w" threshold={0.05} message="{ratio}% are
+  any." />` stays quiet until the denominator has at least `minDenominator` matches,
+  so a small diff cannot trip it on one line.
 ---
 
 ```ts eval

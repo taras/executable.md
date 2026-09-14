@@ -8,6 +8,11 @@ props:
       type: object
   required: [cleanupAnalysis, diagnostics]
   additionalProperties: false
+description: >-
+  File and retire GitHub issues for the repository's worst cleanup clusters.
+  `<CleanupIssues cleanupAnalysis={analysis} diagnostics={diagnostics} />` keeps one
+  labelled issue per file in the top five and closes the ones that dropped out. It
+  does nothing without `GITHUB_TOKEN` and `GITHUB_REPOSITORY`.
 ---
 
 ```ts persist eval

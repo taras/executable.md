@@ -19,6 +19,11 @@ props:
       type: string
   required: [pr, pattern, message]
   additionalProperties: false
+description: >-
+  Report added lines matching a regular expression. `<Pattern pr={pr}
+  pattern="console\.log\(" message="{count} console statements." />` renders once at
+  least `min` lines match, and substitutes the count into `{count}`. Test files are
+  excluded unless `excludeTests` says otherwise.
 ---
 
 ```ts eval

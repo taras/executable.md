@@ -3,6 +3,12 @@ props:
   type: object
   properties: {}
   additionalProperties: false
+description: >-
+  Authorize the GitHub requests made inside it. `<GitHubAuth>…</GitHubAuth>` adds a
+  bearer token to requests to `api.github.com` over HTTPS and leaves every other host
+  untouched. Without `GITHUB_TOKEN` it adds nothing and the requests still run.
+context: >-
+  The Markdown whose GitHub requests are authorized.
 ---
 
 ```ts persist eval

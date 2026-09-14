@@ -10,6 +10,11 @@ props:
       type: object
   required: [pr, diagnostics, doctor]
   additionalProperties: false
+description: >-
+  Review a pull request for code that should not be there. `<ExtraneousCodePolicy
+  pr={pr} diagnostics={diagnostics} doctor={doctor} />` asks the model in scope to
+  weigh the sensor's violation density against the specific patterns behind it, and
+  skips changes of twenty lines or fewer.
 ---
 
 <ReviewSection heading="Correctness"

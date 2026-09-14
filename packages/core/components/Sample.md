@@ -1,6 +1,15 @@
 ---
 meta:
   componentName: Sample
+  description: >-
+    Ask the model in scope for text. `<Sample>Summarize what changed.</Sample>`
+    sends its content, or the `prompt` when written self-closing, to whichever
+    provider is installed — and `model` picks between providers when more than one
+    is.
+  as: >-
+    The model's reply.
+  context: >-
+    The prompt.
 
 props:
   type: object
@@ -27,6 +36,8 @@ props:
         as SampleContext.params. Providers can use this for custom behavior
         (e.g., "brief", "json", "classify").
   additionalProperties: false
+as: >-
+  The model's reply.
 ---
 
 ```js persist eval
