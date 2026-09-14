@@ -1,7 +1,17 @@
 {
   "name": "@executablemd/code-review-agent",
   "version": "0.12.1",
-  "description": "Parsers that turn git diff and Oxlint output into typed structures for executable.md reviews.",
+  "description": "The review component graph and the parsers behind it, for executable.md reviews.",
   "type": "module",
-  "exports": "./mod.ts"
+  "exports": {
+    ".": "./mod.ts",
+    "./review-components": "./src/review-components.ts"
+  },
+  "dependencies": {
+    "@effectionx/fetch": "0.2.1",
+    "@effectionx/fs": "0.3.0",
+    "@executablemd/core": "workspace:*",
+    "@executablemd/runtime": "workspace:*",
+    "effection": "4.1.0"
+  }
 }

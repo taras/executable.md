@@ -65,8 +65,9 @@ All executable.md core changes and the full agent implementation are complete:
 - **Renamed `Instruction.md` input** `text` → `system` for clarity
 - **Fixed broken providers** — `OllamaProvider`,
   `AnthropicProvider` updated to use direct `fetch()` calls
-- **Component resolution** — review components resolved via
-  `--include .reviews/components --include packages/core/components`
+- **Component resolution** — the review component graph is owned and declared by
+  the installed `@executablemd/code-review-agent` package (§3.5), not resolved
+  through a checkout-relative `--include`
 - **AST-based user import extraction** (DEC-93) — eval blocks can use
   standard `import` declarations; extracted via acorn's
   `allowImportExportEverywhere` and hoisted to module level
@@ -163,12 +164,56 @@ function parseDiff(
 ```
 packages/code-review-agent/
   src/
+    components/            # the six reserved TypeScript components
+    documents/
+      components/          # 28 review components + Sample.md + Instruction.md
+      policies/            # the five policy documents
+    components.md          # long-form documentation for the six registrations
+    review-components.ts   # the one assembly boundary
     parse-diff.ts
     types.ts
   mod.ts
 ```
 
-Zero dependencies beyond Deno stdlib.
+The package depends on `@executablemd/core`, `@executablemd/runtime`,
+`@effectionx/fs`, `@effectionx/fetch` and `effection`.
+
+### 3.5 The declared component graph
+
+`src/review-components.ts` is the only assembly boundary, exported as
+`@executablemd/code-review-agent/review-components`. It supplies forty-one
+components in two tiers:
+
+- **Thirty-five declared Markdown components.** The twenty-eight review
+  components, the five policies, and the package's own copies of `Sample.md` and
+  `Instruction.md`. Each is read from its packaged asset and declared with
+  `Markdown({…})`, carrying the exact bytes, their SHA-256, and the origin
+  `@executablemd/code-review-agent/components/<Name>.md` or
+  `…/policies/<Name>.md`. `forms` is deliberately unstated, so both invocation
+  spellings keep working.
+- **Six reserved registrations.** `CommentReviewData`, `CommentReviewState`,
+  `Doctor`, `OxlintDiagnostics`, `RepositoryInventory` and `ReviewContext`, with
+  origin `@executablemd/code-review-agent`. `useReviewComponents()` installs them
+  together with the documentation in `src/components.md`, which the
+  documentation index validates against this same registration list.
+
+Both tiers claim their names: a checkout under review cannot supply a component
+of any of these forty-one names and have a review run it, and a second claim on
+one name is refused at admission rather than ordered. Names outside the forty-one
+resolve through ordinary inclusion and repository discovery, unchanged.
+
+The assets are located from the module's own URL, never from the working
+directory and never through the component search path, so a source checkout, an
+npm install and a compiled binary select the same bytes and report the same
+digests. The reads use the Effection filesystem directly rather than `API.Fs` or
+the document-facing `Files` authority, neither of which may decide what a
+review's own components are.
+
+The CLI attaches this graph wherever the production `run` profile is assembled:
+ordinary non-testing execution, a nested `<Execution host="run">`,
+`useRunProfileRegistry()` for syntax and structural validation, `<Plan>`'s
+admission validator, and `xmd plan`'s candidate validation. `xmd test` at its
+root does not gain it; its nested run child does.
 
 ---
 

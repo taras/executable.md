@@ -1,0 +1,159 @@
+---
+props:
+  type: object
+  properties:
+    findings:
+      type: array
+    dismissedReplies:
+      type: array
+      default: []
+  required: [findings]
+  additionalProperties: false
+---
+
+```ts eval
+import { env as runtimeEnv } from "@executablemd/runtime";
+
+function* githubConfiguration() {
+  const token = yield* runtimeEnv("GITHUB_TOKEN");
+  const repo = yield* runtimeEnv("GITHUB_REPOSITORY");
+  const prNumber = yield* runtimeEnv("PR_NUMBER");
+  const headSha = yield* runtimeEnv("HEAD_SHA");
+  if (!token || !repo || !prNumber || !headSha) {
+    return undefined;
+  }
+  const [owner, name] = repo.split("/");
+  return {
+    api: `https://api.github.com/repos/${owner}/${name}`,
+    graphql: "https://api.github.com/graphql",
+    prNumber,
+    headSha,
+    owner,
+    name,
+  };
+}
+
+const github = yield* githubConfiguration();
+if (!github) {
+  return "";
+}
+
+const { api, graphql, prNumber, headSha, owner, name } = github;
+
+const existingReviews = yield* fetch(
+  `${api}/pulls/${prNumber}/reviews`
+).expect().json();
+
+const botReviews = existingReviews.filter(r =>
+  r.user.login === "github-actions[bot]" &&
+  r.body && r.body.includes("redundant comment")
+);
+
+for (const review of botReviews) {
+  try {
+    yield* fetch(`${api}/pulls/${prNumber}/reviews/${review.id}`, {
+      method: "DELETE",
+    }).expect();
+  } catch {
+    // Review may already be submitted (can't delete submitted reviews).
+  }
+}
+
+// 2. React 👍 on dismiss replies and resolve their threads
+if (props.dismissedReplies.length > 0) {
+  // Fetch review threads via GraphQL to get thread node IDs
+  const threadsQuery = `query($owner: String!, $name: String!, $pr: Int!) {
+    repository(owner: $owner, name: $name) {
+      pullRequest(number: $pr) {
+        reviewThreads(first: 100) {
+          nodes {
+            id
+            isResolved
+            comments(first: 1) {
+              nodes { databaseId }
+            }
+          }
+        }
+      }
+    }
+  }`;
+
+  let threadMap = new Map();
+  try {
+    const threadsResult = yield* fetch(graphql, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        query: threadsQuery,
+        variables: { owner, name, pr: parseInt(prNumber, 10) },
+      }),
+    }).expect().json();
+
+    const threads = threadsResult.data?.repository?.pullRequest?.reviewThreads?.nodes ?? [];
+    for (const thread of threads) {
+      const commentId = thread.comments?.nodes?.[0]?.databaseId;
+      if (commentId) {
+        threadMap.set(commentId, { threadId: thread.id, isResolved: thread.isResolved });
+      }
+    }
+  } catch {
+    // If GraphQL fails, skip thread resolution — 👍 reaction still works
+  }
+
+  for (const reply of props.dismissedReplies) {
+    // React 👍
+    if (reply.replyId) {
+      try {
+        yield* fetch(`${api}/pulls/comments/${reply.replyId}/reactions`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ content: "+1" }),
+        }).expect();
+      } catch {}
+    }
+
+    // Resolve the thread
+    if (reply.botCommentId && threadMap.has(reply.botCommentId)) {
+      const { threadId, isResolved } = threadMap.get(reply.botCommentId);
+      if (!isResolved) {
+        try {
+          yield* fetch(graphql, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              query: `mutation($threadId: ID!) {
+                resolveReviewThread(input: { threadId: $threadId }) {
+                  thread { isResolved }
+                }
+              }`,
+              variables: { threadId },
+            }),
+          }).expect();
+        } catch {}
+      }
+    }
+  }
+}
+
+// 3. Post new review with pending findings
+if (props.findings.length > 0) {
+  const comments = props.findings.map(f => ({
+    path: f.file,
+    line: f.lineNumber,
+    body: `Redundant comment — restates what the code does.\n\`\`\`suggestion\n\`\`\``,
+  }));
+
+  yield* fetch(`${api}/pulls/${prNumber}/reviews`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      commit_id: headSha,
+      event: "COMMENT",
+      body: `Found ${props.findings.length} redundant comment${props.findings.length === 1 ? "" : "s"}. Inline suggestions to remove them below.`,
+      comments,
+    }),
+  }).expect();
+}
+
+return "";
+```

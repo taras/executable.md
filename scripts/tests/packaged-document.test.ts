@@ -19,6 +19,15 @@
  * one list all three compile sites build their argv from — to what it finds.
  * While those sites each kept a copy of the list, the release's copy named no
  * `components.md` at all and shipped binaries that could document no component.
+ *
+ * The third kind still decides the other two. An embedded package carries
+ * everything inside it, so a `src/documents/` or a `components.md` beneath one
+ * is already in the binary and must *not* be named again: the code-review
+ * package ships both, and naming either individually would compile the same
+ * bytes twice while reading as the coverage the whole-package entry already
+ * provides. Each discovered asset is therefore required in exactly one place —
+ * the individual list when nothing covers it, the whole-package entry when
+ * something does.
  */
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
@@ -32,6 +41,7 @@ import { fileURLToPath } from "node:url";
 import {
   compileArguments,
   EMBEDDED_ASSETS,
+  EMBEDDED_PACKAGES,
   PACKAGED_DOCUMENTATION,
   PACKAGED_DOCUMENTS,
 } from "../lib/compile.ts";
@@ -93,6 +103,33 @@ function* packagedDocumentation(): Operation<string[]> {
   return found.sort();
 }
 
+/**
+ * Whether an embedded package already carries `asset`.
+ *
+ * A package the binary executes Markdown out of is embedded whole, so every
+ * document and every `components.md` inside it is already in the binary. Naming
+ * one of those individually as well would compile the same bytes twice and read
+ * as coverage the whole-package entry was already providing — so the two checks
+ * below ask for one answer or the other, never both.
+ */
+function embeddedWhole(asset: string): boolean {
+  return EMBEDDED_PACKAGES.some((pkg) => asset === pkg || asset.startsWith(`${pkg}/`));
+}
+
+/**
+ * Both directions for one discovered asset, given the list that should name it.
+ *
+ * A missing entry ships a binary without part of its program; a redundant one
+ * embeds the same bytes twice. `deno compile` reports neither, so both are
+ * failures here.
+ */
+function coverage(found: readonly string[], named: readonly string[]): void {
+  expect(named.toSorted()).toEqual(found.filter((asset) => !embeddedWhole(asset)).toSorted());
+  for (const asset of found.filter(embeddedWhole)) {
+    expect(named).not.toContain(asset);
+  }
+}
+
 describe("the canonical compile inputs", () => {
   it("name every packaged document directory that exists, and no other", function* () {
     const shipped = yield* packagedDocuments();
@@ -106,16 +143,16 @@ describe("the canonical compile inputs", () => {
       // an empty one is not discovered above.
       expect(directory.documents.length).toBeGreaterThan(0);
     }
-    // Both directions: a missing entry ships a binary without its program, and
-    // a stale one embeds nothing while reading as coverage. `deno compile`
-    // reports neither.
-    expect([...PACKAGED_DOCUMENTS].sort()).toEqual(shipped.map((one) => one.directory).sort());
+    coverage(
+      shipped.map((one) => one.directory),
+      PACKAGED_DOCUMENTS,
+    );
   });
 
   it("name every components.md that exists, and no other", function* () {
     const documentation = yield* packagedDocumentation();
     expect(documentation.length).toBeGreaterThan(0);
-    expect([...PACKAGED_DOCUMENTATION].sort()).toEqual(documentation);
+    coverage(documentation, PACKAGED_DOCUMENTATION);
   });
 
   it("embed exactly those, and nothing else", function* () {

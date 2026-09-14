@@ -1,0 +1,66 @@
+---
+props:
+  type: object
+  properties:
+    pr:
+      type: object
+    construct:
+      type: string
+    severity:
+      type: string
+      default: warning
+    message:
+      type: string
+  required: [pr, construct, message]
+  additionalProperties: false
+---
+
+```ts eval
+const lines = props.pr.added.filter(l =>
+  l.file.endsWith(".ts") || l.file.endsWith(".tsx")
+);
+const source = lines.map(l => l.content).join("\n");
+
+// Anchoring the keyword to statement position (line start, after an optional
+// export/default/declare prefix) excludes `import { type X }` specifiers,
+// whose `type` keyword sits inside braces rather than at the start of a
+// declaration.
+const declPattern = new RegExp(
+  `^\\s*(?:export\\s+)?(?:default\\s+|declare\\s+)?${props.construct}\\s+(\\w+)`
+);
+
+const decls = [];
+for (const line of lines) {
+  const match = declPattern.exec(line.content);
+  if (match) {
+    decls.push({ name: match[1], file: line.file, lineNumber: line.lineNumber });
+  }
+}
+
+const unused = decls
+  .map(d => ({
+    ...d,
+    refs: (source.match(new RegExp(`\\b${d.name}\\b`, "g")) ?? []).length,
+  }))
+  .filter(d => d.refs <= 1);
+
+const hasUnused = unused.length > 0;
+const icon = props.severity === "error" ? "🔴" : "🟡";
+const summary = icon + " " + props.message
+  .replace("{names}", unused.map(u => u.name).join(", "))
+  .replace("{count}", String(unused.length));
+```
+
+<If condition={hasUnused}>
+
+<details>
+<summary>{summary}</summary>
+
+| Symbol | Declared at | Refs in diff | Why flagged |
+| --- | --- | --- | --- |
+<Each in={unused} let="u">| `{u.name}` | `{u.file}:{u.lineNumber}` | {u.refs} | referenced ≤1× within the added diff (pre-existing usages not counted) |
+</Each>
+
+</details>
+
+</If>

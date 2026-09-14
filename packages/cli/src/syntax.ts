@@ -39,6 +39,11 @@ import { useTestingComponents } from "@executablemd/testing";
 import { useWebComponents } from "@executablemd/web";
 import { useVerboseComponent } from "./verbose-component.ts";
 import { useCompositionComponents } from "@executablemd/workflow";
+import {
+  reviewComponentDeclarations,
+  useReviewComponents,
+} from "@executablemd/code-review-agent/review-components";
+import type { MarkdownComponent } from "@executablemd/core/host";
 
 export { renderSyntaxMarkdown };
 
@@ -77,8 +82,30 @@ function* profileSymbols(includes: readonly string[]): Operation<SyntaxSymbols> 
     // describe a vocabulary no run has. Described from the packaged bytes:
     // inspection mints nothing, so it reports the Component's identity and
     // contract without building the capabilities only a run can build.
-    declarations: [yield* planComponentDescription()],
+    declarations: yield* runProfileDeclarations(yield* planComponentDescription()),
   });
+}
+
+/**
+ * Every Markdown component the `run` profile declares, in one order.
+ *
+ * The review graph first, then whatever the calling surface declares for
+ * itself. Built here rather than at each site for the reason the registry
+ * bootstrap is: four places assemble this profile — an ordinary run, a nested
+ * `host="run"` child, inspection, and `<Plan>`'s validation — and a list spelled
+ * four times is four chances for one of them to describe a vocabulary the others
+ * do not have. A document validated against a profile it will not run under is
+ * the specific failure that costs an agent a whole authoring round.
+ *
+ * The order is fixed rather than incidental. Nothing depends on it for
+ * resolution — two declarations claiming one name is refused at admission rather
+ * than settled by position — but a stable order makes a catalog's bytes stable,
+ * which is what lets a source run and a compiled run be compared directly.
+ */
+export function* runProfileDeclarations(
+  ...own: readonly MarkdownComponent[]
+): Operation<MarkdownComponent[]> {
+  return [...(yield* reviewComponentDeclarations()), ...own];
 }
 
 /**
@@ -101,6 +128,10 @@ export function* useRunProfileRegistry(): Operation<void> {
   yield* useWebComponents();
   // The repository-composition vocabulary.
   yield* useCompositionComponents();
+  // The six reserved review registrations and their documentation. The
+  // thirty-five Markdown components of the same graph are declarations rather
+  // than registrations, and travel through `runProfileDeclarations()` above.
+  yield* useReviewComponents();
 }
 
 /**

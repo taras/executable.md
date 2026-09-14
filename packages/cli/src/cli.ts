@@ -132,8 +132,10 @@ import {
   renderSyntaxDocumentation,
   renderSyntaxJson,
   renderSyntaxMarkdown,
+  runProfileDeclarations,
   syntaxSymbols,
 } from "./syntax.ts";
+import { useReviewComponents } from "@executablemd/code-review-agent/review-components";
 import { deliverWhole } from "./stdout-delivery.ts";
 import { testingExecutionHost } from "./testing-host.ts";
 import type { ChildPlanDeclaration } from "./testing-host.ts";
@@ -941,6 +943,16 @@ export function* installDocumentComponents(mode: DocumentMode, verbose: boolean)
   } else {
     yield* useVerboseComponent();
     yield* installTestingComponents({ verbose });
+    // The review graph's six reserved registrations, for the `run` profile
+    // alone. A review is the program that must not be answerable by the
+    // repository it is reviewing, so these names are claimed rather than
+    // offered — a checkout's own `ReviewContext.ts` no longer wins.
+    //
+    // `xmd test` is a different profile and claims none of them, so a test
+    // document may still supply its own component of any of these names. The
+    // nested `host="run"` child a test can launch *is* the run profile, and
+    // gets them through this same call.
+    yield* useReviewComponents();
   }
 
   // `<WebForm>` for both commands. Registered rather than reserved, so a
@@ -1170,7 +1182,7 @@ function* runDocument(
         // The `run` profile's own vocabulary. `xmd test` is a different profile
         // and does not gain `<Plan>` at its root — but the production run child
         // it can launch is the run profile, and gets it below.
-        ...(mode.testing ? {} : { declarations: [plan] }),
+        ...(mode.testing ? {} : { declarations: yield* runProfileDeclarations(plan) }),
         // The ceiling a generated fragment runs under, stated only where the
         // host that attached this execution stated none: a workflow attachment
         // states its own Workspace-bound profile, and one execution offers one

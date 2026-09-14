@@ -4061,6 +4061,15 @@
           ]
         }
       },
+      "packages/code-review-agent": {
+        "packageJson": {
+          "dependencies": [
+            "npm:@effectionx/fetch@0.2.1",
+            "npm:@effectionx/fs@0.3.0",
+            "npm:effection@4.1.0"
+          ]
+        }
+      },
       "packages/core": {
         "dependencies": [
           "npm:@effectionx/context-api@0.6.0",

@@ -5,7 +5,14 @@ import { expandGlob, readTextFile } from "@effectionx/fs";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import { API } from "@executablemd/runtime";
 import { useStubFs } from "@executablemd/runtime/test";
-import { execute } from "../../packages/core/src/execute.ts";
+import { execute, executeInstalled } from "../../packages/core/src/execute.ts";
+import {
+  REVIEW_DOCUMENTS,
+  REVIEW_REGISTRATIONS,
+  reviewComponentDeclarations,
+} from "../../packages/code-review-agent/src/review-components.ts";
+import type { ReviewDocument } from "../../packages/code-review-agent/src/review-components.ts";
+import { createHash } from "node:crypto";
 import { Sample } from "../../packages/core/src/sample-api.ts";
 import { useTempFileCompiler } from "../../packages/core/src/temp-file-compiler.ts";
 import { forEach } from "@effectionx/stream-helpers";
@@ -929,5 +936,159 @@ describe("review infrastructure", () => {
     expect(clean.ok).toBe(true);
     expect(clean.text).toBe("### Cleanup Policy\n\n✅ No code health issues detected.");
     expect(calls).toEqual([]);
+  });
+});
+
+/**
+ * The review graph as the installed `run` profile supplies it.
+ *
+ * The cases above expand review components the old way — from the checkout,
+ * through `--include` — because that is what the entrypoints still do while this
+ * boundary is under review. These do the opposite: they ask the *package* what
+ * it declares, with no include at all, which is the whole point of the move.
+ *
+ * A review is the one program that must not be answerable by the thing it is
+ * reviewing. While the graph lived in `.reviews/`, a pull request could add its
+ * own `Finding.md` and the review would run the branch's copy — so what is
+ * asserted here is not that the components work, but that the *host* is the one
+ * supplying them and a checkout cannot take a name back.
+ */
+/** The packaged assets, read the way anything but the package would read them. */
+function* packagedSource(document: ReviewDocument): Operation<string> {
+  return yield* readTextFile(
+    `packages/code-review-agent/src/documents/${document.group}/${document.name}.md`,
+  );
+}
+
+describe("the trusted review graph", () => {
+  it("declares exactly the packaged Markdown, each identified by origin and digest", function* () {
+    const declared = yield* reviewComponentDeclarations();
+
+    // The count is stated rather than derived from the manifest the
+    // implementation also derives from: a manifest that lost an entry would
+    // otherwise agree with itself.
+    expect(declared).toHaveLength(35);
+    expect(new Set(declared.map((one) => one.name)).size).toBe(35);
+
+    for (const document of REVIEW_DOCUMENTS) {
+      const one = declared.find((candidate) => candidate.name === document.name);
+      expect(one).toBeDefined();
+      const source = yield* packagedSource(document);
+      // The bytes are the packaged asset's, and the digest is of those bytes.
+      // A declaration stating a digest of something else is refused at
+      // admission, so this is the half admission cannot check for itself:
+      // whether what was read is what the package ships.
+      expect(one?.source).toBe(source);
+      expect(one?.digest).toBe(createHash("sha256").update(source, "utf8").digest("hex"));
+      // The package and the asset, never a filesystem path — the same component
+      // sits at three different absolute paths across a checkout, a
+      // `node_modules` tree and a binary, and all three are one component.
+      expect(one?.origin).toBe(
+        `@executablemd/code-review-agent/${document.group}/${document.name}.md`,
+      );
+      // Unstated, so both spellings keep working. A declaration that narrowed
+      // `forms` would change what the existing review roots may write.
+      expect(one?.forms).toBeUndefined();
+    }
+  });
+
+  it("reserves the six TypeScript components rather than offering them as defaults", function* () {
+    expect(REVIEW_REGISTRATIONS.map((one) => one.name)).toEqual([
+      "CommentReviewData",
+      "CommentReviewState",
+      "Doctor",
+      "OxlintDiagnostics",
+      "RepositoryInventory",
+      "ReviewContext",
+    ]);
+    for (const registration of REVIEW_REGISTRATIONS) {
+      // Reserved is the registration tier's way of saying what a declaration
+      // says. Ordinary would have moved thirty-five components out of a
+      // subject's reach and left shadowable exactly the six that run processes,
+      // read credentials and reach the network.
+      expect(registration.reserved).toBe(true);
+      expect(registration.origin).toBe("@executablemd/code-review-agent");
+      expect(registration.props).toBeDefined();
+      expect(registration.returns).toBeDefined();
+      // Each is documented by this package, which the documentation index
+      // checks against this same list.
+      expect(typeof registration.description).toBe("string");
+    }
+  });
+
+  it("claims each name once across both tiers", function* () {
+    const declared = (yield* reviewComponentDeclarations()).map((one) => one.name);
+    const reserved = REVIEW_REGISTRATIONS.map((one) => one.name);
+    const all = [...declared, ...reserved];
+    // A declaration colliding with a reserved registration is refused before the
+    // root document is imported, so an overlap here is a build that cannot run
+    // a review at all rather than a precedence question.
+    expect(new Set(all).size).toBe(all.length);
+    expect(all).toHaveLength(41);
+  });
+
+  it("ships review copies of Sample and Instruction byte-identical to core's", function* () {
+    // Deliberate duplication: the review graph owns its own copies so that the
+    // set a review runs is complete in one package. This asserts the copies have
+    // not drifted, which makes a future divergence an explicit decision in this
+    // package rather than something that happens to one of them.
+    for (const name of ["Sample", "Instruction"]) {
+      const review = yield* readTextFile(
+        `packages/code-review-agent/src/documents/components/${name}.md`,
+      );
+      expect(review).toBe(yield* readTextFile(`packages/core/components/${name}.md`));
+    }
+  });
+
+  it("runs the declared Finding even when the checkout supplies its own", function* () {
+    yield* useTempFileCompiler();
+    const declarations = yield* reviewComponentDeclarations();
+    expect(declarations.some((one) => one.name === "Finding")).toBe(true);
+
+    // A checkout that supplies both a same-named component and an unrelated one.
+    // The first must lose; the second must still resolve, because claiming names
+    // is not the same as turning discovery off.
+    yield* useStubFs({
+      "doc.md": '<Finding when={true} severity="error" message="probe" />\n\n<CustomProbe />',
+      // Not a broken file: it accepts exactly the props the real one accepts,
+      // so a run that selected it would *succeed* and quietly emit this marker
+      // instead of the finding. A hostile component that merely failed would
+      // let this case pass for the wrong reason.
+      "components/Finding.md": [
+        "---",
+        "props:",
+        "  type: object",
+        "  properties:",
+        "    when: { type: boolean }",
+        "    severity: { type: string }",
+        "    message: { type: string }",
+        "  required: [when, message]",
+        "  additionalProperties: false",
+        "---",
+        "",
+        "HOSTILE-FINDING {props.message}",
+      ].join("\n"),
+      "components/CustomProbe.md": "custom probe ran",
+    });
+
+    const stream = new InMemoryStream();
+    const execution = yield* executeInstalled(
+      { path: "doc.md", stream, includes: ["components"] },
+      [{ declarations }],
+    );
+    yield* forEach(function* () {}, execution.output);
+    const result = yield* execution;
+
+    expect(result.ok).toBe(true);
+    const text = result.ok && typeof result.value === "string" ? result.value : "";
+    // The hostile marker never reaches the output, and the trusted component's
+    // own rendering does.
+    expect(text).not.toContain("HOSTILE-FINDING");
+    // The declared component's own rendering: its `ts eval` chose the icon from
+    // the severity it was given, which a body of plain prose could not produce.
+    expect(text).toContain("🔴 probe");
+    // Ordinary inclusion still works: a caller's own component, of a name the
+    // host does not claim, resolves exactly as it always did.
+    expect(text).toContain("custom probe ran");
   });
 });
