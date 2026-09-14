@@ -258,7 +258,7 @@ describe("@effectionx/node once() is scope-bound", () => {
 const RULE = "require-scope-bound-event-registration";
 
 /** The directories `deno task lint` passes to oxlint. */
-const LINTED = ["packages", "scripts", ".reviews/components"];
+const LINTED = ["packages", "scripts"];
 
 /** What the lint task's `--ignore-pattern` arguments keep out. */
 const UNLINTED = [

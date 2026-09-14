@@ -450,8 +450,8 @@ version each:
 
 | Tool | Version | Declared in |
 |---|---|---|
-| Oxlint | 1.74.0 | `deno.json`, `package.json`, `.reviews/components/EnsureOxlint.md` |
-| tsgolint | 0.25.0 | `deno.json`, `.reviews/components/EnsureOxlint.md` |
+| Oxlint | 1.74.0 | `deno.json`, `package.json`, `EnsureOxlint.md` |
+| tsgolint | 0.25.0 | `deno.json`, `EnsureOxlint.md` |
 
 The pins are exact rather than caret ranges. A range plus a frozen lock would
 let a routine lock refresh expand the active rule set without any change to the
@@ -621,6 +621,17 @@ validated Doctor object directly.
 ```
 packages/code-review-agent/
   src/
+    review-components.ts             declares the graph to every run
+    components/
+      Doctor.ts                      environment probe (§6.1)
+      OxlintDiagnostics.ts           sensor run + normalization (§6.2)
+      …                              the other four reserved registrations
+    documents/components/
+      EnsureOxlint.md                provisions the pinned toolchain
+      OxlintConfig.md                sensor profile selection
+      OxlintSignals.md               diagnostic signal extraction
+      OxlintSummary.md               summary or unavailable warning
+      …                              the rest of the declared graph
     parse-diff.ts
     parse-diagnostics.ts
     parse-doctor.ts
@@ -630,6 +641,12 @@ packages/code-review-agent/
     types.ts
   mod.ts
 ```
+
+`EnsureOxlint`, `Doctor` and `OxlintDiagnostics` are package assets: the
+installation declares them, so a checkout under review cannot supply its own
+sensor component. What stays checkout-relative is the state a run reads and
+writes — `.reviews/.oxlintrc.json`, the provisioned binaries under
+`.reviews/.oxlint/`, and the generated `tsconfig.oxlint.json`.
 
 ---
 

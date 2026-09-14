@@ -36,7 +36,9 @@ function doc(lines: AddedLine[], construct: string): string {
 // tests exercise the shipped .reviews source rather than a copy. Its `<If>` is
 // a native directive, so the stub filesystem supplies no component for it.
 function* render(lines: AddedLine[], construct: string): Operation<string> {
-  const unusedInDiff = yield* readTextFile(".reviews/components/UnusedInDiff.md");
+  const unusedInDiff = yield* readTextFile(
+    "packages/code-review-agent/src/documents/components/UnusedInDiff.md",
+  );
 
   yield* useStubFs({
     "components/UnusedInDiff.md": unusedInDiff,

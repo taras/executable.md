@@ -205,7 +205,8 @@ yield *
 ```
 
 `init.expect` is part of the request, not a check a caller applies afterwards:
-it says the caller treats a non-2xx as a failure, and `.reviews/components/GitHubAuth.md`
+it says the caller treats a non-2xx as a failure, and
+`packages/code-review-agent/src/documents/components/GitHubAuth.md`
 is a real consumer that reads it. A substituted provider that ignores it makes
 an authored `fetch(url).expect()` succeed on a 404.
 

@@ -4543,12 +4543,17 @@ reserves six registrations beside them, which is what the boundary looks like
 when a complete program graph moves into an installation.
 
 **Why it moved.** The review and repository-analysis components were Markdown
-and TypeScript files in `.reviews/`, and every entrypoint reached them with
-`--include .reviews/components --include .reviews/policies --include
-packages/core/components`. That made the component graph a property of the
-checkout being reviewed: a pull request could add a file named `Finding.md` and
-the review would run the branch's own copy while reporting on it. A review is
+and TypeScript files in `.reviews/`, and every entrypoint reached them through
+checkout-relative component includes. That made the component graph a property of
+the checkout being reviewed: a pull request could add a file named `Finding.md`
+and the review would run the branch's own copy while reporting on it. A review is
 precisely the program that must not be answerable by its subject.
+
+The five review and analysis tasks and the two Actions workflows now pass no
+component include at all, and the retired definitions are gone. What stays in
+`.reviews/` is this repository's own review programs and the sensor
+configuration, journals and runtime state they read and write — inputs and
+outputs, not component definitions.
 
 **Who owns it.** `@executablemd/code-review-agent` does, and
 `packages/code-review-agent/src/review-components.ts` is the only assembly

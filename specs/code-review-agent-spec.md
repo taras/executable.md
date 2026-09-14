@@ -995,7 +995,8 @@ normalization live in typed function components or package modules.
 
 The review workflow checks out the requested revision, installs the pinned
 Deno toolchain, runs `deno task setup`, and executes that checkout's
-`./dist/xmd` binary with the review component directories. Credentials stay
+`./dist/xmd` binary. It passes no component include: the review graph comes
+from the code-review package embedded in that binary. Credentials stay
 in the workflow environment and are consumed by the scoped `GitHubAuth`
 provider. The CI root uses `<Output>` so execution errors fail the CLI while
 ordinary review findings remain successful report text. The journal is
@@ -1018,40 +1019,82 @@ These block merges. The executable.md review is advisory.
 
 ## 10. File Tree
 
+The component graph is package-owned and declared to every run (§3.5). The
+`.reviews/` tree holds this repository's own review programs and the sensor
+configuration and runtime state they read and write — no component definitions,
+and no command passes a component `--include`.
+
 ```
+packages/code-review-agent/
+  src/
+    review-components.ts         The one assembly boundary
+    components.md                Long-form docs for the six registrations
+
+    components/                  Reserved TypeScript registrations
+      CommentReviewData.ts       Pair extraction + GitHub response parsing
+      CommentReviewState.ts      Model-response and checklist state
+      Doctor.ts                  Checkout readiness for review analysis
+      OxlintDiagnostics.ts       Pinned Oxlint sensor run + normalization
+      RepositoryInventory.ts     Repository source paths and totals
+      ReviewContext.ts           Revision range, PR metadata, changed files
+
+    documents/
+      components/                Declared Markdown components
+        # Standard library
+        Finding.md               Severity icon + message
+        ReviewSection.md         Heading + children or clean message
+        Instruction.md           System prompt middleware
+        Sample.md                Sample invocation (review-owned copy)
+        Format.md                Shared formatting helper
+        GitHubAuth.md            Host-scoped credential middleware
+        GitHubComment.md         Post/update PR comment
+        DeepInfraProvider.md     DeepInfra Sample Api provider
+        OllamaProvider.md        Ollama Sample Api provider
+        ReviewSetup.md           Review preamble composition
+        ThinkFilter.md           Strips model reasoning from output
+
+        # Rule primitives (one eval block each, written once)
+        Threshold.md             Numeric comparison
+        Pattern.md               Regex match on added lines
+        Ratio.md                 Ratio of two regex counts
+        UnusedInDiff.md          Declarations with no references
+        DescriptionCheck.md      PR body length
+        LinkedIssue.md           Issue linkage
+        ConfigSourceMix.md       Config + source mixing
+        AbstractionNames.md      Suspicious file names
+        NewDependencies.md       Dependency justification
+        ReleaseSpecWarning.md    Release-spec change warning
+        SuggestRemoval.md        Removal suggestion rendering
+        CommentReview.md         Prompt composition for comment review
+
+        # Oxlint sensor surface
+        EnsureOxlint.md          Provisions the pinned sensor toolchain
+        OxlintConfig.md          Sensor profile selection
+        OxlintSignals.md         Diagnostic signal extraction
+        OxlintSummary.md         Sensor summary or unavailable warning
+        CleanupIssues.md         Idempotent GitHub issue lifecycle
+
+        # Policy report composition
+        PrPolicyReport.md        Composes PR policies
+        RepoPolicyReport.md      Composes repo policies
+
+      policies/                  Declared policy documents
+        ScopePolicy.md           PR size and scoping hygiene
+        BloatPolicy.md           Structural bloat patterns
+        SlopPolicy.md            Verbosity/slop indicators
+        ExtraneousCodePolicy.md  Semantic/correctness-focused review
+        RepoCleanupPolicy.md     Repo-wide cleanup policy analysis
+
 .reviews/
   ReviewPR.md                    CI entry point (DeepInfra + GitHubComment)
   ReviewPR.local.md              Local entry point (Ollama + stdout)
-
-  components/
-    # Standard library
-    Finding.md                   Severity icon + message
-    ReviewSection.md             Heading + children or clean message
-    Instructions.md              System prompt middleware
-    GitHubComment.md             Post/update PR comment
-    DeepInfraProvider.md         DeepInfra Sample Api provider
-    OllamaProvider.md            Ollama Sample Api provider
-
-    # Rule primitives (one eval block each, written once)
-    Threshold.md                 Numeric comparison
-    Pattern.md                   Regex match on added lines
-    Ratio.md                     Ratio of two regex counts
-    UnusedInDiff.md              Declarations with no references
-    DescriptionCheck.md          PR body length
-    LinkedIssue.md               Issue linkage
-    ConfigSourceMix.md           Config + source mixing
-    AbstractionNames.md          Suspicious file names
-    NewDependencies.md           Dependency justification
-    CommentReview.md             Prompt composition for comment review
-    CommentReviewData.ts         Pair extraction + GitHub response parsing
-    CommentReviewState.ts        Model-response and checklist state
-
-    # Policy documents (zero JavaScript)
-    ScopeCheck.md                Composes Threshold, Finding checks
-    StructuralBloat.md           Composes Pattern, Ratio, UnusedInDiff
-    VerbosityCheck.md            Composes Ratio, CommentReview
-    SemanticReview.md            Prompt template + If + Sample
-    ReviewBody.md                Composes all four checks
+  AnalyzeRepo.md                 Local repository analysis
+  AnalyzeRepoCI.md               CI repository analysis
+  DispatchRepoAnalysis.md        Repository-analysis dispatch
+  policies/README.md             Points at the package-owned policies
+  .oxlintrc.json                 Sensor profile (committed)
+  .oxlint/                       Provisioned sensor binaries (runtime state)
+  tsconfig.oxlint.json           Generated type-aware config (runtime state)
 ```
 
 ---
@@ -1220,8 +1263,9 @@ oxlint.shared.json                 Canonical Oxlint policy both profiles extend
 
 .reviews/
   .oxlintrc.json                   Sensor profile (committed)
-  components/
-    CleanupIssues.md               Idempotent GitHub issue lifecycle
+
+packages/code-review-agent/src/documents/components/
+  CleanupIssues.md                 Idempotent GitHub issue lifecycle
 
 .github/
   pull_request_template.md         Process enforcement
@@ -1262,7 +1306,8 @@ of curated signals; Doctor derives its available and missing rules from it
 rather than keeping a second list. The catalog is internal policy structure and
 is not a published export.
 
-`.reviews/components/EnsureOxlint.md` provisions the sensor's Oxlint 1.74.0 and
+`packages/code-review-agent/src/documents/components/EnsureOxlint.md` provisions
+the sensor's Oxlint 1.74.0 and
 tsgolint 0.25.0 by checksum, and the repository dependency inputs name the same
 two exact versions, so the policy the gate applies and the policy the sensor
 applies are evaluated by the same linter.

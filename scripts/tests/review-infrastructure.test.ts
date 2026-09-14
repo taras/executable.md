@@ -215,7 +215,24 @@ function* runDocumentResult(
   });
 }
 
-const OPERATIONAL_DIRS = [".reviews/components", ".reviews/policies", "packages/core/components"];
+/**
+ * Where the review components now live, as explicit fixture includes.
+ *
+ * The package's own directories rather than a checkout path: these are the
+ * shipped definitions, and reading them here is what makes the behavioral cases
+ * below about the real components rather than about copies of them.
+ *
+ * This is *not* how a run finds them. Production selection is the host's
+ * declaration, asserted in "the trusted review graph" below and end to end in
+ * `scripts/tests/plan-component-compiled.test.ts`. These cases supply the files
+ * explicitly because their subject is what one component does with its inputs,
+ * which needs no profile at all.
+ */
+const OPERATIONAL_DIRS = [
+  "packages/code-review-agent/src/documents/components",
+  "packages/code-review-agent/src/documents/policies",
+  "packages/code-review-agent/src/components",
+];
 
 /**
  * Read operational components from the repository before `useStubFs` replaces
@@ -252,7 +269,9 @@ function* runDocument(
 describe("review infrastructure", () => {
   it("uses the real GitHubAuth component for exact-host scoped middleware", function* () {
     yield* useTempFileCompiler();
-    const provider = yield* readTextFile(".reviews/components/GitHubAuth.md");
+    const provider = yield* readTextFile(
+      "packages/code-review-agent/src/documents/components/GitHubAuth.md",
+    );
     const result = yield* run(provider, "secret-token");
 
     expect(result.requests).toHaveLength(6);
@@ -277,7 +296,9 @@ describe("review infrastructure", () => {
 
   it("delegates unchanged when the token is unavailable and restores scope", function* () {
     yield* useTempFileCompiler();
-    const provider = yield* readTextFile(".reviews/components/GitHubAuth.md");
+    const provider = yield* readTextFile(
+      "packages/code-review-agent/src/documents/components/GitHubAuth.md",
+    );
     const result = yield* run(provider);
 
     for (const request of result.requests) {
@@ -294,9 +315,12 @@ describe("review infrastructure", () => {
 
     const valid = yield* runDocumentResult(
       '<Output><OxlintDiagnostics files={["a.ts"]} as="diagnostics" />\n```ts eval\nconst summary = `${diagnostics.length}:${diagnostics[0].ruleId}`;\n```\n{summary}</Output>',
-      { ".reviews/components/OxlintDiagnostics.ts": "" },
+      { "packages/code-review-agent/src/components/OxlintDiagnostics.ts": "" },
       {
-        includes: [".reviews/components"],
+        includes: [
+          "packages/code-review-agent/src/documents/components",
+          "packages/code-review-agent/src/components",
+        ],
         process: {
           exitCode: 1,
           stdout: JSON.stringify([
@@ -322,9 +346,12 @@ describe("review infrastructure", () => {
     expect(
       yield* runDocument(
         '<Output><OxlintDiagnostics files={["a.ts"]} as="diagnostics" /></Output>',
-        { ".reviews/components/OxlintDiagnostics.ts": "" },
+        { "packages/code-review-agent/src/components/OxlintDiagnostics.ts": "" },
         {
-          includes: [".reviews/components"],
+          includes: [
+            "packages/code-review-agent/src/documents/components",
+            "packages/code-review-agent/src/components",
+          ],
           process: { exitCode: 0, stdout: "not json", stderr: "" },
         },
       ),
@@ -332,9 +359,12 @@ describe("review infrastructure", () => {
     expect(
       yield* runDocument(
         '<Output><OxlintDiagnostics files={["a.ts"]} as="diagnostics" /></Output>',
-        { ".reviews/components/OxlintDiagnostics.ts": "" },
+        { "packages/code-review-agent/src/components/OxlintDiagnostics.ts": "" },
         {
-          includes: [".reviews/components"],
+          includes: [
+            "packages/code-review-agent/src/documents/components",
+            "packages/code-review-agent/src/components",
+          ],
           process: { exitCode: 2, stdout: "[]", stderr: "invocation failed" },
         },
       ),
@@ -351,9 +381,14 @@ describe("review infrastructure", () => {
       yield* runDocument(
         '<Output><OxlintDiagnostics files={[]} as="diagnostics" /></Output>',
         {
-          ".reviews/components/OxlintDiagnostics.ts": "",
+          "packages/code-review-agent/src/components/OxlintDiagnostics.ts": "",
         },
-        { includes: [".reviews/components"] },
+        {
+          includes: [
+            "packages/code-review-agent/src/documents/components",
+            "packages/code-review-agent/src/components",
+          ],
+        },
       ),
     ).toBe(true);
     expect(calls).toBe(0);
@@ -422,7 +457,10 @@ describe("review infrastructure", () => {
       "</Output>",
     ].join("\n");
     const options = {
-      includes: [".reviews/components"],
+      includes: [
+        "packages/code-review-agent/src/documents/components",
+        "packages/code-review-agent/src/components",
+      ],
       env: {
         GITHUB_TOKEN: "test-token",
         GITHUB_REPOSITORY: "taras/executable.md",
@@ -431,7 +469,7 @@ describe("review infrastructure", () => {
     };
     const result = yield* runDocumentResult(
       document,
-      { ".reviews/components/CommentReviewData.ts": "" },
+      { "packages/code-review-agent/src/components/CommentReviewData.ts": "" },
       options,
     );
     expect(result.ok).toBe(true);
@@ -442,7 +480,7 @@ describe("review infrastructure", () => {
     malformed = true;
     const malformedResult = yield* runDocumentResult(
       document,
-      { ".reviews/components/CommentReviewData.ts": "" },
+      { "packages/code-review-agent/src/components/CommentReviewData.ts": "" },
       options,
     );
     expect(malformedResult.ok).toBe(false);
@@ -471,8 +509,13 @@ describe("review infrastructure", () => {
     ].join("\n");
     const result = yield* runDocumentResult(
       document,
-      { ".reviews/components/CommentReviewState.ts": "" },
-      { includes: [".reviews/components"] },
+      { "packages/code-review-agent/src/components/CommentReviewState.ts": "" },
+      {
+        includes: [
+          "packages/code-review-agent/src/documents/components",
+          "packages/code-review-agent/src/components",
+        ],
+      },
     );
     expect(result.ok).toBe(true);
     expect(result.journal).toContain("true:true:1");
@@ -494,7 +537,7 @@ describe("review infrastructure", () => {
       "{summary}",
       "</Output>",
     ].join("\n");
-    const component = { ".reviews/components/Doctor.ts": "" };
+    const component = { "packages/code-review-agent/src/components/Doctor.ts": "" };
     const stats = (available: boolean) => (path: string) => {
       if (path === ".reviews/.oxlint/oxlint" || path === ".reviews/.oxlint/tsgolint") {
         return { exists: available, isFile: available, isDirectory: false };
@@ -507,7 +550,13 @@ describe("review infrastructure", () => {
       }
       return undefined;
     };
-    const baseOptions = { includes: [".reviews/components"], glob: [] };
+    const baseOptions = {
+      includes: [
+        "packages/code-review-agent/src/documents/components",
+        "packages/code-review-agent/src/components",
+      ],
+      glob: [],
+    };
 
     const unavailable = yield* runDocumentResult(document, component, {
       ...baseOptions,
@@ -591,9 +640,12 @@ describe("review infrastructure", () => {
     ].join("\n");
     const result = yield* runDocumentResult(
       document,
-      { ".reviews/components/ReviewContext.ts": "" },
+      { "packages/code-review-agent/src/components/ReviewContext.ts": "" },
       {
-        includes: [".reviews/components"],
+        includes: [
+          "packages/code-review-agent/src/documents/components",
+          "packages/code-review-agent/src/components",
+        ],
         env: { BASE_SHA: "base", HEAD_SHA: "head", PR_BODY: "local body" },
         process: (command) =>
           command.includes("--name-status")
@@ -606,9 +658,12 @@ describe("review infrastructure", () => {
 
     const failed = yield* runDocumentResult(
       document,
-      { ".reviews/components/ReviewContext.ts": "" },
+      { "packages/code-review-agent/src/components/ReviewContext.ts": "" },
       {
-        includes: [".reviews/components"],
+        includes: [
+          "packages/code-review-agent/src/documents/components",
+          "packages/code-review-agent/src/components",
+        ],
         process: { exitCode: 1, stdout: "", stderr: "git diff failed" },
       },
     );
@@ -617,9 +672,15 @@ describe("review infrastructure", () => {
 
   it("fails when a provider returns 2xx without model content", function* () {
     yield* useTempFileCompiler();
-    const deepInfra = yield* readTextFile(".reviews/components/DeepInfraProvider.md");
-    const ollama = yield* readTextFile(".reviews/components/OllamaProvider.md");
-    const sample = yield* readTextFile("packages/core/components/Sample.md");
+    const deepInfra = yield* readTextFile(
+      "packages/code-review-agent/src/documents/components/DeepInfraProvider.md",
+    );
+    const ollama = yield* readTextFile(
+      "packages/code-review-agent/src/documents/components/OllamaProvider.md",
+    );
+    const sample = yield* readTextFile(
+      "packages/code-review-agent/src/documents/components/Sample.md",
+    );
     const requests: string[] = [];
     yield* FetchApi.around({
       *fetch([input]) {
@@ -657,7 +718,9 @@ describe("review infrastructure", () => {
 
   it("requires GitHubComment metadata", function* () {
     yield* useTempFileCompiler();
-    const comment = yield* readTextFile(".reviews/components/GitHubComment.md");
+    const comment = yield* readTextFile(
+      "packages/code-review-agent/src/documents/components/GitHubComment.md",
+    );
     expect(
       yield* runDocument("<Output><GitHubComment>finding</GitHubComment></Output>", {
         "components/GitHubComment.md": comment,
@@ -670,11 +733,14 @@ describe("review infrastructure", () => {
     const inventoryResult = yield* runDocumentResult(
       '<RepositoryInventory as="inventory" />\n{inventory.fileCount}:{inventory.lineCount}',
       {
-        ".reviews/components/RepositoryInventory.ts": "",
+        "packages/code-review-agent/src/components/RepositoryInventory.ts": "",
         "packages/example.ts": "first\nsecond\n",
       },
       {
-        includes: [".reviews/components"],
+        includes: [
+          "packages/code-review-agent/src/documents/components",
+          "packages/code-review-agent/src/components",
+        ],
         glob: [{ path: "packages/example.ts", isFile: true, isDirectory: false }],
       },
     );
@@ -684,14 +750,20 @@ describe("review infrastructure", () => {
   it("retires the Show component from the review library", function* () {
     const tag = /<\/?Show[\s/>]/;
     const documents: string[] = [];
-    for (const entry of yield* each(expandGlob(".reviews/**/*.md"))) {
+    for (const entry of yield* each(
+      expandGlob("packages/code-review-agent/src/documents/**/*.md"),
+    )) {
       documents.push(entry.path);
       const source = yield* readTextFile(entry.path);
       expect([entry.path, tag.test(source)]).toEqual([entry.path, false]);
       yield* each.next();
     }
     // The walk found the review library, so the scan above is not vacuous.
-    expect(documents.some((path) => path.endsWith(".reviews/components/Finding.md"))).toBe(true);
+    expect(
+      documents.some((path) =>
+        path.endsWith("packages/code-review-agent/src/documents/components/Finding.md"),
+      ),
+    ).toBe(true);
     expect(documents.some((path) => path.endsWith("Show.md"))).toBe(false);
 
     const focused = yield* readTextFile("packages/core/tests/unused-in-diff.test.ts");
@@ -707,7 +779,9 @@ describe("review infrastructure", () => {
 
   it("renders Finding's selected icon and message and suppresses its false case", function* () {
     yield* useTempFileCompiler();
-    const components = yield* operationalComponents([".reviews/components/Finding.md"]);
+    const components = yield* operationalComponents([
+      "packages/code-review-agent/src/documents/components/Finding.md",
+    ]);
 
     const selected = yield* runDocumentResult(
       '<Finding when={true} severity="error" message="Broken contract." />',
@@ -729,8 +803,8 @@ describe("review infrastructure", () => {
   it("renders OxlintSummary's clean section and its unavailable warning", function* () {
     yield* useTempFileCompiler();
     const components = yield* operationalComponents([
-      ".reviews/components/OxlintSummary.md",
-      ".reviews/components/ReviewSection.md",
+      "packages/code-review-agent/src/documents/components/OxlintSummary.md",
+      "packages/code-review-agent/src/documents/components/ReviewSection.md",
     ]);
     const summary = (oxlintInstalled: boolean) =>
       [
@@ -768,7 +842,9 @@ describe("review infrastructure", () => {
 
   it("suppresses ReleaseSpecWarning for ordinary files and warns on release changes", function* () {
     yield* useTempFileCompiler();
-    const components = yield* operationalComponents([".reviews/components/ReleaseSpecWarning.md"]);
+    const components = yield* operationalComponents([
+      "packages/code-review-agent/src/documents/components/ReleaseSpecWarning.md",
+    ]);
     const warning = (files: string[]) =>
       [...props({ files }), "<ReleaseSpecWarning files={files} />"].join("\n");
 
@@ -797,7 +873,9 @@ describe("review infrastructure", () => {
 
   it("expands UnusedInDiff and CommentReview to nothing without an If component", function* () {
     yield* useTempFileCompiler();
-    const unusedComponents = yield* operationalComponents([".reviews/components/UnusedInDiff.md"]);
+    const unusedComponents = yield* operationalComponents([
+      "packages/code-review-agent/src/documents/components/UnusedInDiff.md",
+    ]);
     const unused = yield* runDocumentResult(
       [
         ...props({ pr: { added: [{ file: "a.ts", lineNumber: 1, content: "const plain = 1;" }] } }),
@@ -810,11 +888,11 @@ describe("review infrastructure", () => {
     expect(unused.text).toBe("");
 
     const reviewComponents = yield* operationalComponents([
-      ".reviews/components/CommentReview.md",
-      ".reviews/components/CommentReviewData.ts",
-      ".reviews/components/CommentReviewState.ts",
-      ".reviews/components/SuggestRemoval.md",
-      "packages/core/components/Sample.md",
+      "packages/code-review-agent/src/documents/components/CommentReview.md",
+      "packages/code-review-agent/src/components/CommentReviewData.ts",
+      "packages/code-review-agent/src/components/CommentReviewState.ts",
+      "packages/code-review-agent/src/documents/components/SuggestRemoval.md",
+      "packages/code-review-agent/src/documents/components/Sample.md",
     ]);
     const requests: string[] = [];
     yield* FetchApi.around({
@@ -857,9 +935,9 @@ describe("review infrastructure", () => {
   it("skips the ExtraneousCodePolicy sample below the review threshold", function* () {
     yield* useTempFileCompiler();
     const components = yield* operationalComponents([
-      ".reviews/policies/ExtraneousCodePolicy.md",
-      ".reviews/components/ReviewSection.md",
-      "packages/core/components/Sample.md",
+      "packages/code-review-agent/src/documents/policies/ExtraneousCodePolicy.md",
+      "packages/code-review-agent/src/documents/components/ReviewSection.md",
+      "packages/code-review-agent/src/documents/components/Sample.md",
     ]);
     function runPolicy(totalChanges: number): Operation<{ calls: string[]; text: string }> {
       return scoped(function* () {
@@ -908,9 +986,9 @@ describe("review infrastructure", () => {
   it("renders RepoCleanupPolicy's clean section without running either branch", function* () {
     yield* useTempFileCompiler();
     const components = yield* operationalComponents([
-      ".reviews/policies/RepoCleanupPolicy.md",
-      ".reviews/components/ReviewSection.md",
-      "packages/core/components/Sample.md",
+      "packages/code-review-agent/src/documents/policies/RepoCleanupPolicy.md",
+      "packages/code-review-agent/src/documents/components/ReviewSection.md",
+      "packages/code-review-agent/src/documents/components/Sample.md",
     ]);
     const calls: string[] = [];
     yield* Sample.around({
@@ -942,10 +1020,11 @@ describe("review infrastructure", () => {
 /**
  * The review graph as the installed `run` profile supplies it.
  *
- * The cases above expand review components the old way — from the checkout,
- * through `--include` — because that is what the entrypoints still do while this
- * boundary is under review. These do the opposite: they ask the *package* what
- * it declares, with no include at all, which is the whole point of the move.
+ * The cases above supply the package's component files as explicit fixtures,
+ * because what they are measuring is what one component does with its inputs.
+ * These ask a different question: not whether a component works, but whether the
+ * *host* is the one supplying it — so they pass no include at all and let the
+ * declaration answer.
  *
  * A review is the one program that must not be answerable by the thing it is
  * reviewing. While the graph lived in `.reviews/`, a pull request could add its
@@ -1025,6 +1104,71 @@ describe("the trusted review graph", () => {
     // a review at all rather than a precedence question.
     expect(new Set(all).size).toBe(all.length);
     expect(all).toHaveLength(41);
+  });
+
+  /**
+   * Every supported entrypoint takes the graph from the installation.
+   *
+   * The declaration tier winning is only half the outcome. While a command still
+   * passed `--include .reviews/components`, the retired directory was a live
+   * dependency of that command: deleting it broke the entrypoint, and restoring
+   * a file under it put a checkout-supplied component back in front of a review
+   * — which is the thing this issue exists to stop.
+   *
+   * So this reads the commands themselves rather than trusting that the
+   * migration reached all seven. Import-graph selection cannot see a task string
+   * or a workflow step, so nothing else in the suite would notice one being put
+   * back.
+   *
+   * Scoped to these seven by name. `ci.yml` passes `--include
+   * packages/core/components` for unrelated smoke fixtures and is none of this
+   * assertion's business — a sweep over every workflow would fail on it and
+   * teach the next person to weaken the check.
+   */
+  it("runs every supported review entrypoint with no component include", function* () {
+    const RETIRED = [".reviews/components", ".reviews/policies", "packages/core/components"];
+
+    const tasks: Record<string, string> = JSON.parse(yield* readTextFile("deno.json")).tasks;
+    const ROOTS: Record<string, string> = {
+      review: ".reviews/ReviewPR.md",
+      "review:local": ".reviews/ReviewPR.local.md",
+      analyze: ".reviews/AnalyzeRepo.md",
+      "analyze:ci": ".reviews/AnalyzeRepoCI.md",
+      "analyze:dispatch": ".reviews/DispatchRepoAnalysis.md",
+    };
+
+    for (const [name, root] of Object.entries(ROOTS)) {
+      const command = tasks[name];
+      // The task still exists and still runs its own root document. A
+      // migration that removed an entrypoint would otherwise satisfy every
+      // negative assertion below.
+      expect(`${name}: ${typeof command}`).toBe(`${name}: string`);
+      expect(`${name}: ${command.includes(root)}`).toBe(`${name}: true`);
+      // No component search path at all, rather than no retired path: an
+      // include pointing somewhere new would be a second way to answer for a
+      // review's components.
+      expect(`${name}: ${command.includes("--include")}`).toBe(`${name}: false`);
+      for (const retired of RETIRED) {
+        expect(`${name}: ${retired}: ${command.includes(retired)}`).toBe(
+          `${name}: ${retired}: false`,
+        );
+      }
+    }
+
+    const WORKFLOWS: Record<string, string> = {
+      ".github/workflows/review.yml": ".reviews/ReviewPR.md",
+      ".github/workflows/repo-analysis.yml": ".reviews/AnalyzeRepoCI.md",
+    };
+
+    for (const [file, root] of Object.entries(WORKFLOWS)) {
+      const source = yield* readTextFile(file);
+      expect(`${file}: ${source.includes(`run ${root}`)}`).toBe(`${file}: true`);
+      for (const retired of RETIRED) {
+        expect(`${file}: ${retired}: ${source.includes(retired)}`).toBe(
+          `${file}: ${retired}: false`,
+        );
+      }
+    }
   });
 
   it("ships review copies of Sample and Instruction byte-identical to core's", function* () {
