@@ -22,8 +22,6 @@ props:
         from enclosing scopes appear first, inner instructions are appended.
   required: [system]
   additionalProperties: false
-context: >-
-  The Markdown whose samples carry this instruction.
 ---
 
 ```js persist eval

@@ -13,7 +13,9 @@ props:
 description: >-
   Compose the whole pull-request review. `<PrPolicyReport pr={pr}
   diagnostics={diagnostics} doctor={doctor} />` renders the scope, structural, slop,
-  static-analysis and correctness sections under one heading.
+  static-analysis and correctness sections under one heading. When redundant comments
+  remain and the required GitHub environment is present, it also reconciles inline
+  removal suggestions on the pull request.
 ---
 
 ## PR #{props.pr.meta.number}: {props.pr.meta.title}

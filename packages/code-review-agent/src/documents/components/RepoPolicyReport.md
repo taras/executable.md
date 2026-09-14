@@ -19,7 +19,9 @@ props:
 description: >-
   Compose the whole repository analysis. `<RepoPolicyReport diagnostics={diagnostics}
   doctor={doctor} fileList={files} fileCount={count} lineCount={lines} />` renders the
-  static-analysis and cleanup sections and files the cleanup issues they justify.
+  static-analysis and cleanup sections. With the configured GitHub environment, it
+  also creates, updates and closes cleanup issues for the five highest-ranked file
+  clusters.
 ---
 
 ## Repository Analysis

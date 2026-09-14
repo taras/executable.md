@@ -11,7 +11,9 @@ props:
 description: >-
   Report verbosity indicators in a pull request. `<SlopPolicy pr={pr}
   diagnostics={diagnostics} />` renders a Slop section covering comment ratio,
-  comments that restate the code, and the sensor's verbosity signals.
+  comments that restate the code, and the sensor's verbosity signals. When redundant
+  comments remain and the required GitHub environment is present, it also reconciles
+  inline removal suggestions on the pull request.
 ---
 
 <ReviewSection heading="Slop" clean="✅ Slop indicators look low.">

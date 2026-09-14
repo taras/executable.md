@@ -36,8 +36,6 @@ props:
         as SampleContext.params. Providers can use this for custom behavior
         (e.g., "brief", "json", "classify").
   additionalProperties: false
-as: >-
-  The model's reply.
 ---
 
 ```js persist eval

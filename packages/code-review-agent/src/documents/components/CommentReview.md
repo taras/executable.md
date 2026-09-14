@@ -8,9 +8,10 @@ props:
   additionalProperties: false
 description: >-
   Review the pull request's code comments for ones that only restate the code.
-  `<CommentReview pr={pr} />` asks the model in scope which are redundant, reads the
-  replies to earlier suggestions to see which a person rejected, and renders what is
-  still outstanding.
+  `<CommentReview pr={pr} />` asks the model in scope which are redundant, reads
+  replies to earlier suggestions, and renders what remains outstanding. When findings
+  remain and the required GitHub environment is present, it also reconciles inline
+  removal suggestions on the pull request.
 ---
 
 <CommentReviewData pr={props.pr} as="reviewData" />
