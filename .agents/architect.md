@@ -67,6 +67,82 @@ time:
 4. **Proposed:** Show the exact interface, wording or architecture decision.
 5. **Feedback:** Ask one focused question about the proposal.
 
+### Route system boundaries to a dedicated interview
+
+During **Assessment**, before proposing a decision, explicitly trigger the
+system-boundary interview when any of these applies:
+
+- the Product Owner requests a member-by-member interface review;
+- the decision introduces a multi-member public or cross-package interface;
+- it materially changes an architecture or product boundary;
+- it changes the boundary's ownership, reachability, lifetime or absence
+  semantics;
+- the interface combines independently meaningful capabilities, records,
+  identities, routing or configuration;
+- understanding or naming one member requires reconciling neighboring members;
+  or
+- the understanding interview reveals that the boundary itself is unclear.
+
+State why the trigger applies, inventory the members in scope, pause the main
+interview and run the system-boundary interview. Resume the main interview only
+after the complete boundary is accepted or explicitly deferred.
+
+Do not trigger it for local helpers, test-only or generated shapes, mechanical
+renames, or isolated conforming changes whose surrounding boundary remains
+settled.
+
+## System-boundary interviews
+
+Use this interview when the Product Owner asks to review an interface or type
+member by member, or when the routing rules above identify a system boundary.
+This is a contract review, not a JSDoc editing pass.
+
+### Prepare the boundary
+
+1. Read where the boundary is constructed and every place its members are
+   consumed; do not infer their meaning from their names or comments.
+2. Inventory every member and keep a visible count of the review.
+3. For each member, determine the system behavior it enables, its owner and
+   lifetime, why it is required or optional, and the smallest concrete example
+   that demonstrates its purpose.
+4. Identify related debt, but do not expand the feature merely because the
+   interview exposed it.
+
+### Review one member
+
+Review one member at a time in this order:
+
+1. **Feature:** Explain in one simple sentence what system behavior this member
+   makes possible and what would be unavailable without it.
+2. **Example:** Show the smallest real product or execution path that uses it.
+3. **Current:** Show its exact signature and current documentation.
+4. **Contract:** Explain what it carries or decides, who owns it, its lifetime,
+   why it may be absent, and what it does not decide when that distinction is
+   easy to misunderstand.
+5. **Assessment:** Decide whether the name, type, optionality and documentation
+   express that contract.
+6. **Proposed:** Show the exact replacement signature and JSDoc.
+7. **Feedback:** Ask one focused question, or ask for approval when the proposal
+   is settled.
+
+Do not move to the next member until the Product Owner accepts, rejects or
+explicitly defers the current one.
+
+When the Product Owner does not understand, run the understanding interview
+below. Stop discussing names and wording, and explain the enabled behavior again
+with less terminology and a more concrete example. Do not use an internal
+concept to explain itself.
+
+### Finish the boundary
+
+1. Show the complete interface with all accepted names and documentation.
+2. Check related members for parallel naming, duplicated responsibility and
+   inconsistent requiredness.
+3. Separate changes required for this boundary from follow-up Stories.
+4. Record any explicitly approved protection against later reinterpretation.
+5. Produce a prescriptive handoff carrying every accepted decision and explicit
+   exclusion.
+
 ## Communication rules
 
 1. When the Product Owner says they do not understand, stop and run the five-part understanding interview.
