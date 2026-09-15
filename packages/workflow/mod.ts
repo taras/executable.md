@@ -356,6 +356,24 @@ export type {
   WorkflowDefinition,
 } from "./src/storage/definition.ts";
 
+export {
+  decodeSourceText,
+  parseSourceBundleDefinition,
+  sourceBundleComponents,
+  sourceBundleDefinitionToJson,
+  sourceBundleHash,
+  sourceContentHash,
+  verifySourceBundleDefinition,
+  verifySourceBundleSnapshot,
+} from "./src/storage/source-bundle.ts";
+export type {
+  SourceBundleComponentV2,
+  SourceBundleEntryV2,
+  SourceBundleIdentityV2,
+  SourceBundleSnapshotEntryV2,
+  SourceBundleWorkflowDefinitionV2,
+} from "./src/storage/source-bundle.ts";
+
 export { conflictingFields } from "./src/storage/compatibility.ts";
 
 export {
