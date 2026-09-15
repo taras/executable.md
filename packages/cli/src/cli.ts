@@ -135,7 +135,8 @@ import {
   syntaxSymbols,
 } from "./syntax.ts";
 import { BUNDLED_PLUGINS } from "./bundled-plugins.ts";
-import { importPluginModule, loadPlugins } from "./plugin-loader.ts";
+import { loadPlugins } from "./plugin-loader.ts";
+import type { PluginModuleLoader } from "./plugin-loader.ts";
 import { installPlugins, NO_PLUGINS } from "./plugin-host.ts";
 import type { CommandPlugins } from "./plugin-host.ts";
 import { selectPlugins } from "./plugin-selection.ts";
@@ -2325,10 +2326,10 @@ const PLUGIN_HELP = [
   "order they are written, after the ones this build bundles.",
   "",
   "A selected Plugin is trusted executable code, not a sandboxed extension:",
-  "loading one runs its module, and installing one runs its code with this",
-  "process's own authority. xmd discovers none on its own — a package that",
-  "happens to be installed does nothing until it is named — and loads none over",
-  "the network.",
+  "loading one runs its module, and selected Plugin code can execute whatever",
+  "the surrounding runtime permits. xmd discovers none on its own — a package",
+  "that happens to be installed does nothing until it is named — and loads none",
+  "over the network.",
 ].join("\n");
 
 /**
@@ -2916,6 +2917,13 @@ export function* runXmd(
   // of its own, and nothing a document can write reaches this: it is a value
   // the entrypoint supplies, called at most once per invocation.
   readStandardInput: StandardInputReader,
+  // How this host loads one module `--plugin` selected. Reaching a module means
+  // reaching the host — a dynamic import of a computed specifier, and the host
+  // package resolution behind a bare one — so it is a value the entrypoint
+  // supplies, exactly as the standard-input reader is. The shared command holds
+  // it and calls it; it reaches no loader of its own, and nothing a document
+  // can write reaches this.
+  loadPluginModule: PluginModuleLoader,
   // Defaults to the host that refuses. A caller driving this without naming a
   // workflow host has no run store, and inheriting one by omission is the
   // failure mode the whole boundary exists to prevent — so the default is the
@@ -2957,6 +2965,7 @@ export function* runXmd(
     upgrade,
     installRepositories,
     readStandardInput,
+    loadPluginModule,
     installWorkflowHost,
     sessions,
   );
@@ -2973,6 +2982,7 @@ export function* runXmd(
  */
 function* withPlugins(
   selection: PluginSelection | undefined,
+  loadPluginModule: PluginModuleLoader,
   body: (plugins: CommandPlugins) => Operation<void>,
 ): Operation<void> {
   yield* scoped(function* () {
@@ -2984,7 +2994,7 @@ function* withPlugins(
       // Captured before the first module is loaded, so a relative path and a
       // package specifier both resolve where the caller is standing.
       const directory = yield* cwd();
-      const loaded = yield* loadPlugins(selection.specifiers, directory, importPluginModule);
+      const loaded = yield* loadPlugins(selection.specifiers, directory, loadPluginModule);
       plugins = yield* installPlugins([...BUNDLED_PLUGINS, ...loaded], {
         command: selection.command,
         args: selection.args,
@@ -3012,6 +3022,7 @@ function* runCommand(
   upgrade: UpgradeAssembly,
   installRepositories: RepositoryInstaller,
   readStandardInput: StandardInputReader,
+  loadPluginModule: PluginModuleLoader,
   installWorkflowHost: HostWorkflowInstaller,
   sessions: MachineSessionAssembly | undefined,
 ): Operation<void> {
@@ -3086,7 +3097,7 @@ function* runCommand(
   // anything it installs can be asked for.
   const configured = function* (): Operation<void> {
     yield* Config.around({ verbose: () => commandVerbosity(selected) }, { at: "min" });
-    yield* withPlugins(selectedPlugins, run);
+    yield* withPlugins(selectedPlugins, loadPluginModule, run);
   };
 
   if (!bounded) {

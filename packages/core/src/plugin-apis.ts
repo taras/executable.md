@@ -7,16 +7,32 @@
  * the first Plugin installed is the outermost wrapper and the execution's own
  * answer is innermost.
  *
- * The names are stable and unbranded on purpose. A Plugin loaded from a module
- * that resolved its own copy of this package reads the same context name
+ * The keys are stable, namespaced and unbranded on purpose. A Plugin loaded
+ * from a module that resolved its own copy of this package reads the same key
  * canonical execution published, so the two copies compose instead of silently
  * installing two independent stacks.
+ *
+ * The key is what identifies an Api across copies, so it carries the owning
+ * package and the boundary rather than the public name alone: an unrelated
+ * package that happens to build an Api called `Document` addresses a different
+ * context and cannot intercept, replace or observe this one. The public names
+ * stay `Document`, `RootMetadata` and `ActivePlugins` — the spelling a consumer
+ * writes is not the spelling two copies have to agree on.
  */
 
 import { type Api, createApi } from "@effectionx/context-api";
 import type { Operation } from "effection";
 
 import type { Plugin } from "./plugin.ts";
+
+/** The key canonical core publishes the document envelope under. */
+const DOCUMENT_KEY = "executablemd.core.plugin.document";
+
+/** The key canonical core publishes the root's composed metadata under. */
+const ROOT_METADATA_KEY = "executablemd.core.plugin.root-metadata";
+
+/** The key canonical core publishes the active Plugin list under. */
+const ACTIVE_PLUGINS_KEY = "executablemd.core.plugin.active-plugins";
 
 /**
  * The exact text the document terminal answers with.
@@ -43,7 +59,7 @@ export interface DocumentApi {
   readonly document: string;
 }
 
-export const Document: Api<DocumentApi> = createApi<DocumentApi>("Document", {
+export const Document: Api<DocumentApi> = createApi<DocumentApi>(DOCUMENT_KEY, {
   document: DOCUMENT_PLACEHOLDER,
 });
 
@@ -77,7 +93,7 @@ export interface RootMetadataApi {
   readonly metadata: Readonly<Record<string, unknown>>;
 }
 
-export const RootMetadata: Api<RootMetadataApi> = createApi<RootMetadataApi>("RootMetadata", {
+export const RootMetadata: Api<RootMetadataApi> = createApi<RootMetadataApi>(ROOT_METADATA_KEY, {
   metadata: {},
 });
 
@@ -111,9 +127,10 @@ export interface ActivePluginsApi {
   readonly plugins: readonly Plugin[];
 }
 
-export const ActivePlugins: Api<ActivePluginsApi> = createApi<ActivePluginsApi>("ActivePlugins", {
-  plugins: Object.freeze([]),
-});
+export const ActivePlugins: Api<ActivePluginsApi> = createApi<ActivePluginsApi>(
+  ACTIVE_PLUGINS_KEY,
+  { plugins: Object.freeze([]) },
+);
 
 /** The active Plugin list, as an immutable ordered snapshot. */
 export const activePlugins: Operation<readonly Plugin[]> = {

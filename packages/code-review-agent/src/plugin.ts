@@ -32,36 +32,58 @@ import { reviewComponentDeclarations, useReviewComponents } from "./review-compo
 /** The `xmd workflow` actions that execute a document, and so run a profile. */
 const EXECUTING_ACTIONS: ReadonlySet<string> = new Set(["start", "resume", "fork"]);
 
-/** Every action the workflow command defines, so an option is never read as one. */
-const WORKFLOW_ACTIONS: ReadonlySet<string> = new Set([
-  ...EXECUTING_ACTIONS,
-  "answer",
-  "status",
-  "list",
-  "history",
-  "cancel",
-  "delete",
-  "export",
-]);
+/**
+ * The `xmd workflow` options that take a separated value.
+ *
+ * A value is not an action however much it reads like one, so the scan below
+ * steps over the token after each of these. `--plugin` is the one that makes
+ * this necessary rather than merely careful: `xmd workflow --plugin start list`
+ * selects a module called `start` and runs the management action `list`, and a
+ * scan that read the first recognized word would have run the review graph for
+ * a command that executes no document.
+ */
+const VALUED_OPTIONS: ReadonlySet<string> = new Set(["--plugin", "--id", "--at", "--artifact"]);
+
+/** The generated root-property options, which take a separated value too. */
+const PROPERTY_OPTION = "--props";
+
+/** Whether this token is an option that takes the token after it. */
+function takesValue(token: string): boolean {
+  return (
+    VALUED_OPTIONS.has(token) ||
+    token === PROPERTY_OPTION ||
+    token.startsWith(`${PROPERTY_OPTION}-`)
+  );
+}
 
 /**
  * Whether this workflow command line executes a document.
  *
- * The action is found by name rather than by position: an option written before
- * it — `--plugin` included — is not an action, and a value that happens to look
- * like one is not either, because only the tokens after `workflow` are read and
- * only the defined action names match. A command line naming none is malformed
- * and refused by the command itself; it executes no document either way.
+ * The action is the first positional after `workflow`: the first token that is
+ * neither an option nor an option's value. Everything after `--` is positional
+ * by definition and is not scanned for one, and a token this command defines no
+ * action for is not one — a malformed command line executes no document either
+ * way, and the command itself is what says so.
  */
 function executesDocument(args: readonly string[]): boolean {
   const start = args.indexOf("workflow");
   if (start === -1) {
     return false;
   }
-  for (const token of args.slice(start + 1)) {
-    if (WORKFLOW_ACTIONS.has(token)) {
-      return EXECUTING_ACTIONS.has(token);
+  const tokens = args.slice(start + 1);
+  for (let index = 0; index < tokens.length; index++) {
+    const token = tokens[index];
+    if (token === undefined || token === "--") {
+      return false;
     }
+    if (takesValue(token)) {
+      index += 1;
+      continue;
+    }
+    if (token.startsWith("-")) {
+      continue;
+    }
+    return EXECUTING_ACTIONS.has(token);
   }
   return false;
 }

@@ -14,8 +14,10 @@
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import type { Operation } from "effection";
-import { Plugin, parsePluginValue } from "../api.ts";
+import { Plugin } from "../api.ts";
 import type { PluginInstallation } from "../api.ts";
+// Admission is the host boundary: a distribution decides what it will install.
+import { parsePluginValue } from "../host.ts";
 
 /** The message an admission refused with, or the name it admitted. */
 function admitted(value: unknown): string {
@@ -78,6 +80,41 @@ describe("PL2 — admission reads an untyped export structurally", () => {
     expect(admitted({ name: "broken", install: "yes" })).toBe(
       "a Plugin module's default export carries a callable `install`, and broken carries string",
     );
+  });
+
+  it("admits the value itself, so members this boundary does not read survive", function* () {
+    const module = { name: "carries-more", version: "3.1.4", helper: () => "kept" };
+    const plugin = parsePluginValue(module);
+    if (!plugin.ok) {
+      throw new Error("the module was not admitted as a Plugin");
+    }
+    // Identity, because a copy is the defect: a Plugin's own configuration, its
+    // helpers and whatever else its package publishes beside the contract are
+    // not this boundary's to drop.
+    expect(plugin.value).toBe(module);
+    expect(Reflect.get(plugin.value, "version")).toBe("3.1.4");
+  });
+
+  it("keeps the receiver an install was written against", function* () {
+    // A Plugin written as an object literal with a method reads `this` for its
+    // own state. Rebinding or wrapping `install` would hand it a different
+    // receiver and the state would be gone — silently, at install time.
+    const module = {
+      name: "reads-this",
+      label: "mine",
+      *install(): Operation<PluginInstallation | undefined> {
+        seen.push(Reflect.get(this, "label"));
+        return undefined;
+      },
+    };
+    const seen: unknown[] = [];
+    const plugin = parsePluginValue(module);
+    if (!plugin.ok || plugin.value.install === undefined) {
+      throw new Error("the module was not admitted as a Plugin");
+    }
+    expect(plugin.value.install).toBe(module.install);
+    yield* plugin.value.install({ command: "run", args: [] });
+    expect(seen).toEqual(["mine"]);
   });
 
   it("calls the admitted install rather than a copy of it", function* () {

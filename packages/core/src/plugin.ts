@@ -15,10 +15,10 @@
  * ## Trusted, not sandboxed
  *
  * Selecting a Plugin runs its module's top level and then its `install`. There
- * is no permission boundary here and none is implied: a selected Plugin is code
- * the operator chose to run, with exactly the authority the `xmd` process has.
- * The engine refuses a *malformed* Plugin before installing anything; it does
- * not constrain a well-formed one.
+ * is no permission boundary here and none is implied: selected Plugin code can
+ * execute whatever the surrounding runtime permits. The engine refuses a
+ * *malformed* Plugin before installing anything; it does not constrain a
+ * well-formed one.
  */
 
 import type { Operation, Result } from "effection";
@@ -91,42 +91,69 @@ export function Plugin(input: Plugin): Plugin {
   return input;
 }
 
-/** What a value that is not a usable Plugin failed to be. */
-function refusal(detail: string): Error {
-  return new Error(`a Plugin module's default export ${detail}`);
-}
+/** The optional half of a Plugin, named so the guard below can state it. */
+type PluginInstall = (request: PluginInstallRequest) => Operation<PluginInstallation | undefined>;
 
 /** The shape `install` has, read the way a function component's default is. */
 function isInstall(value: unknown): value is PluginInstall {
   return typeof value === "function";
 }
 
-/** The optional half of a Plugin, named so the guard above can state it. */
-type PluginInstall = (request: PluginInstallRequest) => Operation<PluginInstallation | undefined>;
+/**
+ * Whether a value satisfies the Plugin contract structurally.
+ *
+ * The one decision, so admission and the sentence explaining a refusal cannot
+ * come to disagree about what a Plugin is: an object with a non-empty string
+ * `name`, and either no `install` member or a callable one.
+ */
+function isPlugin(value: unknown): value is Plugin {
+  if (typeof value !== "object" || value === null) {
+    return false;
+  }
+  const name = "name" in value ? value.name : undefined;
+  if (typeof name !== "string" || name.length === 0) {
+    return false;
+  }
+  const install = "install" in value ? value.install : undefined;
+  return install === undefined || isInstall(install);
+}
+
+/**
+ * Why a value is not a Plugin — asked only after {@link isPlugin} said no.
+ *
+ * It names the member that failed and what was found there, and nothing else
+ * about the module: a specifier and a member are what makes a refusal
+ * actionable, and a module's internals are not a diagnostic.
+ */
+function refusal(value: unknown): Error {
+  const detail = describe(value);
+  return new Error(`a Plugin module's default export ${detail}`);
+}
+
+function describe(value: unknown): string {
+  if (typeof value !== "object" || value === null) {
+    return "is a Plugin value; this module exports none";
+  }
+  const name = "name" in value ? value.name : undefined;
+  if (typeof name !== "string" || name.length === 0) {
+    return "carries a non-empty string `name`";
+  }
+  const install = "install" in value ? value.install : undefined;
+  return `carries a callable \`install\`, and ${name} carries ${typeof install}`;
+}
 
 /**
  * Read an untyped module export as a Plugin, or say why it is not one.
  *
- * The rule is structural and minimal, because the contract is: an object with a
- * non-empty string `name`, and either no `install` member or a callable one. A
- * value that satisfies it is used as it was loaded — copied nowhere, frozen
- * nowhere, and asked for nothing else. What `install` returns is admitted where
- * the declarations it carries are, not here.
+ * What comes back on success is **the admitted value itself**, never a copy of
+ * it. Two consequences the copy did not have: a Plugin may carry members this
+ * boundary does not read — its own helpers, its own configuration, whatever a
+ * package publishes beside the contract — and they survive; and `install` runs
+ * with the receiver its own module gave it, so an implementation written as a
+ * method and reading `this` behaves here exactly as it does when its package
+ * calls it. Admission decides whether a value is a Plugin. It does not decide
+ * what one is made of.
  */
 export function parsePluginValue(value: unknown): Result<Plugin> {
-  if (typeof value !== "object" || value === null) {
-    return Err(refusal("is a Plugin value; this module exports none"));
-  }
-  const name = "name" in value ? value.name : undefined;
-  if (typeof name !== "string" || name.length === 0) {
-    return Err(refusal("carries a non-empty string `name`"));
-  }
-  const install = "install" in value ? value.install : undefined;
-  if (install === undefined) {
-    return Ok({ name });
-  }
-  if (!isInstall(install)) {
-    return Err(refusal(`carries a callable \`install\`, and ${name} carries ${typeof install}`));
-  }
-  return Ok({ name, install: (request: PluginInstallRequest) => install(request) });
+  return isPlugin(value) ? Ok(value) : Err(refusal(value));
 }

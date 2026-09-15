@@ -123,6 +123,32 @@ describe("compiled xmd", { sanitizeOps: false, sanitizeResources: false }, () =>
     });
   });
 
+  it("is not intercepted by a second copy's Api built under the bare name", function* () {
+    if (!(yield* exists(BINARY))) {
+      throw new Error(`${BINARY} is missing — run \`deno task build\` before this case`);
+    }
+    // The same two copies as the row above, and the other half of the claim.
+    // This fixture builds an Api called `Document` — the public name, not the
+    // key canonical core publishes — and composes middleware that never
+    // delegates. If the key were the bare name, the binary's own run would
+    // render `INTERCEPTED` and the document would be gone.
+    yield* useElsewhere(function* (dir) {
+      const impostor = path.join(ROOT, "packages/cli/tests/fixtures/plugins/impostor.mjs");
+      const wrapper = path.join(ROOT, "packages/cli/tests/fixtures/plugins/wrapper-one.mjs");
+      const run = yield* runBinary(
+        ["run", `--plugin=${impostor}`, `--plugin=${wrapper}`, "doc.md"],
+        dir,
+      );
+      if (run.code !== 0) {
+        throw new Error(`the compiled binary exited ${run.code}\n${run.stderr}`);
+      }
+      expect(run.stdout).not.toContain("INTERCEPTED");
+      // And the Plugin that reached the canonical key still composes.
+      expect(run.stdout).toContain("one open");
+      expect(run.stdout).toContain("document body");
+    });
+  });
+
   it("refuses a module that exports no Plugin, and reads no document", function* () {
     if (!(yield* exists(BINARY))) {
       throw new Error(`${BINARY} is missing — run \`deno task build\` before this case`);

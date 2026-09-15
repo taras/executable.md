@@ -2,15 +2,16 @@
  * @module
  *
  * The consumer API of `@executablemd/core`: the contextual APIs a Plugin
- * composes a run through, and the values it hands the host.
+ * composes a run through, and the contracts it is written against.
  *
  * A Plugin depends on this package and imports from here. It is a separate
- * entrypoint from `.` — which is the engine's own surface, and large — and from
- * `./host`, which is the infrastructure boundary a distribution's own host
- * assembles an execution at.
+ * entrypoint from `.` — the engine's own surface, and large — and from
+ * `./host`, the infrastructure boundary a distribution's own host assembles an
+ * execution at. What a host declares with, and what a host admits an untyped
+ * value through, stay there.
  *
  * ```ts
- * import { Plugin, Document } from "@executablemd/core/api";
+ * import { Document, Plugin } from "@executablemd/core/api";
  *
  * export default Plugin({
  *   name: "example",
@@ -23,12 +24,13 @@
  * });
  * ```
  *
- * A selected Plugin is trusted executable code. Loading one runs its module's
- * top level, and installing one runs its `install` with this process's own
- * authority. Nothing here is a sandbox.
+ * Selecting a Plugin is a decision to run its code: loading one runs its
+ * module, and installing one runs its `install`. Selected Plugin code can
+ * execute whatever the surrounding runtime permits, so nothing here is a
+ * sandbox.
  */
 
-export { Plugin, parsePluginValue } from "./src/plugin.ts";
+export { Plugin } from "./src/plugin.ts";
 export type { PluginInstallation, PluginInstallRequest } from "./src/plugin.ts";
 
 export {
@@ -36,29 +38,24 @@ export {
   activePlugins,
   Document,
   document,
-  DOCUMENT_PLACEHOLDER,
   RootMetadata,
   rootMetadata,
 } from "./src/plugin-apis.ts";
 export type { ActivePluginsApi, DocumentApi, RootMetadataApi } from "./src/plugin-apis.ts";
 
 /**
- * The declarations a `PluginInstallation` carries, and what builds one.
+ * The types the accepted `PluginInstallation` members are written in.
  *
- * `Markdown({…})` and `sourceDigest` are re-exported from the host boundary
- * because a Plugin is exactly the trusted code that declares exact Markdown: a
- * value it cannot construct is a member it cannot fill in.
+ * Types only. `Markdown({…})`, `sourceDigest` and `Structural({…})` construct
+ * what a *host* declares to an execution, and they stay on `./host` with the
+ * rest of that boundary: a Plugin is trusted code and imports them from there,
+ * which is also where a reader looking for what may be declared will find them.
  */
-export { Markdown, sourceDigest } from "./src/components/declared-markdown.ts";
-export type {
-  MarkdownComponent,
-  MarkdownComponentInput,
-} from "./src/components/declared-markdown.ts";
-export { Structural } from "./src/execution-declarations.ts";
+export type { MarkdownComponent } from "./src/components/declared-markdown.ts";
 export type {
   ExpansionChunk,
   ExpansionRegion,
   ExpansionRequest,
-  StructuralInput,
+  Structural,
 } from "./src/execution-declarations.ts";
 export type { JournalAdmission } from "./src/execute.ts";

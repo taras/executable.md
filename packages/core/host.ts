@@ -226,6 +226,18 @@ export type { WorkflowBundleComponent, WorkflowComponentBundle } from "./src/com
  * own does not decide what the declaration is. `MarkdownComponentInput` is what
  * a host writes and `MarkdownComponent` is what comes back.
  */
+/**
+ * Reading an untyped module export as a Plugin — see `src/plugin.ts`.
+ *
+ * Admission rather than construction, and a host boundary for the same reason
+ * the rest of this module is one: a distribution decides what it is willing to
+ * install, and what comes back on success is the admitted value itself rather
+ * than a copy, so a Plugin keeps every member it carries and `install` keeps
+ * the receiver its own module gave it. `Plugin({…})` is the consumer-facing
+ * constructor and stays on `./api`.
+ */
+export { parsePluginValue } from "./src/plugin.ts";
+
 export {
   DeclaredMarkdownError,
   Markdown,

@@ -18,6 +18,7 @@ import { API, useHostFiles } from "@executablemd/runtime";
 import { compileTempFile } from "@executablemd/core";
 import { runXmd, XMD_VERSION } from "./cli.ts";
 import { readInputStream } from "./standard-input.ts";
+import { importPluginModule } from "./host-plugin-modules.ts";
 import type { UpgradeAssembly } from "./upgrade.ts";
 import { unassembledMachineSessions } from "./session-coordinator.ts";
 import { unsupportedWorkflowHost } from "./workflow.ts";
@@ -80,6 +81,7 @@ await main(function* (args) {
     UPGRADE,
     unsupportedRepositories,
     () => readInputStream(process.stdin),
+    importPluginModule,
     unsupportedWorkflowHost,
     unassembledMachineSessions(),
   );

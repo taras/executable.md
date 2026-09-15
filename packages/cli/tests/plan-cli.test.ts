@@ -240,6 +240,21 @@ const PLAN_HELP = [
   "   --timeout [TIMEOUT]       deadline for the whole planning invocation, as a duration (500ms, 30s, 5min)",
   "   -h, --help                show help",
   "",
+  // Every command takes `--plugin`, and it is read out of argv before any
+  // command's grammar exists — so help states it in one section of its own
+  // rather than as an option on each command.
+  "PLUGINS",
+  "  --plugin <specifier>  load a Plugin before the command runs (repeatable)",
+  "",
+  "A Plugin is a package or a file this invocation names. They install in the",
+  "order they are written, after the ones this build bundles.",
+  "",
+  "A selected Plugin is trusted executable code, not a sandboxed extension:",
+  "loading one runs its module, and selected Plugin code can execute whatever",
+  "the surrounding runtime permits. xmd discovers none on its own — a package",
+  "that happens to be installed does nothing until it is named — and loads none",
+  "over the network.",
+  "",
   "Exactly one request is required. It describes the program you want the coding",
   "agent to create, rather than a path. Quote it so the shell passes it as one",
   "argument:",

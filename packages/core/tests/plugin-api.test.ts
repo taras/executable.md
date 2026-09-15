@@ -8,6 +8,8 @@
  */
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
+import { createApi } from "@effectionx/context-api";
+import type { Api } from "@effectionx/context-api";
 import { scoped } from "effection";
 import type { Operation } from "effection";
 import {
@@ -15,11 +17,13 @@ import {
   activePlugins,
   Document,
   document,
-  DOCUMENT_PLACEHOLDER,
   Plugin,
   RootMetadata,
   rootMetadata,
 } from "../api.ts";
+// The placeholder text is canonical core's own, not part of what a Plugin
+// imports: a wrapper receives it from `next()` rather than naming it.
+import { DOCUMENT_PLACEHOLDER } from "../src/plugin-apis.ts";
 import {
   installInvalidDocument,
   installInvalidRootMetadata,
@@ -61,6 +65,63 @@ describe("PA1 — Document composes an envelope around one terminal", () => {
       }
     });
     expect(refusal).toContain("Document middleware answers with Markdown text");
+  });
+});
+
+describe("PA1b — the key is what two copies agree on, and it is namespaced", () => {
+  /** An Api built under the bare public name, the way another package might. */
+  function impostor(name: string): Api<{ readonly document: string }> {
+    return createApi<{ readonly document: string }>(name, { document: "impostor terminal" });
+  }
+
+  it("cannot be intercepted by an Api built with the bare public name", function* () {
+    const composed = yield* scoped(function* (): Operation<string> {
+      // Everything an interceptor could reach for: the public name of the Api,
+      // the name of its one member, and middleware that never delegates.
+      yield* impostor("Document").around({ document: () => "intercepted" });
+      yield* impostor("document").around({ document: () => "intercepted" });
+      return yield* document;
+    });
+    // The canonical answer, untouched. An Api keyed by the bare name addresses
+    // a different context; it is not nearer, further, or ordered against this
+    // one, because it is not this one.
+    expect(composed).toBe(DOCUMENT_PLACEHOLDER);
+  });
+
+  it("composes with a second Api built under the canonical key", function* () {
+    // The other half of the same claim: a Plugin that resolved its own copy of
+    // this package builds an Api with the same key, and that one *does*
+    // compose — which is what makes the key rather than the module instance the
+    // thing the two copies share.
+    const composed = yield* scoped(function* (): Operation<string> {
+      const loadedCopy = createApi<{ readonly document: string }>(
+        "executablemd.core.plugin.document",
+        { document: "a second copy's terminal" },
+      );
+      yield* loadedCopy.around({ document: (_args, next) => `wrapped ${next()}` });
+      return yield* document;
+    });
+    expect(composed).toBe(`wrapped ${DOCUMENT_PLACEHOLDER}`);
+  });
+
+  it("keeps the same claim for RootMetadata and ActivePlugins", function* () {
+    const metadata = yield* scoped(function* () {
+      yield* createApi<{ readonly metadata: Record<string, unknown> }>("RootMetadata", {
+        metadata: {},
+      }).around({ metadata: () => ({ intercepted: true }) });
+      yield* RootMetadata.around({ metadata: () => ({ real: true }) }, { at: "min" });
+      return yield* rootMetadata;
+    });
+    expect(metadata).toEqual({ real: true });
+
+    const listed = yield* scoped(function* () {
+      yield* createApi<{ readonly plugins: readonly Plugin[] }>("ActivePlugins", {
+        plugins: [],
+      }).around({ plugins: () => [Plugin({ name: "impostor" })] });
+      yield* ActivePlugins.around({ plugins: () => [Plugin({ name: "real" })] });
+      return (yield* activePlugins).map((plugin) => plugin.name);
+    });
+    expect(listed).toEqual(["real"]);
   });
 });
 

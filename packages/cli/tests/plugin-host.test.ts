@@ -14,11 +14,12 @@
  */
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { ensure, scoped } from "effection";
+import { ensure, scoped, spawn, suspend, withResolvers } from "effection";
 import type { Operation } from "effection";
 import { activePlugins, Plugin } from "@executablemd/core/api";
 import type { PluginInstallation } from "@executablemd/core/api";
 import { inspectComponent } from "@executablemd/core";
+import { Markdown, sourceDigest, Structural } from "@executablemd/core/host";
 import { Config, verbose } from "@executablemd/runtime/api";
 import { BUNDLED_PLUGINS } from "../src/bundled-plugins.ts";
 import { admitPlugins, installPlugins, NO_PLUGINS } from "../src/plugin-host.ts";
@@ -180,30 +181,182 @@ describe("PH3 — an installation has the command's lifetime", () => {
   });
 });
 
+describe("PH3b — cancellation unwinds what was installed", () => {
+  it("releases the Plugins already installed when the command is halted", function* () {
+    const events: string[] = [];
+    const reached = withResolvers<void>();
+    const command = yield* spawn(() =>
+      scoped(function* () {
+        yield* installPlugins(
+          [
+            Plugin({
+              name: "holds-a-resource",
+              *install(): Operation<PluginInstallation | undefined> {
+                yield* ensure(function* () {
+                  events.push("released");
+                });
+                events.push("installed");
+                return undefined;
+              },
+            }),
+            Plugin({
+              name: "still-installing",
+              *install(): Operation<PluginInstallation | undefined> {
+                reached.resolve();
+                // A Plugin that is still working when the command is cancelled:
+                // a provider waiting on a socket, a lock, an answer.
+                yield* suspend();
+                return undefined;
+              },
+            }),
+            recording("never-reached", events),
+          ],
+          RUN,
+        );
+      }),
+    );
+    yield* reached.operation;
+    yield* command.halt();
+    // The resource the first Plugin acquired is released, the third never
+    // installed, and halting stays halting: nothing turned it into a failure.
+    expect(events).toEqual(["installed", "released"]);
+  });
+
+  it("leaves the established teardown-failure precedence exactly as it was", function* () {
+    // The rule this must not move: in a scope where the body failed *and* a
+    // teardown failed, Effection reports the teardown failure. Installing
+    // Plugins is an ordinary scope doing ordinary work, so the same command
+    // line reports the same thing it would with no Plugin in it at all.
+    const events: string[] = [];
+    const throughPlugins = yield* refusal(() =>
+      scoped(function* () {
+        yield* installPlugins(
+          [
+            Plugin({
+              name: "fails-to-release",
+              *install(): Operation<PluginInstallation | undefined> {
+                yield* ensure(function* (): Operation<void> {
+                  events.push("release attempted");
+                  throw new Error("this Plugin could not release its resource");
+                });
+                return undefined;
+              },
+            }),
+            Plugin({
+              name: "refuses",
+              // deno-lint-ignore require-yield
+              *install(): Operation<PluginInstallation | undefined> {
+                throw new Error("this Plugin refuses to install");
+              },
+            }),
+          ],
+          RUN,
+        );
+      }),
+    );
+
+    // The same two failures, with no Plugin anywhere: the comparison is what
+    // makes this a claim about precedence rather than a restatement of one
+    // observation.
+    const withoutPlugins = yield* refusal(() =>
+      scoped(function* () {
+        yield* ensure(function* (): Operation<void> {
+          throw new Error("this Plugin could not release its resource");
+        });
+        throw new Error("this Plugin refuses to install");
+      }),
+    );
+
+    expect(events).toEqual(["release attempted"]);
+    expect(throughPlugins).toBe(withoutPlugins);
+    expect(throughPlugins).toContain("could not release its resource");
+  });
+});
+
 describe("PH4 — what an installation contributes crosses as one execution installation", () => {
-  it("carries components, structural syntax and admissions on one installation", function* () {
-    const assembly = yield* scoped(function* () {
-      return yield* installPlugins(
-        [
-          Plugin({
-            name: "declaring",
-            // deno-lint-ignore require-yield
-            *install(): Operation<PluginInstallation | undefined> {
-              return {
-                admissions: [
-                  // deno-lint-ignore require-yield
-                  function* () {},
-                ],
-              };
-            },
-          }),
-        ],
-        RUN,
-      );
+  const SOURCE = "declared by a Plugin\n";
+
+  /** Everything one installation can carry, on one value. */
+  function everything(seen: string[]): Plugin {
+    const installation = {
+      components: [
+        Markdown({
+          name: "PluginDeclared",
+          origin: "tier-ph/PluginDeclared.md",
+          source: SOURCE,
+          digest: sourceDigest(SOURCE),
+        }),
+      ],
+      structural: [
+        Structural({
+          name: "PluginConstruct",
+          origin: "tier-ph",
+          forms: ["paired"],
+          props: { type: "object", properties: {}, additionalProperties: false },
+          syntax: ["<PluginConstruct>…</PluginConstruct>"],
+          description: "A construct this Plugin declared.",
+          context: "What the construct renders.",
+          parent: null,
+        }),
+      ],
+      admissions: [
+        // deno-lint-ignore require-yield
+        function* (): Operation<void> {},
+      ],
+      label: "the installation it came from",
+      // deno-lint-ignore require-yield
+      *expand(): Operation<void> {
+        // Read off `this`, because what the host binds is the installation the
+        // handler was returned on — not a copy, and not whatever object the
+        // conversion happened to build.
+        seen.push(String(Reflect.get(this, "label")));
+      },
+    };
+    return Plugin({
+      name: "everything",
+      // deno-lint-ignore require-yield
+      *install(): Operation<PluginInstallation | undefined> {
+        return installation;
+      },
     });
+  }
+
+  it("carries components, structural syntax, its bound expand and admissions on one", function* () {
+    const seen: string[] = [];
+    const assembly = yield* scoped(function* () {
+      return yield* installPlugins([everything(seen)], RUN);
+    });
+
+    // One installation, not one per kind: what a Plugin returned is what
+    // canonical execution captures, and a declaration and the handler that
+    // expands it have to arrive together or the pair is refused.
     expect(assembly.installations).toHaveLength(1);
-    expect(assembly.installations[0]?.admissions).toHaveLength(1);
-    expect(assembly.installations[0]?.declarations).toBe(undefined);
+    const installed = assembly.installations[0];
+    expect(installed?.declarations?.map((declaration) => declaration.name)).toEqual([
+      "PluginDeclared",
+      "PluginConstruct",
+    ]);
+    // Markdown first, then structural — one list, both arms, in that order.
+    expect(installed?.declarations?.map((declaration) => declaration.kind)).toEqual([
+      "component",
+      "structural",
+    ]);
+    expect(installed?.admissions).toHaveLength(1);
+    expect(assembly.components.map((component) => component.name)).toEqual(["PluginDeclared"]);
+
+    // And the handler runs against the installation it was returned on.
+    const expand = installed?.expand;
+    if (expand === undefined) {
+      throw new Error("the installation carried no expansion handler");
+    }
+    yield* expand({
+      name: "PluginConstruct",
+      origin: "tier-ph",
+      form: "paired",
+      props: {},
+      regions: [],
+    });
+    expect(seen).toEqual(["the installation it came from"]);
   });
 
   it("contributes no installation for a Plugin that returned nothing", function* () {
@@ -282,9 +435,26 @@ describe("PH6 — the bundled review Plugin claims the commands that run a revie
     }
   });
 
-  it("reads the action by name, so a --plugin value is never mistaken for one", function* () {
-    const declared = yield* declaredFor("workflow", ["workflow", "--plugin", "./start", "list"]);
-    expect(declared).toEqual([]);
+  it("reads an option's value as a value, never as the action", function* () {
+    // The command line that makes this necessary: a module named `start`, and
+    // the management action `list`. Reading the first recognized word would
+    // have installed the review graph for a command that executes no document.
+    expect(yield* declaredFor("workflow", ["workflow", "--plugin", "start", "list"])).toEqual([]);
+    expect(yield* declaredFor("workflow", ["workflow", "--plugin=./start.mjs", "list"])).toEqual(
+      [],
+    );
+    expect(yield* declaredFor("workflow", ["workflow", "--id", "start", "list"])).toEqual([]);
+    expect(yield* declaredFor("workflow", ["workflow", "--props-name", "start", "list"])).toEqual(
+      [],
+    );
+    // And the same reading still finds a real action written after an option.
+    expect(
+      (yield* declaredFor("workflow", ["workflow", "--plugin", "list", "start", "flow.md"])).length,
+    ).toBe(35);
+    expect(
+      (yield* declaredFor("workflow", ["workflow", "--id", "release-1", "start", "flow.md"]))
+        .length,
+    ).toBe(35);
   });
 
   it("registers the six reserved names where it claims the graph", function* () {

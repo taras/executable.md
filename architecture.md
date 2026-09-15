@@ -139,7 +139,7 @@ and categorization rather than clarify them, so both stay exactly as written.
 | execution environment | the private bundle of services and records one execution supplies while its document expands: what resolves a name, what routes it to a retained implementation, what the execution declared, and the records it keeps about its own identities, forms, vocabulary and source output. The execution builds it from what it captured and admitted, owns it, and passes it by value through canonical expansion — never through a context, because a context resolves by name and a name is not a secret. An expansion driven directly is handed none at all, which is what "nothing is installed here" means; there is no partial one. Its shape is an architecture and product boundary |
 | syntax reference | the engine-owned lexical answer to "what may a document write here", carried by value on canonical core's execution environment beside what resolves an import. The execution builds one at its root from the selection inputs it captured before any installation, middleware or document code ran, or from the one set of symbols a trusted host stated for its profile; a trusted canonical evaluation boundary replaces it for the subtree it evaluates. It answers with text and decides nothing: a component the symbols name is not a component anything may run |
 | run profile declarations | the component registrations a first-party package makes, held as plain values apart from the middleware, providers, activation and launchers its installer also arranges. The installer registers exactly those values and inspection reads exactly those values, so what a run installs and what the symbols report cannot drift |
-| Plugin | trusted code a distribution bundles or an operator selects with `--plugin`, installed once before an execution imports a root document. A plain structural value carrying a name and one optional `install`; what it contributes is the existing `ExecutionInstallation` members, and what it composes through are the three stable contextual APIs below. Selecting one runs its module and its code with this process's own authority: it is trusted, and it is not sandboxed |
+| Plugin | trusted code a distribution bundles or an operator selects with `--plugin`, installed once before an execution imports a root document. A plain structural value carrying a name and one optional `install`; what it contributes is the existing `ExecutionInstallation` members, and what it composes through are the three stable contextual APIs below. Selecting one runs its module, and selected Plugin code can execute whatever the surrounding runtime permits: it is trusted, and it is not sandboxed |
 | document envelope | the Markdown the `Document` Api composes for one run: the canonical `<Document />` placeholder wrapped by each Plugin's middleware, first Plugin outermost. Canonical core scans it once and splices the root's already parsed, already target-selected segments in at each placeholder, at their authored positions — so an unwrapped run is the run it always was, and an authored `<Document />` is an ordinary element that projects nothing |
 | active Plugins | the frozen ordered list of Plugin values installed for one command, published before the first `install()` runs so that every Plugin and every later consumer read the same list. It is a description of what is installed and grants nothing |
 | command declarations | every Markdown component one command declares, in one order: what the installed Plugins declared, then whatever the calling surface declares for itself. Built once per command so that an ordinary run, a nested `host="run"` child, inspection and `<Plan>`'s validation cannot describe four different vocabularies |
@@ -4456,6 +4456,12 @@ means a library package can publish its Plugin as its default while keeping
 every named export it already had — which is exactly what
 `@executablemd/code-review-agent` does.
 
+**Admission reads a value; it does not rebuild one.** What a host admits is the
+object the module exported, so a Plugin keeps members this boundary does not
+read and its `install` keeps the receiver its own module gave it — an
+implementation written as a method and reading `this` behaves here exactly as it
+does when its own package calls it.
+
 **What an install contributes** is one `PluginInstallation`, or `undefined` for
 a command the Plugin is not active in: exact Markdown components, structural
 syntax, the handler that expands it, and journal admissions. Those are the
@@ -4465,12 +4471,20 @@ Feature facilities are deliberately absent: a Plugin that needs repositories,
 sessions, GitHub or upgrade services imports that feature package's own `/api`.
 
 **Trusted, not sandboxed.** Loading a selected module runs its top level, and
-that happens before anything can look at what it exported. Installing one runs
-its code with the process's own authority. The engine refuses a *malformed*
+that happens before anything can look at what it exported. Selected Plugin code
+can execute whatever the surrounding runtime permits. The engine refuses a
+*malformed*
 Plugin — a module exporting no default, a default carrying no name, an `install`
 that is not callable, two selections claiming one name — and it refuses them
 before any `install()` runs and before a root document is read. It constrains a
 well-formed one not at all, and none of this is a permission boundary.
+
+**How a module is reached is the host's.** The shared command holds a loader the
+runtime entrypoint supplied and calls it once per specifier, exactly as it holds
+the standard-input reader: reaching a module means a dynamic import and host
+package resolution, and neither belongs in shared orchestration. All four
+entrypoints supply one adapter today because the four runtimes genuinely resolve
+and import the same way, and nothing anywhere asks which runtime is running.
 
 **Selection is explicit.** Nothing scans the repository, `node_modules`, a
 package manifest, the root document or the component search path. A package
@@ -4501,6 +4515,15 @@ makes a run child of `xmd test` the run profile while the test root is not.
 
 Each is a value-returning contextual Api: the terminal answers with what the
 execution would use on its own, and a Plugin wraps that answer.
+
+**The key is namespaced; the name is not.** They are published under
+`executablemd.core.plugin.document`, `executablemd.core.plugin.root-metadata`
+and `executablemd.core.plugin.active-plugins`, and a consumer still writes
+`Document`, `RootMetadata` and `ActivePlugins`. The key is the whole of what two
+loaded copies have to agree on, so it carries the owning package and the
+boundary rather than a bare word another package could also pick: an Api built
+with the name `Document` elsewhere addresses a different context, and cannot
+intercept, replace or observe this one.
 
 `Document` is the root's content. Its terminal answers with the exact text
 `"<Document />"` — the placeholder canonical core projects the already parsed
@@ -4545,13 +4568,17 @@ middleware must reject an incompatible retained history supplies an explicit
 
 ### Where a consumer imports from
 
-`@executablemd/core/api` publishes the Plugin contracts, the three contextual
-APIs and their direct operations, and the declaration constructors an
-installation's members are built from. `@executablemd/runtime/api` publishes the
-existing `Config` Api a Plugin reads timeouts and verbosity through. Both
-packages keep every root export they had; `/api` is additive, and it is where a
-consumer depending on the package imports from rather than reaching the engine's
-own surface or the host boundary.
+`@executablemd/core/api` publishes exactly the consumer surface: `Plugin`, the
+three contextual APIs and their direct operations, and the contract types the
+accepted interfaces are written in. `@executablemd/runtime/api` publishes the
+existing `Config` Api a Plugin reads timeouts and verbosity through.
+
+What a *host* does stays on `./host`. `Markdown({…})`, `sourceDigest` and
+`Structural({…})` construct what is declared to an execution, and
+`parsePluginValue` is how a distribution admits an untyped module export — all
+four are the trusted-infrastructure boundary, and a Plugin reaches them there
+because a Plugin is trusted code. Both packages keep every root export they had;
+`/api` is additive.
 
 ## The declared Markdown boundary
 

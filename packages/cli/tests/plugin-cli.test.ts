@@ -24,6 +24,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const FIXTURES = fileURLToPath(new URL("./fixtures/plugins/", import.meta.url));
+const REPOSITORY = fileURLToPath(new URL("../../../", import.meta.url));
 
 /** One fixture Plugin, named the way an operator names one: by path. */
 function fixture(name: string): string {
@@ -274,21 +275,42 @@ describe("PC4 — nothing is discovered, and nothing unselected runs", () => {
 });
 
 describe("PC5 — a Plugin reads configuration, never document properties", () => {
-  it("reads the verbosity the command line settled", function* () {
+  it("reads every Config value the command line settled", function* () {
     yield* useWorkspace({ "doc.md": DOCUMENT }, function* (dir) {
       const quiet = yield* runCli(["run", `--plugin=${fixture("configured.mjs")}`, "doc.md"], {
         cwd: dir,
       }).expect();
+      // Nothing configured is nothing, not a number somebody guessed.
       expect(quiet.stdout).toContain("verbose: false");
-      const loud = yield* runCli(
-        ["run", `--plugin=${fixture("configured.mjs")}`, "--verbose", "doc.md"],
+      expect(quiet.stdout).toContain("timeout: undefined");
+      expect(quiet.stdout).toContain("timeoutExec: undefined");
+      expect(quiet.stdout).toContain("timeoutFetch: undefined");
+
+      const configured = yield* runCli(
+        [
+          "run",
+          `--plugin=${fixture("configured.mjs")}`,
+          "--verbose",
+          "--timeout",
+          "30s",
+          "--timeout-exec",
+          "10s",
+          "--timeout-fetch",
+          "5s",
+          "doc.md",
+        ],
         { cwd: dir },
       ).expect();
-      expect(loud.stdout).toContain("verbose: true");
+      // Installed before the Plugin, so a Plugin reads the same typed answers
+      // every other consumer reads rather than a second reading of argv.
+      expect(configured.stdout).toContain("verbose: true");
+      expect(configured.stdout).toContain("timeout: 30000");
+      expect(configured.stdout).toContain("timeoutExec: 10000");
+      expect(configured.stdout).toContain("timeoutFetch: 5000");
     });
   });
 
-  it("leaves a root property spelled like a CLI option out of the configuration", function* () {
+  it("leaves root properties spelled like CLI options out of the configuration", function* () {
     yield* useWorkspace(
       {
         "doc.md": [
@@ -296,21 +318,32 @@ describe("PC5 — a Plugin reads configuration, never document properties", () =
           "props:",
           "  verbose:",
           "    type: string",
+          "  timeout:",
+          "    type: string",
           "---",
           "",
-          "prop is {props.verbose}",
+          "props are {props.verbose} and {props.timeout}",
           "",
         ].join("\n"),
       },
       function* (dir) {
         const run = yield* runCli(
-          ["run", `--plugin=${fixture("configured.mjs")}`, "doc.md", "--props-verbose", "yes"],
+          [
+            "run",
+            `--plugin=${fixture("configured.mjs")}`,
+            "doc.md",
+            "--props-verbose",
+            "yes",
+            "--props-timeout",
+            "99s",
+          ],
           { cwd: dir },
         ).expect();
-        expect(run.stdout).toContain("prop is yes");
-        // The document property is the document's. The Plugin read the typed
-        // configuration, which nobody set.
+        expect(run.stdout).toContain("props are yes and 99s");
+        // The document's properties are the document's. Nothing copied one into
+        // the configuration a Plugin, a component or the engine reads.
         expect(run.stdout).toContain("verbose: false");
+        expect(run.stdout).toContain("timeout: undefined");
       },
     );
   });
@@ -333,6 +366,164 @@ describe("PC6 — every surface of one command sees one vocabulary", () => {
       const run = yield* runCli(["syntax"], { cwd: dir }).expect();
       expect(run.stdout).not.toContain("Greeting");
       expect(run.stdout).toContain("Finding");
+    });
+  });
+});
+
+/**
+ * A package installed where the command runs, as an operator would have it.
+ *
+ * Written into the workspace's own `node_modules`, because that is what "from
+ * the invocation's working directory" means: the CLI resolves a bare specifier
+ * in the package environment the caller is standing in rather than in its own.
+ */
+function installedPackage(name: string, module: string): Record<string, string> {
+  return {
+    [`node_modules/${name}/package.json`]: `${JSON.stringify(
+      { name, type: "module", main: "index.mjs", exports: "./index.mjs" },
+      null,
+      2,
+    )}\n`,
+    [`node_modules/${name}/index.mjs`]: module,
+  };
+}
+
+/** A Plugin module that names itself something other than its package. */
+function renamedPlugin(pluginName: string, marker: string): string {
+  return [
+    `console.error("${marker}: loaded");`,
+    "",
+    "export default {",
+    `  name: "${pluginName}",`,
+    "  *install(request) {",
+    `    console.error(\`${marker}: installed for \${request.command}\`);`,
+    "    return undefined;",
+    "  },",
+    "};",
+    "",
+  ].join("\n");
+}
+
+describe("PC7 — a package is selected by name, from where the command runs", () => {
+  it("loads a bare package from the invocation directory, named by its own name", function* () {
+    yield* useWorkspace(
+      {
+        "doc.md": DOCUMENT,
+        ...installedPackage(
+          "@fixture/selected-package",
+          renamedPlugin("renamed-by-its-author", "selected-package"),
+        ),
+        // Installed beside it and named by nobody.
+        ...installedPackage(
+          "@fixture/unselected-package",
+          renamedPlugin("unselected", "unselected-package"),
+        ),
+      },
+      function* (dir) {
+        const run = yield* runCli(
+          [
+            "run",
+            "--plugin",
+            "@fixture/selected-package",
+            `--plugin=${fixture("active.mjs")}`,
+            "doc.md",
+          ],
+          { cwd: dir },
+        ).expect();
+        expect(run.stderr).toContain("selected-package: loaded");
+        expect(run.stderr).toContain("selected-package: installed for run");
+        // A Plugin's name is its own. The package it came from is how an
+        // operator found it, and nothing resolves one to the other.
+        expect(run.stdout).toContain(
+          "active: @executablemd/code-review-agent, renamed-by-its-author, active",
+        );
+        // And the package installed beside it did nothing at all: presence is
+        // not selection, and nothing here scans `node_modules`.
+        expect(run.stderr).not.toContain("unselected-package");
+      },
+    );
+  });
+
+  it("leaves an installed package inert until it is named", function* () {
+    yield* useWorkspace(
+      {
+        "doc.md": DOCUMENT,
+        ...installedPackage(
+          "@fixture/unselected-package",
+          renamedPlugin("unselected", "unselected-package"),
+        ),
+      },
+      function* (dir) {
+        const run = yield* runCli(["run", "doc.md"], { cwd: dir }).expect();
+        expect(run.stdout).toContain("document body");
+        expect(run.stderr).not.toContain("unselected-package");
+      },
+    );
+  });
+
+  it("loads a relative path inside the directory the command runs in", function* () {
+    yield* useWorkspace(
+      {
+        "doc.md": DOCUMENT,
+        "plugins/local.mjs": renamedPlugin("project-local", "project-local"),
+      },
+      function* (dir) {
+        const run = yield* runCli(["run", "--plugin", "./plugins/local.mjs", "doc.md"], {
+          cwd: dir,
+        }).expect();
+        expect(run.stderr).toContain("project-local: installed for run");
+        expect(run.stdout).toContain("document body");
+      },
+    );
+  });
+
+  it("loads a relative path inside this repository, written from its root", function* () {
+    // The repository is an ordinary directory to this boundary: an explicit
+    // path inside the checkout is valid because an operator wrote it, and it is
+    // still explicit — nothing discovered it.
+    const run = yield* runCli(
+      [
+        "run",
+        "--plugin",
+        "./packages/cli/tests/fixtures/plugins/external.mjs",
+        "--eval",
+        "document body\n",
+      ],
+      { cwd: REPOSITORY },
+    ).expect();
+    expect(run.stderr).toContain("external-fixture: installed for run");
+    expect(run.stdout).toContain("document body");
+  });
+});
+
+describe("PC8 — an Api built under the bare public name intercepts nothing", () => {
+  it("leaves the document unwrapped and the run unchanged", function* () {
+    yield* useWorkspace({ "doc.md": DOCUMENT }, function* (dir) {
+      const run = yield* runCli(["run", `--plugin=${fixture("impostor.mjs")}`, "doc.md"], {
+        cwd: dir,
+      }).expect();
+      expect(run.stdout).toContain("document body");
+      // The Api canonical core publishes is keyed by package and boundary, so a
+      // same-named one addresses a different context: there is nothing for it
+      // to be nearer than, and nothing for it to replace.
+      expect(run.stdout).not.toContain("INTERCEPTED");
+    });
+  });
+
+  it("still composes with a Plugin that reached the canonical key", function* () {
+    yield* useWorkspace({ "doc.md": DOCUMENT }, function* (dir) {
+      const run = yield* runCli(
+        [
+          "run",
+          `--plugin=${fixture("impostor.mjs")}`,
+          `--plugin=${fixture("wrapper-one.mjs")}`,
+          "doc.md",
+        ],
+        { cwd: dir },
+      ).expect();
+      expect(run.stdout).toContain("one open");
+      expect(run.stdout).toContain("document body");
+      expect(run.stdout).not.toContain("INTERCEPTED");
     });
   });
 });

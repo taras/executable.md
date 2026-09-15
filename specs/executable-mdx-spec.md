@@ -10070,13 +10070,20 @@ name are each refused before any `install()` runs and before the root document
 is read. Module top-level code has already executed by then — loading a selected
 module *is* running it — so what a refusal guarantees is that no Plugin
 installed anything and no document began. A Plugin is trusted executable code
-and is not sandboxed.
+and is not sandboxed: selected Plugin code can execute whatever the surrounding
+runtime permits.
 
 **Selection is explicit.** Nothing is discovered: not from the repository, the
 installed packages, a manifest, the root document or the component search path.
 Specifiers resolve from the invocation's captured initial working directory. A
 path inside the current repository is valid when the operator names it. V1
 performs no ambient or document-declared discovery.
+
+How a module is *reached* belongs to the host: the runtime entrypoint supplies
+the operation that loads one, and the shared command calls it once per
+specifier. A Plugin's name is its own — nothing resolves it to the package or
+module it came from, and two modules with different package names may carry
+Plugins named anything.
 
 **Lifetime.** The complete command runs inside the scope the Plugins installed
 into. A load or install failure, or a cancellation, unwinds the Plugins already
@@ -10086,9 +10093,21 @@ again in its own scope, with command `run`.
 
 #### The contextual APIs a Plugin composes through
 
-Three value-returning APIs, published from `@executablemd/core/api` under stable
-namespaced names so that a Plugin resolving its own copy of core composes with
-the canonical execution instead of installing a second, invisible stack.
+Three value-returning APIs, published from `@executablemd/core/api`, so that a
+Plugin resolving its own copy of core composes with the canonical execution
+instead of installing a second, invisible stack. `@executablemd/core/api`
+publishes `Plugin`, those three APIs and their direct operations, and the
+contract types the accepted interfaces are written in; the declaration
+constructors and the module admission a *host* uses stay on
+`@executablemd/core/host`.
+
+The three APIs are published under stable namespaced keys —
+`executablemd.core.plugin.document`, `executablemd.core.plugin.root-metadata`
+and `executablemd.core.plugin.active-plugins` — while the names a consumer
+writes stay `Document`, `RootMetadata` and `ActivePlugins`. The key is what two
+loaded copies have to agree on, so it carries the owning package and the
+boundary: an unrelated Api built with the bare name `Document` addresses a
+different context and cannot intercept, replace or observe this one.
 
 `Document` answers with the Markdown one run executes. Its terminal answer is
 the exact text `"<Document />"`. Middleware wraps that value — the first Plugin
@@ -13538,6 +13557,7 @@ Plugin is the run it always was.
 |---|------|--------|
 | PL1 | The value | `Plugin(input)` returns the value it was given and adds no identity, version or capability; a Plugin with no `install` installs nothing |
 | PL2 | Module admission | An object with a non-empty `name` and an absent or callable `install` is admitted; a non-object, a missing, empty or non-string name, and a non-callable `install` each refuse naming the specifier and the member that failed |
+| PL2a | Admission returns the value | What comes back is the admitted object itself: members outside the contract survive, `install` is the same function the module exported, and calling it through admission gives it the receiver its own module gave it |
 | PL3 | The flag grammar | Both spellings are read in occurrence order, only those tokens are removed, the scan stops at `--`, the original argv is retained frozen, and a missing or option-shaped value refuses before anything loads |
 | PL4 | The command a Plugin is told | Each public command reports its own name and the shorthand document form reports `run`; help, `--version` and the internal worker mode install no Plugin and load no module |
 | PL5 | Order composes | Bundled Plugins install first and explicit ones in occurrence order; the first installed is the outermost `Document` wrapper, and reversing the selection reverses the composition |
@@ -13547,8 +13567,11 @@ Plugin is the run it always was.
 | PL9 | Nothing is discovered | A module beside a selected one, and an installed package nobody named, are never loaded; a command that selected none loads none |
 | PL10 | Explicit paths and no remote | An explicit path inside the current repository loads; a remote specifier refuses without fetching |
 | PL11 | Lifetime | A Plugin that fails to install unwinds the Plugins before it, reads no root, starts no document, and leaves nothing a document would have written |
-| PL12 | Configuration, not properties | A Plugin reads the timeouts and verbosity the command line settled through `Config`; a root property spelled like a CLI option reaches document props and changes none of them |
+| PL12 | Configuration, not properties | A Plugin reads `timeout`, `timeoutExec`, `timeoutFetch` and `verbose` as the command line settled them, and reads them as absent when it settled none; root properties spelled like those options reach document props and change none of them |
 | PL13 | Product parity | A source checkout, the emitted npm bin and the compiled binary each load the same external ESM module, run its top level, and run its install |
+| PL14 | The key, not the name | An Api built under the bare names `Document`, `RootMetadata` or `ActivePlugins` composes nothing and observes nothing; one built under the published key composes, including from a second loaded copy inside the compiled binary |
+| PL15 | Selection by package | A bare specifier resolves in the invocation directory's package environment, and the Plugin's own name is what identifies it — not the package or module it came from |
+| PL16 | Cancellation | A command halted while a Plugin is still installing releases what the Plugins before it acquired, installs nothing after it, and stays a cancellation; a scope whose body and teardown both fail reports exactly what it reported before Plugins existed |
 
 ### Tier RC — Root composition (§5.4, §7 Plugins)
 
