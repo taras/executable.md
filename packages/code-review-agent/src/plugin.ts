@@ -33,16 +33,31 @@ import { reviewComponentDeclarations, useReviewComponents } from "./review-compo
 const EXECUTING_ACTIONS: ReadonlySet<string> = new Set(["start", "resume", "fork"]);
 
 /**
- * The `xmd workflow` options that take a separated value.
+ * Every `xmd workflow` option that takes a separated value.
  *
  * A value is not an action however much it reads like one, so the scan below
- * steps over the token after each of these. `--plugin` is the one that makes
- * this necessary rather than merely careful: `xmd workflow --plugin start list`
- * selects a module called `start` and runs the management action `list`, and a
- * scan that read the first recognized word would have run the review graph for
- * a command that executes no document.
+ * steps over the token after each of these. The list is every non-boolean field
+ * of the command's own grammar (`workflowConfig` in
+ * `packages/cli/src/workflow.ts`) plus the two options read out of argv before
+ * that grammar exists: `--plugin`, and the aggregate and generated root
+ * properties. The boolean switches — `--verbose`/`-V`, `--raw`,
+ * `--secret-detection`, `--no-secret-detection`, `--json`, `--forkable` — take
+ * no value and are skipped as the options they are.
+ *
+ * It has to be written out here rather than read from the command, because the
+ * CLI depends on this package and not the other way round. What makes the
+ * omission of one visible is the rule it breaks: `xmd workflow --output start
+ * export run-1` exports a run, and a scan that read `start` as the action would
+ * have installed the review graph for a command that executes no document.
  */
-const VALUED_OPTIONS: ReadonlySet<string> = new Set(["--plugin", "--id", "--at", "--artifact"]);
+const VALUED_OPTIONS: ReadonlySet<string> = new Set([
+  "--plugin",
+  "--id",
+  "--at",
+  "--status",
+  "--artifact",
+  "--output",
+]);
 
 /** The generated root-property options, which take a separated value too. */
 const PROPERTY_OPTION = "--props";

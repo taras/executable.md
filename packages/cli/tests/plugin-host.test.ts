@@ -436,25 +436,42 @@ describe("PH6 — the bundled review Plugin claims the commands that run a revie
   });
 
   it("reads an option's value as a value, never as the action", function* () {
-    // The command line that makes this necessary: a module named `start`, and
-    // the management action `list`. Reading the first recognized word would
-    // have installed the review graph for a command that executes no document.
-    expect(yield* declaredFor("workflow", ["workflow", "--plugin", "start", "list"])).toEqual([]);
-    expect(yield* declaredFor("workflow", ["workflow", "--plugin=./start.mjs", "list"])).toEqual(
-      [],
-    );
-    expect(yield* declaredFor("workflow", ["workflow", "--id", "start", "list"])).toEqual([]);
-    expect(yield* declaredFor("workflow", ["workflow", "--props-name", "start", "list"])).toEqual(
-      [],
-    );
+    // Every option the command defines that takes a separated value, each with
+    // an executing action's own name as that value and a management action
+    // after it. Reading the first recognized word would have installed the
+    // review graph for a command that executes no document.
+    const valued: readonly (readonly [string, string, readonly string[]])[] = [
+      ["--plugin", "start", ["workflow", "--plugin", "start", "list"]],
+      ["--output", "start", ["workflow", "--output", "start", "export", "run-1"]],
+      ["--status", "resume", ["workflow", "--status", "resume", "list"]],
+      ["--id", "fork", ["workflow", "--id", "fork", "list"]],
+      ["--at", "start", ["workflow", "--at", "start", "history", "run-1"]],
+      ["--artifact", "start", ["workflow", "--artifact", "start", "status"]],
+      ["--props", "start", ["workflow", "--props", "start", "list"]],
+      ["--props-name", "start", ["workflow", "--props-name", "start", "list"]],
+    ];
+    for (const [option, value, args] of valued) {
+      const declared = yield* declaredFor("workflow", args);
+      expect(`${option}=${value}: ${declared.length}`).toBe(`${option}=${value}: 0`);
+    }
+
+    // The assigned spelling is one token and was never a hazard, but a scan
+    // that special-cased the separated form would have found this one.
+    expect(
+      yield* declaredFor("workflow", ["workflow", "--output=start.xmd", "export", "r"]),
+    ).toEqual([]);
+
     // And the same reading still finds a real action written after an option.
-    expect(
-      (yield* declaredFor("workflow", ["workflow", "--plugin", "list", "start", "flow.md"])).length,
-    ).toBe(35);
-    expect(
-      (yield* declaredFor("workflow", ["workflow", "--id", "release-1", "start", "flow.md"]))
-        .length,
-    ).toBe(35);
+    const executing: readonly (readonly string[])[] = [
+      ["workflow", "--plugin", "list", "start", "flow.md"],
+      ["workflow", "--id", "release-1", "start", "flow.md"],
+      ["workflow", "--at", "event-4", "fork", "run-1", "flow.md"],
+      ["workflow", "--verbose", "resume", "run-1"],
+    ];
+    for (const args of executing) {
+      const declared = yield* declaredFor("workflow", args);
+      expect(`${args.join(" ")}: ${declared.length}`).toBe(`${args.join(" ")}: 35`);
+    }
   });
 
   it("registers the six reserved names where it claims the graph", function* () {
