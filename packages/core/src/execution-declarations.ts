@@ -362,6 +362,38 @@ export function* admitExecutionDeclarations(
 }
 
 /**
+ * Which half of one installation's structural pair is missing, if either is.
+ *
+ * A declaration and the handler that expands it are one installation. Either
+ * half alone describes an environment that could admit syntax nothing can
+ * expand, and this is the one place that decides so — the execution below holds
+ * every installation to it before the root document is read, and a host
+ * assembling installations of its own holds each one to it before any command
+ * can advertise, validate or run the vocabulary.
+ *
+ * It answers with which half is missing rather than with a sentence, because
+ * the two callers are answering different readers: an execution refuses "an
+ * installation", and a host naming a Plugin says which Plugin and what a
+ * command would otherwise have done with it.
+ */
+export type IncompleteStructural = "declarations-without-handler" | "handler-without-declarations";
+
+export function incompleteStructural(
+  installation: RetainedInstallation,
+): IncompleteStructural | undefined {
+  const declares = installation.declarations.some(
+    (declaration) => declaration.kind === "structural",
+  );
+  if (declares && installation.expand === undefined) {
+    return "declarations-without-handler";
+  }
+  if (!declares && installation.expand !== undefined) {
+    return "handler-without-declarations";
+  }
+  return undefined;
+}
+
+/**
  * Admit what this execution's installations declared, with the handlers they
  * supplied.
  *
@@ -410,16 +442,16 @@ function* admit(
   const admittedStructural = yield* admitStructural(structural, registry, admittedMarkdown);
 
   if (installed) {
-    for (const [ordinal, installation] of installations.entries()) {
-      const declares = structural.some((owned) => owned.installation === ordinal);
-      if (declares && installation.expand === undefined) {
+    for (const installation of installations) {
+      const incomplete = incompleteStructural(installation);
+      if (incomplete === "declarations-without-handler") {
         throw refuse(
           "an installation declared structural syntax and supplied no expansion handler. The " +
             "installation that names a construct is the one that expands it, so a declaration " +
             "without a handler is syntax this execution could admit and never expand.",
         );
       }
-      if (!declares && installation.expand !== undefined) {
+      if (incomplete === "handler-without-declarations") {
         throw refuse(
           "an installation supplied a structural expansion handler and declared no structural " +
             "syntax. A handler expands the constructs its own installation declared, so one " +

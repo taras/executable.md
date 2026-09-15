@@ -13567,8 +13567,10 @@ Plugin is the run it always was.
 | PL6 | One name, one Plugin | Two selections claiming one Plugin name refuse before the first `install()` runs, whichever modules they came from |
 | PL7 | The active list | Every Plugin, including the first, reads the complete frozen list, and a snapshot is not the installed array |
 | PL8 | Declarative contribution | `components`, `structural` and `admissions` cross as one `ExecutionInstallation`; returning `undefined` contributes none; two Plugins declaring one component name refuse at admission |
+| PL8a | The pair is the Plugin's | A Plugin that declares structural syntax and supplies no `expand`, or supplies one and declares none, is refused where the assembly is built — before `xmd syntax` describes the construct, before Plan validation accepts it and before a run expands it; the Plugins installed before it are unwound and the one after it never installs |
 | PL9 | Nothing is discovered | A module beside a selected one, and an installed package nobody named, are never loaded; a command that selected none loads none |
 | PL10 | Explicit paths and no remote | An explicit path inside the current repository loads; a remote specifier refuses without fetching |
+| PL10a | A path is not a scheme | A Windows drive path classifies as a filesystem path on every host, not as a remote URL; relative paths, POSIX absolute paths, UNC shares, `file:` URLs, bare packages and real remote schemes each keep the answer they had |
 | PL11 | Lifetime | A Plugin that fails to install unwinds the Plugins before it, reads no root, starts no document, and leaves nothing a document would have written |
 | PL12 | Configuration, not properties | A Plugin reads `timeout`, `timeoutExec`, `timeoutFetch` and `verbose` as the command line settled them, and reads them as absent when it settled none; root properties spelled like those options reach document props and change none of them |
 | PL13 | Product parity | A source checkout, the emitted npm bin and the compiled binary each load the same external ESM module, run its top level, and run its install |

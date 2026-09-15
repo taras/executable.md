@@ -19,7 +19,12 @@ import type { Operation } from "effection";
 
 import { ActivePlugins } from "@executablemd/core/api";
 import type { Plugin, PluginInstallRequest } from "@executablemd/core/api";
-import type { ExecutionDeclaration, ExecutionInstallation } from "@executablemd/core/host";
+import { incompleteStructural } from "@executablemd/core/host";
+import type {
+  ExecutionDeclaration,
+  ExecutionInstallation,
+  IncompleteStructural,
+} from "@executablemd/core/host";
 
 /**
  * What one command's Plugins contributed, retained for every consumer of it.
@@ -64,6 +69,33 @@ export const NO_PLUGINS: CommandPlugins = Object.freeze({
   declarations: Object.freeze([]),
   args: Object.freeze([]),
 });
+
+/**
+ * What a Plugin whose structural half is incomplete is refused with.
+ *
+ * A structural declaration and the handler that expands it are one
+ * installation, and canonical execution refuses either half alone before it
+ * reads a root document. The refusal has to happen *here* as well, because the
+ * assembly this function retains is what `xmd syntax` describes and what
+ * `<Plan>` validates against — and both of those read declarations without
+ * handlers, by design, so neither could ever notice. A Plugin that got past
+ * this point would have its construct advertised to a writer and accepted in a
+ * Plan, and refused only when a run finally tried to expand it.
+ */
+function incomplete(name: string, half: IncompleteStructural): Error {
+  if (half === "declarations-without-handler") {
+    return new Error(
+      `the Plugin ${name} declared structural syntax and supplied no expansion handler. The ` +
+        "installation that names a construct is the one that expands it, so a command would " +
+        "describe syntax in its symbols, accept it in a Plan, and refuse it at the run.",
+    );
+  }
+  return new Error(
+    `the Plugin ${name} supplied a structural expansion handler and declared no structural ` +
+      "syntax. A handler expands the constructs its own installation declared, so one with no " +
+      "declarations answers for nothing a document can write.",
+  );
+}
 
 /** What two selections claiming one Plugin name are refused with. */
 function duplicate(name: string): Error {
@@ -123,6 +155,17 @@ export function* installPlugins(
     const admissions = Object.freeze([...(installed.admissions ?? [])]);
     const expand = installed.expand;
     const declarations = [...components, ...structural];
+    // Held to the pair rule the execution boundary owns, and held here, because
+    // this is where the assembly every other surface reads is made. The first
+    // Plugin to fail it stops the command with the Plugins before it already
+    // unwound and no root document read.
+    const half = incompleteStructural({
+      declarations,
+      ...(expand === undefined ? {} : { expand: (call) => expand.call(installed, call) }),
+    });
+    if (half !== undefined) {
+      throw incomplete(plugin.name, half);
+    }
     declared.push(...declarations);
     if (declarations.length === 0 && admissions.length === 0 && expand === undefined) {
       continue;

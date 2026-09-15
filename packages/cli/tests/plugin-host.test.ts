@@ -641,3 +641,136 @@ describe("PH7 — a structural-only Plugin reaches every consumer of the catalog
     );
   });
 });
+
+describe("PH8 — an incomplete structural half never reaches a command", () => {
+  const ORIGIN = "tier-ph/incomplete";
+  const NO_PROPS = { type: "object", properties: {}, additionalProperties: false };
+
+  const CONSTRUCT = Structural({
+    name: "Orphan",
+    origin: ORIGIN,
+    forms: ["paired"],
+    props: NO_PROPS,
+    syntax: ["<Orphan><OrphanLine>…</OrphanLine></Orphan>"],
+    description: "A construct whose Plugin supplied no handler.",
+    context: "What it would have framed.",
+    parent: null,
+  });
+
+  const REGION = Structural({
+    name: "OrphanLine",
+    origin: ORIGIN,
+    forms: ["paired"],
+    props: NO_PROPS,
+    syntax: ["<OrphanLine>…</OrphanLine>"],
+    description: "One line of an orphan.",
+    context: "The line's own content.",
+    parent: "Orphan",
+  });
+
+  /** Declares structural syntax and supplies no handler for it. */
+  const declarationsOnly: Plugin = Plugin({
+    name: "declarations-only",
+    // deno-lint-ignore require-yield
+    *install(): Operation<PluginInstallation | undefined> {
+      return { structural: [CONSTRUCT, REGION] };
+    },
+  });
+
+  /** Supplies a handler and declares no structural syntax for it to expand. */
+  const handlerOnly: Plugin = Plugin({
+    name: "handler-only",
+    // deno-lint-ignore require-yield
+    *install(): Operation<PluginInstallation | undefined> {
+      return {
+        // deno-lint-ignore require-yield
+        *expand(): Operation<void> {},
+      };
+    },
+  });
+
+  it("refuses structural declarations with no handler, at installation", function* () {
+    const message = yield* refusal(() =>
+      scoped(function* () {
+        yield* installPlugins([declarationsOnly], RUN);
+      }),
+    );
+    expect(message).toContain("declarations-only");
+    expect(message).toContain("supplied no expansion handler");
+  });
+
+  it("refuses a handler with no structural declarations, at installation", function* () {
+    const message = yield* refusal(() =>
+      scoped(function* () {
+        yield* installPlugins([handlerOnly], RUN);
+      }),
+    );
+    expect(message).toContain("handler-only");
+    expect(message).toContain("declared no structural syntax");
+  });
+
+  it("stops before xmd syntax can advertise the construct", function* () {
+    // The defect this closes: the assembly retained a flattened declaration
+    // list, `inspectSyntax` reads declarations without handlers by design, and
+    // the construct was therefore described to a writer — and refused only when
+    // a run finally tried to expand it.
+    const described = yield* refusal(() =>
+      scoped(function* () {
+        const assembly = yield* installPlugins([declarationsOnly], RUN);
+        return yield* syntaxSymbols([], assembly);
+      }),
+    );
+    expect(described).toContain("supplied no expansion handler");
+
+    // And with no Plugin installed at all, nothing describes it either — so the
+    // row above is about the refusal rather than about an empty catalog.
+    const catalog = yield* scoped(function* () {
+      return yield* syntaxSymbols([], NO_PLUGINS);
+    });
+    const named = catalog.categories.flatMap((category) =>
+      category.entries.map((entry) => entry.name),
+    );
+    expect(named).not.toContain("Orphan");
+  });
+
+  it("stops before Plan validation can accept the construct", function* () {
+    const validated = yield* refusal(() =>
+      scoped(function* () {
+        const assembly = yield* installPlugins([declarationsOnly], RUN);
+        const validate = structuralValidation([], [], assembly);
+        return yield* validate("<Orphan>\n  <OrphanLine>x</OrphanLine>\n</Orphan>\n");
+      }),
+    );
+    expect(validated).toContain("supplied no expansion handler");
+  });
+
+  it("unwinds the Plugins installed before the incomplete one", function* () {
+    const events: string[] = [];
+    const message = yield* refusal(() =>
+      scoped(function* () {
+        yield* installPlugins(
+          [
+            Plugin({
+              name: "first",
+              *install(): Operation<PluginInstallation | undefined> {
+                yield* ensure(function* () {
+                  events.push("released");
+                });
+                events.push("installed");
+                return undefined;
+              },
+            }),
+            declarationsOnly,
+            recording("never-reached", events),
+          ],
+          RUN,
+        );
+      }),
+    );
+    expect(message).toContain("supplied no expansion handler");
+    // Installation order and first-failure behaviour are unchanged: the Plugin
+    // after the incomplete one never installed, and the one before it released
+    // what it held.
+    expect(events).toEqual(["installed", "released"]);
+  });
+});

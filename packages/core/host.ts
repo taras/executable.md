@@ -268,6 +268,18 @@ export type {
 // export carries both — a host writes `Structural({…})` and types with the same
 // name.
 export { ExecutionDeclarationError, Structural } from "./src/execution-declarations.ts";
+/**
+ * Which half of one installation's structural pair is missing — see
+ * `src/execution-declarations.ts`.
+ *
+ * Exported because a host that assembles installations of its own — from
+ * Plugins, say — must hold each one to the same rule this boundary holds an
+ * execution to, and *before* the assembly reaches anything that describes or
+ * validates the vocabulary. Two copies of that rule would be two rules, and the
+ * one that ran earlier would be the one nobody tested.
+ */
+export { incompleteStructural } from "./src/execution-declarations.ts";
+export type { IncompleteStructural } from "./src/execution-declarations.ts";
 export type {
   ExecutionDeclaration,
   ExpansionChunk,

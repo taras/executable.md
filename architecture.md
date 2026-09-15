@@ -4792,6 +4792,17 @@ directly inside it — syntax the engine has no branch for — on the same
 list. Those declarations are the one source selection, inspection and
 non-executing validation read.
 
+**A pair is one installation, and a host is held to that too.** An installation
+that declares structural syntax supplies the handler that expands it, and one
+that supplies a handler declares syntax for it. Canonical execution refuses
+either half alone before it reads a root document — and a host assembling
+installations of its own, from Plugins, is held to the same rule where it builds
+the assembly. That second place is not a convenience: `xmd syntax` and
+non-executing validation read declarations *without* handlers, by design, so a
+half-installation that reached them would be advertised to a writer and accepted
+in a Plan, and refused only when a run finally tried to expand it. One rule,
+`incompleteStructural`, decides both.
+
 **A pair is declared, never assembled.** A structural declaration states its
 name, origin, accepted forms, props schema, authored syntax examples,
 description, what its content means, and whether it is the construct itself
