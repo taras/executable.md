@@ -165,9 +165,6 @@ importers:
       '@executablemd/acp':
         specifier: workspace:*
         version: link:../acp
-      '@executablemd/code-review-agent':
-        specifier: workspace:*
-        version: link:../code-review-agent
       '@executablemd/core':
         specifier: workspace:*
         version: link:../core
@@ -204,6 +201,10 @@ importers:
       zod:
         specifier: ^4.3.6
         version: 4.3.6
+    devDependencies:
+      '@executablemd/code-review-agent':
+        specifier: workspace:*
+        version: link:../code-review-agent
 
   packages/code-review-agent:
     dependencies:
