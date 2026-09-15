@@ -44,11 +44,31 @@ export const COMPILE_FLAGS = [
 ];
 
 /**
- * Packages embedded whole, because the binary runs their Markdown rather than
- * importing it. Nothing discovers these: a package is here because a command
- * executes documents from it, which is a decision rather than a file layout.
+ * A whole package the binary executes Markdown out of.
+ *
+ * Empty, and that is a decision rather than an omission: the binary contains
+ * the program `xmd` is, and a Plugin is not part of it. The code-review graph
+ * was embedded here while it was bundled; now that it is selected with
+ * `--plugin` like any other Plugin, it reads its own assets from wherever the
+ * operator installed it — a source checkout, an npm install, or the path they
+ * named — and the binary carries none of them.
+ *
+ * An entry here is for a package the binary *imports*. Adding one for a package
+ * nothing in the binary imports would embed bytes no code can reach.
  */
-export const EMBEDDED_PACKAGES = ["packages/code-review-agent"];
+export const EMBEDDED_PACKAGES: readonly string[] = [];
+
+/**
+ * Packages whose assets the binary deliberately does not carry.
+ *
+ * `scripts/tests/packaged-document.test.ts` walks the repository for packages
+ * that ship documents and holds the lists above to what it finds, which is what
+ * keeps a new asset from being forgotten. A package outside the binary would
+ * fail that walk for the right reason and the wrong subject, so it is named
+ * here — and the same test checks the claim rather than trusting it, by proving
+ * no CLI production module imports one.
+ */
+export const UNEMBEDDED_PACKAGES: readonly string[] = ["packages/code-review-agent"];
 
 /**
  * Each package's `src/documents/`, embedded whole.

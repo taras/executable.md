@@ -21,6 +21,7 @@ import {
   RootMetadata,
   rootMetadata,
 } from "../api.ts";
+import type { DocumentApi } from "../api.ts";
 // The placeholder text is canonical core's own, not part of what a Plugin
 // imports: a wrapper receives it from `next()` rather than naming it.
 import { DOCUMENT_PLACEHOLDER } from "../src/plugin-apis.ts";
@@ -37,8 +38,16 @@ describe("PA1 — Document composes an envelope around one terminal", () => {
 
   it("runs the first wrapper outermost and the terminal innermost", function* () {
     const composed = yield* scoped(function* (): Operation<string> {
-      yield* Document.around({ document: (_args, next) => `[first ${next()} first]` });
-      yield* Document.around({ document: (_args, next) => `(second ${next()} second)` });
+      yield* Document.around({
+        *document(_args, next) {
+          return `[first ${yield* next()} first]`;
+        },
+      });
+      yield* Document.around({
+        *document(_args, next) {
+          return `(second ${yield* next()} second)`;
+        },
+      });
       return yield* document;
     });
     expect(composed).toBe("[first (second <Document /> second) first]");
@@ -46,7 +55,11 @@ describe("PA1 — Document composes an envelope around one terminal", () => {
 
   it("lets a wrapper delegate more than once", function* () {
     const composed = yield* scoped(function* (): Operation<string> {
-      yield* Document.around({ document: (_args, next) => `${next()}\n\n${next()}` });
+      yield* Document.around({
+        *document(_args, next) {
+          return `${yield* next()}\n\n${yield* next()}`;
+        },
+      });
       return yield* document;
     });
     expect(composed).toBe("<Document />\n\n<Document />");
@@ -70,16 +83,27 @@ describe("PA1 — Document composes an envelope around one terminal", () => {
 
 describe("PA1b — the key is what two copies agree on, and it is namespaced", () => {
   /** An Api built under the bare public name, the way another package might. */
-  function impostor(name: string): Api<{ readonly document: string }> {
-    return createApi<{ readonly document: string }>(name, { document: "impostor terminal" });
+  function impostor(name: string): Api<DocumentApi> {
+    return createApi<DocumentApi>(name, {
+      // deno-lint-ignore require-yield
+      *document(): Operation<string> {
+        return "impostor terminal";
+      },
+    });
   }
 
   it("cannot be intercepted by an Api built with the bare public name", function* () {
     const composed = yield* scoped(function* (): Operation<string> {
       // Everything an interceptor could reach for: the public name of the Api,
       // the name of its one member, and middleware that never delegates.
-      yield* impostor("Document").around({ document: () => "intercepted" });
-      yield* impostor("document").around({ document: () => "intercepted" });
+      const intercept = {
+        // deno-lint-ignore require-yield
+        *document(): Operation<string> {
+          return "intercepted";
+        },
+      };
+      yield* impostor("Document").around(intercept);
+      yield* impostor("document").around(intercept);
       return yield* document;
     });
     // The canonical answer, untouched. An Api keyed by the bare name addresses
@@ -94,11 +118,17 @@ describe("PA1b — the key is what two copies agree on, and it is namespaced", (
     // compose — which is what makes the key rather than the module instance the
     // thing the two copies share.
     const composed = yield* scoped(function* (): Operation<string> {
-      const loadedCopy = createApi<{ readonly document: string }>(
-        "executablemd.core.plugin.document",
-        { document: "a second copy's terminal" },
-      );
-      yield* loadedCopy.around({ document: (_args, next) => `wrapped ${next()}` });
+      const loadedCopy = createApi<DocumentApi>("executablemd.core.plugin.document", {
+        // deno-lint-ignore require-yield
+        *document(): Operation<string> {
+          return "a second copy's terminal";
+        },
+      });
+      yield* loadedCopy.around({
+        *document(_args, next) {
+          return `wrapped ${yield* next()}`;
+        },
+      });
       return yield* document;
     });
     expect(composed).toBe(`wrapped ${DOCUMENT_PLACEHOLDER}`);

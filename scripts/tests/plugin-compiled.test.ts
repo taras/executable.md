@@ -45,6 +45,14 @@ function* runBinary(args: readonly string[], cwd: string): Operation<ProcessResu
   return attempt.value;
 }
 
+/** Every component name a symbols payload describes. */
+function describedNames(stdout: string): string[] {
+  const catalog = JSON.parse(stdout);
+  return catalog.categories.flatMap((category: { entries: { name?: string }[] }) =>
+    category.entries.map((entry) => entry.name),
+  );
+}
+
 /** A directory that is not the checkout, holding one trivial document. */
 function* useElsewhere(body: (dir: string) => Operation<void>): Operation<void> {
   const dir = yield* until(mkdtemp(path.join(tmpdir(), "xmd-compiled-plugin-")));
@@ -74,52 +82,46 @@ describe("compiled xmd", { sanitizeOps: false, sanitizeResources: false }, () =>
     });
   });
 
-  it("still carries its bundled review graph beside a selected Plugin", function* () {
+  it("describes only the engine's own language when nothing was selected", function* () {
     if (!(yield* exists(BINARY))) {
       throw new Error(`${BINARY} is missing — run \`deno task build\` before this case`);
     }
+    // The binary bundles no Plugin and embeds no Plugin's assets. What it
+    // describes with no `--plugin` is the language `xmd` itself is — which is
+    // also what makes the row below a claim about selection rather than about
+    // what happened to be compiled in.
     yield* useElsewhere(function* (dir) {
+      const run = yield* runBinary(["syntax", "--json", "--include", dir], dir);
+      if (run.code !== 0) {
+        throw new Error(`the compiled binary exited ${run.code}\n${run.stderr}`);
+      }
+      const names = describedNames(run.stdout);
+      expect(names).toContain("Syntax");
+      expect(names).not.toContain("Finding");
+      expect(names).not.toContain("ReviewContext");
+    });
+  });
+
+  it("gains the review graph from a Plugin the operator named by path", function* () {
+    if (!(yield* exists(BINARY))) {
+      throw new Error(`${BINARY} is missing — run \`deno task build\` before this case`);
+    }
+    // No `node_modules` here and nothing embedded, so the package is reached
+    // the way the accepted contract says it is: an explicit filesystem path.
+    // The binary carries its own copy of core and the package resolves the
+    // checkout's, which is the loaded-copy case under real conditions.
+    yield* useElsewhere(function* (dir) {
+      const review = path.join(ROOT, "packages/code-review-agent/mod.ts");
       const run = yield* runBinary(
-        ["syntax", "--json", `--plugin=${FIXTURE}`, "--include", dir],
+        ["syntax", "--json", `--plugin=${review}`, "--include", dir],
         dir,
       );
       if (run.code !== 0) {
         throw new Error(`the compiled binary exited ${run.code}\n${run.stderr}`);
       }
-      expect(run.stderr).toContain("external-fixture: installed for syntax");
-      const catalog = JSON.parse(run.stdout);
-      const names = catalog.categories.flatMap((category: { entries: { name?: string }[] }) =>
-        category.entries.map((entry) => entry.name),
-      );
-      // The embedded assets the bundled Plugin declares are still there: a
-      // build that shipped the code without them would resolve the name and
-      // find nothing behind it.
+      const names = describedNames(run.stdout);
       expect(names).toContain("Finding");
-    });
-  });
-
-  it("composes with a Plugin that loaded its own copy of core", function* () {
-    if (!(yield* exists(BINARY))) {
-      throw new Error(`${BINARY} is missing — run \`deno task build\` before this case`);
-    }
-    // The binary carries its own copy of `@executablemd/core`; this fixture
-    // resolves the checkout's, so the `Document` Api the Plugin composes and
-    // the one canonical execution reads are two module instances. They compose
-    // because the Api's name is stable and the values are plain structural
-    // data — a brand, a symbol or an `instanceof` check here would silently
-    // drop everything the Plugin installed, and the run would render the
-    // document with no wrapper at all rather than failing.
-    yield* useElsewhere(function* (dir) {
-      const wrapper = path.join(ROOT, "packages/cli/tests/fixtures/plugins/wrapper-one.mjs");
-      const run = yield* runBinary(["run", `--plugin=${wrapper}`, "doc.md"], dir);
-      if (run.code !== 0) {
-        throw new Error(`the compiled binary exited ${run.code}\n${run.stderr}`);
-      }
-      expect(run.stdout).toContain("one open");
-      expect(run.stdout).toContain("document body");
-      expect(run.stdout).toContain("one close");
-      expect(run.stdout.indexOf("one open")).toBeLessThan(run.stdout.indexOf("document body"));
-      expect(run.stdout.indexOf("document body")).toBeLessThan(run.stdout.indexOf("one close"));
+      expect(names).toContain("ReviewContext");
     });
   });
 

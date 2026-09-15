@@ -134,7 +134,6 @@ import {
   renderSyntaxMarkdown,
   syntaxSymbols,
 } from "./syntax.ts";
-import { BUNDLED_PLUGINS } from "./bundled-plugins.ts";
 import { loadPlugins } from "./plugin-loader.ts";
 import type { PluginModuleLoader } from "./plugin-loader.ts";
 import { installPlugins, NO_PLUGINS } from "./plugin-host.ts";
@@ -2323,7 +2322,8 @@ const PLUGIN_HELP = [
   "  --plugin <specifier>  load a Plugin before the command runs (repeatable)",
   "",
   "A Plugin is a package or a file this invocation names. They install in the",
-  "order they are written, after the ones this build bundles.",
+  "order they are written, and that order is the whole order: xmd ships no",
+  "Plugin and installs none unless one is named.",
   "",
   "A selected Plugin is trusted executable code, not a sandboxed extension:",
   "loading one runs its module, and selected Plugin code can execute whatever",
@@ -2979,6 +2979,11 @@ export function* runXmd(
  * through the list unwinds the Plugins before it without ever reading a root
  * document. `undefined` is an invocation that installs none — help, the
  * version, and the internal worker mode.
+ *
+ * What a command line selected is the complete list, in the order it was
+ * written. XMD bundles none and defaults to none: a command that named no
+ * `--plugin` installs nothing, and a package that happens to be installed stays
+ * inert until it is named.
  */
 function* withPlugins(
   selection: PluginSelection | undefined,
@@ -2995,7 +3000,7 @@ function* withPlugins(
       // package specifier both resolve where the caller is standing.
       const directory = yield* cwd();
       const loaded = yield* loadPlugins(selection.specifiers, directory, loadPluginModule);
-      plugins = yield* installPlugins([...BUNDLED_PLUGINS, ...loaded], {
+      plugins = yield* installPlugins(loaded, {
         command: selection.command,
         args: selection.args,
       });

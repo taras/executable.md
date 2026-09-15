@@ -139,7 +139,7 @@ and categorization rather than clarify them, so both stay exactly as written.
 | execution environment | the private bundle of services and records one execution supplies while its document expands: what resolves a name, what routes it to a retained implementation, what the execution declared, and the records it keeps about its own identities, forms, vocabulary and source output. The execution builds it from what it captured and admitted, owns it, and passes it by value through canonical expansion — never through a context, because a context resolves by name and a name is not a secret. An expansion driven directly is handed none at all, which is what "nothing is installed here" means; there is no partial one. Its shape is an architecture and product boundary |
 | syntax reference | the engine-owned lexical answer to "what may a document write here", carried by value on canonical core's execution environment beside what resolves an import. The execution builds one at its root from the selection inputs it captured before any installation, middleware or document code ran, or from the one set of symbols a trusted host stated for its profile; a trusted canonical evaluation boundary replaces it for the subtree it evaluates. It answers with text and decides nothing: a component the symbols name is not a component anything may run |
 | run profile declarations | the component registrations a first-party package makes, held as plain values apart from the middleware, providers, activation and launchers its installer also arranges. The installer registers exactly those values and inspection reads exactly those values, so what a run installs and what the symbols report cannot drift |
-| Plugin | trusted code a distribution bundles or an operator selects with `--plugin`, installed once before an execution imports a root document. A plain structural value carrying a name and one optional `install`; what it contributes is the existing `ExecutionInstallation` members, and what it composes through are the three stable contextual APIs below. Selecting one runs its module, and selected Plugin code can execute whatever the surrounding runtime permits: it is trusted, and it is not sandboxed |
+| Plugin | trusted code an operator selects with `--plugin`, installed once before an execution imports a root document. XMD ships none and defaults to none, so a command that selects no Plugin installs none and a package that happens to be installed stays inert until it is named. A plain structural value carrying a name and one optional `install`; what it contributes is the existing `ExecutionInstallation` members, and what it composes through are the three stable contextual APIs below. Selecting one runs its module, and selected Plugin code can execute whatever the surrounding runtime permits: it is trusted, and it is not sandboxed |
 | document envelope | the Markdown the `Document` Api composes for one run: the canonical `<Document />` placeholder wrapped by each Plugin's middleware, first Plugin outermost. Canonical core scans it once and splices the root's already parsed, already target-selected segments in at each placeholder, at their authored positions — so an unwrapped run is the run it always was, and an authored `<Document />` is an ordinary element that projects nothing |
 | active Plugins | the frozen ordered list of Plugin values installed for one command, published before the first `install()` runs so that every Plugin and every later consumer read the same list. It is a description of what is installed and grants nothing |
 | command declarations | every Markdown component one command declares, in one order: what the installed Plugins declared, then whatever the calling surface declares for itself. Built once per command so that an ordinary run, a nested `host="run"` child, inspection and `<Plan>`'s validation cannot describe four different vocabularies |
@@ -4423,11 +4423,12 @@ durable is written.
 ## The Plugin boundary
 
 A **Plugin** is trusted code installed before an execution imports a root
-document. A distribution names the ones it bundles, and an operator appends
-their own with a repeatable `--plugin <specifier>`. Together they are the one
-extension boundary XMD has: there is no package with a reserved name, no
-manifest, no Plugin version, no capability bag and no central runner context a
-Plugin reaches through.
+document. An operator selects them with a repeatable `--plugin <specifier>`, and
+that selection is the complete list: XMD bundles none, defaults to none, and
+installs none for a command that named none. It is the one extension boundary
+XMD has: there is no package with a reserved name, no manifest, no Plugin
+version, no capability bag and no central runner context a Plugin reaches
+through.
 
 **A Plugin is a value, not a registration.** It carries a name and, optionally,
 one `install(request)` operation:
@@ -4496,9 +4497,9 @@ install, an npm install and a compiled binary agree about what one name means.
 V1 performs no ambient or document-declared discovery — that is a decision about
 what V1 does, not a claim that discovery can never be added.
 
-**Order composes and never arbitrates.** The bundled list installs first, then
-the explicit selections in occurrence order, and the first Plugin installed is
-the outermost middleware wrapper. Position decides nothing else: two Plugins
+**Order composes and never arbitrates.** The selections install in occurrence
+order, and the first Plugin installed is the outermost middleware wrapper.
+Position decides nothing else: two Plugins
 claiming one Plugin name, one component name, one structural construct or one
 documentation contribution are refused at admission, exactly as two trusted
 hosts already were.
@@ -4525,7 +4526,10 @@ boundary rather than a bare word another package could also pick: an Api built
 with the name `Document` elsewhere addresses a different context, and cannot
 intercept, replace or observe this one.
 
-`Document` is the root's content. Its terminal answers with the exact text
+`Document` is the root's content, and it is an operation —
+`document(): Operation<string>` — because deciding what to wrap a document in is
+work: a Plugin may read its configuration or ask where it is standing, and it
+delegates with `yield* next()`. Its terminal answers with the exact text
 `"<Document />"` — the placeholder canonical core projects the already parsed
 and target-selected root into. A Plugin returns Markdown containing that
 placeholder wherever the original document belongs, and canonical core scans
@@ -4748,12 +4752,13 @@ reserved registrations. The mechanisms differ in what they carry and agree in
 what they mean. Moving only the Markdown would have left shadowable exactly the
 six components that run processes, read credentials and reach the network.
 
-**Where it is installed.** Through the Plugin boundary, as this distribution's
-one bundled Plugin. `packages/cli/src/bundled-plugins.ts` is the only CLI module
-that names the package, and one installation per command serves every surface
-that describes or validates the vocabulary: ordinary non-testing execution, the
-registry `xmd syntax` and structural validation enter, `<Plan>`'s internal
-admission validator, and `xmd plan`'s candidate validation. A Plan is therefore
+**Where it is installed.** Through the Plugin boundary, as the Plugin an
+operator selected — by package where it is installed, or by path. Nothing in the
+CLI names the package, and a command that selected nothing has none of the
+forty-one names. Once selected, one installation per command serves every
+surface that describes or validates the vocabulary: ordinary non-testing
+execution, the registry `xmd syntax` and structural validation enter, `<Plan>`'s
+internal admission validator, and `xmd plan`'s candidate validation. A Plan is therefore
 checked against the vocabulary the later `xmd run` supplies, rather than a
 narrower one that would refuse a program the run would have accepted, and the
 three checks inside one Plan command consume one retained assembly rather than

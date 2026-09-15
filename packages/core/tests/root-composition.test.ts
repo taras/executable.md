@@ -82,7 +82,11 @@ function* useProbe(seen: { id: string; path?: string; line?: number }[]): Operat
 
 /** Wrap every root this scope executes in the given envelope. */
 function* useEnvelope(before: string, after: string): Operation<void> {
-  yield* Document.around({ document: (_args, next) => `${before}${next()}${after}` });
+  yield* Document.around({
+    *document(_args, next) {
+      return `${before}${yield* next()}${after}`;
+    },
+  });
 }
 
 const ROOT = ["# Heading", "", "body text", ""].join("\n");
@@ -138,7 +142,11 @@ describe("RC2 — a wrapper composes around the projected document", () => {
 
   it("projects the document once for every placeholder a wrapper writes", function* () {
     const output = yield* scoped(function* () {
-      yield* Document.around({ document: (_args, next) => `${next()}\n\n${next()}` });
+      yield* Document.around({
+        *document(_args, next) {
+          return `${yield* next()}\n\n${yield* next()}`;
+        },
+      });
       return yield* render("once\n");
     });
     expect(output.split("once").length - 1).toBe(2);

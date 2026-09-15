@@ -236,8 +236,12 @@ test root does not.
 The workflow action is found by name among the tokens after `workflow`, so an
 option written before it — `--plugin` included — is never read as one.
 
-`packages/cli/src/bundled-plugins.ts` is the only CLI module that names this
-package. One installation per command serves every surface that describes or
+Nothing in the CLI names this package. XMD ships no Plugin, so the graph
+arrives only when an operator selects it — `--plugin @executablemd/code-review-agent`
+where the package is installed, or `--plugin ./packages/code-review-agent/mod.ts`
+by path — and a command that names none has none of the forty-one names.
+
+One installation per command then serves every surface that describes or
 validates the vocabulary — ordinary execution, `xmd syntax`, structural
 validation, `<Plan>`'s admission validator and `xmd plan`'s candidate validation
 — so the three checks inside one Plan command consume one retained assembly
@@ -1341,9 +1345,11 @@ two exact versions, so the policy the gate applies and the policy the sensor
 applies are evaluated by the same linter.
 
 The review workflow runs `deno task setup` and then `./dist/xmd`, so the binary
-and executable Markdown are from the same checkout. It passes no `--plugin`: the
-review graph is what this build bundles, and an entrypoint that had to name it
-would be one place a review could be run without it. The two CI roots use
+and executable Markdown are from the same checkout. It selects this package
+explicitly — `--plugin ./packages/code-review-agent/mod.ts` — because the binary
+carries no Plugin and embeds none of this package's assets; the same selection
+is written into the `review`, `review:local`, `analyze` and `analyze:ci` tasks
+so a local run and a CI run install the same graph. The two CI roots use
 `<Output>` error mode: execution failures return a failed document result and a
 nonzero CLI exit, while ordinary finding text remains successful output. The
 journal is uploaded with `if: always()` and is not parsed by Actions.

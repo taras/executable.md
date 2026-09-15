@@ -6,7 +6,9 @@ export default Plugin({
   *install() {
     const names = (yield* activePlugins).map((plugin) => plugin.name).join(", ");
     yield* Document.around({
-      document: (_args, next) => `active: ${names}\n\n${next()}`,
+      *document(_args, next) {
+        return `active: ${names}\n\n${yield* next()}`;
+      },
     });
     return undefined;
   },

@@ -4,12 +4,21 @@
 // would have wrapped comes out unwrapped.
 import { createApi } from "@effectionx/context-api";
 
-const impostor = createApi("Document", { document: "impostor terminal" });
+const impostor = createApi("Document", {
+  *document() {
+    return "impostor terminal";
+  },
+});
 
 export default {
   name: "impostor",
   *install() {
-    yield* impostor.around({ document: () => "INTERCEPTED" });
+    yield* impostor.around({
+      // deno-lint-ignore require-yield
+      *document() {
+        return "INTERCEPTED";
+      },
+    });
     return undefined;
   },
 };

@@ -21,8 +21,10 @@ import type { PluginInstallation } from "@executablemd/core/api";
 import { inspectComponent } from "@executablemd/core";
 import { Markdown, sourceDigest, Structural } from "@executablemd/core/host";
 import { Config, verbose } from "@executablemd/runtime/api";
-import { BUNDLED_PLUGINS } from "../src/bundled-plugins.ts";
+import reviewPlugin from "@executablemd/code-review-agent";
 import { admitPlugins, installPlugins, NO_PLUGINS } from "../src/plugin-host.ts";
+import { syntaxSymbols } from "../src/syntax.ts";
+import { structuralValidation } from "../src/plan-component.ts";
 
 /** The message an operation failed with, or `undefined` when it did not. */
 function* refusal(body: () => Operation<unknown>): Operation<string | undefined> {
@@ -342,7 +344,10 @@ describe("PH4 — what an installation contributes crosses as one execution inst
       "structural",
     ]);
     expect(installed?.admissions).toHaveLength(1);
-    expect(assembly.components.map((component) => component.name)).toEqual(["PluginDeclared"]);
+    expect(assembly.declarations.map((declaration) => declaration.name)).toEqual([
+      "PluginDeclared",
+      "PluginConstruct",
+    ]);
 
     // And the handler runs against the installation it was returned on.
     const expand = installed?.expand;
@@ -364,7 +369,7 @@ describe("PH4 — what an installation contributes crosses as one execution inst
       return yield* installPlugins([recording("inert", [])], RUN);
     });
     expect(assembly.installations).toEqual([]);
-    expect(assembly.components).toEqual([]);
+    expect(assembly.declarations).toEqual([]);
     expect(assembly.plugins.map((plugin) => plugin.name)).toEqual(["inert"]);
   });
 
@@ -372,7 +377,7 @@ describe("PH4 — what an installation contributes crosses as one execution inst
   it("contributes nothing at all where no Plugin was selected", function* () {
     expect(NO_PLUGINS.plugins).toEqual([]);
     expect(NO_PLUGINS.installations).toEqual([]);
-    expect(NO_PLUGINS.components).toEqual([]);
+    expect(NO_PLUGINS.declarations).toEqual([]);
     expect(NO_PLUGINS.args).toEqual([]);
   });
 });
@@ -401,12 +406,12 @@ describe("PH5 — a Plugin reads the command's typed configuration", () => {
   });
 });
 
-describe("PH6 — the bundled review Plugin claims the commands that run a review", () => {
-  /** The declared component names this command's bundled Plugins contribute. */
+describe("PH6 — the selected review Plugin claims the commands that run a review", () => {
+  /** The declared names this command contributes when the Plugin is selected. */
   function* declaredFor(command: string, args: readonly string[]): Operation<string[]> {
     return yield* scoped(function* () {
-      const assembly = yield* installPlugins(BUNDLED_PLUGINS, { command, args });
-      return assembly.components.map((component) => component.name);
+      const assembly = yield* installPlugins([reviewPlugin], { command, args });
+      return assembly.declarations.map((declaration) => declaration.name);
     });
   }
 
@@ -474,6 +479,18 @@ describe("PH6 — the bundled review Plugin claims the commands that run a revie
     }
   });
 
+  it("contributes nothing at all when it is not selected", function* () {
+    // XMD bundles no Plugin. A command that named none installs none, whichever
+    // command it is — the graph arrives because an operator asked for it.
+    for (const command of ["run", "syntax", "plan", "workflow"]) {
+      const assembly = yield* scoped(function* () {
+        return yield* installPlugins([], { command, args: [command] });
+      });
+      expect(`${command}: ${assembly.declarations.length}`).toBe(`${command}: 0`);
+      expect(`${command}: ${assembly.installations.length}`).toBe(`${command}: 0`);
+    }
+  });
+
   it("registers the six reserved names where it claims the graph", function* () {
     const reserved = [
       "CommentReviewData",
@@ -484,7 +501,7 @@ describe("PH6 — the bundled review Plugin claims the commands that run a revie
       "ReviewContext",
     ];
     const described = yield* scoped(function* () {
-      yield* installPlugins(BUNDLED_PLUGINS, { command: "run", args: ["run"] });
+      yield* installPlugins([reviewPlugin], { command: "run", args: ["run"] });
       const found: string[] = [];
       for (const name of reserved) {
         const info = yield* inspectComponent({ name, includes: [] });
@@ -502,11 +519,124 @@ describe("PH6 — the bundled review Plugin claims the commands that run a revie
     expect(described).toEqual(reserved);
   });
 
-  it("registers none of them for the test root", function* () {
+  it("registers none of them where no Plugin was selected", function* () {
     const kind = yield* scoped(function* () {
-      yield* installPlugins(BUNDLED_PLUGINS, { command: "test", args: ["test"] });
+      yield* installPlugins([], { command: "run", args: ["run"] });
       return (yield* inspectComponent({ name: "ReviewContext", includes: [] })).kind;
     });
     expect(kind).not.toBe("registered");
+  });
+
+  it("registers none of them for the test root", function* () {
+    const kind = yield* scoped(function* () {
+      yield* installPlugins([reviewPlugin], { command: "test", args: ["test"] });
+      return (yield* inspectComponent({ name: "ReviewContext", includes: [] })).kind;
+    });
+    expect(kind).not.toBe("registered");
+  });
+});
+
+describe("PH7 — a structural-only Plugin reaches every consumer of the catalog", () => {
+  const ORIGIN = "tier-ph/structural";
+  const NO_PROPS = { type: "object", properties: {}, additionalProperties: false };
+
+  /** A Plugin that declares structural syntax and no Markdown component at all. */
+  const structural: Plugin = Plugin({
+    name: "structural-only",
+    // deno-lint-ignore require-yield
+    *install(): Operation<PluginInstallation | undefined> {
+      return {
+        structural: [
+          Structural({
+            name: "Banner",
+            origin: ORIGIN,
+            forms: ["paired"],
+            props: NO_PROPS,
+            syntax: ["<Banner><BannerLine>…</BannerLine></Banner>"],
+            description: "Frame the lines written inside it.",
+            context: "The lines this banner frames.",
+            parent: null,
+          }),
+          Structural({
+            name: "BannerLine",
+            origin: ORIGIN,
+            forms: ["paired"],
+            props: NO_PROPS,
+            syntax: ["<BannerLine>…</BannerLine>"],
+            description: "One line of a banner.",
+            context: "The line's own content.",
+            parent: "Banner",
+          }),
+        ],
+        // deno-lint-ignore require-yield
+        *expand(): Operation<void> {},
+      };
+    },
+  });
+
+  it("retains both arms of what it declared, not the Markdown half", function* () {
+    const assembly = yield* scoped(function* () {
+      return yield* installPlugins([structural], RUN);
+    });
+    expect(assembly.declarations.map((declaration) => declaration.name)).toEqual([
+      "Banner",
+      "BannerLine",
+    ]);
+    // One installation carries them, with the handler that expands them.
+    expect(assembly.installations).toHaveLength(1);
+    expect(assembly.installations[0]?.expand).toBeDefined();
+  });
+
+  it("describes the construct in the symbols xmd syntax renders", function* () {
+    const catalog = yield* scoped(function* () {
+      const assembly = yield* installPlugins([structural], RUN);
+      return yield* syntaxSymbols([], assembly);
+    });
+    const named: string[] = [];
+    const described = new Map<string, unknown>();
+    for (const category of catalog.categories) {
+      for (const entry of category.entries) {
+        named.push(entry.name);
+        described.set(entry.name, {
+          origin: entry.origin,
+          ...("parent" in entry ? { parent: entry.parent } : {}),
+        });
+      }
+    }
+    expect(named).toContain("Banner");
+    expect(named).toContain("BannerLine");
+    // Described as declared syntax from the origin the Plugin stated, with the
+    // pair reported: `null` for the construct, the construct for its region.
+    expect(described.get("Banner")).toEqual({
+      origin: { kind: "structural", origin: ORIGIN },
+      parent: null,
+    });
+    expect(described.get("BannerLine")).toEqual({
+      origin: { kind: "structural", origin: ORIGIN },
+      parent: "Banner",
+    });
+  });
+
+  it("accepts a candidate that writes the construct, under Plan validation", function* () {
+    const outcome = yield* scoped(function* () {
+      const assembly = yield* installPlugins([structural], RUN);
+      const validate = structuralValidation([], [], assembly);
+      return yield* validate("<Banner>\n  <BannerLine>framed</BannerLine>\n</Banner>\n");
+    });
+    // The whole point: a construct the run expands is syntax the check knows.
+    expect(outcome.diagnostics.map((diagnostic) => diagnostic.message)).toEqual([]);
+    expect(outcome.outcome).toBe("valid");
+  });
+
+  it("refuses the same candidate when nothing declared the construct", function* () {
+    const outcome = yield* scoped(function* () {
+      const validate = structuralValidation([], [], NO_PLUGINS);
+      return yield* validate("<Banner>\n  <BannerLine>framed</BannerLine>\n</Banner>\n");
+    });
+    // Which is what makes the row above a claim rather than a restatement.
+    expect(outcome.outcome).toBe("invalid");
+    expect(outcome.diagnostics.map((diagnostic) => diagnostic.code)).toContain(
+      "component-unresolved",
+    );
   });
 });

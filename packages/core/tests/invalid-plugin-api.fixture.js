@@ -8,7 +8,11 @@
 import { Document, RootMetadata } from "@executablemd/core/api";
 
 export function* installInvalidDocument(value) {
-  yield* Document.around({ document: () => value });
+  yield* Document.around({
+    *document() {
+      return value;
+    },
+  });
 }
 
 export function* installInvalidRootMetadata(value) {

@@ -17,7 +17,9 @@
  *   name: "example",
  *   *install() {
  *     yield* Document.around({
- *       document: (_args, next) => `# Example\n\n${next()}`,
+ *       *document(_args, next) {
+ *         return `# Example\n\n${yield* next()}`;
+ *       },
  *     });
  *     return undefined;
  *   },

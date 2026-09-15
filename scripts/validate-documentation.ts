@@ -7,11 +7,15 @@
  * the components it documents, and the first person to notice would be an
  * author whose `<Syntax names={…}>` refused at run time.
  *
- * So the check is the real assembly. It installs the bundled Plugins the way a
- * `run` command does, enters the same declarative bootstraps, collects through
- * the same Api, and builds the same index — which means a missing section, an
+ * So the check is the real assembly. It selects the first-party Plugin the way
+ * an operator does, enters the same declarative bootstraps, collects through the
+ * same Api, and builds the same index — which means a missing section, an
  * unknown heading and a component documented twice each fail the build for
  * exactly the reason they would fail a run.
+ *
+ * XMD bundles no Plugin, so the selection is explicit here too. This script is
+ * a build tool rather than the product, which is why it may name the package
+ * that ships the graph; nothing in the CLI does.
  */
 
 import { main, scoped } from "effection";
@@ -19,8 +23,8 @@ import type { Operation } from "effection";
 import { capturedDocumentation, documentationIndexFor } from "@executablemd/core";
 import type { ComponentOrigin, DocumentationIndex } from "@executablemd/core";
 import { useCommandComponents } from "../packages/cli/src/syntax.ts";
-import { BUNDLED_PLUGINS } from "../packages/cli/src/bundled-plugins.ts";
 import { installPlugins } from "../packages/cli/src/plugin-host.ts";
+import reviewPlugin from "../packages/code-review-agent/mod.ts";
 
 /** Assemble the complete index, throwing whatever it refuses with. */
 export function* validateDocumentation(): Operation<number> {
@@ -28,10 +32,10 @@ export function* validateDocumentation(): Operation<number> {
   // that installed it: collecting outside would find core's terminal alone and
   // pass every rule vacuously.
   const index = yield* scoped(function* () {
-    // The bundled Plugins first, exactly as a `run` command installs them: a
+    // The first-party Plugin, installed exactly as `--plugin` installs one: a
     // Plugin's registrations and the documentation describing them arrive
     // together, so a build that shipped one without the other fails here.
-    yield* installPlugins(BUNDLED_PLUGINS, { command: "run", args: [] });
+    yield* installPlugins([reviewPlugin], { command: "run", args: [] });
     yield* useCommandComponents();
     return documentationIndexFor(yield* capturedDocumentation());
   });
@@ -46,8 +50,8 @@ export function* validateDocumentation(): Operation<number> {
     origin: "@executablemd/web",
     reserved: false,
   });
-  // And one from a bundled Plugin, so an index assembled without the Plugins a
-  // distribution ships cannot pass this check either.
+  // And one from the selected Plugin, so an index assembled without it cannot
+  // pass this check either.
   read(index, "ReviewContext", {
     kind: "registered",
     origin: "@executablemd/code-review-agent",

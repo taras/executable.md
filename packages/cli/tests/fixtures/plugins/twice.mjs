@@ -6,7 +6,9 @@ export default Plugin({
   name: "twice",
   *install() {
     yield* Document.around({
-      document: (_args, next) => `${next()}\n\n${next()}\n`,
+      *document(_args, next) {
+        return `${yield* next()}\n\n${yield* next()}\n`;
+      },
     });
     return undefined;
   },

@@ -13,7 +13,6 @@
   "dependencies": {
     "@effectionx/stream-helpers": "0.8.3",
     "@executablemd/acp": "workspace:*",
-    "@executablemd/code-review-agent": "workspace:*",
     "@executablemd/core": "workspace:*",
     "@executablemd/durable-streams": "workspace:*",
     "@executablemd/runtime": "workspace:*",
@@ -26,5 +25,8 @@
     "effection": "4.1.0",
     "semver": "^7.8.5",
     "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@executablemd/code-review-agent": "workspace:*"
   }
 }

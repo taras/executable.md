@@ -98,7 +98,7 @@ describe("PC1 — selected Plugins compose around the document, in the order wri
     });
   });
 
-  it("shows every Plugin the complete list, bundled Plugins first", function* () {
+  it("shows every Plugin the complete list, in the order it was written", function* () {
     yield* useWorkspace({ "doc.md": DOCUMENT }, function* (dir) {
       const run = yield* runCli(
         [
@@ -109,7 +109,9 @@ describe("PC1 — selected Plugins compose around the document, in the order wri
         ],
         { cwd: dir },
       ).expect();
-      expect(run.stdout).toContain("active: @executablemd/code-review-agent, active, wrapper-one");
+      // The written order is the whole order: XMD bundles nothing, so there is
+      // no prefix in front of what the caller selected.
+      expect(run.stdout).toContain("active: active, wrapper-one");
     });
   });
 
@@ -356,8 +358,6 @@ describe("PC6 — every surface of one command sees one vocabulary", () => {
         cwd: dir,
       }).expect();
       expect(run.stdout).toContain("Greeting");
-      // And the bundled review graph is still described beside it.
-      expect(run.stdout).toContain("Finding");
     });
   });
 
@@ -365,7 +365,74 @@ describe("PC6 — every surface of one command sees one vocabulary", () => {
     yield* useWorkspace({}, function* (dir) {
       const run = yield* runCli(["syntax"], { cwd: dir }).expect();
       expect(run.stdout).not.toContain("Greeting");
-      expect(run.stdout).toContain("Finding");
+    });
+  });
+
+  it("describes a structural construct a Plugin declared, and expands it in a run", function* () {
+    yield* useWorkspace(
+      { "doc.md": "<Banner>\n  <BannerLine>framed</BannerLine>\n</Banner>\n" },
+      function* (dir) {
+        // Both arms of one catalog: the construct and the region written inside
+        // it, described from the same installation a run expands them under.
+        const described = yield* runCli(["syntax", `--plugin=${fixture("structural.mjs")}`], {
+          cwd: dir,
+        }).expect();
+        expect(described.stdout).toContain("<Banner>");
+        expect(described.stdout).toContain("<BannerLine>");
+
+        const run = yield* runCli(["run", `--plugin=${fixture("structural.mjs")}`, "doc.md"], {
+          cwd: dir,
+        }).expect();
+        expect(run.stderr).toContain("structural-fixture: expanded framed");
+      },
+    );
+  });
+
+  it("describes none of that construct where the Plugin was not selected", function* () {
+    yield* useWorkspace({}, function* (dir) {
+      const run = yield* runCli(["syntax"], { cwd: dir }).expect();
+      expect(run.stdout).not.toContain("<Banner>");
+    });
+  });
+});
+
+describe("PC9 — the review graph arrives only when it is selected", () => {
+  const REVIEW = "@executablemd/code-review-agent";
+  const PACKAGE = fileURLToPath(new URL("../../code-review-agent/mod.ts", import.meta.url));
+  const FINDING = '<Finding when={true} severity="error" message="probe" />\n';
+
+  it("is absent from every command that would run it, until it is named", function* () {
+    yield* useWorkspace({ "doc.md": FINDING }, function* (dir) {
+      // `xmd syntax` describes the language a run has, so it is where an absent
+      // vocabulary shows without running anything.
+      const described = yield* runCli(["syntax"], { cwd: dir }).expect();
+      expect(described.stdout).not.toContain("Finding");
+      expect(described.stdout).not.toContain("ReviewContext");
+
+      // And a document that writes one of the forty-one names resolves nothing.
+      const run = yield* runCli(["run", "doc.md"], { cwd: dir }).join();
+      expect(run.stdout).not.toContain("probe");
+    });
+  });
+
+  it("arrives for run and syntax when it is named", function* () {
+    yield* useWorkspace({ "doc.md": FINDING }, function* (dir) {
+      const described = yield* runCli(["syntax", `--plugin=${PACKAGE}`], { cwd: dir }).expect();
+      expect(described.stdout).toContain("Finding");
+      expect(described.stdout).toContain("ReviewContext");
+
+      const run = yield* runCli(["run", `--plugin=${PACKAGE}`, "doc.md"], { cwd: dir }).expect();
+      expect(run.stdout).toContain("probe");
+    });
+  });
+
+  it("names itself by its own name, however it was reached", function* () {
+    yield* useWorkspace({ "doc.md": DOCUMENT }, function* (dir) {
+      const run = yield* runCli(
+        ["run", `--plugin=${PACKAGE}`, `--plugin=${fixture("active.mjs")}`, "doc.md"],
+        { cwd: dir },
+      ).expect();
+      expect(run.stdout).toContain(`active: ${REVIEW}, active`);
     });
   });
 });
@@ -434,9 +501,7 @@ describe("PC7 — a package is selected by name, from where the command runs", (
         expect(run.stderr).toContain("selected-package: installed for run");
         // A Plugin's name is its own. The package it came from is how an
         // operator found it, and nothing resolves one to the other.
-        expect(run.stdout).toContain(
-          "active: @executablemd/code-review-agent, renamed-by-its-author, active",
-        );
+        expect(run.stdout).toContain("active: renamed-by-its-author, active");
         // And the package installed beside it did nothing at all: presence is
         // not selection, and nothing here scans `node_modules`.
         expect(run.stderr).not.toContain("unselected-package");

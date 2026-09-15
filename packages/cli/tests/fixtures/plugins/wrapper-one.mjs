@@ -4,7 +4,9 @@ export default Plugin({
   name: "wrapper-one",
   *install() {
     yield* Document.around({
-      document: (_args, next) => `one open\n\n${next()}\n\none close\n`,
+      *document(_args, next) {
+        return `one open\n\n${yield* next()}\n\none close\n`;
+      },
     });
     return undefined;
   },

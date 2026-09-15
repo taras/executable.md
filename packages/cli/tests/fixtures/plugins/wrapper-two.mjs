@@ -4,7 +4,9 @@ export default Plugin({
   name: "wrapper-two",
   *install() {
     yield* Document.around({
-      document: (_args, next) => `two open\n\n${next()}\n\ntwo close\n`,
+      *document(_args, next) {
+        return `two open\n\n${yield* next()}\n\ntwo close\n`;
+      },
     });
     return undefined;
   },

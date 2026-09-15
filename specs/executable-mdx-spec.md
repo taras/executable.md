@@ -10023,10 +10023,11 @@ and no later policy replaces it.
 
 ### Plugins
 
-A **Plugin** is trusted code a distribution bundles or an operator selects, and
-it is installed before an execution imports a root document. The CLI accepts a
-repeatable `--plugin <specifier>` or `--plugin=<specifier>`; the bundled list
-installs first, then the explicit selections in the order they were written.
+A **Plugin** is trusted code an operator selects, and it is installed before an
+execution imports a root document. The CLI accepts a repeatable
+`--plugin <specifier>` or `--plugin=<specifier>`, and those occurrences in the
+order they were written are the complete list: XMD ships no Plugin and installs
+none for a command that named none.
 
 A Plugin is a plain structural value:
 
@@ -10109,8 +10110,10 @@ loaded copies have to agree on, so it carries the owning package and the
 boundary: an unrelated Api built with the bare name `Document` addresses a
 different context and cannot intercept, replace or observe this one.
 
-`Document` answers with the Markdown one run executes. Its terminal answer is
-the exact text `"<Document />"`. Middleware wraps that value — the first Plugin
+`Document` answers with the Markdown one run executes. It is
+`document(): Operation<string>`, so composing an envelope may do work — read
+configuration, ask the filesystem where it is standing — and a wrapper delegates
+with `yield* next()`. Its terminal answer is the exact text `"<Document />"`. Middleware wraps that value — the first Plugin
 installed is the outermost wrapper — and canonical core scans the result once as
 an envelope, splicing the already parsed, already target-selected root segments
 in at each `<Document />` placeholder, at the offsets, lines and paths they were
@@ -13572,6 +13575,8 @@ Plugin is the run it always was.
 | PL14 | The key, not the name | An Api built under the bare names `Document`, `RootMetadata` or `ActivePlugins` composes nothing and observes nothing; one built under the published key composes, including from a second loaded copy inside the compiled binary |
 | PL15 | Selection by package | A bare specifier resolves in the invocation directory's package environment, and the Plugin's own name is what identifies it — not the package or module it came from |
 | PL16 | Cancellation | A command halted while a Plugin is still installing releases what the Plugins before it acquired, installs nothing after it, and stays a cancellation; a scope whose body and teardown both fail reports exactly what it reported before Plugins existed |
+| PL17 | Nothing by default | A command that names no `--plugin` installs none, under every command; the review graph is absent from the symbols and from a run until it is selected, and present in both once it is |
+| PL18 | Both arms, every consumer | A Plugin declaring structural syntax and no Markdown component has its construct and region described by `xmd syntax` with the pair reported, accepted by Plan structural validation, and expanded by a run under the same installation; the same candidate is refused where nothing declared it |
 
 ### Tier RC — Root composition (§5.4, §7 Plugins)
 

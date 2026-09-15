@@ -15,7 +15,9 @@ export default Plugin({
       `timeoutFetch: ${yield* timeoutFetch}`,
     ].join("\n");
     yield* Document.around({
-      document: (_args, next) => `${settled}\n\n${next()}`,
+      *document(_args, next) {
+        return `${settled}\n\n${yield* next()}`;
+      },
     });
     return undefined;
   },

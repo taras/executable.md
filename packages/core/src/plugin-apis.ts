@@ -46,21 +46,41 @@ export const DOCUMENT_PLACEHOLDER = "<Document />";
 /**
  * The document one execution runs, as Markdown a Plugin may wrap.
  *
- * The terminal is `"<Document />"` — the placeholder canonical execution
- * projects the already parsed and targeted root into. Middleware returns
- * Markdown containing that placeholder wherever the original document belongs,
- * and may contain it more than once: each occurrence is its own wrapper
- * occurrence, projecting the same root under its own expansion identity.
+ * The terminal answers with `"<Document />"` — the placeholder canonical
+ * execution projects the already parsed and targeted root into. Middleware
+ * returns Markdown containing that placeholder wherever the original document
+ * belongs, and may contain it more than once: each occurrence is its own
+ * wrapper occurrence, projecting the same root under its own expansion
+ * identity.
+ *
+ * It is an operation rather than a value, because deciding what to wrap a
+ * document in is work. A Plugin composing one may read its configuration, ask
+ * the filesystem where it is standing, or consult anything else an operation
+ * can reach, and it delegates with `yield* next()`:
+ *
+ * ```ts
+ * yield* Document.around({
+ *   *document(args, next) {
+ *     if (yield* inRepo()) {
+ *       return `<Repository><Worktree>${yield* next()}</Worktree></Repository>`;
+ *     }
+ *     return yield* next();
+ *   },
+ * });
+ * ```
  *
  * An authored `<Document />` is an ordinary element and resolves as one. Only
- * the placeholders canonical execution mints from this value project anything.
+ * the placeholders canonical execution mints from this answer project anything.
  */
 export interface DocumentApi {
-  readonly document: string;
+  document(): Operation<string>;
 }
 
 export const Document: Api<DocumentApi> = createApi<DocumentApi>(DOCUMENT_KEY, {
-  document: DOCUMENT_PLACEHOLDER,
+  // deno-lint-ignore require-yield
+  *document(): Operation<string> {
+    return DOCUMENT_PLACEHOLDER;
+  },
 });
 
 /**
@@ -72,7 +92,7 @@ export const Document: Api<DocumentApi> = createApi<DocumentApi>(DOCUMENT_KEY, {
  */
 export const document: Operation<string> = {
   *[Symbol.iterator]() {
-    const composed = yield* Document.operations.document;
+    const composed = yield* Document.operations.document();
     if (typeof composed !== "string") {
       throw new Error(`Document middleware answers with Markdown text, got ${typeof composed}`);
     }

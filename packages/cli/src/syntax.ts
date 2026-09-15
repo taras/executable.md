@@ -45,7 +45,7 @@ import { useTestingComponents } from "@executablemd/testing";
 import { useWebComponents } from "@executablemd/web";
 import { useVerboseComponent } from "./verbose-component.ts";
 import { useCompositionComponents } from "@executablemd/workflow";
-import type { MarkdownComponent } from "@executablemd/core/host";
+import type { ExecutionDeclaration } from "@executablemd/core/host";
 import { NO_PLUGINS } from "./plugin-host.ts";
 import type { CommandPlugins } from "./plugin-host.ts";
 
@@ -116,9 +116,9 @@ function* profileSymbols(
  */
 export function commandDeclarations(
   plugins: CommandPlugins,
-  ...own: readonly MarkdownComponent[]
-): MarkdownComponent[] {
-  return [...plugins.components, ...own];
+  ...own: readonly ExecutionDeclaration[]
+): ExecutionDeclaration[] {
+  return [...plugins.declarations, ...own];
 }
 
 /**

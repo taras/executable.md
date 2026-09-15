@@ -69,10 +69,10 @@
     "vendor:verify": "deno run --allow-read --allow-write=/tmp --allow-env --allow-run --cached-only --frozen scripts/verify-cloudflare-dofs.ts",
     "check": "deno check --frozen",
     "check:jsr": "deno publish --dry-run --allow-dirty",
-    "review": "deno run --allow-all packages/cli/src/deno.ts run .reviews/ReviewPR.md -j .reviews/journal.jsonl",
-    "review:local": "deno run --allow-all packages/cli/src/deno.ts run .reviews/ReviewPR.local.md -j .reviews/journal.local.jsonl",
-    "analyze": "deno run --allow-all packages/cli/src/deno.ts run .reviews/AnalyzeRepo.md -j .reviews/journal.analyze.jsonl",
-    "analyze:ci": "deno run --allow-all packages/cli/src/deno.ts run .reviews/AnalyzeRepoCI.md -j .reviews/journal.analyze.ci.jsonl",
+    "review": "deno run --allow-all packages/cli/src/deno.ts run --plugin ./packages/code-review-agent/mod.ts .reviews/ReviewPR.md -j .reviews/journal.jsonl",
+    "review:local": "deno run --allow-all packages/cli/src/deno.ts run --plugin ./packages/code-review-agent/mod.ts .reviews/ReviewPR.local.md -j .reviews/journal.local.jsonl",
+    "analyze": "deno run --allow-all packages/cli/src/deno.ts run --plugin ./packages/code-review-agent/mod.ts .reviews/AnalyzeRepo.md -j .reviews/journal.analyze.jsonl",
+    "analyze:ci": "deno run --allow-all packages/cli/src/deno.ts run --plugin ./packages/code-review-agent/mod.ts .reviews/AnalyzeRepoCI.md -j .reviews/journal.analyze.ci.jsonl",
     "analyze:dispatch": "deno run --allow-all packages/cli/src/deno.ts run .reviews/DispatchRepoAnalysis.md -j .reviews/journal.dispatch.jsonl"
   }
 }

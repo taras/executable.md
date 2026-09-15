@@ -1,11 +1,12 @@
 /**
  * Installing the Plugins one command runs with.
  *
- * The bundled list this distribution ships comes first, then the modules the
- * operator selected, in the order they wrote them. That order fixes how
- * middleware composes — the first Plugin installed is the outermost wrapper —
- * and decides nothing else: two Plugins claiming one name, one component name
- * or one structural construct are refused rather than settled by position.
+ * The modules the operator selected, in the order they wrote them, and nothing
+ * else: XMD ships no Plugin and installs none by default, so a command that
+ * named none installs none. That order fixes how middleware composes — the
+ * first Plugin installed is the outermost wrapper — and decides nothing else:
+ * two Plugins claiming one name, one component name or one structural construct
+ * are refused rather than settled by position.
  *
  * Installation happens once per command, in the scope that encloses everything
  * the command does. A Plugin that installed middleware, acquired a resource or
@@ -17,8 +18,8 @@
 import type { Operation } from "effection";
 
 import { ActivePlugins } from "@executablemd/core/api";
-import type { MarkdownComponent, Plugin, PluginInstallRequest } from "@executablemd/core/api";
-import type { ExecutionInstallation } from "@executablemd/core/host";
+import type { Plugin, PluginInstallRequest } from "@executablemd/core/api";
+import type { ExecutionDeclaration, ExecutionInstallation } from "@executablemd/core/host";
 
 /**
  * What one command's Plugins contributed, retained for every consumer of it.
@@ -34,8 +35,18 @@ export interface CommandPlugins {
   readonly plugins: readonly Plugin[];
   /** What the installs contributed, as one execution installation each. */
   readonly installations: readonly ExecutionInstallation[];
-  /** Every Markdown component the installs declared, in the same order. */
-  readonly components: readonly MarkdownComponent[];
+  /**
+   * Everything the installs declared, in the same order, under one discriminant.
+   *
+   * Both arms, because both are what a name means here: exact Markdown and
+   * structural syntax cross on one `declarations` list to an execution, and
+   * every surface that describes or validates this vocabulary reads the same
+   * catalog. Retaining only the Markdown half would let `xmd syntax` and
+   * `<Plan>`'s validation describe a language a run does not have — a Plugin's
+   * construct would be unknown syntax to the check and ordinary syntax to the
+   * run that follows it.
+   */
+  readonly declarations: readonly ExecutionDeclaration[];
   /**
    * The original argv these Plugins were installed from.
    *
@@ -50,7 +61,7 @@ export interface CommandPlugins {
 export const NO_PLUGINS: CommandPlugins = Object.freeze({
   plugins: Object.freeze([]),
   installations: Object.freeze([]),
-  components: Object.freeze([]),
+  declarations: Object.freeze([]),
   args: Object.freeze([]),
 });
 
@@ -95,7 +106,7 @@ export function* installPlugins(
   yield* ActivePlugins.around({ plugins: () => plugins });
 
   const installations: ExecutionInstallation[] = [];
-  const components: MarkdownComponent[] = [];
+  const declared: ExecutionDeclaration[] = [];
   for (const plugin of plugins) {
     if (plugin.install === undefined) {
       continue;
@@ -107,12 +118,12 @@ export function* installPlugins(
     // Copied here, while the value is the one the Plugin returned: the arrays
     // belong to whoever built them, and what canonical execution captures must
     // be what this command read.
-    const declared = Object.freeze([...(installed.components ?? [])]);
+    const components = Object.freeze([...(installed.components ?? [])]);
     const structural = Object.freeze([...(installed.structural ?? [])]);
     const admissions = Object.freeze([...(installed.admissions ?? [])]);
     const expand = installed.expand;
-    components.push(...declared);
-    const declarations = [...declared, ...structural];
+    const declarations = [...components, ...structural];
+    declared.push(...declarations);
     if (declarations.length === 0 && admissions.length === 0 && expand === undefined) {
       continue;
     }
@@ -127,7 +138,7 @@ export function* installPlugins(
   return {
     plugins,
     installations: Object.freeze(installations),
-    components: Object.freeze(components),
+    declarations: Object.freeze(declared),
     args: request.args,
   };
 }
