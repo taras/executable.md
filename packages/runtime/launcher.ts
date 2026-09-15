@@ -64,6 +64,21 @@ export interface NativeLauncherHandler {
   reserve(): Operation<void>;
   flush(): Operation<void>;
   launch(request: NativeLaunchRequest): Operation<NativeLaunchOutcome>;
+  /**
+   * Show the person one line about the launch itself, on the terminal this
+   * launch reserved.
+   *
+   * Not document output. What a launch has to say — that a turn is about to be
+   * spent in their name, what it answered, what it cost — is addressed to
+   * whoever is sitting there, and it belongs on the screen the native UI is
+   * about to open on rather than in the document's captured text, where a
+   * `<File>` would keep it and a replay would print it again.
+   *
+   * It goes through the launcher for the same reason `flush` does: this is the
+   * only thing that knows which terminal a given launch owns, so the root's
+   * launch writes to the root terminal.
+   */
+  notify(text: string): Operation<void>;
 }
 
 export const NATIVE_LAUNCHER_UNAVAILABLE =
@@ -92,6 +107,10 @@ export const NativeLauncher: Api<NativeLauncherHandler> = createApi<NativeLaunch
     *launch(_request: NativeLaunchRequest): Operation<NativeLaunchOutcome> {
       throw new NativeLauncherUnavailableError();
     },
+    // deno-lint-ignore require-yield
+    *notify(_text: string): Operation<void> {
+      throw new NativeLauncherUnavailableError();
+    },
   },
 );
 
@@ -103,6 +122,11 @@ export function reserveTerminal(): Operation<void> {
 /** Give the reader everything the document has produced so far. */
 export function flushOutput(): Operation<void> {
   return NativeLauncher.operations.flush();
+}
+
+/** Say one thing to whoever is at the terminal this launch reserved. */
+export function notifyTerminal(text: string): Operation<void> {
+  return NativeLauncher.operations.notify(text);
 }
 
 /** Run one native UI as a foreground child and report how it ended. */
@@ -182,6 +206,12 @@ export function* installForegroundLauncher(
       },
       *launch([request]) {
         return yield* runForeground(request);
+      },
+      *notify([text]) {
+        // Written and drained, not queued: the next thing to reach this
+        // terminal may be a child drawing over it.
+        process.stdout.write(`${text}\n`);
+        yield* drainStream(process.stdout);
       },
     },
     { at: "min" },
@@ -415,6 +445,8 @@ export interface ControlledLauncherOptions {
   wait?: (request: NativeLaunchRequest) => Operation<void>;
   onReserve?: () => void;
   onFlush?: () => void;
+  /** Each line the launch addressed to the terminal, in the order it said them. */
+  onNotify?: (text: string) => void;
 }
 
 export function* installControlledLauncher(
@@ -443,6 +475,10 @@ export function* installControlledLauncher(
       // deno-lint-ignore require-yield
       *flush() {
         options.onFlush?.();
+      },
+      // deno-lint-ignore require-yield
+      *notify([text]) {
+        options.onNotify?.(text);
       },
       *launch([request]) {
         options.record?.(request);

@@ -119,6 +119,31 @@ function handle(message) {
       });
       return;
     }
+    case "thread/resume": {
+      // Reopening answers with the thread the App Server settled on. That
+      // answer, not the id the request carried, is what names the conversation
+      // a client would go on to address directly.
+      const threadId = message.params?.threadId ?? "thread-1";
+      reply(message.id, {
+        thread: { id: threadId },
+        model: "fake-model",
+        modelProvider: "fake",
+        serviceTier: null,
+        cwd: process.cwd(),
+        instructionSources: [],
+        approvalPolicy: "never",
+        approvalsReviewer: "user",
+        sandboxPolicy: { mode: "danger-full-access" },
+        reasoningEffort: null,
+        skills: [],
+      });
+      return;
+    }
+    case "thread/read": {
+      const threadId = message.params?.threadId ?? "thread-1";
+      reply(message.id, { thread: { id: threadId, title: null, turns: [] } });
+      return;
+    }
     case "turn/start": {
       const threadId = message.params?.threadId ?? "thread-1";
       const turnId = nextTurn(threadId);

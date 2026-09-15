@@ -6,7 +6,7 @@ those instead of the adapter `npx` would resolve.
 
 | Provider | Package | Version | Contracts |
 | --- | --- | --- | --- |
-| `codex` | `@agentclientprotocol/codex-acp` | 1.6.2 | `_meta.codex.turnId`, `executablemd.session-materialization/v1` |
+| `codex` | `@agentclientprotocol/codex-acp` | 1.6.2 | `_meta.codex.turnId`, `executablemd.session-materialization/v1`, `_meta.agentSessionId` |
 | `claude` | `@agentclientprotocol/claude-agent-acp` | 0.70.0 | `_meta.claudeCode.assistantMessageUuid`, `executablemd.session-materialization/v1` |
 
 `MANIFEST.json` records, for each: the exact upstream base and patched commit,
@@ -15,7 +15,7 @@ list. `generated/snapshots.ts` carries the same bytes as a module.
 
 ## Why this exists
 
-Two facts XMD needs, neither of which a published adapter reports.
+Three facts XMD needs, none of which a published adapter reports.
 
 ### Which turn a Prompt completed
 
@@ -59,6 +59,31 @@ own, so a client not waiting for it reads nothing.
 `materializationContract` in `MANIFEST.json` records it separately from
 `contract` above: which turn completed and whether a backend accepted one are
 different claims, and an adapter could carry either without the other.
+
+### Which conversation the provider actually opened
+
+Handing a running session to the provider's own CLI needs the identity that CLI
+addresses — for Codex, the App Server thread the adapter created or reopened.
+Codex allocates it, so a client cannot know it without being told; Claude's
+adapter is handed one, so nothing there needs reporting.
+
+Codex 1.6.2 returns that thread id only as the top-level ACP `sessionId`, which
+is the ACP session's own name. A client cannot tell from it whether the provider
+allocated the identity or the client did, and reading it as native identity would
+mean asserting a thread the App Server may never have confirmed. The snapshot
+therefore reports it explicitly on the response `_meta` of `session/new`,
+`session/load` and `session/resume`, as `{"agentSessionId": "<thread id>"}`,
+taken from the thread the App Server answered with rather than the one requested.
+
+That change is not part of PR #438, which carries the turn identity. It is
+reachable at
+<https://github.com/taras/codex-acp/tree/feat/session-native-identity>, recorded
+as `patchedBranch` beside the commit it names.
+
+`identityContract` in `MANIFEST.json` records this third claim on its own, for
+the same reason `materializationContract` is separate: an adapter could report a
+turn identity, an acceptance, or a native session identity without the others,
+and only `codex` declares this one.
 
 These snapshots are what stands in until both land upstream.
 
