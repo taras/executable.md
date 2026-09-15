@@ -467,7 +467,10 @@ describe(
 
         const described = yield* timebox<ProcessResult>(TIMEOUT, function* () {
           return yield* exec(command, {
-            arguments: [...args, "syntax", "--json", "--include", "custom"],
+            // The same selection: what an installation describes is what it
+            // would run, and describing it without the Plugin would describe a
+            // vocabulary the run above did not have.
+            arguments: [...args, "syntax", review, "--json", "--include", "custom"],
             cwd: elsewhere,
           }).join();
         });
