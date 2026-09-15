@@ -682,7 +682,18 @@ describe("Tier DV: <Switch> branch selection", () => {
   });
 });
 
-describe("Tier DV: terminal grids", () => {
+/**
+ * Tier DV — the withdrawn terminal-grid names.
+ *
+ * `Terminal.Grid` and `Terminal` are no longer structural syntax, so validation
+ * knows nothing about them beyond the two ordinary questions it asks of any
+ * name: does something supply it, and do its props satisfy that supplier's
+ * schema. These rows hold that line from both sides — nothing supplies them and
+ * a repository file does — because the withdrawn behaviour was special-cased
+ * here by name, and a name-keyed branch returning would be invisible to a row
+ * that only asserted the happy path.
+ */
+describe("Tier DV: the withdrawn terminal-grid names", () => {
   const GRID_DOC = [
     "<Terminal.Grid columns={2}>",
     '<Terminal title="Agent">',
@@ -693,146 +704,150 @@ describe("Tier DV: terminal grids", () => {
     "",
   ].join("\n");
 
-  it("TG3: a well-formed grid is valid, and nothing beneath it runs", function* () {
+  it("WD1: with nothing supplying them, both follow the ordinary missing-component path", function* () {
     const { result, seen } = yield* validateText(GRID_DOC, {
       tree: { "components/Widget.md": WIDGET },
+      includes: ["components"],
     });
 
-    expect(result.outcome).toBe("valid");
-    expect(result.diagnostics).toEqual([]);
+    expect(result.outcome).toBe("invalid");
+    // Exactly what `<DefinitelyMissing />` gets in DV1, once per invocation,
+    // and nothing else: no placement rule, no prop rule, no layout rule.
+    expect(codes(result)).toEqual([
+      "component-unresolved",
+      "component-unresolved",
+      "component-unresolved",
+    ]);
+    expect(result.diagnostics.map((diagnostic) => diagnostic.component)).toEqual([
+      "Terminal.Grid",
+      "Terminal",
+      "Terminal",
+    ]);
+    expect(result.diagnostics[0]!.message).toContain("Cannot resolve component: Terminal.Grid");
+    expect(result.diagnostics[1]!.message).toContain("Cannot resolve component: Terminal");
     expect(names(result)).toEqual(["Terminal.Grid", "Terminal", "Widget", "Terminal"]);
-    expect(named(result, "Terminal.Grid").origin).toEqual({
-      kind: "structural",
-      construct: "Terminal.Grid",
-    });
-    expect(named(result, "Terminal").origin).toEqual({
-      kind: "structural",
-      construct: "Terminal",
-    });
-    // A pane's body is walked like any other region, and none of it — no
-    // shell, no command, no agent, no terminal — was reached to walk it.
+    // An unresolved name has no origin — there is no construct to report.
+    for (const name of ["Terminal.Grid", "Terminal"]) {
+      const invocation = named(result, name);
+      expect(invocation.outcome).toBe("invalid");
+      expect(invocation.outcome === "invalid" ? invocation.origin : "unreached").toBeUndefined();
+    }
+    // The `<Widget>` inside the paired pane is still walked and still valid, so
+    // the region is read as ordinary content rather than as a pane body.
+    expect(named(result, "Widget").outcome).toBe("valid");
     expect(seen.effects).toEqual([]);
-    // Reserved means selection never looked for a file that could supply
-    // either construct.
-    expect(seen.reads.some((read) => read.includes("Terminal"))).toBe(false);
+    // Only the one definition that exists was read: selection probed for a
+    // file under each withdrawn name and found none, which is why the
+    // diagnostic is `component-unresolved` rather than a structural sentence.
+    // WD3 supplies those files and reads them.
+    expect(seen.reads).toEqual(["components/Widget.md"]);
   });
 
-  it("TG3: reports each invalid authored form, with no execution", function* () {
-    const invalid: [string, string, string][] = [
-      [
-        "an unknown prop on the grid",
-        '<Terminal.Grid columns={2} layout="tiled"><Terminal title="A" /></Terminal.Grid>\n',
-        '<Terminal.Grid> only accepts a "columns" prop. Got: "layout".',
-      ],
-      [
-        "a capture on the grid",
-        '<Terminal.Grid columns={2} as="grid"><Terminal title="A" /></Terminal.Grid>\n',
-        '<Terminal.Grid> only accepts a "columns" prop. Got: "as".',
-      ],
-      [
-        "no column count",
-        '<Terminal.Grid><Terminal title="A" /></Terminal.Grid>\n',
-        '<Terminal.Grid> requires a "columns" prop (a positive integer).',
-      ],
+  it("WD2: every form the grid rules used to refuse is now decided by resolution alone", function* () {
+    // Each of these was a `structural-usage-invalid` diagnostic with a sentence
+    // of its own. With no supplier the only answer is that the name resolves to
+    // nothing; the sentences are gone, not relocated.
+    const withdrawn: [string, string, string][] = [
+      ["an unknown prop on the grid", '<Terminal.Grid columns={2} layout="tiled" />\n', "layout"],
+      ["a capture on the grid", '<Terminal.Grid columns={2} as="grid" />\n', "columns"],
+      ["no column count", "<Terminal.Grid />\n", "columns"],
       [
         "a column count that is not a positive integer",
-        '<Terminal.Grid columns={0}><Terminal title="A" /></Terminal.Grid>\n',
-        'Prop "columns" on <Terminal.Grid> must be a positive integer. Got: 0.',
+        "<Terminal.Grid columns={0} />\n",
+        "positive integer",
       ],
-      [
-        "an unknown prop on a pane",
-        '<Terminal.Grid columns={2}><Terminal title="A" shell="zsh" /></Terminal.Grid>\n',
-        '<Terminal> only accepts a "title" prop. Got: "shell".',
-      ],
-      [
-        "no title on a pane",
-        "<Terminal.Grid columns={2}><Terminal /></Terminal.Grid>\n",
-        '<Terminal> requires a "title" prop (the label the pane displays).',
-      ],
-      [
-        "an empty title",
-        '<Terminal.Grid columns={2}><Terminal title="" /></Terminal.Grid>\n',
-        'Prop "title" on <Terminal> must be a non-empty string. Got: "".',
-      ],
-      [
-        "a self-closing grid",
-        "<Terminal.Grid columns={2} />\n",
-        "<Terminal.Grid> holds the panes it lays out",
-      ],
-      [
-        "a grid with no pane",
-        "<Terminal.Grid columns={2}></Terminal.Grid>\n",
-        "<Terminal.Grid> requires at least one <Terminal> pane.",
-      ],
+      ["an unknown prop on a pane", '<Terminal title="A" shell="zsh" />\n', "shell"],
+      ["no title on a pane", "<Terminal />\n", "title"],
+      ["an empty title", '<Terminal title="" />\n', "non-empty"],
+      ["a self-closing grid", "<Terminal.Grid columns={2} />\n", "holds the panes"],
+      ["a grid with no pane", "<Terminal.Grid columns={2}></Terminal.Grid>\n", "at least one"],
       [
         "text written directly in a grid",
-        '<Terminal.Grid columns={2}>a note<Terminal title="A" /></Terminal.Grid>\n',
-        '<Terminal.Grid> holds only <Terminal> panes. Found text "a note" directly inside it.',
-      ],
-      [
-        "a direct element that is not a pane",
-        '<Terminal.Grid columns={2}><Widget title="x" /><Terminal title="A" /></Terminal.Grid>\n',
-        "<Terminal.Grid> holds only <Terminal> panes. Found <Widget> directly inside it.",
+        "<Terminal.Grid columns={2}>a note</Terminal.Grid>\n",
+        "directly inside it",
       ],
       [
         "a pane produced by control flow",
         '<Terminal.Grid columns={2}><If condition={true}><Terminal title="A" /></If></Terminal.Grid>\n',
-        "<Terminal.Grid> holds only <Terminal> panes. Found <If> directly inside it.",
+        "holds only",
       ],
       [
         "a nested grid",
         '<Terminal.Grid columns={2}><Terminal title="A"><Terminal.Grid columns={1}>' +
           '<Terminal title="B" /></Terminal.Grid></Terminal></Terminal.Grid>\n',
-        "<Terminal.Grid> cannot be written inside another <Terminal.Grid>.",
+        "inside another",
       ],
-      [
-        "a pane outside every grid",
-        '<Terminal title="A">alone</Terminal>\n',
-        "<Terminal> must be a direct child of <Terminal.Grid>.",
-      ],
-      [
-        "a pane below a grid that is not one of its panes",
-        '<Terminal.Grid columns={2}><Terminal title="A"><Terminal title="B" /></Terminal>' +
-          "</Terminal.Grid>\n",
-        "<Terminal> must be a direct child of <Terminal.Grid>.",
-      ],
+      ["a pane outside every grid", '<Terminal title="A">alone</Terminal>\n', "direct child"],
     ];
 
-    for (const [form, source, message] of invalid) {
-      const { result, seen } = yield* validateText(source, {
-        tree: { "components/Widget.md": WIDGET },
-      });
+    for (const [form, source, withdrawnWording] of withdrawn) {
+      const { result, seen } = yield* validateText(source, { includes: ["components"] });
 
       expect(`${form}: ${result.outcome}`).toBe(`${form}: invalid`);
-      expect(`${form}: ${codes(result).includes("structural-usage-invalid")}`).toBe(
-        `${form}: true`,
-      );
-      const said = result.diagnostics.some((diagnostic) => diagnostic.message.includes(message));
-      expect(`${form}: ${said}`).toBe(`${form}: true`);
+      expect(`${form}: ${new Set(codes(result)).size}`).toBe(`${form}: 1`);
+      expect(`${form}: ${codes(result)[0]}`).toBe(`${form}: component-unresolved`);
+      const said = result.diagnostics.map((diagnostic) => diagnostic.message).join("\n");
+      expect(`${form}: ${said.includes(withdrawnWording)}`).toBe(`${form}: false`);
+      expect(`${form}: ${said.includes("Cannot resolve component")}`).toBe(`${form}: true`);
       expect(`${form}: ${JSON.stringify(seen.effects)}`).toBe(`${form}: []`);
     }
   });
 
-  it("TG3: answers the same way twice", function* () {
+  it("WD3: a repository file supplying each name makes the same document valid", function* () {
+    const pane = [
+      "---",
+      "props:",
+      "  title:",
+      "    type: string",
+      "required: [title]",
+      "---",
+      "",
+      "pane {props.title}",
+      "",
+    ].join("\n");
+    const grid = [
+      "---",
+      "props:",
+      "  columns:",
+      "    type: number",
+      "required: [columns]",
+      "---",
+      "",
+      "grid of {props.columns}",
+      "",
+    ].join("\n");
+
+    const { result, seen } = yield* validateText(GRID_DOC, {
+      tree: {
+        "components/Widget.md": WIDGET,
+        "components/Terminal.md": pane,
+        "components/Terminal/Grid.md": grid,
+      },
+      includes: ["components"],
+    });
+
+    expect(result.outcome).toBe("valid");
+    expect(result.diagnostics).toEqual([]);
+    expect(named(result, "Terminal.Grid").origin).toEqual({
+      kind: "repository",
+      path: "components/Terminal/Grid.md",
+    });
+    expect(named(result, "Terminal").origin).toEqual({
+      kind: "repository",
+      path: "components/Terminal.md",
+    });
+    // The nesting the withdrawn placement rule refused — a pane holding an
+    // element that is not a pane, and a pane read as an ordinary region — is
+    // ordinary composition now.
+    expect(outcomes(result)).toEqual(["valid", "valid", "valid", "valid"]);
+    expect(seen.effects).toEqual([]);
+  });
+
+  it("WD4: answers the same way twice", function* () {
     const first = yield* validateText("<Terminal.Grid columns={2}><Terminal /></Terminal.Grid>\n");
     const second = yield* validateText("<Terminal.Grid columns={2}><Terminal /></Terminal.Grid>\n");
 
     expect(JSON.stringify(second.result)).toBe(JSON.stringify(first.result));
-  });
-
-  it("TG3: a dynamic column count and title are decided by expansion, not here", function* () {
-    const { result, seen } = yield* validateText(
-      ["<Terminal.Grid columns={size}>", "<Terminal title={label} />", "</Terminal.Grid>", ""].join(
-        "\n",
-      ),
-    );
-
-    // Whether those expressions produce a positive integer and a non-empty
-    // string is a value the document computes, and evaluating one is
-    // expansion's alone.
-    expect(result.outcome).toBe("valid");
-    expect(result.diagnostics).toEqual([]);
-    expect(seen.effects).toEqual([]);
   });
 });
 

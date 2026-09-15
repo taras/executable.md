@@ -736,3 +736,57 @@ journal- and root-publication-stability snapshots in
 `packages/cli/tests/workflow-suspension.test.ts`, where an `API.Files` call
 count is explicitly not once-only evidence — document re-expansion legitimately
 enters that boundary before the durable effect underneath restores.
+
+## DEC-016: Withdraw the unimplemented terminal-grid surface
+
+**Status:** Decided
+
+**Date:** 2026-09-15
+
+### Context
+
+The #729 implementation reserved `<Terminal.Grid>` and `<Terminal>`, published
+them through syntax inspection, validated their authored structure, and derived
+a row-major layout. It installed no provider: every otherwise valid invocation
+ended with a provider-unavailable error before any pane ran. #734 nevertheless
+recorded the complete #717 terminal-grid and tmux design as an active contract.
+
+No release contains those commits, no provider implementing the contract has
+merged, and no released durable terminal-grid record requires compatibility.
+The accepted names and ownership also changed while the unmerged implementation
+was developed. Keeping the stub would turn an implementation placeholder into
+a public compatibility burden before the product has established the
+interaction model it needs.
+
+### Decision
+
+`<Terminal.Grid>` and `<Terminal>` are not XMD structural syntax. Core does not
+reserve, validate, expand, place, journal, or replay them, and syntax inspection
+does not advertise them. There is no alias or migration reader for the
+unreleased provisional surface.
+
+The terminal-grid lifecycle, pane launcher, pane-terminal ownership, and tmux
+provider contracts are withdrawn from the active architecture and executable
+specifications. The #726 spike remains historical engineering evidence only; it
+does not define current product behavior.
+
+Root `<Session.Launch>` is unchanged. It continues to own the one foreground
+terminal through the established native-launch, session-identity, durability,
+and teardown contracts. Codex and Claude support remain independent of any grid
+or multiplexer.
+
+The generic installed-structural boundary remains the only extension mechanism
+for structural syntax supplied outside core. This decision defines no
+replacement grid, pane, multiplexer, session viewer, or REPL interface.
+
+### Consequences
+
+A document using either withdrawn name receives ordinary component resolution:
+an installed or repository component may claim it, and an unresolved name is a
+missing component rather than a terminal-grid diagnostic. No durable migration
+is necessary because the mainline stub never produced a grid journal record and
+was never released.
+
+Removing the surface is surgical rather than a commit revert. The unrelated
+catalog corrections that landed with #729, the generic structural installation
+work from #806, and every root native-launch change remain.

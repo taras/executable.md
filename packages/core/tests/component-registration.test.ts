@@ -612,6 +612,69 @@ describe("Tier CR — what a document gets", () => {
     expect(output).toContain("reserved");
   });
 
+  // The counterpart to CR24, and the positive half of the terminal-grid
+  // withdrawal: `Terminal.Grid` and `Terminal` are ordinary names now, so a
+  // file named after either one does render — and renders *its own* body,
+  // which is what no syntax or validation row can show.
+  it("CR24c: a repository Terminal.Grid.md and Terminal.md each run their own body", function* () {
+    const dir = yield* useFixture();
+    yield* writeTextFile(
+      join(dir, "doc.md"),
+      '<Terminal.Grid columns={2}>\n<Terminal title="Agent" />\n</Terminal.Grid>\n',
+    );
+    yield* ensureDir(join(dir, "Terminal"));
+    yield* writeTextFile(
+      join(dir, "Terminal/Grid.md"),
+      [
+        "---",
+        "props:",
+        "  columns: { type: number }",
+        "---",
+        "",
+        "GRID:{props.columns}",
+        "",
+        "<Content />",
+      ].join("\n"),
+    );
+    yield* writeTextFile(
+      join(dir, "Terminal.md"),
+      ["---", "props:", "  title: { type: string }", "---", "", "PANE:{props.title}"].join("\n"),
+    );
+
+    const rendered = String(yield* run(dir));
+    // Each definition's own body, with its own props: the grid laid nothing
+    // out and the pane opened nothing — they are Markdown components.
+    expect(rendered).toContain("GRID:2");
+    expect(rendered).toContain("PANE:Agent");
+  });
+
+  it("CR24d: a registration may claim both names, and its own fn answers", function* () {
+    const dir = yield* useFixture();
+    yield* writeTextFile(join(dir, "doc.md"), "<Terminal.Grid />\n\n<Terminal />\n");
+
+    const rendered = yield* scoped(function* () {
+      yield* useHostFiles();
+      yield* registerComponents([
+        registration("Terminal.Grid", "installed-grid"),
+        registration("Terminal", "installed-pane"),
+      ]);
+      return String(
+        yield* collect(
+          yield* execute({
+            path: join(dir, "doc.md"),
+            stream: new InMemoryStream(),
+            includes: [dir],
+          }),
+        ),
+      );
+    });
+
+    // `registration()` renders its origin, so the text names which of the two
+    // registrations answered each element.
+    expect(rendered).toContain("installed-grid");
+    expect(rendered).toContain("installed-pane");
+  });
+
   // Selection stats against the process's directory, so loading has to as well.
   // `<TempDir>` rebinds the contextual `Env.cwd` for its content, and a
   // repository component written inside it must still resolve and load.
