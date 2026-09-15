@@ -13,6 +13,8 @@ the system itself; this file governs how new architecture is designed.
 4. Do not copy an inconsistent existing pattern merely because it already exists.
 5. Correct debt only when the feature changes that surface or cannot remain coherent without the correction.
 6. Record adjacent debt as a proposed follow-up Story instead of expanding the feature.
+7. Each package exports its consumer-facing contextual APIs and their types from /api; consumers depend on that package and import them from /api.
+8. Feature-specific runtime APIs stay with their feature package and are not collected into a central runner context.
 
 The Architect applies these rules without another approval when they settle a
 design. A new concept, ambiguous fit, conflict or proposed exception returns to

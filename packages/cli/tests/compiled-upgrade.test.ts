@@ -46,6 +46,7 @@ import process from "node:process";
 
 import { runXmd } from "../src/cli.ts";
 import { refusedStandardInput } from "./support/standard-input.ts";
+import { refusedPluginModules } from "./support/plugin-modules.ts";
 import { unsupportedRepositories } from "../src/run-repositories.ts";
 import { compiledUpgradeAssembly, writeAll } from "../src/compiled-upgrade.ts";
 import type {
@@ -1535,7 +1536,14 @@ function* commandStatus(args: string[], assembly: UpgradeAssembly): Operation<Co
     // This harness is about the upgrade assembly, so it installs the provider
     // that operates no repository: every composition name still resolves, and
     // reaching one reports an absent provider rather than touching a checkout.
-    yield* runXmd(args, function* () {}, assembly, unsupportedRepositories, refusedStandardInput);
+    yield* runXmd(
+      args,
+      function* () {},
+      assembly,
+      unsupportedRepositories,
+      refusedStandardInput,
+      refusedPluginModules,
+    );
     return { status, stderr: stderr.trim() };
   });
 }

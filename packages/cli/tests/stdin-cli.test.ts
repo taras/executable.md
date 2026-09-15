@@ -43,6 +43,7 @@ import {
 } from "../src/standard-input.ts";
 import type { StandardInputReader } from "../src/standard-input.ts";
 import { unsupportedRepositories } from "../src/run-repositories.ts";
+import { refusedPluginModules } from "./support/plugin-modules.ts";
 import { SOURCE_UPGRADE } from "./support/upgrade-assembly.ts";
 
 function* useFixture<T>(
@@ -847,6 +848,7 @@ function* observedRun(
     SOURCE_UPGRADE,
     unsupportedRepositories,
     reader.read,
+    refusedPluginModules,
   );
 }
 

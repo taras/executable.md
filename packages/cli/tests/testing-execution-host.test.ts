@@ -30,6 +30,7 @@ import { testingExecutionHost } from "../src/testing-host.ts";
 import { planComponentDeclaration, planComponentDescription } from "../src/plan-component.ts";
 
 import { unsupportedRepositories } from "../src/run-repositories.ts";
+import reviewPlugin from "@executablemd/code-review-agent";
 function doc(...lines: string[]): string {
   return `${lines.join("\n")}\n`;
 }
@@ -773,6 +774,12 @@ describe("deterministic dependencies declared for a nested run", () => {
     const hold = withResolvers<void>();
     const host = testingExecutionHost({
       includes: [],
+      // The Plugin a run would have selected, because a `host="run"` child gets
+      // what `xmd run` gets: the child installs it again in its own scope, with
+      // command `run`. XMD bundles none, so a harness that wants the review
+      // graph names it exactly as an operator does.
+      plugins: [reviewPlugin],
+      pluginArgs: [],
       secretDetection: true,
       // deno-lint-ignore require-yield
       installService: function* (): Operation<void> {},
@@ -990,6 +997,12 @@ describe("deterministic dependencies declared for a nested run", () => {
     // to say about it, and what it says is why.
     const host = testingExecutionHost({
       includes: [],
+      // The Plugin a run would have selected, because a `host="run"` child gets
+      // what `xmd run` gets: the child installs it again in its own scope, with
+      // command `run`. XMD bundles none, so a harness that wants the review
+      // graph names it exactly as an operator does.
+      plugins: [reviewPlugin],
+      pluginArgs: [],
       secretDetection: true,
       // deno-lint-ignore require-yield
       installService: function* (): Operation<void> {},

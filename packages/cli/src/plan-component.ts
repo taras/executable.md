@@ -84,7 +84,9 @@ import type { PlanWriter, PlanWriterObservation } from "./plan-writer-profile.ts
 import type { CandidateAssessment } from "./plan-writer-profile.ts";
 import type { MachineSessionAssembly } from "./session-coordinator.ts";
 import { PLAN_DOCUMENT, readPackagedDocument } from "./packaged-document.ts";
-import { runProfileDeclarations, useRunProfileRegistry } from "./syntax.ts";
+import { commandDeclarations, useCommandComponents } from "./syntax.ts";
+import { NO_PLUGINS } from "./plugin-host.ts";
+import type { CommandPlugins } from "./plugin-host.ts";
 
 /**
  * The origin `<Plan>` reports, in every distribution.
@@ -138,6 +140,7 @@ export type StructuralValidation = (candidate: string) => Operation<DocumentVali
 export function structuralValidation(
   includes: readonly string[],
   declarations: readonly MarkdownComponent[],
+  plugins: CommandPlugins = NO_PLUGINS,
 ): StructuralValidation {
   return (candidate: string) =>
     // The registry is installed around the question rather than around the
@@ -145,17 +148,17 @@ export function structuralValidation(
     // `<Testing>`, `<Test>` and the assertions included — and the Component
     // itself has no business reaching a vocabulary it only describes.
     scoped(function* (): Operation<DocumentValidation> {
-      yield* useRunProfileRegistry();
+      yield* useCommandComponents();
       return yield* validateDocumentStructure({
         ...retainedSource(PLAN_IDENTITY, candidate),
         includes: [...includes],
         components: agentIdentityComponents(),
-        // The review graph travels with the profile, so a Plan is checked
-        // against the same vocabulary the later `xmd run` supplies. Checking it
-        // against a narrower one would refuse a program the run would have
-        // accepted — and accepting a wider one would admit a Plan that fails
-        // the first time somebody runs it.
-        declarations: yield* runProfileDeclarations(...declarations),
+        // Whatever the installed Plugins declare travels with the profile, so a
+        // Plan is checked against the same vocabulary the later `xmd run`
+        // supplies. Checking it against a narrower one would refuse a program
+        // the run would have accepted — and accepting a wider one would admit a
+        // Plan that fails the first time somebody runs it.
+        declarations: commandDeclarations(plugins, ...declarations),
       });
     });
 }
@@ -236,6 +239,14 @@ export interface PlanComponentAssembly {
    * after teardown are one dependency rather than three.
    */
   validate?: StructuralValidation;
+  /**
+   * What the command's Plugins declared, when this surface has them.
+   *
+   * The retained assembly, never a second installation: a `<Plan>` inside a run
+   * is checked against the vocabulary that run installed, and reinstalling here
+   * would re-read every packaged asset to arrive at the same answer.
+   */
+  readonly plugins?: CommandPlugins;
 }
 
 /** The frozen inputs `<PlanInputs>` answers with. */
@@ -386,7 +397,9 @@ export function* planComponentDeclaration(
   // One structural question for this invocation, asked by the draft check and by
   // the admission alike — and, when the command supplied it, by the command's own
   // gate after this declaration is gone.
-  const validate = assembly.validate ?? structuralValidation(assembly.includes, declared);
+  const validate =
+    assembly.validate ??
+    structuralValidation(assembly.includes, declared, assembly.plugins ?? NO_PLUGINS);
   const declaration = Markdown({
     name: PLAN_COMPONENT,
     origin: PLAN_ORIGIN,

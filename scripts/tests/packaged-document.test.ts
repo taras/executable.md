@@ -44,6 +44,7 @@ import {
   EMBEDDED_PACKAGES,
   PACKAGED_DOCUMENTATION,
   PACKAGED_DOCUMENTS,
+  UNEMBEDDED_PACKAGES,
 } from "../lib/compile.ts";
 
 const ROOT = fileURLToPath(new URL("../../", import.meta.url));
@@ -57,7 +58,12 @@ interface PackagedDocuments {
 }
 
 function* members(): Operation<string[]> {
-  return (yield* until(readdir(path.join(ROOT, "packages")))).sort();
+  const all = (yield* until(readdir(path.join(ROOT, "packages")))).sort();
+  // A package the binary does not contain ships its assets for whoever
+  // installed *it*, and embedding them would put bytes in the binary no code
+  // in it can reach. The claim that it is outside the binary is checked below
+  // rather than taken on trust.
+  return all.filter((member) => !UNEMBEDDED_PACKAGES.includes(`packages/${member}`));
 }
 
 /** Repository-relative paths beneath `directory`, or none when it does not exist. */
@@ -153,6 +159,26 @@ describe("the canonical compile inputs", () => {
     const documentation = yield* packagedDocumentation();
     expect(documentation.length).toBeGreaterThan(0);
     coverage(documentation, PACKAGED_DOCUMENTATION);
+  });
+
+  it("leave a package out of the binary only when nothing in the binary imports it", function* () {
+    // The filter above hides a package from the sweep, so it is exactly the
+    // kind of claim that rots. Every entry has to still be true: a CLI
+    // production module importing one would put it in the binary's module
+    // graph, and its assets would then be missing rather than deliberately
+    // absent.
+    expect(UNEMBEDDED_PACKAGES.length).toBeGreaterThan(0);
+    const sources = (yield* beneath("packages/cli/src")).filter((entry) => entry.endsWith(".ts"));
+    expect(sources.length).toBeGreaterThan(0);
+    const manifest = JSON.parse(yield* readTextFile(path.join(ROOT, "packages/cli/package.json")));
+    for (const excluded of UNEMBEDDED_PACKAGES) {
+      const name = JSON.parse(yield* readTextFile(path.join(ROOT, excluded, "package.json"))).name;
+      for (const source of sources) {
+        const text = yield* readTextFile(path.join(ROOT, source));
+        expect([source, text.includes(name)]).toEqual([source, false]);
+      }
+      expect(Object.keys(manifest.dependencies ?? {})).not.toContain(name);
+    }
   });
 
   it("embed exactly those, and nothing else", function* () {

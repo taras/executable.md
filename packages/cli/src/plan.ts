@@ -61,6 +61,7 @@ import {
   structuralValidation,
 } from "./plan-component.ts";
 import type { StructuralValidation } from "./plan-component.ts";
+import type { CommandPlugins } from "./plugin-host.ts";
 import type { MachineSessionAssembly } from "./session-coordinator.ts";
 import { describeError } from "./props.ts";
 import { renderSyntaxMarkdown } from "./syntax.ts";
@@ -150,6 +151,16 @@ export interface PlanDependencies {
    * agree today.
    */
   validate?: StructuralValidation;
+  /**
+   * What this command's Plugins declared.
+   *
+   * One assembly for the whole command: the symbols the writer is shown, every
+   * draft check, the admission inside `<Plan>` and the gate this command keeps
+   * afterwards all read it. Reinstalling per check would re-read every packaged
+   * asset in order to arrive at the same answer, and could arrive at a
+   * different one.
+   */
+  plugins?: CommandPlugins;
 }
 
 /**
@@ -191,7 +202,8 @@ export function* runPlan(command: PlanCommand, deps: PlanDependencies): Operatio
   // check, the admission and the gate below all ask about is the profile the
   // approved program would actually run in.
   const validate =
-    deps.validate ?? structuralValidation(command.include, [yield* planComponentDescription()]);
+    deps.validate ??
+    structuralValidation(command.include, [yield* planComponentDescription()], deps.plugins);
 
   let authored: Result<string>;
   try {
@@ -217,6 +229,7 @@ export function* runPlan(command: PlanCommand, deps: PlanDependencies): Operatio
       host,
       installElicitation: deps.installElicitation,
       validate,
+      ...(deps.plugins === undefined ? {} : { plugins: deps.plugins }),
     });
 
     authored = yield* runPlanCommandDocument({

@@ -58,6 +58,7 @@ import {
 } from "./invocation-rules.ts";
 import type { IdentityComponent } from "./invocation-identity.ts";
 import { readRootSource, rootSourcePath } from "./root-source.ts";
+import { composeRootDefinition } from "./root-composition.ts";
 import type { RootDocumentSource } from "./root-source.ts";
 import {
   answersViolations,
@@ -555,7 +556,17 @@ class ValidationState {
     // section, and a component selecting this path is asking about the whole
     // definition. Either way the bytes above are read once.
     const view = options.target === undefined ? path : undefined;
-    return this.#admitParsed(ordinal, parsed.value.definition, view);
+    // The same composition a run performs. A wrapper a Plugin composes is part
+    // of the program this root becomes, so it is walked on the same terms — and
+    // a candidate is checked against the profile that will run it (spec §5.4).
+    let composed: ComponentDefinition;
+    try {
+      composed = yield* composeRootDefinition(parsed.value.definition);
+    } catch (error) {
+      this.#draft(ordinal, "source-invalid", { message: messageOf(error), cause: error });
+      return undefined;
+    }
+    return this.#admitParsed(ordinal, composed, view);
   }
 
   /**

@@ -176,6 +176,7 @@ import type { SyntaxSymbolsProvider } from "./syntax-reference.ts";
 import type { WorkflowComponentBundle, WorkflowComponentCatalog } from "./components/bundle.ts";
 import type { CodeBlockContext, CodeBlockResult, EvalEnv } from "./types.ts";
 import { readRootSource, rootSourcePath } from "./root-source.ts";
+import { composeRootDefinition } from "./root-composition.ts";
 import type { RootDocumentSource } from "./root-source.ts";
 import { useEvalScope } from "@effectionx/scope-eval";
 import { declaredRouting, FOREGROUND, route, withRouting } from "./foreground.ts";
@@ -2102,7 +2103,7 @@ function* documentWorkflow(
   // installed by execute maps "__root__" to the run's root document source.
   // The ephemeral() wrapper bridges typing only — the import inside remains a
   // durable, journaled operation.
-  const root = yield* ephemeral(
+  const imported = yield* ephemeral(
     (function* (): Operation<ComponentDefinition | FunctionComponentDefinition> {
       const imported = yield* importComponent("__root__");
       const imports = environment.componentResolution;
@@ -2118,9 +2119,15 @@ function* documentWorkflow(
     })(),
   );
 
-  if (root.kind === "function") {
+  if (imported.kind === "function") {
     throw new Error("Root document must be a markdown file, not a function component");
   }
+
+  // What this run executes, after the Document and RootMetadata APIs have been
+  // asked. With no Plugin middleware the answer is the definition that was just
+  // imported, so the durable record above and the body below describe the same
+  // document they always did (spec §5.4).
+  const root = yield* ephemeral(composeRootDefinition(imported));
 
   const validatedProps = yield* ephemeral(validateProps("__root__", props, root.props));
 

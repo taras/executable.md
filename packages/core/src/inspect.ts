@@ -33,6 +33,7 @@ import { STRUCTURAL_DECLARATIONS } from "./structural.ts";
 import { assertDistinctIdentityNames } from "./invocation-identity.ts";
 import type { IdentityComponent } from "./invocation-identity.ts";
 import { readRootSource, rootSourcePath } from "./root-source.ts";
+import { composeRootDefinition } from "./root-composition.ts";
 import type { RootDocumentSource } from "./root-source.ts";
 
 const TEXT_RETURN_SCHEMA: ReturnsSchema = { type: "string" };
@@ -116,7 +117,9 @@ export function* inspectDocument(options: InspectOptions): Operation<DocumentInf
   // is already here, so describing it reads nothing.
   const content = yield* readRootSource(options);
   const parsed = yield* parseRootMarkdownDefinition("__root__", path, content, options.target);
-  const { definition } = parsed;
+  // The same composition a run performs, so what a caller is told a document
+  // declares is what the document will run as (spec §5.4).
+  const definition = yield* composeRootDefinition(parsed.definition);
 
   return {
     path,

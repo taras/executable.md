@@ -22,6 +22,7 @@ import { runCli } from "@executablemd/test-support/launch";
 import { runXmd } from "../src/cli.ts";
 import { SOURCE_UPGRADE } from "./support/upgrade-assembly.ts";
 import { refusedStandardInput } from "./support/standard-input.ts";
+import { refusedPluginModules } from "./support/plugin-modules.ts";
 
 import { unsupportedRepositories } from "../src/run-repositories.ts";
 function* useFixture<T>(
@@ -591,6 +592,7 @@ function* replacingRun(
       SOURCE_UPGRADE,
       unsupportedRepositories,
       refusedStandardInput,
+      refusedPluginModules,
     );
 
     return { status, stderr, serviceInstalled, serviceStarted, documentReads, reads };
@@ -767,6 +769,7 @@ function* helpRun(args: string[], cwd: string): Operation<HelpRun> {
       SOURCE_UPGRADE,
       unsupportedRepositories,
       refusedStandardInput,
+      refusedPluginModules,
     );
 
     return { status, stdout, stderr, serviceInstalled };

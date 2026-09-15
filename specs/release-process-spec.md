@@ -636,14 +636,23 @@ The checks that hold this together, each proving a different build:
   under Deno, Node and Bun, which is what makes it evidence rather than one
   runtime's opinion.
 - `scripts/tests/cli-npm-bin.test.ts` builds the real package, asserts every
-  emitted `esm/src/documents/` asset is byte-identical to the source, and then
-  asks the built bin — from a directory that is not the package — which Plan
-  `<Plan>` Component source it would let a document write. The answer carries the
+  emitted `esm/src/documents/` asset is byte-identical to the source, checks
+  that the emitted core and runtime manifests publish `./api` and that the
+  module behind it was emitted, runs the built bin with a `--plugin` an operator
+  would write, and then asks the built bin — from a directory that is not the
+  package — which Plan `<Plan>` Component source it would let a document write. The answer carries the
   origin and the SHA-256 of those bytes, so a build that shipped different ones, or none,
   answers differently here rather than at a person's first `xmd plan`.
 - `scripts/tests/plan-component-compiled.test.ts` asks the same question of the
   compiled binary, which has no checkout to fall back to. It runs in the `smoke`
   job, beside the other suites whose subject is `dist/xmd`.
+- `scripts/tests/plugin-compiled.test.ts` asks the binary to load a module that
+  is *not* embedded in it — an operator's `--plugin` — from a directory that is
+  not the checkout. A binary with no `node_modules` and no module graph to add
+  to either loads an external ESM module and runs it, or it cannot, and nothing
+  else can tell. It also proves the binary describes only the engine's own
+  language until a Plugin is named, and gains the review graph when one is. It
+  runs in the `smoke` job for the same reason.
 - `scripts/tests/packaged-document.test.ts` holds the canonical compile inputs
   to the document *directories* that exist and are not empty, because which
   packages ship documents is the one thing no build discovers for itself.
@@ -670,9 +679,14 @@ binary narrower than the one a release publishes.
 the flags, and every embedded asset, in three lists that differ in how they are
 maintained:
 
-- `EMBEDDED_PACKAGES` — a whole package the binary executes Markdown out of
-  (`packages/code-review-agent`). A decision rather than a file layout, so
-  nothing discovers it.
+- `EMBEDDED_PACKAGES` — a whole package the binary executes Markdown out of.
+  **Empty**, because XMD ships no Plugin: the binary contains the program `xmd`
+  is, and a Plugin is not part of it. An entry here is for a package the binary
+  *imports*; naming one nothing imports would embed bytes no code can reach.
+- `UNEMBEDDED_PACKAGES` — the packages whose assets the binary deliberately does
+  not carry, so the discovery sweep below does not demand them. The code-review
+  package is the one: it is selected with `--plugin` and reads its own assets
+  from wherever the operator installed it.
 - `PACKAGED_DOCUMENTS` — each package's `src/documents/`, embedded whole (§9).
 - `PACKAGED_DOCUMENTATION` — each package's `components.md`, named individually
   because the directories they sit in are package source, and embedding those
@@ -686,18 +700,22 @@ dropped `--target` would compile the runner's own platform and upload it under
 another platform's artifact name. `verify:clean` builds the same argv from the
 module directly, since it spawns its phases inside a clone of `HEAD`.
 
-The three lists partition the assets rather than overlapping. A whole entry in
-`EMBEDDED_PACKAGES` already carries every `src/documents/` directory and every
-`components.md` nested inside it, so those are **not** added to the individual
-lists as well — the code-review package ships both, and naming either
-individually would compile the same bytes twice while reading as the coverage the
-whole-package entry already provides.
+The lists partition the assets rather than overlapping. A whole entry in
+`EMBEDDED_PACKAGES` would already carry every `src/documents/` directory and
+every `components.md` nested inside it, so those are **not** added to the
+individual lists as well: naming either individually would compile the same
+bytes twice while reading as the coverage the whole-package entry already
+provides.
 
 `scripts/tests/packaged-document.test.ts` walks the repository for both
 discoverable kinds and holds the lists to what it finds in **both** directions —
 a missing entry ships a binary without its asset, a stale one embeds nothing
 while reading as coverage, and a redundant one is rejected against the
-whole-package entry that already covers it.
+whole-package entry that already covers it. `UNEMBEDDED_PACKAGES` hides a
+package from that sweep, which is exactly the kind of claim that rots, so the
+same test checks it: a CLI production module importing one — or the CLI package
+depending on it — fails there, because the package would then be in the binary
+with its assets missing rather than deliberately absent.
 
 ### The documentation smoke
 

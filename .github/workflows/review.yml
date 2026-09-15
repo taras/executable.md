@@ -38,6 +38,7 @@ jobs:
           DEEPINFRA_TOKEN: ${{ secrets.DEEPINFRA_TOKEN }}
         run: |
           ./dist/xmd run .reviews/ReviewPR.md \
+            --plugin ./packages/code-review-agent/mod.ts \
             -j .reviews/journal.jsonl \
             --verbose
 

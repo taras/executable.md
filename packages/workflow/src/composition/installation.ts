@@ -9,7 +9,7 @@
  *
  * One array, three consumers, because three descriptions of one vocabulary
  * would drift. `useCompositionComponents()` registers it inside a workflow
- * attachment; `useRunProfileRegistry()` registers it for `xmd syntax` and for
+ * attachment; `useCommandComponents()` registers it for `xmd syntax` and for
  * `xmd plan`'s validation and generation; `installDocumentComponents()`
  * registers it for an ordinary run. Registering it installs no provider,
  * performs no repository discovery, acquires no lock and reaches no network:

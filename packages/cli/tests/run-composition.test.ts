@@ -27,7 +27,7 @@ import { exists, readdir, readTextFile, writeTextFile } from "@effectionx/fs";
 import { useTempDirectory } from "@executablemd/test-support/temp";
 import { join } from "node:path";
 import { COMPOSITION_REGISTRATIONS } from "@executablemd/workflow";
-import { syntaxSymbols, useRunProfileRegistry } from "../src/syntax.ts";
+import { syntaxSymbols, useCommandComponents } from "../src/syntax.ts";
 import { DEFAULT_REPOSITORY_ROOT, unsupportedRepositories } from "../src/run-repositories.ts";
 
 /** Every element an author can write that needs a repository provider. */
@@ -162,7 +162,7 @@ describe("ORC1 — describing the vocabulary reaches nothing", () => {
     // Registering the declarations installs no provider: the Apis still answer
     // with their own defaults, which is what a catalog is allowed to leave
     // behind.
-    yield* useRunProfileRegistry();
+    yield* useCommandComponents();
     const failure = yield* raisedValue(
       collect(yield* execute({ ...inlineSource(`<Git.Push />`), stream: new InMemoryStream() })),
     );
@@ -174,7 +174,7 @@ describe("ORC1 — describing the vocabulary reaches nothing", () => {
 
 describe("ORC2 — one language, described everywhere and operated somewhere", () => {
   it("registers the same thirteen declarations the syntax catalog describes", function* () {
-    // The array itself, rather than a second list: `useRunProfileRegistry()`,
+    // The array itself, rather than a second list: `useCommandComponents()`,
     // `installDocumentComponents()` and `useCompositionComponents()` all
     // consume this one, so there is nothing for a runtime to disagree about.
     expect(COMPOSITION_REGISTRATIONS).toHaveLength(13);

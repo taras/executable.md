@@ -354,6 +354,17 @@ Plan is a program a later `xmd run` executes, and this authorship execution
 searches no repository and refuses almost every capability, so symbols derived
 from it would describe a vocabulary the approved program would not have.
 
+That vocabulary is whatever the Plugins this invocation explicitly selected
+declare, and nothing else: XMD ships no Plugin, so a `xmd plan` that named none
+describes the engine's own language and a Plan is held to exactly that. There is
+no review prefix in front of the selection. The command installs what was named
+once and retains one assembly: the symbols the writer is shown,
+every draft check, the admission inside `<Plan>` and the gate the command keeps
+after that document has torn down all read it. Reinstalling per check would
+re-read every packaged asset in order to arrive at the same answer, and could
+arrive at a different one — which is how a Plan comes to be validated against a
+vocabulary the later run does not have.
+
 **The root is an adapter, not the workflow.** Its whole body is two elements: it
 projects `props.request` into `<Plan>` without adding whitespace, supplies
 `props.session`, captures the exact source the Component renders, and returns it.

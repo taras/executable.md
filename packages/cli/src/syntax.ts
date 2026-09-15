@@ -2,17 +2,23 @@
  * `xmd syntax` — everything a document may write here, described without
  * running any of it.
  *
- * Two jobs, kept apart. The first is entering the `run` profile's *declarative*
+ * Two jobs, kept apart. The first is entering the command's *declarative*
  * bootstraps: the same calls the runtime installers delegate to, with none of
  * the middleware, providers, launchers or activation those installers also
  * arrange. The second is rendering, and both renderers take the symbols as a
  * value — neither performs discovery, and neither parses the other's output.
  *
  * Entering the bootstraps rather than splicing their registration arrays is
- * what makes the documentation this command reads the profile's own: a package
+ * what makes the documentation this command reads the command's own: a package
  * installs its registrations and its documentation in one call, so a command
  * that has the components has the words that describe them. Splicing the arrays
  * left the two halves to be kept in step by hand, and they were not.
+ *
+ * What a Plugin contributes is not entered here at all. A Plugin installs its
+ * registrations and its documentation in the command scope this one is entered
+ * inside, and declares its Markdown components by value — so what the symbols
+ * describe is what the command installed, and a command that installed no
+ * Plugin describes exactly the engine's own language.
  *
  * JSON is the canonical, lossless projection and belongs to this command.
  * Markdown belongs to core, because a document that writes `<Syntax />` is shown
@@ -39,11 +45,9 @@ import { useTestingComponents } from "@executablemd/testing";
 import { useWebComponents } from "@executablemd/web";
 import { useVerboseComponent } from "./verbose-component.ts";
 import { useCompositionComponents } from "@executablemd/workflow";
-import {
-  reviewComponentDeclarations,
-  useReviewComponents,
-} from "@executablemd/code-review-agent/review-components";
-import type { MarkdownComponent } from "@executablemd/core/host";
+import type { ExecutionDeclaration } from "@executablemd/core/host";
+import { NO_PLUGINS } from "./plugin-host.ts";
+import type { CommandPlugins } from "./plugin-host.ts";
 
 export { renderSyntaxMarkdown };
 
@@ -66,15 +70,21 @@ export { renderSyntaxMarkdown };
  * state and documentation middleware. Leaving it removes the layer, and there
  * is no process, agent, service, journal, file or permission left to clean up.
  */
-export function* syntaxSymbols(includes: readonly string[]): Operation<SyntaxSymbols> {
+export function* syntaxSymbols(
+  includes: readonly string[],
+  plugins: CommandPlugins = NO_PLUGINS,
+): Operation<SyntaxSymbols> {
   return yield* scoped(function* () {
-    yield* useRunProfileRegistry();
-    return yield* profileSymbols(includes);
+    yield* useCommandComponents();
+    return yield* profileSymbols(includes, plugins);
   });
 }
 
 /** The profile's symbols, inside a scope that has already bootstrapped it. */
-function* profileSymbols(includes: readonly string[]): Operation<SyntaxSymbols> {
+function* profileSymbols(
+  includes: readonly string[],
+  plugins: CommandPlugins,
+): Operation<SyntaxSymbols> {
   return yield* inspectSyntax({
     includes,
     components: agentIdentityComponents(),
@@ -82,34 +92,44 @@ function* profileSymbols(includes: readonly string[]): Operation<SyntaxSymbols> 
     // describe a vocabulary no run has. Described from the packaged bytes:
     // inspection mints nothing, so it reports the Component's identity and
     // contract without building the capabilities only a run can build.
-    declarations: yield* runProfileDeclarations(yield* planComponentDescription()),
+    declarations: commandDeclarations(plugins, yield* planComponentDescription()),
   });
 }
 
 /**
- * Every Markdown component the `run` profile declares, in one order.
+ * Everything this command declares, in one order.
  *
- * The review graph first, then whatever the calling surface declares for
- * itself. Built here rather than at each site for the reason the registry
- * bootstrap is: four places assemble this profile — an ordinary run, a nested
- * `host="run"` child, inspection, and `<Plan>`'s validation — and a list spelled
- * four times is four chances for one of them to describe a vocabulary the others
- * do not have. A document validated against a profile it will not run under is
- * the specific failure that costs an agent a whole authoring round.
+ * Every execution declaration the selected Plugins contributed — exact Markdown
+ * components *and* structural syntax, on one list under one discriminant —
+ * followed by whatever the calling surface declares for itself. Both arms,
+ * because both are what a name means here: a catalog carrying only the Markdown
+ * half would describe a language a run does not have, and a Plan writing a
+ * construct the run expands would be refused for writing syntax nobody had
+ * heard of.
+ *
+ * Built here rather than at each site for the reason the registry bootstrap is:
+ * four places assemble this vocabulary — an ordinary run, a nested
+ * `host="run"` child, inspection, and `<Plan>`'s validation — and a list
+ * spelled four times is four chances for one of them to describe a vocabulary
+ * the others do not have. A document validated against a profile it will not
+ * run under is the specific failure that costs an agent a whole authoring
+ * round.
  *
  * The order is fixed rather than incidental. Nothing depends on it for
- * resolution — two declarations claiming one name is refused at admission rather
- * than settled by position — but a stable order makes a catalog's bytes stable,
- * which is what lets a source run and a compiled run be compared directly.
+ * resolution — two declarations claiming one name is refused at admission
+ * rather than settled by position — but a stable order makes a catalog's bytes
+ * stable, which is what lets a source run and a compiled run be compared
+ * directly.
  */
-export function* runProfileDeclarations(
-  ...own: readonly MarkdownComponent[]
-): Operation<MarkdownComponent[]> {
-  return [...(yield* reviewComponentDeclarations()), ...own];
+export function commandDeclarations(
+  plugins: CommandPlugins,
+  ...own: readonly ExecutionDeclaration[]
+): ExecutionDeclaration[] {
+  return [...plugins.declarations, ...own];
 }
 
 /**
- * The declarations the `run` profile installs, and nothing else.
+ * The declarative vocabulary every command installs, and nothing else.
  *
  * Shared with `xmd plan`, which both describes this vocabulary to a generator
  * and validates what comes back. Bootstrapping only here would make the symbols
@@ -121,17 +141,17 @@ export function* runProfileDeclarations(
  * discovers an ambient repository, acquires a lock, spawns Git or reads a
  * credential.
  */
-export function* useRunProfileRegistry(): Operation<void> {
+export function* useCommandComponents(): Operation<void> {
   yield* useVerboseComponent();
   yield* useAgentComponents();
   yield* useTestingComponents();
   yield* useWebComponents();
   // The repository-composition vocabulary.
   yield* useCompositionComponents();
-  // The six reserved review registrations and their documentation. The
-  // thirty-five Markdown components of the same graph are declarations rather
-  // than registrations, and travel through `runProfileDeclarations()` above.
-  yield* useReviewComponents();
+  // No package-specific vocabulary is bootstrapped here. What a Plugin
+  // registers — the review graph's six reserved registrations among them — it
+  // registers in the command scope this one is entered inside, so a command
+  // that installed no Plugin describes exactly the engine's own language.
 }
 
 /**
@@ -164,10 +184,11 @@ export function renderSyntaxJson(symbols: SyntaxSymbols): string {
 export function* renderSyntaxDocumentation(
   includes: readonly string[],
   names: readonly string[],
+  plugins: CommandPlugins = NO_PLUGINS,
 ): Operation<string> {
   return yield* scoped(function* () {
-    yield* useRunProfileRegistry();
-    const catalog = yield* profileSymbols(includes);
+    yield* useCommandComponents();
+    const catalog = yield* profileSymbols(includes, plugins);
     const index = documentationIndexFor(yield* capturedDocumentation());
     return renderSelectedDocumentation(selectDocumented(catalog, catalog, names, index));
   });

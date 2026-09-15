@@ -48,6 +48,7 @@ jobs:
           GITHUB_REPOSITORY: ${{ github.repository }}
         run: |
           ./dist/xmd run .reviews/AnalyzeRepoCI.md \
+            --plugin ./packages/code-review-agent/mod.ts \
             -j .reviews/journal.analyze.ci.jsonl > .reviews/analyze-report.md
 
       - name: Write run metadata

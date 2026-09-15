@@ -358,6 +358,19 @@ Root document props belong to `xmd run` alone, and so does the inline root
 document. Neither `xmd test` nor `xmd plan` accepts `--props`, `--props-*`,
 `XMD_PROPS`, `XMD_PROPS_*`, or `--eval`/`-e`.
 
+### Properties are not host configuration
+
+A root property and a CLI option are separate boundaries, and a shared spelling
+does not join them. `--props-verbose yes` supplies the document's own `verbose`
+property; the `verbose` a component, a Plugin or the engine reads is the typed
+`Config` value the command line settled, and nothing copies one into the other.
+So a document declaring a property named after a CLI option changes no timeout,
+no verbosity and no other host answer — and an invocation that configured the
+host supplies no implicit document property in return. There is no untyped
+request bag either: what a Plugin is told about the invocation is the normalized
+command and the original argv, and what it reads about configuration it reads
+through `Config`.
+
 ## Generated documents
 
 `xmd plan` produces a program rather than running one

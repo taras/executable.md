@@ -348,19 +348,21 @@ describe("compiled xmd", { sanitizeOps: false, sanitizeResources: false }, () =>
  * asked for by name.
  */
 describe(
-  "the trusted review graph, as both installations ship it",
+  "the trusted review graph, as both installations load it",
   { sanitizeOps: false, sanitizeResources: false },
   () => {
     /**
-     * The review graph is the installation's, in both installations, and a
-     * checkout cannot take a name back from it.
+     * The review graph belongs to the Plugin an operator selected, in both
+     * installations, and a checkout cannot take a name back from it.
      *
      * A review is the one program that must not be answerable by the thing it is
      * reviewing. While its components lived in `.reviews/` and every entrypoint
      * reached them with `--include`, a pull request could add its own
      * `Finding.md` and the review would run the branch's copy while reporting on
-     * it. So the graph moved into the package, and this is the proof that the
-     * move actually reaches a person's installation.
+     * it. So the graph moved into the package, and this is the proof that it
+     * actually reaches a person's installation when they select it. XMD bundles
+     * no Plugin: both installations name the package by path, which is also the
+     * route an installation with no checkout has.
      *
      * Everything here is deliberately hostile to the mechanism. The working
      * directory is not the checkout, so a lookup that resolved relative to the
@@ -380,7 +382,7 @@ describe(
      * here render from their own bytes, which is what makes this cheap enough to
      * be an ordinary case.
      */
-    it("supplies the trusted review graph to both installations", function* () {
+    it("supplies the trusted review graph to both installations that select it", function* () {
       if (!(yield* exists(BINARY))) {
         throw new Error(`${BINARY} is missing — run \`deno task build\` before this case`);
       }
@@ -422,6 +424,10 @@ describe(
         ),
       );
 
+      // The graph is a Plugin an operator selects, so both installations name
+      // it the same way: an explicit path to the package that ships it. XMD
+      // bundles none, and neither of these carries it until it is named.
+      const review = `--plugin=${path.join(ROOT, "packages/code-review-agent/mod.ts")}`;
       const installations = [
         ["compiled", BINARY, [] as string[]],
         ["source", Deno.execPath(), ["run", "--allow-all", path.join(ROOT, SOURCE_ENTRY)]],
@@ -433,9 +439,10 @@ describe(
       for (const [label, command, args] of installations) {
         const attempt = yield* timebox<ProcessResult>(TIMEOUT, function* () {
           return yield* exec(command, {
-            // One include, and it is the caller's. Nothing names the review
-            // components, which is the entire claim.
-            arguments: [...args, "run", "doc.md", "--include", "custom"],
+            // One include, and it is the caller's. The Plugin is named, and
+            // nothing names the review components — which is the entire claim:
+            // a selected declaration beats a same-named file in the include.
+            arguments: [...args, "run", review, "doc.md", "--include", "custom"],
             cwd: elsewhere,
           }).join();
         });
@@ -460,7 +467,10 @@ describe(
 
         const described = yield* timebox<ProcessResult>(TIMEOUT, function* () {
           return yield* exec(command, {
-            arguments: [...args, "syntax", "--json", "--include", "custom"],
+            // The same selection: what an installation describes is what it
+            // would run, and describing it without the Plugin would describe a
+            // vocabulary the run above did not have.
+            arguments: [...args, "syntax", review, "--json", "--include", "custom"],
             cwd: elsewhere,
           }).join();
         });

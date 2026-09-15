@@ -560,6 +560,12 @@ const COMPILED_BINARY: RuntimeExclusion[] = [
       "asks the compiled `dist/xmd` which `<Plan>` Component source it carries, and only `deno compile --include` embeds that asset — no test shard builds the binary, so the suite belongs beside the other compiled-binary evidence the `smoke` job builds for through README.md#Build",
     issue: "https://github.com/taras/executable.md/issues/567",
   },
+  {
+    path: "scripts/tests/plugin-compiled.test.ts",
+    reason:
+      "asks the compiled `dist/xmd` to load a Plugin module that is not embedded in it — a binary with no checkout, no node_modules and no module graph to add to, which only `deno compile` produces and no test shard builds; it belongs beside the other compiled-binary evidence the `smoke` job builds for through README.md#Build",
+    issue: "https://github.com/taras/executable.md/issues/567",
+  },
 ];
 
 /**
