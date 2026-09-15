@@ -1,8 +1,8 @@
 /**
  * @executablemd/code-review-agent
  *
- * The review component graph, as the Plugin a distribution bundles, and the
- * parsers behind the components in it.
+ * The review component graph, as the Plugin a host installs once an operator
+ * has selected this package, and the parsers behind the components in it.
  *
  * The default export is the Plugin. The named exports are the library they
  * always were, and `./review-components` still publishes the graph's own
@@ -11,7 +11,8 @@
 
 /**
  * The review graph as a Plugin — the package's default export, so a host that
- * selected this module has one unambiguous value to install.
+ * was pointed at this module by an explicit `--plugin` selection has one
+ * unambiguous value to install.
  */
 export { default } from "./src/plugin.ts";
 

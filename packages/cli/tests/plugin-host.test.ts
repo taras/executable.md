@@ -8,9 +8,10 @@
  * reads no document. And the whole list has the command's lifetime, so a
  * failure part-way through unwinds what came before it.
  *
- * The bundled review Plugin's own rows are here too, because which commands
- * claim its forty-one names is a property of this assembly rather than of the
- * package: the graph itself is `scripts/tests/review-infrastructure.test.ts`.
+ * The review Plugin's own rows are here too, because which commands claim its
+ * forty-one names is a property of this assembly rather than of the package —
+ * and because nothing installs it until a selection names it. The graph itself
+ * is `scripts/tests/review-infrastructure.test.ts`.
  */
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";

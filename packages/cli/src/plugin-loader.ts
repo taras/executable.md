@@ -3,9 +3,8 @@
  *
  * Explicit only. Nothing here scans the current repository, `node_modules`, a
  * package manifest, the root document or the component search path for a
- * Plugin: a module is loaded because an operator named it or because this
- * distribution bundles it, and a package that happens to be installed does
- * nothing at all.
+ * Plugin: a module is loaded because an operator named it, and a package that
+ * happens to be installed does nothing at all.
  *
  * How a module is *reached* is the host's — see `host-plugin-modules.ts`. This
  * module holds the loader contract and what a loaded namespace has to be, which

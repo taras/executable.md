@@ -13563,7 +13563,7 @@ Plugin is the run it always was.
 | PL2a | Admission returns the value | What comes back is the admitted object itself: members outside the contract survive, `install` is the same function the module exported, and calling it through admission gives it the receiver its own module gave it |
 | PL3 | The flag grammar | Both spellings are read in occurrence order, only those tokens are removed, the scan stops at `--`, the original argv is retained frozen, and a missing or option-shaped value refuses before anything loads |
 | PL4 | The command a Plugin is told | Each public command reports its own name and the shorthand document form reports `run`; help, `--version` and the internal worker mode install no Plugin and load no module |
-| PL5 | Order composes | Bundled Plugins install first and explicit ones in occurrence order; the first installed is the outermost `Document` wrapper, and reversing the selection reverses the composition |
+| PL5 | Order composes | The repeated `--plugin` occurrences in written order are the complete order, with no prefix in front of them; the first selected Plugin is the outermost `Document` wrapper, and reversing the selection reverses the composition |
 | PL6 | One name, one Plugin | Two selections claiming one Plugin name refuse before the first `install()` runs, whichever modules they came from |
 | PL7 | The active list | Every Plugin, including the first, reads the complete frozen list, and a snapshot is not the installed array |
 | PL8 | Declarative contribution | `components`, `structural` and `admissions` cross as one `ExecutionInstallation`; returning `undefined` contributes none; two Plugins declaring one component name refuse at admission |

@@ -1,5 +1,5 @@
 // Declares one exact Markdown component. The bytes, their origin and their
-// digest are what the host states about them, exactly as a bundled Plugin
+// digest are what the host states about them, exactly as any selected Plugin
 // states its own — a Plugin is trusted code, and this is the same boundary.
 import { Plugin } from "@executablemd/core/api";
 // A declaration is what a *host* states about bytes it ships, so its

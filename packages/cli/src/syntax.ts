@@ -97,16 +97,23 @@ function* profileSymbols(
 }
 
 /**
- * Every Markdown component this command declares, in one order.
+ * Everything this command declares, in one order.
  *
- * What the installed Plugins declared first, then whatever the calling surface
- * declares for itself. Built here rather than at each site for the reason the
- * registry bootstrap is: four places assemble this vocabulary — an ordinary
- * run, a nested `host="run"` child, inspection, and `<Plan>`'s validation — and
- * a list spelled four times is four chances for one of them to describe a
- * vocabulary the others do not have. A document validated against a profile it
- * will not run under is the specific failure that costs an agent a whole
- * authoring round.
+ * Every execution declaration the selected Plugins contributed — exact Markdown
+ * components *and* structural syntax, on one list under one discriminant —
+ * followed by whatever the calling surface declares for itself. Both arms,
+ * because both are what a name means here: a catalog carrying only the Markdown
+ * half would describe a language a run does not have, and a Plan writing a
+ * construct the run expands would be refused for writing syntax nobody had
+ * heard of.
+ *
+ * Built here rather than at each site for the reason the registry bootstrap is:
+ * four places assemble this vocabulary — an ordinary run, a nested
+ * `host="run"` child, inspection, and `<Plan>`'s validation — and a list
+ * spelled four times is four chances for one of them to describe a vocabulary
+ * the others do not have. A document validated against a profile it will not
+ * run under is the specific failure that costs an agent a whole authoring
+ * round.
  *
  * The order is fixed rather than incidental. Nothing depends on it for
  * resolution — two declarations claiming one name is refused at admission

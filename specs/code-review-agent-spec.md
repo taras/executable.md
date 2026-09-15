@@ -1027,10 +1027,17 @@ normalization live in typed function components or package modules.
 
 The review workflow checks out the requested revision, installs the pinned
 Deno toolchain, runs `deno task setup`, and executes that checkout's
-`./dist/xmd` binary. It passes no component include: the review graph comes
-from the code-review package embedded in that binary. Credentials stay
-in the workflow environment and are consumed by the scoped `GitHubAuth`
-provider. The CI root uses `<Output>` so execution errors fail the CLI while
+`./dist/xmd` binary with `--plugin ./packages/code-review-agent/mod.ts`. The
+binary embeds none of this package: it ships no Plugin, so the graph arrives
+because the workflow selected it, and the package reads its own assets from the
+checkout it was named in.
+
+It still passes no component include, which is the anti-shadowing claim and is
+unaffected by how the Plugin is reached: a declared component answers ahead of
+any same-named file in a search path, so a pull request cannot add a `Finding.md`
+and have the review run the branch's own copy while reporting on it.
+Credentials stay in the workflow environment and are consumed by the scoped
+`GitHubAuth` provider. The CI root uses `<Output>` so execution errors fail the CLI while
 ordinary review findings remain successful report text. The journal is
 uploaded under `if: always()`; Actions does not parse journal records or
 rendered error markers.

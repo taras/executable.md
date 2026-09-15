@@ -2,11 +2,12 @@
  * The review graph as a Plugin.
  *
  * `@executablemd/code-review-agent` is a library, and its default export is the
- * Plugin a distribution bundles. Nothing about the graph changes here: the same
- * thirty-five Markdown declarations, the same six reserved registrations, the
- * same origins, digests and packaged assets, read through the same boundary.
- * What changes is who assembles them — a Plugin the host installs, rather than
- * a package the CLI imports by name at four separate call sites.
+ * Plugin a host installs once an operator has selected this package. Nothing
+ * about the graph changes here: the same thirty-five Markdown declarations, the
+ * same six reserved registrations, the same origins, digests and packaged
+ * assets, read through the same boundary. What changes is who assembles them —
+ * a Plugin the host installs, rather than a package the CLI imports by name at
+ * four separate call sites.
  *
  * ## Which commands claim the graph
  *
