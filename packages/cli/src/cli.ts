@@ -1624,9 +1624,9 @@ interface PropsPhase {
    * The immutable definition a `workflow start` established, when it did.
    *
    * Established here rather than later because the props a run is created with
-   * are the ones the *pinned* document declares: reading the working tree to
-   * build the bindings and then executing the commit would let help and parsing
-   * describe a document that is not the one running.
+   * are the ones the *retained* document declares: binding against one reading
+   * of the file and then executing another would let help and parsing describe
+   * a document that is not the one running.
    */
   established?: EstablishedDefinition;
 }
@@ -1961,7 +1961,7 @@ function exactRoot(root: RootDocumentSource, target: string | undefined): RootDo
 /**
  * The props phase of a `workflow` invocation.
  *
- * `start` reads what the pinned definition declares, so its generated
+ * `start` reads what the definition it establishes declares, so its generated
  * `--props-*` arguments are exactly `xmd run`'s for that document. A `fork`
  * reads the same way, from the definition it names as its third argument: the
  * fork is a run of that document, so its props are that document's — merged
@@ -2035,10 +2035,10 @@ function* prepareWorkflowProps(
     return { args, bindings: [], workflow, error: established.error.message };
   }
 
-  const root = retainedSource(
-    established.value.definition.rootDocumentPath,
-    established.value.source,
-  );
+  const { definition } = established.value;
+  const root = retainedSource(definition.entrypoint, established.value.source, {
+    ...(definition.targetPath === undefined ? {} : { target: definition.targetPath }),
+  });
   try {
     const document = yield* inspectDocument(root);
     const bindings = buildBindings(document.props);
@@ -3044,11 +3044,11 @@ function* runCommand(
   const helpRequest = takeHelpFlag(evalFlags.rest);
 
   // Before the props phase, because that phase establishes a workflow start's
-  // definition from Git in order to read what the *pinned* document declares.
-  // On a host without workflow support the first thing a caller would otherwise
-  // see is whatever Git said about their directory, which is not the reason the
-  // command is not going to run. Help is exempt: the grammar is the same
-  // everywhere, and describing it costs nothing.
+  // definition in order to read what the *retained* document declares. On a
+  // host without workflow support the first thing a caller would otherwise see
+  // is a refusal about their document, which is not the reason the command is
+  // not going to run. Help is exempt: the grammar is the same everywhere, and
+  // describing it costs nothing.
   let workflowHost: WorkflowHost | undefined;
   if (!helpRequest.requested && namesWorkflow(helpRequest.args)) {
     try {

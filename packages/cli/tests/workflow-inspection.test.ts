@@ -232,7 +232,10 @@ describe("Tier WFI — xmd workflow status, list and history", () => {
       expect(human.code).toBe(0);
       expect(human.stdout).toContain("run: release-1");
       expect(human.stdout).toContain("status: completed");
-      expect(human.stdout).toContain("flows/release.md");
+      // The logical entrypoint, which is the file's own name. Where the file
+      // sat is this machine's arrangement and is not part of what the run is.
+      expect(human.stdout).toContain("release.md");
+      expect(human.stdout).not.toContain("flows/release.md");
       expect(human.stdout).toContain("executions: 1");
 
       const structured = yield* xmd(fixture, ["workflow", "status", "release-1", "--json"]).join();
@@ -361,7 +364,9 @@ describe("Tier WFI — xmd workflow status, list and history", () => {
       // history says so from what the event retained.
       const command = entries.find((entry) => entry.event.description?.type === "exec");
       expect(command?.source).toEqual({
-        path: "flows/release.md",
+        // The authored position is inside the retained source, so it is named
+        // by the logical path that source has in the bundle.
+        path: "release.md",
         offset: RELEASE.indexOf("```bash exec"),
         line: 5,
         column: 1,
@@ -370,7 +375,7 @@ describe("Tier WFI — xmd workflow status, list and history", () => {
       // A Workspace file effect is authored the same way, and says where.
       const file = entries.find((entry) => entry.event.description?.type === "workspace_file");
       expect(file?.source).toEqual({
-        path: "flows/release.md",
+        path: "release.md",
         offset: RELEASE.indexOf("<File"),
         line: 3,
         column: 1,
@@ -383,7 +388,7 @@ describe("Tier WFI — xmd workflow status, list and history", () => {
       const human = yield* xmd(fixture, ["workflow", "history", "release-1"]).join();
       expect(human.code).toBe(0);
       expect(human.stdout).toContain("EVENT");
-      expect(human.stdout).toContain("flows/release.md:5:1");
+      expect(human.stdout).toContain("release.md:5:1");
       // The root Close is the outcome footer rather than one more operation row.
       expect(human.stdout).toContain("Outcome: completed at");
     });

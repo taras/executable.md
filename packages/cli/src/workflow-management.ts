@@ -42,7 +42,11 @@ import { exists, rm } from "@effectionx/fs";
 import { linkSync, mkdtempSync, rmSync } from "node:fs";
 import { rename } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
-import { WorkflowInputDelivery, WorkflowLifecycle } from "@executablemd/workflow";
+import {
+  isGitWorkflowRunRecord,
+  WorkflowInputDelivery,
+  WorkflowLifecycle,
+} from "@executablemd/workflow";
 import type {
   DefinitionRetrieval,
   WorkflowArtifactIdentity,
@@ -227,7 +231,10 @@ function renderStatus(
     `run: ${record.runId}`,
     `status: ${record.status}`,
     `definition: ${describeDefinition(snapshot)}`,
-    `base: ${record.base}`,
+    // Only a Git run has one. A source-bundle run started from exact bytes
+    // rather than from a repository state, and printing a base for it would be
+    // naming a revision it never had.
+    ...(isGitWorkflowRunRecord(record) ? [`base: ${record.base}`] : []),
     `props: ${JSON.stringify(record.props)}`,
     `created: ${record.createdAt}`,
     `updated: ${record.updatedAt}`,
@@ -375,9 +382,20 @@ function describeResult(event: DurableEvent): string {
   }
 }
 
+/**
+ * What this run is a run of, in the terms its own version has.
+ *
+ * A Git run is an object and a path inside it. A source-bundle run is the
+ * entrypoint it retains and the hash of the bytes behind it — no commit, no
+ * repository-relative path, and nothing synthesized to fill the shape the other
+ * version has.
+ */
 function describeDefinition(snapshot: WorkflowInspectionSnapshot): string {
   const { definition } = snapshot.record;
   const target = definition.targetPath === undefined ? "" : `#${definition.targetPath}`;
+  if (definition.kind === "source-bundle") {
+    return `${definition.bundleHash} ${definition.entrypoint}${target}`;
+  }
   return `${definition.objectId} ${definition.rootDocumentPath}${target}`;
 }
 

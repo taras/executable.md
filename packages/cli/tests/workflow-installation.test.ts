@@ -29,9 +29,9 @@ import {
 import type { WorkflowExecutionTransitions } from "@executablemd/workflow/deno";
 import { Git, WorkflowLifecycle, WorkflowRunStorage } from "@executablemd/workflow";
 import type { WorkflowRunDatabase, WorkflowRunStatus } from "@executablemd/workflow";
-import type { Json } from "@executablemd/core";
 import { runWorkflow } from "../src/workflow.ts";
 import type { WorkflowExecution, WorkflowHost, WorkflowRequest } from "../src/workflow.ts";
+import { readLegacyDefinitionSource } from "../src/workflow-source.ts";
 
 /**
  * The fixture repository, answered through the Git Api itself.
@@ -114,10 +114,10 @@ function useRunStore(): Operation<string> {
 function recordingHost(root: string, attached: string[]): WorkflowHost {
   return {
     useRunHost(): Operation<WorkflowExecutionTransitions> {
-      return useWorkflowRunHost({ root });
+      return useWorkflowRunHost({ root, legacySource: readLegacyDefinitionSource });
     },
     useLifecycle(): Operation<void> {
-      return useWorkflowLifecycle({ root });
+      return useWorkflowLifecycle({ root, legacySource: readLegacyDefinitionSource });
     },
     useDelivery(): Operation<void> {
       return useWorkflowInputDelivery({ root });
@@ -164,7 +164,7 @@ function refusingHost(root: string, refuse: "settle" | "none", attempted: string
 /** Record a root terminal, so the next pass over this journal is a replay. */
 function* closeRoot(root: string, runId: string): Operation<void> {
   yield* scoped(function* () {
-    yield* useWorkflowRunHost({ root });
+    yield* useWorkflowRunHost({ root, legacySource: readLegacyDefinitionSource });
     const found = yield* WorkflowRunStorage.operations.lookup(runId);
     if (!found.ok) {
       throw found.error;
@@ -180,7 +180,10 @@ function* closeRoot(root: string, runId: string): Operation<void> {
 /** Put a run into the state a previous invocation would have left it in. */
 function* endRun(root: string, runId: string, status: WorkflowRunStatus): Operation<void> {
   yield* scoped(function* () {
-    const transitions = yield* useWorkflowRunHost({ root });
+    const transitions = yield* useWorkflowRunHost({
+      root,
+      legacySource: readLegacyDefinitionSource,
+    });
     const acquired = yield* WorkflowLifecycle.operations.acquireExecutor(runId);
     if (!acquired.ok) {
       throw acquired.error;
@@ -214,7 +217,7 @@ function* endRun(root: string, runId: string, status: WorkflowRunStatus): Operat
  */
 function* runSnapshot(root: string, runId: string): Operation<string> {
   return yield* scoped(function* () {
-    yield* useWorkflowRunHost({ root });
+    yield* useWorkflowRunHost({ root, legacySource: readLegacyDefinitionSource });
     const found = yield* WorkflowRunStorage.operations.lookup(runId);
     if (!found.ok) {
       throw found.error;
@@ -408,9 +411,16 @@ describe("Tier WFI — what a run hands to canonical core", () => {
       });
 
       expect(outcome.result.exitCode).toEqual(1);
-      // Nothing was fetched, attached or run — the definition in particular was
-      // never read out of Git.
-      expect(asked).toEqual([]);
+      // The source is authenticated first, because that is the order the
+      // contract fixes: every version-1 source check happens before recovery
+      // and before admission, so an unobtainable source wins over any lifecycle
+      // decision that would otherwise have been reached.
+      expect(asked).toContain("repositoryRoot");
+      expect(asked.some((call) => call.startsWith("readObject:"))).toBe(true);
+      // And nothing past it happened. The run was refused for what it is, with
+      // no Workspace attached, no document executed and no lifecycle state
+      // moved — which is what the refusal has to leave behind whether or not a
+      // source was proved on the way to it.
       expect(attached).toEqual([]);
       expect(executions).toEqual(0);
       // No status was published for a run whose status did not change.
@@ -612,7 +622,14 @@ function* startedRun(root: string): Operation<Started> {
   const objectFormat = (yield* git(repository, ["rev-parse", "--show-object-format"])).trim();
 
   return yield* scoped(function* () {
-    const transitions = yield* useWorkflowRunHost({ root });
+    // The same substituted boundary the cases install. Beginning a version-1
+    // run obtains its source now, so a fixture that created one against real
+    // Git would be creating it under a definition these cases never describe.
+    yield* useGit(repository, objectId, contents);
+    const transitions = yield* useWorkflowRunHost({
+      root,
+      legacySource: readLegacyDefinitionSource,
+    });
     const runId = crypto.randomUUID();
     const acquired = yield* WorkflowLifecycle.operations.acquireExecutor(runId);
     if (!acquired.ok) {

@@ -12,7 +12,7 @@ import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { ensure, scoped } from "effection";
 import type { Operation } from "effection";
-import { ensureDir, rm, writeTextFile } from "@effectionx/fs";
+import { ensureDir, readTextFile, rm, writeTextFile } from "@effectionx/fs";
 import { exec } from "@effectionx/process";
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
@@ -116,6 +116,158 @@ describe("Tier FG — workflow retention", () => {
       expect(committed.exitCode).toBe(0);
       expect(committed.stdout).toBe("to-out");
       expect(committed.stderr).toBe("to-err");
+    });
+  });
+});
+
+/**
+ * Tier FG — the source a run retains, after the file it came from is gone.
+ *
+ * The bytes are the run. So the cases here take the original away in each of
+ * the three ways a caller can — edit it, move it, delete it — and then ask the
+ * run to continue. It continues from what it kept, every time, and a second
+ * start of the same bytes under the same logical name is the same run wherever
+ * on this machine those bytes now happen to sit.
+ */
+describe("Tier FG — retained source", () => {
+  /** A line only the retained document says, so a replay of it is visible. */
+  const RETAINED_LINE = "this line is the retained source";
+  const RETAINED = [
+    "# Retained",
+    "",
+    RETAINED_LINE,
+    "",
+    "```bash exec",
+    `printf 'retained-output'`,
+    "```",
+    "",
+  ].join("\n");
+
+  function* startRetained(fixture: Fixture, id: string, at: string): Operation<void> {
+    const started = yield* runCli(["workflow", "start", `--id=${id}`, at], {
+      cwd: fixture.repository,
+      env: { HOME: fixture.home, XMD_WORKFLOW_RUNS: fixture.runs },
+    }).join();
+    expect(started.code).toBe(0);
+  }
+
+  function resume(fixture: Fixture, id: string) {
+    return runCli(["workflow", "resume", id], {
+      cwd: fixture.repository,
+      env: { HOME: fixture.home, XMD_WORKFLOW_RUNS: fixture.runs },
+    }).join();
+  }
+
+  /** One way a caller can take the original away, and what it is called. */
+  interface Disturbance {
+    readonly name: string;
+    disturb(fixture: Fixture, at: string): Operation<void>;
+  }
+
+  const DISTURBANCES: readonly Disturbance[] = [
+    {
+      name: "edited",
+      *disturb(_fixture: Fixture, at: string): Operation<void> {
+        yield* writeTextFile(at, "# Something else entirely\n");
+      },
+    },
+    {
+      name: "moved",
+      *disturb(fixture: Fixture, at: string): Operation<void> {
+        yield* writeTextFile(join(fixture.repository, "flows/moved.md"), RETAINED);
+        yield* rm(at, { force: true });
+      },
+    },
+    {
+      name: "deleted",
+      *disturb(_fixture: Fixture, at: string): Operation<void> {
+        yield* rm(at, { force: true });
+      },
+    },
+  ];
+
+  it("FG40: an edited, moved or deleted original changes nothing about the run", function* () {
+    for (const { name, disturb } of DISTURBANCES) {
+      yield* useFixture(function* (fixture) {
+        const at = join(fixture.repository, "flows/retained.md");
+        yield* writeTextFile(at, RETAINED);
+        yield* startRetained(fixture, `retained-${name}`, at);
+
+        yield* disturb(fixture, at);
+
+        const resumed = yield* resume(fixture, `retained-${name}`);
+        expect({ name, code: resumed.code }).toEqual({ name, code: 0 });
+        // The retained document, rendered from the run rather than from a file
+        // that no longer says it — or no longer exists at all.
+        expect(resumed.stdout).toContain(RETAINED_LINE);
+        expect(resumed.stdout).not.toContain("Something else entirely");
+        // And the command's own retained result, which is what a replay reads
+        // back instead of running it again.
+        expect(committedExec(workflowRunPath(fixture.runs, `retained-${name}`)).stdout).toBe(
+          "retained-output",
+        );
+      });
+    }
+  });
+
+  it("FG43: a damaged retained source refuses, and never falls back to the file", function* () {
+    yield* useFixture(function* (fixture) {
+      const at = join(fixture.repository, "flows/fallback.md");
+      yield* writeTextFile(at, RETAINED);
+      yield* startRetained(fixture, "fallback-1", at);
+
+      // The run's own retained content stops describing itself. The file it was
+      // started from is untouched and still says exactly what it always said —
+      // which is the whole point: a resume that read it would succeed, and a
+      // resume that must not read it refuses.
+      const store = workflowRunPath(fixture.runs, "fallback-1");
+      const database = new DatabaseSync(store);
+      try {
+        const row = database.prepare("SELECT content FROM workflow_definition_blob").get();
+        const bytes = row?.["content"];
+        if (!(bytes instanceof Uint8Array)) {
+          throw new Error("the run retains no source bytes");
+        }
+        const altered = Uint8Array.from(bytes);
+        altered[0] = altered[0] === 0x23 ? 0x2a : 0x23;
+        database.prepare("UPDATE workflow_definition_blob SET content = ?").run(altered);
+      } finally {
+        database.close();
+      }
+      expect(yield* readTextFile(at)).toBe(RETAINED);
+
+      const resumed = yield* resume(fixture, "fallback-1");
+      expect(resumed.code).toBe(1);
+      expect(resumed.stderr).toContain("disagrees with its own descriptor");
+      expect(resumed.stdout).not.toContain(RETAINED_LINE);
+    });
+  });
+
+  it("FG42: another entrypoint, or other bytes, is another run and conflicts", function* () {
+    yield* useFixture(function* (fixture) {
+      yield* writeTextFile(join(fixture.repository, "flows/named.md"), RETAINED);
+      yield* startRetained(fixture, "named-1", join(fixture.repository, "flows/named.md"));
+
+      const environment = { HOME: fixture.home, XMD_WORKFLOW_RUNS: fixture.runs };
+
+      // The same bytes under a different logical name: a different definition,
+      // because source positions and later relative references use the name.
+      yield* writeTextFile(join(fixture.repository, "flows/renamed.md"), RETAINED);
+      const renamed = yield* runCli(
+        ["workflow", "start", "--id=named-1", join(fixture.repository, "flows/renamed.md")],
+        { cwd: fixture.repository, env: environment },
+      ).join();
+      expect(renamed.code).toBe(1);
+      expect(renamed.stderr).toContain("definition");
+
+      // The same name over different bytes: also a different definition.
+      yield* writeTextFile(join(fixture.home, "named.md"), `${RETAINED}\nand one more line\n`);
+      const changed = yield* runCli(
+        ["workflow", "start", "--id=named-1", join(fixture.home, "named.md")],
+        { cwd: fixture.repository, env: environment },
+      ).join();
+      expect(changed.code).toBe(1);
+      expect(changed.stderr).toContain("definition");
     });
   });
 });

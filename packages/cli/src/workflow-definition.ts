@@ -1,71 +1,89 @@
 /**
- * What a workflow run is a run of, established from Git.
+ * What a workflow run is a run of, established from the bytes the caller named.
  *
- * `xmd workflow start notes.md` names a file in a working tree. A working tree
- * changes, so it cannot be a run's identity — a resume months later has to mean
- * the same document. What becomes identity is the object: the repository's
- * object format, the full commit id `HEAD` resolved to once, and the document's
- * repository-relative path inside it.
+ * `xmd workflow start notes.md` names a file, and that file's current bytes are
+ * what the run is of. They are read once, hashed, and retained with the run
+ * before it becomes durable — so a file outside a repository, an untracked
+ * file, and a file edited since its last commit all start, and all start from
+ * what they actually say.
  *
- * The consequence is the part worth stating plainly. **The bytes that execute
- * come from that commit, not from the file the caller pointed at.** A working
- * tree with uncommitted edits runs the committed document, because running the
- * edited one while recording the commit as identity would make the record a
- * claim about something that never ran.
+ * **Where the file is has nothing to do with what the run is.** The containing
+ * directory, the absolute path and the invocation working directory are all
+ * retrieval facts; what the descriptor holds is a portable logical path — the
+ * file's own final segment for the root, and each declared component's
+ * canonical path relative to it. Two machines holding the same bytes under the
+ * same logical entrypoint hold the same definition.
  *
- * Where the repository is *checked out* is not identity. It is retrieval
- * metadata: replaceable, credential-free, excluded from the comparison that
- * decides whether a reused run id addresses the same run, and reauthorized
- * before it is used again. A run that moves between machines is the same run.
+ * Git is optional provenance and never identity. A run records where it was
+ * started from when that is cheaply available, as replaceable metadata; failing
+ * to learn it does not fail a start, and nothing ever reads it back to find the
+ * source. The source is in the run.
  *
- * Everything here goes through the contextual `Git` capability, so nothing
- * below runs a command of its own or names a host.
+ * ## The legacy path
+ *
+ * Version-1 runs still exist, and their Markdown still lives in a repository.
+ * `loadRetainedDefinition()` is what reaches it, and it is used from exactly one
+ * place: the adapter this host hands the Workflow lifecycle as its legacy
+ * source reader. Nothing establishes a version-1 definition any more.
  */
 
-import { isAbsolute, relative, resolve, sep } from "node:path";
-import { Err, Ok, scoped } from "effection";
+import { readFile } from "node:fs/promises";
+import { basename, dirname, resolve } from "node:path";
+import { Err, Ok, scoped, until } from "effection";
 import type { Operation, Result } from "effection";
 import type { Json } from "@executablemd/durable-streams";
 import { API } from "@executablemd/runtime";
-import { parseMarkdownDefinition } from "@executablemd/core";
+import {
+  asDocumentTargetError,
+  fileSource,
+  inspectDocument,
+  parseMarkdownDefinition,
+  retainedSource,
+} from "@executablemd/core";
+import type { DocumentInfo, FileRootDocument } from "@executablemd/core";
 import type { WorkflowBundleComponent } from "@executablemd/core/host";
 import {
+  decodeSourceText,
   definitionComponents,
   gitObjectFormat,
-  parseWorkflowDefinition,
+  parseSourceBundleDefinition,
   readGitObject,
   repositoryRoot,
   revParse,
+  sourceBundleHash,
+  sourceContentHash,
 } from "@executablemd/workflow";
-import type { WorkflowDefinition } from "@executablemd/workflow";
+import type {
+  GitWorkflowDefinitionV1,
+  SourceBundleEntryV2,
+  SourceBundleSnapshotEntryV2,
+  SourceBundleWorkflowDefinitionV2,
+} from "@executablemd/workflow";
 import { declaredBundle, readBundle, reconstructBundle } from "./workflow-bundle.ts";
 
-/** The base a `start` records. The command has no base option, so it is this. */
-export const DEFINITION_BASE = "HEAD";
-
-/** How this host will find the definition again. Replaceable, never a credential. */
+/** How this host recorded where a run was started from. Never read back. */
 export const RETRIEVAL_KIND = "local-checkout";
 
 /** Everything one `start` establishes before a run can exist. */
 export interface EstablishedDefinition {
-  readonly definition: WorkflowDefinition;
-  readonly base: string;
-  readonly pinnedCommit: string;
-  readonly retrieval: Json;
-  /** The document as the pinned commit holds it. */
-  readonly source: string;
+  readonly definition: SourceBundleWorkflowDefinitionV2;
   /**
-   * The execution view of the declared component bundle, empty when the root
-   * declares none.
+   * The exact bytes behind every logical path, in the descriptor's own order.
    *
-   * The same entries the definition retains, plus the exact source each was
-   * read from — so what identity names and what executes come from one read of
-   * one commit.
+   * Owned copies from the one read of each file. They travel to the lifecycle
+   * transition, which copies them again before it validates — so nothing
+   * between here and storage can change what the run is of.
    */
+  readonly sourceSnapshot: readonly SourceBundleSnapshotEntryV2[];
+  /** Credential-free provenance, when it was cheaply available. */
+  readonly retrieval?: Json;
+  /** The entrypoint as text, for the caller that is about to import it. */
+  readonly source: string;
+  /** The execution view of the declared bundle, empty when none is declared. */
   readonly components: readonly WorkflowBundleComponent[];
 }
 
-/** The pinned sources one execution runs: the root, and the bundle it is closed over. */
+/** The sources one execution runs: the root, and the bundle it is closed over. */
 export interface RetainedSources {
   readonly source: string;
   readonly components: readonly WorkflowBundleComponent[];
@@ -81,14 +99,24 @@ function unavailable(message: string, cause?: unknown): WorkflowDefinitionUnavai
 }
 
 /**
- * Run `body` with the repository as the contextual working directory.
+ * One file's exact bytes.
+ *
+ * `@effectionx/fs` reads text and this needs bytes, so the runtime's own
+ * asynchronous primitive is adapted as an operation. Never synchronous: a read
+ * that blocked the host would stall every other operation in the scope.
+ */
+function* readBytes(path: string): Operation<Uint8Array> {
+  return new Uint8Array(yield* until(readFile(path)));
+}
+
+/**
+ * Run `body` with a directory as the contextual working directory.
  *
  * Git answers about the directory it is asked in, so every question about one
  * repository is asked from the same place rather than from wherever the process
- * started. Keeping Git's own output out of the caller's is the capability's
- * own business and is done there.
+ * started.
  */
-function inRepository<T>(directory: string, body: () => Operation<T>): Operation<T> {
+function inDirectory<T>(directory: string, body: () => Operation<T>): Operation<T> {
   return scoped(function* () {
     yield* API.Env.around(
       {
@@ -104,116 +132,324 @@ function inRepository<T>(directory: string, body: () => Operation<T>): Operation
 }
 
 /**
- * The document's path inside its repository, as a definition may hold it.
- *
- * Repository-relative, POSIX-separated, and refused rather than repaired when
- * it leaves the working tree: a path outside the repository names no object in
- * the commit, and normalizing one would silently run a different document.
- */
-function repositoryRelativePath(root: string, documentPath: string): Result<string> {
-  const absolute = resolve(documentPath);
-  const within = relative(resolve(root), absolute);
-  if (within === "" || within.startsWith("..") || isAbsolute(within)) {
-    return Err(
-      unavailable(
-        "the document is not inside the repository this command resolved, so no commit in it " +
-          "holds the document. Run the command from the repository the document belongs to.",
-      ),
-    );
-  }
-  return Ok(within.split(sep).join("/"));
-}
-
-/**
  * Establish the immutable definition of a run that is starting.
  *
- * The order matters: the repository is located from the document's own
- * directory, `HEAD` is resolved once, and the object format is read from the
- * same repository — so a definition never mixes one repository's commit with
- * another's format.
+ * The argument is a document reference, not a path: `notes.md#Release/Publish`
+ * names one section of one file, and a filename that really holds a `#` writes
+ * it `%23`. The reference is taken apart first, because resolving the whole
+ * argument as a path would address a file nobody has.
+ *
+ * Every phase happens before storage exists: the reference is parsed, the file
+ * read once, its logical entrypoint derived from its own final segment, its
+ * bytes decoded strictly and parsed, any selector resolved against those exact
+ * bytes to the one canonical target core produces, the declared bundle resolved
+ * against the file's own directory and read, and the descriptor built and
+ * verified. A file this command cannot read, cannot decode, cannot parse, whose
+ * selector resolves to nothing, or that declares a component it cannot read, is
+ * refused here — with no run, no id and nothing on disk.
  */
-export function* establishDefinition(
-  documentPath: string,
-): Operation<Result<EstablishedDefinition>> {
-  const absolute = resolve(documentPath);
+export function* establishDefinition(reference: string): Operation<Result<EstablishedDefinition>> {
+  let requested: FileRootDocument;
   try {
-    const root = yield* inRepository(absolute.slice(0, absolute.lastIndexOf(sep)) || sep, () =>
-      repositoryRoot(),
-    );
-
-    return yield* inRepository(root, function* (): Operation<Result<EstablishedDefinition>> {
-      const rootDocumentPath = repositoryRelativePath(root, absolute);
-      if (!rootDocumentPath.ok) {
-        return rootDocumentPath;
-      }
-
-      const pinnedCommit = yield* revParse(`${DEFINITION_BASE}^{commit}`);
-      const objectFormat = yield* gitObjectFormat();
-      const source = yield* readGitObject(pinnedCommit, rootDocumentPath.value);
-
-      // The bundle is established from the same commit, and before the run
-      // exists: a declaration this command cannot read, or a component this
-      // commit does not hold, refuses the start rather than being discovered
-      // the first time a document writes the name.
-      const declared = declaredBundle(
-        (yield* parseMarkdownDefinition("__root__", rootDocumentPath.value, source)).meta,
-        rootDocumentPath.value,
-      );
-      if (!declared.ok) {
-        return declared;
-      }
-      const components =
-        declared.value.length === 0
-          ? Ok([])
-          : yield* readBundle(pinnedCommit, declared.value, objectFormat);
-      if (!components.ok) {
-        return components;
-      }
-
-      const definition = parseWorkflowDefinition({
-        version: 1,
-        kind: "git",
-        objectFormat,
-        objectId: pinnedCommit.toLowerCase(),
-        rootDocumentPath: rootDocumentPath.value,
-        // Written only when the root declared one, so a document with no
-        // bundle stores the descriptor it always stored.
-        ...(components.value.length === 0
-          ? {}
-          : {
-              components: components.value.map((component) => ({
-                name: component.name,
-                path: component.path,
-                sourceHash: component.sourceHash,
-              })),
-            }),
-      });
-      if (!definition.ok) {
-        return definition;
-      }
-
-      return Ok({
-        definition: definition.value,
-        base: DEFINITION_BASE,
-        pinnedCommit,
-        retrieval: { version: 1, kind: RETRIEVAL_KIND, checkout: root },
-        source,
-        components: components.value,
-      });
-    });
+    requested = fileSource(reference);
   } catch (error) {
     return Err(
       unavailable(
-        `the workflow definition could not be established from ${documentPath}: ` +
-          (error instanceof Error ? error.message : String(error)),
+        "the workflow definition reference could not be read. A reference is a document path, " +
+          "optionally followed by # and one target selector; write a literal # in a filename " +
+          "as %23.",
         error,
       ),
     );
   }
+
+  const documentPath = requested.path;
+  const absolute = resolve(documentPath);
+  const directory = dirname(absolute);
+
+  // The logical entrypoint is the file's own name, normalized. Where it sits is
+  // this machine's arrangement; what it is called is the run's.
+  const entrypoint = basename(absolute).normalize("NFC");
+
+  let bytes: Uint8Array;
+  try {
+    bytes = yield* readBytes(absolute);
+  } catch (error) {
+    return Err(
+      unavailable(
+        `the workflow definition could not be read from ${documentPath}: ` + describeCause(error),
+        error,
+      ),
+    );
+  }
+
+  const text = decodeSourceText(bytes);
+  if (!text.ok) {
+    return Err(
+      unavailable(
+        `the workflow definition at ${documentPath} is not well-formed UTF-8, so it is not a ` +
+          "Markdown document this command can run.",
+      ),
+    );
+  }
+
+  let meta: Record<string, unknown>;
+  try {
+    meta = (yield* parseMarkdownDefinition("__root__", entrypoint, text.value)).meta;
+  } catch (error) {
+    return Err(
+      unavailable(
+        `the workflow definition at ${documentPath} is not a Markdown document this version ` +
+          "can read: " +
+          describeCause(error),
+        error,
+      ),
+    );
+  }
+
+  // Resolved against the bytes that are about to be retained, by core, once.
+  // What the descriptor keeps is the exact canonical target core produced —
+  // never the selector the caller wrote, which a later resolution against
+  // other bytes could answer differently.
+  const targetPath = yield* resolveTarget(entrypoint, text.value, requested.target);
+  if (!targetPath.ok) {
+    return targetPath;
+  }
+
+  // The bundle is resolved against the root's own directory and read before the
+  // run exists: a declaration this command cannot read, or a component that is
+  // not there, refuses the start rather than being discovered the first time a
+  // document writes the name.
+  const declared = declaredBundle(meta, entrypoint);
+  if (!declared.ok) {
+    return declared;
+  }
+  const bundle = yield* readBundle(directory, declared.value);
+  if (!bundle.ok) {
+    return bundle;
+  }
+
+  const built = yield* buildSourceBundle(entrypoint, bytes, bundle.value, targetPath.value);
+  if (!built.ok) {
+    return built;
+  }
+
+  return Ok({
+    definition: built.value.definition,
+    sourceSnapshot: built.value.sourceSnapshot,
+    ...withProvenance(yield* provenance(directory)),
+    source: text.value,
+    components: bundle.value.map((component) => ({
+      name: component.name,
+      path: component.path,
+      sourceHash: component.sourceHash,
+      content: component.content,
+    })),
+  });
+}
+
+/** Written only when there is some: an absent locator is an absent member. */
+function withProvenance(retrieval: Json | undefined): { retrieval?: Json } {
+  return retrieval === undefined ? {} : { retrieval };
+}
+
+/** What one established candidate is, descriptor and bytes together. */
+interface BuiltBundle {
+  readonly definition: SourceBundleWorkflowDefinitionV2;
+  readonly sourceSnapshot: readonly SourceBundleSnapshotEntryV2[];
 }
 
 /**
- * The checkout a retained locator names, reauthorized before it is used.
+ * The one exact target a selector names in these bytes, or none.
+ *
+ * Core resolves it, because what counts as a target is core's decision and a
+ * rule restated here could disagree with the one the document layer applies.
+ * The answer is the canonical target, never the glob or alias that asked for
+ * it: two spellings of one request are one run, and a glob re-resolved against
+ * different bytes would name a different section.
+ */
+function* resolveTarget(
+  entrypoint: string,
+  source: string,
+  selector: string | undefined,
+): Operation<Result<string | undefined>> {
+  if (selector === undefined) {
+    return Ok(undefined);
+  }
+  let described: DocumentInfo;
+  try {
+    described = yield* inspectDocument(retainedSource(entrypoint, source, { target: selector }));
+  } catch (error) {
+    const failure = asDocumentTargetError(error);
+    return Err(
+      unavailable(
+        failure === undefined
+          ? "the workflow definition's target could not be resolved: " + describeCause(error)
+          : failure.message,
+        error,
+      ),
+    );
+  }
+  if (described.target === undefined) {
+    return Err(
+      unavailable(
+        "the workflow definition's target selector resolved to no section of the document.",
+      ),
+    );
+  }
+  return Ok(described.target);
+}
+
+/**
+ * The canonical descriptor these bytes produce, and the snapshot beside it.
+ *
+ * The manifest is sorted by the UTF-8 bytes of each logical path, because that
+ * is the order the descriptor is canonical in — and the snapshot is built in
+ * the same order, because the transition requires exactly the descriptor's
+ * paths in exactly its order.
+ *
+ * The target is outside the bundle hash and inside the descriptor: selecting a
+ * section does not change the bytes, and a run of one section is still not a
+ * run of the whole document.
+ */
+function* buildSourceBundle(
+  entrypoint: string,
+  root: Uint8Array,
+  components: readonly EstablishedComponent[],
+  targetPath: string | undefined,
+): Operation<Result<BuiltBundle>> {
+  const byPath = new Map<string, Uint8Array>([[entrypoint, root]]);
+  for (const component of components) {
+    const existing = byPath.get(component.path);
+    if (existing === undefined) {
+      byPath.set(component.path, component.bytes);
+      continue;
+    }
+    // One logical path, one source. A component declared at the entrypoint's
+    // own path is the root, and two declarations of one path are one entry.
+    if (!sameBytes(existing, component.bytes)) {
+      return Err(
+        unavailable(
+          `the component "${component.name}" and another source both claim the logical path ` +
+            `${component.path} with different content.`,
+        ),
+      );
+    }
+  }
+
+  const ordered = [...byPath.keys()].sort(compareUtf8);
+  const sources: SourceBundleEntryV2[] = [];
+  const sourceSnapshot: SourceBundleSnapshotEntryV2[] = [];
+  for (const path of ordered) {
+    const bytes = byPath.get(path);
+    if (bytes === undefined) {
+      return Err(unavailable("a source this command read is no longer in hand"));
+    }
+    sources.push({
+      path,
+      sourceHash: yield* sourceContentHash(bytes),
+      byteLength: bytes.byteLength,
+    });
+    sourceSnapshot.push({ path, bytes: Uint8Array.from(bytes) });
+  }
+
+  const mapping = [...components]
+    .map((component) => ({ name: component.name, path: component.path }))
+    .sort((left, right) => compareUtf8(left.name, right.name));
+
+  const bundleHash = yield* sourceBundleHash({
+    entrypoint,
+    sources,
+    ...(mapping.length === 0 ? {} : { components: mapping }),
+  });
+
+  // Parsed rather than assembled: the descriptor this command hands to storage
+  // goes through the same closed parser storage reads one back through, so a
+  // candidate that is not canonical is refused here rather than retained.
+  const definition = parseSourceBundleDefinition({
+    version: 2,
+    kind: "source-bundle",
+    hashAlgorithm: "sha256",
+    bundleHash,
+    entrypoint,
+    sources,
+    ...(targetPath === undefined ? {} : { targetPath }),
+    ...(mapping.length === 0 ? {} : { components: mapping }),
+  });
+  if (!definition.ok) {
+    return definition;
+  }
+  return Ok({ definition: definition.value, sourceSnapshot: Object.freeze(sourceSnapshot) });
+}
+
+/** One declared component, read and parsed, with the bytes behind it. */
+export interface EstablishedComponent {
+  readonly name: string;
+  readonly path: string;
+  readonly sourceHash: string;
+  readonly content: string;
+  readonly bytes: Uint8Array;
+}
+
+function sameBytes(left: Uint8Array, right: Uint8Array): boolean {
+  return left.byteLength === right.byteLength && left.every((byte, at) => byte === right[at]);
+}
+
+const encoder = new TextEncoder();
+
+/** Two strings in the UTF-8 byte order a source bundle is canonical in. */
+function compareUtf8(left: string, right: string): number {
+  const a = encoder.encode(left);
+  const b = encoder.encode(right);
+  const shared = Math.min(a.length, b.length);
+  for (let index = 0; index < shared; index++) {
+    const one = a[index];
+    const other = b[index];
+    if (one !== other && one !== undefined && other !== undefined) {
+      return one < other ? -1 : 1;
+    }
+  }
+  if (a.length === b.length) {
+    return 0;
+  }
+  return a.length < b.length ? -1 : 1;
+}
+
+/**
+ * Where this run was started from, when that is cheap to learn.
+ *
+ * Provenance and nothing more: it is credential-free, excluded from identity
+ * and from compatible reuse, and never read back to find the source. A
+ * directory that is not a working tree simply has none, and a start there is an
+ * ordinary start — which is the whole point of the version.
+ */
+function* provenance(directory: string): Operation<Json | undefined> {
+  try {
+    return yield* inDirectory(directory, function* (): Operation<Json | undefined> {
+      const checkout = yield* repositoryRoot();
+      const objectFormat = yield* gitObjectFormat();
+      const commit = yield* revParse("HEAD^{commit}");
+      return {
+        version: 1,
+        kind: RETRIEVAL_KIND,
+        checkout,
+        objectFormat,
+        commit: commit.toLowerCase(),
+      };
+    });
+  } catch {
+    // Not a repository, no commits yet, or Git is not installed. None of those
+    // is a reason a run cannot start: the bytes are already in hand.
+    return undefined;
+  }
+}
+
+function describeCause(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+/**
+ * The checkout a retained version-1 locator names, reauthorized before use.
  *
  * A retained path is replaceable metadata rather than permission a host already
  * has, so it is checked against the repository it claims to be: a directory
@@ -242,14 +478,18 @@ function parseRetrieval(metadata: Json | undefined): Result<string> {
 }
 
 /**
- * Load the exact object a retained run's definition names.
+ * Load the exact object a retained version-1 definition names.
  *
  * It never substitutes the current `HEAD` or a same-named file in the working
  * tree. A resume that could do either would silently continue a different
  * document under the same run id.
+ *
+ * Reached from one place only: the legacy source reader this host supplies to
+ * the Workflow lifecycle. Nothing else in the CLI loads a definition — a
+ * version-2 run's source comes out of the run.
  */
 export function* loadRetainedDefinition(
-  definition: WorkflowDefinition,
+  definition: GitWorkflowDefinitionV1,
   metadata: Json | undefined,
 ): Operation<Result<RetainedSources>> {
   const checkout = parseRetrieval(metadata);
@@ -258,7 +498,7 @@ export function* loadRetainedDefinition(
   }
 
   try {
-    return yield* inRepository(checkout.value, function* (): Operation<Result<RetainedSources>> {
+    return yield* inDirectory(checkout.value, function* (): Operation<Result<RetainedSources>> {
       const root = yield* repositoryRoot();
       if (resolve(root) !== resolve(checkout.value)) {
         return Err(
@@ -294,22 +534,9 @@ export function* loadRetainedDefinition(
   } catch (error) {
     return Err(
       unavailable(
-        "this run's retained definition could not be loaded: " +
-          (error instanceof Error ? error.message : String(error)),
+        "this run's retained definition could not be loaded: " + describeCause(error),
         error,
       ),
     );
   }
-}
-
-/** Whether this definition names a document this slice can execute. */
-export function supportedRootDocument(definition: WorkflowDefinition): Result<void> {
-  if (definition.rootDocumentPath.endsWith(".md")) {
-    return Ok(undefined);
-  }
-  return Err(
-    unavailable(
-      "xmd workflow runs Markdown definitions. A function-component root is not supported yet.",
-    ),
-  );
 }

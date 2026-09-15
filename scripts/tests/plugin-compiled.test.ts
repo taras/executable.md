@@ -18,8 +18,8 @@
 
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { ensure, until } from "effection";
-import { exists, rm, writeTextFile } from "@effectionx/fs";
+import { ensure, scoped, until } from "effection";
+import { ensureDir, exists, rm, writeTextFile } from "@effectionx/fs";
 import { exec } from "@effectionx/process";
 import { timebox } from "@effectionx/timebox";
 import type { ProcessResult } from "@effectionx/process";
@@ -164,3 +164,72 @@ describe("compiled xmd", { sanitizeOps: false, sanitizeResources: false }, () =>
     });
   });
 });
+
+/**
+ * The compiled binary starting and resuming a file outside any repository.
+ *
+ * The behaviour #443 exists for, through the artifact that ships. The compiled
+ * host is Deno too, so what this proves is not a second implementation — it is
+ * that nothing the compile step does to module resolution, to the bundled
+ * SQLite, or to the Git capability's absence stops a run whose source is its
+ * own bytes.
+ *
+ * Deliberately not in the checkout and deliberately not a repository: the
+ * temporary directory has no `.git` anywhere above it that this run may use,
+ * and the document is removed before the resume so nothing on disk could
+ * answer for it.
+ */
+describe(
+  "compiled workflow source bundles",
+  { sanitizeOps: false, sanitizeResources: false },
+  () => {
+    it("starts and resumes a document outside any repository", function* () {
+      if (!(yield* exists(BINARY))) {
+        throw new Error(`${BINARY} is missing — run \`deno task build\` before this case`);
+      }
+
+      yield* scoped(function* () {
+        const dir = yield* until(mkdtemp(path.join(tmpdir(), "xmd-compiled-bundle-")));
+        yield* ensure(() => rm(dir, { recursive: true, force: true }));
+
+        const runs = path.join(dir, "runs");
+        const home = path.join(dir, "home");
+        yield* ensureDir(runs);
+        yield* ensureDir(home);
+
+        const document = path.join(dir, "release.md");
+        yield* writeTextFile(document, "# Release\n\nretained by the run\n");
+
+        const environment = { HOME: home, XMD_WORKFLOW_RUNS: runs };
+        const started = yield* timebox<ProcessResult>(TIMEOUT, function* () {
+          return yield* exec(BINARY, {
+            arguments: ["workflow", "start", "--id=compiled-1", document],
+            cwd: dir,
+            env: environment,
+          }).join();
+        });
+        if (started.timeout) {
+          throw new Error("the compiled binary timed out starting a source-bundle run");
+        }
+        expect(started.value.code).toBe(0);
+        expect(started.value.stdout).toContain("retained by the run");
+
+        // The document is gone. The run is not.
+        yield* rm(document, { force: true });
+
+        const resumed = yield* timebox<ProcessResult>(TIMEOUT, function* () {
+          return yield* exec(BINARY, {
+            arguments: ["workflow", "resume", "compiled-1"],
+            cwd: dir,
+            env: environment,
+          }).join();
+        });
+        if (resumed.timeout) {
+          throw new Error("the compiled binary timed out resuming a source-bundle run");
+        }
+        expect(resumed.value.code).toBe(0);
+        expect(resumed.value.stdout).toContain("retained by the run");
+      });
+    });
+  },
+);
