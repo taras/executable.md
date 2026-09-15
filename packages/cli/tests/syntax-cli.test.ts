@@ -301,7 +301,7 @@ describe("Tier SX — the run profile the command describes", () => {
     ]);
   });
 
-  it("TG3: describes both terminal-grid constructs without probing for a terminal", function* () {
+  it("SX2b: publishes no terminal-grid construct, and probes no terminal to say so", function* () {
     // Whatever this runtime can or cannot open, the language is the same, so
     // the one boundary a capability probe would cross is a trap here.
     const catalog = yield* scoped(function* () {
@@ -313,22 +313,30 @@ describe("Tier SX — the run profile the command describes", () => {
       });
       return yield* syntaxSymbols([]);
     });
-    const [structural, builtIn] = catalog.categories;
+    const [structural, builtIn, userProvided] = catalog.categories;
 
-    const grid = structural.entries.find((entry) => entry.name === "Terminal.Grid");
-    const pane = structural.entries.find((entry) => entry.name === "Terminal");
-    expect(grid?.origin).toEqual({ kind: "structural", construct: "Terminal.Grid" });
-    expect(pane?.origin).toEqual({ kind: "structural", construct: "Terminal" });
-    expect(grid?.syntax).toEqual(["<Terminal.Grid columns={2}>…</Terminal.Grid>"]);
-    expect(pane?.syntax).toEqual([
-      '<Terminal title="Agent">…</Terminal>',
-      '<Terminal title="Shell" />',
+    // The whole structural vocabulary this profile publishes, so a construct
+    // returning to it has to be written down here.
+    expect([...names(structural.entries)].sort()).toEqual([
+      "Answer",
+      "Answers",
+      "Break",
+      "Case",
+      "Content",
+      "Each",
+      "Else",
+      "If",
+      "Let",
+      "Loop",
+      "Output",
+      "PrintErrors",
+      "Return",
+      "Switch",
     ]);
-    expect(grid?.description ?? "").not.toBe("");
-    expect(pane?.description ?? "").not.toBe("");
-    // Reserved syntax, so neither name is a component this profile offers.
-    expect(names(builtIn.entries)).not.toContain("Terminal.Grid");
-    expect(names(builtIn.entries)).not.toContain("Terminal");
+    for (const name of ["Terminal.Grid", "Terminal"]) {
+      expect(names(builtIn.entries)).not.toContain(name);
+      expect(names(userProvided.entries)).not.toContain(name);
+    }
   });
 
   it("SX3: describes <Session> without minting an execution claimant", function* () {
@@ -569,20 +577,46 @@ describe("Tier SX — the command line", { sanitizeOps: false, sanitizeResources
     });
   });
 
-  it("TG3: prints both terminal-grid constructs, in markdown and in JSON", function* () {
-    yield* useWorkspace(WORKSPACE, function* (cwd) {
-      const markdown = yield* runCli(["syntax"], { cwd }).expect();
-      expect(markdown.stdout).toContain("### `<Terminal.Grid>`");
-      expect(markdown.stdout).toContain("### `<Terminal>`");
-      expect(markdown.stdout).toContain("<Terminal.Grid columns={2}>…</Terminal.Grid>");
-      expect(markdown.stdout).toContain('<Terminal title="Agent">…</Terminal>');
-      expect(markdown.stdout).toContain('<Terminal title="Shell" />');
+  it("SX10b: prints neither terminal-grid name as syntax, and a file claiming one as a component", function* () {
+    yield* useWorkspace(
+      {
+        ...WORKSPACE,
+        "components/Terminal.md": "---\ndescription: a repository terminal.\n---\n\npane\n",
+        "components/Terminal/Grid.md": "---\ndescription: a repository grid.\n---\n\ngrid\n",
+      },
+      function* (cwd) {
+        const markdown = yield* runCli(["syntax"], { cwd }).expect();
+        // The structural section names every construct it publishes, and
+        // neither of these is one of them.
+        expect(markdown.stdout).toContain("## Built-in structural syntax");
+        expect(markdown.stdout).not.toContain("<Terminal.Grid columns={2}>…</Terminal.Grid>");
+        expect(markdown.stdout).not.toContain('<Terminal title="Shell" />');
+        // They are printed — under the author's own components, with the
+        // author's own descriptions.
+        expect(markdown.stdout).toContain("## User-provided components");
+        expect(markdown.stdout).toContain("### `<Terminal.Grid>`");
+        expect(markdown.stdout).toContain("### `<Terminal>`");
+        expect(markdown.stdout).toContain("a repository terminal.");
+        expect(markdown.stdout).toContain("a repository grid.");
 
-      const json = yield* runCli(["syntax", "--json"], { cwd }).expect();
-      const structural = parseSymbols(json.stdout).categories[0].entries;
-      expect(names(structural)).toContain("Terminal.Grid");
-      expect(names(structural)).toContain("Terminal");
-    });
+        const json = yield* runCli(["syntax", "--json"], { cwd }).expect();
+        const [structural, builtIn, userProvided] = parseSymbols(json.stdout).categories;
+        for (const name of ["Terminal.Grid", "Terminal"]) {
+          expect(names(structural.entries)).not.toContain(name);
+          expect(names(builtIn.entries)).not.toContain(name);
+        }
+        expect(userProvided.entries.find((entry) => entry.name === "Terminal")?.origin).toEqual({
+          kind: "repository",
+          path: "components/Terminal.md",
+        });
+        expect(
+          userProvided.entries.find((entry) => entry.name === "Terminal.Grid")?.origin,
+        ).toEqual({
+          kind: "repository",
+          path: "components/Terminal/Grid.md",
+        });
+      },
+    );
   });
 
   it("SX12: succeeds with the defaults in a package tree full of directory links", function* () {

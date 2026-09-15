@@ -371,38 +371,36 @@ describe("Tier SY: structural vocabulary", () => {
     expect(find(entries, "Case").as).toBeUndefined();
   });
 
-  it("TG3: freezes the <Terminal.Grid> and <Terminal> entries the catalog publishes", function* () {
+  it("SY4c: publishes no <Terminal.Grid> or <Terminal> construct at all", function* () {
     const catalog = yield* catalogFor({}, []);
-    const entries = engineEntries(catalog);
 
-    expect(catalog.version).toBe(2);
-    expect(find(entries, "Terminal.Grid")).toEqual({
-      kind: "structural",
-      name: "Terminal.Grid",
-      origin: { kind: "structural", construct: "Terminal.Grid" },
-      syntax: ["<Terminal.Grid columns={2}>…</Terminal.Grid>"],
-      description:
-        "Open several terminals in one view. " +
-        '`<Terminal.Grid columns={2}><Terminal title="Agent">…</Terminal></Terminal.Grid>`',
-      context: "The `<Terminal>` panes the grid lays out.",
-    });
-    expect(find(entries, "Terminal")).toEqual({
-      kind: "structural",
-      name: "Terminal",
-      origin: { kind: "structural", construct: "Terminal" },
-      syntax: ['<Terminal title="Agent">…</Terminal>', '<Terminal title="Shell" />'],
-      description:
-        "Expand Markdown or open a shell in a pane. " +
-        '`<Terminal title="Agent">…</Terminal>` runs content; ' +
-        '`<Terminal title="Shell" />` opens a shell.',
-      context: "Markdown the pane runs, in the paired form.",
-    });
-    // Neither construct binds, so neither carries an `as` sentence at all.
-    expect(find(entries, "Terminal.Grid").as).toBeUndefined();
-    expect(find(entries, "Terminal").as).toBeUndefined();
+    // The reserved vocabulary in full, so a construct returning to the table
+    // has to be written down here before this row can pass again.
+    expect([...names(structural(catalog))].sort()).toEqual([
+      "Answer",
+      "Answers",
+      "Break",
+      "Case",
+      "Content",
+      "Each",
+      "Else",
+      "If",
+      "Let",
+      "Loop",
+      "Output",
+      "PrintErrors",
+      "Return",
+      "Switch",
+    ]);
+    for (const name of ["Terminal.Grid", "Terminal"]) {
+      expect(RESERVED_STRUCTURAL.has(name)).toBe(false);
+      expect(STRUCTURAL_DECLARATIONS.map((one) => one.name)).not.toContain(name);
+      expect(names(builtIn(catalog))).not.toContain(name);
+      expect(names(userProvided(catalog))).not.toContain(name);
+    }
   });
 
-  it("TG3: a repository file cannot supply the grid or a pane, and neither can a registration", function* () {
+  it("SY5c: a repository file supplies both names, as user-provided components", function* () {
     const catalog = yield* catalogFor(
       {
         components: { kind: "directory" },
@@ -413,34 +411,77 @@ describe("Tier SY: structural vocabulary", () => {
       ["components"],
     );
 
-    for (const name of ["Terminal.Grid", "Terminal"]) {
-      expect(names(structural(catalog))).toContain(name);
-      expect(names(userProvided(catalog))).not.toContain(name);
-      expect(names(builtIn(catalog))).not.toContain(name);
-    }
+    expect(find(userProvided(catalog), "Terminal").origin).toEqual({
+      kind: "repository",
+      path: "components/Terminal.md",
+    });
+    expect(find(userProvided(catalog), "Terminal.Grid").origin).toEqual({
+      kind: "repository",
+      path: "components/Terminal/Grid.md",
+    });
+    // Nothing reserves either name, so neither file is shadowed the way
+    // `components/If.md` is in SY5.
+    expect(names(structural(catalog))).not.toContain("Terminal");
+    expect(names(structural(catalog))).not.toContain("Terminal.Grid");
+  });
+
+  it("SY5d: a registration and a declaration may each claim both names", function* () {
+    const registered = yield* scoped(function* () {
+      yield* useTree({ components: { kind: "directory" } }, {});
+      yield* registerComponents(
+        ["Terminal.Grid", "Terminal"].map((name) => ({
+          name,
+          origin: "tier-sy",
+          props: { type: "object", properties: {}, additionalProperties: false },
+          *fn() {
+            return "";
+          },
+        })),
+      );
+      return yield* inspectSyntax({ includes: ["components"] });
+    });
 
     for (const name of ["Terminal.Grid", "Terminal"]) {
-      let refused: unknown;
-      yield* scoped(function* () {
-        try {
-          yield* registerComponents([
-            {
-              name,
-              origin: "tier-tg",
-              props: {},
-              *fn() {
-                return "";
-              },
-            },
-          ]);
-        } catch (error) {
-          refused = error;
-        }
+      expect(find(builtIn(registered), name).origin).toEqual({
+        kind: "registered",
+        origin: "tier-sy",
+        reserved: false,
       });
-      expect(refused instanceof Error ? refused.message : "").toContain(
-        `cannot register "${name}": it is structural syntax the engine owns`,
-      );
+      expect(names(structural(registered))).not.toContain(name);
     }
+
+    const grid = Structural({
+      name: "Terminal.Grid",
+      origin: DECK_ORIGIN,
+      forms: ["paired"],
+      props: { type: "object", properties: {}, additionalProperties: false },
+      syntax: ["<Terminal.Grid><Terminal /></Terminal.Grid>"],
+      description: "An installation's own grid, declared like any other construct.",
+      context: "The panes this grid lays out.",
+      parent: null,
+    });
+    const pane = Structural({
+      name: "Terminal",
+      origin: DECK_ORIGIN,
+      forms: ["self-closing"],
+      props: { type: "object", properties: {}, additionalProperties: false },
+      syntax: ["<Terminal />"],
+      description: "An installation's own pane.",
+      context: null,
+      parent: "Terminal.Grid",
+    });
+    const declared = yield* declaredCatalogFor([grid, pane]);
+
+    // The declaration's own origin, not the engine's: nothing here comes from
+    // `STRUCTURAL_DECLARATIONS`.
+    expect(find(structural(declared).filter(isInstalled), "Terminal.Grid").origin).toEqual({
+      kind: "structural",
+      origin: DECK_ORIGIN,
+    });
+    expect(find(structural(declared).filter(isInstalled), "Terminal").parent).toBe("Terminal.Grid");
+    expect(find(structural(declared).filter(isInstalled), "Terminal.Grid").syntax).toEqual(
+      grid.syntax,
+    );
   });
 
   it("SY5b: a repository file cannot supply <Switch> or <Case>, and neither can a registration", function* () {
