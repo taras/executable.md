@@ -161,6 +161,50 @@ describe("npm CLI package", { sanitizeOps: false, sanitizeResources: false }, ()
   });
 
   /**
+   * A Plugin the emitted bin loads, and the `/api` subpath one imports from.
+   *
+   * dnt emits a package from a module graph and a manifest, and both halves can
+   * lose a subpath independently: a missing `exports` entry makes
+   * `@executablemd/core/api` unresolvable for every Plugin, and a missing
+   * emitted module makes it resolvable and empty. Neither shows up in a Deno
+   * run, where the workspace answers for both.
+   *
+   * The Plugin itself imports nothing, because that is the portable contract —
+   * what this proves is that a Node installation with no checkout loads a
+   * module an operator named and runs it. It is also the only way this package
+   * reaches a Plugin at all now: it bundles none and depends on none.
+   */
+  it("publishes the /api subpath and loads a Plugin named on the command line", function* () {
+    yield* ensure(removeNpmOutput);
+    const { version } = yield* readManifest(PKG_DIR, "deno.json");
+    const built = yield* buildCliPackage(version ?? "0.0.0-dev");
+    if (built.code !== 0) {
+      throw new Error(`build-npm.ts exited ${built.code}\n${built.stderr}`);
+    }
+
+    // Both halves of the subpath, for both packages a Plugin imports from.
+    for (const pkg of ["packages/core", "packages/runtime"]) {
+      const emitted: Manifest & { exports?: Record<string, unknown> } = JSON.parse(
+        yield* readTextFile(path.join(ROOT, pkg, "npm/package.json")),
+      );
+      expect([pkg, emitted.exports?.["./api"] !== undefined]).toEqual([pkg, true]);
+      expect([pkg, yield* exists(path.join(ROOT, pkg, "npm/esm/api.js"))]).toEqual([pkg, true]);
+    }
+
+    const elsewhere = yield* until(mkdtemp(path.join(tmpdir(), "xmd-npm-plugin-")));
+    yield* ensure(() => rm(elsewhere, { recursive: true, force: true }));
+    yield* writeTextFile(path.join(elsewhere, "doc.md"), "document body\n");
+    const fixture = path.join(ROOT, "packages/cli/tests/fixtures/plugins/external.mjs");
+    const run = yield* runEmittedBinIn(elsewhere, ["run", `--plugin=${fixture}`, "doc.md"]);
+    if (run.code !== 0) {
+      throw new Error(`the emitted npm bin exited ${run.code}\n${run.stderr}`);
+    }
+    expect(run.stderr).toContain("external-fixture: loaded");
+    expect(run.stderr).toContain("external-fixture: installed for run");
+    expect(run.stdout).toContain("document body");
+  });
+
+  /**
    * A program piped into the emitted bin, through a pipe that really closes.
    *
    * `xmd run -` reads standard input to end of file, and end of file is what a
