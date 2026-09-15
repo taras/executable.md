@@ -1,7 +1,7 @@
 /**
  * What a `<Repository>` owns: one clone, pinned once, and its live facade.
  *
- * Creation authorizes the locator, resolves the base exactly once, pins the
+ * Creation admits the locator, resolves the base exactly once, pins the
  * commit, puts the checkout on a named branch and retains the whole of it.
  * Attachment rebuilds that checkout from the Workspace root the journal
  * selected and proves it is still the one the record names — where it came

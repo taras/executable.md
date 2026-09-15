@@ -86,7 +86,7 @@ export interface UpgradeCommand {
  * What a runtime-named entrypoint states about the `xmd` that is running.
  *
  * Closed on purpose. Every field is a decision only an entrypoint can make, and
- * the one that carries the installing acts is the last: a host that supplies no
+ * the one that carries the upgrade component factory is the last: a host that supplies no
  * {@link components} gives the document no component through which anything
  * could be read, downloaded or replaced.
  */

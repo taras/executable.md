@@ -1,5 +1,5 @@
 /**
- * The installing acts behind `xmd upgrade`, for a compiled macOS or
+ * The private upgrade components behind `xmd upgrade`, for a compiled macOS or
  * Linux binary (specs/upgrade-command-spec.md).
  *
  * Everything a document must never be able to do lives here: opening the
@@ -25,8 +25,8 @@
  * split gives Markdown honest points to report at; it moves no permission.
  *
  * The identity is the whole of the admission boundary. A release fact is data —
- * a tag, two flags, a page URL, asset names — and holding it authorizes
- * nothing. What authorizes a phase is being in this invocation's private map,
+ * a tag, two flags, a page URL, asset names — and holding it admits
+ * nothing. What admits a phase is being in this invocation's private map,
  * in the state that phase accepts; nothing outside this closure can read,
  * extend or forge it. So the document may choose among the releases it was
  * shown and may not name another release, target, asset or destination, skip a
@@ -254,7 +254,7 @@ class UpgradeFailure extends Error {
   }
 }
 
-/** A release as this command retains it, and the identity that authorizes it. */
+/** A release as this command retains it, and the identity that admits it. */
 interface NormalizedRelease {
   readonly tag: string;
   readonly draft: boolean;

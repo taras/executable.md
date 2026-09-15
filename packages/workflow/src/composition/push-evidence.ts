@@ -68,7 +68,7 @@ function refuse(reason: "missing" | "conflicting" | "unreadable"): never {
 }
 
 /**
- * That these inputs are authorized by a Push this run already performed.
+ * That these inputs are admitted by a Push this run already performed.
  *
  * Every successful Git-host result in the run is inspected. A record of another
  * kind, and a Push of another Repository or another destination, are ignored —
@@ -80,12 +80,12 @@ function refuse(reason: "missing" | "conflicting" | "unreadable"): never {
  * publications of one destination at successive commits — and what a pull
  * request is decided against is where that sequence *ended*. The last relevant
  * record is the run's own account of what the branch holds now: naming this
- * head, it authorizes, and every earlier publication is history rather than
+ * head, it admits, and every earlier publication is history rather than
  * disagreement; naming another commit, this run has published past the head the
  * pull request would name, whether that record came before an exact one or
  * after it.
  *
- * Counting exact records instead would authorize from a publication the run
+ * Counting exact records instead would admit from a publication the run
  * itself superseded. Reading only the last one would be worse: an unreadable
  * record earlier in the sequence would go unnoticed. So every relevant record
  * is read completely, in order, and the last one decides.
@@ -95,7 +95,7 @@ function refuse(reason: "missing" | "conflicting" | "unreadable"): never {
  * something it already did, so that is conflicting rather than missing.
  *
  * Failed Git-host outcomes are not evidence of anything. A refused push
- * published nothing, and a record of it never authorizes.
+ * published nothing, and a record of it never admits.
  */
 export function admitPushEvidence(
   events: readonly DurableEvent[],

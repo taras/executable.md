@@ -90,7 +90,7 @@ export const ANCESTOR = "ancestor";
  * commit is that commit — and when the provider proved inside its own
  * authenticated object source that the commit is somewhere in the source's
  * ancestry, the pre-state says so. That attestation is the whole of what
- * authorizes the existing exact non-force push against a branch that already
+ * admits the existing exact non-force push against a branch that already
  * exists: the fact was established locally, once, before anything was
  * published, and the record keeps it rather than the traversal that found it.
  */

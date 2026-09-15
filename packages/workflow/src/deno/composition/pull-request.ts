@@ -117,7 +117,7 @@ const NOTHING_PROVEN = pullRequestPreStateJson({ pullRequest: null });
  * which it parses and holds to the inputs this invocation admitted. A request
  * naming another Repository, another branch pair or other content is not this
  * invocation's, and answering one would publish a completion for something this
- * operation never authorized.
+ * operation never admitted.
  */
 function pullRequestProvider(
   access: GitHubAccess,
@@ -391,7 +391,7 @@ export function* upsertPullRequest(
     const inputs = yield* admitInputs(checkout, admitted);
 
     // Before an adapter exists, before a token is read and before anything is
-    // sent. What authorizes a pull request is this run's own record of
+    // sent. What admits a pull request is this run's own record of
     // publishing the branch, so a refusal here happens with the Git host never
     // having been asked anything.
     const events = yield* database.journal.readAll();

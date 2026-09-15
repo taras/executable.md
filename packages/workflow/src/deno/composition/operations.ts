@@ -104,7 +104,7 @@ import { worktreeDisagreement } from "./worktree.ts";
  * document's own strings, and durable identity is what decides whether a
  * recorded result may be handed back for an invocation. Two different
  * observations that digested alike would let a replay return a transition
- * authorized for one of them to the other — without the live path, where the
+ * admitted for one of them to the other — without the live path, where the
  * observation is authenticated, ever running.
  *
  * So each value is length-prefixed rather than joined by a separator, and
@@ -189,7 +189,7 @@ export interface GitCheckoutSelection {
   readonly subject: string;
 }
 
-function unauthorized(operation: string, reason: string): never {
+function refuseAdmission(operation: string, reason: string): never {
   throw new GitOperationAdmissionError(operation, reason);
 }
 
@@ -211,12 +211,12 @@ export function selectGitCheckout(
   const observed = request.repository;
   const stored = metadata.readRepository(observed.name);
   if (stored === undefined) {
-    unauthorized(operation, "this run retains no Repository under the name it was given");
+    refuseAdmission(operation, "this run retains no Repository under the name it was given");
   }
   const repositorySubjectName = repositorySubject(observed.name);
   agreedStored(stored, repositorySubjectName);
   if (!sameRepositoryRecord(stored.record, observed)) {
-    unauthorized(
+    refuseAdmission(
       operation,
       "the Repository it observed is not the one this run retained under that name",
     );
@@ -228,7 +228,7 @@ export function selectGitCheckout(
 
   const directory = canonicalWorkspacePath(request.workingDirectory);
   if (directory === undefined) {
-    unauthorized(operation, "its working directory does not name one place in the Workspace");
+    refuseAdmission(operation, "its working directory does not name one place in the Workspace");
   }
 
   // The longest match rather than the first: a checkout nested inside another
@@ -244,7 +244,7 @@ export function selectGitCheckout(
         : undefined
       : worktree.checkoutPath;
   if (checkout === undefined) {
-    unauthorized(
+    refuseAdmission(
       operation,
       "its working directory is not inside any checkout this run retains for that Repository",
     );
@@ -310,14 +310,17 @@ function* workingDirectoryOf(
   }
   const info = yield* entry(directory);
   if (info === undefined || !info.isDirectory()) {
-    unauthorized(operation, "its working directory is not a directory in the checkout it selected");
+    refuseAdmission(
+      operation,
+      "its working directory is not a directory in the checkout it selected",
+    );
   }
   // `lstat` says the entry itself is not a link; this says no segment above it
   // is either. The operating system resolves a working directory before Git
   // sees it, so a link anywhere along the way would run every command somewhere
   // this run does not own.
   if ((yield* until(realpath(directory))) !== directory) {
-    unauthorized(
+    refuseAdmission(
       operation,
       "its working directory does not resolve to a place inside the checkout it selected",
     );
