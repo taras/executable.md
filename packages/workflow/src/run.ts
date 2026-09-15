@@ -72,10 +72,13 @@ import type { RetainedIdentity } from "./git-host/identities.ts";
 import {
   admitWorkflowRunHistory,
   baseMismatch,
+  describeGitWorkflowRun,
   describeWorkflowRun,
+  isGitWorkflowRun,
   malformedRecord,
   readWorkflowRun,
   retainedRunMismatch,
+  workflowRunValue,
 } from "./journal.ts";
 import type { RunHistoryRules, WorkflowRun } from "./journal.ts";
 
@@ -168,7 +171,13 @@ export function* getWorkflowRun(): Operation<WorkflowRun> {
  * records a different one is not this run's journal.
  */
 interface RunPreparation extends RunHistoryRules {
-  readonly base: string;
+  /**
+   * How the durable record identifies itself.
+   *
+   * Carried rather than derived from a base, because a version-2 run has none:
+   * its description says which version it is and what bundle it retains.
+   */
+  readonly description: EffectDescription;
   /** The run this execution is of, reached only when nothing is recorded yet. */
   allocate(): Operation<WorkflowRun>;
 }
@@ -179,14 +188,13 @@ function* record(description: EffectDescription, preparation: RunPreparation): W
     // Reached only when nothing is recorded yet: a replay hands the stored
     // value back without running this at all, so neither the identifier nor Git
     // is reached a second time.
-    const { runId, base, pinnedCommit } = yield* preparation.allocate();
-    return { runId, base, pinnedCommit };
+    return workflowRunValue(yield* preparation.allocate());
   });
 }
 
 function allocating(base: string): RunPreparation {
   return {
-    base,
+    description: describeGitWorkflowRun(base),
     // A base that would not resolve is recorded as a failed effect (§6), and a
     // history whose only record is that failure is this run's own. Requiring a
     // successful one would retry Git instead of replaying what happened.
@@ -203,6 +211,11 @@ function allocating(base: string): RunPreparation {
      * against the stored *value* rather than against the entry's identity.
      */
     agree(recorded: WorkflowRun): WorkflowRun {
+      // This installation allocates a Git run, so a recorded source bundle is
+      // not a base disagreement — it is a different kind of run entirely.
+      if (!isGitWorkflowRun(recorded)) {
+        throw retainedRunMismatch(["definition version"]);
+      }
       if (recorded.base !== base) {
         throw baseMismatch(recorded.base, base);
       }
@@ -213,7 +226,7 @@ function allocating(base: string): RunPreparation {
 
 function retaining(run: WorkflowRun): RunPreparation {
   return {
-    base: run.base,
+    description: describeWorkflowRun(run),
     // The host created this run before anything executed, so a history of its
     // own is something it must have: none, or one that only failed, means the
     // recorded work is not this run's.
@@ -223,15 +236,42 @@ function retaining(run: WorkflowRun): RunPreparation {
       return run;
     },
     agree(recorded: WorkflowRun): WorkflowRun {
-      const differing = (["runId", "base", "pinnedCommit"] as const).filter(
-        (field) => recorded[field] !== run[field],
-      );
+      const differing = differingFields(recorded, run);
       if (differing.length > 0) {
         throw retainedRunMismatch(differing);
       }
       return recorded;
     },
   };
+}
+
+/**
+ * Which terms of the retained run a recorded one disagrees with.
+ *
+ * Two versions are never the same run, and saying so as one field is what stops
+ * the comparison from reporting members one of them does not have. Within a
+ * version every term is compared, the exact target included: absent equals only
+ * absent, which is what keeps a whole-document run distinct from a targeted one.
+ */
+function differingFields(recorded: WorkflowRun, expected: WorkflowRun): string[] {
+  if (isGitWorkflowRun(recorded)) {
+    if (!isGitWorkflowRun(expected)) {
+      return ["definition version"];
+    }
+    return [
+      ...(recorded.runId === expected.runId ? [] : ["runId"]),
+      ...(recorded.base === expected.base ? [] : ["base"]),
+      ...(recorded.pinnedCommit === expected.pinnedCommit ? [] : ["pinnedCommit"]),
+    ];
+  }
+  if (isGitWorkflowRun(expected)) {
+    return ["definition version"];
+  }
+  return [
+    ...(recorded.runId === expected.runId ? [] : ["runId"]),
+    ...(recorded.bundleHash === expected.bundleHash ? [] : ["bundleHash"]),
+    ...(recorded.targetPath === expected.targetPath ? [] : ["targetPath"]),
+  ];
 }
 
 /**
@@ -258,11 +298,7 @@ function held(stored: unknown, preparation: RunPreparation): WorkflowRun {
 }
 
 function same(left: WorkflowRun, right: WorkflowRun): boolean {
-  return (
-    left.runId === right.runId &&
-    left.base === right.base &&
-    left.pinnedCommit === right.pinnedCommit
-  );
+  return differingFields(left, right).length === 0;
 }
 
 /**
@@ -281,7 +317,7 @@ function same(left: WorkflowRun, right: WorkflowRun): boolean {
  * run and the admission is what installs the recorded run.
  */
 function* prepare(preparation: RunPreparation): Workflow<void> {
-  const description = describeWorkflowRun(preparation.base);
+  const description = preparation.description;
   // Which run this is, and whether the journal agrees, are decided by the
   // captured `preparation` and the durable record — never by what the slot
   // happens to hold.
@@ -430,14 +466,18 @@ function retainedRun(run: WorkflowRun): WorkflowRun {
   // Named through the same total read as a journal value: a host that hands
   // over a record whose members refuse to be read has supplied a value that
   // identifies no run, which is the sentence below rather than its exception.
-  const parsed = readWorkflowRun(
-    readingRetainedValue(() => ({
-      runId: run?.runId,
-      base: run?.base,
-      pinnedCommit: run?.pinnedCommit,
-    })),
-  );
-  if (parsed === undefined || parsed.runId === "" || parsed.base === "") {
+  const parsed = readWorkflowRun(readingRetainedValue(() => workflowRunValue(run)));
+  if (parsed === undefined || parsed.runId === "") {
+    throw new Error(
+      "retainedWorkflowInstallation() needs a complete retained run: a Git run's id, base and " +
+        "pinned commit, or a source-bundle run's id and bundle hash. A run installed without " +
+        "them identifies no workflow run.",
+    );
+  }
+  if (!isGitWorkflowRun(parsed)) {
+    return parsed;
+  }
+  if (parsed.base === "") {
     throw new Error(
       "retainedWorkflowInstallation() needs the retained run's id, base and pinned commit. A run " +
         "installed without them identifies no workflow run.",

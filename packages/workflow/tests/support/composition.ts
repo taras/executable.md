@@ -50,6 +50,7 @@ import {
 } from "../../src/deno/composition/materialize.ts";
 import type { StoredRepository } from "../../src/deno/workspace/repositories.ts";
 import type { WorktreeRecord } from "../../src/composition/records.ts";
+import { isGitWorkflowRunRecord, type WorkflowRun, type WorkflowRunRecord } from "../../mod.ts";
 
 /** What one execution did, at the boundaries a claim can be made about. */
 export interface CompositionCounters {
@@ -187,11 +188,7 @@ export function runWorkflowDocument(
         return yield* around(function* () {
           return yield* collect(
             yield* executeInstalled({ ...inlineSource(source), stream: database.journal }, [
-              retainedWorkflowInstallation({
-                runId: database.record.runId,
-                base: database.record.base,
-                pinnedCommit: database.record.definition.objectId,
-              }),
+              retainedWorkflowInstallation(retainedRunValue(database.record)),
             ]),
           );
         });
@@ -757,4 +754,28 @@ export function* writeCheckoutFile(
   if (!written.ok) {
     throw written.error;
   }
+}
+
+/**
+ * The retained run value a record installs under, in its own version's shape.
+ *
+ * A Git record installs the base and pinned commit it retains; a source-bundle
+ * record installs its bundle hash and exact target and invents neither.
+ */
+function retainedRunValue(record: WorkflowRunRecord): WorkflowRun {
+  if (isGitWorkflowRunRecord(record)) {
+    return {
+      runId: record.runId,
+      base: record.base,
+      pinnedCommit: record.definition.objectId,
+    };
+  }
+  return {
+    runId: record.runId,
+    definitionVersion: 2,
+    bundleHash: record.definition.bundleHash,
+    ...(record.definition.targetPath === undefined
+      ? {}
+      : { targetPath: record.definition.targetPath }),
+  };
 }

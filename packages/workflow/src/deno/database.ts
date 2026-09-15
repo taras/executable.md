@@ -63,7 +63,7 @@ import {
 } from "./transaction.ts";
 import { readDocumentExecution, readRetrieval, readRunRecord } from "./rows.ts";
 import { reading } from "./reading.ts";
-import { translateSqliteError } from "./schema.ts";
+import { liveSchemaVersion, translateSqliteError } from "./schema.ts";
 
 const SELECT_RUN = "SELECT * FROM workflow_run WHERE id = 1";
 const SELECT_RETRIEVAL = "SELECT * FROM definition_retrieval WHERE id = 1";
@@ -452,7 +452,7 @@ export function readRunRow(database: DatabaseSync, path: string): WorkflowRunRec
   if (row === undefined) {
     throw new WorkflowDatabaseCorruptError(path, "it holds no workflow run");
   }
-  return readRunRecord(row);
+  return readRunRecord(row, liveSchemaVersion(database, path));
 }
 
 function readRetrievalRow(database: DatabaseSync): DefinitionRetrieval | undefined {

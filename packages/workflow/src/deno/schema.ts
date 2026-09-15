@@ -44,8 +44,20 @@ import { initializeEmptyWorkspace, verifyWorkspace } from "./workspace/root.ts";
  */
 export const APPLICATION_ID = 0x584d4431;
 
-/** The only schema version this build reads or writes. */
+/**
+ * The version a Git-definition run is written at, and reads back as.
+ *
+ * Still the value it always was. A version-2 database is a different inventory
+ * rather than a later amendment of this one, so redefining this constant to
+ * mean "latest" would silently move every version-1 assertion that names it.
+ */
 export const SCHEMA_VERSION = 1;
+
+/** The version a source-bundle run is written at, and reads back as. */
+export const SOURCE_BUNDLE_SCHEMA_VERSION = 2;
+
+/** Every live schema version this build recognizes. */
+export type WorkflowSchemaVersion = 1 | 2;
 
 const STATUSES = "'running', 'suspended', 'interrupted', 'completed', 'failed', 'cancelled'";
 
@@ -499,8 +511,111 @@ const OBJECTS: ReadonlyMap<string, DeclaredObject> = new Map([
   ],
 ]);
 
+/**
+ * The run table a source-bundle database holds instead of version 1's.
+ *
+ * No `base` column at all. A version-2 run started from exact bytes rather than
+ * from a repository state, so a column for one would be a value every row had
+ * to invent — and SQLite is where that invariant is held rather than in the
+ * code that writes rows. The `definition` CHECK pins the descriptor's own
+ * version and kind for the same reason.
+ */
+const SOURCE_BUNDLE_RUN: DeclaredObject = {
+  type: "table",
+  sql: `CREATE TABLE workflow_run (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  run_id TEXT NOT NULL,
+  definition TEXT NOT NULL CHECK (
+    json_valid(definition)
+    AND json_extract(definition, '$.version') = 2
+    AND json_extract(definition, '$.kind') = 'source-bundle'
+  ),
+  props TEXT NOT NULL CHECK (json_valid(props) AND json_type(props) = 'object'),
+  status TEXT NOT NULL CHECK (status IN (${STATUSES})),
+  stop_reason_kind TEXT CHECK (stop_reason_kind IS NULL OR stop_reason_kind IN ('host', 'journal')),
+  stop_reason_code TEXT,
+  stop_reason_event_id TEXT REFERENCES journal_events (event_id),
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  ${coherentStopReason()}
+) STRICT`,
+};
+
+/**
+ * The two tables a source-bundle database adds, and nothing else.
+ *
+ * Content is keyed by its own hash, so two logical paths holding identical
+ * bytes reference one blob. The manifest is the descriptor's `sources` array,
+ * one row per entry: the parser rather than SQLite collation enforces the
+ * logical-path grammar and the canonical order, because neither is something a
+ * collation can state.
+ */
+/**
+ * The two tables a source-bundle database adds, and nothing else.
+ *
+ * Content is keyed by its own hash, so two logical paths holding identical
+ * bytes reference one blob. The manifest is the descriptor's `sources` array,
+ * one row per entry: the parser rather than SQLite collation enforces the
+ * logical-path grammar and the canonical order, because neither is something a
+ * collation can state.
+ */
+const SOURCE_BUNDLE_BLOB: DeclaredObject = {
+  type: "table",
+  sql: `CREATE TABLE workflow_definition_blob (
+  source_hash TEXT PRIMARY KEY CHECK (
+    length(source_hash) = 64
+    AND source_hash NOT GLOB '*[^0-9a-f]*'
+  ),
+  byte_length INTEGER NOT NULL CHECK (
+    byte_length >= 0 AND byte_length <= 9007199254740991
+  ),
+  content BLOB NOT NULL CHECK (length(content) = byte_length)
+) STRICT, WITHOUT ROWID`,
+};
+
+const SOURCE_BUNDLE_MANIFEST: DeclaredObject = {
+  type: "table",
+  sql: `CREATE TABLE workflow_definition_source (
+  path TEXT PRIMARY KEY CHECK (length(path) > 0),
+  source_hash TEXT NOT NULL REFERENCES workflow_definition_blob(source_hash) ON DELETE RESTRICT
+) STRICT, WITHOUT ROWID`,
+};
+
+const SOURCE_BUNDLE_OBJECTS: ReadonlyMap<string, DeclaredObject> = new Map([
+  ["workflow_definition_blob", SOURCE_BUNDLE_BLOB],
+  ["workflow_definition_source", SOURCE_BUNDLE_MANIFEST],
+]);
+
+/**
+ * Version 2: every version-1 object byte for byte, one replacement, two
+ * additions.
+ *
+ * Derived from the version-1 map rather than restated, so the two inventories
+ * cannot drift apart in the objects they are supposed to share — and so a
+ * version-1 amendment is not something that has to be applied twice.
+ */
+const OBJECTS_V2: ReadonlyMap<string, DeclaredObject> = new Map([
+  ...[...OBJECTS.entries()].map(([name, object]): [string, DeclaredObject] => [
+    name,
+    name === "workflow_run" ? SOURCE_BUNDLE_RUN : object,
+  ]),
+  ...SOURCE_BUNDLE_OBJECTS.entries(),
+]);
+
+/** The declared inventory of one live schema version. */
+function objectsFor(version: WorkflowSchemaVersion): ReadonlyMap<string, DeclaredObject> {
+  return version === 2 ? OBJECTS_V2 : OBJECTS;
+}
+
 export const EXPECTED_SCHEMA = Object.freeze(
   [...OBJECTS.entries()].map(([name, object]) =>
+    Object.freeze({ name, type: object.type, sql: normalize(object.sql) }),
+  ),
+);
+
+/** The same declarations, for the source-bundle inventory. */
+export const SOURCE_BUNDLE_EXPECTED_SCHEMA = Object.freeze(
+  [...OBJECTS_V2.entries()].map(([name, object]) =>
     Object.freeze({ name, type: object.type, sql: normalize(object.sql) }),
   ),
 );
@@ -556,31 +671,62 @@ export function declaredObjectSql(name: string): string {
   return declared.sql;
 }
 
+function schemaSql(version: WorkflowSchemaVersion): string {
+  return [...objectsFor(version).values()]
+    .filter((object) => object.type === "table" && !object.sql.startsWith("CREATE TABLE vfs_"))
+    .filter((object) => !object.sql.startsWith("CREATE TABLE _vfs_"))
+    .map((object) => `${object.sql};`)
+    .join("\n\n");
+}
+
 /** Version 1 in full. */
-export const SCHEMA_SQL = [...OBJECTS.values()]
-  .filter((object) => object.type === "table" && !object.sql.startsWith("CREATE TABLE vfs_"))
-  .filter((object) => !object.sql.startsWith("CREATE TABLE _vfs_"))
-  .map((object) => `${object.sql};`)
-  .join("\n\n");
+export const SCHEMA_SQL = schemaSql(SCHEMA_VERSION);
+
+/** Version 2 in full. */
+export const SOURCE_BUNDLE_SCHEMA_SQL = schemaSql(SOURCE_BUNDLE_SCHEMA_VERSION);
 
 /**
- * Write the version-1 schema into a database that holds nothing.
+ * Write one live schema into a database that holds nothing.
  *
  * Called inside the caller's transaction, so the application id, the version
  * and the tables appear together or not at all — a half-initialized file would
  * be indistinguishable from one this build must refuse.
+ *
+ * The version comes from the candidate definition that is about to be written,
+ * never from what a file already claims: this initializes an empty database and
+ * nothing here ever upgrades one.
  */
 export function initializeSchema(
   database: DatabaseSync,
   dofs: CloudflareDatabase,
   initializeRun: () => void,
+  version: WorkflowSchemaVersion = SCHEMA_VERSION,
 ): void {
   database.exec(`PRAGMA application_id = ${APPLICATION_ID};`);
-  database.exec(SCHEMA_SQL);
+  database.exec(version === 2 ? SOURCE_BUNDLE_SCHEMA_SQL : SCHEMA_SQL);
   initializeCloudflareSchema(dofs, () => 0);
   initializeEmptyWorkspace(database);
   initializeRun();
-  database.exec(`PRAGMA user_version = ${SCHEMA_VERSION};`);
+  database.exec(`PRAGMA user_version = ${version};`);
+}
+
+/**
+ * The version a recognized database declares.
+ *
+ * Read from the pragma rather than inferred from the descriptor a row holds:
+ * the pragma is what structural recognition just held the whole inventory to,
+ * and a row parsed under a version its own file does not declare would be read
+ * with columns that file does not have.
+ */
+export function liveSchemaVersion(database: DatabaseSync, path: string): WorkflowSchemaVersion {
+  const version = readPragmaNumber(database, "user_version", path);
+  if (version === SOURCE_BUNDLE_SCHEMA_VERSION) {
+    return 2;
+  }
+  if (version === SCHEMA_VERSION) {
+    return 1;
+  }
+  throw new WorkflowSchemaVersionError(path, version, SOURCE_BUNDLE_SCHEMA_VERSION);
 }
 
 /**
@@ -600,12 +746,33 @@ export function isUninitialized(database: DatabaseSync, path: string): boolean {
 }
 
 /**
- * Refuse anything that is not a version-1 workflow-run database.
+ * Refuse anything that is not a workflow-run database this build recognizes.
  *
  * Structure only. Whether the rows describe the run that was asked for is a
  * separate question, asked after this one succeeds.
+ *
+ * The application id is read first, and only then the version — and the version
+ * selects one of exactly two immutable inventories. Nothing here repairs,
+ * migrates or reinterprets: a file whose objects are a mixture of the two, or
+ * that carries an extra one, disagrees with the version it declares and is left
+ * as it was found.
  */
 export function verifySchema(database: DatabaseSync, path: string, dofs: CloudflareDatabase): void {
+  verifyRecognizedSchema(database, path, dofs);
+}
+
+/**
+ * The same recognition, answering which version it recognized.
+ *
+ * A reader that has to parse a row differently per version asks this, so the
+ * version a record is read under is the one structural recognition just proved
+ * rather than one read again afterwards.
+ */
+export function verifyRecognizedSchema(
+  database: DatabaseSync,
+  path: string,
+  dofs: CloudflareDatabase,
+): WorkflowSchemaVersion {
   checkIntegrity(database, path);
 
   const applicationId = readPragmaNumber(database, "application_id", path);
@@ -623,52 +790,69 @@ export function verifySchema(database: DatabaseSync, path: string, dofs: Cloudfl
   }
 
   const version = readPragmaNumber(database, "user_version", path);
+  // Version 0 under either declared inventory is a partial initialization: the
+  // application identity is there and the version that completes it never was.
   if (version === 0) {
     throw new WorkflowDatabaseCorruptError(
       path,
-      "it carries the XMD application identity without a complete version-1 schema",
+      "it carries the XMD application identity without a complete schema version",
     );
   }
-  if (version !== SCHEMA_VERSION) {
-    throw new WorkflowSchemaVersionError(path, version, SCHEMA_VERSION);
+  if (version !== SCHEMA_VERSION && version !== SOURCE_BUNDLE_SCHEMA_VERSION) {
+    throw new WorkflowSchemaVersionError(path, version, SOURCE_BUNDLE_SCHEMA_VERSION);
   }
+  const recognized: WorkflowSchemaVersion = version === 2 ? 2 : 1;
 
-  verifyStructure(database, path);
+  verifyStructure(database, path, recognized);
   checkForeignKeys(database, path);
   verifyWorkspace(database, dofs, path);
+  return recognized;
 }
 
 /**
- * Hold a recognized database to the schema this build writes.
+ * Hold a recognized database to the schema this build writes for its version.
  *
- * The header already claims version 1, so anything missing or differently
+ * The header already claims a version, so anything missing or differently
  * shaped is the file disagreeing with itself rather than a version this build
- * has not learned yet.
+ * has not learned yet. A version-1 object inside a version-2 file — the
+ * `workflow_run` table with a `base` column, say — fails here as a shape that
+ * is not what this version declares, which is what keeps the two inventories
+ * from being read as one superset.
  */
-function verifyStructure(database: DatabaseSync, path: string): void {
+function verifyStructure(
+  database: DatabaseSync,
+  path: string,
+  version: WorkflowSchemaVersion,
+): void {
   const objects = schemaObjects(database, path);
-  if (isIncompletePreReleaseShape(objects)) {
+  // Only version 1 has pre-release shapes: nothing ever shipped claiming to be
+  // an incomplete version 2.
+  if (version === 1 && isIncompletePreReleaseShape(objects)) {
     throw new WorkflowIncompleteVersionOneError(path);
   }
 
+  const declared = objectsFor(version);
   for (const object of objects) {
-    const expected = OBJECTS.get(object.name);
+    const expected = declared.get(object.name);
     if (expected === undefined) {
       throw new WorkflowDatabaseCorruptError(
         path,
-        `it declares an object that version ${SCHEMA_VERSION} does not`,
+        `it declares an object that version ${version} does not`,
       );
     }
     if (object.type !== expected.type || normalize(object.sql) !== normalize(expected.sql)) {
       throw new WorkflowDatabaseCorruptError(
         path,
-        `its ${object.name} object is not shaped the way version ${SCHEMA_VERSION} declares it`,
+        `its ${object.name} object is not shaped the way version ${version} declares it`,
       );
     }
   }
 
   const present = new Set(objects.map((object) => object.name));
-  const missing = REQUIRED_OBJECTS.filter((name) => !present.has(name));
+  const missing = [...declared.entries()]
+    .filter(([, object]) => object.optional !== true)
+    .map(([name]) => name)
+    .filter((name) => !present.has(name));
   if (missing.length > 0) {
     throw new WorkflowDatabaseCorruptError(path, `it is missing the table ${missing.join(", ")}`);
   }

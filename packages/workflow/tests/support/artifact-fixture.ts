@@ -38,6 +38,9 @@ import type {
   XmdArtifactAgentPortability,
 } from "../../src/deno/artifact/mod.ts";
 import type { AgentSessionRecord } from "../../src/deno/workspace/agent-sessions.ts";
+import { isGitWorkflowDefinition } from "../../mod.ts";
+import type { Operation } from "effection";
+import { parseSourceBundleDefinition, sourceBundleHash, sourceContentHash } from "../../mod.ts";
 
 const encoder = new TextEncoder();
 
@@ -227,6 +230,11 @@ export function definitionOf(
   });
   if (!parsed.ok) {
     throw parsed.error;
+  }
+  // Narrowed rather than asserted: the parser answers with either version, and
+  // these fixtures describe the Git one.
+  if (!isGitWorkflowDefinition(parsed.value)) {
+    throw new Error("expected a Git workflow definition");
   }
   return parsed.value;
 }
@@ -467,23 +475,32 @@ export function richArtifact(): DetachedXmdArtifact {
     ],
     agentSessions: [agentSession()],
     definition: {
-      root: {
-        objectFormat: "sha1",
-        pinnedCommit: PINNED_COMMIT,
-        rootDocumentPath: "workflows/release.md",
-        targetPath: "release-steps",
-        blobId: gitBlobId(ROOT_DOCUMENT),
-        content: ROOT_DOCUMENT,
-      },
-      components: [
-        {
-          name: "Checklist",
-          path: "workflows/Checklist.md",
-          blobId: gitBlobId(CHECKLIST),
-          content: CHECKLIST,
+      definitionVersion: 1,
+      definition: definitionOf(),
+      closure: {
+        root: {
+          objectFormat: "sha1",
+          pinnedCommit: PINNED_COMMIT,
+          rootDocumentPath: "workflows/release.md",
+          targetPath: "release-steps",
+          blobId: gitBlobId(ROOT_DOCUMENT),
+          content: ROOT_DOCUMENT,
         },
-        { name: "Unused", path: "workflows/Unused.md", blobId: gitBlobId(UNUSED), content: UNUSED },
-      ],
+        components: [
+          {
+            name: "Checklist",
+            path: "workflows/Checklist.md",
+            blobId: gitBlobId(CHECKLIST),
+            content: CHECKLIST,
+          },
+          {
+            name: "Unused",
+            path: "workflows/Unused.md",
+            blobId: gitBlobId(UNUSED),
+            content: UNUSED,
+          },
+        ],
+      },
     },
   };
 }
@@ -697,6 +714,64 @@ export function finalizedArtifact(): DetachedXmdArtifact {
     agentEvidence: {
       portability,
       bundles: [{ sessionKey: portable.sessionKey, bytes: bundle }],
+    },
+  };
+}
+
+/** The logical path and bytes a source-bundle fixture retains. */
+export const FIXTURE_BUNDLE_PATH = "release.md";
+export const FIXTURE_BUNDLE_SOURCE = "# Release\n\nthe bytes this artifact seals\n";
+
+/**
+ * The same snapshot, as a run of a retained source bundle.
+ *
+ * Everything outside the definition is the version-1 fixture's, so what a
+ * format-2 case is comparing is the definition and nothing else. The descriptor
+ * describes itself: the source hash comes from the bytes, and the bundle hash
+ * from the manifest that hash makes.
+ */
+export function* sourceBundleArtifact(): Operation<DetachedXmdArtifact> {
+  const bytes = new TextEncoder().encode(FIXTURE_BUNDLE_SOURCE);
+  const sources = [
+    {
+      path: FIXTURE_BUNDLE_PATH,
+      sourceHash: yield* sourceContentHash(bytes),
+      byteLength: bytes.byteLength,
+    },
+  ];
+  const bundleHash = yield* sourceBundleHash({ entrypoint: FIXTURE_BUNDLE_PATH, sources });
+  const parsed = parseSourceBundleDefinition({
+    version: 2,
+    kind: "source-bundle",
+    hashAlgorithm: "sha256",
+    bundleHash,
+    entrypoint: FIXTURE_BUNDLE_PATH,
+    sources,
+  });
+  if (!parsed.ok) {
+    throw parsed.error;
+  }
+
+  const base = richArtifact();
+  const { runId, props, status, stopReason, createdAt, updatedAt } = base.run;
+  return {
+    ...base,
+    // Rebuilt member by member rather than spread past a deleted `base`: a
+    // version-2 record has no such member, and writing it out is what keeps the
+    // fixture the shape the contract declares.
+    run: {
+      runId,
+      definition: parsed.value,
+      props,
+      status,
+      ...(stopReason === undefined ? {} : { stopReason }),
+      createdAt,
+      updatedAt,
+    },
+    definition: {
+      definitionVersion: 2,
+      definition: parsed.value,
+      sources: [{ path: FIXTURE_BUNDLE_PATH, bytes }],
     },
   };
 }

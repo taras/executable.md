@@ -3,12 +3,20 @@
  *
  * Workflow runs for Executable.md.
  *
- * A workflow run is a run of one immutable definition — a Git object and the
- * path of the root document inside it — from one resolved base, recorded
- * durably before the root document is imported so later document executions
- * and durable effects share one explicit identity. The run itself is retained,
- * so another process can find it by its public id and continue from durable
- * data rather than from whoever happened to be holding the journal.
+ * A workflow run is a run of one immutable definition, recorded durably before
+ * the root document is imported so later document executions and durable
+ * effects share one explicit identity. The run itself is retained, so another
+ * process can find it by its public id and continue from durable data rather
+ * than from whoever happened to be holding the journal.
+ *
+ * A definition is one of two things. Version 1 is a Git object and the path of
+ * the root document inside it, run from one resolved base; its Markdown lives
+ * in a repository, and a trusted host supplies the reader that fetches it.
+ * Version 2 is a **source bundle**: the exact bytes themselves, addressed by
+ * portable logical paths and retained with the run. A source-bundle run needs
+ * no repository to start, resume, replay or export — which is what lets a file
+ * outside Git, an untracked file, and a file edited since its last commit each
+ * be one immutable definition the moment it is retained.
  *
  * ```ts
  * import { workflowInstallation } from "@executablemd/workflow";
@@ -63,6 +71,8 @@ export type { GitApi, GitObjectFormat } from "./src/git.ts";
 export { getWorkflowRun, retainedWorkflowInstallation, workflowInstallation } from "./src/run.ts";
 export { workflowBundleInstallation, WorkflowBundleHistoryError } from "./src/bundle.ts";
 export type { WorkflowRun } from "./src/run.ts";
+export { isGitWorkflowRun, workflowRunValue } from "./src/journal.ts";
+export type { GitWorkflowRunV1, SourceBundleWorkflowRunV2 } from "./src/journal.ts";
 export { useWorkflowServiceDenial, WorkflowServiceDeniedError } from "./src/service-denial.ts";
 
 export { RepositoryComposition } from "./src/composition/api.ts";
@@ -303,6 +313,23 @@ export type {
   WorkflowRunTransaction,
 } from "./src/storage/api.ts";
 
+export { isGitWorkflowRunCreation } from "./src/lifecycle/execution.ts";
+export type {
+  GitWorkflowRunCreationV1,
+  SourceBundleWorkflowRunCreationV2,
+  WorkflowRunCreation,
+} from "./src/lifecycle/execution.ts";
+export type {
+  GitDefinitionSourceClosureV1,
+  GitDefinitionSourceComponentV1,
+  GitDefinitionSourceRootV1,
+  GitRetainedDefinitionSourcesV1,
+  LegacyWorkflowSourceReader,
+  RetainedDefinitionSources,
+  SourceBundleRetainedDefinitionSourcesV2,
+  SourceBundleRetainedSourceV2,
+} from "./src/lifecycle/source.ts";
+
 export { WorkflowLifecycle, WorkflowLifecycleProviderError } from "./src/lifecycle/api.ts";
 export type {
   ExecutorAcquisition,
@@ -347,7 +374,10 @@ export type {
 
 export {
   definitionComponents,
+  definitionTargetPath,
   definitionToJson,
+  isGitWorkflowDefinition,
+  isSourceBundleWorkflowDefinition,
   parseWorkflowDefinition,
 } from "./src/storage/definition.ts";
 export type {
@@ -375,9 +405,15 @@ export type {
 } from "./src/storage/source-bundle.ts";
 
 export { conflictingFields } from "./src/storage/compatibility.ts";
+export type {
+  GitWorkflowRunComparisonV1,
+  SourceBundleWorkflowRunComparisonV2,
+  WorkflowRunComparison,
+} from "./src/storage/compatibility.ts";
 
 export {
   canonicalJson,
+  isGitWorkflowRunRecord,
   parseStopReasonInput,
   parseWorkflowRunStatus,
   parseWorkflowStopReason,
@@ -385,6 +421,8 @@ export {
 } from "./src/storage/record.ts";
 export type {
   DefinitionRetrieval,
+  GitWorkflowRunRecordV1,
+  SourceBundleWorkflowRunRecordV2,
   DocumentExecutionCompletion,
   DocumentExecutionRecord,
   StoredRunState,
@@ -394,10 +432,15 @@ export type {
 } from "./src/storage/record.ts";
 
 export {
+  LegacyWorkflowSourceMismatchError,
+  LegacyWorkflowSourceReaderUnavailableError,
+  LegacyWorkflowSourceUnavailableError,
   WorkflowDatabaseClosedError,
   WorkflowDatabaseCorruptError,
   WorkflowDatabaseFormatError,
+  WorkflowDefinitionCorruptError,
   WorkflowDefinitionError,
+  WorkflowDefinitionSourceMissingError,
   WorkflowDocumentExecutionError,
   WorkflowIncompleteVersionOneError,
   WorkflowInspectionRecoveryError,

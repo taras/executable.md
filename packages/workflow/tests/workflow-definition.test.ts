@@ -13,6 +13,7 @@
 
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
+import type { Result } from "effection";
 import { isCanonicalDocumentTarget } from "@executablemd/core";
 import type { Json } from "@executablemd/durable-streams";
 import {
@@ -22,6 +23,8 @@ import {
   definitionComponents,
   definitionToJson,
   type GitWorkflowDefinitionV1,
+  type GitWorkflowRunRecordV1,
+  isGitWorkflowDefinition,
   parseSourceBundleDefinition,
   parseStopReasonInput,
   parseWorkflowDefinition,
@@ -35,7 +38,6 @@ import {
   WORKFLOW_RUN_STATUSES,
   WorkflowDefinitionError,
   WorkflowRequestError,
-  type WorkflowRunRecord,
   type WorkflowDefinition,
   WorkflowRunStorage,
   WorkflowStorageProviderError,
@@ -58,9 +60,22 @@ function definition(overrides: Record<string, unknown> = {}): Record<string, unk
 
 /** The descriptor, parsed, for tests that need one they already trust. */
 function parsed(overrides: Partial<GitWorkflowDefinitionV1> = {}): GitWorkflowDefinitionV1 {
-  const result = parseWorkflowDefinition(definition(overrides));
+  return git(parseWorkflowDefinition(definition(overrides)));
+}
+
+/**
+ * The Git descriptor a result holds, narrowed rather than asserted.
+ *
+ * `parseWorkflowDefinition` now answers with either version, and these cases
+ * are about the Git one: a fixture that parsed as a source bundle would be a
+ * fixture this suite is not describing.
+ */
+function git(result: Result<WorkflowDefinition>): GitWorkflowDefinitionV1 {
   if (!result.ok) {
     throw result.error;
+  }
+  if (!isGitWorkflowDefinition(result.value)) {
+    throw new Error("expected a Git workflow definition");
   }
   return result.value;
 }
@@ -84,11 +99,7 @@ function bundled(overrides: Record<string, unknown> = {}): Record<string, unknow
 }
 
 function parsedBundle(overrides: Record<string, unknown> = {}): GitWorkflowDefinitionV1 {
-  const result = parseWorkflowDefinition(bundled(overrides));
-  if (!result.ok) {
-    throw result.error;
-  }
-  return result.value;
+  return git(parseWorkflowDefinition(bundled(overrides)));
 }
 
 function refusal(value: unknown): WorkflowDefinitionError {
@@ -102,7 +113,7 @@ function refusal(value: unknown): WorkflowDefinitionError {
   return result.error;
 }
 
-function record(overrides: Partial<WorkflowRunRecord> = {}): WorkflowRunRecord {
+function record(overrides: Partial<GitWorkflowRunRecordV1> = {}): GitWorkflowRunRecordV1 {
   return {
     runId: "release-1.4",
     definition: parsed(),
@@ -468,7 +479,7 @@ describe("Tier WD — a definition's exact document target", () => {
     const section = record({ definition: parsed({ targetPath: "Release/Publish" }) });
     const other = record({ definition: parsed({ targetPath: "Release/Announce" }) });
 
-    const asking = (stored: WorkflowRunRecord, definition: WorkflowDefinition) =>
+    const asking = (stored: GitWorkflowRunRecordV1, definition: GitWorkflowDefinitionV1) =>
       conflictingFields(stored, {
         runId: stored.runId,
         definition,
@@ -607,8 +618,8 @@ describe("Tier WD — the component bundle a definition is closed over", () => {
     const again = parseWorkflowDefinition(retained);
 
     expect(again.ok).toBe(true);
-    expect(again.ok && definitionComponents(again.value)).toEqual([]);
-    expect(again.ok && definitionToJson(again.value)).toEqual(retained);
+    expect(definitionComponents(git(again))).toEqual([]);
+    expect(definitionToJson(git(again))).toEqual(retained);
 
     // Presence is the member being written at all: a descriptor that wrote it
     // and named no bundle asked for one and failed to say which.
@@ -637,7 +648,7 @@ describe("Tier WD — the component bundle a definition is closed over", () => {
 
 describe("Tier WD — a bundle decides compatible reuse", () => {
   const stored = record({ definition: parsedBundle() });
-  const asking = (definition: WorkflowDefinition) =>
+  const asking = (definition: GitWorkflowDefinitionV1) =>
     conflictingFields(stored, {
       runId: stored.runId,
       definition,

@@ -37,6 +37,12 @@ import type {
   RetainedWorktree,
 } from "../fork-source.ts";
 import type { StoredWorkspaceRoot } from "../workspace/manifest.ts";
+import type {
+  GitDefinitionSourceClosureV1,
+  GitDefinitionSourceComponentV1,
+  GitDefinitionSourceRootV1,
+  RetainedDefinitionSources,
+} from "../../lifecycle/source.ts";
 
 /** The boundary the lifecycle chose, as the shape every record here is about. */
 export type { XmdArtifactFrontier };
@@ -67,40 +73,16 @@ export interface XmdArtifactJournalRow {
 }
 
 /**
- * The root document this run is a run of, and the bytes behind it.
+ * What one definition is closed over, spelled where the lifecycle spells it.
  *
- * The descriptor members repeat what the workflow definition already pins so
- * that the closure can be checked against it: an artifact whose embedded
- * Markdown belongs to a different commit than the definition names is not a
- * closure of that definition, and a fork made from it would continue a document
- * the run never ran.
+ * The source contract belongs to the lifecycle rather than to this encoder: a
+ * closure is what a run executes, and an artifact is one place it is written
+ * down. These aliases keep the names this directory already used without
+ * declaring a second copy of the shapes they name.
  */
-export interface XmdArtifactDefinitionRoot {
-  readonly objectFormat: "sha1" | "sha256";
-  /** The commit the definition pins, as the definition's own object id. */
-  readonly pinnedCommit: string;
-  readonly rootDocumentPath: string;
-  /** One exact canonical document target, when the definition selects one. */
-  readonly targetPath?: string;
-  /** The Git blob identity of `content`, under `objectFormat`. */
-  readonly blobId: string;
-  readonly content: string;
-}
-
-/** One declared component, including one the run never expanded. */
-export interface XmdArtifactDefinitionComponent {
-  readonly name: string;
-  readonly path: string;
-  /** The Git blob identity of `content`, under the root's `objectFormat`. */
-  readonly blobId: string;
-  readonly content: string;
-}
-
-/** Everything a fork needs to continue this definition without its repository. */
-export interface XmdArtifactDefinitionClosure {
-  readonly root: XmdArtifactDefinitionRoot;
-  readonly components: readonly XmdArtifactDefinitionComponent[];
-}
+export type XmdArtifactDefinitionRoot = GitDefinitionSourceRootV1;
+export type XmdArtifactDefinitionComponent = GitDefinitionSourceComponentV1;
+export type XmdArtifactDefinitionClosure = GitDefinitionSourceClosureV1;
 
 /**
  * One retained Prompt event, and the provider checkpoint token taken at it.
@@ -217,7 +199,15 @@ export interface XmdArtifactContents {
   readonly agentSessions: readonly AgentSessionRecord[];
   /** Absent unless the artifact classifies its Prompt-contributing sessions. */
   readonly agentEvidence?: XmdArtifactAgentEvidence;
-  readonly definition: XmdArtifactDefinitionClosure;
+  /**
+   * The source this run executes, in the form its own version retains.
+   *
+   * A format-1 artifact carries the Git closure and only that; a format-2
+   * artifact carries the source bundle and only that. The union is closed here
+   * so the writer selects a format from what it was handed rather than from a
+   * superset both versions could be read out of.
+   */
+  readonly definition: RetainedDefinitionSources;
 }
 
 /**
@@ -288,6 +278,36 @@ export type XmdArtifactContentKind =
   | "definition-source-component"
   | "definition-source-component-content";
 
+/**
+ * The closed set of content a format-2 artifact may hold.
+ *
+ * The same records as format 1 up to the definition, and then a source bundle
+ * instead of a Git closure. It admits no format-1 definition kind: one version's
+ * closure is never read as the other's, and a shared superset would be an
+ * inventory neither version's verifier could complete.
+ */
+export type XmdArtifactContentKindV2 =
+  | "artifact-frontier"
+  | "workflow-run"
+  | "document-execution"
+  | "fork-lineage"
+  | "journal-event"
+  | "journal-record"
+  | "workspace-root"
+  | "workspace-root-manifest"
+  | "dofs-manifest"
+  | "dofs-manifest-bytes"
+  | "dofs-blob"
+  | "dofs-blob-bytes"
+  | "workspace-repository"
+  | "workspace-worktree"
+  | "suspension-answer"
+  | "agent-session"
+  | "agent-session-portability"
+  | "agent-session-bundle-bytes"
+  | "definition-source-entry"
+  | "definition-source-content";
+
 /** Every declared kind, for recognition and for exhaustiveness. */
 export const XMD_ARTIFACT_CONTENT_KINDS: readonly XmdArtifactContentKind[] = Object.freeze([
   "agent-session",
@@ -335,9 +355,15 @@ export interface XmdArtifactManifestEntryV1 {
   readonly sha256: string;
 }
 
-/** The canonical versioned inventory of one artifact. */
+/**
+ * The canonical versioned inventory of one artifact.
+ *
+ * The version is the semantic format's, and the entry rows are the same shape
+ * in both: a manifest states what the artifact holds, and what those records
+ * mean is the format's question rather than the row's.
+ */
 export interface XmdArtifactManifestV1 {
-  readonly version: 1;
+  readonly version: 1 | 2;
   readonly entries: readonly XmdArtifactManifestEntryV1[];
 }
 
@@ -348,3 +374,27 @@ export interface XmdArtifactContentEntry {
   readonly encoding: XmdArtifactEncoding;
   readonly content: Uint8Array;
 }
+
+/** Every kind format 2 declares, for recognition and for exhaustiveness. */
+export const XMD_ARTIFACT_CONTENT_KINDS_V2: readonly XmdArtifactContentKindV2[] = Object.freeze([
+  "agent-session",
+  "agent-session-bundle-bytes",
+  "agent-session-portability",
+  "artifact-frontier",
+  "definition-source-content",
+  "definition-source-entry",
+  "document-execution",
+  "dofs-blob",
+  "dofs-blob-bytes",
+  "dofs-manifest",
+  "dofs-manifest-bytes",
+  "fork-lineage",
+  "journal-event",
+  "journal-record",
+  "suspension-answer",
+  "workflow-run",
+  "workspace-repository",
+  "workspace-root",
+  "workspace-root-manifest",
+  "workspace-worktree",
+]);

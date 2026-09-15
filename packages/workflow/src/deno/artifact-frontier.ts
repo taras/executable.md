@@ -28,14 +28,8 @@
  */
 
 import type { DatabaseSync } from "node:sqlite";
-import { Err, Ok, type Result } from "effection";
 import type { Json } from "@executablemd/durable-streams";
-import type { WorkflowDefinition } from "../storage/definition.ts";
-import type {
-  DetachedXmdArtifact,
-  XmdArtifactDefinitionClosure,
-  XmdArtifactJournalRow,
-} from "./artifact/types.ts";
+import type { DetachedXmdArtifact, XmdArtifactJournalRow } from "./artifact/types.ts";
 import type { InheritedEventProvenance } from "../lifecycle/history.ts";
 import { WorkflowRequestError } from "../storage/errors.ts";
 import type { WorkflowRunRecord } from "../storage/record.ts";
@@ -118,36 +112,6 @@ export function readRetrievalMetadata(database: DatabaseSync): Json | undefined 
     return undefined;
   }
   return readRetrieval(row).metadata;
-}
-
-/**
- * Whether a fetched closure is this run's, as a refusal or nothing.
- *
- * The identities are compared, not the bytes: whether the Markdown hashes to
- * what the definition names is the artifact writer's question, and asking it
- * twice in two places would be two answers to keep in agreement. What this
- * catches is the closure belonging to a different definition entirely, which
- * no amount of hashing downstream would notice.
- */
-export function matchesRetainedDefinition(
-  definition: WorkflowDefinition,
-  closure: XmdArtifactDefinitionClosure,
-): Result<void> {
-  const root = closure.root;
-  if (
-    root.objectFormat !== definition.objectFormat ||
-    root.pinnedCommit !== definition.objectId ||
-    root.rootDocumentPath !== definition.rootDocumentPath ||
-    root.targetPath !== definition.targetPath
-  ) {
-    return Err(
-      new WorkflowRequestError(
-        "the definition source this host read back does not describe the definition the run " +
-          "retains, so it is not this run's source.",
-      ),
-    );
-  }
-  return Ok();
 }
 
 function readLineageCreatedAt(database: DatabaseSync, path: string): string {

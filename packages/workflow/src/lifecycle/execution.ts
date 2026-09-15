@@ -15,20 +15,54 @@ import type { Operation, Result } from "effection";
 import type { DurableEvent, Json } from "@executablemd/durable-streams";
 import type { ExecutorLock } from "./api.ts";
 import type { WorkflowRunDatabase } from "../storage/api.ts";
-import type { WorkflowDefinition } from "../storage/definition.ts";
+import type { GitWorkflowDefinitionV1 } from "../storage/definition.ts";
 import type { JsonObject } from "../storage/members.ts";
+import type {
+  SourceBundleSnapshotEntryV2,
+  SourceBundleWorkflowDefinitionV2,
+} from "../storage/source-bundle.ts";
+import type { RetainedDefinitionSources } from "./source.ts";
 import type {
   DocumentExecutionCompletion,
   DocumentExecutionRecord,
   WorkflowRunRecord,
 } from "../storage/record.ts";
 
-/** What a `start` creates a run from, and what compatible reuse is compared against. */
-export interface WorkflowRunCreation {
-  readonly definition: WorkflowDefinition;
+/** What a `start` creates a Git run from, and what compatible reuse compares. */
+export interface GitWorkflowRunCreationV1 {
+  readonly definition: GitWorkflowDefinitionV1;
   readonly base: string;
   readonly props: JsonObject;
   readonly retrieval?: Json;
+}
+
+/**
+ * What a `start` creates a source-bundle run from.
+ *
+ * The descriptor and the bytes arrive together, because they are one fact: a
+ * version-2 run's authoritative content is what its store holds, so a creation
+ * that carried only the descriptor would be asking storage to retain an
+ * identity for content nobody supplied.
+ *
+ * `sourceSnapshot` names exactly the descriptor's paths, in exactly its order.
+ * The transition copies every byte sequence before it validates anything, so
+ * mutating a caller-owned array afterwards cannot change the run.
+ */
+export interface SourceBundleWorkflowRunCreationV2 {
+  readonly definition: SourceBundleWorkflowDefinitionV2;
+  readonly sourceSnapshot: readonly SourceBundleSnapshotEntryV2[];
+  readonly props: JsonObject;
+  readonly retrieval?: Json;
+}
+
+/** What a `start` creates a run from, by the definition version it creates. */
+export type WorkflowRunCreation = GitWorkflowRunCreationV1 | SourceBundleWorkflowRunCreationV2;
+
+/** Whether this creation is the Git one, narrowing to it when it is. */
+export function isGitWorkflowRunCreation(
+  creation: WorkflowRunCreation,
+): creation is GitWorkflowRunCreationV1 {
+  return creation.definition.kind === "git";
 }
 
 /** Which committed checkpoint of which run a fork continues. */
@@ -81,6 +115,24 @@ export interface WorkflowExecutionBegun {
   readonly replay: boolean;
   /** What stale recovery closed on the way in, when it closed anything. */
   readonly recovered?: DocumentExecutionRecord;
+  /**
+   * The source this run executes, authenticated against its own definition.
+   *
+   * Answered by the transition rather than fetched afterwards, so the check
+   * happens under the executor lock and before stale recovery, a new execution
+   * record, Workspace attachment or any other lifecycle write. A caller imports
+   * this closure; rereading the candidate path after admission would be a
+   * second source of truth about what the run is a run of.
+   *
+   * Always present. A source-bundle run's content comes out of its own store;
+   * a Git run's comes through the host's legacy reader, which is consulted
+   * against the descriptor about to be persisted — before persistence — when
+   * the run is being created, and against the retained descriptor when it
+   * already exists. A host that installed no reader cannot begin a Git run at
+   * all, which is the honest answer: it has no way to obtain what that run
+   * executes.
+   */
+  readonly sources: RetainedDefinitionSources;
 }
 
 /**

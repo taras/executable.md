@@ -28,7 +28,11 @@ export { useWorkflowRunStorage } from "./src/deno/provider.ts";
 export type { WorkflowRunStorageOptions } from "./src/deno/provider.ts";
 export { useWorkflowLifecycle } from "./src/deno/lifecycle.ts";
 export { useWorkflowRunHost } from "./src/deno/run-host.ts";
+export type { WorkflowRunHostOptions } from "./src/deno/run-host.ts";
+export { isGitWorkflowRunCreation } from "./src/lifecycle/execution.ts";
 export type {
+  GitWorkflowRunCreationV1,
+  SourceBundleWorkflowRunCreationV2,
   WorkflowBeginRequest,
   WorkflowExecutionTransitions,
   WorkflowExecutionBegun,
@@ -47,7 +51,16 @@ export type { WorkflowLifecycleOptions } from "./src/deno/lifecycle.ts";
  * nothing that reads or writes a container is exported from any entrypoint.
  */
 export { gitBlobIdentity } from "./src/deno/artifact/source.ts";
-export type { WorkflowDefinitionSourceReader } from "./src/deno/artifact/source.ts";
+export type {
+  GitDefinitionSourceClosureV1,
+  GitDefinitionSourceComponentV1,
+  GitDefinitionSourceRootV1,
+  GitRetainedDefinitionSourcesV1,
+  LegacyWorkflowSourceReader,
+  RetainedDefinitionSources,
+  SourceBundleRetainedDefinitionSourcesV2,
+  SourceBundleRetainedSourceV2,
+} from "./src/lifecycle/source.ts";
 export type {
   DetachedXmdArtifact,
   VerifiedXmdArtifact,

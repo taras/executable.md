@@ -29,6 +29,8 @@ import { withWorkflowWorkspace } from "@executablemd/workflow/deno";
 import type { WorkflowWorkspaceOptions } from "@executablemd/workflow/deno";
 import * as published from "@executablemd/workflow/deno";
 import { useInvokingHome } from "./support/credential-home.ts";
+import { readdir, readTextFile, stat } from "@effectionx/fs";
+import type { Operation } from "effection";
 
 /**
  * A compile-time proof, not a runtime one.
@@ -158,5 +160,175 @@ describe("workflow published Deno entrypoint", () => {
     }
     expect(COMPOSITION_IS_NOT_A_KEY).toBe(false);
     expect(yield* until(Promise.resolve(true))).toBe(true);
+  });
+});
+
+/**
+ * What the retained path is allowed to depend on.
+ *
+ * A version-1 definition's Markdown lives in a repository, and #443's whole
+ * point is that the modules which retain, recognize, resume, journal and seal a
+ * run do not reach one themselves — a trusted host supplies that capability as
+ * a direct closure instead. So this reads the source tree rather than the
+ * module graph: an import is a fact about a file, and a test that only exercised
+ * behaviour would pass right up until something imported Git and never used it.
+ *
+ * One exception, and it is pinned rather than granted. `src/run.ts` holds the
+ * public `workflowInstallation({ base })` convenience, which resolves a base
+ * through `Git.revParse()`. What this permits is that one named import and its
+ * one use inside the allocation path — not the file. A second Git operation
+ * reaching `run.ts`, or `revParse()` moving out of `allocating()` and into the
+ * retained path, fails here as surely as an import anywhere else would.
+ * #822 moves that adapter into the bundled Git Plugin.
+ */
+describe("workflow retained modules and the Git capability", () => {
+  /** The directories whose modules retain, recognize, resume or seal a run. */
+  const RETAINED = ["src/storage", "src/lifecycle", "src/deno/artifact", "src/deno/workspace"];
+
+  /** Single files on that same path, beside the directories above. */
+  const RETAINED_FILES = ["src/journal.ts", "src/fork.ts", "src/bundle.ts"];
+
+  /**
+   * The one module #822 has not moved yet.
+   *
+   * Named as a path rather than allowed by pattern: an exception that matched a
+   * shape would quietly cover the next file that happened to fit it.
+   */
+  const EXCEPTION = "src/run.ts";
+
+  /** The exact import that exception is, and the one operation it names. */
+  const EXCEPTION_IMPORT = "./git.ts";
+  const EXCEPTION_OPERATION = "revParse";
+
+  function packageFile(relative: string): string {
+    return fileURLToPath(new URL(`../${relative}`, import.meta.url));
+  }
+
+  /**
+   * Every module specifier a file names, in every form that reaches one.
+   *
+   * `from "x"` is only one of them. A bare `import "x"` runs a module for its
+   * effects, `import("x")` reaches one at runtime, and `require("x")` reaches
+   * one from CommonJS — so the specifier is extracted from all four rather than
+   * the statement matched in one.
+   */
+  function specifiers(source: string): string[] {
+    const found: string[] = [];
+    const pattern = /(?:\bfrom\s*|\bimport\s*\(\s*|\bimport\s+|\brequire\s*\(\s*)["']([^"']+)["']/g;
+    for (const match of source.matchAll(pattern)) {
+      const specifier = match[1];
+      if (specifier !== undefined) {
+        found.push(specifier);
+      }
+    }
+    return found;
+  }
+
+  /** Whether a specifier names the local Git capability or its package. */
+  function namesGit(specifier: string): boolean {
+    return /(?:^|\/)git\.ts$/.test(specifier) || /^@executablemd\/git(?:\/|$)/.test(specifier);
+  }
+
+  function gitSpecifiers(source: string): string[] {
+    return specifiers(source).filter(namesGit);
+  }
+
+  /** Every `.ts` file under one directory of the package, recursively. */
+  function* moduleFiles(relative: string): Operation<string[]> {
+    const found: string[] = [];
+    for (const name of yield* readdir(packageFile(relative))) {
+      const child = `${relative}/${name}`;
+      const stats = yield* stat(packageFile(child));
+      if (stats.isDirectory()) {
+        found.push(...(yield* moduleFiles(child)));
+      } else if (name.endsWith(".ts")) {
+        found.push(child);
+      }
+    }
+    return found;
+  }
+
+  function* retainedModules(): Operation<string[]> {
+    const scanned: string[] = [...RETAINED_FILES];
+    for (const directory of RETAINED) {
+      scanned.push(...(yield* moduleFiles(directory)));
+    }
+    // The deno adapter's own modules, without the repository-composition
+    // subsystem: those implement `<Git.*>` and are a capability rather than
+    // part of what a run retains.
+    for (const name of yield* readdir(packageFile("src/deno"))) {
+      if (name.endsWith(".ts")) {
+        scanned.push(`src/deno/${name}`);
+      }
+    }
+    return scanned;
+  }
+
+  it("names Git in no retained module, in any import form", function* () {
+    const scanned = yield* retainedModules();
+
+    // The scan has to be looking at something: a glob that matched nothing
+    // would pass this case every time.
+    expect(scanned.length).toBeGreaterThan(40);
+    expect(scanned).toContain("src/deno/transitions.ts");
+    expect(scanned).toContain("src/storage/source-bundle.ts");
+    expect(scanned).toContain("src/lifecycle/source.ts");
+    expect(scanned).toContain("src/deno/definition-source.ts");
+    expect(scanned).not.toContain(EXCEPTION);
+
+    // And the matcher has to recognize what it is looking for. Each of these is
+    // a way a module could reach Git without writing `from`.
+    for (const form of [
+      'import { revParse } from "./git.ts";',
+      'import "../git.ts";',
+      'const git = await import("./git.ts");',
+      'const git = require("@executablemd/git");',
+      'export { revParse } from "../../git.ts";',
+    ]) {
+      expect({ form, git: gitSpecifiers(form).length }).toEqual({ form, git: 1 });
+    }
+    expect(gitSpecifiers('import { reading } from "./reading.ts";')).toEqual([]);
+
+    const importing: string[] = [];
+    for (const relative of scanned) {
+      const source = yield* readTextFile(packageFile(relative));
+      if (gitSpecifiers(source).length > 0) {
+        importing.push(relative);
+      }
+    }
+    expect(importing).toEqual([]);
+  });
+
+  it("permits one Git import in run.ts, used once inside the allocation path", function* () {
+    const source = yield* readTextFile(packageFile(EXCEPTION));
+
+    // One specifier, and it is the local capability rather than the package.
+    expect(gitSpecifiers(source)).toEqual([EXCEPTION_IMPORT]);
+    // Named, so the import states which operation it is the exception for.
+    expect(source).toContain(`import { ${EXCEPTION_OPERATION} } from "${EXCEPTION_IMPORT}";`);
+
+    // Called once in the whole module. A bare identifier rather than any
+    // mention of the name: the module's own prose says `Git.revParse()`, and a
+    // sentence about the exception is not a second use of it.
+    const calls = [...source.matchAll(/(?<![.\w])revParse\s*\(/g)];
+    expect(calls).toHaveLength(1);
+
+    // And that one call is inside `allocating()` itself, which is what
+    // `workflowInstallation({ base })` uses. The retained installation beside it
+    // resolves nothing: a run it is given arrives whole.
+    //
+    // Bounded by that function's own closing brace rather than by whatever
+    // declaration happens to follow it — a helper slipped in between would
+    // otherwise count as the allocation path while being callable from the
+    // retained one.
+    const from = source.indexOf("function allocating(");
+    expect(from).toBeGreaterThan(-1);
+    const closes = source.indexOf("\n}\n", from);
+    expect(closes).toBeGreaterThan(from);
+    const allocation = source.slice(from, closes);
+    const call = /(?<![.\w])revParse\s*\(/;
+    expect(call.test(allocation)).toBe(true);
+    expect(call.test(source.slice(0, from))).toBe(false);
+    expect(call.test(source.slice(closes))).toBe(false);
   });
 });

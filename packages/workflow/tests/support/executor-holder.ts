@@ -10,6 +10,7 @@ import { main } from "effection";
 import process from "node:process";
 import { WorkflowLifecycle } from "../../mod.ts";
 import { useWorkflowLifecycle } from "../../deno.ts";
+import { legacySourceReader } from "./legacy-source.ts";
 
 await main(function* () {
   // `process.argv` rather than `Deno.args`: this file is Deno-only to run, and
@@ -19,7 +20,7 @@ await main(function* () {
     throw new Error("usage: executor-holder.ts <root> <run-id>");
   }
 
-  yield* useWorkflowLifecycle({ root });
+  yield* useWorkflowLifecycle({ root, legacySource: legacySourceReader() });
   const acquired = yield* WorkflowLifecycle.operations.acquireExecutor(runId);
   if (!acquired.ok) {
     throw acquired.error;

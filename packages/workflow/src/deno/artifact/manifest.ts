@@ -34,16 +34,24 @@ import type {
   XmdArtifactManifestV1,
 } from "./types.ts";
 
-/** The artifact manifest version this build produces and reads. */
+/** The artifact manifest version a format-1 artifact produces and reads. */
 export const XMD_ARTIFACT_MANIFEST_VERSION = 1;
+
+/** The manifest version a format-2 artifact produces and reads. */
+export const XMD_ARTIFACT_SOURCE_BUNDLE_MANIFEST_VERSION = 2;
 
 /**
  * What the artifact identity is a hash *of*, beyond the manifest bytes.
  *
  * Domain separation, so the same bytes appearing as some other structure's
- * canonical encoding cannot be presented as an artifact identity.
+ * canonical encoding cannot be presented as an artifact identity — and so one
+ * format's manifest can never derive the other's identity, however similar the
+ * two inventories happen to look.
  */
 export const XMD_ARTIFACT_IDENTITY_DOMAIN = "xmd-artifact\0v1\0";
+
+/** The same separation for format 2, which is a different set of records. */
+export const XMD_ARTIFACT_SOURCE_BUNDLE_IDENTITY_DOMAIN = "xmd-artifact\0v2\0";
 
 const encoder = new TextEncoder();
 
@@ -125,6 +133,7 @@ export interface XmdArtifactManifestBuild {
 export function buildXmdArtifactManifest(
   entries: readonly XmdArtifactContentEntry[],
   duplicate: (kind: string) => never,
+  version: 1 | 2 = XMD_ARTIFACT_MANIFEST_VERSION,
 ): XmdArtifactManifestBuild {
   const seen = new Set<string>();
   const rows: Array<{ row: XmdArtifactManifestEntryV1; entry: XmdArtifactContentEntry }> = [];
@@ -139,14 +148,14 @@ export function buildXmdArtifactManifest(
   rows.sort((left, right) => compareEntries(left.row, right.row));
 
   const manifest: XmdArtifactManifestV1 = Object.freeze({
-    version: XMD_ARTIFACT_MANIFEST_VERSION,
+    version,
     entries: Object.freeze(rows.map((each) => each.row)),
   });
   const bytes = canonicalJsonBytes(manifestToJson(manifest));
   return Object.freeze({
     manifest,
     bytes,
-    identity: deriveXmdArtifactIdentity(bytes),
+    identity: deriveXmdArtifactIdentity(bytes, version),
     ordered: Object.freeze(rows.map((each) => each.entry)),
   });
 }
@@ -172,9 +181,12 @@ export function manifestToJson(manifest: XmdArtifactManifestV1): Json {
 }
 
 /** The lowercase SHA-256 of the domain prefix followed by the manifest bytes. */
-export function deriveXmdArtifactIdentity(manifestBytes: Uint8Array): string {
+export function deriveXmdArtifactIdentity(manifestBytes: Uint8Array, version: 1 | 2 = 1): string {
   return createHash("sha256")
-    .update(XMD_ARTIFACT_IDENTITY_DOMAIN, "utf8")
+    .update(
+      version === 2 ? XMD_ARTIFACT_SOURCE_BUNDLE_IDENTITY_DOMAIN : XMD_ARTIFACT_IDENTITY_DOMAIN,
+      "utf8",
+    )
     .update(manifestBytes)
     .digest("hex");
 }

@@ -34,6 +34,7 @@ import type { ExecutionInstallation } from "@executablemd/core/host";
 import { Git } from "../src/git.ts";
 import { getWorkflowRun, workflowInstallation } from "../src/run.ts";
 import type { WorkflowRun } from "../src/run.ts";
+import { type GitWorkflowRunV1, isGitWorkflowRun } from "../mod.ts";
 
 const COMMIT = "9fceb02d0ae598e95dc970b74767f19372d61af8";
 const OTHER_COMMIT = "1111111111111111111111111111111111111111";
@@ -182,11 +183,11 @@ describe("Tier WR — workflow runs", () => {
       yield* b;
     });
 
-    expect(first[0]?.base).toBe("main");
-    expect(first[0]?.pinnedCommit).toBe(COMMIT);
-    expect(second[0]?.base).toBe("release");
-    expect(second[0]?.pinnedCommit).toBe(OTHER_COMMIT);
-    expect(first[0]?.runId).not.toBe(second[0]?.runId);
+    expect(gitRun(first[0]).base).toBe("main");
+    expect(gitRun(first[0]).pinnedCommit).toBe(COMMIT);
+    expect(gitRun(second[0]).base).toBe("release");
+    expect(gitRun(second[0]).pinnedCommit).toBe(OTHER_COMMIT);
+    expect(gitRun(first[0]).runId).not.toBe(gitRun(second[0]).runId);
   });
 
   it("WR20: one installation value reused by two executions gives each its own run", function* () {
@@ -388,8 +389,8 @@ describe("Tier WR — workflow runs", () => {
     });
 
     expect(asked).toHaveLength(0);
-    expect(restored[0]?.pinnedCommit).toBe(COMMIT);
-    expect(restored[0]?.runId).toBe(live[0]?.runId);
+    expect(gitRun(restored[0]).pinnedCommit).toBe(COMMIT);
+    expect(gitRun(restored[0]).runId).toBe(live[0]?.runId);
   });
 
   it("WR7: a failure to resolve the base records no run and expands no document", function* () {
@@ -912,7 +913,7 @@ describe("Tier WR — workflow runs", () => {
           origin: "tier-wr",
           props: { type: "object", properties: {}, additionalProperties: false },
           *fn() {
-            order.push(`expanded:${(yield* getWorkflowRun()).pinnedCommit === COMMIT}`);
+            order.push(`expanded:${gitRun(yield* getWorkflowRun()).pinnedCommit === COMMIT}`);
             return "";
           },
         },
@@ -1027,6 +1028,20 @@ describe("Tier WR — workflow runs", () => {
       yield* slow;
     });
 
-    expect(seen.map((run) => run.base).sort()).toEqual(["fast", "slow"]);
+    expect(seen.map((run) => gitRun(run).base).sort()).toEqual(["fast", "slow"]);
   });
 });
+
+/**
+ * The Git run a value holds, narrowed rather than asserted.
+ *
+ * `WorkflowRun` is a closed union now, and these cases are about the Git
+ * member: a value that came back as a source-bundle run is not the one the
+ * assertion below is describing.
+ */
+function gitRun(run: WorkflowRun | undefined): GitWorkflowRunV1 {
+  if (run === undefined || !isGitWorkflowRun(run)) {
+    throw new Error("expected a Git workflow run");
+  }
+  return run;
+}

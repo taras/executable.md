@@ -31,6 +31,7 @@ import type { Workflow } from "@executablemd/durable-streams";
 import { main, until } from "effection";
 import { WorkflowLifecycle, WorkflowStorageError } from "../../mod.ts";
 import { useWorkflowRunHost } from "../../deno.ts";
+import { legacySourceReader } from "./legacy-source.ts";
 
 const DEFINITION = {
   version: 1,
@@ -71,7 +72,7 @@ main(function* () {
 
   // The whole host, because beginning a run is a lifecycle transition and the
   // executor lock is what authorizes it — here exactly as in production.
-  const transitions = yield* useWorkflowRunHost({ root });
+  const transitions = yield* useWorkflowRunHost({ root, legacySource: legacySourceReader() });
 
   const acquired = yield* WorkflowLifecycle.operations.acquireExecutor(runId);
   if (!acquired.ok) {

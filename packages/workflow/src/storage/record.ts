@@ -16,7 +16,8 @@
 import { Err, Ok, type Result } from "effection";
 import { canonicalize } from "@executablemd/core";
 import type { Json } from "@executablemd/durable-streams";
-import type { WorkflowDefinition } from "./definition.ts";
+import type { GitWorkflowDefinitionV1 } from "./definition.ts";
+import type { SourceBundleWorkflowDefinitionV2 } from "./source-bundle.ts";
 import { WorkflowRequestError } from "./errors.ts";
 import {
   describe,
@@ -64,16 +65,54 @@ export type WorkflowStopReason =
   | { readonly kind: "host"; readonly code: string }
   | { readonly kind: "journal"; readonly eventId: string };
 
-/** One workflow run's retained metadata. */
-export interface WorkflowRunRecord {
+/**
+ * One workflow run of a Git definition, and the base it started from.
+ *
+ * Unchanged: this is the record every version-1 run has retained, in the
+ * members and the order it retained them.
+ */
+export interface GitWorkflowRunRecordV1 {
   readonly runId: string;
-  readonly definition: WorkflowDefinition;
+  readonly definition: GitWorkflowDefinitionV1;
   readonly base: string;
   readonly props: JsonObject;
   readonly status: WorkflowRunStatus;
   readonly stopReason?: WorkflowStopReason;
   readonly createdAt: string;
   readonly updatedAt: string;
+}
+
+/**
+ * One workflow run of a retained source bundle.
+ *
+ * No `base` and no pinned commit. Those are Git version-1 fields, and a
+ * synthetic one here would be a repository state this run never had — read back
+ * by anything comparing identity as though the run had named it.
+ */
+export interface SourceBundleWorkflowRunRecordV2 {
+  readonly runId: string;
+  readonly definition: SourceBundleWorkflowDefinitionV2;
+  readonly props: JsonObject;
+  readonly status: WorkflowRunStatus;
+  readonly stopReason?: WorkflowStopReason;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+}
+
+/** One workflow run's retained metadata, by the definition version it retains. */
+export type WorkflowRunRecord = GitWorkflowRunRecordV1 | SourceBundleWorkflowRunRecordV2;
+
+/**
+ * Whether this record is a Git run, narrowing to it when it is.
+ *
+ * The discriminator is the definition's own kind rather than a member repeated
+ * on the record: one value decides what a run is, and a second copy of it could
+ * disagree with the first.
+ */
+export function isGitWorkflowRunRecord(
+  record: WorkflowRunRecord,
+): record is GitWorkflowRunRecordV1 {
+  return record.definition.kind === "git";
 }
 
 /**

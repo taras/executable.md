@@ -67,6 +67,7 @@ import {
   useStorageRoot,
   withStorage,
 } from "./support/storage.ts";
+import { describeWorkflowRun, readWorkflowRun, workflowRunValue } from "../src/journal.ts";
 
 const { create } = WorkflowRunStorage.operations;
 
@@ -1599,5 +1600,88 @@ describe("Tier WJ — surviving a process", () => {
       "third",
       undefined,
     ]);
+  });
+});
+
+/**
+ * Tier WJ — the run value a source-bundle journal records.
+ *
+ * The record is one closed union now. A reader accepts either member's exact
+ * set in any key order and no other, and the ordinary serializer writes one
+ * spelling per version — which is what keeps a retained version-1 record byte
+ * for byte what it always was while version 2 invents no Git field.
+ */
+describe("Tier WJ — the source-bundle run record", () => {
+  const BUNDLE_HASH = "a".repeat(64);
+
+  it("WJ40: version 2 serializes its own members, in its own order", function* () {
+    const whole = workflowRunValue({
+      runId: "bundle-1",
+      definitionVersion: 2,
+      bundleHash: BUNDLE_HASH,
+    });
+    expect(Object.keys(whole)).toEqual(["runId", "definitionVersion", "bundleHash"]);
+
+    const section = workflowRunValue({
+      runId: "bundle-1",
+      definitionVersion: 2,
+      bundleHash: BUNDLE_HASH,
+      targetPath: "Release/Publish",
+    });
+    expect(Object.keys(section)).toEqual([
+      "runId",
+      "definitionVersion",
+      "bundleHash",
+      "targetPath",
+    ]);
+
+    // Version 1 is untouched, in members and in order.
+    expect(Object.keys(workflowRunValue({ runId: "r", base: "main", pinnedCommit: "c" }))).toEqual([
+      "runId",
+      "base",
+      "pinnedCommit",
+    ]);
+  });
+
+  it("WJ41: either exact member set reads, in any order, and nothing else", function* () {
+    // Reordered keys are the same value.
+    expect(
+      readWorkflowRun({ bundleHash: BUNDLE_HASH, definitionVersion: 2, runId: "bundle-1" }),
+    ).toEqual({ runId: "bundle-1", definitionVersion: 2, bundleHash: BUNDLE_HASH });
+
+    for (const refused of [
+      // A member set that is neither version's.
+      { runId: "r", definitionVersion: 2 },
+      { runId: "r", definitionVersion: 2, bundleHash: BUNDLE_HASH, base: "main" },
+      // Half of each.
+      { runId: "r", base: "main", definitionVersion: 2 },
+      // A synthetic version, and a synthetic target.
+      { runId: "r", definitionVersion: 1, bundleHash: BUNDLE_HASH },
+      { runId: "r", definitionVersion: 2, bundleHash: BUNDLE_HASH, targetPath: 7 },
+      { runId: "r", definitionVersion: 2, bundleHash: "" },
+    ]) {
+      expect({ refused, run: readWorkflowRun(refused) }).toEqual({ refused, run: undefined });
+    }
+  });
+
+  it("WJ42: the effect description says which version, and invents no base", function* () {
+    const described = describeWorkflowRun({
+      runId: "bundle-1",
+      definitionVersion: 2,
+      bundleHash: BUNDLE_HASH,
+    });
+    expect(described).toEqual({
+      type: "workflow_run",
+      name: "workflow_run",
+      definitionVersion: 2,
+      bundleHash: BUNDLE_HASH,
+    });
+    expect("base" in described).toBe(false);
+
+    expect(describeWorkflowRun({ runId: "r", base: "main", pinnedCommit: "c" })).toEqual({
+      type: "workflow_run",
+      name: "workflow_run",
+      base: "main",
+    });
   });
 });

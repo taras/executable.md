@@ -21,12 +21,13 @@ import { WorkflowLifecycle, WorkflowRunNotFoundError } from "../mod.ts";
 import type { WorkflowRunRecord, WorkflowRunStatus } from "../mod.ts";
 import { useWorkflowLifecycle, workflowRunLock, workflowRunPath } from "../deno.ts";
 import { creation, useStorageRoot, withExecutorRun, withRunHost } from "./support/storage.ts";
+import { legacySourceReader } from "./support/legacy-source.ts";
 
 const { cancel } = WorkflowLifecycle.operations;
 
 function withLifecycle<T>(root: string, body: () => Operation<T>): Operation<T> {
   return scoped(function* () {
-    yield* useWorkflowLifecycle({ root });
+    yield* useWorkflowLifecycle({ root, legacySource: legacySourceReader() });
     return yield* body();
   });
 }
