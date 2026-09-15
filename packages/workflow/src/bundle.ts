@@ -12,7 +12,7 @@
  *   middleware, or document code exists, resolves declared names against it,
  *   and invokes only the definitions it produced from it.
  * - **Retained history.** `admissions` holds every recorded component import
- *   to the same authority, inside canonical core's own journal read: before
+ *   to the same catalog, inside canonical core's own journal read: before
  *   public replay policy, before any retained effect reaches execution, before
  *   a retained terminal result is reused, and before anything is appended. A
  *   history that recorded a name this bundle does not declare, a path or hash
@@ -219,7 +219,7 @@ function admits(components: ReadonlyMap<string, WorkflowBundleComponent>): Journ
 export function workflowBundleInstallation(
   components: readonly WorkflowBundleComponent[],
 ): ExecutionInstallation {
-  // Copied entry by entry at construction, so the authority this installation
+  // Copied entry by entry at construction, so the catalog this installation
   // carries is closed over these values rather than over an array the caller
   // still holds and could rewrite between installation and import.
   const index = new Map<string, WorkflowBundleComponent>(

@@ -19,7 +19,7 @@
  *
  * ## It requests a destination; it grants nothing
  *
- * This installs composition data, not authority. A document can write any URL
+ * This installs composition data, not permission. A document can write any URL
  * here and reach nothing it was not already allowed to reach: the trusted host
  * installs an adapter-private ceiling beside its credentials, and a target
  * outside that ceiling fails before any provider observes anything. Narrowing

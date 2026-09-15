@@ -23,7 +23,7 @@
  * The admitted read carries only what identifies the question — no run, no
  * expansion, no database. Those are the workflow profile's to add, from context
  * it has and the adapter does not, which is what lets one adapter serve both
- * profiles without importing either one's authority.
+ * profiles without importing either one's permissions.
  */
 
 import { type Api, createApi } from "@effectionx/context-api";

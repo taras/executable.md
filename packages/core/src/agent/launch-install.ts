@@ -8,17 +8,17 @@
  * performing a launch no replay could resume.
  *
  * What travels contextually is the registry — composition data, so a document
- * and the components it expands find the same one. The authority does not: it
+ * and the components it expands find the same one. The coordinator does not: it
  * is handed to a provider factory directly. A replaced registry therefore
- * produces requests the real authority has never heard of, which is a refusal
+ * produces requests the real coordinator has never heard of, which is a refusal
  * rather than a way in.
  */
 
 import { createContext } from "effection";
 import type { Context, Operation } from "effection";
 import type { LaunchOptions, SessionLaunchResult } from "./agent-api.ts";
-import { createLaunchAuthority } from "./launch-authority.ts";
-import type { AgentProviderAuthority } from "./launch-authority.ts";
+import { createLaunchCoordinator } from "./launch-coordinator.ts";
+import type { AgentLaunchCoordinator } from "./launch-coordinator.ts";
 import { createLaunchRegistry, launchSession } from "./launch-owner.ts";
 import type { LaunchRegistry } from "./launch-owner.ts";
 import { AgentInternal } from "./internal.ts";
@@ -38,13 +38,13 @@ const Installation: Context<LaunchInstallation | undefined> = createContext<
 
 /**
  * Open one launch installation for a live document, and hand back the
- * authority its providers are installed with.
+ * coordinator its providers are installed with.
  */
-export function* useLaunchInstallation(): Operation<AgentProviderAuthority> {
+export function* useLaunchInstallation(): Operation<AgentLaunchCoordinator> {
   const registry = createLaunchRegistry();
   const generation = {};
   yield* Installation.set({ registry, generation });
-  return createLaunchAuthority(generation, () => registry.live());
+  return createLaunchCoordinator(generation, () => registry.live());
 }
 
 /**
@@ -77,7 +77,7 @@ export function* launchAgentSession(
 /**
  * Install the provider named by `<AgentProvider>` for `body`.
  *
- * The authority a registered factory receives is this document's, reached only
+ * The coordinator a registered factory receives is this document's, reached only
  * through the terminal the installation opens — so a handler that answers the
  * install request itself installs nothing.
  */
@@ -113,8 +113,8 @@ export function* useProviderInstallation(
   if (!installation) {
     throw new Error(`<AgentProvider name="${name}"> is available only inside a document execution`);
   }
-  const authority = createLaunchAuthority(installation.generation, () =>
+  const launchCoordinator = createLaunchCoordinator(installation.generation, () =>
     installation.registry.live(),
   );
-  yield* installAgentProvider(name, options, authority);
+  yield* installAgentProvider(name, options, launchCoordinator);
 }

@@ -4,7 +4,7 @@
  *
  * The trusted host here is the stub in `execution-host-stub.ts`: these tests are
  * about the harness — targets and inline source, declaration installation,
- * display versus collection, journal policy, outcomes and authority — and not
+ * display versus collection, journal policy, outcomes and the harness — and not
  * about production assembly, which is the CLI's contract and is held there.
  */
 
@@ -69,7 +69,7 @@ function* runHarness(
     if (options.around) {
       yield* options.around();
     }
-    // The harness authority is a delivery the host attaches, so these tests are
+    // The harness is a delivery the host attaches, so these tests are
     // the host: without this, `<Execution>` is recognized and refused.
     const execution = yield* executeInstalled({ path: "README.md", stream: new InMemoryStream() }, [
       testHarnessInstallation(stub.provider),
@@ -413,7 +413,7 @@ describe("journal policy", () => {
   });
 });
 
-describe("authority", () => {
+describe("what may run a child", () => {
   it("refuses <Execution> outside a canonical <Test>", function* () {
     const run = yield* runHarness({
       "README.md": doc("<Testing>", '<Execution host="run" target="child.md" />', "</Testing>"),
@@ -570,10 +570,10 @@ describe("authority", () => {
   });
 });
 
-describe("the authority path", () => {
+describe("the harness path", () => {
   const DOC = {
     "README.md": doc(
-      '<Test name="no-authority">',
+      '<Test name="no-harness">',
       '<Execution host="run" target="child.md" />',
       "</Test>",
     ),
@@ -809,7 +809,7 @@ describe("the authority path", () => {
       (provider) => [testHarnessInstallation(provider)],
       function* () {
         // Public middleware on the behavior hook. It sees what a test was
-        // written with and nothing else: no argument carries authority, so a
+        // written with and nothing else: no argument carries a capability, so a
         // second loaded copy composing here acquires none either.
         yield* TestBehavior.around({
           *test(args, next) {

@@ -90,7 +90,7 @@ export function issueYields(events: readonly DurableEvent[]): DurableEvent[] {
 /** What one execution of a scenario document reports about itself. */
 export interface ScenarioObservation {
   /**
-   * The execution's own outcome, which is the authority on the suite.
+   * The execution's own outcome, which is definitive for the suite.
    *
    * A passing suite is `Ok`. A suite that failed a test — or discovered none at
    * all — is `Err(TestFailureError)`, so a document whose tests never ran

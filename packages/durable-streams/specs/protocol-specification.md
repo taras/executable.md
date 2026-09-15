@@ -363,7 +363,7 @@ per-event check has nothing to object to in a journal that simply omits the
 event. Its default is a no-op.
 
 A replay distinguishes three views of one history, and conflating any two hands
-authority to whoever holds the wrong one:
+the decision to whoever holds the wrong one:
 
 1. the **authoritative retained history**, which admission validated and replay
    consumes — detached from the backend and immutable to policy, its
@@ -372,12 +372,12 @@ authority to whoever holds the wrong one:
    invocation, over which middleware composes freely and from which nothing
    flows back; and
 3. **values delivered to workflow code**, a fresh mutable copy taken from the
-   authority at consumption — for a replayed effect and for a completed run's
+   retained history at consumption — for a replayed effect and for a completed run's
    own return value alike. This is the only thing "mutable replayed value"
-   means: writing to that copy reaches neither the authority nor the next
+   means: writing to that copy reaches neither the retained history nor the next
    replay.
 
-The authority is frozen through in every settlement shape: a success with a
+The retained history is frozen through in every settlement shape: a success with a
 value, a `Result<void>` with none, a failure, and a cancellation, on Yield and
 Close alike. An envelope left writable is one a public observation could add a
 value to before replay reads it.
@@ -386,7 +386,7 @@ Handing policy the authoritative events would let a guard rename effect A to B �
 so a workflow asking for B consumes A's result without B ever running — or
 rewrite a recorded root selection after admission accepted it.
 
-Replay guards are **composable policy, not authority**. Guards compose through
+Replay guards are **composable policy, not enforcement**. Guards compose through
 middleware, and a handler installed further out may decline to delegate — which
 is what composition is for. An invariant that must not be negotiable therefore
 does not belong in a guard. A consumer whose durable identity depends on

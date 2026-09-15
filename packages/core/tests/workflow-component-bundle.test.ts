@@ -483,7 +483,7 @@ describe("Tier WB — public import middleware cannot widen a bundle", () => {
     expect(outputs[1]).not.toContain("first source.");
   });
 
-  it("WB15: an ordinary execution installs no authority at all", function* () {
+  it("WB15: an ordinary execution installs no catalog at all", function* () {
     const output = yield* scoped(function* () {
       yield* Component.around({
         *importComponent([name, position], next) {

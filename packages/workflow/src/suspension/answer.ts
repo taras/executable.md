@@ -49,7 +49,7 @@ import { WorkflowSuspensionRequestError, type WorkflowSuspensionRequest } from "
 export const SUSPENSION_ANSWER = "suspension_answer";
 
 /** What a live answer publication is given, and what it may do with it. */
-export interface SuspensionAnswerAuthority {
+export interface SuspensionAnswerPublication {
   /** The wait being answered, as this run derives it. */
   readonly suspensionId: string;
   /** What that wait asked for, and what shape an answer takes. */
@@ -75,7 +75,7 @@ export interface SuspensionAnswerProvider {
    * answer, and is refused: what makes a wait over is the event, not the
    * return.
    */
-  claim(authority: SuspensionAnswerAuthority): Operation<Json | undefined>;
+  claim(publication: SuspensionAnswerPublication): Operation<Json | undefined>;
 }
 
 /** A live answer publication that did not happen the way its contract says. */
@@ -215,7 +215,7 @@ function* claimRetainedAnswer(
   let published: Result | undefined;
   let open = true;
 
-  const authority: SuspensionAnswerAuthority = Object.freeze({
+  const publication: SuspensionAnswerPublication = Object.freeze({
     suspensionId: id,
     request,
     journalProvenance,
@@ -232,7 +232,7 @@ function* claimRetainedAnswer(
   });
 
   try {
-    const claimed = yield* provider.claim(authority);
+    const claimed = yield* provider.claim(publication);
     if (claimed === undefined) {
       if (published !== undefined) {
         throw new SuspensionAnswerPublicationError(

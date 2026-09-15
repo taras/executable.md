@@ -8,7 +8,7 @@
  * runs Git against a bare repository in a temporary directory instead.
  *
  * That substitution is at the host boundary — which Git runs, and which GitHub
- * answers — and nowhere else. Every locator admission, every authority check,
+ * answers — and nowhere else. Every locator admission, every admission check,
  * every journal read and every classification below is the shipped code.
  */
 
@@ -19,8 +19,8 @@ import { collect, execute, inlineSource, registerComponents } from "@executablem
 import type { ComponentRegistration } from "@executablemd/core";
 import { RepositoryContext } from "../src/composition/context.ts";
 import {
-  GitOperationAuthorityError,
-  PullRequestAuthorityError,
+  GitOperationAdmissionError,
+  PullRequestAdmissionError,
 } from "../src/composition/errors.ts";
 import { useCompositionComponents } from "../src/composition/installation.ts";
 import { parseGitHostReconciliationRecord } from "../src/git-host/records.ts";
@@ -59,12 +59,12 @@ import {
 } from "./support/pull-requests.ts";
 import { gitHubSource } from "../src/deno/composition/github.ts";
 
-function isAuthorityFailure(value: unknown): value is PullRequestAuthorityError {
-  return value instanceof PullRequestAuthorityError;
+function isAdmissionFailure(value: unknown): value is PullRequestAdmissionError {
+  return value instanceof PullRequestAdmissionError;
 }
 
-function isSelectionFailure(value: unknown): value is GitOperationAuthorityError {
-  return value instanceof GitOperationAuthorityError;
+function isSelectionFailure(value: unknown): value is GitOperationAdmissionError {
+  return value instanceof GitOperationAdmissionError;
 }
 
 /** What the run retains for its one Repository, so a suite can read a checkout. */
@@ -236,7 +236,7 @@ describe("workflow PullRequest", () => {
   });
 });
 
-describe("workflow PullRequest authority", () => {
+describe("workflow PullRequest admission", () => {
   it("fails outside a Repository without observing a Git host", function* () {
     const root = yield* useStorageRoot();
     const remote = yield* useBareRemote(REMOTE);
@@ -251,7 +251,7 @@ describe("workflow PullRequest authority", () => {
           run.options,
         ),
       );
-      expect(causedBy(failure, isAuthorityFailure)?.reason).toBe("no-repository-context");
+      expect(causedBy(failure, isAdmissionFailure)?.reason).toBe("no-repository-context");
       expect(String(failure)).not.toContain(LATER);
       expect(run.store.requests).toHaveLength(0);
     });
@@ -328,7 +328,7 @@ describe("workflow PullRequest authority", () => {
           run.options,
         ),
       );
-      expect(causedBy(failure, isAuthorityFailure)?.reason).toBe("unnamed-branch");
+      expect(causedBy(failure, isAdmissionFailure)?.reason).toBe("unnamed-branch");
       expect(run.store.requests).toHaveLength(0);
     });
   });
@@ -358,7 +358,7 @@ describe("workflow PullRequest authority", () => {
         ),
       );
 
-      const refusal = causedBy(failure, isAuthorityFailure);
+      const refusal = causedBy(failure, isAdmissionFailure);
       expect(refusal?.reason).toBe("missing-push-evidence");
       expect(String(refusal)).toContain("<Git.Push />");
       expect(run.store.requests).toHaveLength(0);
@@ -391,7 +391,7 @@ describe("workflow PullRequest authority", () => {
           run.options,
         ),
       );
-      expect(causedBy(failure, isAuthorityFailure)?.reason).toBe("conflicting-push-evidence");
+      expect(causedBy(failure, isAdmissionFailure)?.reason).toBe("conflicting-push-evidence");
       expect(run.store.requests).toHaveLength(0);
     });
   });
@@ -876,7 +876,7 @@ describe("workflow PullRequest upsert", () => {
         ),
       );
 
-      expect(causedBy(failure, isAuthorityFailure)?.reason).toBe("missing-push-evidence");
+      expect(causedBy(failure, isAdmissionFailure)?.reason).toBe("missing-push-evidence");
       expect(run.store.requests).toHaveLength(0);
     });
   });

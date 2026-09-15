@@ -5,7 +5,7 @@
  * the adapter under test and what a real workflow would write. Git is given a
  * bare repository beside the test instead, and GitHub is the small model in
  * `github.ts`. Everything between those two host boundaries — locator
- * admission, checkout authority, the journal scan, classification and the
+ * admission, checkout admission, the journal scan, classification and the
  * record — is the shipped code.
  */
 

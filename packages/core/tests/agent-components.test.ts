@@ -68,7 +68,7 @@ function createStubProvider(respond?: (content: string) => StubResponse): Stub {
           *session([routed]) {
             // A `<Session>` element routes a placement rather than a bare
             // string: the descriptive name is on it, and the engine identity is
-            // reachable only through provider authority. A stub provider reads
+            // reachable only through the delivered coordinator. A stub provider reads
             // the name exactly as a real one does.
             const name = typeof routed === "string" ? routed : routed?.name;
             return { sessionKey: `stub:${name ?? "default"}`, cwd: "/stub" };

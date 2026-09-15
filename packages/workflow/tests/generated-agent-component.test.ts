@@ -2,7 +2,7 @@
  * Tier WGAC — `<Evaluate source={…} />`, the registered generated-XMD boundary
  * (specs/workflow-workspace-spec.md §8.4).
  *
- * The claim under test is the split between availability and authority.
+ * The claim under test is the split between availability and permission.
  * Registering the component is what makes the operation reachable from a
  * trusted workflow document; it carries none of the ceilings the operation runs
  * under, and nothing a document writes can supply or widen one.

@@ -22,7 +22,7 @@
 
 import type { Operation } from "effection";
 
-import type { ImportAuthority } from "./components/component-resolution.ts";
+import type { ComponentResolution } from "./components/component-resolution.ts";
 import type { InstalledComponents, PrivateClosure } from "./components/declared-markdown.ts";
 import type { ExecutionDeclarationCatalog } from "./execution-declarations.ts";
 import type { EvaluationProfile } from "./evaluation-profile.ts";
@@ -52,12 +52,8 @@ export interface ExecutionEnvironment {
    * For a name this execution fixed, it verifies the answer that came back and
    * returns the execution's own retained definition instead. An unrelated open
    * import keeps whatever the public chain answered.
-   *
-   * TODO(#811): Rename ImportAuthority to ComponentResolution — with closes() and
-   * authorize() renamed for what they decide — and replace the remaining
-   * authority terminology.
    */
-  readonly componentResolution?: ImportAuthority;
+  readonly componentResolution?: ComponentResolution;
   /**
    * Identifies structural syntax an installation provided, before a name is
    * looked up as an ordinary component import.

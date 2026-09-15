@@ -39,7 +39,7 @@ const AGENT_SESSION_LAUNCH = "agent_session_launch";
  * preparation effect's description.
  *
  * The rendered instructions are the effect's `input`; the rest describes the
- * filesystem authority, model request and permission configuration the request
+ * filesystem permissions, model request and permission configuration the request
  * was made under, so a reader of the journal can tell what the native session
  * was prepared to be able to do.
  */

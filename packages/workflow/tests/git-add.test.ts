@@ -25,7 +25,7 @@ import { cwd } from "@executablemd/runtime";
 import { useTempDirectory } from "@executablemd/test-support/temp";
 import {
   GitCompositionProviderError,
-  GitOperationAuthorityError,
+  GitOperationAdmissionError,
   GitOperationError,
 } from "../src/composition/errors.ts";
 import { currentRepository, RepositoryContext } from "../src/composition/context.ts";
@@ -98,8 +98,8 @@ function isGitFailure(value: unknown): value is GitOperationError {
   return value instanceof GitOperationError;
 }
 
-function isAuthorityFailure(value: unknown): value is GitOperationAuthorityError {
-  return value instanceof GitOperationAuthorityError;
+function isAdmissionFailure(value: unknown): value is GitOperationAdmissionError {
+  return value instanceof GitOperationAdmissionError;
 }
 
 function isProviderError(value: unknown): value is GitCompositionProviderError {
@@ -537,14 +537,14 @@ describe("workflow Git.Add selection", () => {
         ),
       );
 
-      expect(causedBy(failure, isAuthorityFailure)).toBeInstanceOf(GitOperationAuthorityError);
+      expect(causedBy(failure, isAdmissionFailure)).toBeInstanceOf(GitOperationAdmissionError);
       expect(causedBy(failure, isGitFailure)).toBe(undefined);
       expect(subcommands(counting.counters)).not.toContain("add");
       expect(yield* gitEvents(database)).toHaveLength(0);
     });
   });
 
-  it("gives a forged Repository context no authority to stage", function* () {
+  it("gives a forged Repository context no admission to stage", function* () {
     const root = yield* useStorageRoot();
     const remote = yield* useBareRemote(REMOTE);
 
@@ -559,7 +559,7 @@ describe("workflow Git.Add selection", () => {
       const unretained = yield* createRun({ runId: "ghost" });
       const counting = countingHost();
       const ghost = yield* raised(runForged(unretained, FORGED, source, countingOptions(counting)));
-      expect(causedBy(ghost, isAuthorityFailure)).toBeInstanceOf(GitOperationAuthorityError);
+      expect(causedBy(ghost, isAdmissionFailure)).toBeInstanceOf(GitOperationAdmissionError);
       expect(yield* gitEvents(unretained)).toHaveLength(0);
 
       // A real name carrying a substituted member is refused for the member.
@@ -567,7 +567,7 @@ describe("workflow Git.Add selection", () => {
       const failure = yield* raised(
         runForged(substituted, { ...FORGED, name: "project" }, source, countingOptions(counting)),
       );
-      expect(causedBy(failure, isAuthorityFailure)).toBeInstanceOf(GitOperationAuthorityError);
+      expect(causedBy(failure, isAdmissionFailure)).toBeInstanceOf(GitOperationAdmissionError);
       expect(yield* retainedRepositories(substituted)).toHaveLength(1);
       expect(yield* gitEvents(substituted)).toHaveLength(0);
       expect(subcommands(counting.counters)).not.toContain("add");
@@ -586,7 +586,7 @@ describe("workflow Git.Add selection", () => {
         ),
       );
 
-      expect(causedBy(printed, isAuthorityFailure)).toBeInstanceOf(GitOperationAuthorityError);
+      expect(causedBy(printed, isAdmissionFailure)).toBeInstanceOf(GitOperationAdmissionError);
       expect(yield* gitEvents(database)).toHaveLength(0);
     });
   });

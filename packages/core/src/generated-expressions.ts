@@ -57,7 +57,7 @@ import type { Json } from "./types.ts";
  * Setting it can only ever narrow what an expression may be, so the failure
  * mode of a stray installation is a refusal rather than an escape. Preflight
  * refuses a non-data expression before the fragment's first effect in any case,
- * which is where the authority actually lives; this is what performs the value.
+ * which is where the permission actually lives; this is what performs the value.
  */
 export const GeneratedDataExpressions: Context<boolean> = createContext<boolean>(
   "@executablemd/core/generated-data-expressions",

@@ -33,7 +33,7 @@
  * installing a constrained Agent frame, telling an operator which phase is
  * running, answering about a draft, admitting the approved bytes, deciding what
  * an Agent just sent and settling one information request are each meaningless
- * outside the workflow that orders them — and each carries authority the
+ * outside the workflow that orders them — and each carries permission the
  * enclosing document does not have.
  * So they resolve only while canonical core is expanding these exact bytes:
  * not from the caller's root, not from the Prompt the caller projected, not from
@@ -627,7 +627,7 @@ function planWriter(assembly: PlanComponentAssembly): IdentityComponent {
         // Before a directory exists, before a provider exists, and therefore
         // before any session could be placed or any turn started. A host that
         // supplies no Agent context refuses rather than writing a Plan under
-        // a weaker one, and broader authority in the calling document cannot
+        // a weaker one, and broader permission in the calling document cannot
         // widen it.
         const context = assembly.context;
         if (!context.ok) {
@@ -794,7 +794,7 @@ function classifyPlanResponseComponent(): IdentityComponent {
  * read succeeded when it did not.
  *
  * It owns no evaluator, no profile, no durable protocol and no timer. The child
- * is public `<Evaluate>`, under the authority the host installed, and its own
+ * is public `<Evaluate>`, under the profile the host installed, and its own
  * projection teardown has completed by the time this settles.
  *
  * ## Why the secret check is here rather than at the journal
@@ -802,7 +802,7 @@ function classifyPlanResponseComponent(): IdentityComponent {
  * The next Prompt is a disclosure destination like the progress stream and the
  * journal, and it is *not* durable — it reaches the Agent before any event of
  * it is appended. So the serialized pre-append gate, which is still the
- * authority for durable publication, cannot be what protects it: by the time
+ * gate for durable publication, cannot be what protects it: by the time
  * that gate sees the Prompt, the Agent has it.
  *
  * The complete settled text therefore crosses the execution's own scanner

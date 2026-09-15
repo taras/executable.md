@@ -11,7 +11,7 @@ import type { WorkflowRunDatabase, WorkflowRunTransaction } from "../../storage/
 import { WorkflowTransactionError } from "../../storage/errors.ts";
 import {
   createOwnedDurableWorkspaceOperation,
-  type WorkspaceCoordinationAuthority,
+  type WorkspaceEffectExecution,
   type WorkspaceCoordinationProvider,
   withWorkspaceCoordinationProvider,
 } from "../../workspace/effect.ts";
@@ -178,31 +178,31 @@ function coordinator(
   database: WorkflowRunDatabase,
 ): WorkspaceCoordinationProvider {
   return {
-    *run(authority: WorkspaceCoordinationAuthority): Operation<DurableResult> {
+    *run(execution: WorkspaceEffectExecution): Operation<DurableResult> {
       let transacted;
       try {
-        if (workspaceEffectOwners.get(authority.executionIdentity) !== database) {
+        if (workspaceEffectOwners.get(execution.executionIdentity) !== database) {
           throw new WorkflowTransactionError(
             "the live Workspace effect is missing, foreign, completed, or stale for this WorkflowRun database.",
           );
         }
-        connections.validateJournalProvenance(database, authority.journalProvenance);
+        connections.validateJournalProvenance(database, execution.journalProvenance);
         transacted = yield* database.transact(function* (transaction) {
           return yield* withPrivateWorkspaceTransaction(database, transaction, (workspace) =>
             coordinateTransaction(
               database,
               transaction,
               workspace,
-              authority.execute,
-              authority.publish,
+              execution.execute,
+              execution.publish,
             ),
           );
         });
       } catch (error) {
-        throw yield* authority.activateFailure(error);
+        throw yield* execution.activateFailure(error);
       }
       if (!transacted.ok) {
-        throw yield* authority.activateFailure(transacted.error);
+        throw yield* execution.activateFailure(transacted.error);
       }
       return transacted.value;
     },

@@ -129,7 +129,7 @@ export interface GitAuthentication {
   /**
    * Open one session for this exact locator.
    *
-   * Opened once per live provider invocation, after the authority checks that
+   * Opened once per live provider invocation, after the admission checks that
    * invocation requires, and disposed with it.
    */
   open(locator: string): Operation<GitAuthenticationSession>;
@@ -567,7 +567,7 @@ function readCredential(
  * transports to a remote is about to run, and what is read is about that
  * operation's own locator. Two Repositories are two sessions even when the same
  * helper answers both — a session opened for one locator is never carried
- * forward as authority for another, and neither is anything it stands on.
+ * forward as admission for another, and neither is anything it stands on.
  */
 export function denoGitAuthentication(options: GitAuthenticationOptions = {}): GitAuthentication {
   const ambient = options.ambient ?? process.env;

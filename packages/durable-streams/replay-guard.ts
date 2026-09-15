@@ -12,7 +12,7 @@
  * (e.g., content hash, status code). There is no separate metadata field —
  * inputs belong in the effect description, outputs belong in the result.
  *
- * A guard is **composable policy, not authority**. Guards compose through
+ * A guard is **composable policy, not enforcement**. Guards compose through
  * `Api.around`, and a handler installed further out may decline to call `next`.
  * That is what composition is for, and it is why an invariant that must not be
  * negotiable — durable identity above all — belongs somewhere a caller cannot

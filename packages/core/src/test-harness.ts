@@ -1,5 +1,5 @@
 /**
- * The authority one canonical `<Test>` invocation holds, and nothing else does.
+ * The capability one canonical `<Test>` invocation holds, and nothing else does.
  *
  * A Markdown test can run another document as a real root execution
  * (specs/testing-spec.md). That is a capability no ordinary component may have:
@@ -19,8 +19,8 @@
  * ## Where it goes, and how
  *
  * Nowhere anybody can ask for it. There is no reader, no exported accessor and
- * no context holding a harness: an authority published on a name is an
- * authority every same-name context, every loaded copy and every component
+ * no context holding a harness: a capability published on a name is one
+ * every same-name context, every loaded copy and every component
  * running inside a test can take, and this architecture keeps contextual
  * surfaces for policy and composition only.
  *
@@ -33,7 +33,7 @@
  *
  * The installers reach `<Test>` through a context, because a component function
  * is reached through the engine and there is no other way down. That context
- * carries no authority: it holds the host's functions, and calling one requires
+ * carries no capability: it holds the host's functions, and calling one requires
  * a harness that only this module mints. It is also branded, so a value planted
  * under the same name is refused rather than handed a capability — a shadowing
  * attempt ends with no harness installed, which is the safe direction.
@@ -57,7 +57,7 @@ export class TestHarnessError extends Error {
   constructor(problem: string) {
     super(
       `A nested execution ${problem}. Only an invocation of canonical <Test> holds this ` +
-        "authority, and only for as long as that invocation lasts.",
+        "capability, and only for as long as that invocation lasts.",
     );
   }
 }
@@ -261,12 +261,12 @@ export function* provideTestHarnessInstallers(
  * Called from canonical core's own `<Test>`, in the invocation's own frame, so
  * an installer's registrations land where the test's body will see them and are
  * removed with the test. Expiry is registered before the capability exists: a
- * harness that outlived its test would be a test's authority held by whatever
+ * harness that outlived its test would be a test's capability held by whatever
  * kept it.
  *
  * With nothing attached this mints nothing and does nothing. A document run by
  * a host that never attached an installer therefore has no nested-execution
- * authority anywhere in it, which is the default.
+ * capability anywhere in it, which is the default.
  */
 export function* installTestHarness(): Operation<void> {
   const attached = yield* AttachedInstallers.get();

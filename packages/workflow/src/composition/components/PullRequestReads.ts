@@ -38,7 +38,7 @@
  *
  * This supersedes the request-only route and invocation-private terminal an
  * earlier revision carried. Those kept evidence off a public surface at the
- * cost of a second authority model beside the Issue surface's, and of a read
+ * cost of a second admission model beside the Issue surface's, and of a read
  * that needed a Repository in scope to name a pull request by number.
  *
  * ## The form is declared, not asked about

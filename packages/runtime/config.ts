@@ -26,7 +26,7 @@
  * `verbose` is the fourth field and is not a timeout. It says whether the
  * scope reading it renders verbose-only content, it is `false` until something
  * says otherwise, and it is installed and overridden exactly the way a timeout
- * is. It bounds nothing, opens nothing and decides nothing about authority: a
+ * is. It bounds nothing, opens nothing and decides no permission: a
  * component reads it to choose between rendering its content and rendering
  * nothing, and the host's own presentation — the journal, the event echo, the
  * testing report — is decided by the command line rather than by this field.

@@ -3,7 +3,7 @@
  * content.
  *
  * A stable, namespaced contextual value holding a requested destination and no
- * authority. Installing or replacing it asks for a container for lexical
+ * permission. Installing or replacing it asks for a container for lexical
  * descendants; it grants no network access, no credential, no provider and no
  * permission to mutate that container. What decides whether the target may be
  * reached at all is the ceiling the provider middleware holds beside its

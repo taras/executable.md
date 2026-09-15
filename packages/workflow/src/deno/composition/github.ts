@@ -219,7 +219,7 @@ export function denoGitHubLogin(
  * A source is credential-free and long-lived: an installed middleware or a
  * provider module may hold one for as long as it likes, because there is nothing
  * in one to retain. A *session* is what has an identity, and one is opened per
- * live invocation — after that invocation's ceiling and local authority checks
+ * live invocation — after that invocation's ceiling and local admission checks
  * — and disposed with it. Two calls are two sessions, so an observation and the
  * mutation it decided go out under one identity while two unrelated invocations
  * never share one.

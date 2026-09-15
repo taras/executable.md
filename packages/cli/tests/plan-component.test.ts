@@ -4,7 +4,7 @@
  * The same packaged Component `xmd plan` runs, reached the other way: a document
  * writes `<Plan>`, its body renders the Prompt, and the approved source arrives
  * under `as`. What this tier is about is everything that differs from the
- * command — the caller's Prompt, the caller's journal, the caller's authority —
+ * command — the caller's Prompt, the caller's journal, the caller's permissions —
  * and everything that must not: the ceiling the Agent writes under, the order
  * the phases run in, and the exact bytes that come back.
  *
@@ -231,7 +231,7 @@ function isPrompt(event: DurableEvent): boolean {
 describe("Tier PC — <Plan> in an ordinary document", () => {
   it("PC1: the body is the Prompt, and the approved bytes arrive under `as`", function* () {
     yield* useWorkingDirectory(function* (dir) {
-      // A file only the caller's authority can read, written into the Prompt.
+      // A file only the caller's permissions can read, written into the Prompt.
       // The body is ordinary XMD with the document's own capabilities: if it
       // ran under the Plan writer ceiling instead, this read would be refused.
       yield* writeTextFile(join(dir, "notes.md"), "the project notes");

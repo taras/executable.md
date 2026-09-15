@@ -862,7 +862,7 @@ describe("durableRun — a retained result detaches completely", () => {
  * A to B and have a workflow asking for B consume A's result, without B ever
  * running.
  */
-describe("replay guard — observation is isolated from replay authority", () => {
+describe("replay guard — observation is isolated from the retained history", () => {
   function journal(): DurableEvent[] {
     return [
       {
@@ -996,7 +996,7 @@ describe("replay guard — observation is isolated from replay authority", () =>
 });
 
 /**
- * Every Result shape is authority; every consumer value is a copy.
+ * Every Result shape is retained history; every consumer value is a copy.
  *
  * The distinction has to hold for all four settlements, not only the one that
  * carries data. A `Result<void>` left writable is an envelope a public
@@ -1004,7 +1004,7 @@ describe("replay guard — observation is isolated from replay authority", () =>
  * that hands back the retained value itself gives a caller a frozen object
  * where the live run gave ordinary JSON.
  */
-describe("replay authority — every settlement, and its consumer copy", () => {
+describe("retained history — every settlement, and its consumer copy", () => {
   function completed(value: Json): DurableEvent[] {
     return [{ type: "close", coroutineId: "root", result: { status: "ok", value } }];
   }
@@ -1062,7 +1062,7 @@ describe("replay authority — every settlement, and its consumer copy", () => {
     expect(second).toEqual({ count: 1 });
   });
 
-  it("a retained ok-without-value settlement is authority", function* () {
+  it("a retained ok-without-value settlement is frozen through", function* () {
     const index = new ReplayIndex(
       retainEvents([
         {
@@ -1083,7 +1083,7 @@ describe("replay authority — every settlement, and its consumer copy", () => {
     expect(index.peekYield("root")?.result).toEqual({ status: "ok" });
   });
 
-  it("a retained void Close settlement is authority", function* () {
+  it("a retained void Close settlement is frozen through", function* () {
     const index = new ReplayIndex(
       retainEvents([{ type: "close", coroutineId: "root", result: { status: "ok" } }]),
     );

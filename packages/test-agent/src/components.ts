@@ -21,7 +21,7 @@
  *
  * One ACP provider is installed here, in the `<TestAgent>` invocation, over as
  * many partitions as there are tests. Installation says where the provider can
- * be reached from and is the only thing holding launch authority; the partition
+ * be reached from and is the only thing holding the launch coordinator; the partition
  * a dispatch selects says which state it acts on.
  */
 
@@ -378,9 +378,9 @@ export function* TestAgent(props: Record<string, Json>): Operation<unknown> {
   // Installing here — in the invocation the content is projected into — is
   // what makes the provider reachable from that content at all, and it is
   // also what makes it the only thing holding this document's launch
-  // authority. Selecting per test is what keeps one test's sessions, queues
+  // coordinator. Selecting per test is what keeps one test's sessions, queues
   // and records out of the next. Neither is a substitute for the other, and
-  // the selector carries no authority: it answers with a partition, which
+  // the selector carries no permission: it answers with a partition, which
   // is work, never permission.
   yield* registerAgentProvider(
     TEST_AGENT_PROVIDER,

@@ -20,7 +20,7 @@
  *
  * `checkFilePath` is the one exception, and it is deliberately weak: pure path
  * arithmetic, no filesystem access, and nothing usable comes back — no path, no
- * handle, no authority token. `<File>`'s write form calls it to decide whether
+ * handle, no capability token. `<File>`'s write form calls it to decide whether
  * its children may expand at all, and the later `writeTextFile` repeats the
  * same admission from the same authored path. A check that was skipped,
  * replaced, or answered by another provider therefore authorizes nothing.
@@ -280,10 +280,14 @@ export type FilesDeniableOperation = "temporary-directory";
 /**
  * Which contract a provider broke.
  *
- * `authority` — the identity authorizing access is stale, foreign, or gone.
+ * `authority` — the identity permitting access is stale, foreign, or gone.
  * `savepoint` — a nested transaction could not be rolled back or released.
  * `protocol` — a handler threw, or returned data no consumer can trust.
  * `teardown` — cleanup failed while the scope was already unwinding.
+ *
+ * `authority` keeps that spelling because it is a serialized value: it crosses
+ * loaded copies and reaches parsers that match it byte for byte, so renaming it
+ * would break categorization rather than describe it better.
  */
 export type FilesInvariantCategory = "authority" | "savepoint" | "protocol" | "teardown";
 

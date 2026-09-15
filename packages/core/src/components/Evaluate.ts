@@ -5,7 +5,7 @@
  * that fragment is admitted and performed. It is public, so any author may
  * write it, and canonical core owns what it means.
  *
- * ## Public, protected, and not authority
+ * ## Public, protected, and not a permission
  *
  * Protection settles *which implementation runs* and nothing else. Every
  * ceiling this component draws on was stated by a trusted host at the

@@ -82,10 +82,10 @@ function createLaunchStub(overrides: Partial<LaunchStub> = {}): LaunchStub {
     factoryActivations: 0,
     nativeSessionId: "native-abc",
     ...overrides,
-    // The authority is the second argument because it is delivered, never
+    // The coordinator is the second argument because it is delivered, never
     // published: this stub is only able to author a phase because core installed
     // it and handed it one.
-    factory: function* (_options, authority) {
+    factory: function* (_options, launchCoordinator) {
       stub.factoryActivations++;
       yield* Agent.around(
         {
@@ -113,7 +113,7 @@ function createLaunchStub(overrides: Partial<LaunchStub> = {}): LaunchStub {
             }
 
             let prepared: PreparedLaunchRecord | undefined;
-            yield* authority.perform(request, {
+            yield* launchCoordinator.perform(request, {
               // deno-lint-ignore require-yield
               *prepare(): Operation<PreparedLaunchRecord> {
                 stub.preparations.push(request.instructions);
@@ -589,7 +589,7 @@ describe("Tier SL — native session launch", () => {
     expect(run.stub.detaches).toBe(0);
   });
 
-  it("SL9: the durable record retains identity, channel, digest and authority", function* () {
+  it("SL9: the durable record retains identity, channel, digest and permissions", function* () {
     const run = yield* runDoc(LAUNCH);
 
     expect(run.result.ok).toBe(true);
@@ -779,7 +779,7 @@ describe("Tier SL — native session launch", () => {
  *
  * The repair splits the surface in two. `Agent.operations.launch(request)` is
  * a route: middleware sees a frozen request, may inspect, narrow, refuse or
- * delegate it, and whatever it returns is discarded. Authority to run and
+ * delegate it, and whatever it returns is discarded. The right to run and
  * retain a phase reaches the selected provider by a path no handler is on.
  *
  * So every case here drives the real supported surface — `<Session.Launch>`
@@ -844,10 +844,10 @@ describe("Tier FS — the final public launch surface", () => {
     expect(run.launcher.requests).toHaveLength(1);
   });
 
-  it("FS3: the routed request is frozen and carries no authority", function* () {
+  it("FS3: the routed request is frozen and carries no coordinator", function* () {
     // What middleware is handed is launch facts. A member that could retain a
     // phase, or a request whose fields could be rewritten in place, would put
-    // authority back on the public chain.
+    // launch coordination back on the public chain.
     const seen: AgentLaunchRequest[] = [];
     const run = yield* runDoc(LAUNCH, {
       intercept: function* (request, next) {

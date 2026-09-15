@@ -7,7 +7,7 @@
  * This turns that value into the provider-neutral snapshot and history a
  * retained run already answers with, and knows nothing about containers.
  *
- * ## No live authority, at all
+ * ## No live ownership, at all
  *
  * Nothing here consults the provider's run root, opens a run database, takes a
  * lock, recovers a copy, attaches a Workspace, reads a definition or asks any

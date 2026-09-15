@@ -4,7 +4,7 @@
  *
  * These shapes are provider-neutral, but they are deliberately not part of the
  * `WorkflowLifecycleApi`. That Api routes requests to a host and grants no
- * authority, and everything it answers with is parsed immutable data —
+ * ownership, and everything it answers with is parsed immutable data —
  * beginning an execution answers with an open database, which is a transport.
  * A capability that hands one out belongs to the workflow executor that
  * already holds the executor lock, not to a contextual surface anything in the

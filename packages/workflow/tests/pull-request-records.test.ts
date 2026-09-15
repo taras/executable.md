@@ -16,7 +16,7 @@ import type { DurableEvent, Json } from "@executablemd/durable-streams";
 import { GIT_HOST_EFFECT } from "../src/git-host/effect.ts";
 import { gitHostRequestFingerprint } from "../src/git-host/records.ts";
 import type { GitHostReconciliationRecord } from "../src/git-host/records.ts";
-import { PullRequestAuthorityError } from "../src/composition/errors.ts";
+import { PullRequestAdmissionError } from "../src/composition/errors.ts";
 import {
   GIT_PUSH,
   parseGitPushInputs,
@@ -170,7 +170,7 @@ function refusal(events: readonly DurableEvent[]): string | undefined {
     admitPushEvidence(events, INPUTS);
     return undefined;
   } catch (error) {
-    return error instanceof PullRequestAuthorityError ? error.reason : `unexpected: ${error}`;
+    return error instanceof PullRequestAdmissionError ? error.reason : `unexpected: ${error}`;
   }
 }
 

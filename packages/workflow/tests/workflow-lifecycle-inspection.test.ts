@@ -66,7 +66,7 @@ import {
  *
  * The exclusion is a contract, not a habit of one projection. An artifact
  * carries no record of where its definition could be fetched from now, because
- * that is authority belonging to the machine that exported rather than
+ * that is ownership belonging to the machine that exported rather than
  * something true about the run — so the type has to make writing one
  * impossible, not merely unusual.
  *
@@ -1427,7 +1427,7 @@ describe("Tier WLI — inspecting a crashed run", () => {
     });
   });
 
-  it("WLI16: the clean path costs nothing, and the hot one takes no authority", function* () {
+  it("WLI16: the clean path costs nothing, and the hot one takes no ownership", function* () {
     const root = yield* useStorageRoot();
     yield* retainedRun(root, "clean-1");
     const path = runPath(root, "clean-1");

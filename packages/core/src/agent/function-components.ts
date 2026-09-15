@@ -304,7 +304,7 @@ interface ConsumedTurn {
    * Which provider turn this completion was, when the provider said.
    *
    * Read off the exact terminal event the provider produced, through a carrier
-   * only the delivered provider authority can write to. A terminal event a
+   * only the delivered launch coordinator can write to. A terminal event a
    * handler substituted carries nothing, which retains nothing.
    */
   checkpoint?: AgentPromptCheckpoint;
@@ -418,7 +418,7 @@ function* runPrompt(
  * and launches nothing.
  *
  * The launch itself is the provider's, and every phase it completes is
- * retained through the journal installed here. That is also the authority
+ * retained through the journal installed here. That is also the coordination
  * boundary: middleware around the Agent Api may observe a launch or refuse
  * one, but a result that arrives without those retained phases describes a
  * launch that did not happen, and is refused.

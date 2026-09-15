@@ -64,7 +64,7 @@ export { renderSyntaxMarkdown };
  *
  * The scope is bounded, and everything installed in it is declarative registry
  * state and documentation middleware. Leaving it removes the layer, and there
- * is no process, agent, service, journal, file or authority left to clean up.
+ * is no process, agent, service, journal, file or permission left to clean up.
  */
 export function* syntaxSymbols(includes: readonly string[]): Operation<SyntaxSymbols> {
   return yield* scoped(function* () {

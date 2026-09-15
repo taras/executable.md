@@ -53,7 +53,7 @@ equality only. `base` is the revision expression the host supplied.
 running now. It is a context value under a stable name, so a descriptor built
 independently — as a separately loaded copy of the package builds one — reads
 the same binding, and by the same property a descendant may bind that name for
-its own descendants. It is not an authority boundary: durable enforcement never
+its own descendants. It is not a permission boundary: durable enforcement never
 trusts it. Every call in one live execution answers with the same object; a
 replay preserves the field values, never JavaScript object identity. It throws
 outside a document execution associated with a run, and exposes no journal, Git,
@@ -74,7 +74,7 @@ the installation contributes exactly two things:
   retained-history admission and before any public `Execution.document` policy,
   the root import and every authored effect.
 
-No public middleware carries workflow-run authority. `Execution.execute`,
+No public middleware settles workflow-run state. `Execution.execute`,
 `Execution.document` and `ReplayGuard` handlers may observe, transform or refuse
 what they are given; none of them can suppress the preparation, complete it, or
 substitute a run for it.
@@ -371,12 +371,12 @@ It is the **resolved exact canonical target**, never the selector a caller
 wrote. A glob describes what somebody asked for; two callers may spell one
 request differently, and re-resolving a glob against a different checkout can
 name a different section. Only the resolved answer is stable enough to be
-identity, which is the same routing-is-not-authority split the document layer
+identity, which is the same routing-is-not-permission split the document layer
 makes.
 
 What counts as canonical is not restated here. A stored target has to satisfy
 the same round trip an exact document target does — `isCanonicalDocumentTarget()`
-from `@executablemd/core` is the one authority — so an empty target, an empty
+from `@executablemd/core` is definitive — so an empty target, an empty
 hierarchy level, a leading `#`, a raw `#`, `*` or `**` anywhere in it, a
 malformed or lowercase escape, a byte sequence that is not UTF-8, an NFD
 spelling, and leading, trailing or uncollapsed whitespace are all refused.
@@ -427,7 +427,7 @@ found, which is what lets a targeted run be resumed.
 
 A run lives at the SHA-256 of its UTF-8 run id, directly beneath the authorized
 storage root. Discovery is therefore arithmetic on the id, and no second
-authority exists that could disagree with the files.
+registry exists that could disagree with the files.
 
 The root is absolute. A relative one names a different directory from a
 different working directory, and where a run lives must not depend on where a
@@ -533,7 +533,7 @@ than the operation's execution. The route validates the exact database lease,
 connection generation, transaction identity, private token and open state
 before delegating to the existing `transaction.journal`; it does not duplicate
 insertion SQL. Missing, foreign, fabricated, completed, closed, cross-run and
-stale authority reaches no SQL. A route for another WorkflowRun delegates to an
+a stale handle reaches no SQL. A route for another WorkflowRun delegates to an
 enclosing route instead of hiding it. The provider's ordinary destination and
 each publication-local routed destination are terminal `{ at: "min" }`
 handlers. An enclosing loaded copy with the same stable contextual name cannot
@@ -662,7 +662,7 @@ only its live suffix. Cancellation cannot append or resolve late. The
 callback-based durable-effect factory remains unchanged.
 
 The shared Workspace operation wrapper explicitly reads a contextual provider
-selection. The replaceable selection API carries no live-operation authority:
+selection. The replaceable selection API carries no live-operation permission:
 it receives no executor, publisher, failure activator or durable publication
 identity. The live call retains those exact values behind an execution-owned
 capability associated with a same-named contextual invocation operation.
@@ -672,7 +672,7 @@ but not its credential. A provider installed by another loaded package copy
 terminally consumes the route and calls that capability directly. It never sends inspection, execution,
 publication, failure activation or completion through `next`, so enclosing
 middleware at either priority receives no operational phase. Provider selection
-and invocation authority require no module registry and trust no replaceable
+and invocation ownership require no module registry and trust no replaceable
 structural value.
 
 The execution-owned capability permits one inspection, execution and
@@ -715,7 +715,7 @@ connection after a cancelled mutation scope has torn down.
 
 A documented filesystem refusal is an operation result only after its mutation
 savepoint has rolled back successfully. It keeps the previous current root and
-commits exactly one failed Yield against that root. Connection or authority,
+commits exactly one failed Yield against that root. Connection or admission,
 savepoint, DOFS, schema, corruption, capture, current-root, routing, filtering,
 serialization, insertion, teardown and commit failures instead roll back the
 outer transaction and activate the durable run's first infrastructure failure.
@@ -852,7 +852,7 @@ The filesystem a Workspace transaction hands its body is the provider's, decided
 where the provider is installed and held in its closure. It is reached through no
 context and no contextual Api, so a document cannot observe it and cannot put
 anything in front of it — a stable name is composition, and composition is not
-where authority belongs.
+where ownership belongs.
 
 Paths are absolute POSIX paths inside the run's own filesystem. An authored path
 is resolved by arithmetic on segments and handed to the run's DOFS filesystem;

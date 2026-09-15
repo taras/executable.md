@@ -207,7 +207,7 @@ Before reaching a verdict:
 3. Inspect merged dependencies and concurrent PRs whose contracts overlap.
 4. Verify claims against the code, the patch and the focused evidence reported
    with the feedback commit.
-5. Trace success, failure, cancellation, replay, teardown and stale-authority
+5. Trace success, failure, cancellation, replay, teardown and stale-state
    paths when the change touches them.
 
 Review the commit that was handed over, not a remembered or previously reviewed

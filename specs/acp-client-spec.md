@@ -44,7 +44,7 @@ interface SessionLaunchResult {
 ```
 
 `launchAgentSession()` and `prompt()` resolve through the same `Agent` and
-`Session` operations. The extra shape exists only at the authority boundary:
+`Session` operations. The extra shape exists only at the coordination boundary:
 callers supply instructions and receive a result, while public Agent middleware
 routes an opaque request and cannot manufacture that result.
 
@@ -57,7 +57,7 @@ routes an opaque request and cannot manufacture that result.
   nothing. `launchAgentSession(instructions, options)` is the canonical
   operation that issues that request, retains the launch's phases, and derives
   its `SessionLaunchResult`; the route is where public middleware sees the ask,
-  and authority to perform it reaches the installed provider directly rather
+  and the right to perform it reaches the installed provider directly rather
   than travelling on this chain
   (specs/native-agent-session-launch-spec.md). A launch performs no model turn,
   and a provider that answers `prompt()` does not thereby answer it: native
@@ -111,7 +111,7 @@ routes an opaque request and cannot manufacture that result.
   differing returned identity each refuse before a turn and create no substitute
   conversation.
 - `withSessionRoute` remains routing only: it selects which partition serves a
-  call and carries no authority to construct, own or answer.
+  call and carries no permission to construct, own or answer.
 - **Base behavior:** with no provider installed, `agent()`, `session()`,
   `prompt()`, and `launch()` report a missing provider; `prompt()` reports it
   **coldly** — the
@@ -390,7 +390,7 @@ A fixed session instruction layer states that boundary to the Agent in the same
 terms, and states all of it: that no native tool is authorized; that retained
 work can be asked for only when the prompt being answered asks for it and only
 in the exact closed shape that prompt supplies; and that nothing the Agent
-returns carries authority — source it writes is data this run may admit under
+returns carries permission — source it writes is data this run may admit under
 ceilings decided before the prompt was sent. Those instructions are part of the
 policy fingerprint below, so changing them refuses a session created under the
 previous wording rather than continuing it under new terms the session never
@@ -414,7 +414,7 @@ A native permission request under this profile does not reach
 offered one, otherwise cancellation — and the turn the request belonged to fails
 with a fixed diagnostic, whatever the adapter reports afterwards. An authored
 `<ApproveAll>`, or any other public permission handler, composes around nothing
-here, because there is no native tool authority to widen. The diagnostic names
+here, because there is no native tool permission to widen. The diagnostic names
 nothing the request carried: no tool title, raw input, path or command.
 
 This is what the host asks for and what it refuses. It is not a proof that every
@@ -436,7 +436,7 @@ authored `<Session name>` is descriptive: two sibling `<Session name="review">`
 elements are two sessions, and a document that reuses a name cannot make them
 one. The name travels the public `Agent.session()` chain, where a handler may
 observe or change it; the identity travels inside an opaque placement the
-`<Session>` element routes and is readable only through the authority delivered
+`<Session>` element routes and is readable only through the coordinator delivered
 to the installed provider. Middleware holding the placement reads the name and
 reaches no further.
 
@@ -788,7 +788,7 @@ none.
 - **Host-owned dependencies.** `AcpxProviderDependencies` carries what a host,
   rather than a document, decides: `advertiseNativeLaunch` and
   `advertiseClientNativeAttachment` are two separate lists, and a profile whose
-  session authority differs from ordinary `xmd run` states both explicitly
+  session capabilities differ from ordinary `xmd run` states both explicitly
   rather than inheriting the package's defaults by omission;
   `executableObserver` says how this host observes the build behind an
   executable; `agentCwd` answers with the directory an Agent runs in when the

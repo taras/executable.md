@@ -6,7 +6,7 @@
  * one, hand one to a child, and — since it is an ordinary frozen object — build
  * one that looks exactly like it. So nothing a provider does may be authorized
  * by the value it was handed. This is the other half of that contract: the
- * provider keeps the authority here, in its own closure, and every operation
+ * provider keeps the permission here, in its own closure, and every operation
  * asks this registry what a selection names before it touches Git or a service.
  *
  * The identifier is random and opaque. It is not derived from the name, the

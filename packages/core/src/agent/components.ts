@@ -36,7 +36,7 @@ import { sessionComponent } from "./function-components.ts";
 import type { IdentityComponent } from "../invocation-identity.ts";
 import type { PermissionMode } from "./agent-api.ts";
 import type { AgentProviderFactory, AgentProviderOptions } from "./provider-api.ts";
-import type { AgentProviderAuthority } from "./launch-authority.ts";
+import type { AgentLaunchCoordinator } from "./launch-coordinator.ts";
 import { useLaunchInstallation } from "./launch-install.ts";
 import { AgentInternal } from "./internal.ts";
 import { AgentPromptError } from "./errors.ts";
@@ -280,19 +280,19 @@ export function* installAgentComponents(options?: AgentComponentsOptions): Opera
       // full replay never enters the provider at all.
       const teardown: TeardownSlot = {};
       // One launch installation per live document, whether or not a root
-      // provider is configured: `<AgentProvider>` needs the same authority, and
+      // provider is configured: `<AgentProvider>` needs the same coordinator, and
       // a confirmed full replay installs neither — it performs no phase, so
-      // there is nothing for an authority to authorize.
+      // there is nothing for a coordinator to settle.
       if (!replayed) {
         yield* Execution.around({
           *document([request], nextDocument) {
             yield* scoped(function* () {
-              const authority = yield* useLaunchInstallation();
+              const launchCoordinator = yield* useLaunchInstallation();
               if (!rootProvider) {
                 yield* nextDocument(request);
                 return;
               }
-              yield* withRootProvider(rootProvider, authority, teardown, () =>
+              yield* withRootProvider(rootProvider, launchCoordinator, teardown, () =>
                 nextDocument(request),
               );
             });
@@ -324,7 +324,7 @@ interface TeardownSlot {
  */
 function* withRootProvider(
   rootProvider: { factory: AgentProviderFactory; options: AgentProviderOptions },
-  authority: AgentProviderAuthority,
+  launchCoordinator: AgentLaunchCoordinator,
   teardown: TeardownSlot,
   body: () => Operation<void>,
 ): Operation<void> {
@@ -333,9 +333,9 @@ function* withRootProvider(
     yield* scoped(function* () {
       // The root provider bypasses provider selection entirely: it was
       // configured by the host, so there is no name to route and no middleware
-      // chain to travel. It receives the authority directly, on the same terms
+      // chain to travel. It receives the coordinator directly, on the same terms
       // a registered provider reaches it through its own terminal.
-      yield* rootProvider.factory(rootProvider.options, authority);
+      yield* rootProvider.factory(rootProvider.options, launchCoordinator);
       yield* body();
       completed = true;
     });

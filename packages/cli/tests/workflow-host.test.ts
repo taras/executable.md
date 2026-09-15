@@ -240,7 +240,7 @@ describe("Tier WFH — GitHub pull-request reading is host configuration", () =>
    * as the architecture's word for the bound it imposes.
    *
    * Absence authorizes no URL read, and disables nothing else: `<PullRequest>`
-   * upserts on the authority of this run's own Push evidence, which no
+   * upserts on the strength of this run's own Push evidence, which no
    * environment variable grants or withdraws.
    */
   function configured(value: string | undefined): Operation<unknown> {

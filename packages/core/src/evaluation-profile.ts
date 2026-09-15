@@ -4,8 +4,8 @@
  *
  * `<Evaluate>` is a public component: any author may write it, and canonical
  * core owns what it means. That settles *which implementation runs* and nothing
- * else — protection grants no authority. Canonical `<Evaluate>` uses only
- * authority already captured in this profile, selected by `allow`. So the
+ * else — protection grants no permission. Canonical `<Evaluate>` uses only
+ * operations already captured in this profile, selected by `allow`. So the
  * ceiling lives here, in a value the host hands canonical execution at the
  * installation boundary, before a document exists to ask for it.
  *
@@ -22,13 +22,13 @@
  * Only the input type is exported, and only from the trusted `core/host`
  * surface, because that is where `ExecutionInstallation` already is. The
  * captured profile, its bound operations and its revocation are unexported:
- * ordinary core publishes no getter for active authority and no way to install
+ * ordinary core publishes no getter for the active profile and no way to install
  * a provider.
  *
  * ## One per execution
  *
  * Two profiles would be two answers to "what may a fragment do here", and
- * choosing between them by installation order would make authority depend on
+ * choosing between them by installation order would make permission depend on
  * assembly. So an execution accepts one and refuses two — even two identical
  * ones, because a host that stated it twice has an assembly nobody validated.
  * A host that stated none offers no evaluation at all, which `<Evaluate>`
@@ -318,7 +318,7 @@ export const CANONICAL_PROFILE_ANSWERS: ReadonlySet<string> = new Set([SYNTAX_CO
  * through the ordinary import chain, reconciles that identity, and seals the
  * protected answer through the execution's own protected-body route.
  *
- * Admitting it grants no other authority. The symbols an occurrence renders
+ * Admitting it grants no other permission. The symbols an occurrence renders
  * describe the vocabulary the fragment has; naming a component in them is not
  * permission to run it, and a component the fragment may only read about stays
  * unavailable.
@@ -473,7 +473,7 @@ export type ResolvedAnswers = ReadonlyMap<string, ResolvedAnswer>;
  * own operation or a provider's answer, and the two are different grants.
  */
 export interface CapturedEntry {
-  /** Documentation provenance of an exact routed answer; grants no callable authority. */
+  /** Documentation provenance of an exact routed answer; grants no callable permission. */
   readonly protectedOrigin?: string;
   readonly name: string;
   readonly identity: FragmentIdentity;
@@ -494,14 +494,14 @@ export interface CapturedEntry {
    */
   readonly definition: FunctionComponentDefinition;
   /**
-   * The form authority underneath this entry's implementation, when the sealed
+   * The form dispatcher underneath this entry's implementation, when the sealed
    * definition wraps one.
    *
    * A component answer runs behind a lifetime guard canonical capture built, so
    * the function on the definition is core's rather than the provider's. A
    * provider whose own answer dispatches on the authored form would otherwise
-   * lose that dispatch, because what a selection records as the form authority
-   * is read off the definition it was handed. So the authority travels
+   * lose that dispatch, because what a selection records as the form dispatcher
+   * is read off the definition it was handed. So the dispatcher travels
    * explicitly, and a capability — whose definition is core's own dispatcher —
    * states none.
    */
@@ -526,7 +526,7 @@ export interface EvaluationProfile {
    *
    * Core's own, and not a table a host states: composition carries no effect
    * operation, so admitting it grants nothing and omitting it would take a
-   * language construct away rather than an authority. `allow` selects between
+   * language construct away rather than a permission. `allow` selects between
    * the two effect tables below and never between these.
    */
   readonly composition: readonly CapturedEntry[];
@@ -560,12 +560,12 @@ export interface EvaluationProfile {
 export const NO_PROFILE =
   "<Evaluate /> has no evaluation profile here: this host stated none, so nothing established " +
   "what a generated fragment may do. A profile is the host's own statement of the maximum " +
-  "authority an evaluation has, and `allow` only narrows it.";
+  "permission an evaluation has, and `allow` only narrows it.";
 
 /** What an execution offered two evaluation profiles refuses with. */
 export const TWO_PROFILES =
   "two installations stated the evaluation profile this execution offers. One execution offers " +
-  "one maximum authority, so what a generated fragment may do is never a question of assembly " +
+  "one maximum permission, so what a generated fragment may do is never a question of assembly " +
   "order.";
 
 /** What a profile whose execution has ended refuses with. */
@@ -1011,7 +1011,7 @@ interface SealedAnswer {
  * One sealed implementation per provider-backed name, built once per capture.
  *
  * Built here rather than per entry because a name has one implementation: the
- * lifetime guard, the detached schema and the form authority are properties of
+ * lifetime guard, the detached schema and the form dispatcher are properties of
  * that implementation, and building them twice would give one component two
  * bodies whose only difference was which table asked for it.
  */
@@ -1045,7 +1045,7 @@ function sealAnswers(
         // The provider's own dispatcher, when its answer has one. The
         // definition above runs behind core's lifetime guard, so what a
         // selection would read off it is core's function rather than the
-        // provider's — and a form authority read off the wrong function selects
+        // provider's — and a form dispatcher read off the wrong function selects
         // no body at all.
         ...(isFormDispatcher(inner) ? { dispatch: inner } : {}),
       }),

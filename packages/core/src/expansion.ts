@@ -46,7 +46,7 @@ export interface Expansion {
  * anything instance-local would reject exactly those genuine reads.
  *
  * The same property means a descendant may bind this name for its own
- * descendants, so this is not an authority boundary: nothing that must be
+ * descendants, so this is not a permission boundary: nothing that must be
  * authoritative trusts it.
  */
 const CurrentExpansion: Context<Expansion | undefined> = createContext<Expansion | undefined>(

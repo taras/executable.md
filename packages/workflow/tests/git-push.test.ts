@@ -25,7 +25,7 @@ import type { GitHostCall } from "../src/git-host/api.ts";
 import { RepositoryContext } from "../src/composition/context.ts";
 import {
   GitCompositionProviderError,
-  GitOperationAuthorityError,
+  GitOperationAdmissionError,
   GitOperationError,
 } from "../src/composition/errors.ts";
 import { useCompositionComponents } from "../src/composition/installation.ts";
@@ -277,8 +277,8 @@ function isGitFailure(value: unknown): value is GitOperationError {
   return value instanceof GitOperationError;
 }
 
-function isAuthorityFailure(value: unknown): value is GitOperationAuthorityError {
-  return value instanceof GitOperationAuthorityError;
+function isAdmissionFailure(value: unknown): value is GitOperationAdmissionError {
+  return value instanceof GitOperationAdmissionError;
 }
 
 function isProviderError(value: unknown): value is GitCompositionProviderError {
@@ -822,7 +822,7 @@ describe("workflow Git.Push", () => {
         ),
       );
 
-      expect(causedBy(failure, isAuthorityFailure)).toBeInstanceOf(GitOperationAuthorityError);
+      expect(causedBy(failure, isAdmissionFailure)).toBeInstanceOf(GitOperationAdmissionError);
       expect(String(failure)).not.toContain(LATER);
       expect(subcommands(counting.counters)).not.toContain("ls-remote");
       expect(yield* gitHostEvents(database)).toHaveLength(0);
@@ -857,7 +857,7 @@ describe("workflow Git.Push", () => {
         ),
       );
 
-      expect(causedBy(failure, isAuthorityFailure)).toBeInstanceOf(GitOperationAuthorityError);
+      expect(causedBy(failure, isAdmissionFailure)).toBeInstanceOf(GitOperationAdmissionError);
       expect(subcommands(counting.counters)).not.toContain("ls-remote");
       expect(subcommands(counting.counters)).not.toContain("push");
       expect(yield* gitHostEvents(database)).toHaveLength(0);
@@ -888,7 +888,7 @@ describe("workflow Git.Push", () => {
         ),
       );
 
-      expect(causedBy(failure, isAuthorityFailure)).toBeInstanceOf(GitOperationAuthorityError);
+      expect(causedBy(failure, isAdmissionFailure)).toBeInstanceOf(GitOperationAdmissionError);
       expect(subcommands(counting.counters)).not.toContain("ls-remote");
       expect(subcommands(counting.counters)).not.toContain("push");
       expect(yield* gitHostEvents(database)).toHaveLength(0);

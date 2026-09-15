@@ -495,7 +495,7 @@ describe("Tier OM — <PrintErrors> is how a region prints instead", () => {
   // foreground command's nonzero exit is checked now: printing may decide how
   // it is reported, never that the run succeeded (#441).
   /**
-   * Recovery authority comes from an element the document was written with, and
+   * Recovery comes from an element the document was written with, and
    * travels to the region's own expansion as an argument. Effection resolves a
    * context by name, so a separately created context with the same name is the
    * same binding: an enclosing caller could otherwise set one and turn a run
@@ -567,7 +567,7 @@ describe("Tier OM — <PrintErrors> is how a region prints instead", () => {
   });
 
   /**
-   * The region's authority follows the work the region causes, not the
+   * The region's recovery follows the work the region causes, not the
    * segments literally between its tags. An iteration is that work: the
    * document wrote the block inside the region, and `<Each>` is how the region
    * runs it.
@@ -637,7 +637,7 @@ describe("Tier OM — <PrintErrors> is how a region prints instead", () => {
   });
 
   /**
-   * The other edge of the same boundary: authority ends with the region. A
+   * The other edge of the same boundary: recovery ends with the region. A
    * failing command written after `</PrintErrors>` is an ordinary checked
    * failure, and the region before it changes nothing about that.
    */

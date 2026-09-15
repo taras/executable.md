@@ -106,7 +106,7 @@ export type {
  * Canonical definition construction for a package that registers a form-
  * sensitive component of its own.
  *
- * Not authority: what it returns runs only for an invocation this copy of core
+ * Not a permission: what it returns runs only for an invocation this copy of core
  * minted, in the frame the engine is running, selected by canonical resolution
  * for that import. Building one proves nothing and grants nothing — it is the
  * normalization step, exposed so a package registering `<Dir>` normalizes at
@@ -115,7 +115,7 @@ export type {
 export { formDispatcher } from "./src/invocation-identity.ts";
 /**
  * The opaque session placement a `<Session>` element routes. A handler reads its
- * descriptive name; only provider authority reads the engine identity.
+ * descriptive name; only the delivered launch coordinator reads the engine identity.
  */
 export { AgentSessionProtocolError, isSessionRequest } from "./src/agent/session-request.ts";
 export type { AgentSessionRequest } from "./src/agent/session-request.ts";
@@ -187,7 +187,7 @@ export {
   asDocumentTargetError,
   DocumentTargetError,
   isDocumentTargetError,
-  // The one authority on what an exact target looks like. Exported under the
+  // The one decision on what an exact target looks like. Exported under the
   // fuller name because a consumer outside this package — a stored workflow
   // definition validating the target it retained — reads it beside its own
   // vocabulary, where "target" alone would not say target of what.
@@ -337,7 +337,7 @@ export type {
 } from "./src/agent/agent-api.ts";
 export { AgentPromptError } from "./src/agent/errors.ts";
 // Native session launch — the records one launch retains, and the request its
-// public route carries. The authority that runs and retains a phase is not here
+// public route carries. What runs and retains a phase is not here
 // and is not anywhere: it is delivered to the selected provider.
 export { AgentLaunchError, sameExecutableBuild } from "./src/agent/launch.ts";
 export type {
@@ -354,16 +354,16 @@ export type {
 } from "./src/agent/launch.ts";
 export { AgentLaunchProtocolError } from "./src/agent/launch-request.ts";
 export type { AgentLaunchRequest } from "./src/agent/launch-request.ts";
-export type { AgentLaunchPhases, AgentProviderAuthority } from "./src/agent/launch-authority.ts";
-// The checkpoint type, because the authority's signature names it. The carrier
+export type { AgentLaunchPhases, AgentLaunchCoordinator } from "./src/agent/launch-coordinator.ts";
+// The checkpoint type, because the coordinator's signature names it. The carrier
 // itself is exported from nowhere: writing one is reachable only through a
-// delivered authority, and reading one only from the prompt core is running.
+// delivered coordinator, and reading one only from the prompt core is running.
 export { AgentPromptCheckpointError } from "./src/agent/checkpoint.ts";
 export type { AgentPromptCheckpoint } from "./src/agent/checkpoint.ts";
 export { launchAgentSession } from "./src/agent/launch-install.ts";
 export { AgentProviders, registerAgentProvider } from "./src/agent/provider-api.ts";
-// `installAgentProvider` is deliberately absent: it takes a launch authority,
-// and an authority reachable by import is an authority every package and every
+// `installAgentProvider` is deliberately absent: it takes a launch coordinator,
+// and a coordinator reachable by import is one every package and every
 // loaded copy can reach. An embedder installs a registered provider through
 // `useProviderInstallation()`, which mints one and delivers it privately to the
 // factory through this invocation's terminal.

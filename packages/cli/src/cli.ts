@@ -1112,7 +1112,7 @@ function* runDocument(
     );
   }
 
-  // Native service authority belongs only to document execution. Help,
+  // Attaching a native service belongs only to document execution. Help,
   // document inspection, and the agent worker never enter this scope.
   //
   // This wires a provider into scope; it starts nothing. A run refused by the
@@ -1120,7 +1120,7 @@ function* runDocument(
   // the provider for a service.
   yield* installService();
 
-  // Repository authority belongs to document execution too, and it is this
+  // Repository selection belongs to document execution too, and it is this
   // execution's own: the provider it installs holds an invocation identity, the
   // leases on the checkouts this document selects, and the evidence of what it
   // published. `xmd run` supplies the live one; `xmd plan` executes no document
@@ -1169,7 +1169,7 @@ function* runDocument(
       retainProcessOutput,
     },
     // The harness installer is this command's, not the document's: canonical
-    // `<Test>` hands each invocation's authority to whoever the host attached,
+    // `<Test>` hands each invocation's harness to whoever the host attached,
     // and this is where `xmd` says that is the testing package.
     //
     // `<Session>` travels the same way: its implementation names durable work
@@ -1186,7 +1186,7 @@ function* runDocument(
         // The ceiling a generated fragment runs under, stated only where the
         // host that attached this execution stated none: a workflow attachment
         // states its own Workspace-bound profile, and one execution offers one
-        // maximum authority.
+        // maximum permission.
         ...(statesEvaluation(mode.installations)
           ? {}
           : { evaluation: ordinaryEvaluationProfile() }),
@@ -2802,7 +2802,7 @@ function* dispatch(
             // one already; a browser form here would sit nearer, answer first,
             // and wait for a reader the run has no way to reach.
             { testing: false, props: execution.props, installations: execution.installations },
-            // The workflow authority boundary sits exactly where a host
+            // The workflow permission boundary sits exactly where a host
             // service adapter would: installed inside the execution scope,
             // before the root document is imported.
             useWorkflowServiceDenial,

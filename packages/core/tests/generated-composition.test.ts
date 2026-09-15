@@ -291,7 +291,7 @@ describe("Tier FE31 — Json is composition, not an effect", () => {
     });
   }
 
-  it("FE31: Json grants no read authority under a write-only selection", function* () {
+  it("FE31: Json grants no read permission under a write-only selection", function* () {
     // The negative control for the availability rows: having Json does not make
     // an unselected class reachable, and the refusal costs the write beside it.
     const files = recordedFiles({ "notes.md": NOTE });
@@ -308,7 +308,7 @@ describe("Tier FE31 — Json is composition, not an effect", () => {
     expect(files.performed).toEqual([]);
   });
 
-  it("FE31: Json grants no write authority under a read-only selection", function* () {
+  it("FE31: Json grants no write permission under a read-only selection", function* () {
     const files = recordedFiles({ "notes.md": NOTE });
     yield* refusal(
       run(

@@ -11,7 +11,7 @@
  *
  * ## What happens before the remote exists in the story
  *
- * Authority first, and all of it locally. The enclosing `<Repository>` and the
+ * Admission first, and all of it locally. The enclosing `<Repository>` and the
  * contextual working directory select a retained checkout the way they do for
  * every other Git operation; the observed record is compared with the retained
  * row member for member, every row is held to the identity naming it, and the
@@ -178,7 +178,7 @@ function* provenAncestor(
  * Reading history is all this does. The root it names still has to produce the
  * exact request whose fingerprint the shared engine is looking for, so a wrong
  * one refuses the replay rather than answering it, and no root selected here
- * can authorize live Git-host work.
+ * can admit live Git-host work.
  */
 function* retainedPushRoot(
   database: WorkflowRunDatabase,
@@ -240,7 +240,7 @@ function* exportRequestSource(
  * it receives from the engine is the frozen request, which it parses and holds
  * to the inputs this invocation admitted. A request naming another Repository,
  * branch or commit is not this invocation's, and answering one would publish a
- * completion for something this operation never authorized.
+ * completion for something this operation never admitted.
  */
 function pushProvider(
   source: PushObjectSource,
@@ -287,7 +287,7 @@ function pushProvider(
 
       if (observed.state === "unreachable") {
         // Not absence. A host that could not answer has proven nothing, and
-        // offering silence as absence is what would authorize a duplicate push.
+        // offering silence as absence is what would admit a duplicate push.
         return Err(new GitHostUnavailableError());
       }
       if (observed.state === "ambiguous") {

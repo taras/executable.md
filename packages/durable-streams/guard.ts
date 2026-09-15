@@ -68,7 +68,7 @@ export function establishJournalProvenance(stream: DurableStream): JournalProven
 /**
  * Carry an exact source stream's provenance onto a trusted wrapper of it.
  *
- * Preservation is visible composition rather than new authority: it transfers
+ * Preservation is visible composition rather than a new claim: it transfers
  * only the witness already associated with that exact source, so an unproven
  * source leaves the target unproven. The target is returned so the wrapping
  * site reads as one expression.
@@ -81,7 +81,7 @@ export function preserveJournalProvenance(
   return target;
 }
 
-/** @internal The live durable path reads provenance without receiving stream authority. */
+/** @internal The live durable path reads provenance without receiving the stream itself. */
 export function getJournalProvenance(stream: DurableStream): JournalProvenance | undefined {
   return journalProvenances.get(stream);
 }

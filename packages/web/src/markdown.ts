@@ -29,7 +29,7 @@
  * policy denies is anything the page would do on its own.
  *
  * It is **not** a sandbox against the document's author or the host process:
- * both already hold execution authority over the machine, and nothing here
+ * both already hold execution permission over the machine, and nothing here
  * reduces that.
  *
  * ## Images

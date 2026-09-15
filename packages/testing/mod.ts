@@ -71,7 +71,7 @@ export { useTesting } from "./src/use-testing.ts";
 // the request-only host-profile surface; the trusted answer is attached to the
 // test-harness installation as a captured value.
 export { ExecutionHost, ExecutionHostError } from "./src/execution-host.ts";
-// The authority path. A trusted host attaches this to `executeInstalled()`, and
+// The harness path. A trusted host attaches this to `executeInstalled()`, and
 // canonical `<Test>` calls it with each invocation's harness; a document run
 // without it recognizes `<Execution>` and refuses it.
 export { testHarnessInstallation } from "./src/execution-harness.ts";

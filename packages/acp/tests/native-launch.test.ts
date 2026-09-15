@@ -8,7 +8,7 @@
  * asks the runtime for, when it releases the session, and what it hands the
  * launcher.
  *
- * The authority here is a stand-in for the one core delivers: it drives the
+ * The coordinator here is a stand-in for the one core delivers: it drives the
  * phases in order and keeps every record, so what a case reads is what the
  * provider produced. It deliberately validates no request — identity, lineage,
  * durability and settlement are core's half, and
@@ -21,7 +21,7 @@ import type { Operation } from "effection";
 import { Agent } from "@executablemd/core";
 import type {
   AgentLaunchRequest,
-  AgentProviderAuthority,
+  AgentLaunchCoordinator,
   ExitedLaunchRecord,
   LaunchRecord,
   PreparedLaunchRecord,
@@ -245,27 +245,27 @@ interface Replay {
  * What core does with each phase, minus the journal.
  *
  * Delivered the way core delivers one — directly, as the factory's second
- * argument — so the provider reaches its authority exactly as it does in a run.
+ * argument — so the provider reaches its coordinator exactly as it does in a run.
  * A phase that carries a failure stops the sequence here, which is what the
- * real authority does before deriving a result.
+ * real coordinator does before deriving a result.
  */
-function traceAuthority(trace: Trace): AgentProviderAuthority {
+function traceCoordinator(trace: Trace): AgentLaunchCoordinator {
   return {
     // These suites route launches, never a `<Session>` placement. Throwing
     // rather than answering means a placement that did reach here fails
     // loudly instead of being handed an identity nobody derived.
     sessionIdentity: () => {
-      throw new Error("this stub authority routes no session placement");
+      throw new Error("this stub coordinator routes no session placement");
     },
     // As with a placement, these suites name no provider turn. Throwing means a
     // checkpoint that did reach here fails loudly rather than being recorded by
-    // an authority nothing is asserting against.
+    // a coordinator nothing is asserting against.
     checkpoint: () => {
-      throw new Error("this stub authority names no provider turn");
+      throw new Error("this stub coordinator names no provider turn");
     },
     *perform(_request, phases) {
       // A replay hands back what the journal retained rather than calling the
-      // provider's live preparation, exactly as the real authority does when
+      // provider's live preparation, exactly as the real coordinator does when
       // the phase is already recorded.
       const replay = trace.replay;
       if (replay) {
@@ -346,7 +346,7 @@ function* installLaunchStack(
   });
   yield* factory(
     { defaultAgent: "claude", permissionMode: "approve-reads" },
-    traceAuthority(trace),
+    traceCoordinator(trace),
   );
 }
 
@@ -713,7 +713,7 @@ describe("Tier NL — native session launch", () => {
       yield* launch(INSTRUCTIONS);
 
       // The provider reports what happened; deciding that a nonzero status
-      // fails the document belongs to the authority that derives the result.
+      // fails the document belongs to the coordinator that derives the result.
       expect(trace.records.at(-1)).toMatchObject({ phase: "exited", exitCode: 7 });
       const prepared = trace.records[0];
       expect(prepared).toMatchObject({ nativeSessionId: `agent-session:${SESSION_KEY}` });
@@ -1045,7 +1045,7 @@ describe("Tier NO — session ownership", () => {
       });
       yield* factory(
         { defaultAgent: "claude", permissionMode: "approve-reads" },
-        traceAuthority(trace),
+        traceCoordinator(trace),
       );
 
       const refusal = yield* attempt(trace, INSTRUCTIONS);
@@ -1085,7 +1085,7 @@ describe("Tier NO — session ownership", () => {
       });
       yield* factory(
         { defaultAgent: "claude", permissionMode: "approve-reads" },
-        traceAuthority(trace),
+        traceCoordinator(trace),
       );
 
       // The terminal lease belongs to the launch's caller, so this stack
@@ -3803,7 +3803,10 @@ describe("Tier AO — explicit ACP-only capability", () => {
     });
 
     yield* scoped(function* () {
-      yield* factory({ defaultAgent: "claude", permissionMode: "deny-all" }, traceAuthority(trace));
+      yield* factory(
+        { defaultAgent: "claude", permissionMode: "deny-all" },
+        traceCoordinator(trace),
+      );
       const stream = yield* Agent.operations.prompt("what changed?", {});
       const subscription = yield* stream;
       let next = yield* subscription.next();

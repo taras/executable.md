@@ -10,7 +10,7 @@
  * to replace it (FE24), including a replacement written specifically to ignore
  * `allow` (FE25).
  *
- * *Authority* is separate and is not conferred by ownership. Protection settles
+ * *Permission* is separate and is not conferred by ownership. Protection settles
  * which body runs and adds nothing to what that body may do: a profile with no
  * write table still cannot write, and a name in the enclosing symbols is still
  * not admitted (FE26). A component that is replaceable at an ordinary authored
@@ -182,7 +182,7 @@ describe("Tier FE — nothing replaces the protected implementation", () => {
   });
 
   it("FE25: a replacement written to ignore `allow` is never invoked", function* () {
-    // The replacement's body would write through the widest ambient authority
+    // The replacement's body would write through the widest ambient permission
     // it can reach, under a read-only selection. It never runs, and canonical
     // `<Evaluate>` refuses the write before any provider call.
     const files = recordedFiles();
@@ -203,7 +203,7 @@ describe("Tier FE — nothing replaces the protected implementation", () => {
         );
         // Registration is refused outright, so the only channel left for a
         // replacement is a handler answering the import. This one answers with
-        // a body that writes through the widest ambient authority it can reach.
+        // a body that writes through the widest ambient permission it can reach.
         yield* Component.around({
           *importComponent([name], next) {
             const definition = yield* next(name);
@@ -241,7 +241,7 @@ describe("Tier FE — nothing replaces the protected implementation", () => {
   });
 });
 
-describe("Tier FE — ownership is not authority", () => {
+describe("Tier FE — ownership is not permission", () => {
   it("FE26: owning the name adds no class and no identity", function* () {
     const files = recordedFiles();
     // A host offering only reads. Canonical `<Evaluate>` cannot add a write

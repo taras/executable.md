@@ -2,10 +2,10 @@
  * The lifetime of a protected body's one projection of its own content.
  *
  * Canonical dispatch hands a protected body a callback that renders that
- * element's content once. The callback is authority — it projects the
+ * element's content once. The callback is the projection itself — it projects the
  * document's own children under a reference the body chose — so how long it
  * lives and how many times it answers are not details. This module owns exactly
- * that question, and nothing else: what to project, under which authority, in
+ * that question, and nothing else: what to project, under which permissions, in
  * which scope and with which error mode all stay in `expand.ts`, which already
  * holds them. What arrives here is one already-bound operation.
  *
@@ -52,7 +52,7 @@ export interface ProtectedContentLease {
    * End it.
    *
    * Called from the same `finally` that closes the invocation's issued
-   * authority, so a callback a body retained — in a closure, on an object it
+   * permissions, so a callback a body retained — in a closure, on an object it
    * returned, in something it spawned — refuses rather than projecting content
    * of an element that has finished.
    */
@@ -67,7 +67,7 @@ type LeaseState = "open" | "spent" | "closed";
  *
  * `perform` is called at most once, and only from the `open` state. Everything
  * this adds is the refusal: the operation itself is `expand.ts`'s, closed over
- * the projection state, the authority and the scope that element actually has.
+ * the projection state, the permissions and the scope that element actually has.
  */
 export function protectedContentLease(
   name: string,

@@ -5,7 +5,7 @@
  * `PullRequestAPI` is the transport surface — GitHub's middleware matches the
  * URLs it recognizes, holds a read to the host's ceiling, reconciles a create
  * or an update, and normalizes what comes back. This is the layer above it, and
- * what it owns is *lifecycle and authority*: whether an answer is retained,
+ * what it owns is *lifecycle and admission*: whether an answer is retained,
  * what proves this run published the branch a pull request would name, and what
  * a second execution inherits.
  *

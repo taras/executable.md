@@ -3,7 +3,7 @@
  * and how an element written outside one finds a Repository anyway.
  *
  * A stable, namespaced contextual value holding a {@link RepositorySelection}
- * and no authority. `<Worktree>` and every Git element read it to learn which
+ * and no permission. `<Worktree>` and every Git element read it to learn which
  * Repository they belong to; the provider decides separately whether anything
  * may be done to that Repository, so a replaced context can misname a
  * Repository but cannot grant access to one.

@@ -41,7 +41,7 @@
  * sanitized result is durably published, and the run's current root is the one
  * it was before.
  *
- * Everything that is not a documented refusal — connection, authority,
+ * Everything that is not a documented refusal — connection, admission,
  * savepoint, capture, publication, routing, teardown and commit failure — stays
  * an infrastructure failure and fails the run. None of them is something a
  * document did, and printing one would let the work after this file work run as

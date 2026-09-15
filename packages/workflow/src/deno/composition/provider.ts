@@ -57,7 +57,7 @@ import {
   filteredRepositoryIdentity,
   type RepositorySelection,
 } from "../../composition/selection.ts";
-import { GitOperationAuthorityError, RepositorySelectionError } from "../../composition/errors.ts";
+import { GitOperationAdmissionError, RepositorySelectionError } from "../../composition/errors.ts";
 import { selectionRegistry, type SelectionRegistry } from "../selections.ts";
 import type { WorkflowRunDatabase } from "../../storage/api.ts";
 import { transactWorkspaceRoots } from "../workspace/private.ts";
@@ -177,8 +177,8 @@ function hostOf(options: CompositionProviderOptions): RepositoryHost {
  * retain, because it is the same condition reached one step earlier: what the
  * element observed does not name a checkout this run has.
  */
-function unselected(operation: string): GitOperationAuthorityError {
-  return new GitOperationAuthorityError(
+function unselected(operation: string): GitOperationAdmissionError {
+  return new GitOperationAdmissionError(
     operation,
     "the Repository in scope is not one this run selected, so it names no retained checkout",
   );

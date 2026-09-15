@@ -71,7 +71,7 @@ word a person reads, for the same reason.
 Before writing, the coding agent may ask to look at the project: which files
 exist, what a file contains, what a component does. It asks by answering with a
 read-only XMD program instead of a Plan, and this workflow runs that program
-under the same read-only authority `xmd run` gives any document, sends back
+under the same read-only permissions `xmd run` gives any document, sends back
 exactly what it rendered, and asks again.
 
 This invocation answers at most {requests} of those requests in total — shared

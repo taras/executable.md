@@ -33,7 +33,7 @@
  * ## Why it is lazy
  *
  * Nothing here runs until a live provider first needs the source, which is
- * before its first remote observation and after every local authority check. An
+ * before its first remote observation and after every local admission check. An
  * execution that replays a completed push reaches no provider at all: the
  * shared engine hands back the retained record, so no control repository is
  * built, no object graph is walked and no Git runs for the push.

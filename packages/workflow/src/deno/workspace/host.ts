@@ -110,7 +110,7 @@ export interface WorkflowWorkspaceOptions {
    * Absent authorizes no URL read, so a document naming one reaches
    * `PullRequestAPI`'s own base error rather than a host that quietly read
    * somewhere nobody allowed. It does not disable `<PullRequest>`, whose
-   * authority is this run's own Push evidence rather than a configured URL.
+   * admission is this run's own Push evidence rather than a configured URL.
    */
   readonly gitHubPullRequests?: GitHubPullRequestsOptions;
   /**

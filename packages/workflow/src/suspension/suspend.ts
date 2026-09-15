@@ -25,10 +25,10 @@
  * Yield means the request was retained. It does not mean the wait ended, and it
  * does not authorize anything.
  *
- * **Authority last, and it is the request at this position.** The controller is
+ * **Admission last, and it is the request at this position.** The controller is
  * reached through a stable contextual name, which is how a component's own
  * loaded copy of this package finds the controller the running binary installed.
- * That route is composition rather than authority: middleware may refuse it, but
+ * That route is composition rather than admission: middleware may refuse it, but
  * no value it returns is an answer and none of them makes this operation
  * continue. What authorizes the wait is the retained request at the exact
  * position this operation just published from.

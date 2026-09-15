@@ -25,7 +25,7 @@
  * ## The private closure
  *
  * A declaration may carry components only its own bytes may write. They are
- * *lexical availability*, not authority: each is an ordinary
+ * *lexical availability*, not permission: each is an ordinary
  * {@link IdentityComponent}, built from a claimant this execution minted, and
  * it names nothing once the invocation it was given settles. What makes them
  * private is that nothing registers them — they are resolvable only while
@@ -33,7 +33,7 @@
  * them, and the register below is offered and taken inside one import.
  *
  * Caller-projected content is not that body. Projection restores the caller's
- * frame and the caller's authority, so content written by whoever invoked the
+ * frame and the caller's own resolution, so content written by whoever invoked the
  * declared component reaches no private name, and neither does an imported
  * component, a sibling invocation, or an implementation kept past teardown.
  */
@@ -77,7 +77,7 @@ export class DeclaredMarkdownError extends Error {
 /**
  * One exact Markdown component, as the host declares it.
  *
- * `source` is the authority on the contract. `props`, `returns` and `forms` are
+ * `source` is definitive for the contract. `props`, `returns` and `forms` are
  * optional statements *about* it — a host that states one is held to it, so a
  * packaged asset and the host that ships it cannot drift apart silently.
  *
@@ -419,9 +419,9 @@ export interface PrivateClosure {
 /**
  * One private import, open for exactly one ask.
  *
- * The offer is the authority, and it is spent where it was made. What may be
+ * The offer is what admits the import, and it is spent where it was made. What may be
  * invoked is the object canonical core's own resolver produced *inside this
- * ask* — so an answer retained from another import authorizes nothing, however
+ * ask* — so an answer retained from another import is admitted nowhere, however
  * exactly it describes the same private component, and a name written where no
  * offer was made is not a private import at all.
  */
@@ -434,7 +434,7 @@ export interface PrivateImport {
    * expanded or called, on the same terms a closed import is: the answer has to
    * be the object this ask produced, still describing what core produced.
    */
-  authorize(answer: ImportedDefinition): ImportedDefinition;
+  verify(answer: ImportedDefinition): ImportedDefinition;
   /** The ask is over. */
   close(): void;
 }
@@ -459,7 +459,7 @@ const PRIVATE_REFUSED: Record<ImportRefusal, string> = {
   unissued:
     "Component.importComponent middleware answered a private import with a definition this " +
     "import did not produce. A private component runs for the element the declaration that " +
-    "carries it authored, and for no other — an answer kept from another import authorizes " +
+    "carries it authored, and for no other — an answer kept from another import identifies " +
     "nothing here.",
   "another-name":
     "Component.importComponent middleware answered a private import with the definition " +
@@ -557,7 +557,7 @@ export class InstalledComponents implements ImportTier {
    * declared about the *name*, and a handler answering an undeclared name gets
    * `false` because the host declared nothing about it. It is one half of the
    * question; the caller supplies the other half by asking only for an import
-   * canonical execution authorized.
+   * canonical execution admitted.
    */
   declaresExact(name: string): boolean {
     return this.#catalog.component(name)?.exact === true;
@@ -574,18 +574,18 @@ export class InstalledComponents implements ImportTier {
     if (closure === undefined || !closure.has(name)) {
       return undefined;
     }
-    // One retention per ask. An answer is authorized because it is the object
+    // One retention per ask. An answer is verified because it is the object
     // *this* ask produced, so an answer kept from another import is not in this
     // table at all and is refused as unissued.
     const imports = new CanonicalImports();
     const open: OpenOffer = { closure, name, imports, produced: undefined };
     this.#offered = open;
     return {
-      authorize: (answer) => {
+      verify: (answer) => {
         if (open.produced === undefined) {
           throw new DeclaredMarkdownError(PRIVATE_REFUSED.unissued);
         }
-        return imports.authorize(
+        return imports.verify(
           name,
           answer,
           (refusal) => new DeclaredMarkdownError(PRIVATE_REFUSED[refusal]),
@@ -605,7 +605,7 @@ export class InstalledComponents implements ImportTier {
    * Read once: whatever asks first spends it, so a second ask inside the same
    * window resolves ordinarily and fails to find the name. What comes back is a
    * copy this ask owns rather than the shared implementation, because the offer
-   * authorizes by the object it produced and two asks must not produce one.
+   * is verified by the object it produced and two asks must not produce one.
    */
   claim(name: string): { definition: FunctionComponentDefinition; origin: string } | undefined {
     const offered = this.#offered;

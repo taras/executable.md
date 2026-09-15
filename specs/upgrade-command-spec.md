@@ -68,7 +68,7 @@ path must not exist, the CLI creates it exclusively, and it holds one
 current-run JSONL trace. The trace is evidence only. Upgrade never reads it,
 appends to it, or treats it as continuation input, and a failed run keeps the
 trace it produced. It changes no terminal text, release choice, consent,
-attempt count or authority, and the ordinary secret gate filters it. In status
+attempt count or permission, and the ordinary secret gate filters it. In status
 mode that file is the **sole** permitted filesystem change: status still takes
 no installation lock, downloads no binary, creates no candidate and replaces
 nothing.
@@ -230,7 +230,7 @@ Consent authorizes replacement, not inspection and not a no-op.
 `executeInstalled()` with the fixed props and the phases the assembly carries,
 and — in the same scope, while the document is still producing — hands
 `execution.output` to one caller-supplied consumer. It does not inspect the
-runtime, resolve `PATH`, fetch, open the installation, or manufacture authority,
+runtime, resolve `PATH`, fetch, open the installation, or manufacture components,
 and it neither imports nor writes the host's stdout: which stream a transcript
 lands on is the command line's decision.
 
@@ -248,7 +248,7 @@ reached the reader; it is never translated into an approved operational refusal.
 
 Every runtime-named entrypoint supplies one closed `UpgradeAssembly`:
 
-| Entrypoint | Provenance | Authority |
+| Entrypoint | Provenance | Components |
 | --- | --- | --- |
 | `compiled.ts` (win32) | `compiled-windows` | none |
 | `compiled.ts` (other, no release target) | `compiled` | none |
@@ -258,7 +258,7 @@ Every runtime-named entrypoint supplies one closed `UpgradeAssembly`:
 | `bun.ts` | `bun-source` | none |
 
 The assembly is a required parameter of `runXmd()`. A host that supplies no
-authority gives the document no component through which anything could be read,
+components gives the document no component through which anything could be read,
 downloaded or replaced — which is what makes an unsupported entrypoint's refusal
 structural rather than a check it could forget.
 
@@ -292,7 +292,7 @@ document cannot invoke one.
 ```
 
 Splitting the trusted work into four phases is what gives Markdown honest points
-at which to report progress; it moves no authority into the document. There is
+at which to report progress; it moves no permission into the document. There is
 one installation attempt per invocation, spent before the first asset request. A
 candidate advances `downloaded → verified → committed` exactly once, so a
 fabricated, cross-invocation, repeated or out-of-order identity is refused
@@ -303,13 +303,13 @@ Inside the host every outcome is an Effection `Result<T>`; the mapping to this
 data happens at the JSON boundary so Markdown can present it. There is no local
 TypeScript result union.
 
-**Opaque identity is the authority boundary.** `Upgrade.Releases` mints an
+**Opaque identity is the admission boundary.** `Upgrade.Releases` mints an
 invocation-local identity for every release it admits and retains the normalized
 release privately. `Upgrade.Download` accepts only an identity present in that
 map; `Upgrade.Verify` and `Upgrade.Replace` accept only a candidate this
 invocation staged, in the state each requires. Anything else is refused
 outright — not as a failure code, because a value nothing admitted is a claim of
-authority that was never granted, and answering it with an outcome would make
+admission that was never granted, and answering it with an outcome would make
 the two indistinguishable. So the document may choose among the releases it was
 shown, and cannot name another release, target, asset, checksum URL or
 destination, skip verification, or replay a phase.
@@ -556,7 +556,7 @@ real Deno child.
 | UC1–UC3 | Grammar and inert help | The command row carries its settled description; command help states the default, both consent options, the matrix in named platforms, and what verification does, while performing none of it; nothing a run configures is offered |
 | UC4–UC8 | Command line before policy | An undefined option, a value on a switch, a second positional, `--eval` and `--props-*` are each refused with the CLI's own message and no policy answer; each entrypoint states its own remedy; `xmd workflow` keeps its own `--status` |
 | UG1–UG11 | Selection, consent and the three endings | The latest published stable is selected over a draft and a prerelease and installed; `--status` reports the ordering and installs nothing; an already-current selection downloads nothing; older and prerelease selections each require their consent and install with it, an older prerelease requires both; consent that describes nothing is refused, irrelevant prerelease consent before any read and irrelevant downgrade consent after the comparison; `--status` refuses either consent option and accepts any published exact tag; a draft, a missing tag and a listing with no stable release are each refused by name |
-| UG12–UG15 | Authority and answers | Each unsupported provenance and an untargeted compiled binary refuse with no release read and no install; every release-read and installation failure code reaches its own actionable message, and an unknown code reaches the fallback |
+| UG12–UG15 | Admission and answers | Each unsupported provenance and an untargeted compiled binary refuse with no release read and no install; every release-read and installation failure code reaches its own actionable message, and an unknown code reaches the fallback |
 | UG16–UG20 | Comparison and shape | Stable and prerelease precedence, numeric against non-numeric identifiers, different-length sequences, identifiers past the safe-integer range and the package's own boundary there; leading zeros, a missing `v`, build metadata, whitespace and malformed separators refused before any read; a release whose own tag is malformed is never selected; the approved headings in the approved order |
 | UH1–UH2 | Shared identity | Every platform maps to the exact artifact the release publishes, an unpublished platform maps to none, and only an eligible compiled host carries the components at all |
 | UH3–UH7 | The real path | A real download, digest, executable mode, candidate `--version` and rename replace the bytes once and report the exact facts; `--status` requests only the listing and leaves no sidecar, staging or probe; an exact tag reads the tag endpoint; a 404 is a missing release; a draft never installs |
@@ -564,7 +564,7 @@ real Deno child.
 | UH11–UH13 | The gates before replacement | A checksum mismatch stops before the candidate is made executable or run; a candidate that exits nonzero, times out, prints something else or reports another version never replaces anything; stdout is the version only after its own terminal line ending |
 | UH14–UH17 | Transport and commit | A redirect to another host, a suffix host, userinfo, an alternate port, plain HTTP or another repository's path is refused, GitHub's signed delivery host is followed, and the hop ceiling ends a loop; short, oversized, over-advertised, interrupted and failed downloads never install; a failed replacement leaves the original byte-identical |
 | UH18–UH21 | Owning the installation | An invoked symbolic link is refused without being resolved and without a request; a non-regular destination and an unwritable parent are refused before the network; a second upgrade of one installation is refused rather than queued while a real child holds the lock, and succeeds once the kernel has released it |
-| UH22–UH26 | Cancellation, authority and status | Cancelling before the commit keeps the original and leaves no candidate; cancelling after it keeps the new binary and completes teardown; every request carries only a URL and an accept header; a release identity this invocation never minted is refused outright; the process status follows the outcome |
+| UH22–UH26 | Cancellation, admission and status | Cancelling before the commit keeps the original and leaves no candidate; cancelling after it keeps the new binary and completes teardown; every request carries only a URL and an accept header; a release identity this invocation never minted is refused outright; the process status follows the outcome |
 | UH27–UH28 | Binding a download to one release | A redirect that stays on `github.com`, in this repository and under the download path but names another tag or another platform's asset is refused before it is requested; a release whose page URL names another tag never becomes a fact, while the same payload with its own page is admitted |
 | UH29–UH31 | Containment and ownership | A transport, a candidate process and a lock that each raise become the document's own answers rather than stack traces; a staging path that already exists is left byte-identical, because the exclusive create is what would have made it ours |
 | UH39 | Phase order | Replace before Verify, a second download, and a repeated Verify are each refused before the next protected effect, with nothing committed |

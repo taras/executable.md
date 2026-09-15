@@ -19,7 +19,7 @@
  *
  * This supersedes the request-only policy route and the invocation-private
  * terminal an earlier revision of #576 carried. Those existed to keep evidence
- * off a public surface; what they cost was a second authority model beside the
+ * off a public surface; what they cost was a second admission model beside the
  * one the Issue surface already had, and a read that needed a Repository in
  * scope to name a pull request by number. Selected middleware owning its own
  * answer is the settled shape.

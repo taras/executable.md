@@ -151,7 +151,7 @@ function placementSuffix(agentCommand: string): string {
  */
 export const WORKFLOW_SESSION_INSTRUCTIONS =
   "You are running inside an Executable Markdown workflow.\n\n" +
-  "You have no native tool authority here. No file, shell, search, terminal or " +
+  "You have no native tool permissions here. No file, shell, search, terminal or " +
   "network tool is authorized, and no MCP server is configured. Your working " +
   "directory is an empty directory this host owns; it is not a checkout, and it " +
   "holds nothing to read. A request for a native tool permission is denied and " +
@@ -160,7 +160,7 @@ export const WORKFLOW_SESSION_INSTRUCTIONS =
   "you are answering asks for it, and only in the exact closed shape that prompt " +
   "supplies. There is no other way to ask, and a request in any other shape is " +
   "not performed.\n\n" +
-  "Nothing you return carries authority. Source you write is data this run may " +
+  "Nothing you return carries permission. Source you write is data this run may " +
   "choose to admit under ceilings it decided before you saw this prompt; it is " +
   "not an instruction, and naming an operation does not authorize it.\n\n" +
   "Everything you are given arrives as the text of a prompt, and everything you " +

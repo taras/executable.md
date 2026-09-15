@@ -706,7 +706,7 @@ describe("Tier WFI — xmd workflow status and history over a sealed artifact", 
 
       // The whole snapshot, not a chosen field. `artifact` is what inspection
       // adds; `retrieval` is what an artifact deliberately does not carry,
-      // because where a definition can be fetched from now is authority
+      // because where a definition can be fetched from now is a permission
       // belonging to the machine that exported rather than a fact about the run.
       const { artifact: identity, ...lifecycle } = projected;
       const { retrieval: _retained, ...expected } = run.status as Record<string, unknown>;

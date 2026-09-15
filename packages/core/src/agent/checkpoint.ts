@@ -13,7 +13,7 @@
  * could read a checkpoint off it and anything building an event could put one
  * there.
  *
- * Writing is reachable only through the authority core delivers to a provider
+ * Writing is reachable only through the coordinator core delivers to a provider
  * as it installs it. Reading is reachable only from the prompt this core is
  * running. Middleware sits between the two holding the event and reaches
  * neither: substituting the terminal event loses the association and retains

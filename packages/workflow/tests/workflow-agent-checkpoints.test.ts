@@ -27,7 +27,7 @@ import {
 } from "@executablemd/core";
 import type {
   AgentPromptEvent,
-  AgentProviderAuthority,
+  AgentLaunchCoordinator,
   AgentProviderFactory,
   Json,
   Session,
@@ -119,13 +119,13 @@ function subscriptionOver(
 /**
  * A provider that answers each Prompt from a script, in order.
  *
- * It states a checkpoint the only way a provider can: through the authority
+ * It states a checkpoint the only way a provider can: through the coordinator
  * core delivered to it as it installed. That is the point of driving a factory
- * here rather than assembling events by hand — a checkpoint no authority stated
+ * here rather than assembling events by hand — a checkpoint no coordinator stated
  * is a checkpoint this run must not retain, and this fixture cannot fake one.
  */
 function scriptedProvider(replies: readonly Reply[]): AgentProviderFactory {
-  return function* (_options, authority: AgentProviderAuthority): Operation<void> {
+  return function* (_options, launchCoordinator: AgentLaunchCoordinator): Operation<void> {
     let index = 0;
     yield* Agent.around(
       {
@@ -154,7 +154,7 @@ function scriptedProvider(replies: readonly Reply[]): AgentProviderFactory {
             ? { type: "terminal", status: "failed", error: new Error("the turn failed") }
             : { type: "terminal", status: "completed", stopReason: "end_turn" };
           if (reply.turnId !== undefined) {
-            authority.checkpoint(terminal, {
+            launchCoordinator.checkpoint(terminal, {
               provider: "codex",
               kind: "app-server-turn-id",
               value: reply.turnId,

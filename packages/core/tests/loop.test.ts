@@ -1560,7 +1560,7 @@ describe("Tier BREAK — the projection boundary", () => {
       "components/Wrap.md": "<section><Content /></section>\n",
     });
 
-    // The component finishes rendering — the loop has no authority over its
+    // The component finishes rendering — the loop has no say over its
     // body — and the break lands when the invocation returns, so TAIL and the
     // remaining iterations never expand.
     expect(output).toContain("<section></section>");

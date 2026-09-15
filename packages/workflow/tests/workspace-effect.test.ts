@@ -19,7 +19,7 @@ import {
 } from "@executablemd/durable-streams";
 import { createDurableWorkspaceOperation, WorkspaceCoordinationProviderError } from "../mod.ts";
 import {
-  type WorkspaceCoordinationAuthority,
+  type WorkspaceEffectExecution,
   type WorkspaceCoordinationProvider,
   withWorkspaceCoordinationProvider,
 } from "../src/workspace/effect.ts";
@@ -55,7 +55,7 @@ const WorkspaceInvocationCollision = createApi<InvocationCollisionApi>(
   },
 );
 
-function successfulProvider(observe?: (authority: WorkspaceCoordinationAuthority) => void): {
+function successfulProvider(observe?: (execution: WorkspaceEffectExecution) => void): {
   provider: WorkspaceCoordinationProvider;
   counts: { providers: number; executions: number; publications: number };
 } {
@@ -63,13 +63,13 @@ function successfulProvider(observe?: (authority: WorkspaceCoordinationAuthority
   return {
     counts,
     provider: {
-      *run(authority: WorkspaceCoordinationAuthority): Operation<Result> {
+      *run(execution: WorkspaceEffectExecution): Operation<Result> {
         counts.providers += 1;
-        observe?.(authority);
-        const value = yield* authority.execute();
+        observe?.(execution);
+        const value = yield* execution.execute();
         counts.executions += 1;
         const result: Result = { status: "ok", value };
-        yield* authority.publish(result);
+        yield* execution.publish(result);
         counts.publications += 1;
         return result;
       },
@@ -434,13 +434,13 @@ describe("Tier DLC — Workspace coordination selection", () => {
     const coordinated: string[] = [];
     const ordinary: string[] = [];
     const provider: WorkspaceCoordinationProvider = {
-      *run(authority: WorkspaceCoordinationAuthority): Operation<Result> {
-        expect(authority.journalProvenance).toBe(journalProvenance);
-        expect(Reflect.get(authority.journalProvenance ?? {}, "append")).toBe(undefined);
-        expect(Reflect.get(authority.journalProvenance ?? {}, "readAll")).toBe(undefined);
+      *run(execution: WorkspaceEffectExecution): Operation<Result> {
+        expect(execution.journalProvenance).toBe(journalProvenance);
+        expect(Reflect.get(execution.journalProvenance ?? {}, "append")).toBe(undefined);
+        expect(Reflect.get(execution.journalProvenance ?? {}, "readAll")).toBe(undefined);
         coordinated.push("workspace");
-        const result: Result = { status: "ok", value: yield* authority.execute() };
-        yield* authority.publish(result);
+        const result: Result = { status: "ok", value: yield* execution.execute() };
+        yield* execution.publish(result);
         return result;
       },
     };
@@ -750,16 +750,16 @@ describe("Tier DLC — Workspace coordination selection", () => {
     expect(crossings).toEqual({});
   });
 
-  it("DLC15: live Workspace invocation authority is one-shot", function* () {
+  it("DLC15: live Workspace invocation execution is one-shot", function* () {
     const stream = new InMemoryStream();
     establishJournalProvenance(stream);
-    let capturedAuthority: WorkspaceCoordinationAuthority | undefined;
+    let capturedExecution: WorkspaceEffectExecution | undefined;
     let executions = 0;
     const provider: WorkspaceCoordinationProvider = {
-      *run(authority: WorkspaceCoordinationAuthority): Operation<Result> {
-        capturedAuthority = authority;
-        const result: Result = { status: "ok", value: yield* authority.execute() };
-        yield* authority.publish(result);
+      *run(execution: WorkspaceEffectExecution): Operation<Result> {
+        capturedExecution = execution;
+        const result: Result = { status: "ok", value: yield* execution.execute() };
+        yield* execution.publish(result);
         return result;
       },
     };
@@ -771,17 +771,17 @@ describe("Tier DLC — Workspace coordination selection", () => {
     }
 
     yield* withWorkspaceCoordinationProvider(provider, durableRun(workflow, { stream }));
-    if (capturedAuthority === undefined) {
-      throw new Error("the provider did not receive its live invocation authority");
+    if (capturedExecution === undefined) {
+      throw new Error("the provider did not receive its live invocation execution");
     }
-    expect(yield* raised(capturedAuthority.execute())).toBeInstanceOf(
+    expect(yield* raised(capturedExecution.execute())).toBeInstanceOf(
       WorkspaceCoordinationProviderError,
     );
     expect(
-      yield* raised(capturedAuthority.publish({ status: "ok", value: "late" })),
+      yield* raised(capturedExecution.publish({ status: "ok", value: "late" })),
     ).toBeInstanceOf(WorkspaceCoordinationProviderError);
     const activationFailure = yield* raised(
-      capturedAuthority.activateFailure(new Error("late activation")),
+      capturedExecution.activateFailure(new Error("late activation")),
     );
     expect(activationFailure).toBeInstanceOf(WorkspaceCoordinationProviderError);
     expect(executions).toBe(1);
@@ -997,8 +997,8 @@ describe("Tier DLC — Workspace coordination selection", () => {
     let activated: Error | undefined;
     let collisions = 0;
     const provider: WorkspaceCoordinationProvider = {
-      *run(authority: WorkspaceCoordinationAuthority): Operation<Result> {
-        activated = yield* authority.activateFailure(first);
+      *run(execution: WorkspaceEffectExecution): Operation<Result> {
+        activated = yield* execution.activateFailure(first);
         throw activated;
       },
     };

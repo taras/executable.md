@@ -170,7 +170,7 @@ export const TESTING_REGISTRATIONS: readonly ComponentRegistration[] = [
   },
   // The nested-execution harness. Registered like everything else here, and
   // authoritative like nothing else here: each invocation asks canonical
-  // `<Test>` for the authority, so registering the name grants none of it and
+  // `<Test>` for the harness, so registering the name grants none of it and
   // a repository component of the same name receives ordinary semantics.
   ...HARNESS_REGISTRATIONS.map((registration) => ({ ...registration })),
   // The table stays data: it names the comparison and the props each kind

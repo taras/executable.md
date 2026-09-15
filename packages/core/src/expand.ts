@@ -196,7 +196,7 @@ function provideEvalScope(value: EvalScope): Operation<void> {
  * arbitrary code: run directly on the site's loop task it could set a context
  * value or install middleware that every later sibling would then observe —
  * the same mechanism that lets a `persist` block install a provider for the
- * rest of its invocation. Retention is a lifetime, not authority over the
+ * rest of its invocation. Retention is a lifetime, not control over the
  * caller, so only the provided value crosses back.
  *
  * Every invocation installs a provider, including one with no site to retain
@@ -714,7 +714,7 @@ function requirePrivate(
       `${name} is declared privately by exact Markdown, and this is not an element it authored`,
     );
   }
-  return offered.authorize(answered);
+  return offered.verify(answered);
 }
 
 /**
@@ -1471,7 +1471,7 @@ function* expandListSegments(
  * printing boundary may still be the thing that prints it, exactly as an
  * `<Output>` region's failure is printed today.
  *
- * The ledger is the authority to keep the run, and it is an argument because it
+ * The ledger is what keeps the run, and it is an argument because it
  * has exactly one origin: a `<PrintErrors>` element the document was written
  * with, which hands it to the expansion of its own body and to nothing else.
  * Nothing ambient is consulted. A run's outcome may not be decided by state an
@@ -2462,7 +2462,7 @@ function* expandPrintErrors(
 
   yield* scoped(function* () {
     yield* usePrintErrors();
-    // The element the document was written with is the origin of the authority
+    // The element the document was written with is the origin of the permission
     // to print a checked command failure and continue. It is handed to this
     // body's expansion by hand, so nothing outside the document can hold it.
     return yield* expandSegmentsWithin(
@@ -2589,7 +2589,7 @@ function* expandComponent(
       environment.forms?.select(name, imported);
     } else if (
       environment?.componentResolution === undefined ||
-      !environment.componentResolution.closes(name)
+      !environment.componentResolution.resolves(name)
     ) {
       // Closed for this exact name, not for the execution that closed it. A
       // bundled run closes every import; a host that declared exact Markdown
@@ -2598,7 +2598,7 @@ function* expandComponent(
       // recorded against it.
       imported = answered;
     } else {
-      imported = environment.componentResolution.authorize(name, answered);
+      imported = environment.componentResolution.verify(name, answered);
       // This import is canonical execution's own answer for a name this
       // execution closed, which is the only provenance exact source is read
       // from. An open import — one no tier claims — never sets it, however its
@@ -4398,7 +4398,7 @@ function* expandValueBody(
  * The handler itself is the one the installation supplied with its declaration,
  * taken from the catalog this expansion carries. It is called directly, inside
  * a scope of its own: nothing is published, no context is consulted, and the
- * only authority it gains is over the regions written inside its own occurrence.
+ * only reach it gains is over the regions written inside its own occurrence.
  */
 function* expandInstalledStructural(
   declaration: AdmittedStructural,

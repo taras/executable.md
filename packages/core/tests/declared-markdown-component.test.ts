@@ -754,7 +754,7 @@ describe("Tier DM — the private closure is lexical", () => {
     // canonical execution produced some other answer, but that this ask
     // produced this one and no answer from anywhere else authorizes it.
     expect(message).toContain("did not produce");
-    expect(message).toContain("an answer kept from another import authorizes nothing here");
+    expect(message).toContain("an answer kept from another import identifies nothing here");
   });
 
   it("DM38: a factory replaced after capture does not become what runs", function* () {
@@ -944,7 +944,7 @@ describe("Tier DM — the private closure is lexical", () => {
     expect(entered).toEqual(["policy"]);
   });
 
-  it("DM44: a copy of the private definition grants no authority either", function* () {
+  it("DM44: a copy of the private definition is admitted nowhere either", function* () {
     // The same reach, through a definition of the handler's own making that
     // carries the implementation it kept. What is restricted is the
     // implementation, not the object it arrives in.

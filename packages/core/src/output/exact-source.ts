@@ -19,7 +19,7 @@
  *
  * The record belongs to one execution, which creates it and hands it down by
  * value on the private `ExecutionEnvironment` canonical core already carries its
- * import authority on. It is deliberately not in a context: an Effection
+ * component resolution on. It is deliberately not in a context: an Effection
  * context resolves by *name*, and a name is not a secret — anything that can
  * run code can build a context with the same one and reach whatever is stored
  * under it. A component doing that to this record could replace its `has` and

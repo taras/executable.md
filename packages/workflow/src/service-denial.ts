@@ -1,4 +1,4 @@
-/** Workflow authority boundary for native service attachment. */
+/** Workflow permission boundary for native service attachment. */
 
 import type { Operation } from "effection";
 import { API } from "@executablemd/runtime";

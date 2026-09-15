@@ -128,7 +128,7 @@ export interface ComponentApi {
    * the component returns and released when the site succeeds, fails, or is
    * cancelled — while context and middleware it installs stay inside the
    * child. Only the provided value crosses back, and neither scope is handed
-   * out: retention is a lifetime, not authority over the caller.
+   * out: retention is a lifetime, not control over the caller.
    *
    * This is an operation of TypeScript component execution. Eval blocks are
    * durable — a replay restores a block's exported values without running its

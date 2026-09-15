@@ -546,7 +546,7 @@ describe("Tier FE — the paired form produces its own program", () => {
     expect(files.performed).toEqual(["read notes.md"]);
   });
 
-  it("FE2: a producer keeps its own authority while the fragment does not", function* () {
+  it("FE2: a producer keeps its own permission while the fragment does not", function* () {
     // The producer's content runs at the document's site, so its `<File />` is
     // the ordinary component and reaches the document's own provider. The
     // program it renders reaches only the captured operations. Both are counted
@@ -932,7 +932,7 @@ describe("Tier FE — an execution with no ceiling has no evaluation", () => {
   it("FE5: two installations stating a profile is refused before anything installs", function* () {
     const files = recordedFiles();
     expect(yield* refusal(run(`nothing asked for\n`, [reading(files), reading(files)]))).toContain(
-      "one maximum authority",
+      "one maximum permission",
     );
   });
 
@@ -1253,7 +1253,7 @@ describe("Tier FE — protection settles which implementation runs, and grants n
  * are what makes that observable: a fragment composes admitted reads with
  * branching, binding and bounded iteration under exactly the ordinary rules,
  * while the components those constructs reach stay held to the selected
- * authority.
+ * permission.
  *
  * The discriminating half is the untaken path. Preflight walks every branch,
  * every `<Case>` and every body before the first effect, so a prohibited

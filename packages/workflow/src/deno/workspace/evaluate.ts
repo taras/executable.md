@@ -177,7 +177,7 @@ export function* evaluationProfile(
   // changed: the former `Dir` authorized placement that created nothing, and
   // `<Dir>` now recursively creates the directory it names. A continuation
   // granted under the earlier revision must not silently receive the wider
-  // authority, and the retained comparison refuses it before generated
+  // permission, and the retained comparison refuses it before generated
   // execution.
   const timeout = yield* timeoutFetch;
   return {
@@ -189,7 +189,7 @@ export function* evaluationProfile(
     write: [
       fileWriteEntry(),
       // Revision 3: the grant is the workflow's, so the identity names this
-      // package. What changed from revision 2 is the authority behind it — the
+      // package. What changed from revision 2 is the operation behind it — the
       // body is now closed over the `ensureDirectory` this profile handed over
       // rather than resolving a Files provider when it runs — so a continuation
       // granted under the older, composable one is refused rather than

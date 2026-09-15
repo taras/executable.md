@@ -24,7 +24,7 @@
  * The rest is what a document can already see. The name is the one it wrote or
  * the ambient repository's own; the identity is credential-free by
  * construction; the checkout path is a place a `<Dir>` may already be standing.
- * None of it is authority, so retaining it, rendering it or handing it to a
+ * None of it admits anything, so retaining it, rendering it or handing it to a
  * child costs nothing.
  */
 

@@ -121,7 +121,7 @@ function probe(): GeneratedObservation {
   return pinnedComponent("Probe", hostIdentity("test://probe", "Probe"), PROBE);
 }
 
-describe("generated authority stays internal", () => {
+describe("generated component resolution stays internal", () => {
   it("FE33: ignores route, reference and durable-cursor injection on the public request", function* () {
     const candidate = {
       ...request("<Probe />", [probe()]),
@@ -1986,7 +1986,7 @@ describe("Tier GX — a resumed run is held to the ceilings it was admitted unde
 
     // The component-answer arm did not exist when untagged records were
     // written, so no version-1 string ever described one. Reading this string as
-    // though it might would compare a fragment's authority equal to authority it
+    // though it might would compare a fragment's admission equal to an admission it
     // never had — even though the origin, the key and the revision all match.
     const performed: string[] = [];
     const answered: GeneratedObservation = {

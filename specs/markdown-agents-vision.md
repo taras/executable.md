@@ -6,7 +6,7 @@
 This document records the product direction for agent authoring in
 Executable.md. It guides design without defining the current runtime contract.
 The syntax examples are illustrative; the executable MDX specification remains
-the authority for implemented behavior.
+definitive for implemented behavior.
 
 ## North star
 
@@ -105,7 +105,7 @@ Observability describes the real execution rather than an agent's self-report.
 - A workflow declares the capabilities it requires. A host either supplies
   those capabilities through explicit adapters or refuses before work begins
   with an actionable explanation.
-- Portability does not imply identical authority. Local filesystem access,
+- Portability does not imply identical permissions. Local filesystem access,
   browser storage, credentials, providers, and external services remain
   explicit host capabilities.
 - Execution evidence can be exported and inspected across hosts. Continuing

@@ -181,7 +181,7 @@ function positionAt(index: PositionIndex, offset: number): SourcePosition {
  * Half-open, relative to the text handed to the scanner. Internal: this is the
  * scanner's own boundary decision, recorded so heading discovery can blank the
  * regions this scanner owns before a Markdown parser looks at them. It is not a
- * public authority over what a component is.
+ * public say over what a component is.
  */
 export interface ComponentSpan {
   readonly start: number;

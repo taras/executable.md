@@ -1,5 +1,5 @@
 /**
- * The installation authority behind `xmd upgrade`, for a compiled macOS or
+ * The private upgrade components behind `xmd upgrade`, for a compiled macOS or
  * Linux binary (specs/upgrade-command-spec.md).
  *
  * Everything a document must never be able to do lives here: opening the
@@ -22,11 +22,11 @@
  *
  * Four rather than one because the document reports progress, and a reader
  * watching a binary be replaced deserves to see each step as it completes. The
- * split gives Markdown honest points to report at; it moves no authority.
+ * split gives Markdown honest points to report at; it moves no permission.
  *
- * The identity is the whole of the authority boundary. A release fact is data —
- * a tag, two flags, a page URL, asset names — and holding it authorizes
- * nothing. What authorizes a phase is being in this invocation's private map,
+ * The identity is the whole of the admission boundary. A release fact is data —
+ * a tag, two flags, a page URL, asset names — and holding it admits
+ * nothing. What admits a phase is being in this invocation's private map,
  * in the state that phase accepts; nothing outside this closure can read,
  * extend or forge it. So the document may choose among the releases it was
  * shown and may not name another release, target, asset or destination, skip a
@@ -204,13 +204,13 @@ export interface CompiledHost {
 /**
  * What a compiled `xmd` states about upgrading itself.
  *
- * Authority is granted on two facts and nothing else: this is not Windows, and
+ * The components are supplied on two facts and nothing else: this is not Windows, and
  * the release publishes a binary for this platform. Neither is a guess about
  * how the file arrived — a compiled binary somebody copied, extracted, built or
  * installed is the same file to this command, and replacing it is the same act.
  *
  * A compiled Windows binary and a compiled binary for a platform no release
- * targets both come back without an authority, so the document has no component
+ * targets both come back with no components, so the document has no component
  * to reach and stops at its own refusal.
  */
 export function compiledUpgradeAssembly(
@@ -239,7 +239,7 @@ export function compiledUpgradeAssembly(
   return {
     provenance: "compiled",
     ...stated,
-    authority: (command) => compiledUpgradeAuthority(facts, command, dependencies),
+    components: (command) => compiledUpgradeComponents(facts, command, dependencies),
   };
 }
 
@@ -254,7 +254,7 @@ class UpgradeFailure extends Error {
   }
 }
 
-/** A release as this command retains it, and the identity that authorizes it. */
+/** A release as this command retains it, and the identity that admits it. */
 interface NormalizedRelease {
   readonly tag: string;
   readonly draft: boolean;
@@ -448,7 +448,7 @@ export const UPGRADE_ORIGIN = "xmd upgrade";
  * an ending of any kind — a refusal, a failure, a cancellation, a killed
  * process — gives back everything this invocation took.
  */
-export function* compiledUpgradeAuthority(
+export function* compiledUpgradeComponents(
   facts: CompiledUpgradeFacts,
   command: UpgradeCommand,
   dependencies: CompiledUpgradeDependencies = {},
@@ -513,7 +513,7 @@ export function* compiledUpgradeAuthority(
    *
    * A value nothing admitted, a candidate from another invocation, and a
    * candidate presented out of order are all the same thing: a claim of
-   * authority that was never granted. None is a failure code, because
+   * admission that was never granted. None is a failure code, because
    * answering with an outcome would make a forged capability indistinguishable
    * from a release this command could not install.
    */

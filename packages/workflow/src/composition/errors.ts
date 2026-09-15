@@ -119,12 +119,12 @@ export class RepositoryCompositionProviderError extends WorkflowStorageError {
  * edited after it did.
  *
  * A selection names a target and grants nothing: the provider keeps the
- * authority in its own closure and asks what a selection names before it
+ * permission in its own closure and asks what a selection names before it
  * touches anything. So a value that was copied out of one execution, rebuilt
  * from what a document could see, or handed over with a member changed reaches
  * this rather than a checkout.
  *
- * A `StaleInputError`, on the same terms as {@link GitOperationAuthorityError}:
+ * A `StaleInputError`, on the same terms as {@link GitOperationAdmissionError}:
  * a document cannot avoid it by asking for something else, and later siblings
  * must not run as though the operation had happened.
  */
@@ -196,20 +196,20 @@ export class GitOperationError extends Error {
  * did not get. Each is the run's own state disagreeing with what was presented
  * for it, so each fails the run the way a stale-state condition does: children
  * and later siblings do not begin, `<PrintErrors>` cannot print it, and no
- * result is published for an operation that was never authorized to happen.
+ * result is published for an operation that was never admitted.
  *
  * The sentence names the operation and the condition, and nothing else. What a
  * caller presented is not quoted back: a forged record is untrusted input, and
  * an untrusted value belongs in a diagnostic even less than a retained one does.
  */
-export class GitOperationAuthorityError extends StaleInputError {
-  override name = "GitOperationAuthorityError";
+export class GitOperationAdmissionError extends StaleInputError {
+  override name = "GitOperationAdmissionError";
 
   readonly operation: string;
 
   constructor(operation: string, reason: string) {
     super(
-      `${operation} is not authorized against this run's retained state: ${reason}. The run is ` +
+      `${operation} is not admitted against this run's retained state: ${reason}. The run is ` +
         "left exactly as it was found; no Git ran and no result was recorded for it.",
     );
     this.operation = operation;
@@ -217,13 +217,13 @@ export class GitOperationAuthorityError extends StaleInputError {
 }
 
 /**
- * A word from the fixed vocabulary a `<PullRequest>` authority refusal speaks.
+ * A word from the fixed vocabulary a `<PullRequest>` admission refusal speaks.
  *
  * Every one of them is decided locally, before a Git host is observed. A pull
  * request is a public statement about a branch that exists somewhere else, and
  * the run has to be able to prove it put that branch there before it makes one.
  */
-export type PullRequestAuthorityReason =
+export type PullRequestAdmissionReason =
   | "no-repository-context"
   | "unnamed-branch"
   | "missing-push-evidence"
@@ -231,9 +231,9 @@ export type PullRequestAuthorityReason =
   | "unreadable-push-evidence";
 
 /**
- * `<PullRequest>` is not authorized by what this run retained.
+ * `<PullRequest>` is not admitted by what this run retained.
  *
- * A `StaleInputError`, on the same terms as {@link GitOperationAuthorityError}:
+ * A `StaleInputError`, on the same terms as {@link GitOperationAdmissionError}:
  * a document cannot avoid a Repository context that was replaced or a retained
  * Push result that stopped being readable, and later siblings must not run as
  * though a pull request had been opened. None of these is a Git-host answer —
@@ -244,14 +244,14 @@ export type PullRequestAuthorityReason =
  * quotes no journal content, no retained record and nothing a caller presented:
  * the evidence this refuses to read is exactly the evidence it must not repeat.
  */
-export class PullRequestAuthorityError extends StaleInputError {
-  override name = "PullRequestAuthorityError";
+export class PullRequestAdmissionError extends StaleInputError {
+  override name = "PullRequestAdmissionError";
 
-  readonly reason: PullRequestAuthorityReason;
+  readonly reason: PullRequestAdmissionReason;
 
-  constructor(reason: PullRequestAuthorityReason, sentence: string) {
+  constructor(reason: PullRequestAdmissionReason, sentence: string) {
     super(
-      `<PullRequest> is not authorized against this run's retained state: ${sentence} Nothing ` +
+      `<PullRequest> is not admitted against this run's retained state: ${sentence} Nothing ` +
         "was observed at the Git host, and no pull request was created.",
     );
     this.reason = reason;
@@ -318,7 +318,7 @@ export type PullRequestReadReason =
 /**
  * A read that cannot answer with the evidence it promised.
  *
- * A `StaleInputError`, like the pull-request authority refusals, so expansion
+ * A `StaleInputError`, like the pull-request admission refusals, so expansion
  * propagates it rather than rendering it: an ambient error mode must not be able
  * to downgrade "nobody could read the objections" to a comment and let the
  * review continue as though there were none.

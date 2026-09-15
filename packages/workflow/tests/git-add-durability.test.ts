@@ -21,7 +21,7 @@ import type { ComponentRegistration } from "@executablemd/core";
 import type { Json } from "@executablemd/durable-streams";
 import { cwd } from "@executablemd/runtime";
 import {
-  GitOperationAuthorityError,
+  GitOperationAdmissionError,
   GitOperationError,
   GitOperationProtocolError,
 } from "../src/composition/errors.ts";
@@ -85,8 +85,8 @@ function isProtocolFailure(value: unknown): value is GitOperationProtocolError {
   return value instanceof GitOperationProtocolError;
 }
 
-function isAuthorityFailure(value: unknown): value is GitOperationAuthorityError {
-  return value instanceof GitOperationAuthorityError;
+function isAdmissionFailure(value: unknown): value is GitOperationAdmissionError {
+  return value instanceof GitOperationAdmissionError;
 }
 
 function isGitFailure(value: unknown): value is GitOperationError {
@@ -496,7 +496,7 @@ describe("workflow Git.Add durability", () => {
 });
 
 describe("workflow Git.Add composition routing", () => {
-  it("routes a loaded copy's Api to the installed provider without sharing authority", function* () {
+  it("routes a loaded copy's Api to the installed provider without sharing admission", function* () {
     const root = yield* useStorageRoot();
     const remote = yield* useBareRemote(REMOTE);
     const copy = yield* physicalGitApiCopy();
@@ -557,7 +557,7 @@ describe("workflow Git.Add composition routing", () => {
         }),
       );
 
-      expect(causedBy(failure, isAuthorityFailure)).toBeInstanceOf(GitOperationAuthorityError);
+      expect(causedBy(failure, isAdmissionFailure)).toBeInstanceOf(GitOperationAdmissionError);
       expect(yield* gitEvents(forged)).toHaveLength(0);
     });
   });

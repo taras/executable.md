@@ -4,7 +4,7 @@
  *
  * An admitted `<File />` used to be core's ordinary `<File>` component, which
  * resolves its provider through `API.Files` at the moment it runs. That made
- * the authority a generated fragment exercises a property of whatever the
+ * what a generated fragment may do a property of whatever the
  * document, a repository component or middleware had installed by then — so a
  * fragment admitted for "read a file" reached whichever Files provider was
  * nearest, and a handler composed around one could observe, rewrite or answer
@@ -28,7 +28,7 @@
  * host chooses only *which* of them a fragment may name and under what
  * identity. That is also why the schemas match the ordinary components': a
  * fragment written against `<File path="…">` is the same text an author would
- * write, and only the authority behind it differs.
+ * write, and only the operation behind it differs.
  *
  * ## What is deliberately absent
  *

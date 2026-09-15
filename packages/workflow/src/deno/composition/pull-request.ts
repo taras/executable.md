@@ -42,7 +42,7 @@ import { Err, Ok, scoped, type Operation, type Result } from "effection";
 import {
   GitOperationInfrastructureError,
   GitOperationProtocolError,
-  PullRequestAuthorityError,
+  PullRequestAdmissionError,
 } from "../../composition/errors.ts";
 import { PULL_REQUEST_ELEMENT } from "../../composition/components/PullRequest.ts";
 
@@ -117,7 +117,7 @@ const NOTHING_PROVEN = pullRequestPreStateJson({ pullRequest: null });
  * which it parses and holds to the inputs this invocation admitted. A request
  * naming another Repository, another branch pair or other content is not this
  * invocation's, and answering one would publish a completion for something this
- * operation never authorized.
+ * operation never admitted.
  */
 function pullRequestProvider(
   access: GitHubAccess,
@@ -317,7 +317,7 @@ function* admitInputs(
 ): Operation<PullRequestInputs> {
   const headBranch = yield* currentBranch(checkout.git, checkout.directory);
   if (headBranch === undefined) {
-    throw new PullRequestAuthorityError(
+    throw new PullRequestAdmissionError(
       "unnamed-branch",
       "the checkout it selected has no branch checked out, so there is no head branch to open a " +
         "pull request from — and a detached HEAD is not something this run could have published.",
@@ -391,7 +391,7 @@ export function* upsertPullRequest(
     const inputs = yield* admitInputs(checkout, admitted);
 
     // Before an adapter exists, before a token is read and before anything is
-    // sent. What authorizes a pull request is this run's own record of
+    // sent. What admits a pull request is this run's own record of
     // publishing the branch, so a refusal here happens with the Git host never
     // having been asked anything.
     const events = yield* database.journal.readAll();
@@ -404,7 +404,7 @@ export function* upsertPullRequest(
     const locator = selection.repository.locator;
 
     // One access session for this whole reconciliation, opened after the local
-    // authority check above and shared by its observations and its mutation, so
+    // admission check above and shared by its observations and its mutation, so
     // a pull request is not created under one identity and observed under
     // another. It is disposed with the scope below; a later attempt on an
     // interrupted request opens its own.

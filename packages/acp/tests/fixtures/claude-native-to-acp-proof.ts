@@ -140,7 +140,7 @@ interface ConsentMenu {
 const CONSENT_MENUS: readonly ConsentMenu[] = [
   // "❯ 1. Yes, I trust this folder" is pre-selected, so Enter confirms it.
   { name: "workspace-trust", marker: "Quick safety check", answer: ENTER, bytes: "0d" },
-  // "Esc to keep browser tools off" — the launch widens no authority it was
+  // "Esc to keep browser tools off" — the launch widens no permission it was
   // not given, so the decline is the answer.
   {
     name: "chrome-extension",

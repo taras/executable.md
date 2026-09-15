@@ -26,7 +26,7 @@ Stop and return evidence when implementation reveals:
 
 - an unresolved product choice;
 - a contradiction between the plan and architecture or specifications;
-- a required public-contract, persistence or authority change;
+- a required public-contract, persistence or permission change;
 - a dependency that is not actually available on the planned base;
 - an acceptance claim the supported runtimes cannot provide; or
 - scope that must expand materially to remain coherent.
@@ -44,7 +44,7 @@ before implementing and return the need to the Planner or Architect when the
 work would introduce any unplanned:
 
 - parser, interpreter, template language or declarative rule engine;
-- registry, identity protocol, authority protocol or lifecycle framework;
+- registry, identity protocol, permission protocol or lifecycle framework;
 - public abstraction, package boundary or generic extension point; or
 - compatibility mechanism whose only purpose is preserving behavior the plan
   did not identify as an exact contract.

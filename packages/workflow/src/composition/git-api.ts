@@ -4,7 +4,7 @@
  * `<Git.Switch>` names no subprocess and reaches no filesystem. It observes two
  * things a document can see — the Repository in scope and the contextual working
  * directory — and asks whoever is installed to do the rest. Neither observation
- * carries authority: a replaced selection can misname a Repository, and the
+ * admits anything: a replaced selection can misname a Repository, and the
  * provider's answer is what decides which checkout, if any, those two select.
  *
  * What lifecycle the work has is the installed provider's, not this Api's. A

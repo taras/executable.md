@@ -908,7 +908,7 @@ describe("WF workflow document filesystem", () => {
   // any composed code can occupy — a scope that encloses the whole document and
   // was installed *after* the provider — and rebuilds, by name, every seam a
   // filesystem decorator has answered to. A stable name is composition; this is
-  // what it means for authority not to travel through one.
+  // what it means for permission not to travel through one.
   it("keeps composed middleware away from the transaction filesystem", function* () {
     const root = yield* useStorageRoot();
     yield* withStorage(root, function* () {

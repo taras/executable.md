@@ -10,7 +10,7 @@
  *
  * ## Identity is position, not a name
  *
- * A caller supplies neither an identifier nor authority. The trusted execution
+ * A caller supplies neither an identifier nor a claim. The trusted execution
  * derives one suspension ID from the run and the exact durable coroutine
  * position, which is what makes the wait a document reaches at one point in a
  * procedure the same wait it reaches there after a resume — and what keeps two

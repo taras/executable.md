@@ -278,7 +278,7 @@ execution as `interrupted` while leaving the completed or failed run state
 unchanged. An old workflow executor or invalidated executor lock cannot
 publish a later status.
 
-The host validates namespace authority. There is no separate public
+The host validates namespace permission. There is no separate public
 idempotency-key concept; every run-oriented command uses the public run ID.
 
 ### 3.4 Status vocabulary
@@ -681,7 +681,7 @@ a private scratch directory, let SQLite recover the copy, and read the answer
 from it. The retained pair is unchanged, still awaiting its next write-capable
 owner, and the copy is removed before the answer is observable. `list` processes
 at most one such candidate at a time. Recovery grants nothing else: these
-commands still obtain no executor lock and no lifecycle authority, and a copy
+commands still obtain no executor lock and no lifecycle ownership, and a copy
 that cannot be produced or removed is reported as its own refusal rather than as
 damage to the run.
 
@@ -1070,8 +1070,8 @@ contextual way `<File>` writes one.
 
 The four Git components are likewise one language with two providers. Which
 checkout one acts on is decided the same way in both: by the Repository in
-scope and by the contextual working directory, neither of which carries
-authority.
+scope and by the contextual working directory, neither of which admits
+anything.
 
 Under a workflow run each is a durable Workspace effect, or — for Push — a
 reconciled Git-host effect, and that is what the rest of this section
@@ -1124,7 +1124,7 @@ Worktree. A directory *inside* a checkout selects that checkout — a Git operat
 written in `<Dir path="packages/core">` still operates on the whole checkout that
 directory belongs to, and that directory is only where the operation runs.
 
-Neither observation carries authority. The Repository is compared with the row
+Neither observation admits anything. The Repository is compared with the row
 the run retained under that name, member for member, and the working directory
 has to be a real directory inside one of the checkouts the run retains for it.
 No enclosing `<Repository>` at all, a Repository that is not the retained one, a
@@ -1217,7 +1217,7 @@ Generated from validated release metadata.
 Commit expands its content completely before describing an effect of its own, so
 a nested operation is its own expansion, its own effect and its own transaction,
 finished before a commit exists to include it. Which checkout it commits in is
-decided the way §7.1 decides it, and neither observation carries authority.
+decided the way §7.1 decides it, and neither observation admits anything.
 
 Unlike Switch and Add it produces a value, so it renders nothing and is written
 with `as`: the binding is the full object id of the commit.
@@ -1370,7 +1370,7 @@ link anywhere under `objects/` redirects a read before Git reports anything abou
 it — both are files inside the Workspace, so both are things a document can
 write. Everything Git may traverse is therefore proven to resolve inside the
 object database this run authenticated, before the first remote observation and
-after every local authority check.
+after every local admission check.
 
 That chain is read the way Git reads it, spelling included. An entry beginning
 with `"` is a C-style quoted path Git unquotes before resolving anything, so the
@@ -1543,7 +1543,7 @@ credential-free HTTPS, SSH-URL and `git@github.com:owner/repository` forms, with
 an optional terminal `.git` — and a Repository this adapter does not recognize
 is refused as an unsupported effect kind from observation, before any remote
 work. The credential is read from `GH_TOKEN`, then `GITHUB_TOKEN`, then
-`gh auth token --hostname github.com`, only after local authority succeeds; a
+`gh auth token --hostname github.com`, only after local admission succeeds; a
 variable that is set but empty names no credential and stops the search rather
 than continuing it, and no credential is inherited by a child process. The same
 three sources, in the same order, are what every shipped GitHub adapter
@@ -1730,9 +1730,9 @@ authored `<Prompt>` renders, and nothing else.
 configuration, and there is nothing in the Workspace for a provider to discover:
 the directory the Agent runs in is empty. The workflow host supplies the fixed
 profile below, beneath the document surface. A document cannot replace it, add
-an MCP server, choose a host directory, or raise its authority.
+an MCP server, choose a host directory, or raise its permissions.
 
-### 8.3 Workflow Agent authority
+### 8.3 Workflow Agent permissions
 
 Every live or partial workflow Agent attachment gets a working directory the
 host owns: created empty before the session is established, never written to by
@@ -1745,7 +1745,7 @@ A fixed session instruction layer states that boundary to the Agent in the same
 terms, and states all of it: no native tool is authorized; retained work can be
 asked for only when the prompt being answered asks for it and only in the exact
 closed shape that prompt supplies (§8.4); and nothing the Agent returns carries
-authority, because source it writes is data this run may admit under ceilings it
+permission, because source it writes is data this run may admit under ceilings it
 decided before the prompt was sent. Those instructions take part in the session
 policy fingerprint (§8.5), so changing them refuses a session created under the
 previous wording.
@@ -1753,7 +1753,7 @@ previous wording.
 A native tool permission request is denied and fails the turn it belongs to,
 with a fixed diagnostic that names nothing the request carried. It does not
 reach the public permission chain, so an authored `<ApproveAll>` composes around
-nothing: there is no native tool authority for it to widen.
+nothing: there is no native tool permission for it to widen.
 
 That directory is attachment arrangement rather than retained state. It does not
 identify a logical session, is never imported into the Workspace, and is
@@ -1771,7 +1771,7 @@ foreground launcher, so a launch is refused before provider preparation,
 session ownership transfer, or process creation. The host does not expose the
 machine-wide coordinator, construction-route store or executable observer to
 repair that refusal. Supporting an interactive workflow-native handoff would
-require a separate retained-host and authority contract; it does not weaken the
+require a separate retained-host and permission contract; it does not weaken the
 current sandbox.
 
 ### 8.4 Generated XMD
@@ -2008,7 +2008,7 @@ Canonical capture reads the host's own operation off its object exactly once,
 binds it behind a revocation the execution owns, and closes core's own body over
 the bound result. An admitted `<File />` therefore reaches the `readTextFile`
 this attachment handed over — still the run's transaction-bound one — and never
-resolves `API.Files` while it runs. That is what keeps a fragment's authority
+resolves `API.Files` while it runs. That is what keeps a fragment's permission
 out of reach of the document, a repository component and middleware.
 
 **How its durable operation is named.** The implementation claims on the exact
@@ -2036,7 +2036,7 @@ boundary around it, because returning a refusal as observation text would leave
 the Agent reasoning from a read that never happened.
 
 Being reachable from a trusted document is all the registration decides. It
-carries none of the authority. The component closes over the exact run storage
+carries none of the permission. The component closes over the exact run storage
 and the immutable host options the declaration supplied, takes its durable
 identity from its own invocation through the claimant, reads the retained roots
 and the run's authoritative current root from that storage at invocation — an
@@ -2086,7 +2086,7 @@ owns atomicity, failure and cancellation.
 Selecting `allow={["write"]}` therefore intentionally authorizes persistent,
 recursive directory creation by the current pinned `<Dir>`. The former
 `@executablemd/workflow/composition#Dir` identity described contextual placement
-without creation and is not interchangeable with this authority. A continuation
+without creation and is not interchangeable with this permission. A continuation
 whose retained table contains that former identity refuses before any generated
 component executes; the write ceiling is not silently broadened.
 
@@ -2095,7 +2095,7 @@ effect, a fragment mixing an admitted write with anything unadmitted — a later
 sibling, a nested child, or the same name in the other form — performs no write
 at all.
 
-The write table is authority, not prompting guidance. Generated source cannot
+The write table is permission, not prompting guidance. Generated source cannot
 grant itself Push, PullRequest, an issue upsert, a repository, a process, an
 eval or exec block, a native command, a credential or an arbitrary network write
 merely by naming a component; the table excludes local Git even though those
@@ -2135,7 +2135,7 @@ nothing else. The authored `<Session name>` is descriptive: two sibling
 `<Session name="review">` elements are two sessions. The name travels the
 compositional `Agent.session()` chain, where a handler may change it; the
 identity travels inside an opaque placement the element routes, readable only
-through the authority delivered to the installed provider.
+through the coordinator delivered to the installed provider.
 
 The provider and the resolved agent command are stored beside that identity as
 compatibility attributes. Changing either refuses reattachment rather than
@@ -2205,7 +2205,7 @@ sessions.** Its format classifies every logical Agent session that contributed a
 retained Prompt as portable — with ordered provider checkpoint tokens and an
 opaque Agent session bundle — or as explicitly unavailable, under
 `specs/xmd-artifact-spec.md` §2.5. That evidence is detached: it is retained
-bytes about a conversation, never a live provider session, never authority over
+bytes about a conversation, never a live provider session, never control over
 the host that issued a token, and it changes nothing above. The mapping, the
 canonical assertion, reattachment, replay and the disposable session directory
 are exactly as described. Nothing in the run captures a bundle or acquires a
@@ -2568,7 +2568,7 @@ provider on one surface and coordinated the invocation on a second let public
 middleware read a credential from the first, take an invocation capability from
 the second, and answer a phase itself — and the journal then retained a
 completion no provider had produced. Two individually harmless public surfaces
-composed into completion authority, so there is now nothing to compose.
+composed into the power to settle a completion, so there is now nothing to compose.
 
 **Who may author an outcome.** Only an answer the invocation's own terminal
 accepted. Each phase builds its own API descriptor under that same stable name:
@@ -2749,7 +2749,7 @@ interface IssueTracker {
 
 It is shared across loaded copies under the stable namespaced name
 `executablemd.workflow.issue-tracker`. It is replaceable composition data, not
-authority: installing or replacing it requests a target for lexical descendants
+permission: installing or replacing it requests a target for lexical descendants
 and grants no network access, credential, provider or permission to mutate that
 target.
 
@@ -2827,7 +2827,7 @@ interface IssueUpsertOptions {
 ```
 
 A provider is ordinary middleware around that operation. It carries no
-completion authority: there is nothing it can be handed that only it may
+power to settle a completion: there is nothing it can be handed that only it may
 author, and nothing it can be asked that a plain `IssueApi.around(...)` handler
 could not be asked.
 
@@ -3047,7 +3047,7 @@ selected root, the candidate definition, the component bundle, the normalized
 props, forkability and compatibility replay are all validated. Missing, corrupt,
 unsupported or divergent input fails with no new run and no live effects.
 
-After preflight succeeds, only the new run's executor authority is acquired. One
+After preflight succeeds, only the new run's executor lock is acquired. One
 atomic durable commit records the fork run, its lineage, the inherited prefix
 with its provenance, the copied Workspace roots, the selected current root and
 the first document execution. Failure before that commit leaves no fork. Failure
@@ -3077,7 +3077,7 @@ source, exactly as the record says, and consuming the record asks nobody
 anything. The record keeps the identity it was written under — a fork does not
 rewrite an inherited event as its own — so the effect at that position is named
 by the identity the record holds, while every live attempt is named by the run
-performing it. That is what keeps the fork the authority for what it does next
+performing it. That is what keeps the fork definitive for what it does next
 without making it the author of what it inherited.
 
 That identity is established once, when the engine admits the run's retained
@@ -3223,7 +3223,7 @@ priority. The capability records completion only after the exact published
 result returns from the provider. The durable operation resumes from that
 record, never from a middleware-supplied response. Before opening the
 transaction, the provider requires that capability's proof executor and journal
-provenance to carry the selected WorkflowRun's exact provider-owned authority.
+provenance to carry the selected WorkflowRun's exact provider-owned identity.
 A trusted secret filter preserves that provenance explicitly at its wrapping
 site; an ordinary guard does not. The transaction body calls the
 execution-owned publisher directly
@@ -3380,12 +3380,12 @@ askpass program, and it copies no `credential.*` configuration onto a command
 line.
 
 **When it is opened.** Lazily, and per live provider invocation: after the
-Repository and locator authority checks that operation requires, shared by that
+Repository and locator admission checks that operation requires, shared by that
 invocation's observations and its mutation so both go out under one identity, and
 disposed with the invocation. A later attempt on an interrupted request opens its
 own. The invocation keeps the exact retained locator as its destination. A
 request for another Repository opens a separate exact-locator session; what one
-session stands on is never carried forward as authority for another. Host helpers
+session stands on is never carried forward as admission for another. Host helpers
 remain free to return the same account for several locators according to their
 own policy.
 

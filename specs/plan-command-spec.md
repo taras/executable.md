@@ -412,7 +412,7 @@ successful admission — before the Component renders them.
 Two of the seven serve the information loop. `<ClassifyPlanResponse>` is a pure
 value component answering the closed union `"draft" | "information"` from the
 lexical frontmatter-and-first-block rule alone; it validates nothing, modifies
-nothing, and reads no authority. Paired `<PlanInformation>` projects its child
+nothing, and reads no permission. Paired `<PlanInformation>` projects its child
 public `<Evaluate>`, requires `as`, renders nothing, and binds the closed
 internal result `{ status: "found" | "refused", text: string }`: exact rendered
 text on success, and a safe normalized reason when — and only when — the child
@@ -478,10 +478,10 @@ The frame is installed by `<PlanWriter>`, inside the invocation that owns it,
 rather than around the execution. That is what makes it the same ceiling on both
 surfaces: an ordinary document has an execution of its own, with its own
 provider and its own capabilities, and a Plan written inside it is still written
-under this one. Broader authority in the calling document widens nothing, and the
+under this one. Broader permission in the calling document widens nothing, and the
 constrained provider reaches nothing outside the content the Component projects.
 
-### Agent authority under the Plan writer profile
+### Agent permissions under the Plan writer profile
 
 The assistant that writes a Plan is assembled separately from the final run
 provider:
@@ -671,7 +671,7 @@ patch is applied.
 **Read-only information requests.** An agent that needs to look at the project
 before writing may answer any of the three Plan-producing turns with a read-only
 XMD information request instead of a draft. The workflow evaluates that response
-through the public component under the host's own read authority, hands the
+through the public component under the host's own read permission, hands the
 rendered findings back as inert context, and asks again.
 
 *Classification is lexical and happens before anything else.* A response is a
@@ -894,7 +894,7 @@ outcome. There is no curated projection and no format of this command's own.
 
 It records no later program execution, because there is no later program
 execution. It is written and never read: nothing opens it as input, replays it,
-or treats it as resume authority.
+or treats it as resume evidence.
 
 Without `--journal`, no file is created anywhere.
 
@@ -1100,11 +1100,11 @@ neither observation never interpreted what it wrote.
 | PI2 | Composed findings | One response binds Glob, File and Syntax and renders a chosen object through Json; the next turn receives exactly that text. An empty match renders `[]`. No Syntax-specific parser, filesystem shortcut or implicit observation collection takes part |
 | PI3 | Lexical classification | ATX and Setext H1-first responses are inert drafts, closed invalid YAML included; an unterminated frontmatter envelope, a body block before the heading and a missing heading are candidates. Approved bytes stay exact and no draft is evaluated |
 | PI4 | Both surfaces, whole-fragment refusal | `xmd plan` and embedded `<Plan>` read through the same host-installed profile, and a prohibited operation anywhere in the fragment — including an untaken branch — refuses before any read |
-| PI5 | Documentation is not authority | Named Syntax describes `<Elicit>` and paired `<File>`, and neither becomes executable; bare Syntax reports Json plus the read vocabulary |
+| PI5 | Documentation is not permission | Named Syntax describes `<Elicit>` and paired `<File>`, and neither becomes executable; bare Syntax reports Json plus the read vocabulary |
 | PI6 | Cleanup precedes the next turn | Success and refusal both complete the projection, every acquired read and the protected route before findings are published and before the following turn begins; a cleanup failure is terminal and wins over a candidate retry |
 | PI7 | Independent budgets | Requests interleave with initial, repair and revision turns; successes and refusals share one count of eight; the ten-draft and three-repair budgets are unaffected in both directions; the ninth candidate is not evaluated and starts no turn |
-| PI8 | Continuation | A completed request replays with live Agent, Syntax, File and Glob tripwires at zero; a partial continuation resumes at the first unrecorded effect; changed source, selected authority, lexical reference, Files scope or capture format refuses before reuse |
+| PI8 | Continuation | A completed request replays with live Agent, Syntax, File and Glob tripwires at zero; a partial continuation resumes at the first unrecorded effect; changed source, selected permission, lexical reference, Files scope or capture format refuses before reuse |
 | PI9 | Distribution | The embedded request-to-approved-Plan journey executes through source, emitted npm and compiled installations. The command journey executes through the in-process production command assembly and exact packaged command document. Npm and compiled controls verify packaged command and Plan assets, Plan identity and digest, its exact text contract and private closure, and the canonical protected Syntax/Evaluate tier |
 | PI10 | Recoverable versus terminal | A malformed request and an ordinary read `Err` are each classified by core as a refused generated request, which `<Plan>` alone turns into one safe retry context; missing or broken profile or protected route, a throwing Files provider, stale or corrupt history, journal or secret failure, unexpected runtime failure, teardown failure and outer cancellation each stop authorship. Public `<Evaluate>` still throws under ordinary use |
-| PI11 | Language, not authority | Branching, binding and bounded iteration compose with admitted reads under ordinary rules, and a prohibited component in an untaken branch refuses the whole fragment with zero reads |
+| PI11 | Language, not permission | Branching, binding and bounded iteration compose with admitted reads under ordinary rules, and a prohibited component in an untaken branch refuses the whole fragment with zero reads |
 | PI12 | Disclosure order | Observe default, verbose, journal and Agent prompts for success and refusal, then place a synthetic secret in a file read by an information request. Default output stays content-free; detailed findings follow settlement; the secret appears in no output, journal entry or Agent Prompt, starts no following turn, review or artifact, and ends with the existing terminal secret rejection |

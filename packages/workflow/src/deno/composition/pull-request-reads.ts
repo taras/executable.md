@@ -38,7 +38,7 @@
 
 import type { Operation } from "effection";
 import type { WorkflowRunDatabase } from "../../storage/api.ts";
-import { GitOperationAuthorityError, PullRequestReadError } from "../../composition/errors.ts";
+import { GitOperationAdmissionError, PullRequestReadError } from "../../composition/errors.ts";
 import type {
   PullRequestReadKind,
   PullRequestReadResult,
@@ -151,7 +151,7 @@ export interface GitHubPullRequestsOptions {
    *
    * Absent authorizes no URL read at all — and disables only reads. An upsert
    * names a branch this run published rather than a URL a document wrote, and
-   * carries its own Repository, Push evidence and reconciliation authority, so
+   * carries its own Repository, Push evidence and reconciliation admission, so
    * it is unaffected by what is or is not allowed here.
    */
   readonly allowed?: readonly string[];
@@ -305,7 +305,7 @@ export function* useGitHubPullRequests(
           repository: selections.authenticate(
             upsert.repository,
             () =>
-              new GitOperationAuthorityError(
+              new GitOperationAdmissionError(
                 PULL_REQUEST_ELEMENT,
                 "the Repository in scope is not one this run selected, so it names no retained " +
                   "checkout",

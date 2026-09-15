@@ -505,7 +505,7 @@ describe("Tier WTX — WorkflowRun identity fences", () => {
     });
   });
 
-  it("WTX9: leases and provider generations fence private authority", function* () {
+  it("WTX9: leases and provider generations fence private handles", function* () {
     const root = yield* useStorageRoot();
     let closed: WorkflowRunDatabase | undefined;
     let priorToken: WorkflowRunTransactionToken | undefined;

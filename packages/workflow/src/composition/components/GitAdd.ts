@@ -28,7 +28,7 @@
  * than anything a later element could read.
  *
  * Failure policy is `<Git.Switch>`'s. An invocation this cannot read is a fixed
- * `GitOperationError`; no Repository in scope is missing authority and travels
+ * `GitOperationError`; no Repository in scope is a failed admission and travels
  * past every printing boundary, because a document that continued past one would
  * run later siblings as though something had been staged.
  */
@@ -40,7 +40,7 @@ import type { Operation } from "effection";
 import type { Json } from "@executablemd/durable-streams";
 import { GitComposition } from "../git-api.ts";
 import { selectedRepository } from "../context.ts";
-import { GitOperationAuthorityError, GitOperationError } from "../errors.ts";
+import { GitOperationAdmissionError, GitOperationError } from "../errors.ts";
 import { wellFormedText } from "../parse.ts";
 
 /** The component name, as a document writes it and as a failure names it. */
@@ -134,7 +134,7 @@ export default function* GitAdd(props: Record<string, Json>): Operation<string> 
 
   const repository = yield* selectedRepository();
   if (repository === undefined) {
-    throw new GitOperationAuthorityError(
+    throw new GitOperationAdmissionError(
       ADD,
       "it is written outside a lexical <Repository>, so there is no repository in scope to " +
         "stage anything in",

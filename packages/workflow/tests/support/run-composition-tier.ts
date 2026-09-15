@@ -10,7 +10,7 @@
 import { exists, readdir } from "@effectionx/fs";
 import type { Operation } from "effection";
 import { fileURLToPath } from "node:url";
-import { GitOperationAuthorityError } from "../../src/composition/errors.ts";
+import { GitOperationAdmissionError } from "../../src/composition/errors.ts";
 import {
   ManagedCheckoutError,
   NoAmbientRepositoryError,
@@ -140,8 +140,8 @@ export function isManagedRefusal(value: unknown): value is ManagedCheckoutError 
   return value instanceof ManagedCheckoutError;
 }
 
-export function isAuthorityFailure(value: unknown): value is GitOperationAuthorityError {
-  return value instanceof GitOperationAuthorityError;
+export function isAdmissionFailure(value: unknown): value is GitOperationAdmissionError {
+  return value instanceof GitOperationAdmissionError;
 }
 
 export function isMissingAmbient(value: unknown): value is NoAmbientRepositoryError {

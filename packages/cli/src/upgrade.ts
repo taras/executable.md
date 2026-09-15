@@ -13,7 +13,7 @@
  * ```text
  * the entrypoint states what this xmd is
  *   -> read the exact packaged document
- *   -> build the four phase components, if this host has installation authority
+ *   -> build the four phase components, if this host installs its own binary
  *   -> execute the document with fixed props and nothing else
  *   -> stream what it renders to the caller's consumer, segment by segment
  * ```
@@ -25,7 +25,7 @@
  * resolve PATH, open the installation, contact GitHub, or decide what may be
  * replaced. A runtime-named entrypoint states all of that in an
  * {@link UpgradeAssembly}, and only an eligible compiled macOS or Linux host
- * states an {@link UpgradeAssembly.authority} — so on every other host the
+ * states {@link UpgradeAssembly.components} — so on every other host the
  * document has no component to reach and refuses with the entrypoint's own
  * remedy instead.
  */
@@ -86,8 +86,8 @@ export interface UpgradeCommand {
  * What a runtime-named entrypoint states about the `xmd` that is running.
  *
  * Closed on purpose. Every field is a decision only an entrypoint can make, and
- * the one that carries authority is the last: a host that supplies no
- * {@link authority} gives the document no component through which anything
+ * the one that carries the upgrade component factory is the last: a host that supplies no
+ * {@link components} gives the document no component through which anything
  * could be read, downloaded or replaced.
  */
 export interface UpgradeAssembly {
@@ -112,7 +112,7 @@ export interface UpgradeAssembly {
    * installation lock they take is released by leaving that scope however the
    * command ends.
    */
-  authority?(command: UpgradeCommand): Operation<readonly IdentityComponent[]>;
+  components?(command: UpgradeCommand): Operation<readonly IdentityComponent[]>;
 }
 
 /**
@@ -211,7 +211,7 @@ export function* runUpgrade(run: UpgradeRun): Operation<Result<void>> {
     try {
       source = yield* readPackagedDocument(UPGRADE_COMMAND_DOCUMENT);
       components =
-        run.assembly.authority === undefined ? [] : yield* run.assembly.authority(run.command);
+        run.assembly.components === undefined ? [] : yield* run.assembly.components(run.command);
     } catch (error) {
       return Err(error instanceof Error ? error : new Error(String(error)));
     }

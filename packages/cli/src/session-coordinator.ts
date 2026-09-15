@@ -36,7 +36,7 @@ export function sessionCoordinatorRoot(): string {
  * The two capability sets are stated rather than inherited. They are separate
  * choices — handing a session to a native UI and later joining that same
  * conversation through ACP prove different things — and a profile whose session
- * authority differs from ordinary `xmd run` must not acquire either by
+ * capabilities differ from ordinary `xmd run` must not acquire either by
  * omission. The workflow Agent profile is exactly such a profile: its sessions
  * belong to a run, not to this machine.
  */

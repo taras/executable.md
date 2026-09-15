@@ -72,7 +72,7 @@ export const PLAN_COMMAND_IDENTITY = "<plan-command>";
  * Fixed rather than configured. The provider denies native requests privately,
  * so this is what an authored approval scope inside that document would
  * compose around if one existed — and the honest answer for a profile that
- * grants no native authority is the one that grants none.
+ * grants no native permission is the one that grants none.
  */
 const PLAN_WRITER_PERMISSION_MODE = "deny-all";
 
@@ -134,7 +134,7 @@ export interface PlanWriterProfile {
    * The host's choice, because only the host knows whether somebody asked for a
    * diagnostic trace: one fresh invocation-owned in-memory stream by default,
    * or the file `--journal` named and the CLI exclusively created. Neither is
-   * opened as input, replayed or read as resume authority — a Plan is written
+   * opened as input, replayed or read as resume evidence — a Plan is written
    * once, and nothing here runs the program it produces.
    */
   stream: DurableStream;
@@ -479,7 +479,7 @@ export function* runPlanCommandDocument(profile: PlanWriterProfile): Operation<R
             // states — File, Glob and canonical Syntax, with the write table
             // present and never selected. The host installs it, not `<Plan>`:
             // a component that installed its own would be choosing its
-            // authority instead of being given one.
+            // ceiling instead of being given one.
             evaluation: ordinaryEvaluationProfile(),
           },
         ],

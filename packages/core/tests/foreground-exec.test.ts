@@ -579,7 +579,7 @@ describe("Tier FG — foreground execution", () => {
   /**
    * `Stdio` middleware is documented as free to capture, transform, or redirect
    * what it forwards, and an enclosing handler doing so is the host exercising
-   * authority over its own child processes. What it forwards is what the run
+   * ownership of its own child processes. What it forwards is what the run
    * has: the boundary keeps the transformed text, not the bytes behind it.
    */
   it("FG19: transformed bytes an enclosing middleware forwards are what is retained", function* () {
@@ -617,7 +617,7 @@ describe("Tier FG — foreground execution", () => {
   });
 
   /**
-   * Where authority sits, in both directions, in one case.
+   * Where ownership sits, in both directions, in one case.
    *
    * A handler enclosing an execution is trusted preprocessing: what it forwards
    * is what the run has. A handler below the boundary is this document's
@@ -756,7 +756,7 @@ describe("Tier FG — foreground execution", () => {
   });
 
   /**
-   * Consumption is the strongest form of the same authority: an enclosing
+   * Consumption is the strongest form of the same ownership: an enclosing
    * handler that forwards nothing has decided the run saw nothing. The exit
    * status does not travel through the stdio chain and is unaffected, and the
    * channel the handler left alone arrives as the command emitted it.

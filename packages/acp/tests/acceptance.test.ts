@@ -88,7 +88,7 @@ describe("Tier XA — ACPX provider through the rootProvider seam", () => {
  * Two sibling `<Session name="review">` elements are two sessions. The authored
  * name is descriptive and compositional — a handler may rewrite it, and one
  * here does — while the identity travels inside the placement, reachable only
- * through the authority delivered to this provider.
+ * through the coordinator delivered to this provider.
  */
 describe("Tier WAP — same-named sibling Sessions", () => {
   it('WAP7: two sibling <Session name="review"> sites place two identities the middleware cannot touch', function* () {

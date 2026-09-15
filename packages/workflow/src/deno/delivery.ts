@@ -5,7 +5,7 @@
  * public run id beneath the authorized root — and then does the least a durable
  * answer can be retained with. It takes no executor lock, so a run somebody is
  * about to resume, or is resuming right now, can still be answered; what serializes
- * the write is the connection and SQLite, not lifecycle authority.
+ * the write is the connection and SQLite, not lifecycle ownership.
  *
  * ## Everything is checked before anything is written
  *

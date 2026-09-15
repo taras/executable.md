@@ -12,7 +12,7 @@
 An executable document can prepare a coding-agent session and then place the
 user in that agent's native interactive UI. The document decides which rendered
 context the session receives; the host's Agent context determines its filesystem
-authority. The provider owns the mapping from the logical XMD session to the
+permissions. The provider owns the mapping from the logical XMD session to the
 durable native session and the command that resumes it.
 
 The common repository entry point is an ordinary document target:
@@ -34,7 +34,7 @@ A session constructed that way is still a conversation, and a document can join
 it afterwards. A `<Session>` or `<Prompt>` naming one attaches through ACP under
 the identity the route already carries, so the same named session continues
 where the native UI left off. Attachment is never conversion: the route stays
-`client-native`, the coordinator remains the single live authority, and the
+`client-native`, the coordinator remains the one live owner, and the
 provider's own history remains authoritative for what was said.
 
 ## Smallest example
@@ -146,10 +146,10 @@ is discarded. Identity is object identity: a rebuilt look-alike, a superseded
 parent, a foreign request, or a second delegation of the same leaf describes the
 same ask and authorizes none of it.
 
-Authority to run and retain a phase never travels on that chain. Core delivers
-one `AgentProviderAuthority` directly to the provider factory it installs, as an
+The right to run and retain a phase never travels on that chain. Core delivers
+one `AgentLaunchCoordinator` directly to the provider factory it installs, as an
 argument the factory closes over — there is no context holding one, no request
-member carrying one, and no reader for one. The authority validates the routed
+member carrying one, and no reader for one. The coordinator validates the routed
 request and the provider's installation generation, runs each absent phase once,
 cross-checks the returned record against the request, retains it before the next
 live effect, and derives the result. A provider supplies the work; it never
@@ -226,7 +226,7 @@ mirrored into ACPX or XMD state. Relaunch therefore never silently keeps a stale
 layer, discards unobserved native history, substitutes a new provider session
 for retained continuity, or performs a bootstrap turn.
 
-The prepared text and filesystem authority are different capabilities:
+The prepared text and filesystem permissions are different capabilities:
 
 - the contextual cwd determines what the V1 native agent can access;
 - prepared instructions determine text supplied to the model as instructions;
@@ -244,7 +244,7 @@ The stateful Agent/Session surface likewise defines no V1 model-selection prop
 or launch option. Native launch uses the provider session's model configuration
 and does not create a launch-only model selector. A provider-reported current
 model may be retained as observational evidence; it is not a request and does
-not participate in launch identity or authority.
+not participate in launch identity or admission.
 
 Raw prepared instructions never appear in process arguments or environment
 variables. A provider uses its session API or an invocation-private file with
@@ -730,12 +730,12 @@ session coordinator
   └─ natural key for logical session B
 ```
 
-The grid owns the root foreground-terminal lease. The terminal authority mints
+The grid owns the root foreground-terminal lease. The terminal owner mints
 one private one-use claim per authored pane ordinal, and core installs a native
 launcher in each pane scope that closes over that claim. `Session.Launch` uses
 the launcher already in scope; it receives no pane prop, token, identifier, or
 mode. The launcher validates the claim through the host's direct terminal
-authority and reserves that pane for the launch. A claim from another grid,
+owner and reserves that pane for the launch. A claim from another grid,
 provider installation generation, pane ordinal, or completed invocation
 authorizes nothing.
 
@@ -755,7 +755,7 @@ sessions may be owned concurrently. A terminal claim grants no permission to
 ensure, detach, create, resume, prompt, or attach to an Agent session, and a
 session lease grants no terminal.
 
-The pane-scoped launcher keeps the same launch request and provider authority
+The pane-scoped launcher keeps the same launch request and launch coordinator
 division as the root launcher. Public middleware can route or refuse a request
 but cannot settle it, replace the pane, or mint a launch. Provider-specific grid
 or pane identities never enter the `AgentLaunchRequest`, terminal result,
@@ -806,7 +806,7 @@ construction route:  how this logical session was first constructed
 session coordinator: who may act on it now
 ```
 
-The coordinator remains the single live authority and owns crash behavior. A
+The coordinator remains the one live owner and owns crash behavior. A
 route grants no right to ensure, prompt, detach, spawn or accept history. It
 says only which kind of thing this session is, so a later operation cannot
 quietly treat a conversation that already exists as one it may name.
@@ -998,15 +998,15 @@ instruction-file path, argv, environment, raw host message, credential or
 provider-private state.
 
 The provider does not write these records and cannot reach the thing that does.
-It offers each phase as live work to the authority core delivered it; the
-authority runs a phase only when the journal has none, retains what comes back
+It offers each phase as live work to the coordinator core delivered it; the
+coordinator runs a phase only when the journal has none, retains what comes back
 before the next live effect, and cross-checks the preparation against the exact
 request that was routed — instructions and digest, agent, requested session,
 cwd, the V1 empty additional-directory list, and permission mode. A record that
 changed what was asked would make the journal describe a launch nobody
 authored, so it is refused rather than retained.
 
-That is the authority boundary. Middleware composed around the Agent Api may
+That is the coordination boundary. Middleware composed around the Agent Api may
 observe a launch or refuse one; it cannot author a phase, and a completion it
 returns settles nothing, because the route ignores returns and the result is
 derived from the retained records alone.
@@ -1166,7 +1166,7 @@ advertised operation refuses before provider work rather than acting while a
 native UI may be in the conversation — as *Ownership and concurrency* describes.
 
 Only ordinary `xmd run` receives that assembly. Every other command receives
-none, and a host profile whose session authority differs from ordinary `xmd run`
+none, and a host profile whose session capabilities differ from ordinary `xmd run`
 states its capability sets explicitly rather than inheriting the provider
 package's. The workflow Agent profile selects both sets empty and installs no
 native foreground launcher, so `Session.Launch` is unsupported there without
@@ -1187,7 +1187,7 @@ starts Claude, Codex, or a model.
 Terminal-grid tests additionally install a controlled provider that is not
 tmux. It exposes readiness, independent pane settlement, reader close, provider
 failure, parent cancellation, and teardown completion as test-controlled
-operations while using the same core terminal authority and pane-scoped native
+operations while using the same core terminal owner and pane-scoped native
 launchers. Separate tmux integration evidence exercises the production adapter;
 core semantics are not inferred from tmux identifiers or process behavior. The
 tmux evidence covers exact argv over private IPC, the runtime spawn boundary,
@@ -1263,7 +1263,7 @@ assembled from a TypeScript string. `<Session.Launch>` raises a launch failure
 as an error segment whose cause carries `phase` and `failureClass`, so an
 `<AssertThrows as="…">` binding can assert which refusal it was rather than the
 wording of a message. TypeScript owns what Markdown cannot reach: ACP wire
-traffic, the authority, locks, files, processes, and the journal.
+traffic, the coordinator, locks, files, processes, and the journal.
 
 Adapter contract tests use fake `claude` and `codex` executables to verify resume
 argument construction and exit propagation. They start real children through the
@@ -1321,7 +1321,7 @@ what the provider does, and would then be reporting on itself.
 
 The feature is `launchAgentSession()` and the `Session.Launch` component; the
 opaque launch request its public Agent route carries and the invocation-owned
-authority its installed provider receives; the `agent_session_launch` durable
+coordinator its installed provider receives; the `agent_session_launch` durable
 records with their replay and secret scanning; the host-owned session
 coordinator and its crash-conservative ownership record; an invocation-owned
 native-launch capability in the ACPX provider;
@@ -1395,13 +1395,13 @@ Implementation review checks these frozen invariants:
    reconstructed from XMD output.
 9. Raw prepared context does not appear in process arguments or environment.
 10. Unsupported providers fail before ownership transfer.
-11. Native launch never widens the admitted filesystem authority.
+11. Native launch never widens the admitted filesystem permissions.
 12. A changed instruction layer never discards persistent provider state: it is
     replaced in place with identity and history preserved, or refused before
     handoff.
 13. Public launch routing is request-only: no return value, copy, superseded
     parent, foreign request, or repeated delegation authors a phase, and the
-    authority reaches the installed provider directly.
+    coordinator reaches the installed provider directly.
 14. Every operation that can act on an advertised session takes ownership under
     one natural key first, contention refuses rather than queues, and an owner
     that did not prove it stopped leaves the session owned.

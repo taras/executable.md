@@ -13,7 +13,7 @@
  * *and* the canonical name, holding a closed value of exactly the three members
  * a run has. Anything looser lets a same-typed Yield written under another name,
  * or by a child coroutine, stand in for the record that was removed — and a
- * recorded terminal result would then be reused on its authority.
+ * recorded terminal result would then be reused as though it settled the run.
  */
 
 import { StaleInputError } from "@executablemd/durable-streams";

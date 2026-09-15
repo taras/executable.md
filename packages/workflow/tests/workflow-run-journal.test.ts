@@ -1234,7 +1234,7 @@ describe("Tier WJ — explicit transaction journal routing", () => {
     expect(result).toEqual({ first: [], second: [] });
   });
 
-  it("WJ29: completed, closed and stale-generation authority cannot bind", function* () {
+  it("WJ29: a completed, closed or stale-generation route cannot bind", function* () {
     const root = yield* useStorageRoot();
     let closedDatabase: WorkflowRunDatabase | undefined;
     let completedTransaction: WorkflowRunTransaction | undefined;
@@ -1253,7 +1253,7 @@ describe("Tier WJ — explicit transaction journal routing", () => {
       const transaction = completedTransaction;
       const token = staleToken;
       if (transaction === undefined || token === undefined) {
-        throw new Error("the transaction did not leave route authority for the refusal proof");
+        throw new Error("the transaction did not leave a route for the refusal proof");
       }
       expect(
         yield* attempt(() =>
@@ -1271,7 +1271,7 @@ describe("Tier WJ — explicit transaction journal routing", () => {
     const transaction = completedTransaction;
     const token = staleToken;
     if (closed === undefined || transaction === undefined || token === undefined) {
-      throw new Error("the prior provider did not leave route authority");
+      throw new Error("the prior provider did not leave a route");
     }
     const events = yield* withStorage(root, function* () {
       const found = yield* WorkflowRunStorage.operations.lookup("route-stale");
@@ -1310,7 +1310,7 @@ describe("Tier WJ — explicit transaction journal routing", () => {
     expect(events).toEqual([]);
   });
 
-  it("WJ30: escaped route authority appends nothing after transaction completion", function* () {
+  it("WJ30: an escaped route appends nothing after transaction completion", function* () {
     const root = yield* useStorageRoot();
 
     const events = yield* withStorage(root, function* () {
@@ -1327,7 +1327,7 @@ describe("Tier WJ — explicit transaction journal routing", () => {
       const transaction = escapedTransaction;
       const token = escapedToken;
       if (transaction === undefined || token === undefined) {
-        throw new Error("route authority did not escape for the refusal proof");
+        throw new Error("the route did not escape for the refusal proof");
       }
       expect(
         yield* attempt(() =>
