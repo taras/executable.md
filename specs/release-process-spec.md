@@ -636,14 +636,21 @@ The checks that hold this together, each proving a different build:
   under Deno, Node and Bun, which is what makes it evidence rather than one
   runtime's opinion.
 - `scripts/tests/cli-npm-bin.test.ts` builds the real package, asserts every
-  emitted `esm/src/documents/` asset is byte-identical to the source, and then
-  asks the built bin — from a directory that is not the package — which Plan
-  `<Plan>` Component source it would let a document write. The answer carries the
+  emitted `esm/src/documents/` asset is byte-identical to the source, checks
+  that the emitted core and runtime manifests publish `./api` and that the
+  module behind it was emitted, runs the built bin with a `--plugin` an operator
+  would write, and then asks the built bin — from a directory that is not the
+  package — which Plan `<Plan>` Component source it would let a document write. The answer carries the
   origin and the SHA-256 of those bytes, so a build that shipped different ones, or none,
   answers differently here rather than at a person's first `xmd plan`.
 - `scripts/tests/plan-component-compiled.test.ts` asks the same question of the
   compiled binary, which has no checkout to fall back to. It runs in the `smoke`
   job, beside the other suites whose subject is `dist/xmd`.
+- `scripts/tests/plugin-compiled.test.ts` asks the binary to load a module that
+  is *not* embedded in it — an operator's `--plugin` — from a directory that is
+  not the checkout. A binary with no `node_modules` and no module graph to add
+  to either loads an external ESM module and runs it, or it cannot, and nothing
+  else can tell. It runs in the `smoke` job for the same reason.
 - `scripts/tests/packaged-document.test.ts` holds the canonical compile inputs
   to the document *directories* that exist and are not empty, because which
   packages ship documents is the one thing no build discovers for itself.
@@ -672,7 +679,11 @@ maintained:
 
 - `EMBEDDED_PACKAGES` — a whole package the binary executes Markdown out of
   (`packages/code-review-agent`). A decision rather than a file layout, so
-  nothing discovers it.
+  nothing discovers it. It is also not how a bundled Plugin is *selected*:
+  `packages/cli/src/bundled-plugins.ts` imports the Plugin, which is what makes
+  its code executable in a binary, and this entry keeps its Markdown and
+  documentation assets readable there. Code selection and asset embedding stay
+  separate decisions, so nothing derives the bundled list from this one.
 - `PACKAGED_DOCUMENTS` — each package's `src/documents/`, embedded whole (§9).
 - `PACKAGED_DOCUMENTATION` — each package's `components.md`, named individually
   because the directories they sit in are package source, and embedding those

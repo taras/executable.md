@@ -30,6 +30,7 @@ import { testingExecutionHost } from "../src/testing-host.ts";
 import { planComponentDeclaration, planComponentDescription } from "../src/plan-component.ts";
 
 import { unsupportedRepositories } from "../src/run-repositories.ts";
+import { BUNDLED_PLUGINS } from "../src/bundled-plugins.ts";
 function doc(...lines: string[]): string {
   return `${lines.join("\n")}\n`;
 }
@@ -773,6 +774,11 @@ describe("deterministic dependencies declared for a nested run", () => {
     const hold = withResolvers<void>();
     const host = testingExecutionHost({
       includes: [],
+      // The distribution's own bundled Plugins, because a `host="run"` child
+      // gets what `xmd run` gets: the child installs them again in its own
+      // scope, with command `run`.
+      plugins: BUNDLED_PLUGINS,
+      pluginArgs: [],
       secretDetection: true,
       // deno-lint-ignore require-yield
       installService: function* (): Operation<void> {},
@@ -990,6 +996,11 @@ describe("deterministic dependencies declared for a nested run", () => {
     // to say about it, and what it says is why.
     const host = testingExecutionHost({
       includes: [],
+      // The distribution's own bundled Plugins, because a `host="run"` child
+      // gets what `xmd run` gets: the child installs them again in its own
+      // scope, with command `run`.
+      plugins: BUNDLED_PLUGINS,
+      pluginArgs: [],
       secretDetection: true,
       // deno-lint-ignore require-yield
       installService: function* (): Operation<void> {},

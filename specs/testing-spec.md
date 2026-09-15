@@ -313,6 +313,16 @@ repository discovers it from there. The child's scope does not descend from the
 document's, so this is the trusted host installing what the invocation was
 standing in rather than the child inheriting it.
 
+A `host="run"` child gets the production run assembly, which includes the
+Plugins the invocation selected. It runs in an isolated scope and inherits no
+middleware, no registration and no installation-scoped resource, so the host
+installs the same Plugin **values** again inside that scope, with command `run`
+— never the parent's live middleware and never a second reading of the command
+line. That is what makes a run child of `xmd test` the run profile: the bundled
+review graph claims nothing at the test root and claims all forty-one of its
+names in the child, and an operator's `--plugin` selection composes around the
+child exactly as it composes around an ordinary run.
+
 `host="workflow"`, and the `<WorkflowRun>` scope it requires, are specified in
 issue #454 and are not built: a host that provides no workflow profile refuses
 them, naming that.

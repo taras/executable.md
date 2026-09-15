@@ -10021,6 +10021,104 @@ wrapping the returned handle: an execution that already failed keeps its own
 failure, the first policy that reports one turns a success into that failure,
 and no later policy replaces it.
 
+### Plugins
+
+A **Plugin** is trusted code a distribution bundles or an operator selects, and
+it is installed before an execution imports a root document. The CLI accepts a
+repeatable `--plugin <specifier>` or `--plugin=<specifier>`; the bundled list
+installs first, then the explicit selections in the order they were written.
+
+A Plugin is a plain structural value:
+
+```ts
+interface Plugin {
+  readonly name: string;
+  install?(request: PluginInstallRequest): Operation<PluginInstallation | undefined>;
+}
+
+interface PluginInstallRequest {
+  readonly command: string;
+  readonly args: readonly string[];
+}
+
+interface PluginInstallation {
+  readonly components?: readonly MarkdownComponent[];
+  readonly structural?: readonly Structural[];
+  expand?(request: ExpansionRequest): Operation<void>;
+  readonly admissions?: readonly JournalAdmission[];
+}
+```
+
+`Plugin(input)` is the canonical constructor and preserves the value it is
+given. A selected module's default export is its Plugin. `command` is the
+normalized public top-level command — `run`, `plan`, `test`, `syntax`, `upgrade`
+or `workflow`, with the shorthand document form reported as `run` — and `args`
+is a frozen copy of the original argv, taken before `--plugin` extraction or any
+other scanner changed it. The internal `test-agent` worker mode, `--help` and
+`--version` install no Plugin and load no module.
+
+What an install returns is converted at the host boundary to one
+`ExecutionInstallation`: `components` and `structural` become that
+installation's `declarations`, while `expand` and `admissions` keep the meanings
+they already had. Returning `undefined` contributes no declarative installation
+for that command.
+
+**Refusals happen before the root.** A module exporting no usable default, a
+default carrying no non-empty string `name`, an `install` that is not callable,
+a remote specifier, a missing module, and two selections claiming one Plugin
+name are each refused before any `install()` runs and before the root document
+is read. Module top-level code has already executed by then — loading a selected
+module *is* running it — so what a refusal guarantees is that no Plugin
+installed anything and no document began. A Plugin is trusted executable code
+and is not sandboxed.
+
+**Selection is explicit.** Nothing is discovered: not from the repository, the
+installed packages, a manifest, the root document or the component search path.
+Specifiers resolve from the invocation's captured initial working directory. A
+path inside the current repository is valid when the operator names it. V1
+performs no ambient or document-declared discovery.
+
+**Lifetime.** The complete command runs inside the scope the Plugins installed
+into. A load or install failure, or a cancellation, unwinds the Plugins already
+installed, reads no root and starts no document. An isolated nested
+`<Execution host="run">` inherits nothing and installs the same Plugin values
+again in its own scope, with command `run`.
+
+#### The contextual APIs a Plugin composes through
+
+Three value-returning APIs, published from `@executablemd/core/api` under stable
+namespaced names so that a Plugin resolving its own copy of core composes with
+the canonical execution instead of installing a second, invisible stack.
+
+`Document` answers with the Markdown one run executes. Its terminal answer is
+the exact text `"<Document />"`. Middleware wraps that value — the first Plugin
+installed is the outermost wrapper — and canonical core scans the result once as
+an envelope, splicing the already parsed, already target-selected root segments
+in at each `<Document />` placeholder, at the offsets, lines and paths they were
+authored at. A middleware may delegate more than once, and nothing caches or
+counts. With no middleware the envelope is exactly the placeholder and the run
+executes the definition it imported. An authored `<Document />` inside the
+document resolves as an ordinary component: only the envelope is read for
+placeholders.
+
+`RootMetadata` answers with the root's ordinary `meta` record. The terminal is
+the record the root's frontmatter declared; what middleware returns is detached
+and frozen before the execution reads it. It changes that record and nothing
+else — not `props`, `required`, `returns`, target selection, or the metadata of
+an imported component.
+
+`ActivePlugins` answers with the frozen ordered list of Plugin values installed
+for this command. It is installed before the first `install()` runs.
+
+Execution, `inspectDocument` and non-executing document validation compose the
+root through one shared path, so a wrapper is described and validated on the
+same terms it is run on.
+
+**The durable protocol is unchanged.** There is no Plugin event, no Plugin-set
+identity and no generic Plugin record; the root-import and declaration records
+are byte-identical. A Plugin that must refuse an incompatible retained history
+supplies a `JournalAdmission`.
+
 ### The document expansion
 
 `Execution.document` is a policy surface on the same terms, with one structural
@@ -13428,6 +13526,41 @@ invokes a handler: this layer captures one and calls none.
 | ED8 | Placement | A construct holding its declared regions is valid and every region body is walked; a region outside its construct, a region under something else, substantive text, a code block, a foreign element, a refused form and a failed literal schema are deterministic diagnostics with nothing executed, and the foreign element is reported where it was written |
 | ED9 | Opacity | A required prop written as an expression is present and makes the occurrence opaque; a definitely missing required prop still fails, opacity hides no placement error, and the engine's own constructs keep the results they always had |
 | ED10 | Absence | With nothing declared, the new names are unresolved, the structural category holds only the engine's own constructs, and a repository file under one of those names is an ordinary component rather than syntax |
+
+### Tier PL — Plugins (§7 Plugins)
+
+A Plugin is trusted code, so nothing here proves containment: what it proves is
+that a selection is read, admitted and installed before anything reads a
+document, that order composes and never arbitrates, and that a run with no
+Plugin is the run it always was.
+
+| # | Test | Verify |
+|---|------|--------|
+| PL1 | The value | `Plugin(input)` returns the value it was given and adds no identity, version or capability; a Plugin with no `install` installs nothing |
+| PL2 | Module admission | An object with a non-empty `name` and an absent or callable `install` is admitted; a non-object, a missing, empty or non-string name, and a non-callable `install` each refuse naming the specifier and the member that failed |
+| PL3 | The flag grammar | Both spellings are read in occurrence order, only those tokens are removed, the scan stops at `--`, the original argv is retained frozen, and a missing or option-shaped value refuses before anything loads |
+| PL4 | The command a Plugin is told | Each public command reports its own name and the shorthand document form reports `run`; help, `--version` and the internal worker mode install no Plugin and load no module |
+| PL5 | Order composes | Bundled Plugins install first and explicit ones in occurrence order; the first installed is the outermost `Document` wrapper, and reversing the selection reverses the composition |
+| PL6 | One name, one Plugin | Two selections claiming one Plugin name refuse before the first `install()` runs, whichever modules they came from |
+| PL7 | The active list | Every Plugin, including the first, reads the complete frozen list, and a snapshot is not the installed array |
+| PL8 | Declarative contribution | `components`, `structural` and `admissions` cross as one `ExecutionInstallation`; returning `undefined` contributes none; two Plugins declaring one component name refuse at admission |
+| PL9 | Nothing is discovered | A module beside a selected one, and an installed package nobody named, are never loaded; a command that selected none loads none |
+| PL10 | Explicit paths and no remote | An explicit path inside the current repository loads; a remote specifier refuses without fetching |
+| PL11 | Lifetime | A Plugin that fails to install unwinds the Plugins before it, reads no root, starts no document, and leaves nothing a document would have written |
+| PL12 | Configuration, not properties | A Plugin reads the timeouts and verbosity the command line settled through `Config`; a root property spelled like a CLI option reaches document props and changes none of them |
+| PL13 | Product parity | A source checkout, the emitted npm bin and the compiled binary each load the same external ESM module, run its top level, and run its install |
+
+### Tier RC — Root composition (§5.4, §7 Plugins)
+
+| # | Test | Verify |
+|---|------|--------|
+| RC1 | No middleware, no change | With nothing installed the run renders, returns and fails exactly as it did, and the document's props, `returns` and value are unchanged |
+| RC2 | The envelope | A wrapper's text surrounds the projected document; two wrappers nest with the first outermost; a wrapper that delegates twice projects the document twice |
+| RC3 | Authored identity | A projected element reports the position it was authored at and the expansion identity it would have had unwrapped |
+| RC4 | The document's contract | The document's own `<Output>` still selects what renders, and a value root's `<Return>` still settles the run's value, inside an envelope |
+| RC5 | Metadata separation | `RootMetadata` changes the record the root interpolates and nothing else; an imported component's metadata is untouched, and the composed record is frozen and detached |
+| RC6 | An authored placeholder is ordinary | A document that writes `<Document />` resolves that name through ordinary component selection and projects nothing |
+| RC7 | An envelope is held to the same structure | A wrapper whose own structure a document could not write is diagnosed on the document's terms, with the document's body never run |
 
 ### Tier ORC — Repository composition under an ordinary run (§5.3, §8.1)
 

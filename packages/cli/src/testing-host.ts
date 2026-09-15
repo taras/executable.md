@@ -58,7 +58,8 @@ import type {
   TestAgentChildConfiguration,
 } from "@executablemd/testing";
 import { installDocumentComponents } from "./cli.ts";
-import { runProfileDeclarations } from "./syntax.ts";
+import { installPlugins } from "./plugin-host.ts";
+import type { Plugin } from "@executablemd/core/api";
 import { ordinaryEvaluationProfile } from "./evaluation-profile.ts";
 import type { HostServiceInstaller } from "./cli.ts";
 import type { RepositoryInstaller } from "./run-repositories.ts";
@@ -103,6 +104,17 @@ export interface TestingHostSettings {
    * why a configured child could not write a Plan.
    */
   readonly planDeclaration: (request: ChildPlanDeclaration) => Operation<MarkdownComponent>;
+  /**
+   * The Plugin values this invocation selected, in installation order.
+   *
+   * The values, never the installation: a child runs in an isolated scope and
+   * inherits no middleware, no registration and no resource, so it installs
+   * them again for itself — with command `run`, because `<Execution host="run">`
+   * means the run profile whatever command is hosting it.
+   */
+  readonly plugins: readonly Plugin[];
+  /** The original argv every install request carries. */
+  readonly pluginArgs: readonly string[];
   /** Whether durable events are scanned for credentials before they persist. */
   readonly secretDetection: boolean;
   /** The native service adapter this entrypoint supplies. */
@@ -280,7 +292,15 @@ function* runProfileChild(
   const { testAgent, answers } = selectConfiguration(request);
 
   yield* installDocumentComponents({ testing: false }, false);
-  const installations: ExecutionInstallation[] = [];
+  // The run profile's Plugins, installed in this child's own scope and told
+  // they are installing for a run. A child of `xmd test` therefore gains the
+  // vocabulary an ordinary run has, while the test root that launched it —
+  // a different profile — still has none of it.
+  const childPlugins = yield* installPlugins(settings.plugins, {
+    command: "run",
+    args: settings.pluginArgs,
+  });
+  const installations: ExecutionInstallation[] = [...childPlugins.installations];
   // What this child can establish for a `<Plan>` written inside it. A child
   // nobody configured establishes nothing, which is the refusal `<Plan>` has
   // always given where no Agent context exists.
@@ -321,7 +341,7 @@ function* runProfileChild(
     // whose own document is a different profile — still evaluates a generated
     // fragment under exactly what `xmd run` states.
     evaluation: ordinaryEvaluationProfile(),
-    declarations: yield* runProfileDeclarations(
+    declarations: [
       yield* settings.planDeclaration({
         context,
         ...(planWriterRoot === undefined ? {} : { planWriterRoot }),
@@ -335,7 +355,7 @@ function* runProfileChild(
           ? {}
           : { observePlanWriter: settings.observePlanWriter }),
       }),
-    ),
+    ],
   });
   // A child gets what `xmd run` gets, and the browser form is part of that.
   // Installed here rather than inherited: this scope is isolated from the

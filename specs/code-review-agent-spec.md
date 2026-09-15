@@ -170,9 +170,10 @@ packages/code-review-agent/
       policies/            # the five policy documents
     components.md          # long-form documentation for the six registrations
     review-components.ts   # the one assembly boundary
+    plugin.ts              # the Plugin built from that boundary
     parse-diff.ts
     types.ts
-  mod.ts
+  mod.ts                   # the named library exports, and the Plugin as default
 ```
 
 The package depends on `@executablemd/core`, `@executablemd/runtime`,
@@ -209,11 +210,38 @@ digests. The reads use the Effection filesystem directly rather than `API.Fs` or
 the document-facing `Files` provider, neither of which may decide what a
 review's own components are.
 
-The CLI attaches this graph wherever the production `run` profile is assembled:
-ordinary non-testing execution, a nested `<Execution host="run">`,
-`useRunProfileRegistry()` for syntax and structural validation, `<Plan>`'s
-admission validator, and `xmd plan`'s candidate validation. `xmd test` at its
-root does not gain it; its nested run child does.
+### 3.6 The Plugin
+
+`src/plugin.ts` builds the package's Plugin from that same boundary and exports
+it as the package's default export, so `mod.ts` publishes the Plugin as
+`default` while keeping every named library export and the
+`./review-components` subpath.
+
+```ts
+export default Plugin({
+  name: "@executablemd/code-review-agent",
+  *install(request) { /* the assembly above, for the commands that run reviews */ },
+});
+```
+
+The Plugin claims the forty-one names for the commands that can run a review:
+`run`, `syntax`, `plan`, and a `workflow` action that executes a document
+(`start`, `resume`, `fork`). It returns `undefined` for `xmd test` at its root,
+for `xmd upgrade`, for the workflow management actions and for every other
+command — those never had the graph. A nested `<Execution host="run">` is the
+run profile whatever command hosts it, and installs this Plugin again in its own
+scope with command `run`, so a run child of `xmd test` gains the graph while the
+test root does not.
+
+The workflow action is found by name among the tokens after `workflow`, so an
+option written before it — `--plugin` included — is never read as one.
+
+`packages/cli/src/bundled-plugins.ts` is the only CLI module that names this
+package. One installation per command serves every surface that describes or
+validates the vocabulary — ordinary execution, `xmd syntax`, structural
+validation, `<Plan>`'s admission validator and `xmd plan`'s candidate validation
+— so the three checks inside one Plan command consume one retained assembly
+rather than re-reading every packaged asset.
 
 ---
 
@@ -1313,7 +1341,9 @@ two exact versions, so the policy the gate applies and the policy the sensor
 applies are evaluated by the same linter.
 
 The review workflow runs `deno task setup` and then `./dist/xmd`, so the binary
-and executable Markdown are from the same checkout. The two CI roots use
+and executable Markdown are from the same checkout. It passes no `--plugin`: the
+review graph is what this build bundles, and an entrypoint that had to name it
+would be one place a review could be run without it. The two CI roots use
 `<Output>` error mode: execution failures return a failed document result and a
 nonzero CLI exit, while ordinary finding text remains successful output. The
 journal is uploaded with `if: always()` and is not parsed by Actions.

@@ -3,6 +3,7 @@
   "version": "0.12.1",
   "exports": {
     ".": "./mod.ts",
+    "./api": "./api.ts",
     "./host": "./host.ts"
   },
   "imports": {

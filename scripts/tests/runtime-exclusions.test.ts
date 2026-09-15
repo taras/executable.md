@@ -81,6 +81,7 @@ describe("runtime exclusions", () => {
     expect(exclusions.deno.map((entry) => entry.path)).toEqual([
       "scripts/tests/component-form-dispatch.test.ts",
       "scripts/tests/plan-component-compiled.test.ts",
+      "scripts/tests/plugin-compiled.test.ts",
     ]);
   });
 

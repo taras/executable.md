@@ -80,7 +80,7 @@ import type {
   PropsSchema,
   RootDocumentSource,
 } from "@executablemd/core";
-import { command as hostCommand } from "@executablemd/runtime";
+import { command as hostCommand, cwd } from "@executablemd/runtime";
 import type { MachineSessionAssembly } from "./session-coordinator.ts";
 import {
   installTestingComponents,
@@ -132,10 +132,14 @@ import {
   renderSyntaxDocumentation,
   renderSyntaxJson,
   renderSyntaxMarkdown,
-  runProfileDeclarations,
   syntaxSymbols,
 } from "./syntax.ts";
-import { useReviewComponents } from "@executablemd/code-review-agent/review-components";
+import { BUNDLED_PLUGINS } from "./bundled-plugins.ts";
+import { importPluginModule, loadPlugins } from "./plugin-loader.ts";
+import { installPlugins, NO_PLUGINS } from "./plugin-host.ts";
+import type { CommandPlugins } from "./plugin-host.ts";
+import { selectPlugins } from "./plugin-selection.ts";
+import type { PluginSelection } from "./plugin-selection.ts";
 import { deliverWhole } from "./stdout-delivery.ts";
 import { testingExecutionHost } from "./testing-host.ts";
 import type { ChildPlanDeclaration } from "./testing-host.ts";
@@ -718,6 +722,25 @@ function belongsTo(flag: string): string {
 }
 
 /**
+ * Whether the command line this invocation was written on asked for verbose
+ * output.
+ *
+ * Read from the command's own parse rather than from a second scan of argv, so
+ * a Plugin installed before the document reads the answer the command settled
+ * — the same one `installDocumentComponents` seeds the execution with.
+ */
+function commandVerbosity(selected: { help?: boolean; config?: unknown } | undefined): boolean {
+  if (selected === undefined || selected.help === true) {
+    return false;
+  }
+  const config = selected.config;
+  if (typeof config !== "object" || config === null || !("verbose" in config)) {
+    return false;
+  }
+  return config.verbose === true;
+}
+
+/**
  * Install what the command line asked for, and nothing else: a field nobody
  * wrote stays as the enclosing scope has it, which for a run is no timeout.
  * `min` is what lets a block's own `timeout=` outrank the run's exec default.
@@ -900,6 +923,14 @@ export interface DocumentMode {
    * list is exactly what `execute()` itself does.
    */
   installations?: readonly ExecutionInstallation[];
+  /**
+   * What this command's Plugins declared and installed.
+   *
+   * The retained assembly, never a second installation. The Plugin values
+   * travel with it so an isolated nested run can install them again in its own
+   * scope, which is the one place a second installation is correct.
+   */
+  plugins?: CommandPlugins;
 }
 
 export type HostServiceInstaller = () => Operation<void>;
@@ -943,16 +974,11 @@ export function* installDocumentComponents(mode: DocumentMode, verbose: boolean)
   } else {
     yield* useVerboseComponent();
     yield* installTestingComponents({ verbose });
-    // The review graph's six reserved registrations, for the `run` profile
-    // alone. A review is the program that must not be answerable by the
-    // repository it is reviewing, so these names are claimed rather than
-    // offered — a checkout's own `ReviewContext.ts` no longer wins.
-    //
-    // `xmd test` is a different profile and claims none of them, so a test
-    // document may still supply its own component of any of these names. The
-    // nested `host="run"` child a test can launch *is* the run profile, and
-    // gets them through this same call.
-    yield* useReviewComponents();
+    // No package-specific vocabulary is bootstrapped here. A Plugin registers
+    // what it claims in the command scope this assembly runs inside, which is
+    // what lets `xmd test` claim none of the review graph's names while the
+    // nested `host="run"` child it can launch installs the same Plugins again
+    // and claims all of them.
   }
 
   // `<WebForm>` for both commands. Registered rather than reserved, so a
@@ -1030,10 +1056,13 @@ function* runDocument(
   // it settled, the Plan writer root it owns and the scope its host acts run in;
   // everything else about the Component is this entrypoint's and identical for
   // all of them.
+  const plugins = mode.plugins ?? NO_PLUGINS;
+
   const planDeclaration = (request: ChildPlanDeclaration): Operation<MarkdownComponent> =>
     planComponentDeclaration({
       surface: "component",
       includes: include,
+      plugins,
       context: request.context,
       ...(mode.machineSessions === undefined ? {} : { sessions: mode.machineSessions }),
       ...(request.planWriterRoot !== undefined
@@ -1140,6 +1169,11 @@ function* runDocument(
   // that produced it.
   const testingHost = testingExecutionHost({
     includes: include,
+    // The Plugin *values*, so an isolated child installs them again for itself
+    // with command `run`. Live middleware and installation-scoped resources
+    // never cross into a child's scope.
+    plugins: plugins.plugins,
+    pluginArgs: plugins.args,
     secretDetection,
     installService,
     // The *entrypoint's* installer, not this command's. A `host="run"` child is
@@ -1176,13 +1210,17 @@ function* runDocument(
     // after its own invocation, so the execution is told about it here — before
     // anything else is installed — and builds it from the claimant it mints.
     [
+      // What the command's Plugins declared, each as the installation it was
+      // returned on. First in the list, as they were installed, so a catalog
+      // reads the same way an operator wrote the selection.
+      ...plugins.installations,
       ...(mode.installations ?? []),
       {
         components: agentIdentityComponents(),
         // The `run` profile's own vocabulary. `xmd test` is a different profile
         // and does not gain `<Plan>` at its root — but the production run child
         // it can launch is the run profile, and gets it below.
-        ...(mode.testing ? {} : { declarations: yield* runProfileDeclarations(plan) }),
+        ...(mode.testing ? {} : { declarations: [plan] }),
         // The ceiling a generated fragment runs under, stated only where the
         // host that attached this execution stated none: a workflow attachment
         // states its own Workspace-bound profile, and one execution offers one
@@ -1336,6 +1374,8 @@ function* test(
   installService: HostServiceInstaller,
   /** What a `<Execution host="run">` child installs. This command installs none. */
   installRepositories: RepositoryInstaller,
+  /** What this command's Plugins installed, and the values a child reinstalls. */
+  plugins: CommandPlugins,
 ): Operation<void> {
   const patterns = readPatternFlags(args);
   if (patterns.missingValue) {
@@ -1367,7 +1407,7 @@ function* test(
     announceSecretDetection(config.secretDetection);
     const result = yield* runScopedDocument(
       { ...config, root: { path } },
-      { testing: true },
+      { testing: true, plugins },
       installService,
       // The outer `xmd test` command installs no operational repository
       // provider. A test that needs the production behavior exercises an
@@ -1413,7 +1453,7 @@ function* test(
         root: { path: document.path },
         include: componentSearchPath(document, target.root, config.include),
       },
-      { testing: true },
+      { testing: true, plugins },
       installService,
       unsupportedRepositories,
       installRepositories,
@@ -2271,6 +2311,27 @@ const PLAN_REQUEST_HELP = [
 ].join("\n");
 
 /**
+ * What every command's help says about selecting a Plugin.
+ *
+ * One section rather than an option on each command's grammar, because the
+ * option is read out of argv before any command's grammar exists — and because
+ * what a caller most needs to know about it is not its spelling.
+ */
+const PLUGIN_HELP = [
+  "PLUGINS",
+  "  --plugin <specifier>  load a Plugin before the command runs (repeatable)",
+  "",
+  "A Plugin is a package or a file this invocation names. They install in the",
+  "order they are written, after the ones this build bundles.",
+  "",
+  "A selected Plugin is trusted executable code, not a sandboxed extension:",
+  "loading one runs its module, and installing one runs its code with this",
+  "process's own authority. xmd discovers none on its own — a package that",
+  "happens to be installed does nothing until it is named — and loads none over",
+  "the network.",
+].join("\n");
+
+/**
  * Help for whichever command the arguments name. A command renders its
  * own help when `--help` is its first argument, so the flag removed
  * during the props phase is reinstated there rather than falling back to
@@ -2281,11 +2342,13 @@ function renderHelp(phase: PropsPhase): string {
   const command = COMMAND_NAMES.includes(first) ? first : phase.root ? "run" : undefined;
 
   if (!command) {
-    return xmd.help({ args: phase.args });
+    return `${xmd.help({ args: phase.args })}\n\n${PLUGIN_HELP}`;
   }
 
   const help = xmd.parse({ args: [command, "--help"] });
-  const base = help.ok && help.value.config.help ? help.value.config.text : xmd.help({ args: [] });
+  const parsed =
+    help.ok && help.value.config.help ? help.value.config.text : xmd.help({ args: [] });
+  const base = `${parsed}\n\n${PLUGIN_HELP}`;
   const epilogue =
     command === "run"
       ? RUN_SOURCE_HELP
@@ -2380,6 +2443,14 @@ function* dispatch(
   readStandardInput: StandardInputReader,
   workflowHost: WorkflowHost | undefined,
   sessions: MachineSessionAssembly | undefined,
+  /**
+   * What this invocation's Plugins installed.
+   *
+   * One assembly for the whole command. Every surface that describes or
+   * validates this vocabulary — the run, the symbols, each Plan check, a nested
+   * run host — reads it rather than installing a second time.
+   */
+  plugins: CommandPlugins,
 ): Operation<void> {
   // Before the props phase, and before the help short-circuit below. `--help`
   // is lifted out of argv early enough that a command's own grammar never sees
@@ -2495,6 +2566,7 @@ function* dispatch(
           { ...config, root, retainProcessOutput: keepsProcessOutput(config.journal) },
           {
             testing: false,
+            plugins,
             props: props.value,
             // Only `xmd run` receives it. Every other command assembles none of
             // it, which is what keeps a machine session from being acted on by
@@ -2551,7 +2623,8 @@ function* dispatch(
         },
         {
           ...(sessions === undefined ? {} : { sessions }),
-          symbols: syntaxSymbols,
+          plugins,
+          symbols: (includes) => syntaxSymbols(includes, plugins),
           // The two facts about this process's own stderr that nothing further
           // in may go and read: whether it is a terminal, and whether it took
           // what it was handed. The approved Plan's sinks are stdout and
@@ -2679,6 +2752,7 @@ function* dispatch(
         evalFlags.rest,
         installService,
         installRepositories,
+        plugins,
       );
       break;
     }
@@ -2693,7 +2767,7 @@ function* dispatch(
           // The compact list of symbols, unchanged: routine discovery output and
           // every default Plan prompt read it, and long documentation would make
           // both unnecessarily large.
-          const catalog = yield* syntaxSymbols(command.config.include);
+          const catalog = yield* syntaxSymbols(command.config.include, plugins);
           rendered = command.config.json
             ? renderSyntaxJson(catalog)
             : renderSyntaxMarkdown(catalog);
@@ -2702,7 +2776,7 @@ function* dispatch(
           // the command and the component cannot describe one component two
           // ways. JSON stays the compact projection; it is the symbols' shape,
           // and documentation is prose rather than a symbol member.
-          rendered = yield* renderSyntaxDocumentation(command.config.include, [named]);
+          rendered = yield* renderSyntaxDocumentation(command.config.include, [named], plugins);
         }
       } catch (error) {
         console.error(describeError(error));
@@ -2801,7 +2875,12 @@ function* dispatch(
             // workflow host attached the execution and installed the suspending
             // one already; a browser form here would sit nearer, answer first,
             // and wait for a reader the run has no way to reach.
-            { testing: false, props: execution.props, installations: execution.installations },
+            {
+              testing: false,
+              plugins,
+              props: execution.props,
+              installations: execution.installations,
+            },
             // The workflow permission boundary sits exactly where a host
             // service adapter would: installed inside the execution scope,
             // before the root document is imported.
@@ -2849,18 +2928,93 @@ export function* runXmd(
   // gets no machine sessions at all, which is the ordinary ACP behaviour.
   sessions?: MachineSessionAssembly,
 ): Operation<void> {
-  // Before every scanner, before command selection, and before anything reads a
-  // path. `prompt` names no command, and a first token that names none is a
-  // document reference to the default `run` command — so a file of that name in
-  // the working directory would be rendered and executed by a caller who wrote
-  // a command, not a path. Refused closed here, where there is nothing yet to
-  // undo: no eval scan, no parse, no catalog, no profile, no document.
-  if (namesRetiredCommand(args)) {
+  // Before every scanner and before anything reads a path: what a command line
+  // selects is read from the argv the caller wrote, and the tokens that
+  // selected it are removed from everything downstream.
+  const selection = selectPlugins(args);
+  if (selection.error !== undefined) {
+    console.error(selection.error);
+    yield* exit(1);
+    return;
+  }
+
+  // Before command selection, and before anything reads a path. `prompt` names
+  // no command, and a first token that names none is a document reference to
+  // the default `run` command — so a file of that name in the working directory
+  // would be rendered and executed by a caller who wrote a command, not a path.
+  // Refused closed here, where there is nothing yet to undo: no module loaded,
+  // no eval scan, no parse, no catalog, no profile, no document.
+  if (namesRetiredCommand(selection.rest)) {
     console.error(RETIRED_COMMAND_REFUSAL);
     yield* exit(1);
     return;
   }
 
+  yield* runCommand(
+    selection.rest,
+    selection,
+    installService,
+    upgrade,
+    installRepositories,
+    readStandardInput,
+    installWorkflowHost,
+    sessions,
+  );
+}
+
+/**
+ * Run one command with the Plugins it selected installed around it.
+ *
+ * The scope is the command's, so middleware, resources and registrations a
+ * Plugin installed have exactly the command's lifetime, and a failure part-way
+ * through the list unwinds the Plugins before it without ever reading a root
+ * document. `undefined` is an invocation that installs none — help, the
+ * version, and the internal worker mode.
+ */
+function* withPlugins(
+  selection: PluginSelection | undefined,
+  body: (plugins: CommandPlugins) => Operation<void>,
+): Operation<void> {
+  yield* scoped(function* () {
+    if (selection === undefined) {
+      return yield* body(NO_PLUGINS);
+    }
+    let plugins: CommandPlugins;
+    try {
+      // Captured before the first module is loaded, so a relative path and a
+      // package specifier both resolve where the caller is standing.
+      const directory = yield* cwd();
+      const loaded = yield* loadPlugins(selection.specifiers, directory, importPluginModule);
+      plugins = yield* installPlugins([...BUNDLED_PLUGINS, ...loaded], {
+        command: selection.command,
+        args: selection.args,
+      });
+    } catch (error) {
+      reportFailure(error instanceof Error ? error : new Error(String(error)));
+      yield* exit(1);
+      return;
+    }
+    yield* body(plugins);
+  });
+}
+
+/**
+ * One command line, after the Plugins it selected have been installed.
+ *
+ * Everything from here down reads the argv the selection left behind, so no
+ * scanner sees a `--plugin` token and none of them has to know the option
+ * exists.
+ */
+function* runCommand(
+  args: string[],
+  selection: PluginSelection,
+  installService: HostServiceInstaller,
+  upgrade: UpgradeAssembly,
+  installRepositories: RepositoryInstaller,
+  readStandardInput: StandardInputReader,
+  installWorkflowHost: HostWorkflowInstaller,
+  sessions: MachineSessionAssembly | undefined,
+): Operation<void> {
   // First, so that no later scanner — help, properties, agent flags — can
   // mistake the inline document's own text for an option.
   const evalFlags = readEvalFlags(args);
@@ -2907,8 +3061,15 @@ export function* runXmd(
     !selected.help &&
     (selected.name === "run" || planning);
 
-  if (!bounded) {
-    return yield* dispatch(
+  // What this invocation installs Plugins for, decided from the same selection
+  // that read them out of argv. Help, the version and the internal worker mode
+  // describe or serve a grammar rather than running a document, so none of them
+  // loads a module or installs anything: a Plugin's top-level code is trusted
+  // code, and describing a command line is not a reason to run any.
+  const selectedPlugins = selection.loads ? selection : undefined;
+
+  const run = (plugins: CommandPlugins): Operation<void> =>
+    dispatch(
       evalFlags,
       helpRequest,
       installService,
@@ -2917,7 +3078,19 @@ export function* runXmd(
       readStandardInput,
       workflowHost,
       sessions,
+      plugins,
     );
+
+  // The typed configuration this command line settled, then the Plugins — so a
+  // Plugin reads the same `Config` answers every other consumer reads, before
+  // anything it installs can be asked for.
+  const configured = function* (): Operation<void> {
+    yield* Config.around({ verbose: () => commandVerbosity(selected) }, { at: "min" });
+    yield* withPlugins(selectedPlugins, run);
+  };
+
+  if (!bounded) {
+    return yield* configured();
   }
 
   const timeouts = planning
@@ -2929,16 +3102,7 @@ export function* runXmd(
     return;
   }
 
-  yield* underRunDeadline(timeouts, () =>
-    dispatch(
-      evalFlags,
-      helpRequest,
-      installService,
-      upgrade,
-      installRepositories,
-      readStandardInput,
-      workflowHost,
-      sessions,
-    ),
-  );
+  // The deadline encloses the selection too: a module that hangs while it loads
+  // is inside the run's own `--timeout` rather than outside it.
+  yield* underRunDeadline(timeouts, configured);
 }

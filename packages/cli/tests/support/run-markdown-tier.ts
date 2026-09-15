@@ -37,6 +37,7 @@ import { useDenoService } from "../../src/deno-service.ts";
 import { useNodeService } from "../../src/node-service.ts";
 
 import { unsupportedRepositories } from "../../src/run-repositories.ts";
+import { BUNDLED_PLUGINS } from "../../src/bundled-plugins.ts";
 /** The native service adapter the entrypoint for this runtime installs. */
 const SERVICES = {
   bun: useBunService,
@@ -78,6 +79,11 @@ export function runMarkdownTier(document: string): Operation<MarkdownTierRun> {
     const installService = SERVICES[cliRuntime()];
     const testingHost = testingExecutionHost({
       includes: ["components", "."],
+      // The distribution's own bundled Plugins, because a `host="run"` child
+      // gets what `xmd run` gets: the child installs them again in its own
+      // scope, with command `run`.
+      plugins: BUNDLED_PLUGINS,
+      pluginArgs: [],
       secretDetection: true,
       installService,
       // The same relaunch a runtime-named entrypoint installs, because this
