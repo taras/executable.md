@@ -102,6 +102,27 @@ function parseCheckpoint(value: unknown): AgentPromptCheckpoint {
 }
 
 /**
+ * Read a checkpoint out of a value nobody has authenticated, or none.
+ *
+ * The total counterpart of the parser above, for a reader holding retained
+ * bytes rather than something a provider just handed over. A retained
+ * checkpoint that does not read back is not a checkpoint, and a caller that
+ * needed one says so itself — this reports absence and refuses nothing.
+ */
+export function readCheckpoint(value: unknown): AgentPromptCheckpoint | undefined {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return undefined;
+  }
+  const provider = nonEmpty(Reflect.get(value, "provider"));
+  const kind = nonEmpty(Reflect.get(value, "kind"));
+  const token = nonEmpty(Reflect.get(value, "value"));
+  if (provider === undefined || kind === undefined || token === undefined) {
+    return undefined;
+  }
+  return Object.freeze({ provider, kind, value: token });
+}
+
+/**
  * Associate a checkpoint with the exact terminal event that carries it.
  *
  * Only a successful completion has one. A cancelled turn, a failed turn, and a
