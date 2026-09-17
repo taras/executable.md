@@ -62,6 +62,22 @@ export interface ExecutorLockHold {
    * it away.
    */
   execution?: string;
+  /**
+   * Settle this acquisition's execution as interrupted, if it is still running.
+   *
+   * Installed by the begin transaction itself, at the statement that records
+   * the execution — so from the instant a run commits there is a way to finish
+   * it, and no window exists in which a caller has yet to register one. It
+   * closes over the open connection, the run's path and the exact execution
+   * id, so teardown performs no lookup that could fail or suspend after
+   * cancellation has begun.
+   *
+   * Synchronous on purpose. Teardown runs after every child of this
+   * acquisition has been halted, so nothing else holds the connection, and a
+   * settlement that could suspend here would be one more thing cancellation
+   * could arrive in the middle of.
+   */
+  settleInterruption?: () => void;
 }
 
 /**
@@ -136,8 +152,14 @@ export function createExecutorLockRegistry(): ExecutorLockRegistry {
         // Registered as soon as the lock is held, so a failure between here and
         // the caller's first transition still retires it. It runs before the
         // acquisition beneath releases the file, so no lock is ever open to the
-        // operating system while this registry still answers for it.
+        // operating system while this registry still answers for it — and the
+        // run is therefore published interrupted before anybody else can take
+        // the lock and read it.
         yield* ensure(() => {
+          // Whatever this acquisition began and nobody finished. A settled
+          // execution is left exactly as it settled: this finishes what is
+          // still running rather than relabelling an outcome that already won.
+          hold.settleInterruption?.();
           hold.open = false;
           holds.delete(hold.lock);
         });

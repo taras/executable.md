@@ -61,6 +61,7 @@ import {
   SHA1,
   tamper,
   useStorageRoot,
+  runLeftUnfinished,
   withBegunRun,
   withStorage,
 } from "./support/storage.ts";
@@ -901,9 +902,10 @@ describe("Tier WS — surviving the process", () => {
   it("WS17: an unfinished document execution is still unfinished afterwards", function* () {
     const root = yield* useStorageRoot();
 
-    const executionId = yield* withBegunRun(root, function* (run) {
-      return run.execution.executionId;
-    });
+    // A workflow executor that was lost, not one that returned. A scope closing
+    // in this process runs the executor hold's teardown, and that settles the
+    // execution it began; only a killed process leaves one unfinished.
+    yield* runLeftUnfinished(root, "release-1.4");
 
     const restored = yield* withStorage(root, function* () {
       const found = yield* lookup("release-1.4");
@@ -918,7 +920,6 @@ describe("Tier WS — surviving the process", () => {
     });
 
     expect(restored).toHaveLength(1);
-    expect(restored[0].executionId).toBe(executionId);
     expect(restored[0].stoppedAt).toBeUndefined();
     expect(restored[0].stopStatus).toBeUndefined();
   });

@@ -43,6 +43,11 @@ import { legacySourceReader } from "./legacy-source.ts";
 import { parseSourceBundleDefinition, sourceBundleHash, sourceContentHash } from "../../mod.ts";
 import type { SourceBundleWorkflowRunCreationV2 } from "../../deno.ts";
 import type { Json } from "@executablemd/durable-streams";
+import process from "node:process";
+import { fileURLToPath } from "node:url";
+import { exec } from "@effectionx/process";
+import { when } from "@effectionx/converge";
+import { ensure, spawn } from "effection";
 
 export const SHA1 = "9fceb02d0ae598e95dc970b74767f19372d61af8";
 
@@ -407,4 +412,56 @@ export function storedBytes(row: Record<string, unknown> | undefined, column: st
     throw new Error(`the row carries no ${column}`);
   }
   return value;
+}
+
+const DEATH_CHILD = fileURLToPath(new URL("./executor-death-child.ts", import.meta.url));
+const REPOSITORY = fileURLToPath(new URL("../../..", import.meta.url));
+
+/**
+ * Leave `runId` the way a workflow executor that died leaves it.
+ *
+ * A run durably `running`, one execution with no end, and an advisory lock the
+ * kernel released rather than a host did. It takes a whole process because a
+ * process is the only thing that can be lost: a scope that closes in this one
+ * runs the executor hold's teardown, and that teardown settles the execution
+ * the acquisition began. Ending a scope therefore proves the opposite of what
+ * a dead executor leaves, which is why nothing here stands in for the child.
+ */
+export function* runLeftUnfinished(root: string, runId: string): Operation<void> {
+  yield* scoped(function* () {
+    const child = yield* exec(process.execPath, {
+      arguments: ["run", "--allow-all", "--frozen", DEATH_CHILD, root, runId],
+      cwd: REPOSITORY,
+    });
+    let announced = false;
+    yield* spawn(function* () {
+      const output = yield* child.stdout;
+      let next = yield* output.next();
+      while (!next.done) {
+        if (new TextDecoder().decode(next.value).includes("READY")) {
+          announced = true;
+        }
+        next = yield* output.next();
+      }
+    });
+    // Killed rather than asked: this child exists to be lost, and a process
+    // suspended on purpose has no other way to end.
+    yield* ensure(function* () {
+      try {
+        process.kill(child.pid, "SIGKILL");
+      } catch {
+        // Already gone, which is the outcome this wanted.
+      }
+      yield* child.join();
+    });
+    yield* when(
+      function* () {
+        if (!announced) {
+          throw new Error(`the executor child has not begun ${runId} yet`);
+        }
+      },
+      { timeout: 30_000 },
+    );
+    process.kill(child.pid, "SIGKILL");
+  });
 }

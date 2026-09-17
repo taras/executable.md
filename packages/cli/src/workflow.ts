@@ -976,39 +976,24 @@ export function runWorkflow(
     }
 
     const { database, record, execution, replay } = begun.value;
-    // Only after the creation transaction committed. A run id reported before
-    // it would name something a failure could still leave absent.
-    reportRun(record.runId);
 
-    // What the transition authenticated, and nothing this command read.
-    const source = executableSources(begun.value.sources);
-    if (!source.ok) {
-      report(source.error.message);
-      return { exitCode: 1 };
-    }
-
-    // Interruption is the outcome nothing else publishes. Registered before the
-    // execution starts, so a scope torn down by Ctrl-C settles the run rather
-    // than leaving a record with no end and a status of `running`. The executor
-    // lock outlives this finalizer, so its settlement remains authorized.
+    // Before anything that can suspend. `admit()` handed back a committed
+    // execution receipt, so the run is already durable and already `running`;
+    // everything below — reporting the id, projecting the sources, importing
+    // the Deno adapter — yields, and a cancellation landing in any of them has
+    // to find this finalizer already registered rather than still to come. The
+    // executor lock outlives it, so its settlement stays authorized.
+    //
+    // This is the reporting half of interruption. The begin transition installs
+    // its own settlement on the executor hold, inside the transaction that
+    // recorded the execution, which is what makes the durable outcome
+    // guaranteed rather than merely early; this runs first, so that backstop
+    // finds the execution already finished and leaves it alone.
     //
     // The phase, rather than a boolean: "the document produced an outcome" and
     // "this invocation is durably settled" are different facts, and collapsing
     // them is how a post-execution storage refusal would be republished as an
     // interruption. Teardown speaks only while the phase is still `running`.
-    // Imported where it is used rather than at the top of this module. This
-    // file is on the ordinary `xmd run` path too, and the Deno workflow adapter
-    // reaches `node:sqlite` — which Node greets with an experimental warning on
-    // standard error the moment it loads. A run that opens no workflow storage
-    // should not be announcing that it might have.
-    // `evaluationProfile` comes through the same import, and for the same
-    // reason: it is closed over this run's storage, and a run that opens no
-    // workflow storage must not load the adapter that reaches `node:sqlite` —
-    // which Bun does not have at all.
-    const { createSuspensionController, evaluationProfile } = yield* until(
-      import("@executablemd/workflow/deno"),
-    );
-    const suspension = createSuspensionController({ database });
     const phase: LifecyclePhase = { state: "running" };
     yield* ensure(function* () {
       if (phase.state !== "running") {
@@ -1034,6 +1019,31 @@ export function runWorkflow(
       }
       reportStatus("interrupted");
     });
+
+    // Only after the creation transaction committed. A run id reported before
+    // it would name something a failure could still leave absent.
+    reportRun(record.runId);
+
+    // What the transition authenticated, and nothing this command read.
+    const source = executableSources(begun.value.sources);
+    if (!source.ok) {
+      report(source.error.message);
+      return { exitCode: 1 };
+    }
+
+    // Imported where it is used rather than at the top of this module. This
+    // file is on the ordinary `xmd run` path too, and the Deno workflow adapter
+    // reaches `node:sqlite` — which Node greets with an experimental warning on
+    // standard error the moment it loads. A run that opens no workflow storage
+    // should not be announcing that it might have.
+    // `evaluationProfile` comes through the same import, and for the same
+    // reason: it is closed over this run's storage, and a run that opens no
+    // workflow storage must not load the adapter that reaches `node:sqlite` —
+    // which Bun does not have at all.
+    const { createSuspensionController, evaluationProfile } = yield* until(
+      import("@executablemd/workflow/deno"),
+    );
+    const suspension = createSuspensionController({ database });
 
     const completed = yield* isCompleted(database.journal);
     const documentExecution: WorkflowExecution = {

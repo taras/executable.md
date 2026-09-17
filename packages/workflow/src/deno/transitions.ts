@@ -167,6 +167,7 @@ export function* beginExecution(
   if (!outcome.ok) {
     // The transaction rolled back, so nothing was begun after all.
     hold.execution = undefined;
+    hold.settleInterruption = undefined;
     return outcome;
   }
   if (outcome.value.kind === "refused") {
@@ -396,6 +397,80 @@ function* settleSources(
 }
 
 /**
+ * What finishes this execution if its host is torn down before it settles.
+ *
+ * Built inside the transaction that inserted the execution, so it closes over
+ * the connection that is already open, the path, and the exact execution id —
+ * and therefore asks nothing of the world at the moment it runs. The executor
+ * hold calls it during teardown, before the advisory lock beneath is released,
+ * which is what makes `interrupted` the status the next acquisition finds
+ * rather than a stale `running`.
+ *
+ * Three things it deliberately does not do. It does not reread the run's
+ * source: what a run executes was settled when it began. It does not look the
+ * execution up first — one guarded `UPDATE` is the whole decision, and what it
+ * changed is what says whether there was anything to finish. And it does not
+ * throw: a teardown backstop that raised would replace the failure that caused
+ * the teardown with its own.
+ *
+ * A transaction that rolled back leaves no row at all, and an execution that
+ * settled on its own terms leaves one that no longer matches. Both change
+ * nothing, so neither is relabelled and neither publishes a run status. A
+ * cancellation before the creation committed therefore leaves nothing
+ * recognized and nothing to reuse the run id around.
+ */
+function interruptionSettler(
+  connection: RunConnection,
+  path: string,
+  executionId: string,
+): () => void {
+  let spent = false;
+  return () => {
+    if (spent) {
+      return;
+    }
+    spent = true;
+    const completion: DocumentExecutionCompletion = {
+      executionId,
+      status: "interrupted",
+      reason: { kind: "host", code: "executor-interrupted" },
+    };
+    try {
+      inLifecycleTransaction(connection, path, () => {
+        // The update decides it, rather than a read this then acts on. Its own
+        // `WHERE execution_id = ? AND stopped_at IS NULL` is the condition, so
+        // a row that was never inserted and a row that already settled are the
+        // same answer — nothing changed — and neither is asked about twice.
+        const columns = stopReasonColumns(completion.reason);
+        const changed = withStopReason(path, () =>
+          connection.database
+            .prepare(FINISH_EXECUTION)
+            .run(
+              new Date().toISOString(),
+              completion.status,
+              columns.kind,
+              columns.code,
+              columns.eventId,
+              completion.executionId,
+            ),
+        );
+        // Published only for an execution this actually finished. A run whose
+        // execution settled on its own terms keeps the status that settled it.
+        if (changed.changes === 0) {
+          return;
+        }
+        publish(connection.database, path, completion.status, completion.reason);
+      });
+    } catch {
+      // Teardown owes the caller nothing it can act on here. The run keeps
+      // whatever it last held, and the next acquisition reconciles it as the
+      // unfinished execution of a workflow executor that went away.
+      return;
+    }
+  };
+}
+
+/**
  * What one begin transaction committed.
  *
  * A refusal is an outcome, not an absence: the previous workflow executor's execution was
@@ -501,6 +576,10 @@ function beginOnce(
   const { database } = connection;
   const begun = begin(connection, path, hold, request, recovery, owned);
   hold.execution = begun.execution.executionId;
+  // Inside the transaction that records the execution, so the run is never
+  // durable without a way to finish it. Everything the settlement needs is
+  // captured here; nothing is looked up after cancellation has begun.
+  hold.settleInterruption = interruptionSettler(connection, path, begun.execution.executionId);
   return {
     ...begun,
     ...(recovery.closed === undefined ? {} : { closed: recovery.closed }),
@@ -565,6 +644,7 @@ export function* forkExecution(
   if (!outcome.ok) {
     // The transaction rolled back, so nothing was forked after all.
     hold.execution = undefined;
+    hold.settleInterruption = undefined;
     return outcome;
   }
   if (outcome.value.kind === "refused") {
@@ -728,6 +808,7 @@ function forkOnce(
   writeForkInheritance(connection, transaction, snapshot, head);
   const execution = insertExecution(database);
   hold.execution = execution.executionId;
+  hold.settleInterruption = interruptionSettler(connection, path, execution.executionId);
   return { kind: "begun", record: readRunRow(database, path), execution, replay: false };
 }
 

@@ -55,6 +55,7 @@ import { translateSqliteError, WorkflowReadonlyRollbackError } from "../src/deno
 import { EMPTY_WORKSPACE_ROOT_ID } from "../src/deno/workspace/manifest.ts";
 import {
   creation,
+  runLeftUnfinished,
   withExecutorRun,
   runPath,
   tamper,
@@ -131,17 +132,24 @@ function* retainedRun(root: string, runId: string): Operation<void> {
 
 /** A run interrupted mid-execution: two events, no root Close, still `running`. */
 function* partialRun(root: string, runId: string): Operation<void> {
-  yield* withRunHost(root, function* (transitions) {
-    yield* withExecutorRun(
-      transitions,
-      { runId, action: "start", creation: creation() },
-      function* (begun) {
-        yield* begun.database.journal.append(
-          sourced("import_component", `Release:${runId}`, { line: 4, column: 2 }),
-        );
-        yield* begun.database.journal.append(unsourced("exec", `exec:echo ${runId}`));
-      },
+  // A workflow executor that was lost, not one that returned. A scope closing
+  // in this process runs the executor hold's teardown, and that settles the
+  // execution the acquisition began; only a killed process leaves a run
+  // `running` with an execution that has no end.
+  yield* runLeftUnfinished(root, runId);
+
+  // The history it got through before it went. Appended through a lookup, which
+  // takes no executor lock and therefore settles nothing: what this leaves is
+  // still a run mid-flight.
+  yield* withRunHost(root, function* () {
+    const found = yield* WorkflowRunStorage.operations.lookup(runId);
+    if (!found.ok) {
+      throw found.error;
+    }
+    yield* found.value.journal.append(
+      sourced("import_component", `Release:${runId}`, { line: 4, column: 2 }),
     );
+    yield* found.value.journal.append(unsourced("exec", `exec:echo ${runId}`));
   });
 }
 
