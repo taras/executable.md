@@ -29,6 +29,7 @@ import type { Close, DurableEvent, Yield } from "@executablemd/durable-streams";
 import { SOURCE_POSITION_FIELD } from "@executablemd/core";
 import {
   Git,
+  isGitWorkflowRunRecord,
   WorkflowDatabaseFormatError,
   WorkflowInspectionRecoveryError,
   WorkflowLifecycle,
@@ -239,7 +240,12 @@ describe("Tier WLI — immutable lifecycle inspection", () => {
       expect(snapshot.record.runId).toBe("release-1.4");
       expect(snapshot.record.status).toBe("completed");
       expect(snapshot.record.props).toEqual({ channel: "stable" });
-      expect(snapshot.record.definition.rootDocumentPath).toBe("workflows/release.md");
+      // The fixture is a version-1 run, and the root document path is a member
+      // only that version has: a source bundle names a logical entrypoint.
+      expect(isGitWorkflowRunRecord(snapshot.record)).toBe(true);
+      if (isGitWorkflowRunRecord(snapshot.record)) {
+        expect(snapshot.record.definition.rootDocumentPath).toBe("workflows/release.md");
+      }
       expect(snapshot.executions).toHaveLength(1);
       expect(snapshot.executions[0]?.stopStatus).toBe("completed");
       expect(snapshot.currentWorkspaceRootId).toBe(EMPTY_WORKSPACE_ROOT_ID);

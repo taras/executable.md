@@ -9,7 +9,11 @@
 import { scoped } from "effection";
 import type { Operation } from "effection";
 import { useTempDirectory } from "@executablemd/test-support/temp";
-import { parseWorkflowDefinition, WorkflowRunStorage } from "@executablemd/workflow";
+import {
+  isGitWorkflowDefinition,
+  parseWorkflowDefinition,
+  WorkflowRunStorage,
+} from "@executablemd/workflow";
 import type { CreateWorkflowRunRequest, WorkflowRunDatabase } from "@executablemd/workflow";
 import { useWorkflowRunStorage } from "@executablemd/workflow/deno";
 
@@ -39,6 +43,11 @@ export function* createRun(
   });
   if (!parsed.ok) {
     throw parsed.error;
+  }
+  // The literal above is a version-1 definition, so the union the parser returns
+  // narrows back to one here rather than being asserted into one.
+  if (!isGitWorkflowDefinition(parsed.value)) {
+    throw new Error(`expected a Git definition, got ${parsed.value.kind}`);
   }
   const created = yield* WorkflowRunStorage.operations.create({
     runId: "observation-run",
