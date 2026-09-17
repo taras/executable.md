@@ -390,6 +390,12 @@ const DENO_ONLY_TOOLING: RuntimeExclusion[] = [
     issue: DERIVED_SCOPE,
   },
   {
+    path: "packages/workflow/tests/workflow-fork-source.test.ts",
+    reason:
+      "every case admits a fork through the lifecycle, which takes the run's executor lock; packages/workflow/src/deno/advisory-lock.ts reaches that lock through the `Deno` global and refuses outright under any other runtime. The provider-neutral half of the fork contract — forkability classification and fork selection, which opens no database — is packages/workflow/tests/workflow-fork.test.ts and runs on all three",
+    issue: DERIVED_SCOPE,
+  },
+  {
     path: "packages/cli/tests/workflow-retention.test.ts",
     reason:
       "reads what `xmd workflow start` retained from its node:sqlite run store, which only the Deno entrypoints open; the portable half of the same contract is packages/cli/tests/process-retention.test.ts",
