@@ -63,6 +63,7 @@ import type {
 } from "@executablemd/core";
 import type { Stream } from "effection";
 import { createHash } from "node:crypto";
+import { readLegacyDefinitionSource } from "../src/workflow-source.ts";
 import { establishDefinition } from "../src/workflow-definition.ts";
 import { runWorkflow } from "../src/workflow.ts";
 import type {
@@ -113,10 +114,10 @@ function useRunStore(): Operation<string> {
 function host(root: string, events: string[] = []): WorkflowHost {
   return {
     useRunHost(): Operation<WorkflowExecutionTransitions> {
-      return useWorkflowRunHost({ root });
+      return useWorkflowRunHost({ root, legacySource: readLegacyDefinitionSource });
     },
     useLifecycle(): Operation<void> {
-      return useWorkflowLifecycle({ root });
+      return useWorkflowLifecycle({ root, legacySource: readLegacyDefinitionSource });
     },
     useDelivery(): Operation<void> {
       return useWorkflowInputDelivery({ root });
@@ -286,7 +287,10 @@ function retained(path: string): Retained {
  */
 function* createRun(root: string, fixture: Fixture): Operation<string> {
   return yield* scoped(function* () {
-    const transitions = yield* useWorkflowRunHost({ root });
+    const transitions = yield* useWorkflowRunHost({
+      root,
+      legacySource: readLegacyDefinitionSource,
+    });
     const runId = crypto.randomUUID();
     const acquired = yield* WorkflowLifecycle.operations.acquireExecutor(runId);
     if (!acquired.ok) {
@@ -506,7 +510,7 @@ describe("Tier WFS — a suspended run and its no-input resumes", () => {
     // The lock is free. Acquisition refuses outright while an executor holds
     // it, so acquiring at all is the proof it was released.
     yield* scoped(function* () {
-      yield* useWorkflowLifecycle({ root });
+      yield* useWorkflowLifecycle({ root, legacySource: readLegacyDefinitionSource });
       const acquired = yield* WorkflowLifecycle.operations.acquireExecutor(runId);
       expect(acquired.ok).toBe(true);
       expect(acquired.ok && acquired.value.kind).toBe("acquired");
@@ -725,7 +729,7 @@ describe("Tier WFS — a suspended run and its no-input resumes", () => {
     // And the real wait, answered while a live workflow executor holds the
     // lock. Delivery never asks for it, so holding it changes nothing.
     const delivered = yield* scoped(function* () {
-      yield* useWorkflowLifecycle({ root });
+      yield* useWorkflowLifecycle({ root, legacySource: readLegacyDefinitionSource });
       const acquired = yield* WorkflowLifecycle.operations.acquireExecutor(runId);
       expect(acquired.ok && acquired.value.kind).toBe("acquired");
       return yield* manage(
@@ -886,10 +890,10 @@ function* useStubAgent(calls: AgentCalls): Operation<void> {
 function productionHost(root: string, calls: AgentCalls, events: string[] = []): WorkflowHost {
   return {
     useRunHost(): Operation<WorkflowExecutionTransitions> {
-      return useWorkflowRunHost({ root });
+      return useWorkflowRunHost({ root, legacySource: readLegacyDefinitionSource });
     },
     useLifecycle(): Operation<void> {
-      return useWorkflowLifecycle({ root });
+      return useWorkflowLifecycle({ root, legacySource: readLegacyDefinitionSource });
     },
     useDelivery(): Operation<void> {
       return useWorkflowInputDelivery({ root });
@@ -1198,7 +1202,7 @@ describe("Tier CKX — a checkpoint a document asked for", () => {
     // The lock is free: acquisition refuses outright while an executor holds
     // it, so acquiring at all is the proof it was released.
     yield* scoped(function* () {
-      yield* useWorkflowLifecycle({ root });
+      yield* useWorkflowLifecycle({ root, legacySource: readLegacyDefinitionSource });
       const acquired = yield* WorkflowLifecycle.operations.acquireExecutor(runId);
       expect(acquired.ok).toBe(true);
       expect(acquired.ok && acquired.value.kind).toBe("acquired");
