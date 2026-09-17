@@ -3937,7 +3937,11 @@ function* durableImportComponent(
     "reserved": false } }
 ```
 
-A component the workflow definition is closed over records its own shape:
+A component the workflow definition is closed over records its own shape. The
+path it records is the one that definition retains it under — a
+repository-relative path inside the pinned commit for a Git definition, a
+logical path inside the bundle for a source bundle — so an authored position
+inside a retained component names it by the same path the run does:
 
 ```json
 { "type": "import_component", "name": "Discovery" }
@@ -10305,9 +10309,14 @@ completed is restored from its retained record rather than performed again.
 
 An installation may also carry a `bundle`: the closed set of authored Markdown
 components one workflow execution is closed over, as plain immutable data —
-each entry's name, its canonical repository-relative path inside the pinned
-commit, that blob's object ID, and the exact source read from it. It is read
-once and copied entry by entry before any `install()` runs, on the same terms as
+each entry's name, the canonical path its definition retains it under, that
+source's own identity hash, and the exact source behind it. What that path and
+hash mean belongs to the workflow definition's version and not to core: a
+version-1 definition retains a repository-relative path inside a pinned commit
+and the blob's object ID, and a version-2 source bundle retains a logical path
+and the source's own content hash. Either way core receives the same immutable
+entries. It is read once and copied entry by entry before any `install()` runs,
+on the same terms as
 the admissions and preparations beside it, so what a name resolves to and which
 answers a document may invoke are fixed before anything can observe or replace
 them. One execution runs under one bundle: two installations supplying one is

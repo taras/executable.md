@@ -119,11 +119,18 @@ from the workflow host, not from another spelling of `<File>` or `<Git.Commit>`.
 
 ## 3. Workflow lifecycle
 
-The immutable workflow definition is the source repository, pinned commit and
-root document path established by the workflow-run contract. It is not an
-implicit Repository inside the Workspace. Repository components may therefore
-open two or more unrelated repositories without changing definition or run
-identity.
+The immutable workflow definition is established by the workflow-run contract
+and comes in two versions. A **source bundle** is the exact bytes the run
+retains, addressed by logical paths; a **Git** definition is the source
+repository, pinned commit and root document path. Neither is an implicit
+Repository inside the Workspace. Repository components may therefore open two or
+more unrelated repositories without changing definition or run identity.
+
+`xmd workflow start` establishes a source bundle. Its argument is a document
+reference — a path, optionally followed by `#` and one target selector — and the
+file's current bytes are what the run is of, whether or not that file is tracked,
+committed or inside a repository at all. Existing version-1 runs keep their
+definition, their identity and their behavior exactly.
 
 When the definition names one **document target**, that exact canonical target
 is part of it and therefore part of definition identity. A run of one section
@@ -132,6 +139,31 @@ sections, so a resume is a resume only when it names the same exact target. The
 selector a caller wrote never occupies that field: identity is the resolved
 answer, so resuming re-enters the section the run actually executed rather than
 whatever the same glob would name against a later checkout.
+
+### 3.1 Source is proved before the lifecycle moves
+
+Every source check happens under the executor lock and **before** stale
+recovery, a new document-execution record, Workspace attachment, journal replay
+or root import. A source-bundle run's retained content is re-derived from its own
+store; a version-1 run's Markdown crosses the host-supplied legacy reader and its
+answer is validated against the descriptor. A host that installed no such reader
+cannot begin, fork or stage a version-1 run at all, and says so rather than
+admitting one without knowing what it executes.
+
+A failure there leaves the run exactly as it was: no execution record, no
+Workspace attached, no status published. Nothing falls back to the original
+file, the optional provenance, the current `HEAD` or working-tree bytes.
+
+For a new run, one transaction retains the descriptor, the complete source
+manifest, the exact blobs, the initial Workspace state, the first
+document-execution record and `running` — all of them or none. **No run id is
+reported before that commit.** A failure or cancellation before it leaves no
+recognized run and permits a clean retry of the id; an interruption after it is
+an ordinary resumable execution.
+
+After admission the command executes the closure the transition returned. It
+does not reread the candidate path: a candidate that remained a second route to
+execution would be a second answer to what the run is a run of.
 
 A root may also close itself over a **component bundle**, and that bundle is
 part of the definition too. The root declares it in its own frontmatter:
@@ -148,12 +180,18 @@ workflow:
 
 `workflow` is one closed member, `components`, holding a non-empty mapping from
 a component name to a relative POSIX Markdown path beside the root. Each path is
-normalized against the root's own directory in the same pinned commit and read
-from that commit; the blob's own object ID is the component's source hash. A
-root that declares no `workflow` member is a run with no bundle and keeps the
-version 1 descriptor exactly; an explicitly empty mapping is refused rather than
-becoming a second spelling of the same thing. A declaration may not claim
-structural syntax, a component the engine supplies, or a name the host reserved.
+normalized against the root's own directory, and that normalized path is both
+the logical path the bundle retains and the file this host reads beside the
+root; the source's own domain-separated content hash is the component's source
+hash. A root that
+declares no `workflow` member is a run with no bundle and writes no `components`
+member at all; an explicitly empty mapping is refused rather than becoming a
+second spelling of the same thing. A declaration may not claim structural
+syntax, a component the engine supplies, or a name the host reserved.
+
+A version-1 run keeps its own form of the same rule: each path is normalized
+inside the pinned commit and read from it, and the blob's own object ID is the
+component's source hash.
 
 Because the hash is identity, changing what a component says changes the
 definition. A run of one bundle and a run of another are different runs, exactly
@@ -192,7 +230,9 @@ xmd workflow answer run_01J... 9f2c... '{"approved":true}'
 ```
 
 An inspection names no document and reads no definition: `status`, `list` and
-`history` reach neither Git nor the working tree.
+`history` reach neither Git nor the working tree. `status` describes a
+source-bundle run by its entrypoint and bundle hash, with its exact target when
+it has one, and reports no base and no fabricated commit for it.
 
 `start` executes until completion, failure, suspension or interruption.
 `resume` continues an interrupted or ready suspended run under its retained
@@ -560,14 +600,17 @@ interruption, and a completed or failed document is never relabelled
 
 **A run that ended is not a run to continue.** `resume` admits `interrupted`,
 `suspended` and (as a full replay) `completed`; `failed` and `cancelled` are
-refused with exit 1 — before the definition is fetched from Git, before the
-executor lock is acquired, before stale recovery, before a document-execution
-record is begun, before a Workspace is attached, and before anything is
-appended. Reusing a
+refused with exit 1 — before stale recovery, before a document-execution record
+is begun, before a Workspace is attached, and before anything is appended.
+Source is proved first, under the executor lock and before every one of those
+(§3.1), so a run whose source cannot be obtained is refused for that with its
+lifecycle and journal untouched. Reusing a
 compatible id through `start` is a separate rule: it replays a failed run's
 retained failure, and that does not make the run eligible for `resume`.
 
-- `start` takes exactly one Markdown definition path. There is no generic
+- `start` takes exactly one Markdown document reference — a path, optionally
+  followed by `#` and one target selector, with a literal `#` in a filename
+  written `%23`. There is no generic
   `--prop`, no `--journal`, no inline `--eval`, no agent option and no host
   selector. Without `--id` the host generates an opaque cryptographically random
   identifier, so starting the same document twice makes two runs; the local
@@ -592,9 +635,9 @@ retained failure, and that does not make the run eligible for `resume`.
   module, an extensionless path, a directory, a glob, a URL, a package
   specifier, an absolute path and a path that walks the tree are each refused
   rather than repaired.
-- A declared component the pinned commit does not hold as readable Markdown
-  refuses the `start` before storage is created and before any component code
-  runs.
+- A declared component that is not readable Markdown beside the root refuses
+  the `start` before storage is created and before any component code runs. A
+  version-1 run applies the same rule to the pinned commit.
 - The command exists on every runtime and the capability on one: the Deno
   entrypoint and the compiled binary own the local run store, and Node and Bun
   refuse before creating or executing anything.
@@ -620,9 +663,10 @@ resumes the run rather than on its own. Fork is built (§11): a run's history ca
 be continued under a changed definition from any committed checkpoint the
 retained events allow.
 
-The component bundle is built: a root declares one, `start` establishes it from
-the pinned commit, the definition retains it, and `resume` and completed replay
-reconstruct it. The adversarial implementation loop those five
+The component bundle is built: a root declares one, `start` reads it from beside
+the root, the definition retains its bytes, and `resume` and completed replay
+execute the closure the lifecycle authenticated. A version-1 run's bundle is
+reconstructed from its pinned commit through the host's legacy source reader. The adversarial implementation loop those five
 stage names describe is not — its scheduling and unattended continuation belong
 to the durable-suspension stack. Generated-XMD admission is built for both
 effect classes (§8.4): a fragment observes under `read` and mutates the run's
@@ -793,31 +837,57 @@ Co-location does not make arbitrary filesystem content journal data.
 
 ### 5.1 What the run record holds
 
-The run's own record is the part of that database the lifecycle reads. It holds
-the immutable definition, the definition base and the normalized props;
-the current status and its stop reason; one document-execution record per start
-and per resume; replaceable retrieval metadata; and the filtered journal.
+The run's own record is the part of that database the lifecycle reads, and it is
+a closed alternative on the definition version it retains. Both members hold the
+immutable definition and the normalized props; the current status and its stop
+reason; one document-execution record per start and per resume; replaceable
+retrieval metadata; and the filtered journal. A **version-1** record also holds
+the definition base. A **version-2** record holds no base and no pinned commit:
+those are Git fields, and a synthetic one would name a repository state the run
+never had.
 
-The immutable definition is a versioned descriptor naming an object format, an
-object ID and the repository-relative root document path. It also carries the
-component bundle when the root declares one: an array sorted by component name,
-each entry holding that name, its canonical repository-relative path inside the
-pinned commit, and the blob's object ID under the descriptor's own object
-format. The bundle is a member of that descriptor rather than a version past it,
-so a definition retained before bundles existed parses unchanged and identifies
-a run closed over no components; an empty array is not a second spelling of that
-and is refused. A repository locator is not part of it. Where the definition can be fetched from, and where it is
-checked out on one machine, are retrieval metadata: replaceable, free of
-credentials, reauthorized by the host before use, and excluded from the
-comparison that decides whether a reused run ID addresses the same run.
+The immutable definition is a closed alternative on the same split.
 
-Compatible reuse compares the run ID, the whole descriptor including its
-version and its component bundle, the base and the normalized props,
-canonically. A changed component name, canonical path, source hash or component
-set conflicts as `definition`, and the refusal names that field rather than any
-value behind it. Status, stop reason,
-retrieval metadata, timestamps, document executions and journal records are
-excluded, so a completed run asked for again is found rather than refused.
+A **version-1** descriptor names an object format, an object ID and the
+repository-relative root document path. Its component bundle is an array sorted
+by component name, each entry holding that name, its canonical
+repository-relative path inside the pinned commit, and the blob's object ID
+under the descriptor's own object format. Where that object can be fetched from,
+and where it is checked out on one machine, are retrieval metadata:
+replaceable, free of credentials, reauthorized by the host before use, and
+excluded from the comparison that decides whether a reused run ID addresses the
+same run.
+
+A **version-2** descriptor is a source bundle: a hash algorithm, a bundle hash,
+a logical entrypoint, and a canonically ordered manifest holding each source's
+logical path, its domain-separated content hash and its byte length. Its
+component bundle maps each declared name onto a logical path the same manifest
+retains. The bytes behind every path are retained with the run, so nothing has
+to be fetched at all; an optional credential-free provenance observation lives
+in the same replaceable metadata boundary and is never read back to find the
+source.
+
+In both versions the bundle is a member of the descriptor rather than a version
+past it, so a definition retained before bundles existed parses unchanged and
+identifies a run closed over no components; an empty array is not a second
+spelling of that and is refused. A repository locator is part of neither.
+
+Compatible reuse compares the run ID, the whole descriptor including its version
+and kind and its component bundle, and the normalized props, canonically. **The
+base takes part only when both sides are version-1 runs**; a source bundle has
+none, so nothing is compared about one. A version-2 comparison covers the bundle
+hash, the entrypoint, the complete canonical source manifest, the component
+mapping and the exact presence and value of the target — the manifest whole,
+even though the bundle hash commits to it, because a hash is not a reason to
+admit a retained structure that disagrees with itself.
+
+Two descriptors of different versions are never one run. A cross-version reuse
+conflicts as `definition` and is not then asked about a base one of them does
+not have. A changed component name, path, source hash or component set conflicts
+as `definition` in either version, and the refusal names that field rather than
+any value behind it. Status, stop reason, retrieval metadata, provenance,
+timestamps, document executions and journal records are excluded, so a completed
+run asked for again is found rather than refused.
 
 A stop reason is a categorical host code or a reference to an already-filtered
 journal event. Arbitrary failure text is not retained beside the journal that
@@ -2348,19 +2418,34 @@ creation identity does not. Missing, damaged or conflicting retained state is a 
 stale-input condition: children and later siblings do not begin, `<PrintErrors>`
 cannot print it, and nothing is recloned or repaired.
 
-Before any of that, a run closed over a component bundle reconstructs it: `resume`
-reads every retained component from the retained commit and verifies each blob
-against the retained source hash under the executor lock, before a
-document-execution record is begun, before a Workspace is attached and before
-anything is appended. The working tree and the current `HEAD` are not consulted.
-The reconstructed bundle then holds the retained history to itself — a recorded
-import naming a component the bundle does not declare, or holding a different
-path, hash or source, appends nothing and invokes nothing.
+Before any of that, a run closed over a component bundle obtains it, by the
+version it retains — under the executor lock, before a document-execution record
+is begun, before a Workspace is attached and before anything is appended.
+
+A **version-2** run authenticates it from its own retained source BLOBs. Every
+retained length and content hash is recomputed from the bytes the run holds, and
+so is the bundle hash over the resulting manifest and mapping. Nothing is read
+from a repository, from the file the run was started from, or from the files its
+components were read beside — all three may have been edited, moved or deleted,
+and none of them is what the run is a run of. Missing content and content that
+no longer describes itself are distinct refusals, and neither falls back to any
+other source.
+
+A **version-1** run reconstructs it from the retained commit through the
+host-supplied legacy source reader, and Workflow recomputes every returned blob
+identity from the bytes that came back before comparing it with the retained
+source hash. The working tree and the current `HEAD` are not consulted. A host
+that installed no such reader cannot obtain a version-1 bundle at all and says
+so rather than proceeding without one.
+
+Either way the obtained bundle then holds the retained history to itself — a
+recorded import naming a component the bundle does not declare, or holding a
+different path, hash or source, appends nothing and invokes nothing.
 
 A completed root result returns without expanding the document or attaching
-Workspace, Agent or external providers. It still reconstructs the bundle and
-still applies that admission, so retained output is accepted only for a history
-this run is a run of.
+Workspace, Agent or external providers. It still obtains the bundle the same way
+its version requires, and still applies that admission, so retained output is
+accepted only for a history this run is a run of.
 
 A partial replay that reaches a completed Git-host effect may still reconstruct
 what that effect needed locally — a Push rebuilds its checkout from the Workspace
@@ -2986,9 +3071,11 @@ nor `--at`.
 ### 11.1 What a fork retains
 
 A fork is a new immutable WorkflowRun identity. It holds a new run ID, the
-supplied definition with its base, pinned commit and complete component bundle,
-the merged normalized props, its lineage, and a journal made of two records it
-writes for itself followed by everything it inherited.
+supplied definition entire — its complete component bundle, and whatever else
+that version is made of: a source bundle's manifest and retained bytes, or a
+version-1 definition's base and pinned commit — the merged normalized props, its
+lineage, and a journal made of two records it writes for itself followed by
+everything it inherited.
 
 The two records are its own `workflow_run` and its own root import. The first is
 what its journal is held to: a history carrying two run records describes two
@@ -3042,6 +3129,14 @@ selected event. It does not acquire the source executor lock and never writes
 the source run. Concurrent source appends after the selected checkpoint do not
 alter the admitted prefix or root.
 
+The fork's candidate is established exactly as a `start`'s is: its own document
+reference, its own bytes, its own logical entrypoint and its own bundle. The
+fork is therefore a run of what that file said, and its retained source is
+independent of the source run's — deleting the source run, the candidate's file
+or the repository either sat in changes nothing about what the fork replays.
+Staging assembles the same candidate under the same rules, so a compatibility
+replay runs the bytes the fork will retain rather than anything still on disk.
+
 Before recognizable new-run storage exists, the source, the checkpoint, the
 selected root, the candidate definition, the component bundle, the normalized
 props, forkability and compatibility replay are all validated. Missing, corrupt,
@@ -3055,8 +3150,9 @@ or death after it leaves a valid fork under ordinary lifecycle and recovery
 rules. Live document execution begins only after that commit.
 
 Reusing a caller-selected fork ID is compatible only when the source run, the
-checkpoint, the definition including its component bundle and pinned commit, the
-base and the normalized props all agree. A request differing in any one of them
+checkpoint, the definition including its version and its component bundle, and
+the normalized props all agree — and, for a version-1 definition, its base and
+pinned commit as well. A request differing in any one of them
 is refused before anything is written, and the refusal names the term that
 differs rather than collapsing them into one cause.
 

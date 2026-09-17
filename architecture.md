@@ -34,14 +34,17 @@ and categorization rather than clarify them, so both stay exactly as written.
 | middleware | applied by the lexical structure, used by runtime execution |
 | workflow run | a workflow being carried out with its progress and outcome recorded durably; document executions perform its work, while ongoing effects remain scoped to the document execution in which they run |
 | document execution | one evaluation of a root document initiated through `execute()`, producing one output stream and one completion result while reading and appending a durable journal; its ongoing effects belong to the Effection scope in which the evaluation runs |
-| workflow definition | what a workflow run is a run of: a versioned descriptor naming an immutable object — its format and object ID — together with the repository-relative path of the root document inside it, the exact canonical document target when one is selected, and the component bundle it is closed over when it declares one. A repository locator is not part of it, and it is distinct from every Repository created inside the run's Workspace |
-| workflow component bundle | the closed set of authored Markdown components a workflow root declares, each named, located by a canonical repository-relative path inside the pinned commit, and identified by that blob's object ID. It is both definition identity and canonical resolution: the names it declares resolve to its exact pinned sources and to nothing else |
+| workflow definition | what a workflow run is a run of: a closed versioned descriptor, in one of two versions. Version 1 names an immutable Git object — its format and object ID — together with the repository-relative path of the root document inside it. Version 2 is a **source bundle**: the exact bytes themselves, addressed by logical paths and retained with the run. Both optionally carry the exact canonical document target and the component bundle the root declares. A repository locator is not part of either, and neither is distinct from every Repository created inside the run's Workspace |
+| source bundle | a version-2 workflow definition: an entrypoint, a canonically ordered manifest of logical paths with each source's SHA-256 and byte length, and a bundle hash over that manifest. The bytes behind it are retained with the run, so a file outside a repository, an untracked file and a file edited since its last commit are all ordinary starts, and editing, moving or deleting the original afterwards changes nothing about the run |
+| logical path | a portable identity inside a source bundle, never a host filesystem path: NFC Unicode scalar values, `/`-separated, without leading or trailing separator, NUL, C0 control, DEL, backslash or `#`, and without an empty, `.` or `..` segment, compared case-sensitively by its UTF-8 bytes. The containing directory, the absolute path and the invocation working directory are retrieval facts and never identity |
+| workflow component bundle | the closed set of authored Markdown components a workflow root declares. A version-1 bundle locates each by a canonical repository-relative path inside the pinned commit and identifies it by that blob's object ID; a version-2 bundle maps each name onto a logical path the same source bundle retains. It is both definition identity and canonical resolution: the names it declares resolve to its exact retained sources and to nothing else |
 | declared Markdown component | exact first-party Markdown a trusted host declares to one document execution, read once and held by the invocation — schemas copied, not referenced — before any installation runs, as immutable data on an `ExecutionInstallation`: the public name, the reported origin, the bytes, the SHA-256 of those bytes, the accepted forms, the contract parsed from them, and any private component closure only those bytes may write. The host claims the name rather than offering a default for it, so it resolves ahead of a repository file, a workflow component bundle and every registration; a second claim on one name is a configuration failure. It is a composition mechanism and not a policy loader: no caller-facing option selects one, adds one, or names its source |
 | private component closure | the components one declared Markdown component carries that only its own bytes may write. Each is minted like any other invocation-identity component and registered nowhere, so it resolves while canonical core is expanding that declaration's body and nowhere else — not from the caller's root, the content the caller projected through it, a sibling declaration, an imported component, middleware, or an implementation kept past teardown. Eligibility is the authored occurrence rather than the name: what an import may invoke is what canonical core produced inside that exact ask; an implementation the closure built is refused for every other name, copy, later site and later execution, because a run that has ended admits nothing; and a private name written anywhere else resolves to nothing before any other tier can answer. It is lexical availability, not permission: every private component still takes its operation from the invocation that carries it |
 | retrieval metadata | replaceable, credential-free information about where a workflow definition can be fetched from now; it takes no part in run identity and is reauthorized by the host before use |
 | stop reason | why a workflow run or a document execution stopped: a categorical host code, or a reference to an already-filtered journal event |
 | run ID | an opaque stable public identifier generated by the host or selected by an authorized caller; it associates the run's durable records and effects, remains unchanged for the life of the run, and has no semantics beyond equality and lifecycle addressing |
-| definition base | the Git revision supplied to choose a workflow definition's pinned commit |
+| definition base | the Git revision supplied to choose a version-1 workflow definition's pinned commit. A source-bundle run has none |
+| legacy workflow source reader | the direct, non-contextual capability a trusted host supplies so the retained lifecycle can obtain a version-1 definition's Markdown. It is captured before document code runs and reachable through no Context, Api, component, Plugin installation result or authored value; Workflow validates everything it returns against the descriptor it asked about |
 | Repository base | the optional Git revision from which one named Repository initializes its primary checkout |
 | Repository selection | plain structural composition data naming the repository one component invocation acts on: an opaque provider-minted selection identifier, the display name, the credential-free repository identity, and the selected checkout path. It carries no credential, provider handle, lock, database, run ID or permission — the installed provider authenticates every selection against private state before it touches Git or a service, so a copied, replaced or rebuilt one can misname a target and be refused but can never reach one |
 | ambient Repository | the repository an ordinary `xmd run` was started inside, discovered once before root expansion from the invocation's starting directory. Its identity is the canonical common Git directory and its selected checkout is the canonical checkout root, so starting in a linked worktree names the same repository as starting in the primary checkout while Git operations still act on the worktree. A workflow run has none |
@@ -84,7 +87,7 @@ and categorization rather than clarify them, so both stay exactly as written.
 | recovered inspection snapshot | an immutable lifecycle snapshot read from a private scratch copy after SQLite rolls that copy's hot journal back to the retained store's last committed state; the retained database and journal are not changed |
 | XMD artifact | one immutable portable evidence file with the `.xmd` extension, containing one workflow run's committed retained state at one artifact frontier together with its workflow definition source closure; it is neither a live run store nor permission to continue the source run |
 | artifact frontier | the exact committed lifecycle snapshot, journal boundary and current Workspace root an XMD artifact records |
-| workflow definition source closure | the exact root Markdown source and every source in its declared workflow component bundle, each authenticated against the immutable object identity in the workflow definition; retrieval metadata and a repository checkout are not part of the closure |
+| workflow definition source closure | the exact root Markdown source and every source in its declared workflow component bundle, in the form the run's own definition version retains: a version-1 closure is authenticated against the immutable object identity in the definition, and a version-2 closure is the retained bytes re-derived from the run's own store. Retrieval metadata, provenance and a repository checkout are not part of either |
 | artifact manifest | the canonical versioned inventory of every semantic record and retained byte in one XMD artifact, excluding its own derived identity and physical container layout |
 | XMD artifact identity | the lowercase SHA-256 of an XMD artifact's artifact manifest; it identifies the evidence independently of its host path and physical encoding and is retained as the source identity of a history fork made from that artifact |
 | Agent session portability evidence | what one XMD artifact states about every logical workflow Agent session that contributed a retained Prompt: either complete portable evidence — the session and its compatibility attributes, the provider, the bundle kind and compatibility identifier, the source and bundled provider-session identities, the identity-allocation mode, the ordered provider checkpoint tokens, and the Agent session bundle's length, hash and bytes — or an explicit unavailable marker naming why. A session that retained no Prompt has none. It is detached retained evidence about a conversation, never a live provider session and never control over the host that produced it |
@@ -192,13 +195,16 @@ The workflow run exists once that value is durably recorded. A document failure
 or cancellation after that point does not erase it. Failure before that point
 creates no workflow run and the root document does not expand.
 
-`WorkflowRun.base` and `WorkflowRun.pinnedCommit` identify the source repository
-state containing the workflow definition. They do not create or seed a
-Workspace Repository. Each `<Repository>` inside the definition resolves and
-pins its own optional Repository base, so one workflow may compose repositories
-unrelated to the definition repository or to one another.
+`WorkflowRun` is a closed union. A version-1 run carries `base` and
+`pinnedCommit`, which identify the source repository state containing the
+workflow definition; a version-2 run carries `definitionVersion`, `bundleHash`
+and the exact target when it has one, and invents neither. Neither creates or
+seeds a Workspace Repository. Each `<Repository>` inside the definition resolves
+and pins its own optional Repository base, so one workflow may compose
+repositories unrelated to the definition repository or to one another.
 
-Base resolution goes through the contextual Git capability:
+Base resolution — for a version-1 run only — goes through the contextual Git
+capability:
 
 ```ts
 interface GitApi {
@@ -209,11 +215,21 @@ interface GitApi {
 `Git.revParse(revision)` has the semantics of
 `git rev-parse --verify --end-of-options <revision>` in the contextual working
 directory. Its default provider invokes the Git CLI; another provider may
-replace it lexically. Workflow initialization calls it with
+replace it lexically. `workflowInstallation({ base })` calls it with
 `${base}^{commit}`, which verifies that the result is a commit and returns its
-full object ID. Starting a workflow run fails before root expansion when Git
+full object ID, and it is the only caller of that capability left in the
+workflow package. Starting such a run fails before root expansion when Git
 cannot be invoked, the working directory is not a Git repository, or the base
-does not resolve to a commit. Ordinary `execute()` remains Git-independent.
+does not resolve to a commit. Ordinary `execute()` remains Git-independent, and
+so does starting, resuming, forking or exporting a source-bundle run.
+
+**Retained workflow identity and retained source retrieval require no Git.** The
+CLI establishes a version-2 candidate from filesystem bytes, and the retained
+lifecycle re-derives a version-2 source from the run's own store. Version-1
+source crosses the host-supplied legacy reader, which is a direct dependency
+rather than a package-level import. The one remaining exception is
+`workflowInstallation({ base })` itself, which issue #822 moves into the bundled
+Git Plugin; nothing else in the retained path names Git.
 
 Replay restores the recorded `WorkflowRun` without allocating another run ID
 or invoking Git. The supplied base must equal the recorded base. Git is not
@@ -225,9 +241,11 @@ A host that has already created the run's storage record passes
 Nothing is left for the execution to decide: it records that value through the
 same `workflow_run` durable operation, allocates no identifier and resolves no
 base, and every journal state — live, truncated and completed — requires the
-recorded run to agree with the supplied one in run ID, base and pinned commit. A
-journal that disagrees in any of them is not this run's journal, and the refusal
-names the fields rather than their values.
+recorded run to agree with the supplied one in every member of its own version:
+run ID, base and pinned commit for version 1; run ID, bundle hash and exact
+target for version 2. A journal that disagrees in any of them, or that records
+the other version, is not this run's journal, and the refusal names the fields
+rather than their values.
 
 `getWorkflowRun()` returns the frozen `WorkflowRun` for the current document
 execution. Every call in one live execution returns the same object. It throws
@@ -270,8 +288,12 @@ they can reach SQLite.
 ### Identity is separate from retrieval
 
 Identity is the run ID, the whole workflow definition including its descriptor
-version, the definition base, and the normalized props. Values are compared
-canonically, so props differing only in key order are the same props.
+version and kind, the definition base for a version-1 run, and the normalized
+props. Values are compared canonically, so props differing only in key order are
+the same props. Each version is compared by its own complete identity — a
+version-2 comparison covers the bundle hash, the entrypoint, the whole canonical
+source manifest, the component mapping and the exact target — and two
+descriptors of different versions are never one run.
 
 Everything a run accumulates is excluded from that comparison: status, stop
 reason, retrieval metadata, timestamps, document executions and journal
@@ -317,6 +339,32 @@ records #293 added to it. A fresh run starts with one
 content-addressed root manifest describing only the root directory, empty
 retained manifest and blob reference sets, and the corresponding root-only DOFS
 frontier.
+
+**Schema version 2 is the second immutable inventory, not an amendment of the
+first.** It keeps every version-1 object byte for byte except `workflow_run`,
+replaces that table with one that has no `base` column and a `definition` CHECK
+pinning version 2 and kind `source-bundle`, and adds exactly two tables holding
+the run's own source: content keyed by its SHA-256 with its byte length, and one
+manifest row per descriptor entry mapping a logical path to that hash. Content
+is retained as BLOB bytes rather than as text or re-encoded JSON, and two paths
+holding identical bytes reference one blob.
+
+A new Git run is written at `user_version = 1` and a new source-bundle run at
+`user_version = 2`; initialization selects the version from the candidate
+definition already parsed and never upgrades an existing database. Recognition
+reads the application ID first, then dispatches on those two versions and holds
+the whole inventory to that version's declaration. Version 0 under either
+declared inventory is corruption, any other version is unsupported, and a
+hybrid, an altered object or an extra object is corruption rather than a
+migration candidate.
+
+Before a version-2 record is exposed, its retained source is re-derived in full:
+the manifest equals the descriptor's `sources`, every referenced blob exists,
+both retained lengths equal the content's own, recomputing each blob's hash
+produces its key, no blob is unreferenced, and recomputing the bundle hash from
+the retained manifest and mapping produces `bundleHash`. No reader returns a
+partial bundle, and nothing falls back to the original file, the provenance or
+the legacy reader.
 
 A Workspace root is a complete, immutable filesystem checkpoint. Its canonical
 format-1 JSON includes `/` and every reachable absolute POSIX path in UTF-8 byte
@@ -451,30 +499,47 @@ incomplete workflow for a finished one. A request the command refuses — bad
 grammar, a missing run, an incompatible reuse, damaged storage, an unsupported
 host — exits 1.
 
-`start` establishes an immutable definition from Git rather than identifying a
-working-tree file. It locates the repository containing the supplied path,
-resolves `HEAD^{commit}` once because the command has no base option, reads the
-repository's object format, and stores version 1 of the descriptor with that
-format, the lowercase commit ID and the normalized repository-relative POSIX
-path. **The bytes that execute are the ones that commit holds**, so a working
-tree with uncommitted edits runs the committed document. Where the repository is
-checked out is retrieval metadata: replaceable, credential-free, excluded from
-identity, and reauthorized before it is used again. `resume` loads exactly the
-retained object through that locator and never substitutes the current `HEAD` or
-a same-named working-tree file. A missing object, missing or unreadable
-retrieval metadata, a path outside the repository, or a root that is not
-Markdown fails explicitly; none of them creates a replacement run or an empty
-definition. A workflow definition is one immutable object, so the component
-search path is empty and a repository component fails to resolve rather than
-resolving to content beside the definition in a mutable checkout.
+`start` establishes an immutable definition from **the bytes the caller named**.
+Its argument is a document reference — a path, optionally followed by `#` and one
+target selector — so the reference is taken apart before anything is resolved as
+a path. It reads the supplied file once, derives the logical entrypoint from that
+file's own NFC-normalized final segment, decodes it strictly, parses it, resolves
+any selector through core against those exact bytes to the one canonical target,
+reads the declared bundle from the root's own directory, and builds and verifies
+version 2 of the descriptor — all before storage exists.
+
+**The bytes that execute are the bytes the file held**, so a file outside a
+repository starts, an untracked file starts, and a file edited since its last
+commit runs what it says. Where the file sat is never identity: the containing
+directory, the absolute path and the invocation working directory are retrieval
+facts. Git is optional provenance, recorded as replaceable metadata when it is
+cheaply available; failing to obtain it cannot fail a start, and nothing reads it
+back to find the source.
+
+`resume` executes the closure the lifecycle authenticated from the run's own
+store and never rereads the candidate path. A file that is unreadable, not
+well-formed UTF-8, not Markdown, whose selector resolves to nothing, or that
+declares a component this command cannot read fails explicitly and before
+storage exists; none of them creates a replacement run or an empty definition. A
+workflow definition is one closed set of retained bytes, so the component search
+path is empty and a repository component fails to resolve rather than resolving
+to content beside the definition in a mutable checkout.
+
+A version-1 run remains resumable, replayable and exportable exactly as it was.
+Its Markdown crosses the host-supplied legacy source reader, and Workflow
+recomputes every returned blob identity from the bytes that came back before any
+of it executes.
 
 A root may close itself over a **component bundle** by declaring one in its own
 frontmatter — `workflow.components`, a non-empty mapping from a component name
 to a relative POSIX Markdown path beside the root. `start` normalizes that
-declaration against the root's own directory, reads every member from the same
-pinned commit through `git cat-file`, takes each blob's own object ID as its
-source hash, parses each component before the run exists, and stores the bundle
-on the definition as a `components` array sorted by name. The bundle is a member
+declaration against the root's own directory, reads every member from beside the
+root as exact bytes, takes each source's own domain-separated content hash as
+its source hash,
+parses each component before the run exists, and stores the bundle on the
+definition as a `components` array in canonical order — so each declared path is
+both the logical path the run retains and the file this host happened to find it
+at. The bundle is a member
 of the one descriptor rather than a version past it: a root that declares
 nothing writes no `components` member at all, so a definition retained before
 bundles existed still reads and still means "closed over no components". An
@@ -486,11 +551,15 @@ only once the name has passed the grammar a document writes.
 The bundle is identity, so compatible reuse compares the whole array: a changed
 name, canonical path, source hash, or component set conflicts as `definition`,
 and a run closed over a bundle is never the same run as one closed over none.
-`resume` reconstructs the
-bundle under the executor lock, from the retained commit, verifying every blob
-against the retained hash before the lifecycle advances — so a component that
-changed, went missing, or became unreachable leaves the run's records exactly as
-they are.
+`resume` obtains the bundle under the executor lock and before the lifecycle
+advances, by the version the run retains. A version-2 run re-derives it from its
+own retained BLOBs, recomputing every source hash and the bundle hash from the
+bytes it holds; nothing is read from a repository or from the files the run was
+started beside. A version-1 run reconstructs it from the pinned commit through
+the host-supplied legacy source reader, and every returned blob identity is
+recomputed from the bytes that came back. Either way a component that changed,
+went missing, or became unreachable leaves the run's records exactly as they
+are.
 
 The bundle is also canonical resolution. It reaches canonical core as plain
 immutable data on the `ExecutionInstallation` that already carries the run's
@@ -2553,6 +2622,12 @@ The command line is the first consumer of that split. `xmd run` resolves a
 selector while inspecting the document, then asks execution for the exact target
 that resolved — so a file replaced between the two reads fails on the target the
 run chose, rather than silently running whatever the glob would name now.
+
+`xmd workflow start` is the second, and it is stricter because its answer is
+retained. It resolves the selector once, against the exact bytes it is about to
+retain, and stores only what core answered. A resume re-enters that section
+without resolving anything again: the glob is gone, and the bytes it was
+resolved against are the run's.
 
 The workflow definition is the second. It optionally carries that exact target,
 compares it with the rest of the descriptor, and validates it through core's own
@@ -5359,10 +5434,12 @@ Status is measured against main.
 | document-aware `xmd run … --help` | describes what one document declares and every target it addresses, each as a full document reference with the description its section states, by inspection alone | built on the #463 stack |
 | standard-input root documents | `xmd run -` and `xmd run -- -` read the whole root document from standard input, once, to end of file, and run it through the ordinary run profile. Fixed grammar selects it — the explicit `run` command form plus a document argument that is exactly `-`, read from the parser's own unconsumed remainder so a `-` another option took as its value is not one — and every other spelling keeps the meaning it had: the shorthand `xmd -` executes the file named `-`, `xmd run -#Section` executes that file's `Section`, another command's `-` is that command's, and `--eval -` keeps its refusal. `-` is the one filename the option grammar leaves unwritable, so the reference grammar reaches it and nothing else beginning with `-` is read as a document. The parsed path and every recovered reference stay separate facts until the grammar is settled, so a command line naming two roots refuses in either order, before the read and before either candidate is inspected. The reader is a value each runtime-named entrypoint supplies and the shared CLI never reaches a stdin global; what comes back is `retainedSource("<stdin>", source)`, adding no root-source variant, constructor, digest member or public API. The complete input is acquired before inspection, provider setup, the secret-detection announcement, journal creation, root admission and execution, inside the run's existing deadline; a failed read is one fixed sentence carrying no host error, input or path, and cancellation tears the reader down without becoming one | built on this stack |
 | targeted `xmd run` | reads a file argument as a document reference and executes the one exact target its selector resolved to, replacing the selector before execution rereads the file | built on the #412 stack |
-| targeted workflow definition | the V1 workflow definition optionally carries the exact canonical document target, which takes part in definition identity and in compatible reuse | built on the #412 stack; the workflow CLI does not supply one yet |
+| targeted workflow definition | a workflow definition of either version optionally carries the exact canonical document target, which takes part in definition identity and in compatible reuse but not in the source-bundle hash | built on the #412 stack; `xmd workflow start` takes a document reference and resolves any selector through core against the bytes it is about to retain |
+| source-bundle workflow definition | version 2 of the workflow definition is the exact bytes themselves: an entrypoint, a canonically ordered manifest of logical paths with each source's domain-separated SHA-256 and byte length, a bundle hash over that manifest and mapping, and the optional exact target and component mapping. The bytes are retained with the run in live schema version 2, so starting, resuming, replaying, forking and exporting need no repository and survive the original being edited, moved or deleted | built on the #443 stack; version 1 is unchanged, nothing migrates between them, and the artifact-backed fork remains unbuilt |
+| legacy workflow source reader | a version-1 run's Markdown is obtained through a direct capability a trusted host captures before document code runs, reachable through no Context, Api, component, Plugin result or authored value. Workflow validates the returned closure against the descriptor it asked about, recomputing every blob identity from the bytes that came back | built on the #443 stack; the Deno and compiled hosts supply the Git-object adapter, and #822 moves it into the bundled Git Plugin |
 | installed structural syntax | a trusted host declares a structural construct and the regions written directly inside it, as the second arm of the same `declarations` list: name, origin, accepted forms, props schema, syntax examples, description, what the content means, and `parent` — `null` for the construct, the construct's name for one of its regions. The accepted regions are derived from the regions that named the construct rather than restated by it. The installation that declares them supplies the one `expand` handler, read once and bound at capture, and held on the admitted catalog entry rather than in any registry, context or second dispatch protocol. Admission refuses an invalid name, an empty origin, absent or non-canonical forms, an uncompilable schema, missing syntax examples or description, a context that is neither prose nor `null`, a name the engine's structural table or the canonical protected tier owns, a name a reserved registration claims, a duplicate across either arm or across installations, a collision with a private closure name, an orphan region, a region of a region, a pair split across two installations, a construct with no region, declarations with no handler, and a handler with no declarations — all of it before the root document is read. Resolution places a declared construct in the host tier beside declared Markdown; `inspectComponent()`, `inspectSyntax()` and document validation describe and check it from the same catalog, with the structural entries sorted by code point beside the engine's own and the symbols unchanged at version 2. Expansion asks the catalog after every engine branch and before component import, settles placement, forms, `as`/`slot` and every construct and region prop, and then calls the captured handler once inside its own scope with a frozen request. Each region is an operation whose subscription owns one demand-driven producer: a chunk is delivered only to a waiting read, authored work waits for the read that permits it, output never reaches `DocumentOutput` or the journal, and leaving the handler's scope halts and joins every producer it entered | built on the #806 stack |
 | declared Markdown component | a trusted host declares exact first-party Markdown to one execution as immutable data on an `ExecutionInstallation`, built with `Markdown({…})`: the host states the name, origin, source, its SHA-256, the accepted forms, an optional statement of the props and return that must agree with the parsed source, and an optional private component closure, and the constructor returns a fresh declaration carrying the required `kind: "component"` written after that description. It validates, hashes, copies and freezes nothing. Admission reads the kind before any other member and refuses a missing, unknown or superseded one — including the `"markdown"` earlier versions stated — rather than reading the value as Markdown, then parses the bytes and refuses a mismatched digest or schema, a non-canonical form, a name that is not a component name or is structural, a duplicate, a reserved-registration collision and a private name a registration also claims. Resolution places it in the protected tier with reserved registrations, above the workflow component bundle, repository files and every registered default. Live import and retained history are held to the declared origin, digest and bytes, private names resolve only while canonical core expands the declaring bytes' own body — by the authored occurrence rather than by the name, so an answer kept from a legitimate private import authorizes no later site, no alias, no copy of the definition, no invocation that is over and no later execution — including one that declares no Markdown at all — while a private name written anywhere else resolves to nothing before the bundle, the repository or a registration can answer for it — and `xmd syntax` and document validation describe the declared contract from the same declaration without describing the closure. Closure is per name: only the declared component and its private closure become canonical imports, and every other name in the execution stays the ordinary open import middleware may still answer | built on the #660 stack; no public component uses it yet (#660 PR 2) |
-| workflow component bundle | a workflow root declares a closed set of authored Markdown components; the V1 workflow definition optionally carries them as one array sorted by component name, each entry holding the name, its canonical repository-relative path inside the pinned commit and that blob's object ID, and an absent member identifies a run closed over no components — so a definition retained before the member existed reads unchanged. `start` and `resume` read every component from the definition's own pinned commit; the array takes part in definition identity and is compared as part of the same V1 descriptor in compatible reuse; and canonical core resolves those names and holds both live import and retained history to that exact bundle | built on the #301 stack; the full adversarial implementation loop and its scheduling remain unbuilt (#300), and generated XMD admits no bundled Markdown component (#369) |
+| workflow component bundle | a workflow root declares a closed set of authored Markdown components; the workflow definition optionally carries them as one canonically ordered array, and an absent member identifies a run closed over no components — so a definition retained before the member existed reads unchanged. A version-1 entry holds the name, its canonical repository-relative path inside the pinned commit and that blob's object ID; a version-2 entry maps the name onto a logical path the same source bundle retains. `start` reads every component from beside the root and retains it, and `resume` executes the closure the lifecycle authenticated; the array takes part in definition identity and is compared as part of the same descriptor in compatible reuse; and canonical core resolves those names and holds both live import and retained history to that exact bundle | built on the #301 stack; the full adversarial implementation loop and its scheduling remain unbuilt (#300), and generated XMD admits no bundled Markdown component (#369) |
 | `workflowInstallation()` / `getWorkflowRun()` | associates one document execution with a workflow run, through an `ExecutionInstallation` the trusted host passes to `executeInstalled()` | built on the #366 stack |
 | `retainedWorkflowInstallation()` | associates one document execution with a run storage already created, requiring exact journal agreement | built on the #366 stack |
 | `Git.revParse()` | verifies and resolves one Git revision expression contextually | built on main |
@@ -5404,7 +5481,7 @@ Status is measured against main.
 | ordinary repository provider assembly | the Deno source entrypoint and the compiled binary install the live provider for `xmd run`, parameterized by the same credential-helper assembly the workflow host uses and by the two existing host configurations, `XMD_WORKFLOW_GITHUB_ISSUES` and `XMD_WORKFLOW_GITHUB_PULL_REQUESTS`, both read and validated before a document runs. A nested `<Execution host="run">` child receives a fresh instance — its own invocation identity, leases and Push evidence — so nothing it publishes authorizes its parent or a sibling. The outer `xmd test` command and a workflow execution install none. Node and Bun register the vocabulary and install no operational provider, so every repository operation reports an absent provider before a lock, a credential, a subprocess or a request exists | built on the #643 stack |
 | `<Issue>` under a workflow run | asks one of two questions, decided by its own shape, through a boundary of its own rather than the Git host's. Self-closing with `url` reads that issue and binds `{ url, title, description, tags, assignee }`; paired with `title` upserts and binds exactly `{ url }`, its rendered content being the description. There is no `description` prop. Props are exactly `url`, `title`, optional `tags`, optional `assignee` and — on a read only — optional `provider`; no repository/token/label/milestone/project/comment/close or approval prop. Both forms render nothing. The form is decided before the tracker is read, before any provider is asked and before an `issue_effect` record exists, and that is where a mixed `url`+`title`, a read carrying content or `tags`/`assignee`, an upsert with no content, an upsert naming a `provider`, and an element that is neither are all refused. A read needs no tracker — its URL is the identity; an upsert requires the nearest lexical `<IssueTracker>` and takes its discriminator only from there. The tracker carries a credential-free `url` and an optional `provider`; the URL is canonicalized — a credential, a query and a fragment are refused rather than stripped — and a nested tracker replaces the whole value for its descendants, never merging members, with the enclosing one restored on leaving. It is composition data, not permission: the provider holds an adapter-private ceiling beside its credentials, admitted before it connects, so a target outside it sends nothing. One stable contextual operation, `executablemd.workflow.issue`, with `read(url, options)` and `upsert(issue, options)`; a provider is ordinary middleware around it, matching its own URLs without a discriminator and only its own name with one, independently per member, with no host-side resolution. Once middleware matches it owns the answer — it never delegates afterwards, and nothing catches its refusal to try somebody else — and a request everyone delegated reaches `NoIssueProvider` unchanged. `issue_effect` records an operation discriminator with the normalized request and result; both forms replay without reaching `IssueApi` and therefore without network access; only an upsert derives an idempotency key, from the operation, the canonical target and the run's own effect identity. Retention excludes credentials, endpoints, payloads, provider identities, origin markers and host paths. Observing, adopting, creating once and recovering an interrupted creation are the provider's, because they are knowledge about what a service can prove; title is never identity, and tags are a code-point-sorted set. The Deno workflow host installs configured GitHub middleware and installs none otherwise, so absence of configuration is fail-closed | built on the #296 stack; GitHub middleware, Deno host |
 | workflow lifecycle inspection and control | reads status/list/history without advancing a run, recovering a private copy when a crashed source needs rollback; enforces the executor lock, refuses live cancellation, cancels non-live runs under that lock and deletes retained state | direct read-only inspection and control built on the #367 stack; coordinated recovered inspection built on the #513 stack, Deno provider only |
-| XMD artifact export, inspection and fork source | seals one run's committed retained state, Workspace roots and workflow definition source closure into one immutable `.xmd` evidence file; opens that file read-only for status/history and admits continuation only by creating a new history fork whose lineage names the artifact identity | specified by `specs/xmd-artifact-spec.md`; the version-1 sealed container, its total read-only verifier, `xmd workflow export` and artifact `status`/`history` are built, Deno provider only — the artifact-source fork remains unbuilt. Inspection is two sibling lifecycle operations, `inspectArtifact()` and `historyArtifact()`, taking a path rather than a run id: a run id names live lifecycle ownership and a path names immutable evidence, so neither is a mode of the other. They reach no run store, lock, Workspace, definition reader or external provider, and the artifact path never enters the structural answer |
+| XMD artifact export, inspection and fork source | seals one run's committed retained state, Workspace roots and workflow definition source closure into one immutable `.xmd` evidence file; opens that file read-only for status/history and admits continuation only by creating a new history fork whose lineage names the artifact identity. The physical container stays at schema version 1 while the semantic format follows the run: format 1 carries a Git closure, format 2 carries a source bundle as one entry/content pair per logical path under its own manifest version and `xmd-artifact\0v2\0` identity domain, and the reader selects the closed inventory and verifier from the header rather than reading either as the other | specified by `specs/xmd-artifact-spec.md`; the sealed container, its total read-only verifier, both semantic formats, `xmd workflow export` and artifact `status`/`history` are built, Deno provider only — the artifact-source fork remains unbuilt. Inspection is two sibling lifecycle operations, `inspectArtifact()` and `historyArtifact()`, taking a path rather than a run id: a run id names live lifecycle ownership and a path names immutable evidence, so neither is a mode of the other. They reach no run store, lock, Workspace, definition reader or external provider, and the artifact path never enters the structural answer |
 | Agent session portability evidence in an XMD artifact | classifies every logical Agent session that contributed a retained Prompt as portable — with ordered provider checkpoint tokens and an opaque Agent session bundle — or as explicitly unavailable, as two content kinds inside the existing version-1 manifest and identity | specified by `specs/xmd-artifact-spec.md` §2.5; the closed union, both content kinds and the complete post-identity profile verifier are built on the #621 stack, Deno provider only. Provider bundle capture, Agent-aware export, intrinsic Agent-aware inspection and artifact-backed fork are unbuilt |
 | historical authored source | retains an authored durable operation's normalized `SourcePosition` beside its identity, and history parses it or refuses the entry | built on the #367 stack |
 | history fork | creates a new run from one compatible checkpoint and retained Workspace root, under a new immutable definition and normalized props | built on the #368 stack, Deno provider only |

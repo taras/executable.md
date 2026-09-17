@@ -2,9 +2,9 @@
 
 * **Status:** Current
 * **Scope:** `@executablemd/workflow` — associating a document execution with a
-  workflow run whose starting repository state is pinned once, retaining that
-  run so another process can find it, and giving that run's document its own
-  transactional filesystem.
+  workflow run whose definition is fixed once, retaining that run and the exact
+  source it executes so another process can find both, and giving that run's
+  document its own transactional filesystem.
 
 ---
 
@@ -14,10 +14,20 @@ A **workflow run** is a workflow being carried out, with its progress and
 outcome recorded durably. Document executions perform its work; the run itself
 outlives any one of them.
 
-A run has one starting repository state, chosen once. The host supplies a
-**base** — any Git revision expression — and the run resolves it to a **pinned
-commit** the first time it is created. A branch that moves afterwards does not
-change what the run started from.
+A run has one definition, chosen once, and it comes in two versions.
+
+A **source-bundle** definition is the exact bytes themselves, addressed by
+portable logical paths and retained with the run. A file outside a repository,
+an untracked file and a file edited since its last commit are all ordinary
+starts, and the run executes what each said at the moment it began. Editing,
+moving or deleting the original afterwards changes nothing about the run.
+
+A **Git** definition names a document inside one immutable object: the host
+supplies a **base** — any Git revision expression — and the run resolves it to a
+**pinned commit** the first time it is created. A branch that moves afterwards
+does not change what the run started from. Its Markdown is not retained, so
+obtaining it means reaching a repository, which a trusted host supplies as a
+direct dependency (§7.1).
 
 ```ts
 import { executeInstalled } from "@executablemd/core/host";
@@ -29,25 +39,59 @@ const execution = yield* executeInstalled(
 );
 ```
 
-The package owns `WorkflowRun`, `workflowInstallation()`, `getWorkflowRun()` and the Git
-capability. It depends on `@executablemd/core`,
-`@executablemd/durable-streams` and `@executablemd/runtime`, whose contextual
-`exec()` and `cwd()` the Git provider invokes. Core never imports workflow or
-Git, so ordinary `execute()` and `xmd run` stay Git-independent.
+The package owns `WorkflowRun`, `workflowInstallation()`, `getWorkflowRun()`,
+the source-bundle identity primitives and the Git capability. It depends on
+`@executablemd/core`, `@executablemd/durable-streams` and
+`@executablemd/runtime`, whose contextual `exec()` and `cwd()` the Git provider
+invokes. Core never imports workflow or Git, so ordinary `execute()` and
+`xmd run` stay Git-independent.
+
+`workflowInstallation({ base })` is the one place this package still reaches Git
+to establish a run. Every retained path — recognition, resume, fork, journal and
+export — reaches none. Issue #822 moves that adapter into the bundled Git Plugin
+and removes the final package-level dependency; until it does, the exception is
+exactly that one entrypoint.
 
 ## 2. What a run is
 
 ```ts
-interface WorkflowRun {
+interface GitWorkflowRunV1 {
   readonly runId: string;
   readonly base: string;
   readonly pinnedCommit: string;
 }
+
+interface SourceBundleWorkflowRunV2 {
+  readonly runId: string;
+  readonly definitionVersion: 2;
+  readonly bundleHash: string;
+  readonly targetPath?: string;
+}
+
+type WorkflowRun = GitWorkflowRunV1 | SourceBundleWorkflowRunV2;
 ```
 
 `runId` is opaque, allocated with cryptographic randomness, and supports
-equality only. `base` is the revision expression the host supplied.
-`pinnedCommit` is the full object id that base resolved to.
+equality only. A version-1 run's `base` is the revision expression the host
+supplied and `pinnedCommit` is the full object id that base resolved to. A
+version-2 run's `bundleHash` is the identity of the bytes it retains and
+`targetPath` is the exact section it runs, when it runs one; it has no base and
+no pinned commit, because a synthetic one would name a repository state the run
+never had.
+
+The union is closed, and reading it is exact. A value carrying one version's
+member set in any key order is that version; a value carrying members of both,
+or either set with something extra, is not a run read loosely and is refused.
+Ordinary serialization writes version 1 as `runId`, `base`, `pinnedCommit` and
+version 2 as `runId`, `definitionVersion`, `bundleHash`, then `targetPath` when
+present. Object-member order is presentation: a canonical-JSON container sorts
+these keys under its own rule without changing the value.
+
+The retained effect description follows the same split. Version 1 records
+`{ type: "workflow_run", name: "workflow_run", base }`; version 2 records
+`{ type: "workflow_run", name: "workflow_run", definitionVersion: 2, bundleHash }`
+and invents no Git field. Divergence detection compares only the type and the
+name, so the members past them are for a reader.
 
 `getWorkflowRun()` answers with the frozen value for the document execution
 running now. It is a context value under a stable name, so a descriptor built
@@ -92,27 +136,32 @@ executions and neither sees the other's run.
 ### 3.1 Installing a run that already exists
 
 A host that keeps runs in retained storage (§9) has decided what the run is
-before anything executes: `create()` answered with the run id, and the
-definition was established from a commit the host pinned. There is nothing left
-for the execution to allocate or resolve, and a run id an execution invented
-could not agree with the record storage already holds.
+before anything executes: the lifecycle transition answered with the run id and
+with the definition it retained. There is nothing left for the execution to
+allocate or resolve, and a run id an execution invented could not agree with the
+record storage already holds.
 
 ```ts
-yield* executeInstalled(options, [retainedWorkflowInstallation({ runId, base, pinnedCommit })]);
+yield* executeInstalled(options, [retainedWorkflowInstallation(run)]);
 ```
+
+`run` is whichever member of the `WorkflowRun` union the record retains.
 
 This installs the same middleware in the same place and records through the same
 `workflow_run` durable operation. What differs is both ends of it. The live path
 writes exactly the value it was given: no identifier is generated and
-`Git.revParse()` is never called. And every journal state holds the record to
-that value in full — run id, base and pinned commit — rather than to the base
-alone.
+`Git.revParse()` is never called, whichever version it is. And every journal
+state holds the record to that value in full — run id, base and pinned commit
+for version 1; run id, bundle hash and exact target for version 2 — rather than
+to the base alone.
 
 A journal recording a different run is refused as `StaleInputError`, naming the
 fields that differ and never their values: a run id may be caller-selected and a
 base is any revision expression, so both are external text on the same terms as
-retained props. A value installed without a run id, a base or a pinned commit
-identifies no run and is refused before any document executes.
+retained props. Two versions are never the same run, and a record of the other
+version disagrees as its definition version rather than field by field. A value
+installed without a complete member set for its version identifies no run and is
+refused before any document executes.
 
 ### 3.2 Where workflow-run identity is decided
 
@@ -239,7 +288,8 @@ The journal is parsed, never trusted.
 
 - A record that does not describe a workflow run is refused. The stored value is
   described, never quoted: it is external data, and reporting it would carry
-  whatever it held into logs and rendered output.
+  whatever it held into logs and rendered output. A value matching neither
+  version's exact member set describes none.
 - A recorded base that differs from the supplied base is refused, naming both.
 
 Both are `StaleInputError`: the journal no longer describes this run, and the
@@ -250,9 +300,9 @@ document is re-run from the start rather than resumed.
 A workflow run exists once its `WorkflowRun` value is durably recorded. A
 document failure or cancellation after that point does not erase it.
 
-Failure *before* that point creates no run and expands no root document: Git
-cannot be invoked, the working directory is not a Git repository, or the base
-does not resolve to a commit.
+Failure *before* that point creates no run and expands no root document. For a
+programmatic Git run that is Git failing to be invoked, a working directory that
+is not a Git repository, or a base that does not resolve to a commit.
 
 Such a failure is journaled the way every durable effect's failure is — as a
 recorded failed effect, and no `WorkflowRun` value exists, which is what
@@ -294,8 +344,41 @@ Another provider replaces it lexically with
 `Git.around({ *revParse(…) {…} }, { at: "min" })`. Providers install at `min` so
 a nested replacement wins rather than being shadowed by an outer handler.
 
-Workflow initialization calls it with `${base}^{commit}`, which is what makes
-"does not resolve to a commit" an error rather than a tag object id.
+`workflowInstallation({ base })` calls it with `${base}^{commit}`, which is what
+makes "does not resolve to a commit" an error rather than a tag object id. That
+entrypoint is the only caller in this package (§1).
+
+### 7.1 The legacy source reader
+
+A version-1 definition names an object and a path inside it and retains no
+Markdown, so obtaining what such a run executes means reaching a repository —
+which the retained lifecycle does not do. A trusted host supplies that
+capability directly:
+
+```ts
+type LegacyWorkflowSourceReader = (
+  definition: GitWorkflowDefinitionV1,
+  retrieval: Json | undefined,
+) => Operation<Result<RetainedDefinitionSources>>;
+```
+
+The host captures it before document code runs. It is reachable through no
+Context, contextual Api, component, Plugin installation result or authored
+value: a source capability something in the process could reach by name would be
+a way to decide what a run executes. It receives only the parsed descriptor and
+the run's replaceable retrieval metadata.
+
+Workflow — not the adapter — decides whether what came back is this run's. The
+returned root's object format, pinned commit, repository-relative path and exact
+target must be the descriptor's, the declared component set must match name for
+name and path for path, and every blob identity is **recomputed from the bytes
+that came back** rather than taken on the adapter's word. A closure carrying one
+document's identity beside another's content is refused, and none of it
+executes.
+
+A version-2 run never comes here. Its content is in its own store, and a host
+reaching a repository for it would be a second answer to a question storage has
+already answered.
 
 ## 8. Expansion identity is separate
 
@@ -337,11 +420,11 @@ SQLite or DOFS connection.
 
 ### 9.1 What identifies a run
 
-Identity is the run id, the definition descriptor, the base and the normalized
-props. Normalized props are a JSON object: a document declares named props, so
-a run receives a mapping from those names to values, and a bare scalar or array
-names nothing. The descriptor carries its own version, and takes part in the
-comparison rather than governing it:
+Identity is the run id, the definition descriptor, the base a version-1 run
+started from, and the normalized props. Normalized props are a JSON object: a
+document declares named props, so a run receives a mapping from those names to
+values, and a bare scalar or array names nothing. The descriptor carries its own
+version and kind, and takes part in the comparison rather than governing it:
 
 ```ts
 interface GitWorkflowDefinitionV1 {
@@ -351,8 +434,28 @@ interface GitWorkflowDefinitionV1 {
   objectId: string;
   rootDocumentPath: string;
   targetPath?: string;
+  components?: readonly WorkflowComponentEntry[];
 }
+
+interface SourceBundleWorkflowDefinitionV2 {
+  version: 2;
+  kind: "source-bundle";
+  hashAlgorithm: "sha256";
+  bundleHash: string;
+  entrypoint: string;
+  sources: readonly SourceBundleEntryV2[];
+  targetPath?: string;
+  components?: readonly SourceBundleComponentV2[];
+}
+
+type WorkflowDefinition = GitWorkflowDefinitionV1 | SourceBundleWorkflowDefinitionV2;
 ```
+
+`kind` chooses the parser, not `version`: a kind says what sort of thing a
+descriptor identifies and a version says which revision of that sort it is, so a
+Git descriptor carrying some other version is refused by the Git parser, where a
+reader looking at `objectId` and `rootDocumentPath` is told what went wrong.
+Both shapes are closed and admit their exact members in any object-key order.
 
 An object id is lowercase hexadecimal of the length its format requires, so two
 hosts that agree about the commit agree about the run. A root document path is
@@ -360,6 +463,94 @@ an already-normalized repository-relative POSIX path: absolute paths,
 backslashes, NULs, empty paths, empty segments and `.` or `..` segments are
 refused rather than normalized, because two spellings of one path would
 otherwise be two identities.
+
+#### What a source bundle is
+
+```ts
+interface SourceBundleEntryV2 {
+  path: string;
+  sourceHash: string;
+  byteLength: number;
+}
+
+interface SourceBundleComponentV2 {
+  name: string;
+  path: string;
+}
+```
+
+`sources` is the complete closure the run executes: non-empty, one entry per
+logical path, in the UTF-8 byte order of those paths. `entrypoint` names exactly
+one of them and ends in `.md`. `components`, when present, is non-empty, in the
+UTF-8 byte order of the names, one entry per name, and every path names a
+retained source — so the mapping a root resolves its component names through is
+closed over the same bytes the run executes. Absence means the definition
+declares no workflow components; an empty array is not a second spelling of that
+and is refused.
+
+Arrays must **arrive** canonical. A parser that sorted them would turn two
+spellings of one malformed value into one accepted identity, so a duplicate or a
+non-canonical order is refused rather than repaired. The order is the UTF-8 byte
+order of the encoded strings, which is not the order `<` gives: comparing UTF-16
+code units puts a supplementary character before some of the characters that
+precede it in UTF-8.
+
+A **logical path** is a portable identity inside the bundle, never a host
+filesystem path. It is a non-empty NFC-normalized string of Unicode scalar
+values, `/`-separated, never beginning or ending with `/`, with no NUL, C0
+control, DEL, backslash or `#` character and no empty, `.` or `..` segment, and
+it is compared case-sensitively by its UTF-8 bytes. The containing directory,
+the absolute path, the invocation working directory and the platform separator
+are retrieval facts and never identity: two hosts holding the same bytes under
+the same logical entrypoint hold the same definition. A CLI input contributes
+only its NFC-normalized final path segment as the entrypoint; declared component
+paths are resolved against the source file before the run exists and are then
+represented by canonical logical paths in the same bundle.
+
+Changing the logical entrypoint is an identity change, because source positions
+and later relative references use it.
+
+#### How a bundle is identified
+
+All lengths are unsigned big-endian integers. `u32(n)` is four bytes, `u64(n)`
+is eight, `utf8(value)` is the exact UTF-8 encoding, and `field(value)` is
+`u32(utf8(value).length)` followed by those bytes. A hexadecimal hash
+contributes its decoded 32 bytes, never its text.
+
+Each source hash is
+
+```text
+SHA-256(
+  field("executablemd.workflow.source.v2") ||
+  u64(source byte length) ||
+  exact source bytes
+)
+```
+
+and the bundle hash is
+
+```text
+SHA-256(
+  field("executablemd.workflow.bundle.v2") ||
+  field(entrypoint) ||
+  u32(source count) ||
+  for each canonically ordered source:
+    field(path) || decoded sourceHash || u64(byteLength) ||
+  u32(component count) ||
+  for each canonically ordered component:
+    field(name) || field(path)
+)
+```
+
+`bundleHash` and every `sourceHash` are 64 lowercase hexadecimal digits;
+`byteLength` is a non-negative safe integer, and zero is a length a source may
+have. No property value, run id, host path, Git provenance, retrieval metadata,
+timestamp or storage encoding enters either hash, and source bytes are hashed
+and stored without newline, BOM, Unicode or any other content normalization.
+
+The target is deliberately outside the bundle hash: selecting a section does not
+change the bytes in the bundle. It remains part of the complete definition
+identity, so two runs over one bundle with different targets stay distinct.
 
 #### The document target a run is a run of
 
@@ -392,14 +583,24 @@ is document content. Serialization writes the member only when there is one, and
 stored identity is never normalized, decoded, repaired or re-encoded on the way
 through.
 
-`version` stays `1`. The five-member untargeted shape is the current
-representation of a whole-document workflow rather than a legacy format being
-preserved, so there is no second version, no version union, and no migration.
+`GitWorkflowDefinitionV1`, its JSON shape, its Git-object identity, its run
+record, its journal binding and its compatible-reuse rules are unchanged. A
+version-1 run is never rewritten as version 2 merely because its source was
+retrieved successfully, and nothing migrates between the two.
 
-Where that object can be fetched from is deliberately not identity. A locator
-and a local checkout path are **retrieval metadata** — replaceable, excluded
-from the comparison, never containing credentials, and reauthorized by the host
-before use. A run that moves between hosts is the same run.
+Where a version-1 object can be fetched from is deliberately not identity. A
+locator and a local checkout path are **retrieval metadata** — replaceable,
+excluded from the comparison, never containing credentials, and reauthorized by
+the host before use. A run that moves between hosts is the same run.
+
+For version 2 the same boundary holds optional **provenance**: a host may record
+a credential-free observation such as an object format, a commit and a
+repository-relative path. It may be absent, replaced or become unreachable
+without changing compatibility or preventing a resume, nothing reads it back to
+find the source, and failing to obtain it cannot fail a start. The supplied
+absolute path, the checkout path and the invocation working directory are never
+retained in the definition, the run identity, the journal binding or an
+artifact.
 
 ### 9.2 Creating a run is also how it is found
 
@@ -407,6 +608,13 @@ before use. A run that moves between hosts is the same run.
 refuses with a conflict when any immutable field differs. That is what makes a
 caller-selected id usable twice — as a retry, or as a second process addressing
 the same work — without a separate idempotency concept.
+
+`CreateWorkflowRunRequest` is version-1 only, and its parser refuses a
+source-bundle descriptor. The request carries a descriptor and no source, so
+admitting one would initialize a database whose authoritative content nobody
+supplied. Creating a version-2 run crosses the trusted lifecycle transition
+instead (§9.4.1), which takes the complete snapshot with the descriptor.
+`lookup()` recognizes both versions.
 
 Props are compared canonically, so reordering a JSON object does not look like
 asking for a different run. Everything a run accumulates is excluded: status,
@@ -420,6 +628,21 @@ runs of two different sections, so reusing one run id for the other reports a
 `definition` conflict rather than finding the stored run. Absent compares equal
 only to absent. The same exact target under the same id is the same run and is
 found, which is what lets a targeted run be resumed.
+
+Each version is compared by its own complete identity. A version-2 reuse agrees
+only when the version, kind and hash algorithm, the bundle hash, the entrypoint,
+the complete canonical source manifest and component mapping, the exact presence
+and value of `targetPath`, and the normalized props all agree. The manifest is
+compared whole even though the bundle hash commits to it: a hash is not a reason
+to admit a retained structure that disagrees with itself. The candidate's host
+path and its optional provenance are ignored, so identical bytes reached through
+another directory are the same run. A version-1 reuse keeps its existing
+comparison, including `base`. Two descriptors of different versions are never
+one run, and a cross-version request disagrees as `definition` — it is not then
+asked about a base one of them does not have.
+
+**A compatible reuse executes the retained source, never the newly supplied
+buffers.**
 
 `lookup()` finds by id and creates nothing.
 
@@ -467,12 +690,99 @@ read, listed or mistaken for a run.
   it was last cleared.
 - The filtered journal.
 
+A version-2 run additionally retains **the exact source it executes**: its
+complete manifest, and the content behind it as BLOB bytes rather than as a
+database text value or a re-encoded JSON string.
+
 Complete WorkflowRun schema version 1 also contains the pinned Cloudflare DOFS
 version-5 tables and indexes, immutable Workspace-root tables, exact root-to-
 manifest and root-to-blob reference tables, singleton current-root state, and a
 non-null Workspace-root association on every journal event. XMD schema version
 1, DOFS schema version 5 and Workspace-root format version 1 are independent
 version domains.
+
+#### Two live schema versions
+
+A newly created Git run keeps `PRAGMA user_version = 1`; a newly created
+source-bundle run uses `PRAGMA user_version = 2`. Initialization selects the
+schema from the candidate definition already parsed and never upgrades an
+existing database.
+
+The declarations are two immutable, closed inventories. Version 1 is the current
+object set byte for byte. Version 2 keeps every version-1 table, index and
+trigger byte for byte except `workflow_run`, replaces that table with one that
+has **no `base` column** and a `definition` CHECK pinning version 2 and kind
+`source-bundle`, and adds exactly two tables: `workflow_definition_blob`, keyed
+by a 64-digit lowercase source hash with its byte length and content, and
+`workflow_definition_source`, one row per descriptor entry mapping a logical
+path to that hash. `definition_retrieval` remains an optional replaceable
+metadata table, and every Workspace, journal, session and lifecycle object is
+unchanged.
+
+Recognition validates the application id first, then dispatches on `user_version`
+1 or 2. Each version is accepted only when its inventory equals its immutable
+declaration exactly. Version 0 under either declared inventory is corruption,
+any other version is unsupported, and a hybrid, an altered object or an extra
+object is corruption — never a migration candidate. Nothing repairs, migrates or
+reinterprets a database.
+
+#### What a retained source has to prove
+
+The stored manifest equals the descriptor's complete `sources` array: one row
+per entry and no extra row. Every referenced blob exists, its byte length equals
+both retained lengths, and recomputing its source hash produces its key.
+Multiple paths may reference one blob when their bytes are identical;
+unreferenced content is corruption rather than tolerated garbage. Recomputing
+the bundle hash from the retained manifest and component mapping produces
+`bundleHash`.
+
+No reader returns a partial bundle. Before a retained source is parsed as
+Markdown, the entrypoint and every declared component decodes as well-formed
+UTF-8 under one strict decoder, which performs no normalization; the BLOB stays
+authoritative and is what export and every later resume preserve.
+
+#### 9.4.1 Creating a version-2 run
+
+Version-2 creation crosses only the trusted, non-contextual lifecycle
+transition. Its creation request is a closed union: the version-1 member carries
+a Git descriptor, a base and props; the version-2 member carries the descriptor,
+its props and a `sourceSnapshot` — the exact byte sequence behind each logical
+path.
+
+`sourceSnapshot` is non-empty, admits no extra entry member, and has exactly the
+descriptor's paths in exactly its order. Each length and recomputed source hash
+must equal the corresponding entry. The transition takes an **owned copy of
+every byte sequence before it validates or persists anything**, and retains only
+those copies, so later mutation of a caller-owned array cannot change the run. A
+missing, extra, reordered or mismatched entry is an invalid creation and writes
+nothing.
+
+One initialization transaction then selects schema 2 and writes the descriptor,
+the manifest rows, the de-duplicated BLOBs, the initial Workspace state, the
+lifecycle state and the first document-execution record. They all appear or none
+do. The transition answers with the authenticated retained closure read back
+from storage, which is what a caller imports.
+
+#### 9.4.2 Source is proved before the lifecycle moves
+
+Every source check happens under the executor lock and **before** stale
+recovery, a new document-execution record, Workspace attachment, journal replay
+or root import. A failure therefore leaves the run's lifecycle and journal
+exactly as they were.
+
+For an existing version-2 run the retained BLOBs are re-derived in full; the
+original path, the provenance and the legacy reader are never consulted. For a
+version-1 run the captured legacy reader (§7.1) is invoked under the same lock
+and its answer validated, and a run being created from a version-1 descriptor is
+held to that descriptor before it is persisted. Completed replay, export and
+fork obtain a version-1 closure through the same seam whenever authenticated
+retained history does not already provide it.
+
+No run id is reported before the creation transaction commits. A failure or
+cancellation before that commit leaves no recognized run and permits clean reuse
+of the id; an empty or private staging file is not a damaged run and is not
+discoverable by lookup or list. An interruption after the commit is an ordinary
+resumable execution, because the complete definition already exists.
 
 A fresh database contains one content-addressed Workspace root whose canonical
 manifest describes only `/` as a directory. Its retained manifest and blob
@@ -782,6 +1092,24 @@ differently is reported as itself:
 | request | a value a caller supplied describes nothing storage can keep |
 | transaction | a transaction cannot be started, continued or committed as asked |
 | inspection recovery | a crashed run could not be read from a private recovered copy |
+| definition source missing | a version-2 descriptor names a manifest entry or blob the store does not hold |
+| definition corrupt | a retained path, length, hash, byte, mapping or bundle hash disagrees |
+| legacy reader unavailable | a version-1 run needs source and this host installed no reader |
+| legacy source unavailable | the installed reader cannot obtain the retained object |
+| legacy source mismatch | the reader returned a closure that does not describe this definition |
+
+The last five are the source conditions, and they are kept apart because an
+operator acts on each differently. Missing content is gone and there is nothing
+to repair; corrupt content is there and no longer describes itself; no reader
+means this host cannot obtain version-1 Markdown at all and the operator needs a
+Git-capable XMD host; an unavailable read means the reader could not reach the
+object; and a mismatch means it answered about something else. None of them
+quotes source, props, retrieval metadata or an absolute path, none returns
+partial content, none advances lifecycle state, and **none falls back** to
+current `HEAD`, working-tree bytes, the original file, the provenance or the
+legacy reader. A malformed retained descriptor or database structure stays a
+storage-corruption refusal under the recognition rules above rather than being
+reclassified as an unavailable external source.
 
 Inspection recovery is a distinct condition because it says nothing about the
 run. It reports that read-only inspection could not produce or clean up the
@@ -797,7 +1125,9 @@ table's stored definition is compared with the definition this build creates,
 so a missing column, a dropped constraint, and a table nobody declared are all
 caught before a row reaches a parser that assumes they hold. A file whose
 header says it is a version-1 workflow run and is not shaped like one is
-**damage**: the file disagrees with itself. Format and version failures are
+**damage**: the file disagrees with itself, and so is a file whose header
+declares one version over the other version's objects. Format and version
+failures are
 reserved for a file that belongs to something else, or to a version this build
 has not learned.
 
