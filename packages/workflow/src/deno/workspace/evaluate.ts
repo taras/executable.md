@@ -96,6 +96,16 @@ export interface GeneratedEvaluationOptions {
   readonly reads?: readonly FragmentEntry[];
   /** Further mutation components this host admits beside the standard profile's. */
   readonly writes?: readonly FragmentEntry[];
+  /**
+   * The directory component this host admits, between core's write and delete.
+   *
+   * Its own member rather than one of the additive entries above, because it is
+   * not an addition: it occupies the position the standard profile has always
+   * had a directory entry in, and a continuation compares that table position by
+   * position. A host that captures none is admitted under the entry released
+   * builds retained, which this package still states.
+   */
+  readonly directory?: FragmentEntry;
 }
 
 /**
@@ -155,6 +165,35 @@ function workspaceFiles(database: WorkflowRunDatabase): FragmentFileAccess {
 }
 
 /**
+ * The directory entry a host that captures none of its own is admitted under.
+ *
+ * Built from the same definition the ordinary registration owns, so the two
+ * cannot drift. Versioned in its revision because what the entry authorizes
+ * changed: the former `Dir` authorized placement that created nothing, and
+ * `<Dir>` now recursively creates the directory it names. A continuation
+ * granted under the earlier revision must not silently receive the wider
+ * permission, and the retained comparison refuses it before generated
+ * execution.
+ *
+ * Revision 3: the grant is the workflow's, so the identity names this package.
+ * What changed from revision 2 is the operation behind it — the body is now
+ * closed over the `ensureDirectory` this profile handed over rather than
+ * resolving a Files provider when it runs — so a continuation granted under the
+ * older, composable one is refused rather than re-granted.
+ *
+ * The version-1 alias is the exact string released builds retained for this
+ * entry, written out rather than assembled: that is what those journals hold,
+ * and nothing derives it. The pre-`dir-v2` spelling is deliberately absent — it
+ * named the placement-only `<Dir>`, which created nothing, so answering for it
+ * here would hand a narrower grant the wider one.
+ */
+function retainedDirectoryEntry(): FragmentEntry {
+  return directoryEntry({ origin: COMPOSITION_ORIGIN, key: "Dir", revision: "3" }, "Dir", [
+    "@executablemd/workflow/composition/dir-v2#Dir",
+  ]);
+}
+
+/**
  * The ceiling a workflow run's generated fragments are admitted under.
  *
  * An operation, because the effective Fetch timeout is resolved here — once,
@@ -172,13 +211,6 @@ export function* evaluationProfile(
   // the workflow host installed, not whichever one a document later composes
   // around itself.
   const transport = yield* fetchAccess();
-  // Built from the same definition the ordinary registration owns, so the two
-  // cannot drift. Versioned in its revision because what the entry authorizes
-  // changed: the former `Dir` authorized placement that created nothing, and
-  // `<Dir>` now recursively creates the directory it names. A continuation
-  // granted under the earlier revision must not silently receive the wider
-  // permission, and the retained comparison refuses it before generated
-  // execution.
   const timeout = yield* timeoutFetch;
   return {
     read: [
@@ -188,22 +220,7 @@ export function* evaluationProfile(
     ],
     write: [
       fileWriteEntry(),
-      // Revision 3: the grant is the workflow's, so the identity names this
-      // package. What changed from revision 2 is the operation behind it — the
-      // body is now closed over the `ensureDirectory` this profile handed over
-      // rather than resolving a Files provider when it runs — so a continuation
-      // granted under the older, composable one is refused rather than
-      // re-granted.
-      //
-      // The version-1 alias is the exact string released builds retained for
-      // this entry, written out rather than assembled: that is what those
-      // journals hold, and nothing derives it. The pre-`dir-v2` spelling is
-      // deliberately absent — it named the placement-only `<Dir>`, which
-      // created nothing, so answering for it here would hand a narrower grant
-      // the wider one.
-      directoryEntry({ origin: COMPOSITION_ORIGIN, key: "Dir", revision: "3" }, "Dir", [
-        "@executablemd/workflow/composition/dir-v2#Dir",
-      ]),
+      options.directory ?? retainedDirectoryEntry(),
       fileDeleteEntry(),
       ...(options.writes ?? []),
     ],

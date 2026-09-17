@@ -48,7 +48,10 @@ import {
   importTree,
   localizeAdministration,
 } from "../../src/deno/composition/materialize.ts";
-import type { StoredRepository } from "../../src/deno/workspace/repositories.ts";
+import {
+  createWorkspaceMetadata,
+  type StoredRepository,
+} from "../../src/deno/workspace/repositories.ts";
 import type { WorktreeRecord } from "../../src/composition/records.ts";
 import { isGitWorkflowRunRecord, type WorkflowRun, type WorkflowRunRecord } from "../../mod.ts";
 
@@ -325,7 +328,7 @@ export function* retainedRepositories(
   database: WorkflowRunDatabase,
 ): Operation<StoredRepository[]> {
   const read = yield* transactWorkspaceRoots(database, function* (workspace) {
-    return workspace.metadata.readRepositories();
+    return createWorkspaceMetadata(workspace.storage).readRepositories();
   });
   if (!read.ok) {
     throw read.error;
@@ -338,7 +341,7 @@ export function* retainedWorktrees(
   repositoryName: string,
 ): Operation<WorktreeRecord[]> {
   const read = yield* transactWorkspaceRoots(database, function* (workspace) {
-    return workspace.metadata.readWorktreesForRepository(repositoryName);
+    return createWorkspaceMetadata(workspace.storage).readWorktreesForRepository(repositoryName);
   });
   if (!read.ok) {
     throw read.error;
@@ -442,7 +445,7 @@ export function* inCheckout<T>(
     const host = denoRepositoryHost();
     const root = yield* host.useDirectory();
     const exported = yield* transactWorkspaceRoots(database, function* (workspace) {
-      const [repository] = workspace.metadata.readRepositories();
+      const [repository] = createWorkspaceMetadata(workspace.storage).readRepositories();
       if (repository === undefined) {
         throw new Error("the run retains no repository to read a checkout from");
       }
@@ -453,7 +456,7 @@ export function* inCheckout<T>(
         "inspection",
       );
       const worktrees: string[] = [];
-      for (const worktree of workspace.metadata.readWorktreesForRepository(
+      for (const worktree of createWorkspaceMetadata(workspace.storage).readWorktreesForRepository(
         repository.record.name,
       )) {
         worktrees.push(
@@ -492,7 +495,7 @@ export function* checkoutConfig(
     const host = denoRepositoryHost();
     const root = yield* host.useDirectory();
     const exported = yield* transactWorkspaceRoots(database, function* (workspace) {
-      const [repository] = workspace.metadata.readRepositories();
+      const [repository] = createWorkspaceMetadata(workspace.storage).readRepositories();
       if (repository === undefined) {
         throw new Error("the run retains no repository to read configuration from");
       }
@@ -503,7 +506,7 @@ export function* checkoutConfig(
         "inspection",
       );
       const worktrees: string[] = [];
-      for (const worktree of workspace.metadata.readWorktreesForRepository(
+      for (const worktree of createWorkspaceMetadata(workspace.storage).readWorktreesForRepository(
         repository.record.name,
       )) {
         worktrees.push(

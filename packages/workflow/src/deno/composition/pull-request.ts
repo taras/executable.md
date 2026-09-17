@@ -75,7 +75,8 @@ import type {
   GitHostObservation,
 } from "../../git-host/records.ts";
 import type { WorkflowRunDatabase } from "../../storage/api.ts";
-import { transactWorkspaceRoots } from "../workspace/private.ts";
+import { readWorkflowWorkspace } from "../workspace/inspect.ts";
+import { readWorkspaceMetadata } from "../workspace/repositories.ts";
 import { currentBranch, gitSession, resolveCommit } from "./git.ts";
 import {
   denoGitHubSource,
@@ -375,8 +376,12 @@ export function* upsertPullRequest(
 
     // Held open for the export alone. Everything after this reads files, and a
     // network round trip must never keep the run's database locked.
-    const prepared = yield* transactWorkspaceRoots(database, function* (workspace) {
-      const selection = selectGitCheckout(workspace.metadata, PULL_REQUEST_ELEMENT, admitted);
+    const prepared = yield* readWorkflowWorkspace(database, {}, function* (workspace) {
+      const selection = selectGitCheckout(
+        readWorkspaceMetadata(workspace.storage),
+        PULL_REQUEST_ELEMENT,
+        admitted,
+      );
       return {
         selection,
         exported: yield* exportCheckoutFamily(workspace.filesystem, root, selection),

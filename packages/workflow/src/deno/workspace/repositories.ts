@@ -18,7 +18,6 @@
  * recover, and it is reported through the same channel schema recognition uses.
  */
 
-import type { DatabaseSync } from "node:sqlite";
 import { WorkflowRecordMalformedError } from "../../storage/errors.ts";
 import {
   parseCheckoutPath,
@@ -28,7 +27,11 @@ import {
   type RepositoryRecord,
   type WorktreeRecord,
 } from "../../composition/records.ts";
-import { reading } from "../reading.ts";
+import type {
+  WorkflowWorkspaceReadStorage,
+  WorkflowWorkspaceRow,
+  WorkflowWorkspaceStorage,
+} from "./storage.ts";
 
 /** A Repository row: its journal-safe record, and the locator only storage sees. */
 export interface StoredRepository {
@@ -62,7 +65,7 @@ function malformed(table: string, column: string, expectation: string): never {
   throw new WorkflowRecordMalformedError(`${table}.${column}`, expectation);
 }
 
-function text(row: Record<string, unknown>, column: string, table: string): string {
+function text(row: WorkflowWorkspaceRow, column: string, table: string): string {
   const value = row[column];
   if (typeof value !== "string" || value === "") {
     return malformed(table, column, "expected a non-empty text value");
@@ -70,7 +73,7 @@ function text(row: Record<string, unknown>, column: string, table: string): stri
   return value;
 }
 
-function optionalText(row: Record<string, unknown>, column: string, table: string): string | null {
+function optionalText(row: WorkflowWorkspaceRow, column: string, table: string): string | null {
   const value = row[column];
   if (value === null || value === undefined) {
     return null;
@@ -81,11 +84,7 @@ function optionalText(row: Record<string, unknown>, column: string, table: strin
   return value;
 }
 
-function objectFormat(
-  row: Record<string, unknown>,
-  column: string,
-  table: string,
-): GitObjectFormat {
+function objectFormat(row: WorkflowWorkspaceRow, column: string, table: string): GitObjectFormat {
   const value = parseObjectFormat(row[column]);
   if (value === undefined) {
     return malformed(table, column, `expected "sha1" or "sha256"`);
@@ -93,7 +92,7 @@ function objectFormat(
   return value;
 }
 
-function fingerprint(row: Record<string, unknown>, column: string, table: string): string {
+function fingerprint(row: WorkflowWorkspaceRow, column: string, table: string): string {
   const value = parseFingerprint(row[column]);
   if (value === undefined) {
     return malformed(table, column, "expected a 64-character lowercase hex fingerprint");
@@ -101,7 +100,7 @@ function fingerprint(row: Record<string, unknown>, column: string, table: string
   return value;
 }
 
-function checkoutPath(row: Record<string, unknown>, column: string, table: string): string {
+function checkoutPath(row: WorkflowWorkspaceRow, column: string, table: string): string {
   const value = parseCheckoutPath(row[column]);
   if (value === undefined) {
     return malformed(table, column, "expected a Workspace-relative path beginning with /");
@@ -109,7 +108,7 @@ function checkoutPath(row: Record<string, unknown>, column: string, table: strin
   return value;
 }
 
-function readRepositoryRow(row: Record<string, unknown>): StoredRepository {
+function readRepositoryRow(row: WorkflowWorkspaceRow): StoredRepository {
   const table = "workspace_repositories";
   return Object.freeze({
     locator: text(row, "locator", table),
@@ -125,7 +124,7 @@ function readRepositoryRow(row: Record<string, unknown>): StoredRepository {
   });
 }
 
-function readWorktreeRow(row: Record<string, unknown>): WorktreeRecord {
+function readWorktreeRow(row: WorkflowWorkspaceRow): WorktreeRecord {
   const table = "workspace_worktrees";
   return Object.freeze({
     repositoryName: text(row, "repository_name", table),
@@ -137,62 +136,62 @@ function readWorktreeRow(row: Record<string, unknown>): WorktreeRecord {
   });
 }
 
-export function readRepository(database: DatabaseSync, name: string): StoredRepository | undefined {
-  const row = reading(database, SELECT_REPOSITORY).get(name);
+export function readRepository(
+  storage: WorkflowWorkspaceReadStorage,
+  name: string,
+): StoredRepository | undefined {
+  const row = storage.get(SELECT_REPOSITORY, name);
   return row === undefined ? undefined : readRepositoryRow(row);
 }
 
-export function readRepositories(database: DatabaseSync): StoredRepository[] {
-  return reading(database, SELECT_REPOSITORIES)
-    .all()
-    .map((row) => readRepositoryRow(row));
+export function readRepositories(storage: WorkflowWorkspaceReadStorage): StoredRepository[] {
+  return storage.all(SELECT_REPOSITORIES).map((row) => readRepositoryRow(row));
 }
 
-export function insertRepository(database: DatabaseSync, stored: StoredRepository): void {
+export function insertRepository(
+  storage: WorkflowWorkspaceStorage,
+  stored: StoredRepository,
+): void {
   const { record } = stored;
-  database
-    .prepare(INSERT_REPOSITORY)
-    .run(
-      record.name,
-      stored.locator,
-      record.locatorFingerprint,
-      record.requestedBase,
-      record.creationCommit,
-      record.primaryBranch,
-      record.objectFormat,
-      record.checkoutPath,
-    );
+  storage.run(
+    INSERT_REPOSITORY,
+    record.name,
+    stored.locator,
+    record.locatorFingerprint,
+    record.requestedBase,
+    record.creationCommit,
+    record.primaryBranch,
+    record.objectFormat,
+    record.checkoutPath,
+  );
 }
 
 export function readWorktree(
-  database: DatabaseSync,
+  storage: WorkflowWorkspaceReadStorage,
   repositoryName: string,
   name: string,
 ): WorktreeRecord | undefined {
-  const row = reading(database, SELECT_WORKTREE).get(repositoryName, name);
+  const row = storage.get(SELECT_WORKTREE, repositoryName, name);
   return row === undefined ? undefined : readWorktreeRow(row);
 }
 
 export function readWorktreesForRepository(
-  database: DatabaseSync,
+  storage: WorkflowWorkspaceReadStorage,
   repositoryName: string,
 ): WorktreeRecord[] {
-  return reading(database, SELECT_WORKTREES)
-    .all(repositoryName)
-    .map((row) => readWorktreeRow(row));
+  return storage.all(SELECT_WORKTREES, repositoryName).map((row) => readWorktreeRow(row));
 }
 
-export function insertWorktree(database: DatabaseSync, record: WorktreeRecord): void {
-  database
-    .prepare(INSERT_WORKTREE)
-    .run(
-      record.repositoryName,
-      record.name,
-      record.requestedBranch,
-      record.requestedBase,
-      record.creationCommit,
-      record.checkoutPath,
-    );
+export function insertWorktree(storage: WorkflowWorkspaceStorage, record: WorktreeRecord): void {
+  storage.run(
+    INSERT_WORKTREE,
+    record.repositoryName,
+    record.name,
+    record.requestedBranch,
+    record.requestedBase,
+    record.creationCommit,
+    record.checkoutPath,
+  );
 }
 
 /**
@@ -203,32 +202,49 @@ export function insertWorktree(database: DatabaseSync, record: WorktreeRecord): 
  * surface and not a document's: a component reaches it only by asking the
  * composition provider to perform an effect.
  */
-export interface WorkspaceMetadata {
+export interface WorkspaceMetadataReads {
   readRepository(name: string): StoredRepository | undefined;
   readRepositories(): StoredRepository[];
-  insertRepository(stored: StoredRepository): void;
   readWorktree(repositoryName: string, name: string): WorktreeRecord | undefined;
   readWorktreesForRepository(repositoryName: string): WorktreeRecord[];
+}
+
+export interface WorkspaceMetadata extends WorkspaceMetadataReads {
+  insertRepository(stored: StoredRepository): void;
   insertWorktree(record: WorktreeRecord): void;
 }
 
-export function createWorkspaceMetadata(
-  database: DatabaseSync,
-  authorize: () => void,
-): WorkspaceMetadata {
-  function guarded<T>(read: () => T): T {
-    authorize();
-    return read();
-  }
-
+/**
+ * These tables, read through a storage view that may only read.
+ *
+ * What attachment and export need, and the whole of it. Selecting a checkout
+ * and proving a record still describes one are questions about rows that
+ * already exist; neither writes, and neither is inside an effect that could
+ * publish a row if it did.
+ */
+export function readWorkspaceMetadata(
+  storage: WorkflowWorkspaceReadStorage,
+): WorkspaceMetadataReads {
   return {
-    readRepository: (name) => guarded(() => readRepository(database, name)),
-    readRepositories: () => guarded(() => readRepositories(database)),
-    insertRepository: (stored) => guarded(() => insertRepository(database, stored)),
-    readWorktree: (repositoryName, name) =>
-      guarded(() => readWorktree(database, repositoryName, name)),
+    readRepository: (name) => readRepository(storage, name),
+    readRepositories: () => readRepositories(storage),
+    readWorktree: (repositoryName, name) => readWorktree(storage, repositoryName, name),
     readWorktreesForRepository: (repositoryName) =>
-      guarded(() => readWorktreesForRepository(database, repositoryName)),
-    insertWorktree: (record) => guarded(() => insertWorktree(database, record)),
+      readWorktreesForRepository(storage, repositoryName),
+  };
+}
+
+/**
+ * These tables, read and written through one Workspace transaction's storage.
+ *
+ * The view is the whole of what this needs: the lease, the transaction, the
+ * savepoint and the journal are already around every call it makes, so what is
+ * left here is the SQL for these two tables and the parsers for their columns.
+ */
+export function createWorkspaceMetadata(storage: WorkflowWorkspaceStorage): WorkspaceMetadata {
+  return {
+    ...readWorkspaceMetadata(storage),
+    insertRepository: (stored) => insertRepository(storage, stored),
+    insertWorktree: (record) => insertWorktree(storage, record),
   };
 }

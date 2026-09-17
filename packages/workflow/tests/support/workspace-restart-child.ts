@@ -25,7 +25,10 @@ import { durableRun, type Workflow } from "@executablemd/durable-streams";
 import { main, type Operation, until } from "effection";
 import { WorkflowRunStorage, type WorkflowRunDatabase } from "../../mod.ts";
 import { useWorkflowRunStorage } from "../../deno.ts";
-import { createWorkspaceEffect, withWorkspaceEffects } from "../../src/deno/workspace/effect.ts";
+import {
+  createWorkflowWorkspaceEffect,
+  withWorkspaceEffects,
+} from "../../src/deno/workspace/effect.ts";
 import {
   setPrivateWorkspaceClock,
   transactWorkspaceRoots,
@@ -59,10 +62,10 @@ const DEFINITION = {
  */
 function workflow(database: WorkflowRunDatabase, marker: string, clock: { now: number }) {
   return function* (): Workflow<void> {
-    yield createWorkspaceEffect(
+    yield createWorkflowWorkspaceEffect(
       database,
       { type: "workspace-proof", name: "seed" },
-      function* (filesystem) {
+      function* ({ filesystem }) {
         yield* until(appendFile(marker, "seed\n"));
         yield* filesystem.mkdir("/tree", { mode: 0o750 });
         yield* filesystem.writeFile(HISTORICAL_PATH, HISTORICAL_CONTENT, 0o640);
@@ -71,10 +74,10 @@ function workflow(database: WorkflowRunDatabase, marker: string, clock: { now: n
         return null;
       },
     );
-    yield createWorkspaceEffect(
+    yield createWorkflowWorkspaceEffect(
       database,
       { type: "workspace-proof", name: "revise" },
-      function* (filesystem) {
+      function* ({ filesystem }) {
         yield* until(appendFile(marker, "revise\n"));
         clock.now = REVISE_CLOCK;
         yield* filesystem.writeFile(HISTORICAL_PATH, "later bytes");

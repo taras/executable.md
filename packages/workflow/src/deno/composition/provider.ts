@@ -60,8 +60,8 @@ import {
 import { GitOperationAdmissionError, RepositorySelectionError } from "../../composition/errors.ts";
 import { selectionRegistry, type SelectionRegistry } from "../selections.ts";
 import type { WorkflowRunDatabase } from "../../storage/api.ts";
-import { transactWorkspaceRoots } from "../workspace/private.ts";
-import type { PrivateWorkspaceTransaction } from "../workspace/private.ts";
+import { readWorkflowWorkspace } from "../workspace/inspect.ts";
+import type { WorkflowWorkspaceSnapshot } from "../workspace/inspect.ts";
 import { gitSession, type GitSession } from "./git.ts";
 import { denoRepositoryHost, type RepositoryHost } from "./host.ts";
 import type { GitAuthentication } from "./authentication.ts";
@@ -144,11 +144,13 @@ function* attach(
   database: WorkflowRunDatabase,
   host: RepositoryHost,
   subject: string,
-  prepare: (workspace: PrivateWorkspaceTransaction, root: string) => Operation<Attached>,
+  prepare: (workspace: WorkflowWorkspaceSnapshot, root: string) => Operation<Attached>,
   disagreement: (git: GitSession, attached: Attached) => Operation<StaleReason | undefined>,
 ): Operation<void> {
   const root = yield* host.useDirectory();
-  const prepared = yield* transactWorkspaceRoots(database, (workspace) => prepare(workspace, root));
+  const prepared = yield* readWorkflowWorkspace(database, {}, (workspace) =>
+    prepare(workspace, root),
+  );
   if (!prepared.ok) {
     throw prepared.error;
   }

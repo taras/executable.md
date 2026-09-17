@@ -83,8 +83,8 @@ import {
   type GitHostObservation,
 } from "../../git-host/records.ts";
 import type { WorkflowRunDatabase } from "../../storage/api.ts";
-import { transactWorkspaceRoots } from "../workspace/private.ts";
-import type { PrivateWorkspaceTransaction } from "../workspace/private.ts";
+import { readWorkflowWorkspace } from "../workspace/inspect.ts";
+import { readWorkspaceMetadata } from "../workspace/repositories.ts";
 import {
   commitPresent,
   currentBranch,
@@ -104,6 +104,7 @@ import {
   type ExportedCheckouts,
   type GitCheckout,
   type GitCheckoutSelection,
+  type GitOperationRequest,
 } from "./operations.ts";
 import { gitRefusal } from "./refusals.ts";
 
@@ -218,18 +219,36 @@ function* retainedPushRoot(
   return selected;
 }
 
-/** The checkout family this invocation names its request from, exported to `root`. */
-function* exportRequestSource(
-  workspace: PrivateWorkspaceTransaction,
+/**
+ * The selection and the checkout family this invocation names its request from.
+ *
+ * One inspection, at the root this invocation is speaking from. A retained Push
+ * names the moment it published, and reading the Workspace as it was then —
+ * without the run returning to it — is the inspection boundary's own
+ * responsibility: it materializes that root, hands it to this callback, and
+ * rolls the materialization back however the callback ends.
+ *
+ * The rows the selection reads are the same either way. Retained Repository and
+ * Worktree identity is creation identity, which a Workspace root does not hold
+ * and a restoration does not move.
+ */
+function prepareRequestSource(
+  database: WorkflowRunDatabase,
   retained: string | undefined,
   root: string,
-  selection: GitCheckoutSelection,
-): Operation<ExportedCheckouts> {
-  const family = () => exportCheckoutFamily(workspace.filesystem, root, selection);
-  if (retained === undefined || retained === (yield* workspace.currentRoot())) {
-    return yield* family();
-  }
-  return yield* workspace.readRetainedRoot(retained, family);
+  admitted: GitOperationRequest,
+): Operation<Result<{ selection: GitCheckoutSelection; exported: ExportedCheckouts }>> {
+  return readWorkflowWorkspace(
+    database,
+    retained === undefined ? {} : { rootId: retained },
+    function* (workspace) {
+      const selection = selectGitCheckout(readWorkspaceMetadata(workspace.storage), PUSH, admitted);
+      return {
+        selection,
+        exported: yield* exportCheckoutFamily(workspace.filesystem, root, selection),
+      };
+    },
+  );
 }
 
 /**
@@ -432,13 +451,7 @@ export function* createGitPush(
 
     // Held open for the export alone. Everything after this reads files, and a
     // remote round trip must never keep the run's database locked.
-    const prepared = yield* transactWorkspaceRoots(database, function* (workspace) {
-      const selection = selectGitCheckout(workspace.metadata, PUSH, admitted);
-      return {
-        selection,
-        exported: yield* exportRequestSource(workspace, retained, root, selection),
-      };
-    });
+    const prepared = yield* prepareRequestSource(database, retained, root, admitted);
     if (!prepared.ok) {
       throw prepared.error;
     }

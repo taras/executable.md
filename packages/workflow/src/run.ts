@@ -44,9 +44,9 @@
  * and may still reject the history this admits; none of them can widen it.
  *
  * The two installations differ in what they require, not in how strictly it is
- * enforced. See `RunHistoryRules`: a base that would not resolve is recorded as
- * a failed effect (§6), so a programmatic run replays that failure rather than
- * demanding a successful record it never wrote.
+ * enforced. A base that would not resolve is recorded as a failed effect (§6),
+ * so a programmatic run replays that failure rather than demanding a successful
+ * record it never wrote.
  *
  * All of it is operation-scoped. The value is installed in the scope that owns
  * the document execution, so every descendant of the expansion reads it, the
@@ -80,7 +80,7 @@ import {
   retainedRunMismatch,
   workflowRunValue,
 } from "./journal.ts";
-import type { RunHistoryRules, WorkflowRun } from "./journal.ts";
+import type { WorkflowRun } from "./journal.ts";
 
 export type { WorkflowRun } from "./journal.ts";
 
@@ -163,14 +163,20 @@ export function* getWorkflowRun(): Operation<WorkflowRun> {
 /**
  * How one installation decides what the run is, and what the journal is held to.
  *
- * Two hosts need different answers to both questions. A programmatic caller
- * supplies a base and lets the first live execution allocate an id and resolve
- * that base, so the only thing a record can disagree about is the base it was
- * made from. A workflow host has already created the storage record, so the run
- * is not the execution's to allocate: it arrives whole, and a journal that
- * records a different one is not this run's journal.
+ * Two hosts need different answers to both questions. A caller that resolves a
+ * base lets the first live execution allocate an id and resolve that base, so
+ * the only thing a record can disagree about is the base it was made from. A
+ * workflow host has already created the storage record, so the run is not the
+ * execution's to allocate: it arrives whole, and a journal that records a
+ * different one is not this run's journal.
+ *
+ * Both answers are the host's, and neither is this package's to invent. What
+ * stays here is everything underneath them: the installation slot, when root
+ * admission happens, the durable record's parser, and where the current run is
+ * published. A host that resolves a repository supplies the resolution; it does
+ * not supply the journal.
  */
-interface RunPreparation extends RunHistoryRules {
+export interface WorkflowRunPreparation {
   /**
    * How the durable record identifies itself.
    *
@@ -178,12 +184,19 @@ interface RunPreparation extends RunHistoryRules {
    * its description says which version it is and what bundle it retains.
    */
   readonly description: EffectDescription;
+  /** Whether a non-empty history must carry a successful record. */
+  readonly required: boolean;
+  /** The recorded run, or a refusal naming what it disagrees about. */
+  agree(recorded: WorkflowRun): WorkflowRun;
   /** The run this execution is of, reached only when nothing is recorded yet. */
   allocate(): Operation<WorkflowRun>;
 }
 
 /** Append the run to the journal, and answer with what the journal holds. */
-function* record(description: EffectDescription, preparation: RunPreparation): Workflow<unknown> {
+function* record(
+  description: EffectDescription,
+  preparation: WorkflowRunPreparation,
+): Workflow<unknown> {
   return yield createDurableOperation(description, function* (): Operation<Json> {
     // Reached only when nothing is recorded yet: a replay hands the stored
     // value back without running this at all, so neither the identifier nor Git
@@ -192,7 +205,7 @@ function* record(description: EffectDescription, preparation: RunPreparation): W
   });
 }
 
-function allocating(base: string): RunPreparation {
+function allocating(base: string): WorkflowRunPreparation {
   return {
     description: describeGitWorkflowRun(base),
     // A base that would not resolve is recorded as a failed effect (§6), and a
@@ -224,7 +237,7 @@ function allocating(base: string): RunPreparation {
   };
 }
 
-function retaining(run: WorkflowRun): RunPreparation {
+function retaining(run: WorkflowRun): WorkflowRunPreparation {
   return {
     description: describeWorkflowRun(run),
     // The host created this run before anything executed, so a history of its
@@ -289,7 +302,7 @@ function readingRetainedValue<T>(read: () => T): T | undefined {
 }
 
 /** Read the record this run is held to, refusing anything that is not it. */
-function held(stored: unknown, preparation: RunPreparation): WorkflowRun {
+function held(stored: unknown, preparation: WorkflowRunPreparation): WorkflowRun {
   const run = readWorkflowRun(stored);
   if (run === undefined) {
     throw malformedRecord();
@@ -316,7 +329,7 @@ function same(left: WorkflowRun, right: WorkflowRun): boolean {
  * terminal replay core never enters the durable body at all, so this does not
  * run and the admission is what installs the recorded run.
  */
-function* prepare(preparation: RunPreparation): Workflow<void> {
+function* prepare(preparation: WorkflowRunPreparation): Workflow<void> {
   const description = preparation.description;
   // Which run this is, and whether the journal agrees, are decided by the
   // captured `preparation` and the durable record — never by what the slot
@@ -349,7 +362,7 @@ function* prepare(preparation: RunPreparation): Workflow<void> {
  * the durable body, so preparation does not run and this is the only place
  * inside the execution where the run a recorded result belongs to is known.
  */
-function admits(preparation: RunPreparation): JournalAdmission {
+function admits(preparation: WorkflowRunPreparation): JournalAdmission {
   return function* (retained: readonly DurableEvent[]): Operation<void> {
     // What the history is held to is decided by the captured `preparation`, and
     // by nothing that is read here. The slot is reached only afterwards, to
@@ -407,8 +420,16 @@ function* publish(run: WorkflowRun): Operation<void> {
  * core captures it before any middleware or document code exists, and a second
  * loaded copy of this package composes by handing over its own closure rather
  * than by agreeing on a name.
+ *
+ * The preparation is the host's half and the only half. Everything the run is
+ * held to — the admission captured before any installation, the durable record
+ * inside the root, the parser that reads it back, the slot the execution
+ * publishes into — stays here, so a host that decides what its run is decides
+ * nothing about when or how strictly that decision is enforced.
  */
-function installation(preparation: RunPreparation): ExecutionInstallation {
+export function createWorkflowRunInstallation(
+  preparation: WorkflowRunPreparation,
+): ExecutionInstallation {
   return {
     admissions: [admits(preparation)],
     prepare: () => prepare(preparation),
@@ -433,7 +454,7 @@ function installation(preparation: RunPreparation): ExecutionInstallation {
  * ```
  */
 export function workflowInstallation(options: { base: string }): ExecutionInstallation {
-  return installation(allocating(options.base));
+  return createWorkflowRunInstallation(allocating(options.base));
 }
 
 /**
@@ -450,7 +471,7 @@ export function workflowInstallation(options: { base: string }): ExecutionInstal
  * Git is not consulted, and no identifier is generated.
  */
 export function retainedWorkflowInstallation(run: WorkflowRun): ExecutionInstallation {
-  return installation(retaining(retainedRun(run)));
+  return createWorkflowRunInstallation(retaining(retainedRun(run)));
 }
 
 /**

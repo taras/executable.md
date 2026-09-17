@@ -117,12 +117,8 @@ export function* createGitAdd(
     paths: admitPathspecs(request.paths),
   });
 
-  const outcome = yield* settled(
-    "git",
-    ADD,
-    database,
-    yield* describeAdd(admitted),
-    (filesystem, metadata) => performGitAdd({ filesystem, metadata }, host, admitted),
+  const outcome = yield* settled("git", ADD, database, yield* describeAdd(admitted), (context) =>
+    performGitAdd(context, host, admitted),
   );
   const result = parseGitAddResult(outcome, admitted);
   if (result === undefined || !placedCheckout(result.checkout, admitted.repository)) {

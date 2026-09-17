@@ -36,6 +36,7 @@ import { chmod, readFile, readlink, realpath, symlink, writeFile } from "node:fs
 import { RepositoryStaleStateError } from "../../composition/errors.ts";
 import { canonicalWorkspacePath } from "../../composition/parse.ts";
 import type { DenoWorkspaceFilesystem } from "../workspace/filesystem.ts";
+import type { WorkflowWorkspaceReads } from "../workspace/inspect.ts";
 
 /** Where the two administration files a linked worktree needs are written. */
 const GITDIR_PREFIX = "gitdir: ";
@@ -89,7 +90,7 @@ function* entry(path: string): Operation<Stats | undefined> {
  * than missing: what matters is whether the entry the record names is there.
  */
 export function* workspaceEntryPresent(
-  filesystem: DenoWorkspaceFilesystem,
+  filesystem: WorkflowWorkspaceReads,
   workspacePath: string,
 ): Operation<boolean> {
   try {
@@ -107,7 +108,7 @@ export function* workspaceEntryPresent(
  * exported read-only cannot be written into while the export is still running.
  */
 function* exportEntry(
-  filesystem: DenoWorkspaceFilesystem,
+  filesystem: WorkflowWorkspaceReads,
   workspacePath: string,
   target: string,
 ): Operation<void> {
@@ -154,7 +155,7 @@ function* exportEntry(
  * would trust.
  */
 export function* exportTree(
-  filesystem: DenoWorkspaceFilesystem,
+  filesystem: WorkflowWorkspaceReads,
   root: string,
   workspacePath: string,
   subject: string,

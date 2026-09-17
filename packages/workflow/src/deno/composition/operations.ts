@@ -69,7 +69,8 @@ import {
   GitOperationInfrastructureError,
 } from "../../composition/errors.ts";
 import type { DenoWorkspaceFilesystem } from "../workspace/filesystem.ts";
-import type { StoredRepository, WorkspaceMetadata } from "../workspace/repositories.ts";
+import type { WorkflowWorkspaceReads } from "../workspace/inspect.ts";
+import type { StoredRepository, WorkspaceMetadataReads } from "../workspace/repositories.ts";
 import {
   currentBranch,
   gitSession,
@@ -204,7 +205,7 @@ function refuseAdmission(operation: string, reason: string): never {
  * on.
  */
 export function selectGitCheckout(
-  metadata: WorkspaceMetadata,
+  metadata: WorkspaceMetadataReads,
   operation: string,
   request: GitOperationRequest,
 ): GitCheckoutSelection {
@@ -394,7 +395,7 @@ export interface ExportedCheckouts {
  * holds the run's database open.
  */
 export function* exportCheckoutFamily(
-  filesystem: DenoWorkspaceFilesystem,
+  filesystem: WorkflowWorkspaceReads,
   root: string,
   selection: GitCheckoutSelection,
 ): Operation<ExportedCheckouts> {
@@ -538,6 +539,7 @@ export function* performGitOperation<T>(
 ): Operation<CompositionOutcome> {
   const selection = selectGitCheckout(context.metadata, operation, request);
   return yield* attempted(
+    context,
     "git",
     operation,
     selection.subject,

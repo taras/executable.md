@@ -23,7 +23,8 @@ import {
   type RepositoryCreationRequest,
   type RepositoryRecord,
 } from "../../composition/records.ts";
-import type { PrivateWorkspaceTransaction } from "../workspace/private.ts";
+import type { WorkflowWorkspaceSnapshot } from "../workspace/inspect.ts";
+import { readWorkspaceMetadata } from "../workspace/repositories.ts";
 import {
   checkoutPrimary,
   checkoutReadable,
@@ -157,6 +158,7 @@ export function* performRepository(
   }
 
   return yield* attempted(
+    context,
     "repository",
     request.name,
     repositorySubject(request.name),
@@ -165,12 +167,12 @@ export function* performRepository(
 }
 
 export function* prepareRepositoryAttachment(
-  workspace: PrivateWorkspaceTransaction,
+  workspace: WorkflowWorkspaceSnapshot,
   root: string,
   record: RepositoryRecord,
   subject: string,
 ): Operation<Attached> {
-  const stored = workspace.metadata.readRepository(record.name);
+  const stored = readWorkspaceMetadata(workspace.storage).readRepository(record.name);
   if (stored === undefined || !sameRepositoryRecord(stored.record, record)) {
     throw stale(subject, "metadata");
   }
@@ -248,7 +250,7 @@ export function* createRepository(
     request.name,
     database,
     yield* describeRepository(request, admitted === undefined ? "" : locatorFingerprint(admitted)),
-    (filesystem, metadata) => performRepository({ filesystem, metadata }, host, request),
+    (context) => performRepository(context, host, request),
   );
   const record = parseRepositoryRecord(outcome);
   if (record === undefined) {

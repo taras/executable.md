@@ -53,6 +53,7 @@ import { useWorkspaceEffects } from "../../src/deno/workspace/effect.ts";
 import { withWorkflowWorkspace } from "../../src/deno/workspace/host.ts";
 import { currentWorkspaceRoot } from "../../src/deno/workspace/root.ts";
 import { transactWorkspaceRoots, usePrivateWorkspace } from "../../src/deno/workspace/private.ts";
+import { createWorkspaceMetadata } from "../../src/deno/workspace/repositories.ts";
 import { executeInstalled } from "@executablemd/core/host";
 import { retainedWorkflowInstallation } from "../../src/run.ts";
 import { denoRepositoryHost, useGitAuthentication } from "../../src/deno/composition/host.ts";
@@ -264,10 +265,10 @@ function* inspect(root: string, runId: string): Operation<void> {
   }
 
   const observed = yield* transactWorkspaceRoots(database, function* (workspace) {
-    const [repository] = workspace.metadata.readRepositories();
+    const [repository] = createWorkspaceMetadata(workspace.storage).readRepositories();
     return {
       currentRoot: yield* workspace.currentRoot(),
-      repositories: workspace.metadata.readRepositories().length,
+      repositories: createWorkspaceMetadata(workspace.storage).readRepositories().length,
       checkoutPath: repository?.record.checkoutPath,
       which:
         repository === undefined

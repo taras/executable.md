@@ -171,7 +171,7 @@ export function* createGitSwitch(
     SWITCH,
     database,
     yield* describeSwitch(admitted),
-    (filesystem, metadata) => performGitSwitch({ filesystem, metadata }, host, admitted),
+    (context) => performGitSwitch(context, host, admitted),
   );
   // Read for this request rather than merely read: a result that does not
   // describe the checkout, branch, base and transition this invocation asked for

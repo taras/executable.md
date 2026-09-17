@@ -22,11 +22,10 @@ import {
 } from "../../composition/errors.ts";
 import type { WorkflowRunDatabase } from "../../storage/api.ts";
 import { WorkflowStorageError } from "../../storage/errors.ts";
-import { savepoint } from "../transaction.ts";
-import { createWorkspaceEffect } from "../workspace/effect.ts";
+import { createWorkflowWorkspaceEffect } from "../workspace/effect.ts";
 import { isJournalableWorkspaceFailure } from "../workspace/errors.ts";
 import type { DenoWorkspaceFilesystem } from "../workspace/filesystem.ts";
-import type { WorkspaceMetadata } from "../workspace/repositories.ts";
+import { createWorkspaceMetadata, type WorkspaceMetadata } from "../workspace/repositories.ts";
 import { GitRefusal } from "./git.ts";
 import {
   CompositionRefusal,
@@ -66,6 +65,14 @@ export type CompositionOutcome = { readonly kind: "created"; readonly record: Js
 export interface MutationContext {
   readonly filesystem: DenoWorkspaceFilesystem;
   readonly metadata: WorkspaceMetadata;
+  /**
+   * This effect's own nested savepoint, for work an attempt may have to discard.
+   *
+   * Carried rather than resolved when it is needed: it belongs to the
+   * transaction this effect is performing inside, and a savepoint looked up
+   * from the scope would be whichever one the scope happened to be under.
+   */
+  savepoint<T>(body: Operation<T>): Operation<T>;
 }
 
 /** A Workspace that could not retain what native Git produced. */
@@ -121,13 +128,14 @@ export function parentOf(path: string): string {
  * document asked for.
  */
 export function* attempted(
+  context: MutationContext,
   kind: RefusalKind,
   name: string,
   subject: string,
   work: Operation<Json>,
 ): Operation<CompositionOutcome> {
   try {
-    return created(yield* savepoint(work));
+    return created(yield* context.savepoint(work));
   } catch (error) {
     if (error instanceof GitRefusal) {
       return refused(kind, name, error.reason);
@@ -152,12 +160,18 @@ function refused(kind: RefusalKind, name: string, reason: string): never {
 function* compositionEffect(
   database: WorkflowRunDatabase,
   description: EffectDescription,
-  perform: (
-    filesystem: DenoWorkspaceFilesystem,
-    metadata: WorkspaceMetadata,
-  ) => Operation<CompositionOutcome>,
+  perform: (context: MutationContext) => Operation<CompositionOutcome>,
 ): Workflow<unknown> {
-  return yield createWorkspaceEffect(database, description, perform);
+  // What these two tables mean is this subsystem's, so the rows are read and
+  // written here, through the generic storage view the transaction hands over.
+  // The savepoint travels with them because it belongs to the same transaction:
+  // an attempt discards its bytes and its rows together or discards neither.
+  return yield createWorkflowWorkspaceEffect(
+    database,
+    description,
+    ({ filesystem, storage, savepoint }) =>
+      perform({ filesystem, metadata: createWorkspaceMetadata(storage), savepoint }),
+  );
 }
 
 /**
@@ -192,10 +206,7 @@ export function* settled(
   name: string,
   database: WorkflowRunDatabase,
   description: EffectDescription,
-  perform: (
-    filesystem: DenoWorkspaceFilesystem,
-    metadata: WorkspaceMetadata,
-  ) => Operation<CompositionOutcome>,
+  perform: (context: MutationContext) => Operation<CompositionOutcome>,
 ): Operation<unknown> {
   let value: unknown;
   try {

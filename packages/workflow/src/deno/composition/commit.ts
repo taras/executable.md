@@ -284,7 +284,7 @@ export function* createGitCommit(
     COMMIT,
     database,
     yield* describeCommit(admitted),
-    (filesystem, metadata) => performGitCommit({ filesystem, metadata }, host, admitted, evidence),
+    (context) => performGitCommit(context, host, admitted, evidence),
   );
   // Read for this request rather than merely read: a result whose checkout,
   // message evidence or object graph does not describe this invocation is not

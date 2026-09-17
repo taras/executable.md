@@ -28,6 +28,7 @@ import { fileURLToPath } from "node:url";
 import { withWorkflowWorkspace } from "@executablemd/workflow/deno";
 import type { WorkflowWorkspaceOptions } from "@executablemd/workflow/deno";
 import * as published from "@executablemd/workflow/deno";
+import * as root from "@executablemd/workflow";
 import { useInvokingHome } from "./support/credential-home.ts";
 import { readdir, readTextFile, stat } from "@effectionx/fs";
 import type { Operation } from "effection";
@@ -159,6 +160,50 @@ describe("workflow published Deno entrypoint", () => {
       expect(reachable).not.toContain(seam);
     }
     expect(COMPOSITION_IS_NOT_A_KEY).toBe(false);
+    expect(yield* until(Promise.resolve(true))).toBe(true);
+  });
+
+  it("publishes the three generic extension boundaries and no seam behind them", function* () {
+    const shared = Object.keys(root);
+    const deno = Object.keys(published);
+
+    // What a trusted host outside this package composes with: how it states
+    // what its own run is, how it performs one Workspace-coordinated durable
+    // mutation, how it reads the Workspace without performing one, and how it
+    // tells a failure it may journal from one that fails the run.
+    expect(shared).toContain("createWorkflowRunInstallation");
+    expect(deno).toContain("createWorkflowWorkspaceEffect");
+    expect(deno).toContain("readWorkflowWorkspace");
+    expect(deno).toContain("JournaledEffectFailure");
+    expect(deno).toContain("isJournalableWorkspaceFailure");
+
+    // And what it still cannot reach. A mutation receives its storage view from
+    // the transaction that owns it; a caller that could build one, open a
+    // private transaction, mint a transaction token, restore a root, or install
+    // the private provider would be holding the authority this boundary exists
+    // to keep.
+    for (const seam of [
+      "createWorkflowWorkspaceStorage",
+      "guardedWorkflowWorkspaceStorage",
+      "guardedWorkflowWorkspaceReadStorage",
+      "usePrivateWorkspace",
+      "withPrivateWorkspaceTransaction",
+      "transactWorkspaceRoots",
+      "workflowRunTransactionToken",
+      "validateWorkflowRunTransactionToken",
+      "useWorkspaceEffects",
+      "withWorkspaceEffects",
+      "createWorkflowRunConnections",
+      "restoreWorkspaceRoot",
+      "captureWorkspaceRoot",
+      "setCurrentWorkspaceRoot",
+      "savepoint",
+    ]) {
+      expect({ seam, reachable: deno.includes(seam) || shared.includes(seam) }).toEqual({
+        seam,
+        reachable: false,
+      });
+    }
     expect(yield* until(Promise.resolve(true))).toBe(true);
   });
 });

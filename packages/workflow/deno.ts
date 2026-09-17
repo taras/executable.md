@@ -92,6 +92,62 @@ export {
 export type { GitHubPullRequestsOptions } from "./src/deno/composition/pull-request-reads.ts";
 export { withWorkflowWorkspace } from "./src/deno/workspace/published.ts";
 /**
+ * One durable effect inside this run's Workspace transaction.
+ *
+ * The boundary a feature outside this package performs a Workspace-coordinated
+ * mutation through. It receives the authoritative filesystem and a storage view
+ * valid only while it runs; the lease, the transaction and savepoint, the root
+ * capture and publication, the journal enlistment and the rollback are this
+ * package's and are not projected through it.
+ */
+export { createWorkflowWorkspaceEffect } from "./src/deno/workspace/effect.ts";
+export type {
+  WorkflowWorkspaceMutation,
+  WorkflowWorkspaceTransaction,
+} from "./src/deno/workspace/effect.ts";
+/**
+ * Reading the Workspace, at the current root or at one this run retains.
+ *
+ * The other half of the same boundary, for work that exports a checkout or
+ * proves a record still describes what is there. It journals nothing, publishes
+ * nothing, and can write neither bytes nor rows; a retained root is
+ * materialized inside a rollback-only savepoint this package owns and is always
+ * taken back.
+ */
+export { readWorkflowWorkspace } from "./src/deno/workspace/inspect.ts";
+export type {
+  WorkflowWorkspaceReadOptions,
+  WorkflowWorkspaceReads,
+  WorkflowWorkspaceSnapshot,
+} from "./src/deno/workspace/inspect.ts";
+export type {
+  WorkflowWorkspaceParameter,
+  WorkflowWorkspaceReadStorage,
+  WorkflowWorkspaceRow,
+  WorkflowWorkspaceStorage,
+} from "./src/deno/workspace/storage.ts";
+/**
+ * The Workspace filesystem a mutation writes through, under names a package
+ * outside this one can spell.
+ */
+export type {
+  DenoWorkspaceEntry as WorkflowWorkspaceEntry,
+  DenoWorkspaceFilesystem as WorkflowWorkspaceFilesystem,
+  DenoWorkspaceStat as WorkflowWorkspaceStat,
+} from "./src/deno/workspace/filesystem.ts";
+/**
+ * Whether a failure is the effect's own durable outcome or the run failing.
+ *
+ * The base class is what a feature extends to declare that its refusal is
+ * publishable; the predicate is how that feature tells a Workspace condition it
+ * may journal from infrastructure it may not. Both are generic: neither knows
+ * what any feature's refusal means.
+ */
+export {
+  JournaledEffectFailure,
+  isJournalableWorkspaceFailure,
+} from "./src/deno/workspace/errors.ts";
+/**
  * What a host declares to the execution so an authored workflow document has
  * `<Evaluate>`: its implementation names durable work after its own invocation,
  * so canonical execution builds it from the claimant it minted.

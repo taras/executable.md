@@ -22,8 +22,8 @@ import {
   type WorktreeCreationRequest,
   type WorktreeRecord,
 } from "../../composition/records.ts";
-import type { StoredRepository } from "../workspace/repositories.ts";
-import type { PrivateWorkspaceTransaction } from "../workspace/private.ts";
+import { readWorkspaceMetadata, type StoredRepository } from "../workspace/repositories.ts";
+import type { WorkflowWorkspaceSnapshot } from "../workspace/inspect.ts";
 import {
   addWorktree,
   checkoutReadable,
@@ -181,6 +181,7 @@ export function* performWorktree(
   }
 
   return yield* attempted(
+    context,
     "worktree",
     request.name,
     worktreeSubject(request.name),
@@ -189,16 +190,17 @@ export function* performWorktree(
 }
 
 export function* prepareWorktreeAttachment(
-  workspace: PrivateWorkspaceTransaction,
+  workspace: WorkflowWorkspaceSnapshot,
   root: string,
   record: WorktreeRecord,
   subject: string,
 ): Operation<Attached> {
-  const stored = workspace.metadata.readWorktree(record.repositoryName, record.name);
+  const metadata = readWorkspaceMetadata(workspace.storage);
+  const stored = metadata.readWorktree(record.repositoryName, record.name);
   if (stored === undefined || !sameWorktreeRecord(stored, record)) {
     throw stale(subject, "metadata");
   }
-  const repository = workspace.metadata.readRepository(record.repositoryName);
+  const repository = metadata.readRepository(record.repositoryName);
   if (repository === undefined) {
     throw stale(subject, "repository");
   }
@@ -269,7 +271,7 @@ export function* createWorktree(
     request.name,
     database,
     yield* describeWorktree(request),
-    (filesystem, metadata) => performWorktree({ filesystem, metadata }, host, request),
+    (context) => performWorktree(context, host, request),
   );
   const record = parseWorktreeRecord(outcome);
   if (record === undefined) {

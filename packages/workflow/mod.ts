@@ -69,6 +69,16 @@ export {
 } from "./src/git.ts";
 export type { GitApi, GitObjectFormat } from "./src/git.ts";
 export { getWorkflowRun, retainedWorkflowInstallation, workflowInstallation } from "./src/run.ts";
+/**
+ * How a trusted host states what its own run is.
+ *
+ * The generic constructor behind both installations above: a host supplies the
+ * durable description, whether a successful record is required, how the run is
+ * allocated when nothing is recorded yet, and what a recorded run has to agree
+ * with. Everything the run is then held to stays in this package.
+ */
+export { createWorkflowRunInstallation } from "./src/run.ts";
+export type { WorkflowRunPreparation } from "./src/run.ts";
 export { workflowBundleInstallation, WorkflowBundleHistoryError } from "./src/bundle.ts";
 export type { WorkflowRun } from "./src/run.ts";
 export { isGitWorkflowRun, workflowRunValue } from "./src/journal.ts";
