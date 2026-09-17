@@ -511,7 +511,7 @@ describe("Tier WFF — xmd workflow fork", () => {
     });
   });
 
-  it("WFF3: the fork owns its inherited prefix once the source is deleted", function* () {
+  it("WFF3: the fork owns its inherited prefix and its own retained source", function* () {
     yield* useFixture({ [DEFINITION]: SOURCE }, function* (fixture) {
       {
         yield* xmd(fixture, ["workflow", "start", "--id=source-1", DEFINITION]).expect();
@@ -533,6 +533,13 @@ describe("Tier WFF — xmd workflow fork", () => {
         const gone = yield* xmd(fixture, ["workflow", "status", "source-1"]).join();
         expect(gone.code).toBe(1);
 
+        // Everything the fork's own candidate was established from goes too:
+        // the file it was read from, and the repository it sat in. A resume
+        // that reloaded either would be running bytes this fork is not a fork
+        // of, and deleting only the source run would leave that reload working.
+        yield* rm(join(fixture.repository, DEFINITION), { force: true });
+        yield* rm(join(fixture.repository, ".git"), { recursive: true, force: true });
+
         // The fork still reads, still holds the inherited row, and still names
         // the Workspace root that row was written against.
         const entries = yield* history(fixture, "fork-1");
@@ -541,10 +548,18 @@ describe("Tier WFF — xmd workflow fork", () => {
         expect(inherited.workspaceRootId).toBe(checkpoint.workspaceRootId);
         expect(inherited.inherited?.sourceRunId).toBe("source-1");
 
-        // And continuing it consults nothing that is gone.
+        // And continuing it consults nothing that is gone: the corrected
+        // document the fork was created from is what replays, out of the
+        // fork's own store.
         const resumed = yield* xmd(fixture, ["workflow", "resume", "fork-1"]).join();
         expect(resumed.code).toBe(0);
         expect(resumed.stderr).toContain("workflow status: completed");
+        // The corrected document is what the fork retains, and the source's is
+        // not. Read from the fork's own journal rather than from what was
+        // rendered, because a command's output is retained history rather than
+        // displayed text — and it is the retained history a reload of either
+        // deleted file would have changed.
+        expect(committedExec(workflowRunPath(fixture.runs, "fork-1")).stdout).toBe("corrected\n");
       }
     });
   });
@@ -978,3 +993,22 @@ describe("Tier WFF — xmd workflow fork", () => {
     });
   });
 });
+
+/** The exec record a run committed, as a second connection reads it. */
+function committedExec(path: string): { stdout?: string } {
+  const database = new DatabaseSync(path, { readOnly: true });
+  try {
+    for (const row of database
+      .prepare("SELECT record FROM journal_events ORDER BY sequence")
+      .all()) {
+      const record = typeof row["record"] === "string" ? row["record"] : "";
+      const parsed = JSON.parse(record);
+      if (parsed?.description?.type === "exec" && parsed?.result?.status === "ok") {
+        return parsed.result.value;
+      }
+    }
+    throw new Error("no committed exec record");
+  } finally {
+    database.close();
+  }
+}

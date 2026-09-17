@@ -95,8 +95,12 @@ import type { SuspensionControllerOptions, SuspensionNotice } from "@executablem
 import { SUSPENSION_REQUEST } from "@executablemd/workflow";
 import { describeError } from "./props.ts";
 import { preflightFork } from "./workflow-fork.ts";
-import { loadRetainedDefinition, supportedRootDocument } from "./workflow-definition.ts";
 import type { EstablishedDefinition, RetainedSources } from "./workflow-definition.ts";
+import type { RetainedDefinitionSources } from "@executablemd/workflow/deno";
+import type { WorkflowBundleComponent } from "@executablemd/core/host";
+import { decodeSourceText, isGitWorkflowRunRecord } from "@executablemd/workflow";
+import type { WorkflowRun, WorkflowRunRecord } from "@executablemd/workflow";
+import type { SourceBundleWorkflowRunCreationV2 } from "@executablemd/workflow/deno";
 
 /**
  * What this module cannot do without knowing the host.
@@ -880,7 +884,7 @@ export interface WorkflowStart {
  * status.
  *
  * `execute` is the shared CLI's own document machinery, handed everything this
- * run decided: the pinned source, the retained props, the run's journal, the
+ * run decided: the retained source, the retained props, the run's journal, the
  * installations that belong inside the execution scope, and the attachment that
  * wraps it.
  *
@@ -953,17 +957,6 @@ export function runWorkflow(
     }
     const { lock: executorLock } = acquired.value;
 
-    // A resumed run closed over a component bundle reconstructs it here: under
-    // the executor lock, from the retained commit, and before the execution
-    // record exists. A component that is gone, changed, or unreachable leaves
-    // the run's lifecycle records exactly as they are rather than adding an
-    // attempt that never began.
-    const reconstructed = yield* reconstructedSources(request, runId);
-    if (!reconstructed.ok) {
-      report(reconstructed.error.message);
-      return { exitCode: 1 };
-    }
-
     // One transaction: whatever the previous workflow executor left is reconciled, this
     // action is admitted against what that left behind, and the execution is
     // recorded — or none of it is. A fork's one transaction is its whole
@@ -983,37 +976,24 @@ export function runWorkflow(
     }
 
     const { database, record, execution, replay } = begun.value;
-    reportRun(record.runId);
 
-    // Only now, and only because execution or replay was admitted.
-    const source = yield* documentSource(start, database, reconstructed.value);
-    if (!source.ok) {
-      report(source.error.message);
-      return { exitCode: 1 };
-    }
-
-    // Interruption is the outcome nothing else publishes. Registered before the
-    // execution starts, so a scope torn down by Ctrl-C settles the run rather
-    // than leaving a record with no end and a status of `running`. The executor
-    // lock outlives this finalizer, so its settlement remains authorized.
+    // Before anything that can suspend. `admit()` handed back a committed
+    // execution receipt, so the run is already durable and already `running`;
+    // everything below — reporting the id, projecting the sources, importing
+    // the Deno adapter — yields, and a cancellation landing in any of them has
+    // to find this finalizer already registered rather than still to come. The
+    // executor lock outlives it, so its settlement stays authorized.
+    //
+    // This is the reporting half of interruption. The begin transition installs
+    // its own settlement on the executor hold, inside the transaction that
+    // recorded the execution, which is what makes the durable outcome
+    // guaranteed rather than merely early; this runs first, so that backstop
+    // finds the execution already finished and leaves it alone.
     //
     // The phase, rather than a boolean: "the document produced an outcome" and
     // "this invocation is durably settled" are different facts, and collapsing
     // them is how a post-execution storage refusal would be republished as an
     // interruption. Teardown speaks only while the phase is still `running`.
-    // Imported where it is used rather than at the top of this module. This
-    // file is on the ordinary `xmd run` path too, and the Deno workflow adapter
-    // reaches `node:sqlite` — which Node greets with an experimental warning on
-    // standard error the moment it loads. A run that opens no workflow storage
-    // should not be announcing that it might have.
-    // `evaluationProfile` comes through the same import, and for the same
-    // reason: it is closed over this run's storage, and a run that opens no
-    // workflow storage must not load the adapter that reaches `node:sqlite` —
-    // which Bun does not have at all.
-    const { createSuspensionController, evaluationProfile } = yield* until(
-      import("@executablemd/workflow/deno"),
-    );
-    const suspension = createSuspensionController({ database });
     const phase: LifecyclePhase = { state: "running" };
     yield* ensure(function* () {
       if (phase.state !== "running") {
@@ -1040,9 +1020,41 @@ export function runWorkflow(
       reportStatus("interrupted");
     });
 
+    // Only after the creation transaction committed. A run id reported before
+    // it would name something a failure could still leave absent.
+    reportRun(record.runId);
+
+    // What the transition authenticated, and nothing this command read.
+    const source = executableSources(begun.value.sources);
+    if (!source.ok) {
+      report(source.error.message);
+      return { exitCode: 1 };
+    }
+
+    // Imported where it is used rather than at the top of this module. This
+    // file is on the ordinary `xmd run` path too, and the Deno workflow adapter
+    // reaches `node:sqlite` — which Node greets with an experimental warning on
+    // standard error the moment it loads. A run that opens no workflow storage
+    // should not be announcing that it might have.
+    // `evaluationProfile` comes through the same import, and for the same
+    // reason: it is closed over this run's storage, and a run that opens no
+    // workflow storage must not load the adapter that reaches `node:sqlite` —
+    // which Bun does not have at all.
+    const { createSuspensionController, evaluationProfile } = yield* until(
+      import("@executablemd/workflow/deno"),
+    );
+    const suspension = createSuspensionController({ database });
+
     const completed = yield* isCompleted(database.journal);
     const documentExecution: WorkflowExecution = {
-      root: retainedSource(record.definition.rootDocumentPath, source.value.source),
+      // The exact target the run retains, never a selector re-resolved now: a
+      // resumed run continues the section it started, and nothing asks the
+      // document layer that question a second time.
+      root: retainedSource(rootDocumentName(record), source.value.source, {
+        ...(record.definition.targetPath === undefined
+          ? {}
+          : { target: record.definition.targetPath }),
+      }),
       props: record.props,
       stream: database.journal,
       // The run already exists: the begin transition created or found it before
@@ -1051,11 +1063,7 @@ export function runWorkflow(
       // beside it, through the same host-service slot `xmd run` fills with a
       // real adapter.
       installations: [
-        retainedWorkflowInstallation({
-          runId: record.runId,
-          base: record.base,
-          pinnedCommit: record.definition.objectId,
-        }),
+        retainedWorkflowInstallation(installedRun(record)),
         // The bundle this run is a run of, when it is a run of one. Both start
         // and resume install it, and a completed replay installs it too: the
         // retained history is held to the same components before its recorded
@@ -1207,7 +1215,7 @@ function* forkInheritance(
   request: WorkflowRequest,
   runId: string,
   start: WorkflowStart | undefined,
-  creation: WorkflowRunCreation | undefined,
+  creation: SourceBundleWorkflowRunCreationV2 | undefined,
   host: WorkflowHost,
   transitions: WorkflowExecutionTransitions,
   execute: (execution: WorkflowExecution) => Operation<Result<void>>,
@@ -1255,24 +1263,23 @@ function* startCreation(
   request: WorkflowRequest,
   start: WorkflowStart | undefined,
   inherited: Record<string, Json> | undefined,
-): Operation<Result<WorkflowRunCreation | undefined>> {
+): Operation<Result<SourceBundleWorkflowRunCreationV2 | undefined>> {
   if (request.action === "resume") {
     return Ok(undefined);
   }
   if (start === undefined) {
     return Err(new Error(`xmd workflow ${request.action} has no definition to run`));
   }
-  const supported = supportedRootDocument(start.established.definition);
-  if (!supported.ok) {
-    return supported;
-  }
   const props = yield* forkProps(start, inherited);
   if (!props.ok) {
     return props;
   }
+  // The descriptor and the bytes together. They were established from one read
+  // of each file before the lock was taken, and the transition copies them
+  // again before it validates — so what becomes durable is what was read.
   return Ok({
     definition: start.established.definition,
-    base: start.established.base,
+    sourceSnapshot: start.established.sourceSnapshot,
     props: props.value,
     ...(start.established.retrieval === undefined
       ? {}
@@ -1343,54 +1350,87 @@ function* inheritedProps(
 }
 
 /**
- * The document this run executes.
+ * The document this run executes, as the lifecycle authenticated it.
  *
- * A `start` already established it from Git to read what the pinned document
- * declares. A resume fetches what the run retained, and only once the run has
- * been admitted — a run that ended is not one to fetch a definition for.
+ * Not re-read, not re-fetched, and never the file the caller pointed at. The
+ * begin transition proved the source under the executor lock before it wrote
+ * anything, and what it answered with is the only thing that may import: a
+ * second read here would be a second source of truth about what the run is a
+ * run of, and the two could differ.
  */
-function* documentSource(
-  start: WorkflowStart | undefined,
-  database: WorkflowRunDatabase,
-  reconstructed: RetainedSources | undefined,
-): Operation<Result<RetainedSources>> {
-  if (start !== undefined) {
-    return Ok({ source: start.established.source, components: start.established.components });
+function executableSources(sources: RetainedDefinitionSources): Result<RetainedSources> {
+  if (sources.definitionVersion === 1) {
+    return Ok({
+      source: sources.closure.root.content,
+      components: sources.closure.components.map((component) => ({
+        name: component.name,
+        path: component.path,
+        sourceHash: component.blobId,
+        content: component.content,
+      })),
+    });
   }
-  if (reconstructed !== undefined) {
-    return Ok(reconstructed);
+
+  const byPath = new Map(sources.sources.map((source) => [source.path, source.bytes]));
+  const entry = byPath.get(sources.definition.entrypoint);
+  if (entry === undefined) {
+    return Err(new Error("this run's retained source holds no entrypoint"));
   }
-  return yield* loadRetainedDefinition(database.record.definition, database.retrieval?.metadata);
+  const source = decodeSourceText(entry);
+  if (!source.ok) {
+    return source;
+  }
+
+  const components: WorkflowBundleComponent[] = [];
+  for (const declared of sources.definition.components ?? []) {
+    const bytes = byPath.get(declared.path);
+    const retained = sources.definition.sources.find((each) => each.path === declared.path);
+    if (bytes === undefined || retained === undefined) {
+      return Err(new Error(`this run's retained source holds no ${declared.name}`));
+    }
+    const content = decodeSourceText(bytes);
+    if (!content.ok) {
+      return content;
+    }
+    components.push({
+      name: declared.name,
+      path: declared.path,
+      sourceHash: retained.sourceHash,
+      content: content.value,
+    });
+  }
+  return Ok({ source: source.value, components: Object.freeze(components) });
 }
 
 /**
- * The pinned sources a resumed run closed over a bundle needs before it begins.
+ * The run value this execution is installed under.
  *
- * Answers with nothing for a `start`, which established its own bundle from Git
- * before it asked storage for anything, and for a run whose definition names no
- * components — that one keeps loading its root after the run has been admitted,
- * because a run that ended is not one to fetch a definition for.
- *
- * A run this host cannot inspect answers with nothing too. What that run is,
- * and whether this action may advance it, is the begin transition's to decide,
- * and answering it here would report a different refusal for the same fact.
+ * Whichever version the record retains, spelled as that version spells it. A
+ * source-bundle run records its bundle hash and exact target; it invents no
+ * base or pinned commit for a repository it never had.
  */
-function* reconstructedSources(
-  request: WorkflowRequest,
-  runId: string,
-): Operation<Result<RetainedSources | undefined>> {
-  if (request.action !== "resume") {
-    return Ok(undefined);
+function installedRun(record: WorkflowRunRecord): WorkflowRun {
+  if (isGitWorkflowRunRecord(record)) {
+    return {
+      runId: record.runId,
+      base: record.base,
+      pinnedCommit: record.definition.objectId,
+    };
   }
-  const snapshot = yield* WorkflowLifecycle.operations.inspect(runId);
-  if (!snapshot.ok) {
-    return Ok(undefined);
-  }
-  const { definition } = snapshot.value.record;
-  if (definitionComponents(definition).length === 0) {
-    return Ok(undefined);
-  }
-  return yield* loadRetainedDefinition(definition, snapshot.value.retrieval?.metadata);
+  const { bundleHash, targetPath } = record.definition;
+  return {
+    runId: record.runId,
+    definitionVersion: 2,
+    bundleHash,
+    ...(targetPath === undefined ? {} : { targetPath }),
+  };
+}
+
+/** The logical path a run's own definition names its root document by. */
+function rootDocumentName(record: WorkflowRunRecord): string {
+  return isGitWorkflowRunRecord(record)
+    ? record.definition.rootDocumentPath
+    : record.definition.entrypoint;
 }
 
 /**

@@ -42,17 +42,25 @@
 import { type Api, createApi } from "@effectionx/context-api";
 import type { Operation, Result } from "effection";
 import type { DurableEvent, DurableStream, Json } from "@executablemd/durable-streams";
-import type { WorkflowDefinition } from "./definition.ts";
+import type { GitWorkflowDefinitionV1 } from "./definition.ts";
 import { WorkflowStorageError } from "./errors.ts";
 import type { JsonObject } from "./members.ts";
 import type { DefinitionRetrieval, DocumentExecutionRecord, WorkflowRunRecord } from "./record.ts";
 
-/** What a caller must decide before a run can exist. */
+/**
+ * What a caller must decide before a run can exist.
+ *
+ * Version 1 only, and deliberately. A source-bundle definition names bytes
+ * nobody has supplied here: this request carries a descriptor and no source, so
+ * admitting one would create a database whose authoritative content was never
+ * given to it. Creating a version-2 run crosses the trusted lifecycle
+ * transition instead, which takes the complete snapshot with the descriptor.
+ */
 export interface CreateWorkflowRunRequest {
   /** The public run id. Retained inside the run, and the only way back to it. */
   readonly runId: string;
-  /** The immutable definition this run is a run of. */
-  readonly definition: WorkflowDefinition;
+  /** The immutable Git definition this run is a run of. */
+  readonly definition: GitWorkflowDefinitionV1;
   /** The Git revision chosen as the run's starting repository state. */
   readonly base: string;
   /**

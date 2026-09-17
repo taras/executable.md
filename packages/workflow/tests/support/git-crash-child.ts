@@ -37,7 +37,7 @@
 import process from "node:process";
 import { collect, execute, inlineSource } from "@executablemd/core";
 import { ensure, main, type Operation, scoped, suspend } from "effection";
-import { WorkflowRunStorage } from "../../mod.ts";
+import { isGitWorkflowRunRecord, WorkflowRunStorage } from "../../mod.ts";
 import { useWorkflowRunStorage, workflowRunPath } from "../../deno.ts";
 import { createWorkflowRunConnections } from "../../src/deno/connections.ts";
 import { openWorkflowRunDatabase, readRunRow } from "../../src/deno/database.ts";
@@ -221,6 +221,14 @@ function* pushCrash(
     useAuthentication: (asked: string) => useGitAuthentication(inner, asked),
   };
 
+  // This child drives a version-1 run, so its record narrows to one before the
+  // installation reads a base and a pinned commit. A version-2 record has
+  // neither, and a synthetic one would name a repository state no run had.
+  const record = database.record;
+  if (!isGitWorkflowRunRecord(record)) {
+    throw new Error(`expected a Git run record, got ${record.definition.kind}`);
+  }
+
   yield* withWorkflowWorkspace(
     database,
     scoped(function* () {
@@ -229,9 +237,9 @@ function* pushCrash(
           { ...inlineSource(pushDocument(locator)), stream: database.journal },
           [
             retainedWorkflowInstallation({
-              runId: database.record.runId,
-              base: database.record.base,
-              pinnedCommit: database.record.definition.objectId,
+              runId: record.runId,
+              base: record.base,
+              pinnedCommit: record.definition.objectId,
             }),
           ],
         ),

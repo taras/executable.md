@@ -42,7 +42,7 @@ import { tmpdir } from "node:os";
 import { runCli } from "@executablemd/test-support/launch";
 import { useWorkflowLifecycle, useWorkflowRunStorage } from "@executablemd/workflow/deno";
 import { exportArtifact, type ExportFilesystem } from "../src/workflow-management.ts";
-import { readDefinitionSource } from "../src/workflow-source.ts";
+import { readLegacyDefinitionSource } from "../src/workflow-source.ts";
 
 const RELEASE = ["# Release", "", "nothing to see here", ""].join("\n");
 
@@ -127,7 +127,7 @@ function withHost<T>(fixture: Fixture, body: () => Operation<T>): Operation<T> {
       process.chdir(previous);
     });
     yield* useWorkflowRunStorage({ root: fixture.runs });
-    yield* useWorkflowLifecycle({ root: fixture.runs, definitionSource: readDefinitionSource });
+    yield* useWorkflowLifecycle({ root: fixture.runs, legacySource: readLegacyDefinitionSource });
     return yield* body();
   });
 }

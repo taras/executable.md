@@ -37,8 +37,9 @@ import {
 import { conflictingFields } from "../storage/compatibility.ts";
 import {
   definitionToJson,
+  type GitWorkflowDefinitionV1,
+  isGitWorkflowDefinition,
   parseWorkflowDefinition,
-  type WorkflowDefinition,
 } from "../storage/definition.ts";
 import {
   WorkflowRequestError,
@@ -165,7 +166,7 @@ export function authorizedRoot(root: string): string {
 /** A request whose every member has been checked rather than believed. */
 interface CheckedRequest {
   readonly runId: string;
-  readonly definition: WorkflowDefinition;
+  readonly definition: GitWorkflowDefinitionV1;
   readonly base: string;
   readonly props: JsonObject;
 }
@@ -418,6 +419,20 @@ function checkRequest(offered: CreateWorkflowRunRequest): Result<CheckedRequest>
   if (!definition.ok) {
     return definition;
   }
+  // Version 1 only, and refused rather than narrowed. This request carries a
+  // descriptor and no source, so admitting a source bundle would initialize a
+  // database whose authoritative content nobody ever supplied. Creating a
+  // version-2 run crosses the trusted lifecycle transition instead.
+  if (!isGitWorkflowDefinition(definition.value)) {
+    return Err(
+      new WorkflowRequestError(
+        "a source-bundle definition is not created through this request: its exact bytes are " +
+          "retained with it, and none were supplied here. Start the run through the workflow " +
+          "lifecycle instead.",
+      ),
+    );
+  }
+  const git = definition.value;
 
   let props: JsonObject;
   try {
@@ -429,7 +444,7 @@ function checkRequest(offered: CreateWorkflowRunRequest): Result<CheckedRequest>
     throw error;
   }
 
-  return Ok({ runId: runId.value, definition: definition.value, base, props });
+  return Ok({ runId: runId.value, definition: git, base, props });
 }
 
 function requestFailure(reason: string, path: string): Error {

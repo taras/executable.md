@@ -29,6 +29,7 @@ import { Git, suspendFor, WorkflowLifecycle } from "@executablemd/workflow";
 import type { WorkflowRunDatabase } from "@executablemd/workflow";
 import { collect, inlineSource, registerComponents } from "@executablemd/core";
 import { executeInstalled } from "@executablemd/core/host";
+import { readLegacyDefinitionSource } from "../src/workflow-source.ts";
 import { runWorkflow } from "../src/workflow.ts";
 import type { WorkflowExecution, WorkflowHost, WorkflowRequest } from "../src/workflow.ts";
 
@@ -267,10 +268,10 @@ interface Attachment {
 function liveHost(root: string, attachment: Attachment): WorkflowHost {
   return {
     useRunHost(): Operation<WorkflowExecutionTransitions> {
-      return useWorkflowRunHost({ root });
+      return useWorkflowRunHost({ root, legacySource: readLegacyDefinitionSource });
     },
     useLifecycle(): Operation<void> {
-      return useWorkflowLifecycle({ root });
+      return useWorkflowLifecycle({ root, legacySource: readLegacyDefinitionSource });
     },
     useDelivery(): Operation<void> {
       return useWorkflowInputDelivery({ root });
@@ -347,7 +348,10 @@ function lifecycleRows(path: string): { status: string; executions: string[] } {
 
 function* startedRun(root: string, repository: string, objectId: string): Operation<string> {
   return yield* scoped(function* () {
-    const transitions = yield* useWorkflowRunHost({ root });
+    const transitions = yield* useWorkflowRunHost({
+      root,
+      legacySource: readLegacyDefinitionSource,
+    });
     const runId = randomUUID();
     const acquired = yield* WorkflowLifecycle.operations.acquireExecutor(runId);
     if (!acquired.ok || acquired.value.kind !== "acquired") {
@@ -407,7 +411,7 @@ describe("Tier WFC3 — cancelling a run that is settling into a suspension", ()
           events: [],
           *onRelease(): Operation<void> {
             yield* scoped(function* () {
-              yield* useWorkflowLifecycle({ root });
+              yield* useWorkflowLifecycle({ root, legacySource: readLegacyDefinitionSource });
               refusal = yield* WorkflowLifecycle.operations.cancel(runId);
             });
             duringRows = lifecycleRows(path);

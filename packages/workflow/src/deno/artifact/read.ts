@@ -28,7 +28,6 @@ import { DatabaseSync } from "node:sqlite";
 import { lstat } from "@effectionx/fs";
 import { Err, Ok, type Operation, type Result } from "effection";
 import type { Json } from "@executablemd/durable-streams";
-import type { WorkflowDefinition } from "../../storage/definition.ts";
 import { type JsonObject, parseJsonValue } from "../../storage/members.ts";
 import type { DocumentExecutionRecord, WorkflowRunRecord } from "../../storage/record.ts";
 import type { RetainedAnswer } from "../answers.ts";
@@ -60,20 +59,25 @@ import {
   translateArtifactSqliteError,
   recognizeXmdArtifactContainer,
   verifyXmdArtifactFormatVersion,
+  type XmdArtifactFormatVersion,
   verifyXmdArtifactStructure,
   XMD_ARTIFACT_EXTENSION,
 } from "./schema.ts";
 import {
   XMD_ARTIFACT_CONTENT_KINDS,
+  XMD_ARTIFACT_CONTENT_KINDS_V2,
   type VerifiedXmdArtifact,
   type XmdArtifactAgentEvidence,
   type XmdArtifactAgentPortability,
   type XmdArtifactContentEntry,
   type XmdArtifactContents,
-  type XmdArtifactDefinitionClosure,
   type XmdArtifactEncoding,
   type XmdArtifactJournalRow,
 } from "./types.ts";
+import type { RetainedDefinitionSources } from "../../lifecycle/source.ts";
+import type { SourceBundleWorkflowDefinitionV2 } from "../../storage/source-bundle.ts";
+import { isGitWorkflowRunRecord } from "../../storage/record.ts";
+import type { GitWorkflowDefinitionV1 } from "../../storage/definition.ts";
 
 const SELECT_HEADER_VERSION = "SELECT artifact_version FROM xmd_artifact_header WHERE id = 1";
 const SELECT_HEADER =
@@ -81,7 +85,13 @@ const SELECT_HEADER =
 const SELECT_CONTENT =
   "SELECT kind, identity, encoding, length, sha256, content FROM xmd_artifact_content";
 
-const KINDS: ReadonlySet<string> = new Set(XMD_ARTIFACT_CONTENT_KINDS);
+const KINDS_V1: ReadonlySet<string> = new Set(XMD_ARTIFACT_CONTENT_KINDS);
+const KINDS_V2: ReadonlySet<string> = new Set(XMD_ARTIFACT_CONTENT_KINDS_V2);
+
+/** The closed inventory one semantic format declares, and no other. */
+function kindsFor(format: XmdArtifactFormatVersion): ReadonlySet<string> {
+  return format === 2 ? KINDS_V2 : KINDS_V1;
+}
 
 /** Whether a stored column names one of the three ways bytes may be read. */
 function isXmdArtifactEncoding(value: unknown): value is XmdArtifactEncoding {
@@ -114,6 +124,8 @@ interface SealedContent {
   readonly entries: readonly XmdArtifactContentEntry[];
   readonly manifest: Uint8Array;
   readonly identity: string;
+  /** The semantic format its header declared, which chose every gate after it. */
+  readonly format: XmdArtifactFormatVersion;
 }
 
 /**
@@ -189,7 +201,7 @@ function sealedContent(database: DatabaseSync, path: string): SealedContent {
   // does not implement is an unsupported version whatever its schema looks
   // like. Read through a targeted statement: a header that is missing or is
   // not shaped to answer this is a schema failure, and says so.
-  verifyXmdArtifactFormatVersion(declaredFormatVersion(database, path), path);
+  const format = verifyXmdArtifactFormatVersion(declaredFormatVersion(database, path), path);
 
   // Gate 5: the complete declared schema, the declared references, and the
   // singleton the header is.
@@ -200,9 +212,10 @@ function sealedContent(database: DatabaseSync, path: string): SealedContent {
   // Gates 6 and 7: every entry held to what its own row declares, and all of it
   // into detached memory.
   return Object.freeze({
-    entries: readContent(database, path),
+    entries: readContent(database, path, format),
     manifest: header.manifest,
     identity: header.identity,
+    format,
   });
 }
 
@@ -225,12 +238,16 @@ function* recognized(sealed: SealedContent, path: string): Operation<VerifiedXmd
   // Gate 9: the manifest this content produces, against the one stored beside
   // it, and the identity that manifest derives against the stored identity.
   // Both halves of the inventory take part in it.
-  const rebuilt = buildXmdArtifactManifest(sealed.entries, (kind) => {
-    throw new XmdArtifactInventoryError(
-      path,
-      `it holds more than one ${kind} record under one identity`,
-    );
-  });
+  const rebuilt = buildXmdArtifactManifest(
+    sealed.entries,
+    (kind) => {
+      throw new XmdArtifactInventoryError(
+        path,
+        `it holds more than one ${kind} record under one identity`,
+      );
+    },
+    sealed.format,
+  );
   if (Buffer.compare(Buffer.from(rebuilt.bytes), Buffer.from(sealed.manifest)) !== 0) {
     throw new XmdArtifactManifestMismatchError(path);
   }
@@ -310,11 +327,16 @@ function readHeader(
  * rather than skipped: version 1's inventory is closed, so a record nobody
  * declared is an undeclared semantic record and therefore corruption.
  */
-function readContent(database: DatabaseSync, path: string): XmdArtifactContentEntry[] {
+function readContent(
+  database: DatabaseSync,
+  path: string,
+  format: XmdArtifactFormatVersion,
+): XmdArtifactContentEntry[] {
+  const kinds = kindsFor(format);
   const entries: XmdArtifactContentEntry[] = [];
   for (const row of reading(database, SELECT_CONTENT).all()) {
     const kind = row["kind"];
-    if (typeof kind !== "string" || !KINDS.has(kind)) {
+    if (typeof kind !== "string" || !kinds.has(kind)) {
       throw new XmdArtifactInventoryError(
         path,
         "it holds a record of a kind this artifact version does not declare",
@@ -445,25 +467,52 @@ function sealedBytes(bytes: Uint8Array): () => Uint8Array {
 }
 
 function frozenRun(run: WorkflowRunRecord): WorkflowRunRecord {
-  return Object.freeze({
+  const shared = {
     runId: run.runId,
-    definition: frozenDefinition(run.definition),
-    base: run.base,
     props: frozenJsonObject(run.props),
     status: run.status,
     ...(run.stopReason === undefined ? {} : { stopReason: Object.freeze({ ...run.stopReason }) }),
     createdAt: run.createdAt,
     updatedAt: run.updatedAt,
-  });
+  };
+  if (isGitWorkflowRunRecord(run)) {
+    return Object.freeze({
+      ...shared,
+      definition: frozenGitDefinition(run.definition),
+      base: run.base,
+    });
+  }
+  return Object.freeze({ ...shared, definition: frozenSourceBundle(run.definition) });
 }
 
-function frozenDefinition(definition: WorkflowDefinition): WorkflowDefinition {
+function frozenGitDefinition(definition: GitWorkflowDefinitionV1): GitWorkflowDefinitionV1 {
   return Object.freeze({
     version: definition.version,
     kind: definition.kind,
     objectFormat: definition.objectFormat,
     objectId: definition.objectId,
     rootDocumentPath: definition.rootDocumentPath,
+    ...(definition.targetPath === undefined ? {} : { targetPath: definition.targetPath }),
+    ...(definition.components === undefined
+      ? {}
+      : {
+          components: Object.freeze(
+            definition.components.map((component) => Object.freeze({ ...component })),
+          ),
+        }),
+  });
+}
+
+function frozenSourceBundle(
+  definition: SourceBundleWorkflowDefinitionV2,
+): SourceBundleWorkflowDefinitionV2 {
+  return Object.freeze({
+    version: definition.version,
+    kind: definition.kind,
+    hashAlgorithm: definition.hashAlgorithm,
+    bundleHash: definition.bundleHash,
+    entrypoint: definition.entrypoint,
+    sources: Object.freeze(definition.sources.map((source) => Object.freeze({ ...source }))),
     ...(definition.targetPath === undefined ? {} : { targetPath: definition.targetPath }),
     ...(definition.components === undefined
       ? {}
@@ -599,10 +648,36 @@ function frozenPortability(record: XmdArtifactAgentPortability): XmdArtifactAgen
   });
 }
 
-function frozenClosure(closure: XmdArtifactDefinitionClosure): XmdArtifactDefinitionClosure {
+function frozenClosure(sources: RetainedDefinitionSources): RetainedDefinitionSources {
+  if (sources.definitionVersion === 1) {
+    return Object.freeze({
+      definitionVersion: 1,
+      definition: frozenGitDefinition(sources.definition),
+      closure: Object.freeze({
+        root: Object.freeze({ ...sources.closure.root }),
+        components: Object.freeze(
+          sources.closure.components.map((each) => Object.freeze({ ...each })),
+        ),
+      }),
+    });
+  }
+  // Byte leaves behind an accessor, on the same terms as every other byte
+  // member here: the sealed array stays in the closure and each read answers
+  // with a copy, so evidence a caller received is evidence it cannot edit.
   return Object.freeze({
-    root: Object.freeze({ ...closure.root }),
-    components: Object.freeze(closure.components.map((each) => Object.freeze({ ...each }))),
+    definitionVersion: 2,
+    definition: frozenSourceBundle(sources.definition),
+    sources: Object.freeze(
+      sources.sources.map((source) => {
+        const bytes = sealedBytes(source.bytes);
+        return Object.freeze({
+          path: source.path,
+          get bytes(): Uint8Array {
+            return bytes();
+          },
+        });
+      }),
+    ),
   });
 }
 

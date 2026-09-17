@@ -28,8 +28,7 @@ import { Err, Ok, scoped } from "effection";
 import type { Result } from "effection";
 import type { DurableEvent } from "@executablemd/durable-streams";
 import { WorkflowLifecycle } from "../mod.ts";
-import type { WorkflowDefinition, WorkflowRunDatabase } from "../mod.ts";
-import type { WorkflowDefinitionSourceReader } from "../src/deno/artifact/source.ts";
+import type { WorkflowRunDatabase } from "../mod.ts";
 import { installWorkflowLifecycle } from "../src/deno/lifecycle.ts";
 import type { WorkflowExecutionTransitions } from "../deno.ts";
 import { installWorkflowRunStorage } from "../src/deno/provider.ts";
@@ -43,6 +42,11 @@ import { gitBlobId } from "./support/artifact-fixture.ts";
 import { runDocument } from "./support/composition.ts";
 import { git, gitOutput, useBareRemote } from "./support/git-remotes.ts";
 import { creation, definition, SHA1, useStorageRoot, withExecutorRun } from "./support/storage.ts";
+import type { GitDefinitionSourceClosureV1, RetainedDefinitionSources } from "../deno.ts";
+import type { LegacyWorkflowSourceReader } from "../deno.ts";
+import type { GitWorkflowDefinitionV1 } from "../mod.ts";
+import { DatabaseSync } from "node:sqlite";
+import { BUNDLE_ENTRYPOINT, BUNDLE_SOURCE, sourceBundleCreation } from "./support/storage.ts";
 
 const ROOT_DOCUMENT = "# Release\n\nnothing to see here\n";
 
@@ -78,8 +82,24 @@ function* exportRun(runId: string, stagingPath: string, forged?: XmdArtifactDefi
 
 /** The reader a host installs: it returns this run's real retained source. */
 // deno-lint-ignore require-yield
-function* honestSource(): Operation<Result<XmdArtifactDefinitionClosure>> {
-  return Ok(closure());
+function* honestSource(
+  retained: GitWorkflowDefinitionV1,
+): Operation<Result<RetainedDefinitionSources>> {
+  return Ok(legacy(retained, closure()));
+}
+
+/**
+ * One Git closure, as the versioned answer a legacy reader gives.
+ *
+ * The reader answers with the retained-source union now, so a fixture says
+ * which member it is producing. What Workflow does with it is unchanged: the
+ * closure is still held to the descriptor it was asked about.
+ */
+function legacy(
+  definition: GitWorkflowDefinitionV1,
+  closure: GitDefinitionSourceClosureV1,
+): RetainedDefinitionSources {
+  return { definitionVersion: 1, definition, closure };
 }
 
 /**
@@ -91,14 +111,14 @@ function* honestSource(): Operation<Result<XmdArtifactDefinitionClosure>> {
  */
 function withExportHost<T>(
   root: string,
-  source: WorkflowDefinitionSourceReader | undefined,
+  source: LegacyWorkflowSourceReader | undefined,
   body: (transitions: WorkflowExecutionTransitions) => Operation<T>,
 ): Operation<T> {
   return scoped(function* () {
     const connections = yield* useWorkflowRunConnections(yield* SavepointObservation.get());
     yield* installWorkflowRunStorage({ root }, {}, connections);
     const transitions = yield* installWorkflowLifecycle(
-      { root, ...(source === undefined ? {} : { definitionSource: source }) },
+      { root, ...(source === undefined ? {} : { legacySource: source }) },
       connections,
     );
     return yield* body(transitions);
@@ -178,7 +198,7 @@ describe("exporting a workflow run", () => {
     expect(opened.value.identity).toBe(sealed.value.identity);
     expect(opened.value.run.runId).toBe("release-1.4");
     expect(opened.value.run.status).toBe("completed");
-    expect(opened.value.definition.root.content).toBe(ROOT_DOCUMENT);
+    expect(gitClosure(opened.value.definition).root.content).toBe(ROOT_DOCUMENT);
     expect(opened.value.frontier).toEqual(sealed.value.frontier);
 
     // The run is still there, still readable, and still says what it said.
@@ -197,15 +217,22 @@ describe("exporting a workflow run", () => {
     const other = closure();
 
     // deno-lint-ignore require-yield
-    const wrongRun: WorkflowDefinitionSourceReader = function* () {
-      return Ok({ ...other, root: { ...other.root, rootDocumentPath: "workflows/other.md" } });
+    const wrongRun: LegacyWorkflowSourceReader = function* (retained) {
+      return Ok(
+        legacy(retained, {
+          ...other,
+          root: { ...other.root, rootDocumentPath: "workflows/other.md" },
+        }),
+      );
     };
     const refused = yield* withExportHost(root, wrongRun, function* () {
       return yield* exportRun("release-1.4", target);
     });
 
     expect(refused.ok).toBe(false);
-    expect(refused.ok ? "" : refused.error.name).toBe("WorkflowRequestError");
+    // Its own category now: a reader that answered about some other definition
+    // is a mismatched response rather than a malformed request.
+    expect(refused.ok ? "" : refused.error.name).toBe("LegacyWorkflowSourceMismatchError");
     expect(yield* exists(target)).toBe(false);
   });
 
@@ -233,8 +260,8 @@ describe("exporting a workflow run", () => {
       throw opened.error;
     }
     // The request reached nothing: what was sealed is what the host read.
-    expect(opened.value.definition.root.content).toBe(ROOT_DOCUMENT);
-    expect(opened.value.definition.root.content).not.toBe(lie);
+    expect(gitClosure(opened.value.definition).root.content).toBe(ROOT_DOCUMENT);
+    expect(gitClosure(opened.value.definition).root.content).not.toBe(lie);
   });
 
   it("XE5 refuses to export at all when the host installed no reader", function* () {
@@ -365,9 +392,9 @@ function useDefinitionRepository(source: string): Operation<DefinitionRepository
  * carried. The root's own identity is derived from the bytes that came back,
  * because a definition pins a commit and a path and never the document's hash.
  */
-function repositorySource(repository: DefinitionRepository): WorkflowDefinitionSourceReader {
+function repositorySource(repository: DefinitionRepository): LegacyWorkflowSourceReader {
   // deno-lint-ignore require-yield
-  return function* (retained: WorkflowDefinition) {
+  return function* (retained: GitWorkflowDefinitionV1) {
     const root = committed(repository.path, retained.objectId, retained.rootDocumentPath);
     const components: XmdArtifactDefinitionComponent[] = [];
     for (const declared of retained.components ?? []) {
@@ -387,15 +414,19 @@ function repositorySource(repository: DefinitionRepository): WorkflowDefinitionS
       });
     }
     return Ok({
-      root: {
-        objectFormat: retained.objectFormat,
-        pinnedCommit: retained.objectId,
-        rootDocumentPath: retained.rootDocumentPath,
-        ...(retained.targetPath === undefined ? {} : { targetPath: retained.targetPath }),
-        blobId: gitBlobId(root.content),
-        content: root.content,
+      definitionVersion: 1,
+      definition: retained,
+      closure: {
+        root: {
+          objectFormat: retained.objectFormat,
+          pinnedCommit: retained.objectId,
+          rootDocumentPath: retained.rootDocumentPath,
+          ...(retained.targetPath === undefined ? {} : { targetPath: retained.targetPath }),
+          blobId: gitBlobId(root.content),
+          content: root.content,
+        },
+        components,
       },
-      components,
     });
   };
 }
@@ -680,7 +711,7 @@ describe("exporting a run that really ran", () => {
     );
 
     // --- The definition, and the component nothing expanded ---------------
-    expect(artifact.definition.root).toEqual({
+    expect(gitClosure(artifact.definition).root).toEqual({
       objectFormat: "sha1",
       pinnedCommit: repository.commit,
       rootDocumentPath: "flows/rich.md",
@@ -688,8 +719,8 @@ describe("exporting a run that really ran", () => {
       content: source,
     });
     // The bytes that were sealed are the bytes that executed.
-    expect(artifact.definition.root.content).toBe(source);
-    expect(artifact.definition.components).toEqual([
+    expect(gitClosure(artifact.definition).root.content).toBe(source);
+    expect(gitClosure(artifact.definition).components).toEqual([
       {
         name: "Unused",
         path: "flows/Unused.md",
@@ -697,5 +728,97 @@ describe("exporting a run that really ran", () => {
         content: UNEXPANDED,
       },
     ]);
+  });
+});
+
+/**
+ * The Git closure an artifact carries, narrowed rather than asserted.
+ *
+ * The retained source is a closed union now, so a format-1 case says which
+ * member it is describing: an artifact that came back carrying a source bundle
+ * is not the one these cases are about.
+ */
+function gitClosure(sources: RetainedDefinitionSources): GitDefinitionSourceClosureV1 {
+  if (sources.definitionVersion !== 1) {
+    throw new Error("expected a Git definition source closure");
+  }
+  return sources.closure;
+}
+
+/**
+ * A source-bundle run seals format 2, and reads back as itself.
+ *
+ * The physical container is unchanged — same application id, same tables, same
+ * `user_version` — and what moves is the semantic format inside it: its own
+ * header version, its own manifest version, its own identity domain, and a
+ * closed inventory carrying source pairs instead of a Git closure.
+ */
+describe("exporting a source-bundle workflow run", () => {
+  it("XE40: seals format 2 inside the unchanged container", function* () {
+    const root = yield* useStorageRoot();
+    const creation = yield* sourceBundleCreation();
+    const target = join(root, "bundle.xmd");
+
+    // No legacy reader at all: a version-2 run's source is its own store's, and
+    // an export that needed a repository would be reaching for one it never had.
+    yield* scoped(function* () {
+      const connections = yield* useWorkflowRunConnections(yield* SavepointObservation.get());
+      yield* installWorkflowRunStorage({ root }, {}, connections);
+      const transitions = yield* installWorkflowLifecycle({ root }, connections);
+      yield* withExecutorRun(
+        transitions,
+        { runId: "bundle-export", action: "start", creation },
+        function* (begun, executorLock) {
+          const settled = yield* transitions.settle(executorLock, {
+            executionId: begun.execution.executionId,
+            status: "completed",
+          });
+          if (!settled.ok) {
+            throw settled.error;
+          }
+        },
+      );
+      const sealed = yield* WorkflowLifecycle.operations.export({
+        runId: "bundle-export",
+        stagingPath: target,
+      });
+      if (!sealed.ok) {
+        throw sealed.error;
+      }
+    });
+
+    // The container is version 1 and the semantic format is 2.
+    const header = ((): Record<string, unknown> => {
+      const database = new DatabaseSync(target, { readOnly: true });
+      try {
+        const row = database
+          .prepare("SELECT artifact_version, container_version FROM xmd_artifact_header")
+          .get();
+        const version = database.prepare("PRAGMA user_version").get()?.["user_version"];
+        return { ...row, userVersion: version };
+      } finally {
+        database.close();
+      }
+    })();
+    expect(header["artifact_version"]).toBe(2);
+    expect(header["container_version"]).toBe(1);
+    expect(header["userVersion"]).toBe(1);
+
+    const opened = yield* readXmdArtifact(target);
+    if (!opened.ok) {
+      throw opened.error;
+    }
+    const sources = opened.value.definition;
+    expect(sources.definitionVersion).toBe(2);
+    if (sources.definitionVersion !== 2) {
+      throw new Error("expected a source bundle");
+    }
+    expect(sources.sources.map((source) => source.path)).toEqual([BUNDLE_ENTRYPOINT]);
+    expect(new TextDecoder().decode(sources.sources[0]?.bytes)).toBe(BUNDLE_SOURCE);
+    expect(sources.definition.bundleHash).toBe(creation.definition.bundleHash);
+
+    // The run entry carries no Git fields at all.
+    expect(opened.value.run.definition.kind).toBe("source-bundle");
+    expect("base" in opened.value.run).toBe(false);
   });
 });

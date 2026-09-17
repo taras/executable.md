@@ -6,6 +6,10 @@
  * Neither opens a database, so both are exercised here against retained shapes
  * a run could hold rather than against a run that had to be produced.
  *
+ * Nothing here opens a database, so this file runs under every runtime. The
+ * admission half of the same contract takes the run's executor lock and is
+ * therefore Deno's: it lives in `workflow-fork-source.test.ts`.
+ *
  * The blockers are the reason this tier is not folded into the CLI's: an Agent
  * turn and an effect a later build wrote are histories this build cannot
  * produce on purpose, and a test that waited for one would assert nothing on

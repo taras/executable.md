@@ -21,6 +21,8 @@ import { tmpdir } from "node:os";
 import { runCli } from "@executablemd/test-support/launch";
 import { useWorkflowLifecycle, workflowRunPath } from "@executablemd/workflow/deno";
 import { WorkflowLifecycle } from "@executablemd/workflow";
+import { DatabaseSync } from "node:sqlite";
+import { hashRunId } from "@executablemd/workflow/deno";
 
 interface Fixture {
   /** The repository the definition lives in. */
@@ -30,6 +32,20 @@ interface Fixture {
   /** An isolated HOME, so nothing reaches the developer's own configuration. */
   readonly home: string;
 }
+
+/** Two sections, so one can be selected and the other seen not to run. */
+const SECTIONS = [
+  "# Release",
+  "",
+  "## Publish",
+  "",
+  "publishing.",
+  "",
+  "## Announce",
+  "",
+  "announcing.",
+  "",
+].join("\n");
 
 const RELEASE = [
   "---",
@@ -223,8 +239,11 @@ describe("Tier WFC — xmd workflow start and resume", () => {
     });
   });
 
-  it("WFC4: the definition is the committed object, not the working tree", function* () {
+  it("WFC4: the definition is the file's current bytes, committed or not", function* () {
     yield* useFixture({ "flows/release.md": RELEASE }, function* (fixture) {
+      // A tracked file, edited since its last commit. What runs is what it says
+      // now: the run retains these bytes, so recording them and running
+      // something else was the thing that could not be true.
       yield* writeTextFile(
         join(fixture.repository, "flows/release.md"),
         `${RELEASE}\nUNCOMMITTED\n`,
@@ -239,7 +258,28 @@ describe("Tier WFC — xmd workflow start and resume", () => {
 
       expect(started.code).toBe(0);
       expect(started.stdout).toContain("Wrote: channel=stable");
-      expect(started.stdout).not.toContain("UNCOMMITTED");
+      expect(started.stdout).toContain("UNCOMMITTED");
+    });
+  });
+
+  it("WFC4b: an untracked file starts, and runs what it says", function* () {
+    yield* useFixture({ "flows/release.md": RELEASE }, function* (fixture) {
+      // Never added, never committed: there is no object for this document at
+      // all, and it starts anyway because the run retains the bytes.
+      yield* writeTextFile(
+        join(fixture.repository, "flows/untracked.md"),
+        `${RELEASE}\nUNTRACKED\n`,
+      );
+
+      const started = yield* xmd(fixture, [
+        "workflow",
+        "start",
+        "--id=untracked-1",
+        "flows/untracked.md",
+      ]).join();
+
+      expect(started.code).toBe(0);
+      expect(started.stdout).toContain("UNTRACKED");
     });
   });
 
@@ -526,20 +566,28 @@ describe("Tier WFC — xmd workflow start and resume", () => {
     });
   });
 
-  it("WFC9: a definition outside a repository, and one that is not Markdown", function* () {
-    yield* useFixture(
-      { "flows/release.md": RELEASE, "flows/root.ts": "export default 1;\n" },
-      function* (fixture) {
-        const notMarkdown = yield* xmd(fixture, ["workflow", "start", "flows/root.ts"]).join();
-        expect(notMarkdown.code).toBe(1);
-        expect(notMarkdown.stderr).toMatch(/markdown/i);
-        expect(reportedRunId(notMarkdown.stderr)).toBeUndefined();
+  it("WFC9: a file outside any repository starts, and one that is not there does not", function* () {
+    yield* useFixture({ "flows/release.md": RELEASE }, function* (fixture) {
+      // Outside the working tree entirely. No repository, no commit, no object
+      // — and a run, because the bytes are what the run is of.
+      const elsewhere = join(fixture.home, "elsewhere.md");
+      yield* writeTextFile(elsewhere, `${RELEASE}\nOUTSIDE\n`);
 
-        const outside = yield* xmd(fixture, ["workflow", "start", "../elsewhere.md"]).join();
-        expect(outside.code).toBe(1);
-        expect(reportedRunId(outside.stderr)).toBeUndefined();
-      },
-    );
+      const outside = yield* xmd(fixture, [
+        "workflow",
+        "start",
+        "--id=outside-1",
+        elsewhere,
+      ]).join();
+      expect(outside.code).toBe(0);
+      expect(reportedRunId(outside.stderr)).toBe("outside-1");
+      expect(outside.stdout).toContain("OUTSIDE");
+
+      // A path naming no file is still a refusal, and still reports no run.
+      const absent = yield* xmd(fixture, ["workflow", "start", "flows/absent.md"]).join();
+      expect(absent.code).toBe(1);
+      expect(reportedRunId(absent.stderr)).toBeUndefined();
+    });
   });
 
   it("WFC10: ordinary xmd run is unchanged by any of this", function* () {
@@ -551,6 +599,70 @@ describe("Tier WFC — xmd workflow start and resume", () => {
       // `xmd run` writes into the caller's own filesystem, which is exactly
       // what a workflow run does not do.
       expect(yield* readTextFile(join(fixture.repository, "notes.md"))).toBe("channel=beta");
+    });
+  });
+
+  it("WFC9b: a reference selects one section, and the run is of that section", function* () {
+    yield* useFixture({ "flows/sections.md": SECTIONS }, function* (fixture) {
+      // A glob, deliberately. What the run retains has to be what core resolved
+      // it to, so a start that wrote the caller's selector down instead would
+      // be visible here rather than only where the selector happened to be
+      // spelled the same as its answer.
+      const started = yield* xmd(fixture, [
+        "workflow",
+        "start",
+        "--id=section-1",
+        "flows/sections.md#Pub*",
+      ]).join();
+
+      expect(started.code).toBe(0);
+      expect(reportedRunId(started.stderr)).toBe("section-1");
+      // One section ran, and the one beside it did not.
+      expect(started.stdout).toContain("publishing.");
+      expect(started.stdout).not.toContain("announcing.");
+
+      // What the run retains is the exact canonical target, reported with the
+      // definition — never the glob the caller wrote.
+      const status = yield* xmd(fixture, ["workflow", "status", "section-1"]).join();
+      expect(status.code).toBe(0);
+      expect(status.stdout).toContain("sections.md#Publish");
+      expect(status.stdout).not.toContain("Pub*");
+
+      // The document is taken away, and the resume still runs that section out
+      // of what the run retained rather than resolving the selector again.
+      yield* rm(join(fixture.repository, "flows/sections.md"), { force: true });
+      const resumed = yield* xmd(fixture, ["workflow", "resume", "section-1"]).join();
+      expect(resumed.code).toBe(0);
+      expect(resumed.stdout).toContain("publishing.");
+      expect(resumed.stdout).not.toContain("announcing.");
+    });
+  });
+
+  it("WFC9c: a whole-document run and a targeted one are two runs", function* () {
+    yield* useFixture({ "flows/sections.md": SECTIONS }, function* (fixture) {
+      yield* xmd(fixture, ["workflow", "start", "--id=whole-1", "flows/sections.md"]).expect();
+
+      // The same bytes under the same logical name, one section selected: a
+      // different definition, because the target is part of identity even
+      // though it is outside the bundle hash.
+      const targeted = yield* xmd(fixture, [
+        "workflow",
+        "start",
+        "--id=whole-1",
+        "flows/sections.md#Publish",
+      ]).join();
+      expect(targeted.code).toBe(1);
+      expect(targeted.stderr).toContain("definition");
+
+      // And a selector naming no section refuses before a run exists at all.
+      const absent = yield* xmd(fixture, [
+        "workflow",
+        "start",
+        "--id=absent-1",
+        "flows/sections.md#Nowhere",
+      ]).join();
+      expect(absent.code).toBe(1);
+      expect(reportedRunId(absent.stderr)).toBeUndefined();
     });
   });
 });
@@ -594,10 +706,23 @@ const LOOP_FILES: Record<string, string> = {
   "flows/Implementation.md": "implemented.\n",
 };
 
-/** Overwrite every checkout copy, so a run that reads one is visible. */
+/**
+ * Edit every committed component, leaving the root's declaration intact.
+ *
+ * The marker is added to what each component already said rather than replacing
+ * it, so the stage order stays observable while the edit is too: a run that
+ * read the committed objects would print the stages without the marker, and one
+ * that read the files beside the root prints both.
+ */
 function* editCheckout(fixture: Fixture): Operation<void> {
-  for (const name of Object.keys(LOOP_FILES)) {
-    yield* writeTextFile(join(fixture.repository, name), "EDITED IN THE WORKING TREE\n");
+  for (const [name, content] of Object.entries(LOOP_FILES)) {
+    if (name === "flows/loop.md") {
+      continue;
+    }
+    yield* writeTextFile(
+      join(fixture.repository, name),
+      `${content}\nEDITED IN THE WORKING TREE\n`,
+    );
   }
 }
 
@@ -608,17 +733,18 @@ function* commitAgain(fixture: Fixture, message: string): Operation<void> {
 }
 
 describe("Tier WFC — a workflow closed over a component bundle", () => {
-  it("WFC14: the five declared stages run from the commit, not from the checkout", function* () {
+  it("WFC14: the five declared stages run from the files beside the root", function* () {
     yield* useFixture(LOOP_FILES, function* (fixture) {
       // Every one of the six files says something else in the working tree by
-      // the time the run starts.
+      // the time the run starts, and that is what the run is of: the bundle is
+      // read from the directory the root lives in, and retained with it.
       yield* editCheckout(fixture);
 
       const started = yield* xmd(fixture, ["workflow", "start", "flows/loop.md"]).join();
 
       expect(started.code).toBe(0);
       expect(reportedStatus(started.stderr)).toBe("completed");
-      expect(started.stdout).not.toContain("EDITED IN THE WORKING TREE");
+      expect(started.stdout).toContain("EDITED IN THE WORKING TREE");
 
       const order = [
         "discovered.",
@@ -762,7 +888,7 @@ describe("Tier WFC — a workflow closed over a component bundle", () => {
     });
   });
 
-  it("WFC19: a resume whose pinned components are unreachable is refused whole", function* () {
+  it("WFC19: a resume needs no repository, because the run retains its bundle", function* () {
     yield* useFixture(LOOP_FILES, function* (fixture) {
       const started = yield* xmd(fixture, [
         "workflow",
@@ -772,21 +898,26 @@ describe("Tier WFC — a workflow closed over a component bundle", () => {
       ]).join();
       expect(started.code).toBe(0);
 
-      const before = yield* xmd(fixture, ["workflow", "history", "loop-4", "--json"]).join();
-
-      // The repository this run retains is no longer a repository.
+      // Everything the run was started from is taken away: the repository it
+      // was started in, and every file it was read from. None of it was the
+      // run's source — the run's source is in the run.
       yield* rm(join(fixture.repository, ".git"), { recursive: true, force: true });
+      yield* rm(join(fixture.repository, "flows"), { recursive: true, force: true });
 
       const resumed = yield* xmd(fixture, ["workflow", "resume", "loop-4"]).join();
 
-      expect(resumed.code).toBe(1);
-      expect(reportedStatus(resumed.stderr)).toBeUndefined();
-
-      // Its lifecycle records are exactly what they were: the refusal happened
-      // before an execution was recorded.
-      yield* git(fixture.repository, ["init", "-q", "--initial-branch=main", "."]);
-      const after = yield* xmd(fixture, ["workflow", "history", "loop-4", "--json"]).join();
-      expect(after.stdout).toBe(before.stdout);
+      expect(resumed.code).toBe(0);
+      expect(reportedStatus(resumed.stderr)).toBe("completed");
+      // And it replayed the same five stages, in the same order.
+      const order = [
+        "discovered.",
+        "instruction files listed.",
+        "checkpoint reached.",
+        "planned.",
+        "implemented.",
+      ].map((text) => resumed.stdout.indexOf(text));
+      expect(order.every((at) => at >= 0)).toBe(true);
+      expect([...order].sort((left, right) => left - right)).toEqual(order);
     });
   });
 });
@@ -953,7 +1084,7 @@ describe("Tier WFX — what xmd workflow export refuses", () => {
     });
   });
 
-  it("WFX5: refuses when the run's own source cannot be read back", function* () {
+  it("WFX5: exports after everything the run was started from is gone", function* () {
     yield* useFixture({ "flows/release.md": RELEASE }, function* (fixture) {
       const started = yield* xmd(fixture, [
         "workflow",
@@ -963,89 +1094,69 @@ describe("Tier WFX — what xmd workflow export refuses", () => {
       ]).join();
       expect(started.code).toBe(0);
 
-      // The repository the run retains stops being one. Nothing about the run
-      // changes: what is gone is the only place its definition's bytes were.
+      // The repository stops being one, and the document stops existing. The
+      // run is untouched by either: its source is what it retains, and that is
+      // what an artifact seals.
       yield* rm(join(fixture.repository, ".git"), { recursive: true, force: true });
+      yield* rm(join(fixture.repository, "flows"), { recursive: true, force: true });
 
-      const target = join(fixture.repository, "unreadable.xmd");
-      const refused = yield* xmd(fixture, [
+      const target = join(fixture.home, "detached.xmd");
+      const sealed = yield* xmd(fixture, [
         "workflow",
         "export",
         "release-1",
         `--output=${target}`,
       ]).join();
 
-      expect(refused.code).toBe(1);
-      // Named, because "exited 1" is what a run this command never found would
-      // also say: what refused is the reading of this run's own definition.
-      expect(refused.stderr).toContain("this run's retained definition could not be loaded");
-      yield* expectNothingPublished(fixture, target);
+      expect(sealed.code).toBe(0);
+      expect(yield* exists(target)).toBe(true);
     });
   });
 
-  it("WFX6: refuses source the repository hands back that is not this run's", function* () {
-    yield* useFixture(BUNDLE_FILES, function* (fixture) {
+  it("WFX6: refuses when the run's own retained source no longer describes itself", function* () {
+    yield* useFixture({ "flows/release.md": RELEASE }, function* (fixture) {
       const started = yield* xmd(fixture, [
         "workflow",
         "start",
-        "--id=bundle-1",
-        "flows/bundle.md",
+        "--id=corrupt-1",
+        "flows/release.md",
       ]).join();
       expect(started.code).toBe(0);
-      const pinned = yield* revision(fixture, "HEAD");
 
-      // A second commit that says something else at the component's path, put
-      // in front of the pinned one. The definition still names the commit it
-      // named; the repository now answers for it with another object, which is
-      // exactly the case a host's own reading cannot notice.
-      yield* writeTextFile(join(fixture.repository, "flows/Stage.md"), "replaced.\n");
-      yield* commitAgain(fixture, "replacement");
-      const replacement = yield* revision(fixture, "HEAD");
-      yield* git(fixture.repository, ["replace", pinned, replacement]);
+      // The same length, different bytes. Every constraint the table declares
+      // still holds; what fails is recomputing the hash the descriptor names,
+      // which is the one check a container cannot do for itself.
+      const store = join(fixture.runs, `${hashRunId("corrupt-1")}.sqlite`);
+      const database = new DatabaseSync(store);
+      try {
+        const current = database.prepare("SELECT content FROM workflow_definition_blob").get();
+        const bytes = current?.["content"];
+        if (!(bytes instanceof Uint8Array)) {
+          throw new Error("the run retains no source bytes");
+        }
+        const altered = Uint8Array.from(bytes);
+        altered[0] = altered[0] === 0x23 ? 0x2a : 0x23;
+        database.prepare("UPDATE workflow_definition_blob SET content = ?").run(altered);
+      } finally {
+        database.close();
+      }
 
-      const target = join(fixture.repository, "mismatched.xmd");
+      const target = join(fixture.home, "corrupt.xmd");
       const refused = yield* xmd(fixture, [
         "workflow",
         "export",
-        "bundle-1",
+        "corrupt-1",
         `--output=${target}`,
       ]).join();
 
       expect(refused.code).toBe(1);
-      expect(refused.stderr).toContain("no longer the object this run's definition names");
+      expect(refused.stderr).toContain("disagrees with its own descriptor");
       yield* expectNothingPublished(fixture, target);
     });
   });
 });
 
-/** A root closed over one component, so a definition has an object to disagree about. */
-const BUNDLE_FILES: Record<string, string> = {
-  "flows/bundle.md": [
-    "---",
-    "workflow:",
-    "  components:",
-    "    Stage: ./Stage.md",
-    "---",
-    "",
-    "# Bundle",
-    "",
-    "<Stage />",
-    "",
-  ].join("\n"),
-  "flows/Stage.md": "staged.\n",
-};
-
 /** What one revision resolves to in the fixture's repository right now. */
-function* revision(fixture: Fixture, name: string): Operation<string> {
-  const result = yield* exec("git", {
-    arguments: ["rev-parse", "--verify", name],
-    cwd: fixture.repository,
-  }).expect();
-  if (result.code !== 0) {
-    throw new Error(`git rev-parse ${name} failed: ${result.stderr}`);
-  }
-  return result.stdout.trim();
-}
 
 /**
  * That a refusal left the destination alone, and no staging beside it.

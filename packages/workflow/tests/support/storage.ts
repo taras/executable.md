@@ -27,10 +27,10 @@ import {
   type WorkflowStopReason,
 } from "../../mod.ts";
 import type {
+  GitWorkflowRunCreationV1,
   WorkflowBeginRequest,
   WorkflowExecutionTransitions,
   WorkflowExecutionBegun,
-  WorkflowRunCreation,
 } from "../../deno.ts";
 import { installWorkflowLifecycle } from "../../src/deno/lifecycle.ts";
 import { workflowRunPath } from "../../deno.ts";
@@ -38,6 +38,16 @@ import { useWorkflowRunConnections } from "../../src/deno/connections.ts";
 import { SavepointObservation } from "../../src/deno/savepoints.ts";
 import { installWorkflowRunStorage } from "../../src/deno/provider.ts";
 import type { PrivateWorkspaceOptions } from "../../src/deno/workspace/private.ts";
+import { isGitWorkflowDefinition } from "../../mod.ts";
+import { legacySourceReader } from "./legacy-source.ts";
+import { parseSourceBundleDefinition, sourceBundleHash, sourceContentHash } from "../../mod.ts";
+import type { SourceBundleWorkflowRunCreationV2 } from "../../deno.ts";
+import type { Json } from "@executablemd/durable-streams";
+import process from "node:process";
+import { fileURLToPath } from "node:url";
+import { exec } from "@effectionx/process";
+import { when } from "@effectionx/converge";
+import { ensure, spawn } from "effection";
 
 export const SHA1 = "9fceb02d0ae598e95dc970b74767f19372d61af8";
 
@@ -59,6 +69,11 @@ export function definition(
   });
   if (!result.ok) {
     throw result.error;
+  }
+  // Narrowed rather than asserted: the parser answers with either version, and
+  // these fixtures describe the Git one.
+  if (!isGitWorkflowDefinition(result.value)) {
+    throw new Error("expected a Git workflow definition");
   }
   return result.value;
 }
@@ -222,7 +237,10 @@ export function withRunHost<T>(
   return scoped(function* () {
     const connections = yield* useWorkflowRunConnections(yield* SavepointObservation.get());
     yield* installWorkflowRunStorage({ root }, internal, connections);
-    const transitions = yield* installWorkflowLifecycle({ root }, connections);
+    const transitions = yield* installWorkflowLifecycle(
+      { root, legacySource: legacySourceReader() },
+      connections,
+    );
     return yield* body(transitions);
   });
 }
@@ -258,8 +276,10 @@ export function withExecutorRun<T>(
   });
 }
 
-/** The creation a `start` supplies, for a fixture that does not care which. */
-export function creation(overrides: Partial<WorkflowRunCreation> = {}): WorkflowRunCreation {
+/** The Git creation a `start` supplies, for a fixture that does not care which. */
+export function creation(
+  overrides: Partial<GitWorkflowRunCreationV1> = {},
+): GitWorkflowRunCreationV1 {
   return { definition: definition(), base: "main", props: { channel: "stable" }, ...overrides };
 }
 
@@ -307,5 +327,141 @@ export function withBegunRun<T>(
         });
       },
     );
+  });
+}
+
+/** The Markdown a source-bundle fixture retains, and its logical path. */
+export const BUNDLE_ENTRYPOINT = "release.md";
+export const BUNDLE_SOURCE = "# Release\n\nthis run retains these exact bytes\n";
+
+/**
+ * A complete source-bundle creation, descriptor and bytes together.
+ *
+ * Built the way a host builds one: the source hashes come from the bytes, and
+ * the bundle hash from the manifest those hashes make — so the descriptor
+ * describes itself before anything is asked to retain it.
+ */
+export function* sourceBundleCreation(
+  options: {
+    readonly content?: string;
+    readonly targetPath?: string;
+    readonly props?: { [key: string]: Json };
+  } = {},
+): Operation<SourceBundleWorkflowRunCreationV2> {
+  const text = options.content ?? BUNDLE_SOURCE;
+  const bytes = new TextEncoder().encode(text);
+  const sources = [
+    {
+      path: BUNDLE_ENTRYPOINT,
+      sourceHash: yield* sourceContentHash(bytes),
+      byteLength: bytes.byteLength,
+    },
+  ];
+  const bundleHash = yield* sourceBundleHash({ entrypoint: BUNDLE_ENTRYPOINT, sources });
+  const parsed = parseSourceBundleDefinition({
+    version: 2,
+    kind: "source-bundle",
+    hashAlgorithm: "sha256",
+    bundleHash,
+    entrypoint: BUNDLE_ENTRYPOINT,
+    sources,
+    ...(options.targetPath === undefined ? {} : { targetPath: options.targetPath }),
+  });
+  if (!parsed.ok) {
+    throw parsed.error;
+  }
+  return {
+    definition: parsed.value,
+    sourceSnapshot: [{ path: BUNDLE_ENTRYPOINT, bytes }],
+    props: options.props ?? { channel: "stable" },
+  };
+}
+
+/**
+ * One executor lock, held for the body and released with it.
+ *
+ * `withExecutorRun` begins an execution and raises a refusal; a case whose
+ * subject *is* the refusal needs the lock without the begin, so it can look at
+ * the answer rather than at an exception.
+ */
+export function withExecutor<T>(
+  runId: string,
+  body: (executorLock: ExecutorLock) => Operation<T>,
+): Operation<T> {
+  return scoped(function* () {
+    const acquisition = yield* WorkflowLifecycle.operations.acquireExecutor(runId);
+    if (!acquisition.ok) {
+      throw acquisition.error;
+    }
+    if (acquisition.value.kind !== "acquired") {
+      throw new Error(`the run ${runId} already has a live workflow executor`);
+    }
+    return yield* body(acquisition.value.lock);
+  });
+}
+
+/**
+ * One stored byte column, checked rather than coerced.
+ *
+ * A row is whatever SQLite handed back, so a column that is not bytes is a
+ * failure about the row rather than a `TextDecoder` throwing somewhere else.
+ */
+export function storedBytes(row: Record<string, unknown> | undefined, column: string): Uint8Array {
+  const value = row?.[column];
+  if (!(value instanceof Uint8Array)) {
+    throw new Error(`the row carries no ${column}`);
+  }
+  return value;
+}
+
+const DEATH_CHILD = fileURLToPath(new URL("./executor-death-child.ts", import.meta.url));
+const REPOSITORY = fileURLToPath(new URL("../../..", import.meta.url));
+
+/**
+ * Leave `runId` the way a workflow executor that died leaves it.
+ *
+ * A run durably `running`, one execution with no end, and an advisory lock the
+ * kernel released rather than a host did. It takes a whole process because a
+ * process is the only thing that can be lost: a scope that closes in this one
+ * runs the executor hold's teardown, and that teardown settles the execution
+ * the acquisition began. Ending a scope therefore proves the opposite of what
+ * a dead executor leaves, which is why nothing here stands in for the child.
+ */
+export function* runLeftUnfinished(root: string, runId: string): Operation<void> {
+  yield* scoped(function* () {
+    const child = yield* exec(process.execPath, {
+      arguments: ["run", "--allow-all", "--frozen", DEATH_CHILD, root, runId],
+      cwd: REPOSITORY,
+    });
+    let announced = false;
+    yield* spawn(function* () {
+      const output = yield* child.stdout;
+      let next = yield* output.next();
+      while (!next.done) {
+        if (new TextDecoder().decode(next.value).includes("READY")) {
+          announced = true;
+        }
+        next = yield* output.next();
+      }
+    });
+    // Killed rather than asked: this child exists to be lost, and a process
+    // suspended on purpose has no other way to end.
+    yield* ensure(function* () {
+      try {
+        process.kill(child.pid, "SIGKILL");
+      } catch {
+        // Already gone, which is the outcome this wanted.
+      }
+      yield* child.join();
+    });
+    yield* when(
+      function* () {
+        if (!announced) {
+          throw new Error(`the executor child has not begun ${runId} yet`);
+        }
+      },
+      { timeout: 30_000 },
+    );
+    process.kill(child.pid, "SIGKILL");
   });
 }

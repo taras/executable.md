@@ -65,8 +65,8 @@ import {
 import type { ForkSelection, WorkflowRun } from "@executablemd/workflow";
 import type { WorkflowRunDatabase } from "@executablemd/workflow";
 import type {
+  SourceBundleWorkflowRunCreationV2,
   WorkflowExecutionTransitions,
-  WorkflowRunCreation,
 } from "@executablemd/workflow/deno";
 import type { EstablishedDefinition } from "./workflow-definition.ts";
 import type { WorkflowExecution } from "./workflow.ts";
@@ -84,7 +84,7 @@ export interface ForkRequest {
   readonly sourceRunId: string;
   readonly checkpointEventId: string;
   readonly established: EstablishedDefinition;
-  readonly creation: WorkflowRunCreation;
+  readonly creation: SourceBundleWorkflowRunCreationV2;
 }
 
 /**
@@ -145,10 +145,14 @@ export function* preflightFork(
   }
   const selection = selected.value;
 
+  // The fork's own run value, in the shape its candidate's version declares.
   const run: WorkflowRun = {
     runId: request.runId,
-    base: request.creation.base,
-    pinnedCommit: request.creation.definition.objectId,
+    definitionVersion: 2,
+    bundleHash: request.creation.definition.bundleHash,
+    ...(request.creation.definition.targetPath === undefined
+      ? {}
+      : { targetPath: request.creation.definition.targetPath }),
   };
   const imported = yield* captureRootImport(request, run, execute);
   if (!imported.ok) {
@@ -312,7 +316,7 @@ function* replayPrefix(
  * One preflight execution of the candidate definition.
  *
  * The same shape both passes use: the fork's own identity, the candidate's
- * pinned source and bundle, and a stream that answers with whatever that pass
+ * retained source and bundle, and a stream that answers with whatever that pass
  * is replaying.
  */
 function execution(
@@ -322,7 +326,11 @@ function execution(
   around: <T>(operation: Operation<T>) => Operation<T>,
 ): WorkflowExecution {
   return {
-    root: retainedSource(request.creation.definition.rootDocumentPath, request.established.source),
+    root: retainedSource(request.creation.definition.entrypoint, request.established.source, {
+      ...(request.creation.definition.targetPath === undefined
+        ? {}
+        : { target: request.creation.definition.targetPath }),
+    }),
     props: request.creation.props,
     stream,
     installations: [

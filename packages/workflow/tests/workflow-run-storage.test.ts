@@ -61,9 +61,26 @@ import {
   SHA1,
   tamper,
   useStorageRoot,
+  runLeftUnfinished,
   withBegunRun,
   withStorage,
 } from "./support/storage.ts";
+import {
+  type GitWorkflowRunRecordV1,
+  isGitWorkflowRunRecord,
+  type WorkflowRunRecord,
+} from "../mod.ts";
+import {
+  BUNDLE_ENTRYPOINT,
+  BUNDLE_SOURCE,
+  sourceBundleCreation,
+  storedBytes,
+  withExecutor,
+  withExecutorRun,
+  withRunHost,
+} from "./support/storage.ts";
+import { WorkflowDefinitionCorruptError, WorkflowDefinitionSourceMissingError } from "../mod.ts";
+import { sourceBundleDefinitionToJson } from "../mod.ts";
 
 const { create, lookup } = WorkflowRunStorage.operations;
 
@@ -413,7 +430,7 @@ describe("Tier WS — creating and finding a run", () => {
 
     expect(record.runId).toBe("release-1.4");
     expect(record.definition).toEqual(definition());
-    expect(record.base).toBe("main");
+    expect(gitRecord(record).base).toBe("main");
     expect(record.props).toEqual({ channel: "stable" });
     expect(record.status).toBe("running");
 
@@ -885,9 +902,10 @@ describe("Tier WS — surviving the process", () => {
   it("WS17: an unfinished document execution is still unfinished afterwards", function* () {
     const root = yield* useStorageRoot();
 
-    const executionId = yield* withBegunRun(root, function* (run) {
-      return run.execution.executionId;
-    });
+    // A workflow executor that was lost, not one that returned. A scope closing
+    // in this process runs the executor hold's teardown, and that settles the
+    // execution it began; only a killed process leaves one unfinished.
+    yield* runLeftUnfinished(root, "release-1.4");
 
     const restored = yield* withStorage(root, function* () {
       const found = yield* lookup("release-1.4");
@@ -902,7 +920,6 @@ describe("Tier WS — surviving the process", () => {
     });
 
     expect(restored).toHaveLength(1);
-    expect(restored[0].executionId).toBe(executionId);
     expect(restored[0].stoppedAt).toBeUndefined();
     expect(restored[0].stopStatus).toBeUndefined();
   });
@@ -981,10 +998,12 @@ describe("Tier WS — refusing what is not this run's database", () => {
     const root = yield* useStorageRoot();
     const path = runPath(root, "run-2");
 
+    // Version 3: versions 1 and 2 are both ones this build implements, so a
+    // version it does not is the one that proves nothing is migrated.
     const result = yield* withStorage(root, function* () {
       yield* createRun({ runId: "run-2" });
       tamper(path, (database) => {
-        database.exec("PRAGMA user_version = 2");
+        database.exec("PRAGMA user_version = 3");
       });
       return yield* lookup("run-2");
     });
@@ -993,7 +1012,7 @@ describe("Tier WS — refusing what is not this run's database", () => {
     expect(!result.ok && result.error).toBeInstanceOf(WorkflowSchemaVersionError);
 
     tamper(path, (database) => {
-      expect(database.prepare("PRAGMA user_version").get()?.["user_version"]).toBe(2);
+      expect(database.prepare("PRAGMA user_version").get()?.["user_version"]).toBe(3);
       expect(database.prepare("PRAGMA application_id").get()?.["application_id"]).toBe(
         APPLICATION_ID,
       );
@@ -1715,7 +1734,7 @@ describe("Tier WS — version 1 amended in place", () => {
     }
   });
 
-  it("WS23e: there is no version 2 to migrate to", function* () {
+  it("WS23e: a version-1 inventory stamped version 2 is a hybrid, not a migration", function* () {
     const root = yield* useStorageRoot();
     yield* withStorage(root, function* () {
       yield* createRun();
@@ -1731,8 +1750,13 @@ describe("Tier WS — version 1 amended in place", () => {
       return yield* lookup("release-1.4");
     });
 
+    // Version 2 is a version this build implements, and this file is not one:
+    // its `workflow_run` still has the base column version 1 declares, and its
+    // two definition-source tables were never created. A header claiming the
+    // other version over version 1's objects is the file disagreeing with
+    // itself, which is damage rather than a version to upgrade from.
     expect(result.ok).toBe(false);
-    expect(!result.ok && result.error).toBeInstanceOf(WorkflowSchemaVersionError);
+    expect(!result.ok && result.error).toBeInstanceOf(WorkflowDatabaseCorruptError);
     // Described and left exactly as found: nothing upgraded it, and nothing
     // downgraded it either.
     expect(yield* until(readFile(path))).toEqual(before);
@@ -1837,5 +1861,180 @@ describe("Tier WS — version 1 amended in place", () => {
     // version 1 writes, so recognition refuses it rather than reading rows
     // through a parser that assumes the constraints hold.
     expect(!result.ok && result.error).toBeInstanceOf(WorkflowDatabaseCorruptError);
+  });
+});
+
+/**
+ * The Git record a lookup answered with, narrowed rather than asserted.
+ *
+ * The retained record is a closed union now, and the base these cases assert
+ * about is a member only the Git one has.
+ */
+function gitRecord(record: WorkflowRunRecord): GitWorkflowRunRecordV1 {
+  if (!isGitWorkflowRunRecord(record)) {
+    throw new Error("expected a Git workflow run record");
+  }
+  return record;
+}
+
+/**
+ * Tier WS — the source-bundle schema, and the bytes it retains.
+ *
+ * Version 2 is a second immutable inventory rather than an amendment of the
+ * first. So the questions here are what a version-2 file is required to hold,
+ * what it is required *not* to hold, and whether a reader hands anything back
+ * when what it holds no longer describes itself.
+ */
+describe("Tier WS — a source-bundle run's own schema", () => {
+  it("WS40: a version-2 run declares version 2 and no base column", function* () {
+    const root = yield* useStorageRoot();
+    const creation = yield* sourceBundleCreation();
+
+    yield* withRunHost(root, function* (transitions) {
+      const begun = yield* withExecutorRun(
+        transitions,
+        { runId: "bundle-1", action: "start", creation },
+        // deno-lint-ignore require-yield
+        function* (begun) {
+          return begun;
+        },
+      );
+      expect(begun.record.definition.kind).toBe("source-bundle");
+    });
+
+    tamper(runPath(root, "bundle-1"), (database) => {
+      expect(database.prepare("PRAGMA user_version").get()?.["user_version"]).toBe(2);
+
+      // A base column would be a repository state this run never had, and the
+      // two definition-source tables are what version 2 adds instead.
+      const columns = database
+        .prepare("SELECT name FROM pragma_table_info('workflow_run')")
+        .all()
+        .map((row) => row["name"]);
+      expect(columns).not.toContain("base");
+
+      const objects = database
+        .prepare("SELECT name FROM sqlite_schema WHERE name NOT LIKE 'sqlite_%'")
+        .all()
+        .map((row) => row["name"]);
+      expect(objects).toContain("workflow_definition_blob");
+      expect(objects).toContain("workflow_definition_source");
+    });
+  });
+
+  it("WS41: it retains the exact bytes, keyed by their own hash", function* () {
+    const root = yield* useStorageRoot();
+    const creation = yield* sourceBundleCreation();
+    const entry = creation.definition.sources[0];
+
+    yield* withRunHost(root, function* (transitions) {
+      yield* withExecutorRun(
+        transitions,
+        { runId: "bundle-2", action: "start", creation },
+        // deno-lint-ignore require-yield
+        function* () {},
+      );
+    });
+
+    tamper(runPath(root, "bundle-2"), (database) => {
+      const manifest = database
+        .prepare("SELECT path, source_hash FROM workflow_definition_source")
+        .all();
+      expect(manifest).toEqual([{ path: BUNDLE_ENTRYPOINT, source_hash: entry?.sourceHash }]);
+
+      const blob = database
+        .prepare("SELECT byte_length, content FROM workflow_definition_blob")
+        .get();
+      expect(blob?.["byte_length"]).toBe(entry?.byteLength);
+      expect(new TextDecoder().decode(storedBytes(blob, "content"))).toBe(BUNDLE_SOURCE);
+    });
+  });
+
+  it("WS42: public creation still admits only version 1", function* () {
+    const root = yield* useStorageRoot();
+    const creation = yield* sourceBundleCreation();
+
+    const refused = yield* withStorage(root, function* () {
+      // Round-tripped through JSON rather than cast past the declared type.
+      // That is not a trick: it is the value a host that read its request from
+      // a file hands over, and the reason the provider parses the request it
+      // was given instead of trusting the signature it was called through.
+      const offered: CreateWorkflowRunRequest = JSON.parse(
+        JSON.stringify({
+          runId: "bundle-3",
+          // The descriptor alone, which is exactly what this request cannot
+          // retain: its bytes were never supplied here.
+          definition: sourceBundleDefinitionToJson(creation.definition),
+          base: "main",
+          props: {},
+        }),
+      );
+      return yield* WorkflowRunStorage.operations.create(offered);
+    });
+
+    expect(refused.ok).toBe(false);
+    expect(!refused.ok && refused.error).toBeInstanceOf(WorkflowRequestError);
+    expect(yield* exists(runPath(root, "bundle-3"))).toBe(false);
+  });
+
+  it("WS43: a blob the store no longer holds is missing, not partial", function* () {
+    const root = yield* useStorageRoot();
+    const creation = yield* sourceBundleCreation();
+    yield* withRunHost(root, function* (transitions) {
+      yield* withExecutorRun(
+        transitions,
+        { runId: "bundle-4", action: "start", creation },
+        // deno-lint-ignore require-yield
+        function* () {},
+      );
+    });
+
+    // The manifest row and its content together, so the store stays
+    // structurally consistent — no dangling reference, no unreferenced blob —
+    // and what is wrong is only that the descriptor names a source it no longer
+    // holds. A dangling reference would be caught as damage before any of this.
+    tamper(runPath(root, "bundle-4"), (database) => {
+      database.exec("DELETE FROM workflow_definition_source");
+      database.exec("DELETE FROM workflow_definition_blob");
+    });
+
+    const resumed = yield* withRunHost(root, function* (transitions) {
+      return yield* withExecutor("bundle-4", function* (executorLock) {
+        return yield* transitions.begin(executorLock, { runId: "bundle-4", action: "resume" });
+      });
+    });
+
+    expect(resumed.ok).toBe(false);
+    expect(!resumed.ok && resumed.error).toBeInstanceOf(WorkflowDefinitionSourceMissingError);
+  });
+
+  it("WS44: content that is no longer what it names is corrupt, not missing", function* () {
+    const root = yield* useStorageRoot();
+    const creation = yield* sourceBundleCreation();
+    yield* withRunHost(root, function* (transitions) {
+      yield* withExecutorRun(
+        transitions,
+        { runId: "bundle-5", action: "start", creation },
+        // deno-lint-ignore require-yield
+        function* () {},
+      );
+    });
+
+    // The same length, different bytes: the row still satisfies every CHECK the
+    // table declares, and recomputing its hash is what catches it.
+    tamper(runPath(root, "bundle-5"), (database) => {
+      database
+        .prepare("UPDATE workflow_definition_blob SET content = ?")
+        .run(new TextEncoder().encode(BUNDLE_SOURCE.replace("Release", "Reverse")));
+    });
+
+    const resumed = yield* withRunHost(root, function* (transitions) {
+      return yield* withExecutor("bundle-5", function* (executorLock) {
+        return yield* transitions.begin(executorLock, { runId: "bundle-5", action: "resume" });
+      });
+    });
+
+    expect(resumed.ok).toBe(false);
+    expect(!resumed.ok && resumed.error).toBeInstanceOf(WorkflowDefinitionCorruptError);
   });
 });

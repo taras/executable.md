@@ -20,14 +20,32 @@ import { StaleInputError } from "@executablemd/durable-streams";
 import type { DurableEvent, EffectDescription } from "@executablemd/durable-streams";
 
 /**
- * One workflow run: an opaque identifier, the base that was asked for, and the
- * commit that base resolved to once.
+ * One workflow run of a Git definition: an opaque identifier, the base that was
+ * asked for, and the commit that base resolved to once.
  */
-export interface WorkflowRun {
+export interface GitWorkflowRunV1 {
   readonly runId: string;
   readonly base: string;
   readonly pinnedCommit: string;
 }
+
+/**
+ * One workflow run of a retained source bundle.
+ *
+ * No base and no pinned commit: this run started from exact bytes rather than
+ * from a repository state, and a synthetic Git field here would be a claim
+ * about a repository the run never had. The bundle hash is what the retained
+ * definition is, and the exact target is what distinguishes two runs over it.
+ */
+export interface SourceBundleWorkflowRunV2 {
+  readonly runId: string;
+  readonly definitionVersion: 2;
+  readonly bundleHash: string;
+  readonly targetPath?: string;
+}
+
+/** The value a journal records, and the value `getWorkflowRun()` answers with. */
+export type WorkflowRun = GitWorkflowRunV1 | SourceBundleWorkflowRunV2;
 
 export const WORKFLOW_RUN = "workflow_run";
 
@@ -35,9 +53,61 @@ export const WORKFLOW_RUN = "workflow_run";
 const ROOT_COROUTINE = "root";
 
 const RUN_MEMBERS: readonly string[] = ["runId", "base", "pinnedCommit"];
+const SOURCE_BUNDLE_MEMBERS: readonly string[] = ["runId", "definitionVersion", "bundleHash"];
+const SOURCE_BUNDLE_TARGET = "targetPath";
 
-/** How the record identifies itself. `base` is for a reader, never for matching. */
-export function describeWorkflowRun(base: string): EffectDescription {
+/** Whether this run is the Git one, narrowing to it when it is. */
+export function isGitWorkflowRun(run: WorkflowRun): run is GitWorkflowRunV1 {
+  return !("definitionVersion" in run);
+}
+
+/**
+ * The record as a plain value, in the order its version presents it.
+ *
+ * Object-member order is presentation and not identity — a canonical-JSON
+ * container sorts these keys under its own rule without changing the value —
+ * but one ordinary spelling per version is what keeps a retained record byte
+ * for byte what it always was.
+ */
+export function workflowRunValue(run: WorkflowRun): Record<string, string | number> {
+  if (isGitWorkflowRun(run)) {
+    return { runId: run.runId, base: run.base, pinnedCommit: run.pinnedCommit };
+  }
+  return {
+    runId: run.runId,
+    definitionVersion: run.definitionVersion,
+    bundleHash: run.bundleHash,
+    ...(run.targetPath === undefined ? {} : { targetPath: run.targetPath }),
+  };
+}
+
+/**
+ * How the record identifies itself.
+ *
+ * The members past the type and the name are for a reader and never for
+ * matching: divergence detection compares only type and name. A version-2
+ * description says so and carries its bundle hash; it invents no Git field.
+ */
+export function describeWorkflowRun(run: WorkflowRun): EffectDescription {
+  if (isGitWorkflowRun(run)) {
+    return describeGitWorkflowRun(run.base);
+  }
+  return {
+    type: WORKFLOW_RUN,
+    name: WORKFLOW_RUN,
+    definitionVersion: run.definitionVersion,
+    bundleHash: run.bundleHash,
+  };
+}
+
+/**
+ * The same description for a Git run that has not resolved its commit yet.
+ *
+ * A programmatic run allocates its identifier and resolves its base inside the
+ * durable operation this description names, so the description exists before
+ * the run does. Version 2 has no equivalent: its run arrives whole.
+ */
+export function describeGitWorkflowRun(base: string): EffectDescription {
   return { type: WORKFLOW_RUN, name: WORKFLOW_RUN, base };
 }
 
@@ -93,6 +163,14 @@ export function readWorkflowRun(value: unknown): WorkflowRun | undefined {
   if (record === undefined) {
     return undefined;
   }
+  // The exact member set of one version or the exact member set of the other,
+  // in any order. Nothing in between: a value carrying members of both, or one
+  // of either with something extra, is not a run read loosely — it is a value
+  // this version cannot account for.
+  return readGitRun(record) ?? readSourceBundleRun(record);
+}
+
+function readGitRun(record: Record<string, unknown>): WorkflowRun | undefined {
   if (
     Object.keys(record).length !== RUN_MEMBERS.length ||
     !RUN_MEMBERS.every((member) => Object.hasOwn(record, member))
@@ -104,6 +182,37 @@ export function readWorkflowRun(value: unknown): WorkflowRun | undefined {
     return undefined;
   }
   return Object.freeze({ runId, base, pinnedCommit });
+}
+
+function readSourceBundleRun(record: Record<string, unknown>): WorkflowRun | undefined {
+  const names = Object.keys(record);
+  const targeted = names.length === SOURCE_BUNDLE_MEMBERS.length + 1;
+  if (!targeted && names.length !== SOURCE_BUNDLE_MEMBERS.length) {
+    return undefined;
+  }
+  if (!SOURCE_BUNDLE_MEMBERS.every((member) => Object.hasOwn(record, member))) {
+    return undefined;
+  }
+  if (targeted && !Object.hasOwn(record, SOURCE_BUNDLE_TARGET)) {
+    return undefined;
+  }
+  const { runId, definitionVersion, bundleHash } = record;
+  if (
+    typeof runId !== "string" ||
+    definitionVersion !== 2 ||
+    typeof bundleHash !== "string" ||
+    bundleHash === ""
+  ) {
+    return undefined;
+  }
+  if (!targeted) {
+    return Object.freeze({ runId, definitionVersion: 2, bundleHash });
+  }
+  const targetPath = record[SOURCE_BUNDLE_TARGET];
+  if (typeof targetPath !== "string") {
+    return undefined;
+  }
+  return Object.freeze({ runId, definitionVersion: 2, bundleHash, targetPath });
 }
 
 /** What one retained event claims about the run, when it claims anything. */

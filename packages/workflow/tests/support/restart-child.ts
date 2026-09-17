@@ -29,8 +29,9 @@ import process from "node:process";
 import { durableCall, durableRun } from "@executablemd/durable-streams";
 import type { Workflow } from "@executablemd/durable-streams";
 import { main, until } from "effection";
-import { WorkflowLifecycle, WorkflowStorageError } from "../../mod.ts";
+import { isGitWorkflowRunRecord, WorkflowLifecycle, WorkflowStorageError } from "../../mod.ts";
 import { useWorkflowRunHost } from "../../deno.ts";
+import { legacySourceReader } from "./legacy-source.ts";
 
 const DEFINITION = {
   version: 1,
@@ -71,7 +72,7 @@ main(function* () {
 
   // The whole host, because beginning a run is a lifecycle transition and the
   // executor lock is what authorizes it — here exactly as in production.
-  const transitions = yield* useWorkflowRunHost({ root });
+  const transitions = yield* useWorkflowRunHost({ root, legacySource: legacySourceReader() });
 
   const acquired = yield* WorkflowLifecycle.operations.acquireExecutor(runId);
   if (!acquired.ok) {
@@ -112,10 +113,17 @@ main(function* () {
     throw entries.error;
   }
 
+  // This child restarts a version-1 run, so its record narrows to one before the
+  // base is reported. A version-2 record has none to report.
+  const record = database.record;
+  if (!isGitWorkflowRunRecord(record)) {
+    throw new Error(`expected a Git run record, got ${record.definition.kind}`);
+  }
+
   console.log(
     JSON.stringify({
       value,
-      base: database.record.base,
+      base: record.base,
       // The record settlement returned, not the handle's snapshot from when the
       // execution began — that one still says `running`.
       status: settled.value.status,

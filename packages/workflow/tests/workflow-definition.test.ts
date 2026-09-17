@@ -13,19 +13,31 @@
 
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
+import type { Result } from "effection";
 import { isCanonicalDocumentTarget } from "@executablemd/core";
+import type { Json } from "@executablemd/durable-streams";
 import {
   canonicalJson,
   conflictingFields,
+  decodeSourceText,
   definitionComponents,
   definitionToJson,
   type GitWorkflowDefinitionV1,
+  type GitWorkflowRunRecordV1,
+  isGitWorkflowDefinition,
+  parseSourceBundleDefinition,
   parseStopReasonInput,
   parseWorkflowDefinition,
+  sourceBundleComponents,
+  sourceBundleDefinitionToJson,
+  sourceBundleHash,
+  type SourceBundleWorkflowDefinitionV2,
+  sourceContentHash,
+  verifySourceBundleDefinition,
+  verifySourceBundleSnapshot,
   WORKFLOW_RUN_STATUSES,
   WorkflowDefinitionError,
   WorkflowRequestError,
-  type WorkflowRunRecord,
   type WorkflowDefinition,
   WorkflowRunStorage,
   WorkflowStorageProviderError,
@@ -48,9 +60,22 @@ function definition(overrides: Record<string, unknown> = {}): Record<string, unk
 
 /** The descriptor, parsed, for tests that need one they already trust. */
 function parsed(overrides: Partial<GitWorkflowDefinitionV1> = {}): GitWorkflowDefinitionV1 {
-  const result = parseWorkflowDefinition(definition(overrides));
+  return git(parseWorkflowDefinition(definition(overrides)));
+}
+
+/**
+ * The Git descriptor a result holds, narrowed rather than asserted.
+ *
+ * `parseWorkflowDefinition` now answers with either version, and these cases
+ * are about the Git one: a fixture that parsed as a source bundle would be a
+ * fixture this suite is not describing.
+ */
+function git(result: Result<WorkflowDefinition>): GitWorkflowDefinitionV1 {
   if (!result.ok) {
     throw result.error;
+  }
+  if (!isGitWorkflowDefinition(result.value)) {
+    throw new Error("expected a Git workflow definition");
   }
   return result.value;
 }
@@ -74,11 +99,7 @@ function bundled(overrides: Record<string, unknown> = {}): Record<string, unknow
 }
 
 function parsedBundle(overrides: Record<string, unknown> = {}): GitWorkflowDefinitionV1 {
-  const result = parseWorkflowDefinition(bundled(overrides));
-  if (!result.ok) {
-    throw result.error;
-  }
-  return result.value;
+  return git(parseWorkflowDefinition(bundled(overrides)));
 }
 
 function refusal(value: unknown): WorkflowDefinitionError {
@@ -92,7 +113,7 @@ function refusal(value: unknown): WorkflowDefinitionError {
   return result.error;
 }
 
-function record(overrides: Partial<WorkflowRunRecord> = {}): WorkflowRunRecord {
+function record(overrides: Partial<GitWorkflowRunRecordV1> = {}): GitWorkflowRunRecordV1 {
   return {
     runId: "release-1.4",
     definition: parsed(),
@@ -458,7 +479,7 @@ describe("Tier WD — a definition's exact document target", () => {
     const section = record({ definition: parsed({ targetPath: "Release/Publish" }) });
     const other = record({ definition: parsed({ targetPath: "Release/Announce" }) });
 
-    const asking = (stored: WorkflowRunRecord, definition: WorkflowDefinition) =>
+    const asking = (stored: GitWorkflowRunRecordV1, definition: GitWorkflowDefinitionV1) =>
       conflictingFields(stored, {
         runId: stored.runId,
         definition,
@@ -597,8 +618,8 @@ describe("Tier WD — the component bundle a definition is closed over", () => {
     const again = parseWorkflowDefinition(retained);
 
     expect(again.ok).toBe(true);
-    expect(again.ok && definitionComponents(again.value)).toEqual([]);
-    expect(again.ok && definitionToJson(again.value)).toEqual(retained);
+    expect(definitionComponents(git(again))).toEqual([]);
+    expect(definitionToJson(git(again))).toEqual(retained);
 
     // Presence is the member being written at all: a descriptor that wrote it
     // and named no bundle asked for one and failed to say which.
@@ -627,7 +648,7 @@ describe("Tier WD — the component bundle a definition is closed over", () => {
 
 describe("Tier WD — a bundle decides compatible reuse", () => {
   const stored = record({ definition: parsedBundle() });
-  const asking = (definition: WorkflowDefinition) =>
+  const asking = (definition: GitWorkflowDefinitionV1) =>
     conflictingFields(stored, {
       runId: stored.runId,
       definition,
@@ -677,5 +698,491 @@ describe("Tier WD — a bundle decides compatible reuse", () => {
         }),
       ).toEqual([]);
     }
+  });
+});
+
+/**
+ * Tier WD — the source bundle a definition retains.
+ *
+ * Version 2 is not a looser version 1. Its identity is the bytes themselves,
+ * addressed by logical paths that are portable names inside the bundle rather
+ * than anything a filesystem hands out — so the questions here are what a path
+ * may be, what order a manifest may arrive in, and what exactly the two
+ * domain-separated hashes are computed over.
+ *
+ * The hash vectors below were produced by a separate implementation of the
+ * specified framing rather than by the code under test. A vector derived from
+ * the implementation would agree with whatever framing it happened to have.
+ */
+
+const encoder = new TextEncoder();
+
+/** Three logical paths, in the canonical UTF-8 byte order of the manifest. */
+const ROOT_PATH = "release.md";
+/** U+FB01, whose UTF-8 sorts before the emoji and whose UTF-16 sorts after it. */
+const LIGATURE_PATH = "\uFB01.md";
+const EMOJI_PATH = "\u{1F600}.md";
+
+const ROOT_TEXT = "# Release\n";
+const EMOJI_TEXT = "# \u00DCn\u00EFc\u00F8d\u00E9\n";
+
+const ROOT_BYTES = encoder.encode(ROOT_TEXT);
+const LIGATURE_BYTES = new Uint8Array(0);
+const EMOJI_BYTES = encoder.encode(EMOJI_TEXT);
+
+const ROOT_HASH = "b78cd463c5885c1b595de07f665ce82b61df6636eb8c5f00cf11985cbfeb986d";
+const LIGATURE_HASH = "32b9c0cb4d326ff21913998350eccb9cd8c437576eafcbe0bc79833e90a7cd3c";
+const EMOJI_HASH = "3c81db896c70d1bdd74b0318f509d475248ae03b111e7f7c0b96fc10b26b6fbf";
+
+/** The whole three-source bundle, with its component mapping. */
+const BUNDLE_HASH = "078f7cf1b61cad754ad9d03333df0027a477d5a2cee967903c54b147c29c37e3";
+/** The same three sources, declaring no components. */
+const UNMAPPED_HASH = "4ac6d339215f887347b0226f388b86e010e8d60e41c4eac7eed5b61f791f5e29";
+/** The entrypoint alone, which is what a root declaring no components retains. */
+const SOLO_HASH = "adc2c8e139c6956377090d3f2b26471f461164020c0e28812cda91dcdbceb419";
+
+const SOURCES = [
+  { path: ROOT_PATH, sourceHash: ROOT_HASH, byteLength: 10 },
+  { path: LIGATURE_PATH, sourceHash: LIGATURE_HASH, byteLength: 0 },
+  { path: EMOJI_PATH, sourceHash: EMOJI_HASH, byteLength: 14 },
+];
+
+const COMPONENTS = [
+  { name: "Discovery", path: LIGATURE_PATH },
+  { name: "Planning", path: EMOJI_PATH },
+];
+
+const SNAPSHOT = [
+  { path: ROOT_PATH, bytes: ROOT_BYTES },
+  { path: LIGATURE_PATH, bytes: LIGATURE_BYTES },
+  { path: EMOJI_PATH, bytes: EMOJI_BYTES },
+];
+
+/** A v2 descriptor, loosely typed: half of these tests build ones that are wrong. */
+function bundleV2(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    version: 2,
+    kind: "source-bundle",
+    hashAlgorithm: "sha256",
+    bundleHash: BUNDLE_HASH,
+    entrypoint: ROOT_PATH,
+    sources: SOURCES,
+    components: COMPONENTS,
+    ...overrides,
+  };
+}
+
+/** The same three sources with no `components` member written at all. */
+function unmappedV2(): Record<string, unknown> {
+  return {
+    version: 2,
+    kind: "source-bundle",
+    hashAlgorithm: "sha256",
+    bundleHash: UNMAPPED_HASH,
+    entrypoint: ROOT_PATH,
+    sources: SOURCES,
+  };
+}
+
+/** The one-source descriptor a root declaring no components produces. */
+function soloV2(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    version: 2,
+    kind: "source-bundle",
+    hashAlgorithm: "sha256",
+    bundleHash: SOLO_HASH,
+    entrypoint: ROOT_PATH,
+    sources: [SOURCES[0]],
+    ...overrides,
+  };
+}
+
+function parsedV2(value: Record<string, unknown>): SourceBundleWorkflowDefinitionV2 {
+  const result = parseSourceBundleDefinition(value);
+  if (!result.ok) {
+    throw result.error;
+  }
+  return result.value;
+}
+
+function v2Refusal(value: unknown): WorkflowDefinitionError {
+  const result = parseSourceBundleDefinition(value);
+  if (result.ok) {
+    throw new Error("expected the descriptor to be refused");
+  }
+  if (!(result.error instanceof WorkflowDefinitionError)) {
+    throw result.error;
+  }
+  return result.error;
+}
+
+/** A one-entry manifest carrying one deliberately wrong path. */
+function sourceAt(path: unknown): Record<string, unknown>[] {
+  return [{ path, sourceHash: ROOT_HASH, byteLength: 10 }];
+}
+
+/**
+ * The members one serialized descriptor wrote, in the order it wrote them.
+ *
+ * Narrowed rather than asserted: presentation order is what these cases are
+ * about, and a cast would make the claim hold for a serializer that answered
+ * with an array or a scalar.
+ */
+function jsonMembers(value: Json): string[] {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("expected the serialized descriptor to be a JSON object");
+  }
+  return Object.keys(value);
+}
+
+/** Every logical path this grammar refuses, whichever member carries it. */
+const REFUSED_PATHS = [
+  "",
+  "/release.md",
+  "release.md/",
+  "workflows//release.md",
+  "./release.md",
+  "../release.md",
+  "workflows/../release.md",
+  "workflows\\release.md",
+  "rele#ase.md",
+  "rele\u0000ase.md",
+  "rele\u0001ase.md",
+  "rele\u001Fase.md",
+  "rele\u007Fase.md",
+  // Decomposed: `e` followed by a combining acute is a second spelling of a
+  // path that already has one, and two spellings would be two identities.
+  "cafe\u0301.md",
+  // Not a Unicode scalar value: encoding it would substitute U+FFFD and hash
+  // bytes nobody supplied.
+  "\uD800.md",
+];
+
+describe("Tier WD — a source-bundle descriptor", () => {
+  it("WD36: reads a complete descriptor and round-trips it in presentation order", function* () {
+    const first = parsedV2(bundleV2({ targetPath: "Release/Publish" }));
+
+    expect(first).toEqual({
+      version: 2,
+      kind: "source-bundle",
+      hashAlgorithm: "sha256",
+      bundleHash: BUNDLE_HASH,
+      entrypoint: ROOT_PATH,
+      sources: SOURCES,
+      targetPath: "Release/Publish",
+      components: COMPONENTS,
+    });
+
+    const json = sourceBundleDefinitionToJson(first);
+    expect(jsonMembers(json)).toEqual([
+      "version",
+      "kind",
+      "hashAlgorithm",
+      "bundleHash",
+      "entrypoint",
+      "sources",
+      "targetPath",
+      "components",
+    ]);
+
+    const again = parseSourceBundleDefinition(json);
+    expect(again.ok).toBe(true);
+    expect(again.ok && again.value).toEqual(first);
+  });
+
+  it("WD37: admits exactly its own members, and only version 2 source bundles", function* () {
+    // Neither the host path the bytes were read from nor the props a run was
+    // started with is a member of this shape, so neither reaches the identity.
+    expect(v2Refusal({ ...bundleV2(), sourcePath: "/home/ada/release.md" }).path).toBe("$");
+    expect(v2Refusal({ ...bundleV2(), props: { channel: "stable" } }).path).toBe("$");
+    expect(v2Refusal({ ...bundleV2(), base: "main" }).path).toBe("$");
+
+    expect(v2Refusal(null).message).toContain("found null");
+    expect(v2Refusal([]).message).toContain("found an array");
+    expect(v2Refusal(bundleV2({ version: 1 })).path).toBe("$.version");
+    expect(v2Refusal(bundleV2({ kind: "git" })).path).toBe("$.kind");
+    expect(v2Refusal(bundleV2({ hashAlgorithm: "sha1" })).path).toBe("$.hashAlgorithm");
+  });
+
+  it("WD38: a logical path is a portable name, not something a host handed out", function* () {
+    for (const path of REFUSED_PATHS) {
+      expect({ path, at: v2Refusal(soloV2({ sources: sourceAt(path) })).path }).toEqual({
+        path,
+        at: "$.sources[0].path",
+      });
+    }
+
+    expect(v2Refusal(soloV2({ sources: sourceAt(42) })).message).toContain("expected a string");
+    // The two non-ASCII paths are ordinary logical paths and survive exactly.
+    expect(parsedV2(bundleV2()).sources.map((source) => source.path)).toEqual([
+      ROOT_PATH,
+      LIGATURE_PATH,
+      EMOJI_PATH,
+    ]);
+  });
+
+  it("WD39: the entrypoint is Markdown the bundle actually retains", function* () {
+    expect(v2Refusal(soloV2({ entrypoint: "release.txt" })).message).toContain('expected a ".md"');
+    expect(v2Refusal(soloV2({ entrypoint: "other.md" })).message).toContain(
+      "expected a path this definition retains as a source",
+    );
+    expect(v2Refusal(soloV2({ entrypoint: "/release.md" })).path).toBe("$.entrypoint");
+    expect(v2Refusal(soloV2({ entrypoint: 7 })).path).toBe("$.entrypoint");
+  });
+
+  it("WD40: the manifest is ordered by UTF-8 bytes, which is not string order", function* () {
+    // The discriminating pair. `<` on strings compares UTF-16 code units, so it
+    // sorts the supplementary character before the ligature while UTF-8 sorts
+    // the ligature first: a parser that used `<` would admit the wrong array.
+    const byCodeUnit = [...SOURCES].sort((left, right) => (left.path < right.path ? -1 : 1));
+    expect(byCodeUnit.map((source) => source.path)).toEqual([ROOT_PATH, EMOJI_PATH, LIGATURE_PATH]);
+    expect(v2Refusal(bundleV2({ sources: byCodeUnit })).message).toContain("UTF-8 bytes");
+
+    expect(v2Refusal(bundleV2({ sources: [...SOURCES].reverse() })).message).toContain(
+      "UTF-8 bytes",
+    );
+    expect(v2Refusal(bundleV2({ sources: [SOURCES[0], SOURCES[0]] })).message).toContain(
+      "each source path once",
+    );
+    expect(v2Refusal(bundleV2({ sources: [] })).message).toContain("at least one source");
+    expect(v2Refusal(bundleV2({ sources: {} })).path).toBe("$.sources");
+  });
+
+  it("WD41: a component mapping is closed over the sources declared beside it", function* () {
+    const solo = parsedV2(soloV2());
+    expect("components" in solo).toBe(false);
+    expect(sourceBundleComponents(solo)).toEqual([]);
+    expect(jsonMembers(sourceBundleDefinitionToJson(solo))).toEqual([
+      "version",
+      "kind",
+      "hashAlgorithm",
+      "bundleHash",
+      "entrypoint",
+      "sources",
+    ]);
+
+    // Declaring none and declaring an empty set are not two spellings of one
+    // thing: the second asked for a bundle and named nothing.
+    expect(v2Refusal(bundleV2({ components: [] })).message).toContain("at least one component");
+    expect(v2Refusal(bundleV2({ components: undefined })).path).toBe("$.components");
+    expect(v2Refusal(bundleV2({ components: null })).path).toBe("$.components");
+
+    expect(
+      v2Refusal(bundleV2({ components: [{ name: "Discovery", path: "absent.md" }] })).message,
+    ).toContain("expected a path this definition retains as a source");
+    expect(
+      v2Refusal(bundleV2({ components: [{ ...COMPONENTS[0], sourceHash: ROOT_HASH }] })).path,
+    ).toBe("$.components[0]");
+    expect(
+      v2Refusal(bundleV2({ components: [{ ...COMPONENTS[0], name: "discovery" }] })).path,
+    ).toBe("$.components[0].name");
+    expect(v2Refusal(bundleV2({ components: [...COMPONENTS].reverse() })).message).toContain(
+      "UTF-8 bytes",
+    );
+    expect(v2Refusal(bundleV2({ components: [COMPONENTS[0], COMPONENTS[0]] })).message).toContain(
+      "each component name once",
+    );
+  });
+
+  it("WD42: a hash has one spelling, and a length is a count of bytes", function* () {
+    expect(v2Refusal(bundleV2({ bundleHash: BUNDLE_HASH.toUpperCase() })).message).toContain(
+      "lowercase",
+    );
+    expect(v2Refusal(bundleV2({ bundleHash: BUNDLE_HASH.slice(1) })).message).toContain(
+      "64 hexadecimal digits",
+    );
+    expect(v2Refusal(bundleV2({ bundleHash: `${BUNDLE_HASH}0` })).path).toBe("$.bundleHash");
+    expect(v2Refusal(bundleV2({ bundleHash: `z${BUNDLE_HASH.slice(1)}` })).path).toBe(
+      "$.bundleHash",
+    );
+    expect(v2Refusal(soloV2({ sources: [{ ...SOURCES[0], sourceHash: "abc" }] })).path).toBe(
+      "$.sources[0].sourceHash",
+    );
+
+    for (const byteLength of [-1, 1.5, Number.NaN, Number.MAX_SAFE_INTEGER + 1, "10", null]) {
+      expect({
+        byteLength,
+        at: v2Refusal(soloV2({ sources: [{ ...SOURCES[0], byteLength }] })).path,
+      }).toEqual({ byteLength, at: "$.sources[0].byteLength" });
+    }
+    // Zero is a length a source may have: an empty file is exact bytes too.
+    expect(parsedV2(bundleV2()).sources[1].byteLength).toBe(0);
+  });
+
+  it("WD43: the exact target is present or absent, never synthesized", function* () {
+    expect("targetPath" in parsedV2(bundleV2())).toBe(false);
+    expect(parsedV2(bundleV2({ targetPath: "Release/Publish" })).targetPath).toBe(
+      "Release/Publish",
+    );
+
+    for (const targetPath of ["#Release", "Release/*", "Release/", undefined, null, 1]) {
+      expect({ targetPath, at: v2Refusal(bundleV2({ targetPath })).path }).toEqual({
+        targetPath,
+        at: "$.targetPath",
+      });
+    }
+  });
+
+  it("WD44: a refusal never repeats the bundle it refused", function* () {
+    const canary = "never-printed-canary-4c1f8a";
+
+    for (const error of [
+      v2Refusal(bundleV2({ entrypoint: `/${canary}.md` })),
+      v2Refusal(soloV2({ sources: sourceAt(`/${canary}.md`) })),
+      v2Refusal(soloV2({ sources: [{ ...SOURCES[0], sourceHash: canary }] })),
+      v2Refusal(bundleV2({ components: [{ ...COMPONENTS[0], name: canary }] })),
+      v2Refusal({ ...bundleV2(), [canary]: 1 }),
+    ]) {
+      expect(error.message).not.toContain(canary);
+      expect(error.path).not.toContain(canary);
+    }
+  });
+});
+
+describe("Tier WD — what a source bundle hashes", () => {
+  it("WD45: a source hash is its domain, its length and its exact bytes", function* () {
+    expect(yield* sourceContentHash(ROOT_BYTES)).toBe(ROOT_HASH);
+    // Zero-length content still hashes its domain and its declared length, so
+    // an empty source is a source rather than an absent one.
+    expect(yield* sourceContentHash(LIGATURE_BYTES)).toBe(LIGATURE_HASH);
+    // Fourteen bytes behind ten characters: the framing commits to the bytes.
+    expect(EMOJI_BYTES.byteLength).toBe(14);
+    expect(EMOJI_TEXT.length).toBe(10);
+    expect(yield* sourceContentHash(EMOJI_BYTES)).toBe(EMOJI_HASH);
+
+    // One byte more is a different source.
+    expect(yield* sourceContentHash(encoder.encode(`${ROOT_TEXT}\n`))).not.toBe(ROOT_HASH);
+  });
+
+  it("WD46: a bundle hash is the entrypoint, the manifest and the mapping", function* () {
+    expect(yield* sourceBundleHash(parsedV2(bundleV2()))).toBe(BUNDLE_HASH);
+
+    // Dropping the mapping is a different bundle over the same three sources.
+    expect(yield* sourceBundleHash(parsedV2(unmappedV2()))).toBe(UNMAPPED_HASH);
+    expect(UNMAPPED_HASH).not.toBe(BUNDLE_HASH);
+
+    expect(yield* sourceBundleHash(parsedV2(soloV2()))).toBe(SOLO_HASH);
+  });
+
+  it("WD47: the target is outside the bundle hash and inside the descriptor", function* () {
+    const whole = parsedV2(bundleV2());
+    const section = parsedV2(bundleV2({ targetPath: "Release/Publish" }));
+    const other = parsedV2(bundleV2({ targetPath: "Release/Announce" }));
+
+    // Selecting a section does not change the bytes in the bundle, so all three
+    // carry the one hash this manifest produces.
+    for (const descriptor of [whole, section, other]) {
+      expect(yield* sourceBundleHash(descriptor)).toBe(BUNDLE_HASH);
+      expect(descriptor.bundleHash).toBe(BUNDLE_HASH);
+    }
+    // And the three descriptors remain three identities.
+    expect(section.targetPath).not.toBe(other.targetPath);
+    expect("targetPath" in whole).toBe(false);
+  });
+
+  it("WD48: a descriptor whose own manifest disagrees with its hash is refused", function* () {
+    const honest = yield* verifySourceBundleDefinition(parsedV2(bundleV2()));
+    expect(honest.ok).toBe(true);
+
+    // Another bundle's hash, worn by this one. It parses — the grammar is
+    // satisfied — and it does not describe itself.
+    const lying = yield* verifySourceBundleDefinition(
+      parsedV2(bundleV2({ bundleHash: SOLO_HASH })),
+    );
+    expect(lying.ok).toBe(false);
+    expect(!lying.ok && lying.error).toBeInstanceOf(WorkflowDefinitionError);
+    expect(!lying.ok && lying.error.message).toContain("$.bundleHash");
+  });
+});
+
+describe("Tier WD — the snapshot a source bundle is created from", () => {
+  it("WD49: the accepted snapshot is a copy, so a later mutation is inert", function* () {
+    const mine = encoder.encode(ROOT_TEXT);
+    const offered = [
+      { path: ROOT_PATH, bytes: mine },
+      { path: LIGATURE_PATH, bytes: LIGATURE_BYTES },
+      { path: EMOJI_PATH, bytes: EMOJI_BYTES },
+    ];
+
+    const accepted = yield* verifySourceBundleSnapshot(parsedV2(bundleV2()), offered);
+    expect(accepted.ok).toBe(true);
+    if (!accepted.ok) {
+      throw accepted.error;
+    }
+
+    mine[0] = 0x21;
+    expect(Array.from(mine.slice(0, 1))).toEqual([0x21]);
+    expect(Array.from(accepted.value[0].bytes)).toEqual(Array.from(ROOT_BYTES));
+    expect(yield* sourceContentHash(accepted.value[0].bytes)).toBe(ROOT_HASH);
+    expect(accepted.value.map((entry) => entry.path)).toEqual([
+      ROOT_PATH,
+      LIGATURE_PATH,
+      EMOJI_PATH,
+    ]);
+  });
+
+  it("WD50: a snapshot that is not exactly the manifest retains nothing", function* () {
+    const descriptor = parsedV2(bundleV2());
+
+    for (const snapshot of [
+      SNAPSHOT.slice(1),
+      [...SNAPSHOT, { path: "extra.md", bytes: ROOT_BYTES }],
+      [SNAPSHOT[0], SNAPSHOT[2], SNAPSHOT[1]],
+      [{ path: LIGATURE_PATH, bytes: ROOT_BYTES }, ...SNAPSHOT.slice(1)],
+      [{ path: ROOT_PATH, bytes: encoder.encode("# Release") }, ...SNAPSHOT.slice(1)],
+      [{ path: ROOT_PATH, bytes: encoder.encode("# release\n") }, ...SNAPSHOT.slice(1)],
+      [],
+      {},
+    ]) {
+      const result = yield* verifySourceBundleSnapshot(descriptor, snapshot);
+      expect(result.ok).toBe(false);
+      expect(!result.ok && result.error).toBeInstanceOf(WorkflowRequestError);
+      // The bytes a caller offered are the document, so a refusal names the
+      // position that disagreed and nothing about what it held.
+      expect(!result.ok && result.error.message).not.toContain("# Release");
+    }
+  });
+
+  it("WD51: a snapshot entry admits exactly a path and its bytes", function* () {
+    const descriptor = parsedV2(soloV2());
+
+    for (const snapshot of [
+      [{ path: ROOT_PATH, bytes: ROOT_BYTES, origin: "/home/ada/release.md" }],
+      [{ path: ROOT_PATH }],
+      [{ path: ROOT_PATH, bytes: ROOT_TEXT }],
+      [{ path: ROOT_PATH, bytes: Array.from(ROOT_BYTES) }],
+      [{ bytes: ROOT_BYTES }],
+      [ROOT_PATH],
+      [null],
+    ]) {
+      const result = yield* verifySourceBundleSnapshot(descriptor, snapshot);
+      expect(result.ok).toBe(false);
+      expect(!result.ok && result.error).toBeInstanceOf(WorkflowRequestError);
+    }
+
+    // The one snapshot that does describe this definition is accepted.
+    const accepted = yield* verifySourceBundleSnapshot(descriptor, [SNAPSHOT[0]]);
+    expect(accepted.ok).toBe(true);
+  });
+
+  it("WD52: a retained source reads as UTF-8 strictly, and without normalization", function* () {
+    const text = decodeSourceText(EMOJI_BYTES);
+    expect(text.ok && text.value).toBe(EMOJI_TEXT);
+    expect(decodeSourceText(LIGATURE_BYTES).ok).toBe(true);
+
+    // A byte-order mark is content, not punctuation to be swallowed: the bytes
+    // are the identity, and dropping three of them changes what parses.
+    const marked = decodeSourceText(encoder.encode(`\uFEFF${ROOT_TEXT}`));
+    expect(marked.ok && marked.value).toBe(`\uFEFF${ROOT_TEXT}`);
+
+    // Decomposed content stays decomposed. Normalizing it here would hand the
+    // document parser text the bundle hash does not describe.
+    const decomposed = decodeSourceText(encoder.encode("cafe\u0301\n"));
+    expect(decomposed.ok && decomposed.value).toBe("cafe\u0301\n");
+    expect(decomposed.ok && decomposed.value).not.toBe("caf\u00E9\n");
+
+    const invalid = decodeSourceText(new Uint8Array([0x23, 0x20, 0xff, 0xfe]));
+    expect(invalid.ok).toBe(false);
+    expect(!invalid.ok && invalid.error).toBeInstanceOf(WorkflowRequestError);
   });
 });

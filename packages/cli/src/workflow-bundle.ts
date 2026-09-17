@@ -1,5 +1,5 @@
 /**
- * The components a workflow root is closed over, established from Git.
+ * The components a workflow root is closed over, and where they come from.
  *
  * A workflow root may declare a fixed bundle of authored Markdown components in
  * its own frontmatter:
@@ -11,27 +11,32 @@
  *     Planning: ./Planning.md
  * ```
  *
- * The declaration is authored beside the root and read from the same pinned
- * commit the root came from, so the whole procedure — root and components — is
- * one immutable object graph. A working tree with uncommitted edits runs the
- * committed components for exactly the reason it runs the committed root: a
- * record that named a commit while executing something else would be a claim
- * about something that never happened.
+ * The declaration is authored beside the root and read from beside it: each
+ * path is resolved against the root's own directory, read as bytes, and
+ * retained with the run. So the whole procedure — root and components — is one
+ * immutable set of bytes from the moment the run becomes durable, and a working
+ * tree with uncommitted edits runs what it says rather than what its last
+ * commit said.
  *
  * What each declaration produces is two views of one bundle. The **identity**
- * view is what the workflow definition retains: name, canonical
- * repository-relative path, and the blob's own object id. The **execution**
- * view is the same entries plus the exact source read from the commit, which is
- * what canonical core resolves the names against. Because the hash is
- * identity, changing what a component says changes the definition rather than
- * changing what a retained definition executes.
+ * view is what the workflow definition retains: name, logical path inside the
+ * bundle, and the source hash of the bytes that were read. The **execution**
+ * view is the same entries plus that source as text, which is what canonical
+ * core resolves the names against. Because the hash is identity, changing what
+ * a component says changes the definition rather than changing what a retained
+ * definition executes.
  *
- * Everything here goes through the contextual `Git` capability and the
- * engine's own Markdown parser. Nothing reads the filesystem, resolves a
- * module, or searches a directory.
+ * ## The legacy half
+ *
+ * `reconstructBundle()` rebuilds a version-1 run's bundle out of the commit it
+ * pinned, through the contextual `Git` capability. It is reached only from the
+ * legacy source reader this host supplies to the Workflow lifecycle; nothing
+ * establishing a new bundle goes near it.
  */
 
-import { Err, Ok } from "effection";
+import { readFile } from "node:fs/promises";
+import { join } from "node:path";
+import { Err, Ok, until } from "effection";
 import type { Operation, Result } from "effection";
 import {
   CORE_COMPONENT_NAMES,
@@ -40,8 +45,14 @@ import {
   RESERVED_STRUCTURAL,
 } from "@executablemd/core";
 import type { WorkflowBundleComponent } from "@executablemd/core/host";
-import { readGitObject, revParse } from "@executablemd/workflow";
+import {
+  decodeSourceText,
+  readGitObject,
+  revParse,
+  sourceContentHash,
+} from "@executablemd/workflow";
 import type { GitObjectFormat, WorkflowComponentEntry } from "@executablemd/workflow";
+import type { EstablishedComponent } from "./workflow-definition.ts";
 
 /** Hexadecimal digits per object id, by the format that names them. */
 const OBJECT_ID_LENGTHS: Readonly<Record<GitObjectFormat, number>> = { sha1: 40, sha256: 64 };
@@ -61,10 +72,11 @@ function unavailable(message: string, cause?: unknown): WorkflowBundleUnavailabl
 /**
  * One declared component, normalized against the root's own directory.
  *
- * `path` is already canonical: repository-relative, POSIX, with the single
- * optional leading `./` removed. It is what the definition retains and what
- * Git is asked for; the spelling the document wrote is not kept, because two
- * spellings of one path would be two identities for one bundle.
+ * `path` is already canonical: bundle-relative, POSIX, with the single optional
+ * leading `./` removed. It is the logical path the definition retains and the
+ * path this host reads beside the root; the spelling the document wrote is not
+ * kept, because two spellings of one path would be two identities for one
+ * bundle.
  */
 export interface DeclaredComponent {
   readonly name: string;
@@ -183,15 +195,15 @@ function usableName(name: string): WorkflowBundleUnavailableError | undefined {
 }
 
 /**
- * The repository-relative path a declaration names, or the refusal saying why
- * it names none.
+ * The bundle-relative path a declaration names, or the refusal saying why it
+ * names none.
  *
- * A declared path locates a Markdown blob beside the root inside one commit, so
- * it is deliberately the narrowest thing that can do that: relative, POSIX,
- * forward only, and Markdown. Everything else — an absolute path, a
- * backslash, a URL, a package specifier, a glob, a directory, a traversal that
- * would land back inside the repository anyway — is refused rather than
- * repaired, because a repaired path runs a file the author did not write down.
+ * A declared path locates one Markdown file beside the root, so it is
+ * deliberately the narrowest thing that can do that: relative, POSIX, forward
+ * only, and Markdown. Everything else — an absolute path, a backslash, a URL, a
+ * package specifier, a glob, a directory, a traversal that would land back
+ * under the root's own directory anyway — is refused rather than repaired,
+ * because a repaired path runs a file the author did not write down.
  */
 function canonicalPath(value: string, directory: string, name: string): Result<string> {
   const refuse = (reason: string): Result<string> =>
@@ -210,7 +222,7 @@ function canonicalPath(value: string, directory: string, name: string): Result<s
     return refuse("is absolute, and a declaration is relative to the document beside it");
   }
   if (/^[A-Za-z][A-Za-z0-9+.-]*:/.test(value)) {
-    return refuse("is a URL, and a declaration names a file in this repository");
+    return refuse("is a URL, and a declaration names a file beside the document");
   }
   if (/[*?[\]{}]/.test(value)) {
     return refuse("contains glob syntax, and a declaration names exactly one file");
@@ -235,7 +247,7 @@ function canonicalPath(value: string, directory: string, name: string): Result<s
   // is no directory convention this costs: a bundled component lives beside the
   // document that declares it, and nothing beside it is a package.
   if (segments[0]?.startsWith("@") === true) {
-    return refuse("is a package specifier, and a declaration names a file in this repository");
+    return refuse("is a package specifier, and a declaration names a file beside the document");
   }
   if (!relative.endsWith(".md")) {
     return refuse("is not a Markdown file, and a bundled component is Markdown");
@@ -253,26 +265,28 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 }
 
 /**
- * Read every declared component out of one commit, and parse it.
+ * Read every declared component from the directory the root sits in, and parse
+ * it.
  *
- * Each source is read as a blob, so a declaration that names a directory, a
- * submodule, or a path the commit does not hold fails here rather than
- * executing as whatever Git chose to print. Each blob's own object id becomes
- * the source hash, under the repository's object format, so there is one hash
- * algorithm and it is Git's.
+ * A declared path is a logical path inside the bundle *and* the path the file
+ * has beside the root, which is what makes a declaration portable: the run
+ * retains `Discovery.md`, and this host happens to find it next to the document
+ * that named it. The host directory is joined on here and nowhere else.
+ *
+ * Each source's identity is the source-bundle hash of its own bytes, so what
+ * the descriptor names and what executes come from one read of one file.
  *
  * Parsing happens here too. A bundled component that is not Markdown the engine
  * can read refuses the start before storage is created and before any component
  * code runs — rather than surfacing the first time a document writes its name.
  */
 export function* readBundle(
-  pinnedCommit: string,
+  directory: string,
   declared: readonly DeclaredComponent[],
-  objectFormat: GitObjectFormat,
-): Operation<Result<readonly WorkflowBundleComponent[]>> {
-  const components: WorkflowBundleComponent[] = [];
+): Operation<Result<readonly EstablishedComponent[]>> {
+  const components: EstablishedComponent[] = [];
   for (const component of declared) {
-    const loaded = yield* readComponent(pinnedCommit, component, objectFormat);
+    const loaded = yield* readComponent(directory, component);
     if (!loaded.ok) {
       return loaded;
     }
@@ -282,39 +296,49 @@ export function* readBundle(
 }
 
 function* readComponent(
-  commit: string,
+  directory: string,
   declared: DeclaredComponent,
-  objectFormat: GitObjectFormat,
-): Operation<Result<WorkflowBundleComponent>> {
+): Operation<Result<EstablishedComponent>> {
   const { name, path } = declared;
-  let content: string;
-  let sourceHash: string;
+  // Joined from the root's own directory. The declaration was already refused
+  // if it was absolute, a URL, a glob, or walked the tree, so what is joined
+  // here stays beneath the directory the document lives in.
+  const host = join(directory, ...path.split("/"));
+
+  let bytes: Uint8Array;
   try {
-    // `cat-file blob` first: it refuses a tree, so a declaration that names a
-    // directory fails before its object id is taken as a component's identity.
-    content = yield* readGitObject(commit, path);
-    sourceHash = (yield* revParse(`${commit}:${path}`)).toLowerCase();
+    bytes = new Uint8Array(yield* until(readFile(host)));
   } catch (error) {
     return Err(
       unavailable(
-        `the component "${name}" is not a file this workflow's commit holds at ${path}. ` +
-          "Commit the component beside the document that declares it.",
+        `the component "${name}" is not a file beside the document that declares it at ` +
+          `${path}. Put the component next to the document, or correct the path it declares.`,
         error,
       ),
     );
   }
-  if (sourceHash.length !== OBJECT_ID_LENGTHS[objectFormat] || !/^[0-9a-f]+$/.test(sourceHash)) {
+
+  const text = decodeSourceText(bytes);
+  if (!text.ok) {
     return Err(
       unavailable(
-        `the component "${name}" did not resolve to an object this repository's format names.`,
+        `the component "${name}" at ${path} is not well-formed UTF-8, so it is not Markdown ` +
+          "this command can read.",
       ),
     );
   }
-  const parsed = yield* parseComponent(name, path, content);
+
+  const parsed = yield* parseComponent(name, path, text.value);
   if (!parsed.ok) {
     return parsed;
   }
-  return Ok({ name, path, sourceHash, content });
+  return Ok({
+    name,
+    path,
+    sourceHash: yield* sourceContentHash(bytes),
+    content: text.value,
+    bytes,
+  });
 }
 
 function* parseComponent(name: string, path: string, content: string): Operation<Result<void>> {
@@ -346,7 +370,7 @@ export function* reconstructBundle(
   retained: readonly WorkflowComponentEntry[],
   objectFormat: GitObjectFormat,
 ): Operation<Result<readonly WorkflowBundleComponent[]>> {
-  const loaded = yield* readBundle(
+  const loaded = yield* readGitBundle(
     pinnedCommit,
     retained.map((entry) => ({ name: entry.name, path: entry.path })),
     objectFormat,
@@ -365,4 +389,50 @@ export function* reconstructBundle(
     }
   }
   return loaded;
+}
+
+/**
+ * Read every retained component out of one commit, for a version-1 resume.
+ *
+ * The legacy half, and the only place in this module that reaches Git. A
+ * version-1 definition pins a commit and a path per component, so its bundle is
+ * rebuilt from objects rather than from files — a working tree edited since the
+ * run started continues the run it started.
+ */
+function* readGitBundle(
+  pinnedCommit: string,
+  declared: readonly DeclaredComponent[],
+  objectFormat: GitObjectFormat,
+): Operation<Result<readonly WorkflowBundleComponent[]>> {
+  const components: WorkflowBundleComponent[] = [];
+  for (const { name, path } of declared) {
+    let content: string;
+    let sourceHash: string;
+    try {
+      // `cat-file blob` first: it refuses a tree, so a declaration that names a
+      // directory fails before its object id is taken as a component's identity.
+      content = yield* readGitObject(pinnedCommit, path);
+      sourceHash = (yield* revParse(`${pinnedCommit}:${path}`)).toLowerCase();
+    } catch (error) {
+      return Err(
+        unavailable(
+          `the component "${name}" is not a file this workflow's commit holds at ${path}.`,
+          error,
+        ),
+      );
+    }
+    if (sourceHash.length !== OBJECT_ID_LENGTHS[objectFormat] || !/^[0-9a-f]+$/.test(sourceHash)) {
+      return Err(
+        unavailable(
+          `the component "${name}" did not resolve to an object this repository's format names.`,
+        ),
+      );
+    }
+    const parsed = yield* parseComponent(name, path, content);
+    if (!parsed.ok) {
+      return parsed;
+    }
+    components.push({ name, path, sourceHash, content });
+  }
+  return Ok(Object.freeze(components));
 }

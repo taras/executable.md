@@ -20,6 +20,11 @@ import { isCanonicalDocumentTarget, isComponentName } from "@executablemd/core";
 import type { Json } from "@executablemd/durable-streams";
 import { WorkflowDefinitionError } from "./errors.ts";
 import {
+  parseSourceBundleDefinition,
+  sourceBundleDefinitionToJson,
+  type SourceBundleWorkflowDefinitionV2,
+} from "./source-bundle.ts";
+import {
   describe,
   type Members,
   parseMembers,
@@ -74,7 +79,21 @@ export interface WorkflowComponentEntry {
 }
 
 /** Every descriptor this build understands. */
-export type WorkflowDefinition = GitWorkflowDefinitionV1;
+export type WorkflowDefinition = GitWorkflowDefinitionV1 | SourceBundleWorkflowDefinitionV2;
+
+/** Whether this descriptor is the Git one, narrowing to it when it is. */
+export function isGitWorkflowDefinition(
+  definition: WorkflowDefinition,
+): definition is GitWorkflowDefinitionV1 {
+  return definition.kind === "git";
+}
+
+/** Whether this descriptor is a source bundle, narrowing to it when it is. */
+export function isSourceBundleWorkflowDefinition(
+  definition: WorkflowDefinition,
+): definition is SourceBundleWorkflowDefinitionV2 {
+  return definition.kind === "source-bundle";
+}
 
 /** Hexadecimal digits per object id, by the format that names them. */
 const OBJECT_ID_LENGTHS: Readonly<Record<GitWorkflowDefinitionV1["objectFormat"], number>> = {
@@ -104,8 +123,18 @@ function fail(reason: string, path: string): Error {
  * Parsed rather than asserted: a descriptor reaches storage from a host, and a
  * host that builds one by hand — or reads one from a file — can build one that
  * type-checks and does not describe a definition.
+ *
+ * `kind` chooses the parser, not `version`. A kind says what sort of thing a
+ * descriptor identifies and a version says which revision of that sort it is,
+ * so a Git descriptor carrying some other version is refused by the Git parser
+ * — which is where a reader looking at `objectId` and `rootDocumentPath` is
+ * told what went wrong. Dispatching on the version instead would answer a
+ * mis-numbered Git descriptor with the source bundle's member list.
  */
 export function parseWorkflowDefinition(value: unknown): Result<WorkflowDefinition> {
+  if (declaredKind(value) === "source-bundle") {
+    return parseSourceBundleDefinition(value);
+  }
   try {
     return Ok(parseDefinition(value));
   } catch (error) {
@@ -113,6 +142,25 @@ export function parseWorkflowDefinition(value: unknown): Result<WorkflowDefiniti
       return Err(error);
     }
     throw error;
+  }
+}
+
+/**
+ * The `kind` member a candidate wrote, when it wrote a readable one.
+ *
+ * Read through one guarded access, and read for dispatch alone: whichever
+ * parser this chooses still holds the whole value to its own closed shape, so a
+ * value that lies about its kind is refused rather than admitted loosely.
+ */
+function declaredKind(value: unknown): string | undefined {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  try {
+    const kind = Object.entries(value).find(([key]) => key === "kind")?.[1];
+    return typeof kind === "string" ? kind : undefined;
+  } catch {
+    return undefined;
   }
 }
 
@@ -272,6 +320,9 @@ function parseTargetPath(members: Members): string | undefined {
  * stored shape and the parsed shape one decision.
  */
 export function definitionToJson(definition: WorkflowDefinition): Json {
+  if (isSourceBundleWorkflowDefinition(definition)) {
+    return sourceBundleDefinitionToJson(definition);
+  }
   return {
     version: definition.version,
     kind: definition.kind,
@@ -297,11 +348,24 @@ export function definitionToJson(definition: WorkflowDefinition): Json {
   };
 }
 
-/** The bundle this definition is closed over, empty when it is closed over none. */
+/**
+ * The Git bundle this definition is closed over, empty when it is closed over
+ * none.
+ *
+ * A Git entry names a blob inside the pinned tree and a source-bundle entry
+ * names a retained source, so the two mappings are not one list with a
+ * different member. A caller holding the union asks whichever question its
+ * version has.
+ */
 export function definitionComponents(
-  definition: WorkflowDefinition,
+  definition: GitWorkflowDefinitionV1,
 ): readonly WorkflowComponentEntry[] {
   return definition.components ?? [];
+}
+
+/** The exact document target this definition names, whichever version it is. */
+export function definitionTargetPath(definition: WorkflowDefinition): string | undefined {
+  return definition.targetPath;
 }
 
 function parseObjectFormat(value: unknown): GitWorkflowDefinitionV1["objectFormat"] {

@@ -32,6 +32,27 @@ import {
   useStorageRoot,
   withRunHost,
 } from "./support/storage.ts";
+import { legacySourceReader } from "./support/legacy-source.ts";
+import { Ok } from "effection";
+import {
+  BUNDLE_ENTRYPOINT,
+  BUNDLE_SOURCE,
+  sourceBundleCreation,
+  storedBytes,
+  withExecutor,
+} from "./support/storage.ts";
+import { useWorkflowRunConnections } from "../src/deno/connections.ts";
+import { SavepointObservation } from "../src/deno/savepoints.ts";
+import { installWorkflowRunStorage } from "../src/deno/provider.ts";
+import { installWorkflowLifecycle } from "../src/deno/lifecycle.ts";
+import { gitBlobIdentity } from "../deno.ts";
+import {
+  LegacyWorkflowSourceMismatchError,
+  WorkflowRunStorage,
+  LegacyWorkflowSourceReaderUnavailableError,
+  WorkflowRequestError,
+} from "../mod.ts";
+import { withStorage } from "./support/storage.ts";
 
 const { acquireExecutor } = WorkflowLifecycle.operations;
 
@@ -39,7 +60,7 @@ const HOLDER = fileURLToPath(new URL("./support/executor-holder.ts", import.meta
 
 function withLifecycle<T>(root: string, body: () => Operation<T>): Operation<T> {
   return scoped(function* () {
-    yield* useWorkflowLifecycle({ root });
+    yield* useWorkflowLifecycle({ root, legacySource: legacySourceReader() });
     return yield* body();
   });
 }
@@ -419,4 +440,189 @@ function* holder(root: string, runId: string): Operation<string> {
     throw new Error(`the holder process failed: ${result.stderr}`);
   }
   return result.stdout.trim();
+}
+
+/**
+ * Tier WLA — creating a run from the bytes it retains.
+ *
+ * The transition is the only thing that can turn a source-bundle descriptor
+ * into storage, and what it retains is a copy it took before it checked
+ * anything. So these cases are about the two moments that decide what a run is
+ * a run of: what was copied, and what was proved before anything was written.
+ */
+describe("Tier WLA — a source-bundle creation", () => {
+  it("WLA40: begin answers with the source the store now holds", function* () {
+    const root = yield* useStorageRoot();
+    const creation = yield* sourceBundleCreation();
+
+    yield* withRunHost(root, function* (transitions) {
+      yield* withExecutorRun(
+        transitions,
+        { runId: "bundle-begin", action: "start", creation },
+        // deno-lint-ignore require-yield
+        function* (begun) {
+          const sources = begun.sources;
+          expect(sources.definitionVersion).toBe(2);
+          if (sources.definitionVersion !== 2) {
+            throw new Error("expected a source-bundle closure");
+          }
+          expect(sources.sources.map((source) => source.path)).toEqual([BUNDLE_ENTRYPOINT]);
+          expect(new TextDecoder().decode(sources.sources[0]?.bytes)).toBe(BUNDLE_SOURCE);
+          expect(sources.definition.bundleHash).toBe(creation.definition.bundleHash);
+        },
+      );
+    });
+  });
+
+  it("WLA41: what it retains is the descriptor's bytes, re-derived from the store", function* () {
+    const root = yield* useStorageRoot();
+    const creation = yield* sourceBundleCreation();
+    const mine = creation.sourceSnapshot[0]?.bytes;
+
+    yield* withRunHost(root, function* (transitions) {
+      yield* withExecutorRun(
+        transitions,
+        { runId: "bundle-copy", action: "start", creation },
+        // deno-lint-ignore require-yield
+        function* () {
+          if (mine === undefined) {
+            throw new Error("the fixture offered no bytes");
+          }
+          mine[0] = 0x21;
+        },
+      );
+    });
+
+    // The caller's array really did change afterwards, and the run did not.
+    //
+    // This is the weaker of the two ownership claims: SQLite binds a parameter
+    // synchronously, so a transition that retained the caller's array rather
+    // than a copy would still store these bytes. What the copy protects is the
+    // window between verification and persistence, and the observable that
+    // discriminates it is `verifySourceBundleSnapshot`'s own answer — WD49.
+    expect(mine?.[0]).toBe(0x21);
+    tamper(runPath(root, "bundle-copy"), (database) => {
+      const stored = database.prepare("SELECT content FROM workflow_definition_blob").get();
+      expect(new TextDecoder().decode(storedBytes(stored, "content"))).toBe(BUNDLE_SOURCE);
+    });
+
+    // And the run still reads back as the definition it claims, which is the
+    // check a drifted retained byte would fail.
+    const resumed = yield* withRunHost(root, function* (transitions) {
+      return yield* withExecutor("bundle-copy", function* (executorLock) {
+        return yield* transitions.begin(executorLock, { runId: "bundle-copy", action: "resume" });
+      });
+    });
+    expect(resumed.ok).toBe(true);
+  });
+
+  it("WLA42: a snapshot that is not the descriptor's retains nothing", function* () {
+    const root = yield* useStorageRoot();
+    const honest = yield* sourceBundleCreation();
+    const lying = {
+      ...honest,
+      sourceSnapshot: [
+        { path: BUNDLE_ENTRYPOINT, bytes: new TextEncoder().encode("# Not this document\n") },
+      ],
+    };
+
+    const refused = yield* withRunHost(root, function* (transitions) {
+      return yield* withExecutor("bundle-lie", function* (executorLock) {
+        return yield* transitions.begin(executorLock, {
+          runId: "bundle-lie",
+          action: "start",
+          creation: lying,
+        });
+      });
+    });
+
+    expect(refused.ok).toBe(false);
+    expect(!refused.ok && refused.error).toBeInstanceOf(WorkflowRequestError);
+    // Nothing was retained, so nothing recognizes the id: opening a connection
+    // leaves an empty file behind, and an empty file is not a run.
+    expect(yield* undiscoverable(root, "bundle-lie")).toBe(true);
+  });
+
+  it("WLA43: a host with no legacy reader cannot begin a Git run", function* () {
+    const root = yield* useStorageRoot();
+
+    const refused = yield* scoped(function* () {
+      const connections = yield* useWorkflowRunConnections(yield* SavepointObservation.get());
+      yield* installWorkflowRunStorage({ root }, {}, connections);
+      // Deliberately no `legacySource`: this host cannot obtain the Markdown a
+      // version-1 definition names, so it cannot say what such a run executes.
+      const transitions = yield* installWorkflowLifecycle({ root }, connections);
+      return yield* withExecutor("git-no-reader", function* (executorLock) {
+        return yield* transitions.begin(executorLock, {
+          runId: "git-no-reader",
+          action: "start",
+          creation: creation(),
+        });
+      });
+    });
+
+    expect(refused.ok).toBe(false);
+    expect(!refused.ok && refused.error).toBeInstanceOf(LegacyWorkflowSourceReaderUnavailableError);
+    // The check precedes the creation transaction, so nothing was written and
+    // the id is still one a later start can take.
+    expect(yield* undiscoverable(root, "git-no-reader")).toBe(true);
+  });
+
+  it("WLA44: a reader answering about another definition is a mismatch", function* () {
+    const root = yield* useStorageRoot();
+
+    const refused = yield* scoped(function* () {
+      const connections = yield* useWorkflowRunConnections(yield* SavepointObservation.get());
+      yield* installWorkflowRunStorage({ root }, {}, connections);
+      const transitions = yield* installWorkflowLifecycle(
+        {
+          root,
+          // deno-lint-ignore require-yield
+          *legacySource(definition) {
+            return Ok({
+              definitionVersion: 1,
+              definition,
+              closure: {
+                root: {
+                  objectFormat: definition.objectFormat,
+                  pinnedCommit: definition.objectId,
+                  rootDocumentPath: "workflows/somewhere-else.md",
+                  blobId: gitBlobIdentity("# Elsewhere\n", definition.objectFormat),
+                  content: "# Elsewhere\n",
+                },
+                components: [],
+              },
+            });
+          },
+        },
+        connections,
+      );
+      return yield* withExecutor("git-mismatch", function* (executorLock) {
+        return yield* transitions.begin(executorLock, {
+          runId: "git-mismatch",
+          action: "start",
+          creation: creation(),
+        });
+      });
+    });
+
+    expect(refused.ok).toBe(false);
+    expect(!refused.ok && refused.error).toBeInstanceOf(LegacyWorkflowSourceMismatchError);
+    expect(yield* undiscoverable(root, "git-mismatch")).toBe(true);
+  });
+});
+
+/**
+ * Whether this run id names nothing a host would find.
+ *
+ * Not "whether a file is there": opening a connection creates the file before
+ * any decision is made, so a refused creation routinely leaves an empty one
+ * behind. What the refusal has to preserve is that nothing recognizes the id,
+ * which is what a later start reusing it depends on.
+ */
+function* undiscoverable(root: string, runId: string): Operation<boolean> {
+  return yield* withStorage(root, function* () {
+    const found = yield* WorkflowRunStorage.operations.lookup(runId);
+    return !found.ok;
+  });
 }

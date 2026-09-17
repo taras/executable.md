@@ -63,6 +63,12 @@ import {
 import { serializeDurableEvent } from "@executablemd/durable-streams";
 import type { DurableEvent, Json } from "@executablemd/durable-streams";
 import { SUSPENSION_ANSWER } from "../src/suspension/answer.ts";
+import type { GitDefinitionSourceClosureV1, RetainedDefinitionSources } from "../deno.ts";
+import {
+  FIXTURE_BUNDLE_PATH,
+  FIXTURE_BUNDLE_SOURCE,
+  sourceBundleArtifact,
+} from "./support/artifact-fixture.ts";
 
 const encoder = new TextEncoder();
 
@@ -402,9 +408,19 @@ function* resealed(
         encoding: encodingOf(textColumn(row, "encoding")),
         content: bytesColumn(row, "content"),
       }));
-    const built = buildXmdArtifactManifest(entries, (kind) => {
-      throw new Error(`two ${kind} records under one identity`);
-    });
+    // Resealed under the format the header declares: the manifest version and
+    // the identity domain are the format's, so a format-2 file resealed as
+    // format 1 would be turned away by the identity comparison rather than by
+    // the gate a case is aiming at.
+    const format = database.prepare("SELECT artifact_version FROM xmd_artifact_header").get();
+    const declared = format?.["artifact_version"] === 2 ? 2 : 1;
+    const built = buildXmdArtifactManifest(
+      entries,
+      (kind) => {
+        throw new Error(`two ${kind} records under one identity`);
+      },
+      declared,
+    );
     database
       .prepare("UPDATE xmd_artifact_header SET manifest = ?, identity = ? WHERE id = 1")
       .run(built.bytes, built.identity);
@@ -600,7 +616,7 @@ describe("XMD artifact container version 1", () => {
     }
     expect(read.manifests.length).toBe(contents.manifests.length);
     // One component the run never expanded is still in the closure.
-    expect(read.definition.components.map((component) => component.name)).toEqual([
+    expect(gitClosure(read.definition).components.map((component) => component.name)).toEqual([
       "Checklist",
       "Unused",
     ]);
@@ -664,7 +680,16 @@ describe("XMD artifact container version 1", () => {
         target.exec("PRAGMA user_version = 2");
       },
     );
+    // Version 3: formats 1 and 2 are both ones this build implements, so a
+    // format it does not is what proves an unsupported one is left alone.
     const futureFormat = yield* damaged(path, join(directory, "future-format.xmd"), (target) => {
+      target.exec("UPDATE xmd_artifact_header SET artifact_version = 3");
+    });
+    // The neighbouring claim: a format this build *does* implement, over the
+    // other format's records. Its closed inventory is the one the header names,
+    // so a format-1 closure inside a format-2 header is content that format
+    // does not declare rather than a superset either verifier could complete.
+    const wrongFormat = yield* damaged(path, join(directory, "wrong-format.xmd"), (target) => {
       target.exec("UPDATE xmd_artifact_header SET artifact_version = 2");
     });
     const extraView = yield* damaged(path, join(directory, "extra-view.xmd"), (target) => {
@@ -769,6 +794,7 @@ describe("XMD artifact container version 1", () => {
       [notADatabase, "XmdArtifactForeignContainerError"],
       [futureContainer, "XmdArtifactContainerVersionError"],
       [futureFormat, "XmdArtifactFormatVersionError"],
+      [wrongFormat, "XmdArtifactInventoryError"],
       [extraView, "XmdArtifactSchemaError"],
       [extraIndex, "XmdArtifactSchemaError"],
       [extraTrigger, "XmdArtifactSchemaError"],
@@ -801,7 +827,7 @@ describe("XMD artifact container version 1", () => {
       path,
       join(directory, "future-format-and-schema.xmd"),
       (target) => {
-        target.exec("UPDATE xmd_artifact_header SET artifact_version = 2");
+        target.exec("UPDATE xmd_artifact_header SET artifact_version = 3");
         target.exec("CREATE VIEW later AS SELECT kind FROM xmd_artifact_content");
       },
     );
@@ -1501,7 +1527,7 @@ describe("XMD artifact version 1 Agent portability evidence", () => {
       expect(read.run.status).toBe(frozen.status);
       expect(read.journal.length).toBe(frozen.journal);
       expect(read.frontier.finalEventId).toBe(frozen.finalEventId);
-      expect(read.definition.root.content.length).toBeGreaterThan(0);
+      expect(gitClosure(read.definition).root.content.length).toBeGreaterThan(0);
       // No record, no token, no bundle and no marker is reconstructed for it.
       expect(read.agentEvidence).toBeUndefined();
       expect(rowsOfKind(frozen.path, "agent-session-portability")).toBe(0);
@@ -2046,3 +2072,125 @@ function walk(
     walk(member, visit, seen);
   }
 }
+
+/**
+ * The Git closure an artifact carries, narrowed rather than asserted.
+ *
+ * The retained source is a closed union now, so a format-1 case says which
+ * member it is describing: an artifact that came back carrying a source bundle
+ * is not the one these cases are about.
+ */
+function gitClosure(sources: RetainedDefinitionSources): GitDefinitionSourceClosureV1 {
+  if (sources.definitionVersion !== 1) {
+    throw new Error("expected a Git definition source closure");
+  }
+  return sources.closure;
+}
+
+/**
+ * A format-2 artifact's own statement about its content, held to the descriptor.
+ *
+ * Each `definition-source-entry` declares a source hash and a byte length
+ * beside the content it names. Those are read, so a forger who re-seals the
+ * file cannot move them: the descriptor is what the run retains, and an entry
+ * that disagrees with it describes a source this artifact does not hold.
+ */
+describe("XMD artifact format 2 definition sources", () => {
+  const ENTRY = "definition-source-entry";
+  const IDENTITY = JSON.stringify(FIXTURE_BUNDLE_PATH);
+
+  function* useSourceBundleArtifact(): Operation<{ directory: string; path: string }> {
+    const directory = yield* useArtifactDirectory();
+    const { path } = yield* sealed(directory, "bundle.xmd", yield* sourceBundleArtifact());
+    return { directory, path };
+  }
+
+  /**
+   * The entry row's canonical JSON, with one member replaced.
+   *
+   * Parsed back into the object shape the row holds rather than asserted into
+   * it: a row that is not an object is a fixture that has already stopped
+   * describing what this case is about.
+   */
+  function forgedEntry(path: string, replace: (entry: JsonObject) => Json): string {
+    const parsed: unknown = JSON.parse(storedText(path, ENTRY, IDENTITY));
+    const entry = parseJsonObject(parsed, "$", (reason) => new Error(reason));
+    return canonicalJsonText(replace(entry));
+  }
+
+  it("F40: opens when its entries agree with the descriptor", function* () {
+    const { path } = yield* useSourceBundleArtifact();
+    const artifact = yield* opened(path);
+
+    expect(artifact.definition.definitionVersion).toBe(2);
+    if (artifact.definition.definitionVersion !== 2) {
+      throw new Error("expected a source bundle");
+    }
+    expect(new TextDecoder().decode(artifact.definition.sources[0]?.bytes)).toBe(
+      FIXTURE_BUNDLE_SOURCE,
+    );
+  });
+
+  it("F41: a resealed artifact cannot move a declared byte length", function* () {
+    const { directory, path } = yield* useSourceBundleArtifact();
+
+    // Re-sealed in full: the row's own length and digest are corrected, and the
+    // manifest and identity are rebuilt over what the damage left. Every gate
+    // before semantic recognition therefore passes, and what refuses the file
+    // is the entry disagreeing with the definition the run retains.
+    const forged = yield* resealed(path, join(directory, "forged-length.xmd"), (database) => {
+      rewrite(
+        database,
+        ENTRY,
+        IDENTITY,
+        forgedEntry(path, (entry) => ({ ...entry, byteLength: 1 })),
+      );
+    });
+
+    const refused = yield* readXmdArtifact(forged);
+    expect(refused.ok).toBe(false);
+    expect(refused.ok ? "" : refused.error.name).toBe("XmdArtifactRecordError");
+    expect(refused.ok ? "" : refused.error.message).toContain("declared byte length");
+  });
+
+  it("F42: nor a declared source hash", function* () {
+    const { directory, path } = yield* useSourceBundleArtifact();
+
+    const forged = yield* resealed(path, join(directory, "forged-hash.xmd"), (database) => {
+      rewrite(
+        database,
+        ENTRY,
+        IDENTITY,
+        forgedEntry(path, (entry) => ({ ...entry, sourceHash: "b".repeat(64) })),
+      );
+    });
+
+    const refused = yield* readXmdArtifact(forged);
+    expect(refused.ok).toBe(false);
+    expect(refused.ok ? "" : refused.error.name).toBe("XmdArtifactRecordError");
+    expect(refused.ok ? "" : refused.error.message).toContain("declared source hash");
+  });
+
+  it("F43: nor a path the descriptor does not retain", function* () {
+    const { directory, path } = yield* useSourceBundleArtifact();
+
+    const forged = yield* resealed(path, join(directory, "forged-path.xmd"), (database) => {
+      database
+        .prepare("UPDATE xmd_artifact_content SET identity = ? WHERE kind = ? AND identity = ?")
+        .run(JSON.stringify("elsewhere.md"), ENTRY, IDENTITY);
+      database
+        .prepare("UPDATE xmd_artifact_content SET identity = ? WHERE kind = ? AND identity = ?")
+        .run(JSON.stringify("elsewhere.md"), "definition-source-content", IDENTITY);
+      rewrite(
+        database,
+        ENTRY,
+        JSON.stringify("elsewhere.md"),
+        forgedEntry(path, (entry) => ({ ...entry, path: "elsewhere.md" })),
+      );
+    });
+
+    const refused = yield* readXmdArtifact(forged);
+    expect(refused.ok).toBe(false);
+    expect(refused.ok ? "" : refused.error.name).toBe("XmdArtifactInventoryError");
+  });
+});

@@ -255,6 +255,97 @@ export class WorkflowDatabaseClosedError extends WorkflowStorageError {
   }
 }
 
+/**
+ * A version-2 run's own retained source is not there.
+ *
+ * Its own category because there is nothing to fall back to and nothing to
+ * repair: the descriptor names a manifest entry or a blob the live store does
+ * not contain, so the run's authoritative content is gone. The original file,
+ * the optional provenance and the legacy Git reader are all deliberately not
+ * consulted — each would execute bytes this run is not a run of.
+ */
+export class WorkflowDefinitionSourceMissingError extends WorkflowStorageError {
+  override name = "WorkflowDefinitionSourceMissingError";
+
+  constructor() {
+    super(
+      "This workflow run retains a source bundle whose content its own store no longer holds. " +
+        "The run is left unchanged, and no other source is substituted for it: restore the " +
+        "run's database from a backup, or start a new run.",
+    );
+  }
+}
+
+/**
+ * A version-2 run's retained source is there and does not describe itself.
+ *
+ * Distinct from absence because an operator acts on it differently. A path, a
+ * length, a source hash, a component mapping or the bundle hash disagrees with
+ * what the descriptor states, so what is retained is no longer evidence of the
+ * definition it claims. No partial closure is returned.
+ */
+export class WorkflowDefinitionCorruptError extends WorkflowStorageError {
+  override name = "WorkflowDefinitionCorruptError";
+
+  constructor(reason: string) {
+    super(
+      `This workflow run's retained source bundle disagrees with its own descriptor: ${reason}. ` +
+        "No partial source is returned and the run is left unchanged.",
+    );
+  }
+}
+
+/**
+ * A version-1 run needs its Git source and this host installed no reader.
+ *
+ * The retained lifecycle performs no Git operation of its own. A host that can
+ * reach the repository supplies that capability directly when it installs the
+ * workflow host, and one that did not cannot obtain a version-1 definition's
+ * Markdown at all.
+ */
+export class LegacyWorkflowSourceReaderUnavailableError extends WorkflowStorageError {
+  override name = "LegacyWorkflowSourceReaderUnavailableError";
+
+  constructor() {
+    super(
+      "This workflow run retains a Git definition, and this host installed no legacy workflow " +
+        "source reader. Run it from a Git-capable XMD host. No execution record was created.",
+    );
+  }
+}
+
+/** The installed legacy reader cannot obtain the object a v1 definition pins. */
+export class LegacyWorkflowSourceUnavailableError extends WorkflowStorageError {
+  override name = "LegacyWorkflowSourceUnavailableError";
+
+  constructor(reason: string) {
+    super(
+      `This workflow run's retained Git definition could not be read: ${reason}. Current \`HEAD\` ` +
+        "and working-tree bytes are not substituted for it, and the run is left unchanged.",
+    );
+  }
+}
+
+/**
+ * The legacy reader answered, and its answer is not this definition's.
+ *
+ * Workflow validates every returned closure against the descriptor it asked
+ * about rather than trusting the adapter that produced it. A reader that
+ * returned another commit's bytes, another path, or a different component set
+ * has not obtained this run's source, and none of what it returned executes.
+ */
+export class LegacyWorkflowSourceMismatchError extends WorkflowStorageError {
+  override name = "LegacyWorkflowSourceMismatchError";
+
+  constructor(reason: string) {
+    super(
+      `The legacy workflow source reader returned a source closure that does not describe this ` +
+        `run's retained Git definition: ${reason}. None of it executes and the run is left ` +
+        "unchanged.",
+    );
+  }
+}
+
 /** A value offered as a workflow definition descriptor does not describe one. */
 export class WorkflowDefinitionError extends WorkflowStorageError {
   override name = "WorkflowDefinitionError";

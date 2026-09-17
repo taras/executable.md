@@ -35,7 +35,12 @@
 
 import type { DurableEvent } from "@executablemd/durable-streams";
 import { Err, Ok, type Result } from "effection";
-import { describeWorkflowRun, WORKFLOW_RUN, type WorkflowRun } from "./journal.ts";
+import {
+  describeWorkflowRun,
+  WORKFLOW_RUN,
+  type WorkflowRun,
+  workflowRunValue,
+} from "./journal.ts";
 import type { Forkability } from "./lifecycle/forkability.ts";
 import { WorkflowRequestError } from "./storage/errors.ts";
 
@@ -130,11 +135,8 @@ export function forkRunRecordEvent(run: WorkflowRun): DurableEvent {
   return {
     type: "yield",
     coroutineId: ROOT_COROUTINE,
-    description: describeWorkflowRun(run.base),
-    result: {
-      status: "ok",
-      value: { runId: run.runId, base: run.base, pinnedCommit: run.pinnedCommit },
-    },
+    description: describeWorkflowRun(run),
+    result: { status: "ok", value: workflowRunValue(run) },
   };
 }
 
