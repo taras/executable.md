@@ -13,10 +13,7 @@
 
 import process from "node:process";
 import { main } from "effection";
-import {
-  isCredentialHelperMode,
-  runCredentialHelper,
-} from "@executablemd/workflow/credential-helper";
+import { isCredentialHelperMode, runCredentialHelper } from "@executablemd/git/credential-helper";
 
 // The launcher already names the mode; what follows it is Git's operation. The
 // whole of what this program does is awaited, so a failure to read the request

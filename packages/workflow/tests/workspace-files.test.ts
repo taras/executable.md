@@ -34,6 +34,7 @@ import { API, FILES_FATAL, parseFilesFatal, useHostFiles } from "@executablemd/r
 import type { HostFilesEvent } from "@executablemd/runtime";
 import type { WorkflowRunDatabase } from "../mod.ts";
 import { withWorkflowWorkspace } from "../src/deno/workspace/host.ts";
+import { gitWorkspaceAttachment } from "../../git/src/deno/attachment.ts";
 import { WORKSPACE_FILE } from "../src/deno/workspace/files.ts";
 import { throwWorkspaceFilesystemFailure } from "../src/deno/workspace/errors.ts";
 import type { DenoWorkspaceFilesystem } from "../src/deno/workspace/filesystem.ts";
@@ -139,6 +140,9 @@ function runDocument(database: WorkflowRunDatabase, source: string): Operation<R
           yield* execute({ ...inlineSource(source), stream: database.journal }),
         );
       }),
+      // `<Dir>` belongs to `@executablemd/git` now, and these cases drive this
+      // run's own directory handling through it.
+      { attachments: [gitWorkspaceAttachment()] },
     );
     return { output, host };
   });

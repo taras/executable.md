@@ -171,6 +171,9 @@ importers:
       '@executablemd/durable-streams':
         specifier: workspace:*
         version: link:../durable-streams
+      '@executablemd/git':
+        specifier: workspace:*
+        version: link:../git
       '@executablemd/runtime':
         specifier: workspace:*
         version: link:../runtime
@@ -310,6 +313,30 @@ importers:
       '@durable-streams/client':
         specifier: ^0.2.2
         version: 0.2.2
+      effection:
+        specifier: 4.1.0
+        version: 4.1.0
+
+  packages/git:
+    dependencies:
+      '@effectionx/context-api':
+        specifier: 0.6.0
+        version: 0.6.0(effection@4.1.0)
+      '@effectionx/fs':
+        specifier: 0.3.0
+        version: 0.3.0(effection@4.1.0)
+      '@executablemd/core':
+        specifier: workspace:*
+        version: link:../core
+      '@executablemd/durable-streams':
+        specifier: workspace:*
+        version: link:../durable-streams
+      '@executablemd/runtime':
+        specifier: workspace:*
+        version: link:../runtime
+      '@executablemd/workflow':
+        specifier: workspace:*
+        version: link:../workflow
       effection:
         specifier: 4.1.0
         version: 4.1.0

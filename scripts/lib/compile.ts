@@ -101,7 +101,7 @@ export const PACKAGED_DOCUMENTATION = [
   "packages/cli/src/components.md",
   "packages/testing/src/components.md",
   "packages/web/src/components.md",
-  "packages/workflow/src/composition/components.md",
+  "packages/git/src/composition/components.md",
 ];
 
 /** Everything a compile embeds, in the order the argv names it. */

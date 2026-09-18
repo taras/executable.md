@@ -24,7 +24,7 @@ import type { Json } from "@executablemd/core";
 import type { DurableEvent, Yield } from "@executablemd/durable-streams";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import type { WorkflowRunDatabase } from "../mod.ts";
-import { runWorkflowDocument } from "./support/composition.ts";
+import { runWorkflowDocument } from "../../git/tests/support/composition.ts";
 import { runPath, useStorageRoot, withBegunRun } from "./support/storage.ts";
 import { createSuspensionController } from "../src/deno/suspension.ts";
 import type { SuspensionNotice } from "../src/deno/suspension.ts";

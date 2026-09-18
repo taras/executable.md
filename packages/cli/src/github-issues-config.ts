@@ -18,8 +18,8 @@
 
 import { env as readEnv } from "@executablemd/runtime";
 import type { Operation } from "effection";
-import { canonicalIssueTarget } from "@executablemd/workflow";
-import type { GitHubIssuesOptions } from "@executablemd/workflow/deno";
+import { canonicalIssueTarget } from "@executablemd/git";
+import type { GitHubIssuesOptions } from "@executablemd/git/deno";
 
 /** The variable that configures GitHub issue handling. */
 export const GITHUB_ISSUES_ENV = "XMD_WORKFLOW_GITHUB_ISSUES";

@@ -200,6 +200,108 @@ describe("Tier WFK — forkability and fork selection", () => {
     expect(refused[1]?.blockers).toEqual([{ code: "external-state-unavailable", eventId: "e2" }]);
   });
 
+  it("WFK3c: a record this build cannot read in full is not a completed one", function* () {
+    // The effect belongs to `@executablemd/git` now, so this module reads its
+    // retained rows as compatibility data. Reading them *totally* is what makes
+    // the answer safe: a value JSON cannot express is a record this build
+    // cannot classify, and classifying it as completed would hand a fork a
+    // prefix it cannot actually replay.
+    const complete = {
+      request: {
+        identity: { runId: "source-1", expansionId: "x" },
+        kind: "git-push",
+        inputs: { remote: "origin" },
+        naturalKey: { destinationRef: "refs/heads/publish/1" },
+      },
+      preState: { remoteCommit: null },
+      observations: { remoteCommit: "abc" },
+      decision: "performed",
+      result: { remoteCommit: "abc" },
+    };
+
+    /** One Git-host event holding exactly this value, however hostile. */
+    function holding(value: unknown): DurableEvent {
+      return {
+        type: "yield",
+        coroutineId: "root",
+        description: { type: "git_host_effect", name: "git-push:1" },
+        result: { status: "ok", value: value as Json },
+      };
+    }
+
+    function blockers(value: unknown) {
+      return classify([
+        { id: "e1", event: RUN_RECORD },
+        { id: "e2", event: holding(value) },
+      ])[1]?.blockers;
+    }
+
+    // The positive control: built the same way, read the same way, accepted.
+    // Without it every refusal below could be the builder rather than the rule.
+    expect(blockers(structuredClone(complete))).toEqual([]);
+
+    const cyclic: Record<string, unknown> = { remoteCommit: "abc" };
+    cyclic["self"] = cyclic;
+
+    const sparse: unknown[] = ["a"];
+    sparse[2] = "c";
+
+    const hostile = structuredClone(complete);
+    Object.defineProperty(hostile, "result", {
+      enumerable: true,
+      get(): never {
+        throw new Error("a record does not get to run code during classification");
+      },
+    });
+
+    const refusals: Record<string, unknown> = {
+      // An identity with nothing in it names no run and no position.
+      "empty runId": {
+        ...complete,
+        request: { ...complete.request, identity: { runId: "", expansionId: "x" } },
+      },
+      "empty expansionId": {
+        ...complete,
+        request: { ...complete.request, identity: { runId: "source-1", expansionId: "" } },
+      },
+      "empty kind": { ...complete, request: { ...complete.request, kind: "" } },
+      "absent kind": { ...complete, request: { ...complete.request, kind: undefined } },
+      // A decision this build does not know is not one it may act on.
+      "unknown decision": { ...complete, decision: "abandoned" },
+      // Members the shape does not declare, and members it declares missing.
+      "extra identity member": {
+        ...complete,
+        request: {
+          ...complete.request,
+          identity: { runId: "source-1", expansionId: "x", host: "github" },
+        },
+      },
+      "missing request member": {
+        ...complete,
+        request: { identity: complete.request.identity, kind: "git-push", inputs: {} },
+      },
+      // Values JSON cannot express, at every depth this reads.
+      "non-finite number": { ...complete, preState: { drift: Number.POSITIVE_INFINITY } },
+      NaN: { ...complete, preState: { drift: Number.NaN } },
+      "undefined member": { ...complete, observations: { remoteCommit: undefined } },
+      "a sparse array": { ...complete, observations: { refs: sparse } },
+      "a cycle": { ...complete, preState: cyclic },
+      "a function": { ...complete, result: { settle: () => "now" } },
+      "a getter that throws": hostile,
+      // And the record itself has to be a record.
+      "an array": [complete],
+      "a string": JSON.stringify(complete),
+      null: null,
+    };
+
+    for (const [why, value] of Object.entries(refusals)) {
+      expect([why, blockers(value)]).toEqual([
+        why,
+        [{ code: "external-state-unavailable", eventId: "e2" }],
+      ]);
+    }
+  });
+
   it("WFK4: selection takes the prefix and leaves the two records a fork writes", function* () {
     const history = candidates([
       { id: "e1", event: RUN_RECORD },

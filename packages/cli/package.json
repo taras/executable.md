@@ -15,6 +15,7 @@
     "@executablemd/acp": "workspace:*",
     "@executablemd/core": "workspace:*",
     "@executablemd/durable-streams": "workspace:*",
+    "@executablemd/git": "workspace:*",
     "@executablemd/runtime": "workspace:*",
     "@executablemd/test-agent": "workspace:*",
     "@executablemd/testing": "workspace:*",

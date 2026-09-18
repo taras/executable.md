@@ -17,9 +17,9 @@
  *
  * - the read table is core's read-only `<File />`; `<Fetch />` joins it only
  *   where this host also states the exact requests it may perform;
- * - the write table is core's paired `<File>`, workflow's own lexical `<Dir>`
- *   built from the same definition the ordinary registration owns, and core's
- *   self-closing `<File.Delete />`;
+ * - the write table is core's paired `<File>`, the directory entry this host
+ *   captured — or the one released builds retained, when it captured none —
+ *   and core's self-closing `<File.Delete />`;
  * - any further read or write comes from the captured host option; and
  * - the Workspace basis is answered per invocation by the private operation
  *   below, because a run's own progress legitimately advances it: every
@@ -71,7 +71,6 @@ import type {
   GeneratedRequest,
 } from "@executablemd/core/host";
 import type { WorkflowRunDatabase } from "../../storage/api.ts";
-import { COMPOSITION_ORIGIN } from "../../composition/definitions.ts";
 import { workflowFilesHandler } from "./files.ts";
 import { WORKSPACE_ROOT } from "./logical-path.ts";
 import { workspaceRootSelection } from "./effect.ts";
@@ -167,8 +166,9 @@ function workspaceFiles(database: WorkflowRunDatabase): FragmentFileAccess {
 /**
  * The directory entry a host that captures none of its own is admitted under.
  *
- * Built from the same definition the ordinary registration owns, so the two
- * cannot drift. Versioned in its revision because what the entry authorizes
+ * The exact entry released builds admitted, stated here rather than derived
+ * from a registration this package no longer owns. Versioned in its revision
+ * because what the entry authorizes
  * changed: the former `Dir` authorized placement that created nothing, and
  * `<Dir>` now recursively creates the directory it names. A continuation
  * granted under the earlier revision must not silently receive the wider
@@ -187,8 +187,18 @@ function workspaceFiles(database: WorkflowRunDatabase): FragmentFileAccess {
  * named the placement-only `<Dir>`, which created nothing, so answering for it
  * here would hand a narrower grant the wider one.
  */
+/**
+ * The origin released builds retained for this entry.
+ *
+ * Written out rather than imported. The component behind `<Dir>` belongs to
+ * `@executablemd/git` now, and this string identifies retained history rather
+ * than current source ownership — every journal a released build wrote holds
+ * it, so it is this package's own compatibility data.
+ */
+const RETAINED_DIRECTORY_ORIGIN = "@executablemd/workflow/composition";
+
 function retainedDirectoryEntry(): FragmentEntry {
-  return directoryEntry({ origin: COMPOSITION_ORIGIN, key: "Dir", revision: "3" }, "Dir", [
+  return directoryEntry({ origin: RETAINED_DIRECTORY_ORIGIN, key: "Dir", revision: "3" }, "Dir", [
     "@executablemd/workflow/composition/dir-v2#Dir",
   ]);
 }

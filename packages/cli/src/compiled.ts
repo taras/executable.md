@@ -16,11 +16,8 @@ import { compiledUpgradeAssembly } from "./compiled-upgrade.ts";
 import { useMachineSessions } from "./session-coordinator.ts";
 import { useDenoWorkflowHost } from "./deno-workflow.ts";
 import { denoRunRepositories } from "./deno-repositories.ts";
-import {
-  isCredentialHelperMode,
-  runCredentialHelper,
-} from "@executablemd/workflow/credential-helper";
-import type { HelperAssembly } from "@executablemd/workflow/credential-helper";
+import { isCredentialHelperMode, runCredentialHelper } from "@executablemd/git/credential-helper";
+import type { HelperAssembly } from "@executablemd/git/credential-helper";
 import { useCompiledService } from "./compiled-service.ts";
 
 /**

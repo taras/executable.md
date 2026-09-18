@@ -16,8 +16,8 @@
 
 import type { Operation } from "effection";
 import { cwd } from "@executablemd/runtime";
-import { useRunComposition } from "@executablemd/workflow/deno";
-import type { HelperAssembly } from "@executablemd/workflow/credential-helper";
+import { useRunComposition } from "@executablemd/git/deno";
+import type { HelperAssembly } from "@executablemd/git/credential-helper";
 import { gitHubIssuesConfiguration } from "./github-issues-config.ts";
 import { gitHubPullRequestsConfiguration } from "./github-pull-requests-config.ts";
 import { DEFAULT_REPOSITORY_ROOT } from "./run-repositories.ts";

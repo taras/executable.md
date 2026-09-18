@@ -36,7 +36,7 @@ import {
 } from "@executablemd/core";
 import { executeInstalled } from "@executablemd/core/host";
 import type { ExecutionRequest } from "@executablemd/core";
-import { Git } from "../src/git.ts";
+import { Git } from "../../git/src/git.ts";
 import { getWorkflowRun, retainedWorkflowInstallation } from "../src/run.ts";
 import type { WorkflowRun } from "../src/run.ts";
 

@@ -27,7 +27,8 @@ import {
   useWorkflowRunHost,
 } from "@executablemd/workflow/deno";
 import type { WorkflowExecutionTransitions } from "@executablemd/workflow/deno";
-import { Git, WorkflowLifecycle, WorkflowRunStorage } from "@executablemd/workflow";
+import { WorkflowLifecycle, WorkflowRunStorage } from "@executablemd/workflow";
+import { Git } from "@executablemd/git";
 import type { WorkflowRunDatabase, WorkflowRunStatus } from "@executablemd/workflow";
 import { runWorkflow } from "../src/workflow.ts";
 import type { WorkflowExecution, WorkflowHost, WorkflowRequest } from "../src/workflow.ts";
@@ -290,12 +291,14 @@ describe("Tier WFI — what a run hands to canonical core", () => {
     );
     expect(preparing.length).toEqual(1);
     expect(preparing[0]?.admissions?.length).toEqual(1);
-    // Every installation this run was given is one of three things, and none of
+    // Every installation this run was given is one of four things, and none of
     // them is a second execution: one `executeInstalled()`, not one per phase.
     // A run-contract installation carries its admission; a bundle carries its
-    // own admission and no preparation; and the fragment-evaluation profile
-    // carries a ceiling and no admission at all, because stating what a
-    // generated fragment may do is not a claim about this run's history.
+    // own admission and no preparation; the bundled Git Plugin carries the two
+    // journal admissions that let a replay recognize the Git-host and Issue
+    // records this history holds; and the fragment-evaluation profile carries a
+    // ceiling and no admission at all, because stating what a generated
+    // fragment may do is not a claim about this run's history.
     const profiles = (execution?.installations ?? []).filter(
       (candidate) => candidate.evaluation !== undefined,
     );
@@ -304,10 +307,19 @@ describe("Tier WFI — what a run hands to canonical core", () => {
         expect(candidate.admissions).toBe(undefined);
         expect(candidate.prepare).toBe(undefined);
         expect(candidate.components).toBe(undefined);
-        continue;
       }
-      expect(candidate.admissions?.length).toEqual(1);
     }
+    // The exact contribution, rather than a rule each one satisfies: this run
+    // installs no bundle, so what reaches core is the run contract's one
+    // admission and the Git Plugin's two. A contribution that went missing, an
+    // installation that arrived twice, or an admission that was dropped on the
+    // way all change this list.
+    expect(
+      (execution?.installations ?? [])
+        .filter((candidate) => candidate.evaluation === undefined)
+        .map((candidate) => candidate.admissions?.length ?? 0)
+        .toSorted((left, right) => left - right),
+    ).toEqual([1, 2]);
 
     // The ceiling is stated exactly once, and it is a real one: a run that
     // installed no profile, or an empty one, would leave `<Evaluate>` with

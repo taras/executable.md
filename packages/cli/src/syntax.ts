@@ -44,7 +44,7 @@ import type { SyntaxSymbols } from "@executablemd/core";
 import { useTestingComponents } from "@executablemd/testing";
 import { useWebComponents } from "@executablemd/web";
 import { useVerboseComponent } from "./verbose-component.ts";
-import { useCompositionComponents } from "@executablemd/workflow";
+import { useCompositionComponents } from "@executablemd/git";
 import type { ExecutionDeclaration } from "@executablemd/core/host";
 import { NO_PLUGINS } from "./plugin-host.ts";
 import type { CommandPlugins } from "./plugin-host.ts";

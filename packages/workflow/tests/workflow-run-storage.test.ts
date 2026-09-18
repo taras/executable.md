@@ -46,7 +46,7 @@ import { createWorkflowRunConnections } from "../src/deno/connections.ts";
 import { WorkflowRunRecognition } from "../src/deno/provider.ts";
 import { holdRecoveryCoordination } from "../src/deno/recovery-coordination.ts";
 import { EXPECTED_SCHEMA, initializeSchema } from "../src/deno/schema.ts";
-import { readRepositories } from "../src/deno/workspace/repositories.ts";
+import { readRepositories } from "../../git/src/deno/repositories.ts";
 import { createWorkflowWorkspaceStorage } from "../src/deno/workspace/storage.ts";
 import {
   EMPTY_WORKSPACE_MANIFEST,

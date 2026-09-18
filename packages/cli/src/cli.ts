@@ -160,7 +160,8 @@ import type { HostWorkflowInstaller, WorkflowHost, WorkflowStart } from "./workf
 import { runWorkflowManagement } from "./workflow-management.ts";
 import { establishDefinition } from "./workflow-definition.ts";
 import type { EstablishedDefinition } from "./workflow-definition.ts";
-import { useCompositionComponents, useWorkflowServiceDenial } from "@executablemd/workflow";
+import { useWorkflowServiceDenial } from "@executablemd/workflow";
+import { useCompositionComponents } from "@executablemd/git";
 import denoJson from "../deno.json" with { type: "json" };
 
 const SECRET_DETECTION_OPTION = "--secret-detection";

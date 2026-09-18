@@ -5,8 +5,7 @@
   "type": "module",
   "exports": {
     ".": "./mod.ts",
-    "./deno": "./deno.ts",
-    "./credential-helper": "./src/deno/composition/credential-helper.ts"
+    "./deno": "./deno.ts"
   },
   "dependencies": {
     "@effectionx/context-api": "0.6.0",

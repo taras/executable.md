@@ -40,13 +40,13 @@ import {
   isCredentialHelperMode,
   launcherName,
   launcherProgram,
-} from "@executablemd/workflow/credential-helper";
+} from "@executablemd/git/credential-helper";
 import type {
   HelperAssembly,
   HelperPlatform,
   HelperRuntime,
-} from "@executablemd/workflow/credential-helper";
-import { HELPER_VARIABLES } from "@executablemd/workflow/credential-helper";
+} from "@executablemd/git/credential-helper";
+import { HELPER_VARIABLES } from "@executablemd/git/credential-helper";
 
 /** The one sentence a host without workflow support says. */
 const UNSUPPORTED =

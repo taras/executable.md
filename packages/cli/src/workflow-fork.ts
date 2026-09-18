@@ -62,6 +62,7 @@ import {
   workflowBundleInstallation,
   WorkflowLifecycle,
 } from "@executablemd/workflow";
+import type { ExecutionInstallation } from "@executablemd/core/host";
 import type { ForkSelection, WorkflowRun } from "@executablemd/workflow";
 import type { WorkflowRunDatabase } from "@executablemd/workflow";
 import type {
@@ -133,6 +134,7 @@ export function* preflightFork(
   request: ForkRequest,
   host: ForkPreflightHost,
   execute: (execution: WorkflowExecution) => Operation<Result<void>>,
+  git: ExecutionInstallation,
 ): Operation<Result<ForkAdmission>> {
   const history = yield* WorkflowLifecycle.operations.history(request.sourceRunId);
   if (!history.ok) {
@@ -154,7 +156,7 @@ export function* preflightFork(
       ? {}
       : { targetPath: request.creation.definition.targetPath }),
   };
-  const imported = yield* captureRootImport(request, run, execute);
+  const imported = yield* captureRootImport(request, run, execute, git);
   if (!imported.ok) {
     return imported;
   }
@@ -180,8 +182,14 @@ export function* preflightFork(
       return staged;
     }
     const database = staged.value;
-    return yield* replayPrefix(request, run, journal, identities, execute, (operation) =>
-      host.attach(database, operation),
+    return yield* replayPrefix(
+      request,
+      run,
+      journal,
+      identities,
+      execute,
+      (operation) => host.attach(database, operation),
+      git,
     );
   });
   if (!checked.ok) {
@@ -208,6 +216,7 @@ function* captureRootImport(
   request: ForkRequest,
   run: WorkflowRun,
   execute: (execution: WorkflowExecution) => Operation<Result<void>>,
+  git: ExecutionInstallation,
 ): Operation<Result<DurableEvent>> {
   const record = forkRunRecordEvent(run);
   let captured: DurableEvent | undefined;
@@ -229,7 +238,7 @@ function* captureRootImport(
     },
   };
 
-  const attempted = yield* execute(execution(request, run, stream, passThrough));
+  const attempted = yield* execute(execution(request, run, stream, passThrough, git));
   if (captured !== undefined) {
     return Ok(captured);
   }
@@ -254,6 +263,7 @@ function* replayPrefix(
   identities: readonly string[],
   execute: (execution: WorkflowExecution) => Operation<Result<void>>,
   attach: <T>(operation: Operation<T>) => Operation<T>,
+  git: ExecutionInstallation,
 ): Operation<Result<void>> {
   const total = journal.filter((event) => event.type === "yield").length;
   const progress = { consumed: 0 };
@@ -290,7 +300,7 @@ function* replayPrefix(
     );
   }
 
-  const attempted = yield* execute(execution(request, run, stream, boundary));
+  const attempted = yield* execute(execution(request, run, stream, boundary, git));
   if (attempted.ok) {
     return Err(
       new Error(
@@ -324,6 +334,7 @@ function execution(
   run: WorkflowRun,
   stream: DurableStream,
   around: <T>(operation: Operation<T>) => Operation<T>,
+  git: ExecutionInstallation,
 ): WorkflowExecution {
   return {
     root: retainedSource(request.creation.definition.entrypoint, request.established.source, {
@@ -335,6 +346,10 @@ function execution(
     stream,
     installations: [
       retainedWorkflowInstallation(run),
+      // What the Git Plugin admits of the inherited history. Without its
+      // admissions an inherited effect is named by a live identity and the
+      // candidate diverges from its own history.
+      git,
       ...(request.established.components.length === 0
         ? []
         : [workflowBundleInstallation(request.established.components)]),

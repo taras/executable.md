@@ -26,7 +26,7 @@ import type { RuntimeFetchResponse } from "@executablemd/runtime";
 import { exists, readdir, readTextFile, writeTextFile } from "@effectionx/fs";
 import { useTempDirectory } from "@executablemd/test-support/temp";
 import { join } from "node:path";
-import { COMPOSITION_REGISTRATIONS } from "@executablemd/workflow";
+import { COMPOSITION_REGISTRATIONS } from "@executablemd/git";
 import { syntaxSymbols, useCommandComponents } from "../src/syntax.ts";
 import { DEFAULT_REPOSITORY_ROOT, unsupportedRepositories } from "../src/run-repositories.ts";
 

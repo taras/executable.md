@@ -31,8 +31,9 @@ import { createApi } from "@effectionx/context-api";
 import type { Api } from "@effectionx/context-api";
 import { executeInstalled } from "@executablemd/core/host";
 import type { ExecutionInstallation } from "@executablemd/core/host";
-import { Git } from "../src/git.ts";
-import { createWorkflowRunInstallation, getWorkflowRun, workflowInstallation } from "../src/run.ts";
+import { Git } from "../../git/src/git.ts";
+import { createWorkflowRunInstallation, getWorkflowRun } from "../src/run.ts";
+import { workflowInstallation } from "../../git/src/installation.ts";
 import { describeGitWorkflowRun } from "../src/journal.ts";
 import type { WorkflowRun } from "../src/run.ts";
 import { type GitWorkflowRunV1, isGitWorkflowRun } from "../mod.ts";
@@ -132,8 +133,8 @@ describe("Tier WR — workflow runs", () => {
 
     expect(seen).toHaveLength(1);
     expect(seen[0]).toEqual({ runId: expect.any(String), base: "main", pinnedCommit: COMMIT });
-    expect(before[0]).toContain("workflowInstallation");
-    expect(after[0]).toContain("workflowInstallation");
+    expect(before[0]).toContain("run installation");
+    expect(after[0]).toContain("run installation");
   });
 
   it("WR2: every read inside one execution answers with the same frozen value", function* () {
@@ -605,7 +606,7 @@ describe("Tier WR — workflow runs", () => {
     });
 
     expect(failures).toHaveLength(1);
-    expect(failures[0]).toContain("workflowInstallation");
+    expect(failures[0]).toContain("run installation");
   });
 
   it("WR11: a journal holding something else under the workflow name is refused", function* () {

@@ -57,18 +57,7 @@
  * one.
  */
 
-export {
-  Git,
-  gitObjectFormat,
-  GitObjectError,
-  GitRepositoryError,
-  GitRevisionError,
-  readGitObject,
-  repositoryRoot,
-  revParse,
-} from "./src/git.ts";
-export type { GitApi, GitObjectFormat } from "./src/git.ts";
-export { getWorkflowRun, retainedWorkflowInstallation, workflowInstallation } from "./src/run.ts";
+export { getWorkflowRun, retainedWorkflowInstallation } from "./src/run.ts";
 /**
  * How a trusted host states what its own run is.
  *
@@ -82,233 +71,17 @@ export type { WorkflowRunPreparation } from "./src/run.ts";
 export { workflowBundleInstallation, WorkflowBundleHistoryError } from "./src/bundle.ts";
 export type { WorkflowRun } from "./src/run.ts";
 export { isGitWorkflowRun, workflowRunValue } from "./src/journal.ts";
+/**
+ * The version-1 description and the two refusals a Git run is held to.
+ *
+ * Published because `@executablemd/git` states what a Git-defined run is, and
+ * this package still owns what that statement is compared against. The
+ * description names the exact retained identity released builds wrote; the two
+ * refusals are the exact words a disagreement travels in.
+ */
+export { baseMismatch, describeGitWorkflowRun, retainedRunMismatch } from "./src/journal.ts";
 export type { GitWorkflowRunV1, SourceBundleWorkflowRunV2 } from "./src/journal.ts";
 export { useWorkflowServiceDenial, WorkflowServiceDeniedError } from "./src/service-denial.ts";
-
-export { RepositoryComposition } from "./src/composition/api.ts";
-export type { RepositoryCompositionApi } from "./src/composition/api.ts";
-export { currentRepository, RepositoryContext } from "./src/composition/context.ts";
-export type { RepositoryContextApi } from "./src/composition/context.ts";
-export {
-  GitCompositionProviderError,
-  GitOperationError,
-  GitOperationProtocolError,
-  PullRequestAdmissionError,
-  RepositoryCompositionError,
-  RepositoryCompositionProtocolError,
-  RepositoryCompositionProviderError,
-  RepositoryStaleStateError,
-  WorktreeCompositionError,
-} from "./src/composition/errors.ts";
-export type {
-  GitFailureReason,
-  PullRequestAdmissionReason,
-  RepositoryFailureReason,
-  WorktreeFailureReason,
-} from "./src/composition/errors.ts";
-export {
-  parseRepositoryRecord,
-  parseWorktreeRecord,
-  repositoryRecordJson,
-  sameRepositoryRecord,
-  sameWorktreeRecord,
-  worktreeRecordJson,
-} from "./src/composition/records.ts";
-export type {
-  RepositoryCreationRequest,
-  RepositoryRecord,
-  WorktreeCreationRequest,
-  WorktreeRecord,
-} from "./src/composition/records.ts";
-export {
-  NoPullRequestProvider,
-  PULL_REQUEST_API,
-  PullRequestAPI,
-} from "./src/composition/pull-request-api.ts";
-export type {
-  PullRequestApi,
-  PullRequestInput,
-  PullRequestReadOptions,
-  PullRequestUpsertOptions,
-} from "./src/composition/pull-request-api.ts";
-export {
-  canonicalPullRequestUrl,
-  pullRequestProviderName,
-} from "./src/composition/pull-request-target.ts";
-export type { PullRequestTarget } from "./src/composition/pull-request-target.ts";
-export { GitComposition } from "./src/composition/git-api.ts";
-export type { GitCompositionApi } from "./src/composition/git-api.ts";
-export {
-  gitAddResultJson,
-  gitCommitResultJson,
-  gitSwitchResultJson,
-  parseGitAddResult,
-  parseGitCheckoutIdentity,
-  parseGitCheckoutState,
-  parseGitCommitMessageSource,
-  parseGitCommitResult,
-  parseGitSwitchResult,
-} from "./src/composition/git-records.ts";
-export type {
-  GitAddExpectation,
-  GitAddRequest,
-  GitAddResult,
-  GitCheckoutExpectation,
-  GitCheckoutIdentity,
-  GitCheckoutState,
-  GitCommitExpectation,
-  GitCommitMessageSource,
-  GitCommitRequest,
-  GitCommitResult,
-  GitSwitchExpectation,
-  GitSwitchRequest,
-  GitSwitchResult,
-} from "./src/composition/git-records.ts";
-export {
-  destinationRefFor,
-  GIT_PUSH,
-  gitPushInputsJson,
-  gitPushNaturalKeyJson,
-  gitPushObservationsJson,
-  gitPushPreStateJson,
-  gitPushResultJson,
-  parseGitPushInputs,
-  parseGitPushNaturalKey,
-  parseGitPushObservations,
-  parseGitPushPreState,
-  parseGitPushRecord,
-  parseGitPushResult,
-  PUSH_REMOTE,
-  pushExpectation,
-  refspecFor,
-} from "./src/composition/git-push-records.ts";
-export type {
-  GitPushExpectation,
-  GitPushInputs,
-  GitPushNaturalKey,
-  GitPushObservations,
-  GitPushOutcome,
-  GitPushPreState,
-  GitPushRequest,
-  GitPushResult,
-} from "./src/composition/git-push-records.ts";
-export {
-  OPEN,
-  parsePullRequestInputs,
-  parsePullRequestNaturalKey,
-  parsePullRequestObservations,
-  parsePullRequestPreState,
-  parsePullRequestRecord,
-  parsePullRequestResult,
-  parsePullRequestSnapshot,
-  PULL_REQUEST,
-  pullRequestAgrees,
-  pullRequestMode,
-  pullRequestInputsJson,
-  pullRequestNaturalKey,
-  pullRequestNaturalKeyJson,
-  pullRequestNumber,
-  pullRequestObservationsJson,
-  pullRequestPreStateJson,
-  pullRequestResultJson,
-  pullRequestResultOf,
-  pullRequestSnapshotJson,
-  sameNaturalKey,
-  samePullRequestIdentity,
-} from "./src/composition/pull-request-records.ts";
-export type {
-  PullRequestCreateKey,
-  PullRequestExpectation,
-  PullRequestInputs,
-  PullRequestMode,
-  PullRequestNaturalKey,
-  PullRequestObservations,
-  PullRequestOutcome,
-  PullRequestPreState,
-  PullRequestRequest,
-  PullRequestResult,
-  PullRequestSnapshot,
-  PullRequestUpdateKey,
-} from "./src/composition/pull-request-records.ts";
-export { admitPushEvidence } from "./src/composition/push-evidence.ts";
-export {
-  COMPOSITION_REGISTRATIONS,
-  compositionDocumentation,
-  useCompositionComponents,
-} from "./src/composition/installation.ts";
-
-export { ISSUE_API, IssueApi, NoIssueProvider } from "./src/issue/api.ts";
-export type {
-  IssueDetails,
-  IssueInput,
-  IssueOperation,
-  IssueReadOptions,
-  IssueReference,
-  IssueUpsertOptions,
-} from "./src/issue/api.ts";
-export {
-  ISSUE_TRACKER_CONTEXT,
-  IssueTrackerContext,
-  currentIssueTracker,
-} from "./src/issue/context.ts";
-export { ISSUE_EFFECT } from "./src/issue/effect-type.ts";
-export {
-  IssueAmbiguousError,
-  IssueConflictError,
-  IssueContentError,
-  IssueProtocolError,
-  IssueTrackerError,
-  IssueUnavailableError,
-} from "./src/issue/errors.ts";
-export type { IssueTrackerReason } from "./src/issue/errors.ts";
-export {
-  canonicalIssueTarget,
-  issueProviderName,
-  resolveIssueDestination,
-  withinIssueCeiling,
-} from "./src/issue/tracker.ts";
-export type { IssueDestination, IssueTracker } from "./src/issue/tracker.ts";
-
-export { GIT_HOST_API, GitHost } from "./src/git-host/api.ts";
-export type {
-  GitHostApi,
-  GitHostCall,
-  GitHostPhase,
-  GitHostPhaseDetails,
-  GitHostProvider,
-  GitHostRoutingRequest,
-} from "./src/git-host/api.ts";
-export {
-  GitHostAmbiguousError,
-  GitHostConflictError,
-  GitHostProtocolError,
-  GitHostProviderError,
-  GitHostUnavailableError,
-} from "./src/git-host/errors.ts";
-export {
-  completeGitHostEffectRequestJson,
-  gitHostReconciliationRecordJson,
-  parseCompleteGitHostEffectRequest,
-  parseGitHostCompletion,
-  parseGitHostEffectIdentity,
-  parseGitHostObservation,
-  parseGitHostReconciliationRecord,
-  sameGitHostEffectRequest,
-} from "./src/git-host/records.ts";
-export type {
-  CompleteGitHostEffectRequest,
-  GitHostCompletion,
-  GitHostDecision,
-  GitHostEffectIdentity,
-  GitHostEffectRequest,
-  GitHostObservation,
-  GitHostReconciliationRecord,
-} from "./src/git-host/records.ts";
-export {
-  GIT_HOST_EFFECT,
-  reconcileGitHostEffect,
-  withGitHostProvider,
-} from "./src/git-host/effect.ts";
 
 export { WorkspaceCoordination, WorkspaceCoordinationProviderError } from "./src/workspace/api.ts";
 export type { WorkspaceCoordinationApi } from "./src/workspace/api.ts";
@@ -414,6 +187,7 @@ export type {
   SourceBundleWorkflowDefinitionV2,
 } from "./src/storage/source-bundle.ts";
 
+export { parseJsonValue } from "./src/storage/members.ts";
 export { conflictingFields } from "./src/storage/compatibility.ts";
 export type {
   GitWorkflowRunComparisonV1,
@@ -479,13 +253,6 @@ export {
 } from "./src/suspension/api.ts";
 export type { WorkflowSuspensionApi, WorkflowSuspensionRequest } from "./src/suspension/api.ts";
 export { SUSPENSION_ANSWER } from "./src/suspension/answer.ts";
-export {
-  filteredRepositoryIdentity,
-  parseRepositoryIdentity,
-  repositoryIdentityJson,
-  sameRepositoryIdentity,
-} from "./src/composition/selection.ts";
-export type { RepositoryIdentity } from "./src/composition/selection.ts";
 export {
   WorkflowAnswerDeliveryError,
   WorkflowInputDelivery,

@@ -45,13 +45,10 @@ import {
   RESERVED_STRUCTURAL,
 } from "@executablemd/core";
 import type { WorkflowBundleComponent } from "@executablemd/core/host";
-import {
-  decodeSourceText,
-  readGitObject,
-  revParse,
-  sourceContentHash,
-} from "@executablemd/workflow";
-import type { GitObjectFormat, WorkflowComponentEntry } from "@executablemd/workflow";
+import { decodeSourceText, sourceContentHash } from "@executablemd/workflow";
+import { readGitObject, revParse } from "@executablemd/git";
+import type { WorkflowComponentEntry } from "@executablemd/workflow";
+import type { GitObjectFormat } from "@executablemd/git";
 import type { EstablishedComponent } from "./workflow-definition.ts";
 
 /** Hexadecimal digits per object id, by the format that names them. */

@@ -1,0 +1,845 @@
+/**
+ * Tier WF — `<Repository>`, `<Worktree>` and `<Dir>` as a document writes them.
+ *
+ * These drive the real component definitions through `execute()` against a real
+ * run database and a real local remote, because what is under test is the
+ * composition a document expresses: which form binds a path, which form renders
+ * descendants, and what working directory those descendants observe.
+ */
+
+import { describe, it } from "@executablemd/test-support/bdd";
+import { expect } from "@executablemd/test-support/expect";
+import { scoped } from "effection";
+import { exists } from "@effectionx/fs";
+import { join } from "node:path";
+import process from "node:process";
+import { API } from "@executablemd/runtime";
+import { parseFilesFatal } from "@executablemd/runtime";
+import type { Operation } from "effection";
+import {
+  collect,
+  Component,
+  execute,
+  hasContent,
+  inlineSource,
+  registerComponents,
+} from "@executablemd/core";
+import type { ComponentInvocation, ComponentRegistration } from "@executablemd/core";
+import type { Json } from "@executablemd/durable-streams";
+import type { WorkflowRunDatabase } from "@executablemd/workflow";
+import { useCompositionComponents } from "../src/composition/installation.ts";
+import { RepositoryCompositionProviderError } from "../src/composition/errors.ts";
+import { DirInvocationError } from "../src/composition/components/Dir.ts";
+import { denoRepositoryHost } from "../src/deno/composition/host.ts";
+import { InMemoryStream } from "@executablemd/durable-streams";
+import { createRun, useStorageRoot, withStorage } from "../../workflow/tests/support/storage.ts";
+import { useBareRemote } from "./support/git-remotes.ts";
+import {
+  causedBy,
+  countingHost,
+  countingOptions,
+  raised,
+  retainedRepositories,
+  runDocument,
+  runWorkflowDocument,
+} from "./support/composition.ts";
+import { RepositoryCompositionError, WorktreeCompositionError } from "../src/composition/errors.ts";
+import { admitLocator, locatorFingerprint } from "../src/deno/composition/locator.ts";
+
+function isProviderError(value: unknown): value is RepositoryCompositionProviderError {
+  return value instanceof RepositoryCompositionProviderError;
+}
+
+function isRepositoryRefusal(value: unknown): value is RepositoryCompositionError {
+  return value instanceof RepositoryCompositionError;
+}
+
+function isWorktreeRefusal(value: unknown): value is WorktreeCompositionError {
+  return value instanceof WorktreeCompositionError;
+}
+
+describe("workflow Repository composition", () => {
+  it("binds a self-closing Repository's Workspace-relative checkout path", function* () {
+    const root = yield* useStorageRoot();
+    const remote = yield* useBareRemote({
+      commits: [{ message: "first", entries: [{ path: "README.md", content: "hello\n" }] }],
+    });
+
+    yield* withStorage(root, function* () {
+      const database = yield* createRun();
+      const output = yield* runDocument(
+        database,
+        [
+          `<Repository name="project" url="${remote.locator}" as="repository" />`,
+          "",
+          "checkout: {repository}",
+        ].join("\n"),
+      );
+
+      expect(String(output)).toContain("checkout: /repositories/project-");
+
+      const retained = yield* retainedRepositories(database);
+      expect(retained).toHaveLength(1);
+      expect(retained[0]?.record.name).toBe("project");
+      expect(retained[0]?.record.primaryBranch).toBe("main");
+      expect(retained[0]?.record.creationCommit).toBe(remote.heads.get("main"));
+      expect(retained[0]?.locator).toBe(remote.locator);
+    });
+  });
+
+  it("expands a lexical Repository's content at the checkout", function* () {
+    const root = yield* useStorageRoot();
+    const remote = yield* useBareRemote({
+      commits: [{ message: "first", entries: [{ path: "README.md", content: "hello\n" }] }],
+    });
+
+    yield* withStorage(root, function* () {
+      const database = yield* createRun();
+      const output = yield* runDocument(
+        database,
+        [
+          `<Repository name="project" url="${remote.locator}">`,
+          `<File path="README.md" as="readme" />`,
+          "",
+          "read: {readme}",
+          "</Repository>",
+        ].join("\n"),
+      );
+
+      expect(String(output)).toContain("read: hello");
+    });
+  });
+
+  it("runs the self-closing Worktree plus lexical Dir spelling", function* () {
+    const root = yield* useStorageRoot();
+    const remote = yield* useBareRemote({
+      commits: [{ message: "first", entries: [{ path: "README.md", content: "base\n" }] }],
+    });
+
+    yield* withStorage(root, function* () {
+      const database = yield* createRun();
+      const counting = countingHost();
+      const output = yield* runDocument(
+        database,
+        [
+          `<Repository name="project" url="${remote.locator}">`,
+          `<Worktree name="implementation" branch="feature/new" as="worktree" />`,
+          "<Dir path={worktree}>",
+          `<File path="README.md" as="readme" />`,
+          "",
+          "inside: {readme}",
+          "</Dir>",
+          "</Repository>",
+        ].join("\n"),
+        countingOptions(counting),
+      );
+
+      const rendered = String(output);
+      expect(rendered).toContain("inside: base");
+      // The self-closing Worktree binds a path and renders nothing of its own.
+      expect(rendered).not.toContain("/worktrees/");
+      expect(counting.counters.effects).toEqual(["repository:project", "worktree:implementation"]);
+    });
+  });
+
+  it("restores the enclosing working directory after Dir", function* () {
+    const root = yield* useStorageRoot();
+    const remote = yield* useBareRemote({
+      commits: [
+        {
+          message: "first",
+          entries: [
+            { path: "README.md", content: "outer\n" },
+            { path: "nested/README.md", content: "inner\n" },
+          ],
+        },
+      ],
+    });
+
+    yield* withStorage(root, function* () {
+      const database = yield* createRun();
+      const output = yield* runDocument(
+        database,
+        [
+          `<Repository name="project" url="${remote.locator}">`,
+          '<Dir path="nested">',
+          `<File path="README.md" as="inner" />`,
+          "",
+          "inner: {inner}",
+          "</Dir>",
+          `<File path="README.md" as="outer" />`,
+          "",
+          "outer: {outer}",
+          "</Repository>",
+        ].join("\n"),
+      );
+
+      const rendered = String(output);
+      expect(rendered).toContain("inner: inner");
+      expect(rendered).toContain("outer: outer");
+    });
+  });
+
+  it("keeps a lexical Worktree written with `as` an ordinary capture", function* () {
+    const root = yield* useStorageRoot();
+    const remote = yield* useBareRemote({
+      commits: [{ message: "first", entries: [{ path: "README.md", content: "base\n" }] }],
+    });
+
+    yield* withStorage(root, function* () {
+      const database = yield* createRun();
+      const output = yield* runDocument(
+        database,
+        [
+          `<Repository name="project" url="${remote.locator}">`,
+          `<Worktree name="implementation" branch="feature/new" as="captured">`,
+          "rendered inside",
+          "</Worktree>",
+          "",
+          "captured: {captured}",
+          "</Repository>",
+        ].join("\n"),
+      );
+
+      const rendered = String(output);
+      // Ordinary generic capture: the content is captured and suppressed, and
+      // the binding is that content rather than the checkout path.
+      expect(rendered).toContain("rendered inside");
+      expect(rendered).not.toContain("/worktrees/");
+      expect(rendered.indexOf("rendered inside")).toBe(rendered.lastIndexOf("rendered inside"));
+    });
+  });
+
+  it("passes expression values as names and inputs", function* () {
+    const root = yield* useStorageRoot();
+    const remote = yield* useBareRemote({
+      commits: [{ message: "first", entries: [{ path: "README.md", content: "base\n" }] }],
+    });
+
+    yield* withStorage(root, function* () {
+      const database = yield* createRun();
+      // The locator and the Worktree name arrive as root-prop expressions
+      // rather than as literals, which is what makes them inputs rather than
+      // keys into something the provider looks up.
+      const output = yield* runDocument(
+        database,
+        [
+          "---",
+          "props:",
+          "  repository:",
+          "    type: string",
+          `    default: ${remote.locator}`,
+          "  candidate:",
+          "    type: string",
+          "    default: implementation",
+          "---",
+          "",
+          `<Repository name="project" url={props.repository}>`,
+          `<Worktree name={props.candidate} branch="feature/new" as="worktree" />`,
+          "",
+          "worktree: {worktree}",
+          "</Repository>",
+        ].join("\n"),
+      );
+
+      expect(String(output)).toContain("worktree: /worktrees/");
+      const retained = yield* retainedRepositories(database);
+      expect(retained[0]?.locator).toBe(remote.locator);
+    });
+  });
+});
+
+describe("workflow composition refusal vocabulary", () => {
+  it("names a fixed reason on each failure class", function* () {
+    const repository = new RepositoryCompositionError("project", "invalid-locator", "why");
+    const worktree = new WorktreeCompositionError("implementation", "unresolved-base", "why");
+    expect(repository.reason).toBe("invalid-locator");
+    expect(worktree.reason).toBe("unresolved-base");
+  });
+});
+
+describe("workflow Git locator admission", () => {
+  it("refuses every place a credential is written into a url", function* () {
+    // Userinfo, query and fragment: the three ways an HTTPS locator carries a
+    // secret. Each is refused rather than stripped, because a locator that
+    // carried one is a secret the caller put into a durable input, and quietly
+    // editing it would retain a run nobody asked for.
+    expect(admitLocator("https://user:pw@example.test/repo.git")).toBeUndefined();
+    expect(admitLocator("https://token@example.test/repo.git")).toBeUndefined();
+    expect(admitLocator("https://example.test/repo.git?access_token=abc")).toBeUndefined();
+    expect(admitLocator("https://example.test/repo.git#token=abc")).toBeUndefined();
+
+    // An ordinary locator is still admitted, and admitted as its own bytes.
+    expect(admitLocator("https://example.test/repo.git")).toBe("https://example.test/repo.git");
+    expect(admitLocator("git@example.test:owner/repo.git")).toBe("git@example.test:owner/repo.git");
+    expect(admitLocator("/srv/git/repo.git")).toBe("/srv/git/repo.git");
+  });
+
+  it("names the exact admitted bytes, so a changed locator is a changed identity", function* () {
+    const one = admitLocator("https://example.test/repo.git") ?? "";
+    const other = admitLocator("https://example.test/other.git") ?? "";
+
+    expect(locatorFingerprint(one)).toBe(locatorFingerprint(one));
+    expect(locatorFingerprint(one)).not.toBe(locatorFingerprint(other));
+  });
+});
+
+/**
+ * Who decides what a composition failure means.
+ *
+ * The components describe known refusals; the document decides whether one is
+ * printed and whether anything runs after it. That is one rule, and these hold
+ * it at both ends: the same document written plainly and written inside an
+ * authored `<PrintErrors>` region must differ, and differ in the sibling that
+ * follows rather than only in the sentence that is rendered.
+ *
+ * A marker after the failing element is what makes each pair discriminating.
+ * Asserting only that a diagnostic appears would pass equally for a component
+ * that recovered on its own behalf, which is exactly the policy these prove is
+ * not in force.
+ */
+describe("workflow composition failure policy", () => {
+  const LATER = "later sibling marker";
+
+  /** The one printed error a region produced, so "exactly once" is checkable. */
+  function printed(rendered: string): string[] {
+    return rendered.match(/<!-- ERROR:[^]*?-->/g) ?? [];
+  }
+
+  function* failureOf(
+    database: WorkflowRunDatabase,
+    source: string,
+  ): Operation<{ error: unknown; rendered: string }> {
+    let rendered = "";
+    let error: unknown;
+    try {
+      rendered = String(yield* runDocument(database, source));
+    } catch (raised) {
+      error = raised;
+    }
+    return { error, rendered };
+  }
+
+  it("fails the run on an invalid self-closing <Dir> and runs no later sibling", function* () {
+    const root = yield* useStorageRoot();
+    yield* withStorage(root, function* () {
+      const database = yield* createRun();
+      const { error, rendered } = yield* failureOf(
+        database,
+        [`<Dir path="/somewhere" />`, "", LATER].join("\n"),
+      );
+
+      expect(error).toBeInstanceOf(DirInvocationError);
+      expect(rendered).not.toContain(LATER);
+    });
+  });
+
+  it("prints an invalid <Dir> once inside <PrintErrors> and runs the later sibling", function* () {
+    const root = yield* useStorageRoot();
+    yield* withStorage(root, function* () {
+      const database = yield* createRun();
+      const { error, rendered } = yield* failureOf(
+        database,
+        ["<PrintErrors>", `<Dir path="/somewhere" />`, "", LATER, "</PrintErrors>"].join("\n"),
+      );
+
+      expect(error).toBe(undefined);
+      expect(printed(rendered)).toHaveLength(1);
+      expect(rendered).toContain("is invalid");
+      expect(rendered).toContain(LATER);
+    });
+  });
+
+  it("fails the run on a Repository refusal and runs no later sibling", function* () {
+    const root = yield* useStorageRoot();
+    yield* withStorage(root, function* () {
+      const database = yield* createRun();
+      const { error, rendered } = yield* failureOf(
+        database,
+        [`<Repository name="project" url="relative/path" as="r" />`, "", LATER].join("\n"),
+      );
+
+      expect(error).toBeInstanceOf(RepositoryCompositionError);
+      expect(String(error)).toContain("could not be prepared");
+      expect(rendered).not.toContain(LATER);
+    });
+  });
+
+  it("prints a Repository refusal once inside <PrintErrors> and continues", function* () {
+    const root = yield* useStorageRoot();
+    yield* withStorage(root, function* () {
+      const database = yield* createRun();
+      const { error, rendered } = yield* failureOf(
+        database,
+        [
+          "<PrintErrors>",
+          `<Repository name="project" url="relative/path" as="r" />`,
+          "",
+          LATER,
+          "</PrintErrors>",
+        ].join("\n"),
+      );
+
+      expect(error).toBe(undefined);
+      expect(printed(rendered)).toHaveLength(1);
+      expect(rendered).toContain("could not be prepared");
+      expect(rendered).toContain(LATER);
+    });
+  });
+
+  it("fails the run on a Worktree with no Repository and runs no later sibling", function* () {
+    const root = yield* useStorageRoot();
+    yield* withStorage(root, function* () {
+      const database = yield* createRun();
+      const { error, rendered } = yield* failureOf(
+        database,
+        [`<Worktree name="implementation" branch="feature" as="w" />`, "", LATER].join("\n"),
+      );
+
+      expect(error).toBeInstanceOf(WorktreeCompositionError);
+      expect(String(error)).toContain("invalid outside a lexical <Repository>");
+      expect(rendered).not.toContain(LATER);
+    });
+  });
+
+  it("prints a Worktree with no Repository once inside <PrintErrors>", function* () {
+    const root = yield* useStorageRoot();
+    yield* withStorage(root, function* () {
+      const database = yield* createRun();
+      const { error, rendered } = yield* failureOf(
+        database,
+        [
+          "<PrintErrors>",
+          `<Worktree name="implementation" branch="feature" as="w" />`,
+          "",
+          LATER,
+          "</PrintErrors>",
+        ].join("\n"),
+      );
+
+      expect(error).toBe(undefined);
+      expect(printed(rendered)).toHaveLength(1);
+      expect(rendered).toContain("invalid outside a lexical <Repository>");
+      expect(rendered).toContain(LATER);
+    });
+  });
+
+  it("fails the run on a recognized Worktree refusal inside a Repository", function* () {
+    const root = yield* useStorageRoot();
+    const remote = yield* useBareRemote({
+      commits: [{ message: "first", entries: [{ path: "which.txt", content: "first\n" }] }],
+    });
+
+    yield* withStorage(root, function* () {
+      const database = yield* createRun();
+      const { error, rendered } = yield* failureOf(
+        database,
+        [
+          `<Repository name="project" url="${remote.locator}">`,
+          `<Worktree name="implementation" branch="main" as="w" />`,
+          "",
+          LATER,
+          "</Repository>",
+        ].join("\n"),
+      );
+
+      expect(error).toBeInstanceOf(WorktreeCompositionError);
+      expect(String(error)).toContain("already checked out by another worktree");
+      expect(rendered).not.toContain(LATER);
+    });
+  });
+
+  /**
+   * A failure that is not a refusal must not arrive as one.
+   *
+   * The components own a fixed vocabulary for what a document asked for and did
+   * not get. Everything else — a provider that is not installed, a Git binary
+   * that could not be run — is not something the document did, and turning one
+   * into a printed refusal would let later work proceed as though a checkout
+   * existed. The plain form is what discriminates: no region is present, so
+   * nothing may print, and what escapes must still be the original failure.
+   */
+  it("does not turn a missing provider into a refusal", function* () {
+    const failure = yield* raised(
+      scoped(function* () {
+        yield* useCompositionComponents();
+        return yield* collect(
+          yield* execute({
+            ...inlineSource(`<Repository name="project" url="/tmp/x.git" as="r" />`),
+            stream: new InMemoryStream(),
+          }),
+        );
+      }),
+    );
+
+    expect(causedBy(failure, isProviderError)).toBeInstanceOf(RepositoryCompositionProviderError);
+    expect(causedBy(failure, isRepositoryRefusal)).toBe(undefined);
+  });
+
+  it("does not turn an unexpected host failure into a refusal", function* () {
+    const root = yield* useStorageRoot();
+    const remote = yield* useBareRemote({
+      commits: [{ message: "first", entries: [{ path: "which.txt", content: "first\n" }] }],
+    });
+
+    yield* withStorage(root, function* () {
+      const database = yield* createRun();
+      const broken = {
+        // deno-lint-ignore require-yield
+        *git(): Operation<never> {
+          throw new Error("the host could not run git");
+        },
+        useDirectory: denoRepositoryHost().useDirectory,
+      };
+
+      const failure = yield* raised(
+        runDocument(
+          database,
+          [
+            "<PrintErrors>",
+            `<Repository name="project" url="${remote.locator}" as="r" />`,
+            "",
+            LATER,
+            "</PrintErrors>",
+          ].join("\n"),
+          { composition: { host: broken } },
+        ),
+      );
+
+      // Even under an authored region: this is not a document failure, so the
+      // components never offered it as one.
+      expect(failure).not.toBe(undefined);
+      expect(causedBy(failure, isRepositoryRefusal)).toBe(undefined);
+      expect(yield* retainedRepositories(database)).toHaveLength(0);
+    });
+  });
+
+  /**
+   * A failure of projected content belongs to the region it is written in.
+   *
+   * Through all three boundaries, because each one expands content and none of
+   * them may decide what a failure of somebody else's text means.
+   */
+  it("leaves a projected-content failure to the region that wrote it", function* () {
+    const root = yield* useStorageRoot();
+    const remote = yield* useBareRemote({
+      commits: [{ message: "first", entries: [{ path: "which.txt", content: "first\n" }] }],
+    });
+
+    const inside = [
+      `<Repository name="project" url="${remote.locator}">`,
+      `<Worktree name="implementation" branch="feature/new" as="w" />`,
+      "<Dir path={w}>",
+      "<Bogus />",
+      "</Dir>",
+      "</Repository>",
+    ].join("\n");
+
+    yield* withStorage(root, function* () {
+      const plain = yield* createRun({ runId: "plain" });
+      const { error } = yield* failureOf(plain, inside);
+      expect(error).not.toBe(undefined);
+      expect(causedBy(error, isRepositoryRefusal)).toBe(undefined);
+      expect(causedBy(error, isWorktreeRefusal)).toBe(undefined);
+
+      const printing = yield* createRun({ runId: "printing" });
+      const { error: none, rendered } = yield* failureOf(
+        printing,
+        ["<PrintErrors>", inside, "", LATER, "</PrintErrors>"].join("\n"),
+      );
+      expect(none).toBe(undefined);
+      expect(rendered).toContain("Bogus");
+      expect(rendered).toContain(LATER);
+    });
+  });
+});
+
+/**
+ * Tier WF — `<Dir>`'s authored form under a lying content chain
+ * (specs/workflow-workspace-spec.md §6.3).
+ *
+ * `<Dir>` installs a lexical working directory for its content, and a
+ * self-closing invocation has none — so which form it was written as decides
+ * whether it does anything at all. That comes from the invocation the engine
+ * issued, not from `Component.hasContent()`, whose outermost handler answers
+ * first and may answer differently on each call.
+ *
+ * Each case installs the handler outside every component invocation and puts a
+ * `<Says />` beside the `<Dir>`, so the run proves the chain is live and lying
+ * before it proves `<Dir>` ignored it.
+ */
+function* useLyingContent(script: readonly boolean[]): Operation<void> {
+  let call = 0;
+  yield* registerComponents([
+    {
+      name: "Says",
+      origin: "test://says",
+      props: { type: "object", properties: {}, additionalProperties: false },
+      *fn(): Operation<string> {
+        return `says:${yield* hasContent()}`;
+      },
+    },
+  ]);
+  yield* Component.around({
+    // deno-lint-ignore require-yield
+    *hasContent(_args, _next) {
+      const answer = script[Math.min(call, script.length - 1)] ?? false;
+      call += 1;
+      return answer;
+    },
+  });
+}
+
+describe("workflow Dir under a lying content chain", () => {
+  // The probe is the chain's first caller, so what it renders is the script's
+  // first answer — which is what makes the handler's liveness observable.
+  const DENYING: Array<[string, readonly boolean[], string]> = [
+    ["a handler that always denies content", [false], "says:false"],
+    ["a handler that answers true then false", [true, false], "says:true"],
+  ];
+
+  for (const [what, script, probed] of DENYING) {
+    it(`keeps a paired Dir's lexical cwd under ${what}`, function* () {
+      const root = yield* useStorageRoot();
+
+      yield* withStorage(root, function* () {
+        const database = yield* createRun();
+        // No `<Repository>` around this on purpose: Repository chooses between
+        // binding a path and rendering its content from the same contextual
+        // answer, so a denying handler collapses it to its self-closing form
+        // and there is no document left to observe. What is under test is
+        // `<Dir>`, so the fixture is the Workspace root and two ordinary files.
+        const output = yield* runWorkflowDocument(
+          database,
+          [
+            "<Says />",
+            "",
+            '<Dir path="nested">',
+            `<File path="deep.md">the inner bytes</File>`,
+            "</Dir>",
+            "",
+            `<File path="nested/deep.md" as="back" />`,
+            "",
+            "back: {back}",
+          ].join("\n"),
+          {},
+          (execute) =>
+            scoped(function* () {
+              yield* useLyingContent(script);
+              return yield* execute();
+            }),
+        );
+
+        const rendered = String(output);
+        // The chain is live and answering from the script, and the answer
+        // `<Dir>` would have taken denies content — which would have made it
+        // refuse itself as a self-closing invocation.
+        expect(rendered).toContain(probed);
+        // And the working directory it installed is where the write landed: the
+        // read is written against the Workspace root and finds it one level in.
+        expect(rendered).toContain("back: the inner bytes");
+      });
+    });
+  }
+
+  const REPORTING: Array<[string, readonly boolean[]]> = [
+    ["a handler that always reports content", [true]],
+    ["a handler that answers false then true", [false, true]],
+  ];
+
+  for (const [what, script] of REPORTING) {
+    it(`still refuses a self-closing Dir under ${what}`, function* () {
+      const root = yield* useStorageRoot();
+      yield* withStorage(root, function* () {
+        const database = yield* createRun();
+        let error: unknown;
+        try {
+          yield* runWorkflowDocument(
+            database,
+            ["<Says />", "", `<Dir path="/somewhere" />`].join("\n"),
+            {},
+            (execute) =>
+              scoped(function* () {
+                yield* useLyingContent(script);
+                return yield* execute();
+              }),
+          );
+        } catch (raised) {
+          error = raised;
+        }
+
+        // A working directory installed for content nobody wrote is a directory
+        // nothing runs in, and no contextual answer makes it one.
+        expect(error).toBeInstanceOf(DirInvocationError);
+      });
+    });
+  }
+
+  // The other way to answer the question: not a handler in the chain, but an
+  // object handed to the component that implements the method. The whole public
+  // shape is there and it reports content, which is the answer that would make
+  // `<Dir>` install a working directory for children nobody wrote. Only the
+  // engine's own invocation reports the form, so this establishes nothing.
+  it("refuses a look-alike invocation that reports content", function* () {
+    const root = yield* useStorageRoot();
+    yield* withStorage(root, function* () {
+      const database = yield* createRun();
+      const lookAlike: ComponentInvocation = {
+        hasContent() {
+          return true;
+        },
+      };
+      let error: unknown;
+      try {
+        yield* runWorkflowDocument(database, `<Dir path="/somewhere" />`, {}, (execute) =>
+          scoped(function* () {
+            yield* Component.around({
+              *importComponent([name, position], next) {
+                const definition = yield* next(name, position);
+                if (name !== "Dir" || definition.kind !== "function") {
+                  return definition;
+                }
+                const original = definition.fn;
+                if (typeof original !== "function") {
+                  return definition;
+                }
+                return {
+                  ...definition,
+                  *fn(props: Record<string, Json>) {
+                    return yield* original(props, lookAlike);
+                  },
+                };
+              },
+            });
+            return yield* execute();
+          }),
+        );
+      } catch (raised) {
+        error = raised;
+      }
+
+      expect(error).toBeInstanceOf(Error);
+      expect(error instanceof Error ? error.message : "").toContain(
+        "without the invocation the engine issued",
+      );
+    });
+  });
+});
+
+/** The first Files infrastructure failure in a thrown graph. */
+function fatalCause(error: unknown, seen = new Set<unknown>()): unknown {
+  if (parseFilesFatal(error) !== undefined) {
+    return error;
+  }
+  if (typeof error !== "object" || error === null || seen.has(error)) {
+    return undefined;
+  }
+  seen.add(error);
+  const causes =
+    error instanceof AggregateError
+      ? error.errors
+      : error instanceof Error && error.cause !== undefined
+        ? [error.cause]
+        : [];
+  for (const cause of causes) {
+    const found = fatalCause(cause, seen);
+    if (found !== undefined) {
+      return found;
+    }
+  }
+  return undefined;
+}
+
+/**
+ * The shipped `<Dir>` against no Files provider at all.
+ *
+ * Core's `FF2` proves the fail-closed boundary of `ensureDirectory` itself,
+ * through a stand-in that makes exactly that one call — it has to, because core
+ * cannot import the package this component lives in. This is the other half:
+ * that the component shipped here really does make that call, first, and that a
+ * document stops at it.
+ *
+ * Together they are the whole claim. Neither is sufficient alone: the stand-in
+ * could pass while `<Dir>` called something else or called nothing, and this
+ * could pass while the operation quietly answered instead of refusing.
+ */
+describe("Dir without a Files provider", () => {
+  it("stops at ensureDirectory, and no directory, content or sibling follows", function* () {
+    const calls: string[] = [];
+    // Sentinel components rather than rendered text. What escapes a failed
+    // execution is an error, and searching an error's string for a marker
+    // cannot tell "the content never expanded" from "the content expanded and
+    // its text is simply not in this message". A component that ran leaves a
+    // record here whether or not anything was rendered or collected.
+    const expanded: string[] = [];
+    const marker = (name: string): ComponentRegistration => ({
+      name,
+      origin: "test://marker",
+      props: { type: "object", properties: {}, additionalProperties: false },
+      // deno-lint-ignore require-yield
+      *fn(): Operation<string> {
+        expanded.push(name);
+        return name;
+      },
+    });
+
+    const failure = yield* raised(
+      scoped(function* () {
+        yield* useCompositionComponents();
+        yield* registerComponents([marker("Inside"), marker("After")]);
+        // Middleware that records and delegates. Delegation is what keeps this
+        // fail-closed: the absent-provider terminal is still what answers, so
+        // recording the call cannot be what makes the document stop.
+        yield* API.Files.around({
+          *checkFilePath([input], next) {
+            calls.push("check-file-path");
+            return yield* next(input);
+          },
+          *readTextFile([input], next) {
+            calls.push("read");
+            return yield* next(input);
+          },
+          *writeTextFile([input], next) {
+            calls.push("write");
+            return yield* next(input);
+          },
+          *deleteFile([input], next) {
+            calls.push("delete");
+            return yield* next(input);
+          },
+          *ensureDirectory([input], next) {
+            calls.push("ensure-directory");
+            return yield* next(input);
+          },
+          *globFiles([input], next) {
+            calls.push("glob");
+            return yield* next(input);
+          },
+          *temporaryDirectory([], next) {
+            calls.push("temporary-directory");
+            return yield* next();
+          },
+        });
+        return yield* collect(
+          yield* execute({
+            ...inlineSource('<Dir path="made/here">\n\n<Inside />\n\n</Dir>\n\n<After />\n'),
+            stream: new InMemoryStream(),
+          }),
+        );
+      }),
+    );
+
+    // The first Files call the component makes, and the only one it reaches.
+    expect(calls[0]).toBe("ensure-directory");
+    expect(calls).toEqual(["ensure-directory"]);
+    // Absence is not a refusal the document can print: what escapes is the
+    // provider-unavailable failure itself.
+    expect(parseFilesFatal(fatalCause(failure))?.kind).toBe("provider-unavailable");
+    // Neither the content inside the region nor the sibling after it ran. This
+    // is the assertion the failure's message could not make.
+    expect(expanded).toEqual([]);
+    // And nothing was made. The path is relative, so a provider that had
+    // answered would have created it beneath the process directory.
+    expect(yield* exists(join(process.cwd(), "made"))).toBe(false);
+  });
+});

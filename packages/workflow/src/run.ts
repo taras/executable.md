@@ -1,20 +1,25 @@
 /**
  * Associating one document execution with a workflow run.
  *
- * `workflowInstallation({ base })` is a value, not an installation act. It
- * creates no workflow run: a run comes into being when a document execution
- * reaches its first durable operation, which resolves the base once, records
- * one immutable value, and only then lets the root document be imported.
+ * An installation is a value, not an installation act. It creates no workflow
+ * run: a run comes into being when a document execution reaches its first
+ * durable operation, which allocates the run once, records one immutable value,
+ * and only then lets the root document be imported.
+ *
+ * What a run *is* belongs to the host that states it. `@executablemd/git`
+ * supplies one that resolves a base through Git; a workflow host supplies one
+ * for a run its storage already created. Both arrive as a
+ * `WorkflowRunPreparation`, and everything below holds either of them to the
+ * same journal on the same terms.
  *
  * A journal can be in three states, and two of them are held to the run.
  *
- * - **Live** — no record yet. The installation's `prepare` hook allocates the
- *   run id, resolves `${base}^{commit}` through `Git.revParse()`, and records
- *   the value — inside the durable root, before any public document policy and
- *   before the root is imported.
+ * - **Live** — no record yet. The installation's `prepare` hook asks the
+ *   preparation to allocate, and records the value — inside the durable root,
+ *   before any public document policy and before the root is imported.
  * - **Truncated** — the record is there but the root never closed. The durable
- *   operation replays the stored value, so neither the identifier nor Git is
- *   reached a second time, and the journal cursor still advances past its own
+ *   operation replays the stored value, so the preparation is not asked to
+ *   allocate a second time, and the journal cursor still advances past its own
  *   entry.
  * - **Completed** — the root `Close` is recorded, and `durableRun` returns the
  *   stored result without entering the durable body at all, so preparation is
@@ -64,20 +69,13 @@ import type {
   Workflow,
 } from "@executablemd/durable-streams";
 import type { ExecutionInstallation, JournalAdmission } from "@executablemd/core/host";
-import { revParse } from "./git.ts";
-import { retainedGitHostIdentities } from "./git-host/identities.ts";
-import { retainedIssueIdentities } from "./issue/identities.ts";
-import type { RetainedIssueIdentity } from "./issue/identities.ts";
-import type { RetainedIdentity } from "./git-host/identities.ts";
 import {
   admitWorkflowRunHistory,
-  baseMismatch,
-  describeGitWorkflowRun,
-  describeWorkflowRun,
   isGitWorkflowRun,
+  retainedRunMismatch,
+  describeWorkflowRun,
   malformedRecord,
   readWorkflowRun,
-  retainedRunMismatch,
   workflowRunValue,
 } from "./journal.ts";
 import type { WorkflowRun } from "./journal.ts";
@@ -116,35 +114,6 @@ const CurrentWorkflowRun: Context<RunSlot | undefined> = createContext<RunSlot |
  */
 interface RunSlot {
   run?: WorkflowRun;
-  /**
-   * The identity every Git-host record in this run's admitted history holds.
-   *
-   * Beside the run because a Git-host effect is named by a digest that includes
-   * the run id, so a record a fork inherited has to be recognized by the
-   * identity it was written under — and because a second physical copy of this
-   * package reconciles through the same stable name and must see the same
-   * answer. Nothing durable rests on it: a wrong answer is held to the record
-   * it consumed, and one that reaches live execution performs nothing.
-   */
-  gitHostIdentities?: RetainedIdentity[];
-  /**
-   * The identity every Issue record in this run's admitted history holds.
-   *
-   * A second table rather than a shared one, because an Issue effect is a
-   * different request shape reconciled through a different boundary; what it
-   * needs from the run is the same association, for the same reason.
-   */
-  issueIdentities?: RetainedIssueIdentity[];
-}
-
-/** The Git-host identities this execution's admitted history holds. */
-export function* retainedGitHostIdentitiesHere(): Operation<RetainedIdentity[] | undefined> {
-  return (yield* CurrentWorkflowRun.get())?.gitHostIdentities;
-}
-
-/** The Issue identities this execution's admitted history holds. */
-export function* retainedIssueIdentitiesHere(): Operation<RetainedIssueIdentity[] | undefined> {
-  return (yield* CurrentWorkflowRun.get())?.issueIdentities;
 }
 
 /** The frozen run of the current document execution; throws outside one. */
@@ -154,7 +123,7 @@ export function* getWorkflowRun(): Operation<WorkflowRun> {
   if (run === undefined) {
     throw new Error(
       "getWorkflowRun() is available only inside a document execution associated with a " +
-        "workflow run. Pass workflowInstallation({ base }) to executeInstalled().",
+        "workflow run. Pass a run installation to executeInstalled().",
     );
   }
   return run;
@@ -203,38 +172,6 @@ function* record(
     // is reached a second time.
     return workflowRunValue(yield* preparation.allocate());
   });
-}
-
-function allocating(base: string): WorkflowRunPreparation {
-  return {
-    description: describeGitWorkflowRun(base),
-    // A base that would not resolve is recorded as a failed effect (§6), and a
-    // history whose only record is that failure is this run's own. Requiring a
-    // successful one would retry Git instead of replaying what happened.
-    required: false,
-    *allocate(): Operation<WorkflowRun> {
-      const pinnedCommit = yield* revParse(`${base}^{commit}`);
-      // Web Crypto rather than `node:crypto`: a run id is allocated in shared
-      // code, which names no host.
-      return { runId: crypto.randomUUID(), base, pinnedCommit };
-    },
-    /**
-     * The description carries the base for a reader; divergence detection
-     * compares only type and name, so the base this run supplied is checked
-     * against the stored *value* rather than against the entry's identity.
-     */
-    agree(recorded: WorkflowRun): WorkflowRun {
-      // This installation allocates a Git run, so a recorded source bundle is
-      // not a base disagreement — it is a different kind of run entirely.
-      if (!isGitWorkflowRun(recorded)) {
-        throw retainedRunMismatch(["definition version"]);
-      }
-      if (recorded.base !== base) {
-        throw baseMismatch(recorded.base, base);
-      }
-      return recorded;
-    },
-  };
 }
 
 function retaining(run: WorkflowRun): WorkflowRunPreparation {
@@ -371,29 +308,8 @@ function admits(preparation: WorkflowRunPreparation): JournalAdmission {
     if (admitted === undefined) {
       return;
     }
-    // The one place both halves are in hand: the run canonical core just
-    // admitted, and the snapshot it admitted it from. A Git-host effect at a
-    // position this history already holds a record at is named by the identity
-    // that record holds, and this is where that association is established —
-    // out of reach of every name a document could bind.
-    yield* publishGitHostIdentities(retained);
     yield* publish(admitted);
   };
-}
-
-/**
- * Publish the identities this run's admitted history holds.
- *
- * Beside the run, in the same slot, so every physical copy of this package sees
- * one answer rather than one per module object.
- */
-function* publishGitHostIdentities(retained: readonly DurableEvent[]): Operation<void> {
-  const slot = yield* CurrentWorkflowRun.get();
-  if (slot === undefined) {
-    return;
-  }
-  slot.gitHostIdentities = retainedGitHostIdentities(retained);
-  slot.issueIdentities = retainedIssueIdentities(retained);
 }
 
 /**
@@ -442,19 +358,6 @@ export function createWorkflowRunInstallation(
       yield* CurrentWorkflowRun.set({});
     },
   };
-}
-
-/**
- * The installation that associates one document execution with a workflow run.
- *
- * Constructing it creates nothing. Executing a document under it does.
- *
- * ```ts
- * yield* executeInstalled(options, [workflowInstallation({ base: "main" })]);
- * ```
- */
-export function workflowInstallation(options: { base: string }): ExecutionInstallation {
-  return createWorkflowRunInstallation(allocating(options.base));
 }
 
 /**

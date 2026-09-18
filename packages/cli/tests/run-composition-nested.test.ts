@@ -23,8 +23,8 @@ import { InMemoryStream } from "@executablemd/durable-streams";
 import { collect, execute, inlineSource, installAgentComponents } from "@executablemd/core";
 import { runCli } from "@executablemd/test-support/launch";
 import { useTempDirectory } from "@executablemd/test-support/temp";
-import { useCompositionComponents } from "@executablemd/workflow";
-import { useRunComposition } from "@executablemd/workflow/deno";
+import { useCompositionComponents } from "@executablemd/git";
+import { useRunComposition } from "@executablemd/git/deno";
 import { FileStream } from "../src/file-stream.ts";
 
 /** Git, with an environment a caller's own configuration cannot reach into. */

@@ -1,0 +1,20 @@
+{
+  "name": "@executablemd/git",
+  "version": "0.12.1",
+  "description": "The Git Plugin for executable.md: repositories, worktrees, Git operations, pull requests and issues, retained in a workflow run's Workspace.",
+  "type": "module",
+  "exports": {
+    ".": "./mod.ts",
+    "./deno": "./deno.ts",
+    "./credential-helper": "./credential-helper.ts"
+  },
+  "dependencies": {
+    "@effectionx/context-api": "0.6.0",
+    "@effectionx/fs": "0.3.0",
+    "@executablemd/core": "workspace:*",
+    "@executablemd/durable-streams": "workspace:*",
+    "@executablemd/runtime": "workspace:*",
+    "@executablemd/workflow": "workspace:*",
+    "effection": "4.1.0"
+  }
+}

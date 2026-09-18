@@ -45,14 +45,11 @@ import type { WorkflowBundleComponent } from "@executablemd/core/host";
 import {
   decodeSourceText,
   definitionComponents,
-  gitObjectFormat,
   parseSourceBundleDefinition,
-  readGitObject,
-  repositoryRoot,
-  revParse,
   sourceBundleHash,
   sourceContentHash,
 } from "@executablemd/workflow";
+import { gitObjectFormat, readGitObject, repositoryRoot, revParse } from "@executablemd/git";
 import type {
   GitWorkflowDefinitionV1,
   SourceBundleEntryV2,

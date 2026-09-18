@@ -29,9 +29,10 @@ import {
   useWorkflowRunHost,
   withWorkflowWorkspace,
 } from "@executablemd/workflow/deno";
+import { gitWorkspaceAttachment } from "@executablemd/git/deno";
 import type { WorkflowExecutionTransitions } from "@executablemd/workflow/deno";
 import type { WorkflowRunDatabase } from "@executablemd/workflow";
-import type { HelperAssembly } from "@executablemd/workflow/credential-helper";
+import type { HelperAssembly } from "@executablemd/git/credential-helper";
 import { readLegacyDefinitionSource } from "./workflow-source.ts";
 import type { WorkflowHost } from "./workflow.ts";
 import { gitHubIssuesConfiguration } from "./github-issues-config.ts";
@@ -74,9 +75,18 @@ export function* useDenoWorkflowHost(helper: HelperAssembly): Operation<Workflow
     },
     attach<T>(database: WorkflowRunDatabase, operation: Operation<T>): Operation<T> {
       return withWorkflowWorkspace(database, operation, {
-        ...(gitHubIssues === undefined ? {} : { gitHubIssues }),
-        ...(gitHubPullRequests === undefined ? {} : { gitHubPullRequests }),
-        helper,
+        // The Git vocabulary is a feature this host attaches, not something the
+        // run's own package installs: what `<Repository>` and `<Git.Push>` mean
+        // belongs to `@executablemd/git`, and the credential helper and the two
+        // GitHub ceilings are configuration for that feature rather than for
+        // the run.
+        attachments: [
+          gitWorkspaceAttachment({
+            ...(gitHubIssues === undefined ? {} : { gitHubIssues }),
+            ...(gitHubPullRequests === undefined ? {} : { gitHubPullRequests }),
+            helper,
+          }),
+        ],
         // Only a live or partial attachment reaches this, which is what keeps a
         // completed replay from starting an agent process to restore a turn it
         // already has the answer to.

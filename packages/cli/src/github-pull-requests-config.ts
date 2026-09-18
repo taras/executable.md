@@ -31,8 +31,8 @@
 
 import { env as readEnv } from "@executablemd/runtime";
 import type { Operation } from "effection";
-import { canonicalPullRequestUrl } from "@executablemd/workflow";
-import type { GitHubPullRequestsOptions } from "@executablemd/workflow/deno";
+import { canonicalPullRequestUrl } from "@executablemd/git";
+import type { GitHubPullRequestsOptions } from "@executablemd/git/deno";
 
 /** The variable that configures GitHub pull-request reading. */
 export const GITHUB_PULL_REQUESTS_ENV = "XMD_WORKFLOW_GITHUB_PULL_REQUESTS";

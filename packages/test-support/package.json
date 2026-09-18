@@ -6,6 +6,7 @@
   "exports": {
     "./bdd": "./bdd.ts",
     "./expect": "./expect.ts",
+    "./host-boundary": "./host-boundary.ts",
     "./journal": "./journal.ts",
     "./launch": "./launch.ts",
     "./temp": "./temp.ts"
