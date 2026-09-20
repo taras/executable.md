@@ -245,11 +245,24 @@ exists, and every V1 launch carries the explicit empty ordered
 launching with another root and must define ordering and access modes before an
 adapter can map one. Until then the launcher neither receives nor grants one.
 
-The stateful Agent/Session surface likewise defines no V1 model-selection prop
-or launch option. Native launch uses the provider session's model configuration
-and does not create a launch-only model selector. A provider-reported current
-model may be retained as observational evidence; it is not a request and does
-not participate in launch identity or admission.
+The `<Session>` that owns the conversation may specify its model and effort
+level. Native launch adds no launch-only selector. `AgentLaunchRequest.with()`
+may route another whole Session as it routes instructions or agent; no separate
+configuration member travels through middleware.
+
+The final routed Session decides configuration. An authentic configured use is
+applied and verified before handoff; another authentic use applies its own
+settings; and a raw Session, name or absence follows the unconfigured launch
+contract with no configuration read. A copied or foreign value claiming to be
+configured refuses before the provider prepares anything.
+
+The configured use remains valid only while the provider-installation owner
+that issued it is live. The launch provider reads it through the coordinator
+delivered directly to that installation; a same-named Context, sibling run,
+retained post-teardown value or another loaded Core copy cannot supply that
+owner. Provider teardown invalidates lookup before a later launch can prepare
+anything. Placement completion and its registration state do not participate in
+launch admission: `AgentLaunchRequest` remains the launch's one-use identity.
 
 Raw prepared instructions never appear in process arguments or environment
 variables. A provider uses its session API or an invocation-private file with
@@ -1087,7 +1100,8 @@ instruction reconciliation outcome
 prepared instructions and digest
 instruction channel selected by the provider
 primary cwd and the empty V1 additional-directory list
-provider-reported current model, when observed, as non-configuring evidence
+the canonical verified Session configuration, on a successful configured
+  preparation only
 permission configuration
 launch phase
 the materialization turn's outcome, where one was owed: the provider turn
@@ -1213,9 +1227,10 @@ native foreground launcher, so `Session.Launch` is unsupported there without
 weakening the workflow sandbox.
 
 Provider and agent remain runtime bindings. The target and logical session name
-remain role and continuity identities. V1 defines no stateful-Agent model
-selection. A document can explicitly name an Agent where required, but no
-provider-specific executable or resume syntax appears in `AGENTS.md`.
+remain role and continuity identities. A `<Session>` may specify exact provider
+model and effort IDs; no other Agent component selects them. A document can
+explicitly name an Agent where required, but no provider-specific executable or
+resume syntax appears in `AGENTS.md`.
 
 ## Testing
 
@@ -1383,10 +1398,37 @@ degrading:
   omitting the fact, and no adapter maps a root it was never given. The ACP
   Client specification is the prerequisite owner for a future ordering and
   access-mode contract.
-- **Stateful-Agent model selection is unbuilt.** `Agent`, `Session`, `Prompt`
-  and `Session.Launch` expose no model prop or launch option. A provider may
-  report the current model as observational evidence, but native launch neither
-  selects nor changes it.
+- **A final configured launch is verified before the handoff.** `<Session>` says which
+  model and effort level its conversation runs under; `<Agent>`, `<Prompt>` and
+  `<Session.Launch>` have no such prop. Where the provider returns the identity,
+  the settings are applied and verified after the exact session is ensured and
+  before any materialization turn, detach record or native process, and the
+  successful preparation retains one canonical `configuration`. A launch that
+  could not apply them refuses with `configuration-refused` and retains no
+  configuration. Core issued the frozen session use that carried both the exact
+  provider Session that completed its placement and these settings; the provider retains no
+  desired-settings association, and a rebuilt use authorizes nothing. Middleware
+  may route another whole Session, and the preparation describes only the final
+  route that actually succeeded.
+- **A route that creates its session in its own interface refuses a final
+  configured launch.** There is no moment between a native UI creating a
+  conversation and a person typing in it, so a final configured launch on a client-allocated adapter
+  refuses with `unsupported-capability` before a route is published, an identity
+  allocated, a private instruction file written, or anything detached or
+  spawned. An unconfigured launch on either route is unchanged and reads no
+  configuration at all. Middleware that routes a raw Session or no Session has
+  selected that unchanged unconfigured path.
+- **An incomplete configured launch reapplies what it retained.** At its own
+  first live phase — the detach for a launch that never handed over, the spawn
+  for one that did — it reconciles its route and build, reattaches by the exact
+  retained identity, puts the retained configuration back into force, and
+  relinquishes ACP again without authoring a second detach.
+- **Released launch model members never become configuration.** A non-empty
+  `requestedModel` or top-level observational `model` string is validated and
+  discarded while reading an older preparation; a malformed value refuses the
+  record. New records write neither member, and an incomplete older record does
+  no configuration work because one was present. Canonical `configuration`
+  beside either released member is ambiguous and refuses.
 - **Executable upgrade migration is unbuilt.** A V2 route freezes one build for
   that logical session, and a later build refuses with
   `executable-binding-refused` rather than modifying the route or the provider's

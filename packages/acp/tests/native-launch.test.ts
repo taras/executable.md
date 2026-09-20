@@ -19,6 +19,11 @@ import { expect } from "@executablemd/test-support/expect";
 import { ensure, Ok, scoped, sleep, spawn, until, withResolvers } from "effection";
 import type { Operation } from "effection";
 import { Agent, sameExecutableBuild } from "@executablemd/core";
+import type { ConfigureAgentSession } from "@executablemd/core";
+// The engine's own placement machinery, used the way core uses it: these suites
+// stand in for an installation, so they open and read placements rather than
+// inventing a second shape for one.
+import { readPlacement, sessionPlacement } from "../../core/src/agent/session-request.ts";
 import type {
   AgentLaunchRequest,
   AgentLaunchCoordinator,
@@ -27,6 +32,7 @@ import type {
   MaterializedLaunchRecord,
   PreparedLaunchRecord,
   Session,
+  SessionConfiguration,
 } from "@executablemd/core";
 import {
   flushOutput,
@@ -187,6 +193,12 @@ interface Trace {
   order: string[];
   /** Who owned the session, and when. */
   ownership: CoordinatorHarness;
+  /** Every configured use this trace issued, as its installation would. */
+  uses: Map<Session, { session: Session; configuration: SessionConfiguration }>;
+  /** Every exact session the provider registered as configurable. */
+  registered: Session[];
+  /** How the provider said each of those is configured. */
+  configurable: Map<Session, ConfigureAgentSession>;
   /**
    * What the next launch in this trace replays, if anything.
    *
@@ -267,12 +279,38 @@ interface Replay {
  */
 function traceCoordinator(trace: Trace): AgentLaunchCoordinator {
   return {
+    // The installation's own reader: a suite says a session is configured by
+    // issuing a use of it through `configuredUse`, and this is what unwraps
+    // one. Anything else is the ordinary session it presents itself as.
+    sessionPlacement: (request) => {
+      const placed = readPlacement(request);
+      return {
+        ...(placed.sessionIdentity === undefined
+          ? {}
+          : { sessionIdentity: placed.sessionIdentity }),
+        *complete(session, state) {
+          trace.registered.push(session);
+          if (state.kind === "established") {
+            trace.configurable.set(session, state.configure);
+          }
+          if (placed.configuration === undefined) {
+            return session;
+          }
+          const use: Session = { ...session };
+          trace.uses.set(use, { session, configuration: placed.configuration });
+          return use;
+        },
+      };
+    },
+    sessionUse: (routed) => {
+      if (typeof routed !== "object" || routed === null) {
+        return undefined;
+      }
+      return trace.uses.get(routed) ?? { session: routed };
+    },
     // These suites route launches, never a `<Session>` placement. Throwing
     // rather than answering means a placement that did reach here fails
     // loudly instead of being handed an identity nobody derived.
-    sessionIdentity: () => {
-      throw new Error("this stub coordinator routes no session placement");
-    },
     // As with a placement, these suites name no provider turn. Throwing means a
     // checkpoint that did reach here fails loudly rather than being recorded by
     // a coordinator nothing is asserting against.
@@ -402,7 +440,17 @@ function* installLaunchStack(
 }
 
 function newTrace(): Trace {
-  return { records: [], launches: [], notices: [], order: [], ownership: makeCoordinator() };
+  const trace: Trace = {
+    records: [],
+    launches: [],
+    notices: [],
+    order: [],
+    ownership: makeCoordinator(),
+    uses: new Map(),
+    registered: [],
+    configurable: new Map(),
+  };
+  return trace;
 }
 
 /** The preparation a launch retained, refusing a trace that holds none. */
@@ -449,7 +497,7 @@ const PROVIDER_RETURNED_CLAUDE: NativeAdapter = {
  */
 function launchRequest(
   instructions: string,
-  options: { agent?: string; session?: string | Session; model?: string; effort?: string } = {},
+  options: { agent?: string; session?: string | Session } = {},
 ): AgentLaunchRequest {
   const request = {
     instructions,
@@ -458,13 +506,30 @@ function launchRequest(
     cwd: CWD,
     additionalDirectories: [] as readonly string[],
     permissionMode: "approve-reads" as const,
-    // What the enclosing `<Session>` asked this conversation to run under.
-    // Facts about the launch, exactly as core routes them.
-    ...(options.model === undefined ? {} : { model: options.model }),
-    ...(options.effort === undefined ? {} : { effort: options.effort }),
     with: () => request,
   };
   return request;
+}
+
+/**
+ * Place a session and issue one use of it, the way a `<Session>` element does.
+ *
+ * What a launch runs under travels on the value that names its conversation,
+ * and only the installation that issued that value can say what it is — so a
+ * configured launch is a launch for a use this trace issued, and there is no
+ * member to set on a request built out of thin air.
+ */
+function* configuredUse(trace: Trace, configuration: SessionConfiguration): Operation<Session> {
+  // A placement carrying what the element asks, exactly as core opens one: the
+  // settings are sealed into it before anything routes, and the provider
+  // settles it into the use this trace then hands to a launch.
+  const issuance = sessionPlacement(undefined, undefined);
+  issuance.configure(configuration);
+  try {
+    return yield* Agent.operations.session(issuance.request);
+  } finally {
+    issuance.close();
+  }
 }
 
 /** Run a launch and report the refusal it retained, if it retained one. */
@@ -473,7 +538,7 @@ function* attempt(
   instructions: string,
   options: { agent?: string; session?: string | Session; model?: string; effort?: string } = {},
 ): Operation<PreparedLaunchRecord["failure"] | undefined> {
-  yield* Agent.operations.launch(launchRequest(instructions, options));
+  yield* Agent.operations.launch(launchRequest(instructions, yield* routed(trace, options)));
   // The last one, so a case that launches more than once reads the attempt it
   // just made rather than the first thing that ever went wrong.
   return trace.records.findLast((record) => record.failure)?.failure;
@@ -500,9 +565,37 @@ function* prompt(text: string, options: { session?: string | Session } = {}): Op
 /** Run a launch that is expected to complete. */
 function* launch(
   instructions: string,
-  options: { agent?: string; session?: string | Session; model?: string; effort?: string } = {},
+  options: {
+    agent?: string;
+    session?: string | Session;
+    model?: string;
+    effort?: string;
+    trace?: Trace;
+  } = {},
 ): Operation<void> {
-  yield* Agent.operations.launch(launchRequest(instructions, options));
+  const { trace, ...rest } = options;
+  yield* Agent.operations.launch(
+    launchRequest(instructions, trace === undefined ? rest : yield* routed(trace, rest)),
+  );
+}
+
+/** The launch options, with a configured use in place of loose settings. */
+function* routed(
+  trace: Trace,
+  options: { agent?: string; session?: string | Session; model?: string; effort?: string },
+): Operation<{ agent?: string; session?: string | Session }> {
+  const { agent, session, model, effort } = options;
+  if (model === undefined && effort === undefined) {
+    return {
+      ...(agent === undefined ? {} : { agent }),
+      ...(session === undefined ? {} : { session }),
+    };
+  }
+  const use = yield* configuredUse(trace, {
+    ...(model === undefined ? {} : { model }),
+    ...(effort === undefined ? {} : { effort }),
+  });
+  return { ...(agent === undefined ? {} : { agent }), session: use };
 }
 
 const INSTRUCTIONS = "You are the repository implementor.";
@@ -4933,7 +5026,7 @@ describe("Tier NC — configured native launch", () => {
     advertiseConfiguration(harness, trace);
     yield* scoped(function* () {
       yield* installLaunchStack(harness, trace);
-      yield* launch(INSTRUCTIONS, { model: "gpt-5.4-mini", effort: "high" });
+      yield* launch(INSTRUCTIONS, { model: "gpt-5.4-mini", effort: "high", trace });
 
       // One sequence, provider and launcher together: the session exists, the
       // model is applied, its effort choices are refreshed, the effort is
@@ -4953,10 +5046,7 @@ describe("Tier NC — configured native launch", () => {
         "exited",
       ]);
       const prepared = trace.records[0] as PreparedLaunchRecord;
-      expect(prepared.requestedModel).toBe("gpt-5.4-mini");
-      expect(prepared.requestedEffort).toBe("high");
-      expect(prepared.model).toBe("gpt-5.4-mini");
-      expect(prepared.effort).toBe("high");
+      expect(prepared.configuration).toEqual({ model: "gpt-5.4-mini", effort: "high" });
       // The same conversation throughout: one ensure, and the identity the
       // native UI was handed is the one this preparation named.
       expect(harness.ensureCalls.length).toBe(1);
@@ -4972,22 +5062,13 @@ describe("Tier NC — configured native launch", () => {
       yield* installLaunchStack(harness, trace);
       yield* launch(INSTRUCTIONS);
 
-      expect(trace.order).toEqual([
-        "ensure",
-        "status",
-        "prepared",
-        "close",
-        "detached",
-        "spawn",
-        "exited",
-      ]);
-      // The one status read is the model summary a launch has always retained,
-      // and it writes nothing.
-      expect(harness.configCalls).toEqual(["status"]);
+      expect(trace.order).toEqual(["ensure", "prepared", "close", "detached", "spawn", "exited"]);
+      // Not one read. A launch that names no settings asks this agent nothing
+      // about them — including what it happens to be using, which nobody asked
+      // for and which a record naming it would be presenting as a choice.
+      expect(harness.configCalls).toEqual([]);
       const prepared = trace.records[0] as PreparedLaunchRecord;
-      expect(prepared.requestedModel).toBe(undefined);
-      expect(prepared.requestedEffort).toBe(undefined);
-      expect(prepared.effort).toBe(undefined);
+      expect(prepared.configuration).toBe(undefined);
     });
   });
 
@@ -5007,12 +5088,9 @@ describe("Tier NC — configured native launch", () => {
       // happened at all.
       expect(trace.order).toEqual(["ensure", "status", "close", "prepared"]);
       expect(trace.launches).toEqual([]);
-      // What the document asked for is retained whatever happened to it; what
-      // is not retained is an effective value, because nothing verified one.
-      const prepared = preparedOf(trace);
-      expect(prepared.requestedModel).toBe("gpt-x");
-      expect(prepared.model).toBe(undefined);
-      expect(prepared.effort).toBe(undefined);
+      // A refusal names no settings: nothing was put into force, so there is
+      // nothing for this record to say the conversation ran under.
+      expect(preparedOf(trace).configuration).toBe(undefined);
     });
   });
 
@@ -5042,13 +5120,9 @@ describe("Tier NC — configured native launch", () => {
         "prepared",
       ]);
       expect(trace.launches).toEqual([]);
-      // Both asked-for values survive the refusal, and neither effective one
-      // appears: the model was put back, and the effort was never applied.
-      const prepared = preparedOf(trace);
-      expect(prepared.requestedModel).toBe("gpt-5.4-mini");
-      expect(prepared.requestedEffort).toBe("high");
-      expect(prepared.model).toBe(undefined);
-      expect(prepared.effort).toBe(undefined);
+      // The refusal names no settings: the model was put back and the effort
+      // was never applied, so this conversation ran under nothing.
+      expect(preparedOf(trace).configuration).toBe(undefined);
     });
   });
 
@@ -5079,7 +5153,7 @@ describe("Tier NC — configured native launch", () => {
         adapters: { claude: owes },
         routeStore: createMemorySessionRouteStore(),
       });
-      yield* launch(INSTRUCTIONS, { model: "gpt-5.4-mini", effort: "high" });
+      yield* launch(INSTRUCTIONS, { model: "gpt-5.4-mini", effort: "high", trace });
 
       // The turn that makes this conversation openable is a turn in it, so it
       // is spent under the configuration the document asked for rather than
@@ -5143,12 +5217,8 @@ describe("Tier NC — configured native launch", () => {
       expect(trace.order).toEqual(["prepared"]);
       expect(harness.ensureCalls).toEqual([]);
       expect(trace.launches).toEqual([]);
-      // The refusal still says what the document asked for, and claims no
-      // effective value for a conversation that was never created.
-      const prepared = preparedOf(trace);
-      expect(prepared.requestedModel).toBe("gpt-5.4-mini");
-      expect(prepared.model).toBe(undefined);
-      expect(prepared.effort).toBe(undefined);
+      // Nothing was created, so the record claims no settings for it.
+      expect(preparedOf(trace).configuration).toBe(undefined);
     });
   });
 });
@@ -5181,10 +5251,7 @@ describe("Tier NR — configured incomplete replay", () => {
       additionalDirectories: [],
       permissionMode: "approve-reads",
       launcher: "claude",
-      requestedModel: "gpt-5.4-mini",
-      requestedEffort: "high",
-      model: "gpt-5.4-mini",
-      effort: "high",
+      configuration: { model: "gpt-5.4-mini", effort: "high" },
       ...overrides,
     };
   }
@@ -5197,9 +5264,7 @@ describe("Tier NR — configured incomplete replay", () => {
       yield* installLaunchStack(harness, trace);
       trace.replay = { prepared: retainedConfigured(), suffix: "prepared" };
 
-      yield* Agent.operations.launch(
-        launchRequest(INSTRUCTIONS, { model: "gpt-5.4-mini", effort: "high" }),
-      );
+      yield* Agent.operations.launch(launchRequest(INSTRUCTIONS));
 
       expect(trace.order).toEqual([
         "prepared",
@@ -5259,9 +5324,7 @@ describe("Tier NR — configured incomplete replay", () => {
         suffix: "prepared+detached",
       };
 
-      yield* Agent.operations.launch(
-        launchRequest(INSTRUCTIONS, { model: "gpt-5.4-mini", effort: "high" }),
-      );
+      yield* Agent.operations.launch(launchRequest(INSTRUCTIONS));
 
       expect(trace.order).toEqual([
         "prepared",
@@ -5323,9 +5386,7 @@ describe("Tier NR — configured incomplete replay", () => {
         suffix: "prepared+detached",
       };
 
-      yield* Agent.operations.launch(
-        launchRequest(INSTRUCTIONS, { model: "gpt-5.4-mini", effort: "high" }),
-      );
+      yield* Agent.operations.launch(launchRequest(INSTRUCTIONS));
 
       const exited = trace.records.find((record) => record.phase === "exited");
       expect(exited?.failure?.class).toBe("executable-binding-refused");
@@ -5377,9 +5438,7 @@ describe("Tier NR — configured incomplete replay", () => {
         suffix: "prepared+detached",
       };
 
-      yield* Agent.operations.launch(
-        launchRequest(INSTRUCTIONS, { model: "gpt-5.4-mini", effort: "high" }),
-      );
+      yield* Agent.operations.launch(launchRequest(INSTRUCTIONS));
 
       const exited = trace.records.find((record) => record.phase === "exited");
       expect(exited?.failure?.class).toBe("process-creation-failed");
@@ -5411,17 +5470,36 @@ describe("Tier NR — configured incomplete replay", () => {
       });
 
       expect(refusal?.class).toBe("session-recovery-required");
-      // The launch never reached the agent, and what it asked for is still
-      // what the journal says it asked for — with no effective value beside
-      // it, because nothing was contacted to verify one.
-      const prepared = preparedOf(trace);
-      expect(prepared.requestedModel).toBe("gpt-5.4-mini");
-      expect(prepared.requestedEffort).toBe("high");
-      expect(prepared.model).toBe(undefined);
-      expect(prepared.effort).toBe(undefined);
+      // The launch never reached the agent, so the record says nothing about
+      // what any conversation is running under.
+      expect(preparedOf(trace).configuration).toBe(undefined);
       expect(harness.ensureCalls).toEqual([]);
       expect(harness.configCalls).toEqual([]);
       expect(trace.launches).toEqual([]);
+    });
+  });
+
+  it("NR8: a released record's observational model is not a configuration to reapply", function* () {
+    const harness = createFakeRuntime();
+    const trace = newTrace();
+    advertiseConfiguration(harness, trace);
+    yield* scoped(function* () {
+      yield* installLaunchStack(harness, trace);
+      // What the shipped provider wrote on every launch: the model it happened
+      // to be using, which nobody chose. A replay that read it as a
+      // configuration would reopen the conversation and apply settings this
+      // launch never asked for.
+      // Written as a released record would have it: the member is not part of
+      // this build's shape, so it is added beside the record rather than
+      // through its type.
+      const released = { ...retainedConfigured({ configuration: undefined }), model: "gpt-5.4" };
+      trace.replay = { prepared: released, suffix: "prepared+detached" };
+
+      yield* Agent.operations.launch(launchRequest(INSTRUCTIONS));
+
+      expect(trace.order).toEqual(["prepared", "detached", "spawn", "exited"]);
+      expect(harness.ensureCalls).toEqual([]);
+      expect(harness.configCalls).toEqual([]);
     });
   });
 
@@ -5432,12 +5510,7 @@ describe("Tier NR — configured incomplete replay", () => {
     yield* scoped(function* () {
       yield* installLaunchStack(harness, trace);
       trace.replay = {
-        prepared: retainedConfigured({
-          requestedModel: undefined,
-          requestedEffort: undefined,
-          model: undefined,
-          effort: undefined,
-        }),
+        prepared: retainedConfigured({ configuration: undefined }),
         suffix: "prepared+detached",
       };
 
@@ -5462,9 +5535,7 @@ describe("Tier NR — configured incomplete replay", () => {
       yield* installLaunchStack(harness, trace);
       trace.replay = { prepared: retainedConfigured(), suffix: "prepared+detached" };
 
-      yield* Agent.operations.launch(
-        launchRequest(INSTRUCTIONS, { model: "gpt-5.4-mini", effort: "high" }),
-      );
+      yield* Agent.operations.launch(launchRequest(INSTRUCTIONS));
 
       const exited = trace.records.find((record) => record.phase === "exited");
       expect(exited?.failure?.class).toBe("configuration-refused");

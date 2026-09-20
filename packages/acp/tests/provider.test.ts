@@ -8,13 +8,17 @@ import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { scoped, sleep, spawn, until, withResolvers } from "effection";
 import type { Operation } from "effection";
-import { Agent, Config } from "@executablemd/core";
+import { Agent, claimsConfiguration, Config, sessionOf } from "@executablemd/core";
+import type { ConfigureAgentSession } from "@executablemd/core";
+import { sessionPlacement } from "../../core/src/agent/session-request.ts";
+import { createSessionPlacementOwner } from "../../core/src/agent/session-placement.ts";
 import type {
   AgentLaunchRequest,
   AgentPromptEvent,
   AgentLaunchCoordinator,
   PromptOptions,
   Session,
+  SessionConfiguration,
 } from "@executablemd/core";
 import {
   createAcpxProvider,
@@ -49,14 +53,23 @@ import type { NativeAdapter } from "../src/native-launch.ts";
 
 const CWD = "/work";
 
-function* installProvider(harness: FakeRuntimeHarness): Operation<void> {
+/**
+ * Install the provider, and hand back the coordinator it was installed with.
+ *
+ * Returning it is what lets a case say a session is configured: the coordinator
+ * is the authority the provider asks, so a suite states a configuration there
+ * rather than putting one on a value the provider would read.
+ */
+function* installProvider(harness: FakeRuntimeHarness): Operation<CoordinatorLog> {
   yield* useFlatWorld(CWD);
+  const coordinator = stubCoordinator();
   const factory = createAcpxProvider({
     createRuntime: harness.create,
     sessionStore: makeStore(),
     agentRegistry: makeRegistry({ scribe: "scribe-cmd", other: "other-cmd" }),
   });
-  yield* factory({ defaultAgent: "scribe", permissionMode: "deny-all" }, stubCoordinator());
+  yield* factory({ defaultAgent: "scribe", permissionMode: "deny-all" }, coordinator);
+  return coordinator;
 }
 
 function* collectPrompt(
@@ -732,6 +745,18 @@ interface CoordinatorLog extends AgentLaunchCoordinator {
   performed: number;
   refused: number;
   /**
+   * Issue one use of this conversation, configured this way.
+   *
+   * The coordinator is the authority on what a routed session runs under, so a
+   * suite that wants a configured operation asks for one here — exactly where a
+   * real document installation issues it. What comes back is a distinct value
+   * that unwraps to the same conversation, which is what makes two uses of one
+   * session two things rather than one.
+   */
+  configure(session: Session, configuration: SessionConfiguration): Operation<Session>;
+  /** Every exact session this provider registered, in order. */
+  registered: Session[];
+  /**
    * Every provider turn this provider named, in the order it named them.
    *
    * Recorded as it arrived, unparsed. What the provider decided to associate is
@@ -741,19 +766,64 @@ interface CoordinatorLog extends AgentLaunchCoordinator {
   checkpoints: unknown[];
 }
 
+/** The claim an authentic use carries, which any copy of it also carries. */
+const CONFIGURED_SESSION = Symbol.for("executablemd.agent.session.configured");
+
 function stubCoordinator(): CoordinatorLog {
+  // The real thing, not a stand-in: settling a placement, registering how a
+  // conversation is configured and minting the use are exactly what these cases
+  // are about, so they run against the owner core creates rather than against a
+  // second implementation of it that could be wrong in its own way.
+  const owner = createSessionPlacementOwner();
+  // One operation per conversation, as a provider has: registering the same
+  // session with two different ones is a refusal, and a provider that knows how
+  // to configure a conversation knows it once.
+  const applying = new Map<Session, ConfigureAgentSession>();
+  const applyFor = (session: Session): ConfigureAgentSession => {
+    const known = applying.get(session);
+    if (known !== undefined) {
+      return known;
+    }
+    // deno-lint-ignore require-yield
+    const configure: ConfigureAgentSession = function* (asked) {
+      return asked;
+    };
+    applying.set(session, configure);
+    return configure;
+  };
   const log: CoordinatorLog = {
     performed: 0,
     refused: 0,
     checkpoints: [],
+    registered: [],
+    *configure(session, configuration) {
+      // One use of a conversation this provider already issued, the way a
+      // second configured `<Session>` naming it produces one.
+      const issuance = sessionPlacement(undefined, undefined);
+      issuance.configure(configuration);
+      try {
+        return yield* owner
+          .placement(issuance.request)
+          .complete(session, { kind: "established", configure: applyFor(session) });
+      } finally {
+        issuance.close();
+      }
+    },
+    sessionPlacement: (request) => {
+      const placement = owner.placement(request);
+      return {
+        ...(placement.sessionIdentity === undefined
+          ? {}
+          : { sessionIdentity: placement.sessionIdentity }),
+        *complete(session, state) {
+          log.registered.push(session);
+          return yield* placement.complete(session, state);
+        },
+      };
+    },
+    sessionUse: (routed) => owner.read(routed),
     checkpoint: (_terminal, token) => {
       log.checkpoints.push(token);
-    },
-    // These suites route launches, never a `<Session>` placement. Throwing
-    // rather than answering means a placement that did reach here fails
-    // loudly instead of being handed an identity nobody derived.
-    sessionIdentity: () => {
-      throw new Error("this stub coordinator routes no session placement");
     },
     // deno-lint-ignore require-yield
     *perform() {
@@ -1815,13 +1885,38 @@ function configured(harness: FakeRuntimeHarness): FakeRuntimeHarness {
   return harness;
 }
 
+/**
+ * Resolve a session and put it under `configuration`, as a configured
+ * `<Session>` element does.
+ *
+ * Two steps, because they are two things: the public route carries a name and
+ * nothing else, and how this exact conversation is configured is something only
+ * the provider that issued it registered. An established session is configured
+ * here; a fresh placement has nothing to configure yet.
+ */
+function* configuredSession(
+  _coordinator: CoordinatorLog,
+  name: string | undefined,
+  configuration: SessionConfiguration,
+): Operation<Session> {
+  const issuance = sessionPlacement(undefined, name);
+  issuance.configure(configuration);
+  try {
+    return yield* Agent.operations.session(issuance.request);
+  } finally {
+    issuance.close();
+  }
+}
+
 function* configuredPrompt(
-  harness: FakeRuntimeHarness,
-  configuration: { model?: string; effort?: string },
+  coordinator: CoordinatorLog,
+  configuration: SessionConfiguration,
 ): Operation<{ events: AgentPromptEvent[]; session: Session }> {
-  const session = yield* Agent.operations.session("review", configuration);
-  const { events } = yield* collectPrompt("hello", { session });
-  return { events, session };
+  // What `<Session model effort>` produces: the provider settled the placement
+  // into one use of the conversation it resolved.
+  const use = yield* configuredSession(coordinator, "review", configuration);
+  const { events } = yield* collectPrompt("hello", { session: use });
+  return { events, session: use };
 }
 
 /**
@@ -1841,7 +1936,7 @@ const OWNED_CLAUDE: NativeAdapter = {
 function* installOwnedProvider(
   harness: FakeRuntimeHarness,
   ownership: CoordinatorHarness,
-): Operation<void> {
+): Operation<CoordinatorLog> {
   yield* useFlatWorld(CWD);
   const factory = createAcpxProvider({
     createRuntime: harness.create,
@@ -1852,7 +1947,9 @@ function* installOwnedProvider(
     nativeAdapters: { claude: OWNED_CLAUDE },
     coordinator: ownership.coordinator,
   });
-  yield* factory({ defaultAgent: "claude", permissionMode: "deny-all" }, stubCoordinator());
+  const delivered = stubCoordinator();
+  yield* factory({ defaultAgent: "claude", permissionMode: "deny-all" }, delivered);
+  return delivered;
 }
 
 function refusalOf(operation: () => Operation<unknown>): Operation<string> {
@@ -1870,11 +1967,8 @@ describe("Tier SC — session configuration", () => {
   it("SC1: a first prompt configures model then effort, verifies, and only then takes the turn", function* () {
     const harness = configured(createFakeRuntime());
     yield* scoped(function* () {
-      yield* installProvider(harness);
-      const { events } = yield* configuredPrompt(harness, {
-        model: "gpt-5.4-mini",
-        effort: "high",
-      });
+      const coordinator = yield* installProvider(harness);
+      yield* configuredPrompt(coordinator, { model: "gpt-5.4-mini", effort: "high" });
 
       // Read, write the model, refresh for that model's effort choices, write
       // the effort, verify. The refresh between the two writes is what makes
@@ -1890,18 +1984,6 @@ describe("Tier SC — session configuration", () => {
       expect(harness.ensureCalls.length).toBe(1);
       expect(harness.handleIds.length).toBe(1);
       expect(harness.turns.length).toBe(1);
-      const started = events[0];
-      expect(started?.type).toBe("started");
-      if (started?.type === "started") {
-        expect(started.requestedConfiguration).toEqual({
-          model: "gpt-5.4-mini",
-          effort: "high",
-        });
-        expect(started.effectiveConfiguration).toEqual({
-          model: "gpt-5.4-mini",
-          effort: "high",
-        });
-      }
     });
   });
 
@@ -1910,23 +1992,18 @@ describe("Tier SC — session configuration", () => {
     yield* scoped(function* () {
       yield* installProvider(harness);
       const session = yield* Agent.operations.session("review");
-      const { events } = yield* collectPrompt("hello", { session });
+      yield* collectPrompt("hello", { session });
 
       expect(harness.configCalls).toEqual([]);
       expect(harness.turns.length).toBe(1);
-      const started = events[0];
-      if (started?.type === "started") {
-        expect(started.requestedConfiguration).toBe(undefined);
-        expect(started.effectiveConfiguration).toBe(undefined);
-      }
     });
   });
 
   it("SC3: each setting is written only where it was authored", function* () {
     const harness = configured(createFakeRuntime());
     yield* scoped(function* () {
-      yield* installProvider(harness);
-      yield* configuredPrompt(harness, { model: "gpt-5.4-mini" });
+      const coordinator = yield* installProvider(harness);
+      yield* configuredPrompt(coordinator, { model: "gpt-5.4-mini" });
       // A model-only request verifies through the refresh it already needed,
       // and never touches the effort selector.
       expect(harness.configCalls).toEqual(["status", "set model=gpt-5.4-mini", "status"]);
@@ -1934,8 +2011,8 @@ describe("Tier SC — session configuration", () => {
 
     const effortOnly = configured(createFakeRuntime());
     yield* scoped(function* () {
-      yield* installProvider(effortOnly);
-      yield* configuredPrompt(effortOnly, { effort: "high" });
+      const coordinator = yield* installProvider(effortOnly);
+      yield* configuredPrompt(coordinator, { effort: "high" });
       // Effort alone applies to the model the conversation is already on, so
       // no model is read for a second time and none is written.
       expect(effortOnly.configCalls).toEqual(["status", "set effort=high", "status"]);
@@ -1945,8 +2022,8 @@ describe("Tier SC — session configuration", () => {
   it("SC4: a value the conversation already has is verified rather than rewritten", function* () {
     const harness = configured(createFakeRuntime());
     yield* scoped(function* () {
-      yield* installProvider(harness);
-      yield* configuredPrompt(harness, { model: "gpt-5.4", effort: "medium" });
+      const coordinator = yield* installProvider(harness);
+      yield* configuredPrompt(coordinator, { model: "gpt-5.4", effort: "medium" });
       expect(harness.configCalls).toEqual(["status", "status", "status"]);
     });
   });
@@ -1964,11 +2041,8 @@ describe("Tier SC — session configuration", () => {
       }
     };
     yield* scoped(function* () {
-      yield* installProvider(harness);
-      const { events } = yield* configuredPrompt(harness, {
-        model: "gpt-5.4-mini",
-        effort: "extreme",
-      });
+      const coordinator = yield* installProvider(harness);
+      yield* configuredPrompt(coordinator, { model: "gpt-5.4-mini", effort: "extreme" });
       expect(harness.configCalls).toEqual([
         "status",
         "set model=gpt-5.4-mini",
@@ -1976,21 +2050,15 @@ describe("Tier SC — session configuration", () => {
         "set effort=extreme",
         "status",
       ]);
-      const started = events[0];
-      if (started?.type === "started") {
-        expect(started.effectiveConfiguration).toEqual({
-          model: "gpt-5.4-mini",
-          effort: "extreme",
-        });
-      }
+      expect(harness.turns.length).toBe(1);
     });
   });
 
   it("SC6: an unknown model is refused before any write, and nothing is prompted", function* () {
     const harness = configured(createFakeRuntime());
     yield* scoped(function* () {
-      yield* installProvider(harness);
-      const refused = yield* refusalOf(() => configuredPrompt(harness, { model: "gpt-x" }));
+      const coordinator = yield* installProvider(harness);
+      const refused = yield* refusalOf(() => configuredPrompt(coordinator, { model: "gpt-x" }));
 
       expect(refused).toBe(
         'Unknown model "gpt-x" for agent "scribe".\nAvailable options are: gpt-5.4, gpt-5.4-mini',
@@ -2003,9 +2071,9 @@ describe("Tier SC — session configuration", () => {
   it("SC7: an invalid effort names the model it was invalid for, and takes no turn", function* () {
     const harness = configured(createFakeRuntime());
     yield* scoped(function* () {
-      yield* installProvider(harness);
+      const coordinator = yield* installProvider(harness);
       const refused = yield* refusalOf(() =>
-        configuredPrompt(harness, { model: "gpt-5.4", effort: "extreme" }),
+        configuredPrompt(coordinator, { model: "gpt-5.4", effort: "extreme" }),
       );
 
       expect(refused).toBe(
@@ -2023,8 +2091,8 @@ describe("Tier SC — session configuration", () => {
     const harness = createFakeRuntime();
     harness.configOptions = [selector("model", "model", "gpt-5.4", MODELS)];
     yield* scoped(function* () {
-      yield* installProvider(harness);
-      const refused = yield* refusalOf(() => configuredPrompt(harness, { effort: "high" }));
+      const coordinator = yield* installProvider(harness);
+      const refused = yield* refusalOf(() => configuredPrompt(coordinator, { effort: "high" }));
       expect(refused).toBe('Effort choices are unavailable for model "gpt-5.4".');
       expect(harness.turns.length).toBe(0);
     });
@@ -2034,9 +2102,9 @@ describe("Tier SC — session configuration", () => {
     const harness = configured(createFakeRuntime());
     harness.writeFailures = { effort: new Error("the agent refused that effort level") };
     yield* scoped(function* () {
-      yield* installProvider(harness);
+      const coordinator = yield* installProvider(harness);
       const refused = yield* refusalOf(() =>
-        configuredPrompt(harness, { model: "gpt-5.4-mini", effort: "high" }),
+        configuredPrompt(coordinator, { model: "gpt-5.4-mini", effort: "high" }),
       );
 
       // The provider's own rejection, not a relabelling of it as unknown.
@@ -2077,21 +2145,20 @@ describe("Tier SC — session configuration", () => {
       model: new Error("the agent refused that model"),
     };
     yield* scoped(function* () {
-      yield* installProvider(harness);
+      const coordinator = yield* installProvider(harness);
       // The first model write has to land before the effort one is refused,
       // so the model selector rejects only after it has been applied once.
       harness.writeFailures = { effort: new Error("the agent refused that effort level") };
-      const failing = yield* Agent.operations.session("review", {
-        model: "gpt-5.4-mini",
-        effort: "high",
-      });
+      const configuration = { model: "gpt-5.4-mini", effort: "high" };
+      const failing = yield* configuredSession(coordinator, "review", configuration);
+      const failingUse = failing;
       harness.afterWrite = () => {
         harness.writeFailures = {
           effort: new Error("the agent refused that effort level"),
           model: new Error("the agent refused that model"),
         };
       };
-      const refused = yield* refusalOf(() => collectPrompt("hello", { session: failing }));
+      const refused = yield* refusalOf(() => collectPrompt("hello", { session: failingUse }));
 
       expect(refused).toContain("the agent refused that effort level");
       expect(refused).toContain(
@@ -2105,7 +2172,7 @@ describe("Tier SC — session configuration", () => {
       const ensures = harness.ensureCalls.length;
       // Every later route to that exact session refuses before the provider is
       // asked anything at all.
-      const again = yield* refusalOf(() => collectPrompt("again", { session: failing }));
+      const again = yield* refusalOf(() => collectPrompt("again", { session: failingUse }));
       const placed = yield* refusalOf(() => Agent.operations.session("review"));
       for (const message of [again, placed]) {
         expect(message).toBe(
@@ -2122,7 +2189,7 @@ describe("Tier SC — session configuration", () => {
   it("SC11: an existing session is reconfigured in place, with its identity and history intact", function* () {
     const harness = configured(createFakeRuntime());
     yield* scoped(function* () {
-      yield* installProvider(harness);
+      const coordinator = yield* installProvider(harness);
       const first = yield* Agent.operations.session("review");
       yield* collectPrompt("hello", { session: first });
       const identity = first.agentSessionId;
@@ -2130,8 +2197,11 @@ describe("Tier SC — session configuration", () => {
 
       // The same placement, now configured. It is established, so this is a
       // real reconfiguration request rather than an inert placement.
-      const again = yield* Agent.operations.session("review", { model: "gpt-5.4-mini" });
-      expect(again).toBe(first);
+      const again = yield* configuredSession(coordinator, "review", { model: "gpt-5.4-mini" });
+      // One use of the conversation that already existed — the same session,
+      // the same provider-native identity, reached through the use rather than
+      // replaced by it.
+      expect(sessionOf(again)).toBe(first);
       expect(again.agentSessionId).toBe(identity);
       expect(harness.configCalls).toEqual(["status", "set model=gpt-5.4-mini", "status"]);
       // Reattached, not replaced: the second ensure reopens the same session
@@ -2142,12 +2212,112 @@ describe("Tier SC — session configuration", () => {
     });
   });
 
+  it("SC19: a write the agent does not reflect fails rather than being reported back", function* () {
+    const harness = configured(createFakeRuntime());
+    // Accepted and ignored: the agent answers the write and goes on reporting
+    // the model it was already on.
+    harness.ignoredWrites = ["model"];
+    yield* scoped(function* () {
+      const coordinator = yield* installProvider(harness);
+      const refused = yield* refusalOf(() =>
+        configuredPrompt(coordinator, { model: "gpt-5.4-mini" }),
+      );
+
+      expect(refused).toContain('did not apply the model "gpt-5.4-mini"');
+      // There is no "effective" answer to keep instead: a conversation this run
+      // could not put under what was asked is a conversation nothing prompts.
+      expect(harness.turns.length).toBe(0);
+    });
+  });
+
+  it("SC18: two uses of one conversation each get their own settings", function* () {
+    const harness = configured(createFakeRuntime());
+    yield* scoped(function* () {
+      const coordinator = yield* installProvider(harness);
+      // Two uses of one conversation, both issued before either runs. Nothing
+      // the provider holds decides what a turn runs under, so the second
+      // cannot overwrite the first's settings while the first is still waiting
+      // to be sent.
+      const session = yield* Agent.operations.session("review");
+      const mini = yield* coordinator.configure(session, { model: "gpt-5.4-mini" });
+      const thorough = yield* coordinator.configure(session, { effort: "high" });
+
+      yield* collectPrompt("first", { session: mini });
+      expect(harness.configCalls).toEqual(["status", "set model=gpt-5.4-mini", "status"]);
+
+      harness.configCalls = [];
+      yield* collectPrompt("second", { session: thorough });
+      // The second use asked about effort and nothing else: the first use's
+      // model is not rewritten, and it is not re-verified either.
+      expect(harness.configCalls).toEqual(["status", "set effort=high", "status"]);
+      expect(harness.turns.length).toBe(2);
+      // One conversation throughout: both turns went to the session the first
+      // prompt established, under two different settings.
+      expect(harness.ensureCalls.length).toBe(1);
+    });
+  });
+
+  it("SC23: a value that claims to be a use and is not one reaches no provider work", function* () {
+    const harness = configured(createFakeRuntime());
+    yield* scoped(function* () {
+      const coordinator = yield* installProvider(harness);
+      const session = yield* Agent.operations.session("review");
+      const use = yield* coordinator.configure(session, { model: "gpt-5.4-mini" });
+      // Everything a spread carries: the claim is copied, whatever makes the
+      // value authentic is not. Routed onto a prompt that authored nothing,
+      // there is no authored use for core to compare this against — so the
+      // question falls to the installation, which is the only thing that can
+      // say whose issuance a use carries.
+      const refused = yield* refusalOf(() => collectPrompt("hello", { session: { ...use } }));
+
+      expect(refused).toContain("not a configured session this run issued");
+      // Before provider work: nothing was read, nothing written, nothing
+      // established and no turn spent. Running it as an ordinary session
+      // instead would have put this conversation under nothing at all.
+      expect(harness.configCalls).toEqual([]);
+      expect(harness.ensureCalls.length).toBe(0);
+      expect(harness.turns.length).toBe(0);
+    });
+  });
+
+  it("SC24: one established conversation configured twice settles through one operation", function* () {
+    const harness = configured(createFakeRuntime());
+    yield* scoped(function* () {
+      const coordinator = yield* installProvider(harness);
+      // Establish it, so both placements below meet a real conversation rather
+      // than an inert one.
+      const first = yield* Agent.operations.session("review");
+      yield* collectPrompt("hello", { session: first });
+      harness.configCalls = [];
+
+      // Two configured `<Session>` elements naming one conversation. The
+      // provider knows one way to configure it, so both placements settle —
+      // registering the same session twice with the same operation is the same
+      // statement twice, not two answers to reconcile.
+      const one = yield* configuredSession(coordinator, "review", { model: "gpt-5.4-mini" });
+      const two = yield* configuredSession(coordinator, "review", { effort: "high" });
+
+      expect(sessionOf(one)).toBe(first);
+      expect(sessionOf(two)).toBe(first);
+      // Each asked only about what it authored, and neither rewrote the other.
+      expect(harness.configCalls).toEqual([
+        "status",
+        "set model=gpt-5.4-mini",
+        "status",
+        "status",
+        "set effort=high",
+        "status",
+      ]);
+      expect(harness.turns.length).toBe(1);
+    });
+  });
+
   it("SC12: an agent that cannot report or change configuration refuses in place", function* () {
     const harness = createFakeRuntime();
     harness.omitConfiguration = true;
     yield* scoped(function* () {
-      yield* installProvider(harness);
-      const refused = yield* refusalOf(() => configuredPrompt(harness, { model: "gpt-5.4" }));
+      const coordinator = yield* installProvider(harness);
+      const refused = yield* refusalOf(() => configuredPrompt(coordinator, { model: "gpt-5.4" }));
       expect(refused).toContain("cannot be configured in place");
       expect(harness.turns.length).toBe(0);
     });
@@ -2169,12 +2339,10 @@ describe("Tier SC — session configuration", () => {
       })();
     };
     yield* scoped(function* () {
-      yield* installProvider(harness);
-      const session = yield* Agent.operations.session("review", {
-        model: "gpt-5.4-mini",
-        effort: "high",
-      });
-      const prompting = yield* spawn(() => collectPrompt("hello", { session }));
+      const coordinator = yield* installProvider(harness);
+      const configuration = { model: "gpt-5.4-mini", effort: "high" };
+      const use = yield* configuredSession(coordinator, "review", configuration);
+      const prompting = yield* spawn(() => collectPrompt("hello", { session: use }));
       yield* refreshing.operation;
       expect(harness.configCalls).toEqual(["status", "set model=gpt-5.4-mini", "status"]);
 
@@ -2215,12 +2383,10 @@ describe("Tier SC — session configuration", () => {
           })()
         : undefined;
     yield* scoped(function* () {
-      yield* installProvider(harness);
-      const session = yield* Agent.operations.session("review", {
-        model: "gpt-5.4-mini",
-        effort: "high",
-      });
-      const prompting = yield* spawn(() => collectPrompt("hello", { session }));
+      const coordinator = yield* installProvider(harness);
+      const configuration = { model: "gpt-5.4-mini", effort: "high" };
+      const use = yield* configuredSession(coordinator, "review", configuration);
+      const prompting = yield* spawn(() => collectPrompt("hello", { session: use }));
       yield* writing.operation;
 
       // Cancelled with that write in flight. Restoration may not start until
@@ -2262,12 +2428,10 @@ describe("Tier SC — session configuration", () => {
           })()
         : undefined;
     yield* scoped(function* () {
-      yield* installProvider(harness);
-      const session = yield* Agent.operations.session("review", {
-        model: "gpt-5.4-mini",
-        effort: "high",
-      });
-      const prompting = yield* spawn(() => collectPrompt("hello", { session }));
+      const coordinator = yield* installProvider(harness);
+      const configuration = { model: "gpt-5.4-mini", effort: "high" };
+      const use = yield* configuredSession(coordinator, "review", configuration);
+      const prompting = yield* spawn(() => collectPrompt("hello", { session: use }));
       yield* restoring.operation;
       expect(harness.configCalls).toEqual([
         "status",
@@ -2325,9 +2489,10 @@ describe("Tier SC — session configuration", () => {
       }
     };
     yield* scoped(function* () {
-      yield* installProvider(harness);
-      const session = yield* Agent.operations.session("review", { model: "gpt-5.4-mini" });
-      const prompting = yield* spawn(() => collectPrompt("hello", { session }));
+      const coordinator = yield* installProvider(harness);
+      const configuration = { model: "gpt-5.4-mini" };
+      const use = yield* configuredSession(coordinator, "review", configuration);
+      const prompting = yield* spawn(() => collectPrompt("hello", { session: use }));
       yield* refreshing.operation;
 
       yield* prompting.halt();
@@ -2337,9 +2502,9 @@ describe("Tier SC — session configuration", () => {
       // uses it again — and the refusal costs no provider call at all.
       const before = [...harness.configCalls];
       const ensures = harness.ensureCalls.length;
-      const refused = yield* refusalOf(() => collectPrompt("again", { session }));
+      const refused = yield* refusalOf(() => collectPrompt("again", { session: use }));
       expect(refused).toBe(
-        `Session "${session.sessionKey}" may remain reconfigured after a failed ` +
+        `Session "${use.sessionKey}" may remain reconfigured after a failed ` +
           `restoration and will not be used again during this run.`,
       );
       expect(harness.configCalls).toEqual(before);
@@ -2370,8 +2535,8 @@ describe("Tier SC — session configuration", () => {
       const harness = createFakeRuntime();
       harness.configOptions = configOptions;
       yield* scoped(function* () {
-        yield* installProvider(harness);
-        const refused = yield* refusalOf(() => configuredPrompt(harness, { model: "gpt-5.4" }));
+        const coordinator = yield* installProvider(harness);
+        const refused = yield* refusalOf(() => configuredPrompt(coordinator, { model: "gpt-5.4" }));
         expect([shape, refused.length > 0, harness.turns.length]).toEqual([shape, true, 0]);
       });
     }
@@ -2557,7 +2722,7 @@ describe("Tier SE — reconfiguring an owned session", () => {
     const harness = configured(createFakeRuntime());
     const ownership = makeCoordinator();
     yield* scoped(function* () {
-      yield* installOwnedProvider(harness, ownership);
+      const coordinator = yield* installOwnedProvider(harness, ownership);
       const session = yield* Agent.operations.session("review");
       yield* collectPrompt("hello", { session });
       const closes = harness.closeCalls.length;
@@ -2565,7 +2730,7 @@ describe("Tier SE — reconfiguring an owned session", () => {
 
       harness.writeFailures = { effort: new Error("the agent refused that effort level") };
       const refused = yield* refusalOf(() =>
-        Agent.operations.session("review", { model: "gpt-5.4-mini", effort: "high" }),
+        configuredSession(coordinator, "review", { model: "gpt-5.4-mini", effort: "high" }),
       );
 
       expect(refused).toContain("the agent refused that effort level");
@@ -2591,7 +2756,7 @@ describe("Tier SE — reconfiguring an owned session", () => {
     const reading = withResolvers<void>();
     const held = withResolvers<void>();
     yield* scoped(function* () {
-      yield* installOwnedProvider(harness, ownership);
+      const coordinator = yield* installOwnedProvider(harness, ownership);
       const session = yield* Agent.operations.session("review");
       yield* collectPrompt("hello", { session });
       const closes = harness.closeCalls.length;
@@ -2607,7 +2772,7 @@ describe("Tier SE — reconfiguring an owned session", () => {
             })()
           : undefined;
       const configuring = yield* spawn(() =>
-        Agent.operations.session("review", { model: "gpt-5.4-mini" }),
+        configuredSession(coordinator, "review", { model: "gpt-5.4-mini" }),
       );
       yield* reading.operation;
 

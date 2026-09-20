@@ -11,7 +11,7 @@
 
 import { type Api, createApi } from "@effectionx/context-api";
 import type { Operation } from "effection";
-import type { PermissionMode, SessionConfiguration } from "./agent-api.ts";
+import type { PermissionMode, Session } from "./agent-api.ts";
 import type { AgentPromptPublisher } from "./publication.ts";
 import type { AgentPromptError } from "./errors.ts";
 import type { Expansion } from "../expansion.ts";
@@ -40,16 +40,15 @@ interface AgentInternalApi {
   /** Permission mode inherited by `<AgentProvider>`. */
   permissionMode: PermissionMode;
   /**
-   * What the enclosing `<Session>` asked its conversation to run under, so a
-   * prompt or a launch beneath it can describe the request durably before any
-   * provider work begins. Undefined where no `<Session>` authored one.
+   * Which conversation the enclosing `<Session>` placed. Undefined outside one.
    *
-   * Private on purpose. Applying the configuration is the provider's, and it
-   * does that through the exact `Session` it issued; what travels here is only
-   * what the document asked for, for the journal to record and a launch to
-   * cross-check against what the provider prepared.
+   * For a configured element this is the authentic use that element was issued,
+   * which is that session and also the only value that can say what it runs
+   * under. It is not a configuration channel: nothing reads settings off it,
+   * and holding it proves nothing — the installation that issued it is what
+   * answers, through the coordinator delivered to the installed provider.
    */
-  sessionConfiguration: SessionConfiguration | undefined;
+  sessionUse: Session | undefined;
   /**
    * How long a prompt beneath an `<AgentProvider timeout>` may take, in
    * milliseconds; undefined when nothing declared one.
@@ -102,7 +101,7 @@ export const AgentInternal: Api<AgentInternalApi> = createApi<AgentInternalApi>(
   },
   defaultAgentName: undefined,
   permissionMode: "deny-all",
-  sessionConfiguration: undefined,
+  sessionUse: undefined,
   promptTimeout: undefined,
   promptPublisher: undefined,
   // deno-lint-ignore require-yield

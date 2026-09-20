@@ -91,22 +91,7 @@ export interface AgentOptionsRequest {
 }
 
 export type AgentPromptEvent =
-  | {
-      type: "started";
-      agent: Agent;
-      session: Session;
-      /**
-       * What this turn asked the provider to configure, when it asked for
-       * anything.
-       */
-      requestedConfiguration?: SessionConfiguration;
-      /**
-       * What the provider reported after applying it, verified before the turn
-       * began. Never an echo of the request: it is what the provider says the
-       * conversation is running under.
-       */
-      effectiveConfiguration?: SessionConfiguration;
-    }
+  | { type: "started"; agent: Agent; session: Session }
   | { type: "text_delta"; text: string }
   | {
       type: "terminal";
@@ -117,6 +102,15 @@ export type AgentPromptEvent =
 
 export interface PromptOptions {
   agent?: Agent;
+  /**
+   * Which conversation this prompt belongs to.
+   *
+   * A name for the provider to resolve, or the exact `Session` a provider
+   * issued. One `<Session>` that named a model or an effort level pins a
+   * configured use of that session, which is a `Session` like any other — what
+   * it runs under is read through the coordinator delivered to the installed
+   * provider, never off the value.
+   */
   session?: string | Session;
   timeout?: number;
 }
@@ -183,15 +177,14 @@ export interface AgentApi {
    * identity where only the installed provider's coordinator can reach it — a
    * durable identity on this chain would be one any middleware could rewrite.
    *
-   * `configuration` is what the element authored, and the provider that issued
-   * the session owns applying it. Absent means the conversation keeps whatever
-   * it is already using, so a handler that delegates must pass on what it was
-   * given rather than manufacturing an empty configuration.
+   * What a conversation runs under is not here. Model and effort are settings a
+   * `<Session>` supplies, not inputs a handler composes: routing them as a
+   * second argument would make them a value every handler could edit, and the
+   * conversation would run under the last thing anybody wrote. A handler
+   * selects, reroutes or refuses whole sessions, and the provider that issued
+   * one owns applying what the document asked of it.
    */
-  session(
-    name?: string | AgentSessionRequest,
-    configuration?: SessionConfiguration,
-  ): Operation<Session>;
+  session(name?: string | AgentSessionRequest): Operation<Session>;
   /**
    * What model and effort choices `agent` advertises.
    *
@@ -245,10 +238,7 @@ export const Agent: Api<AgentApi> = createApi<AgentApi>(AGENT_API, {
     throw noProvider("agent()");
   },
   // deno-lint-ignore require-yield
-  *session(
-    _name?: string | AgentSessionRequest,
-    _configuration?: SessionConfiguration,
-  ): Operation<Session> {
+  *session(_name?: string | AgentSessionRequest): Operation<Session> {
     throw noProvider("session()");
   },
   // deno-lint-ignore require-yield

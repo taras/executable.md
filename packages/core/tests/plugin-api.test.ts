@@ -234,7 +234,7 @@ describe("PA3 — ActivePlugins is an ordered immutable snapshot", () => {
  */
 describe("PA4 — the Agent Api composes from the Plugin entrypoint", () => {
   it("wraps options() and a configured session() the ordinary way", function* () {
-    const seen: (SessionConfiguration | undefined)[] = [];
+    const seen: unknown[][] = [];
     const choices: AgentOptions = {
       agent: "codex",
       model: {
@@ -255,8 +255,8 @@ describe("PA4 — the Agent Api composes from the Plugin entrypoint", () => {
       yield* Agent.around(
         {
           // deno-lint-ignore require-yield
-          *session([, configuration]): Operation<Session> {
-            seen.push(configuration);
+          *session(args): Operation<Session> {
+            seen.push([...args]);
             return { sessionKey: "plugin:review", cwd: "/repo" };
           },
           // deno-lint-ignore require-yield
@@ -267,17 +267,15 @@ describe("PA4 — the Agent Api composes from the Plugin entrypoint", () => {
         { at: "min" },
       );
       yield* Agent.around({
-        *session([name, configuration], next): Operation<Session> {
-          return yield* next(name, configuration);
+        *session(args, next): Operation<Session> {
+          return yield* next(...args);
         },
       });
-      return [
-        yield* Agent.operations.session("review", { model: "gpt-5.4", effort: "high" }),
-        yield* Agent.operations.options("codex"),
-      ];
+      return [yield* Agent.operations.session("review"), yield* Agent.operations.options("codex")];
     });
 
-    expect(seen).toEqual([{ model: "gpt-5.4", effort: "high" }]);
+    // The placement, and nothing else: no settings object travels this route.
+    expect(seen).toEqual([["review"]]);
     expect(composed[0]).toEqual({ sessionKey: "plugin:review", cwd: "/repo" });
     expect(composed[1].model?.options[0]?.group).toEqual({ id: "frontier", name: "Frontier" });
     expect(composed[1].effort).toBe(null);

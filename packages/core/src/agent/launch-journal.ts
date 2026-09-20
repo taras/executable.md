@@ -39,6 +39,7 @@ import type {
   PreparedLaunchRecord,
 } from "./launch.ts";
 import { AgentInternal } from "./internal.ts";
+import { readConfiguration, serializeConfiguration } from "./configuration-record.ts";
 import { readCheckpoint } from "./checkpoint.ts";
 import { persistPrompt } from "./journal.ts";
 import type { PromptRecord } from "./journal.ts";
@@ -53,8 +54,8 @@ const AGENT_SESSION_LAUNCH = "agent_session_launch";
  * preparation effect's description.
  *
  * The rendered instructions are the effect's `input`; the rest describes the
- * filesystem permissions, the model and effort the session asked for, and the
- * permission configuration the request was made under, so a reader of the journal can tell what the native session
+ * filesystem permissions and the permission configuration the request was made
+ * under, so a reader of the journal can tell what the native session
  * was prepared to be able to do.
  */
 export interface LaunchRequestDescription {
@@ -64,8 +65,6 @@ export interface LaunchRequestDescription {
   cwd: string;
   additionalDirectories: string[];
   permissionMode: PermissionMode;
-  model?: string;
-  effort?: string;
 }
 
 export interface LaunchIdentity {
@@ -266,18 +265,7 @@ function serializePrepared(record: PreparedLaunchRecord): Json {
   if (record.materialization !== undefined) {
     payload.materialization = serializePlan(record.materialization);
   }
-  if (record.requestedModel !== undefined) {
-    payload.requestedModel = record.requestedModel;
-  }
-  if (record.requestedEffort !== undefined) {
-    payload.requestedEffort = record.requestedEffort;
-  }
-  if (record.model !== undefined) {
-    payload.model = record.model;
-  }
-  if (record.effort !== undefined) {
-    payload.effort = record.effort;
-  }
+  Object.assign(payload, serializeConfiguration(record.configuration));
   if (record.failure !== undefined) {
     payload.failure = serializeFailure(record.failure);
   }
@@ -307,10 +295,6 @@ export function parsePrepared(value: unknown): PreparedLaunchRecord | undefined 
     cwd,
     additionalDirectories,
     launcher,
-    requestedModel,
-    requestedEffort,
-    model,
-    effort,
     failure,
   } = value;
   if (typeof agent !== "string" || typeof sessionKey !== "string") {
@@ -386,26 +370,24 @@ export function parsePrepared(value: unknown): PreparedLaunchRecord | undefined 
   if (plan !== undefined) {
     record.materialization = plan;
   }
-  // Each is refused rather than read past, because an empty model or effort
-  // names no choice: a record carrying one would replay as a launch that asked
-  // for nothing, and a launch that asked for nothing is a different launch.
-  for (const [member, entry] of [
-    ["requestedModel", requestedModel],
-    ["requestedEffort", requestedEffort],
-    ["model", model],
-    ["effort", effort],
-  ] as const) {
-    if (entry === undefined) {
-      continue;
-    }
-    if (typeof entry !== "string" || entry.length === 0) {
-      return undefined;
-    }
-    record[member] = entry;
+  // Refused rather than read past: a released observational model is validated
+  // and dropped, and a record carrying one beside a configuration says two
+  // different things about what this conversation ran under.
+  const configuration = readConfiguration(value);
+  if (!configuration.ok) {
+    return undefined;
+  }
+  if (configuration.value !== undefined) {
+    record.configuration = configuration.value;
   }
   if (failure !== undefined) {
     const parsed = parseFailure(failure);
     if (!parsed) {
+      return undefined;
+    }
+    // A refusal put this conversation under nothing, so a record that carries
+    // both is describing two different launches.
+    if (record.configuration !== undefined) {
       return undefined;
     }
     record.failure = parsed;
@@ -647,12 +629,6 @@ export function persistPreparation(
   };
   if (request.session !== undefined) {
     description.session = request.session;
-  }
-  if (request.model !== undefined) {
-    description.model = request.model;
-  }
-  if (request.effort !== undefined) {
-    description.effort = request.effort;
   }
   return persistPhase(identity, "prepared", description, live, serializePrepared, parsePrepared);
 }

@@ -145,54 +145,55 @@ describe("Tier AA — configuration and option discovery compose", () => {
     expect(answered).toEqual(CHOICES);
   });
 
-  it("AA7: session() routes the exact configuration, and omission stays omission", function* () {
-    // A provider reads what the element authored. Nothing manufactures an empty
-    // configuration on the way: an unconfigured session asks for nothing, which
-    // is not the same ask as "leave both settings alone".
-    const routed: (SessionConfiguration | undefined)[] = [];
-    const authored: SessionConfiguration = { model: "gpt-5.4", effort: "high" };
+  it("AA7: session middleware receives the placement and nothing else", function* () {
+    // Model and effort are settings a `<Session>` supplies, not inputs a
+    // handler composes. Routing them here would make them a value every
+    // handler could edit, and the conversation would run under the last thing
+    // anybody wrote — so the route carries a name, and what a conversation runs
+    // under travels on the value that names it.
+    const routed: unknown[][] = [];
     yield* scoped(function* (): Operation<void> {
       yield* Agent.around(
         {
           // deno-lint-ignore require-yield
-          *session([, configuration]): Operation<Session> {
-            routed.push(configuration);
+          *session(args): Operation<Session> {
+            routed.push([...args]);
             return { sessionKey: "s", cwd: "/" };
           },
         },
         { at: "min" },
       );
-      yield* Agent.operations.session("review", authored);
       yield* Agent.operations.session("review");
+      yield* Agent.operations.session();
     });
 
-    expect(routed).toEqual([authored, undefined]);
-    // The exact object, not a copy of its members.
-    expect(routed[0]).toBe(authored);
+    // One argument when a name was given, and none when it was not: an absent
+    // name routed as an explicit undefined would read as an ask of its own.
+    expect(routed).toEqual([["review"], []]);
   });
 
-  it("AA8: a wrapper that delegates hands the configuration on unchanged", function* () {
-    const seen: (SessionConfiguration | undefined)[] = [];
-    const authored: SessionConfiguration = { effort: "high" };
+  it("AA8: a wrapper that delegates hands the placement on unchanged", function* () {
+    const seen: unknown[][] = [];
     yield* scoped(function* (): Operation<void> {
       yield* Agent.around(
         {
           // deno-lint-ignore require-yield
-          *session([, configuration]): Operation<Session> {
-            seen.push(configuration);
+          *session(args): Operation<Session> {
+            seen.push([...args]);
             return { sessionKey: "s", cwd: "/" };
           },
         },
         { at: "min" },
       );
       yield* Agent.around({
-        *session([name, configuration], next): Operation<Session> {
-          return yield* next(name, configuration);
+        *session(args, next): Operation<Session> {
+          return yield* next(...args);
         },
       });
-      yield* Agent.operations.session("review", authored);
+      yield* Agent.operations.session("review");
+      yield* Agent.operations.session();
     });
 
-    expect(seen).toEqual([authored]);
+    expect(seen).toEqual([["review"], []]);
   });
 });

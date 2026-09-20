@@ -57,6 +57,7 @@ import process from "node:process";
 import { program, object, field, cli, commands } from "configliere";
 import { z } from "zod";
 import {
+  Agent,
   AgentProviders,
   Config,
   asDocumentTargetError,
@@ -80,7 +81,9 @@ import type {
   PropsSchema,
   RootDocumentSource,
 } from "@executablemd/core";
+import { useAcpxProvider } from "@executablemd/acp";
 import { command as hostCommand, cwd } from "@executablemd/runtime";
+import { renderAgentOptions, renderAgentOptionsJson, scanAgentArgs } from "./agent-options.ts";
 import type { MachineSessionAssembly } from "./session-coordinator.ts";
 import {
   installTestingComponents,
@@ -95,7 +98,12 @@ import {
 import { installWebComponents, installWebElicitation } from "@executablemd/web";
 import { timebox } from "@effectionx/timebox";
 import { timeout as runTimeout } from "@executablemd/runtime";
-import { installRunAgentStack, resolveAgentStack, resolvePlanWriterStack } from "./agent-stack.ts";
+import {
+  hostAcpDependencies,
+  installRunAgentStack,
+  resolveAgentStack,
+  resolvePlanWriterStack,
+} from "./agent-stack.ts";
 import { planComponentDeclaration } from "./plan-component.ts";
 import { planAgentContext } from "./plan-writer-profile.ts";
 import { useVerboseComponent } from "./verbose-component.ts";
@@ -383,12 +391,65 @@ const syntaxConfig = object({
   },
 });
 
+/**
+ * `xmd agent` — one action, one optional agent, two options.
+ *
+ * Declared for the help this command renders; what one command line means is
+ * settled by {@link scanAgentArgs}, because an option this parser does not
+ * recognize would otherwise reach a command that starts an agent.
+ */
+const agentConfig = object({
+  action: {
+    description: "the one action: `options`",
+    ...field(z.string().optional(), cli.argument()),
+  },
+  agent: {
+    description: "agent to ask (default: the agent `xmd run` would use)",
+    ...field(z.string().optional(), cli.argument()),
+  },
+  model: {
+    description: "read effort choices for this exact model id instead of the current one",
+    ...field(z.string().optional()),
+  },
+  json: {
+    description: "write the choices as version-1 JSON instead of text",
+    ...field(z.boolean(), field.default(false)),
+  },
+});
+
 const testAgentConfig = object({
   connect: {
     description: "opaque controller route (controller-launched workers only)",
     ...field(z.string()),
   },
 });
+
+/** What `xmd --help` says the agent command is for. */
+const AGENT_DESCRIPTION = "Report the model and effort choices an agent advertises.";
+
+/**
+ * What `xmd agent options --help` says beyond its option list.
+ *
+ * It answers the one thing the option list cannot: asking costs a conversation
+ * in the agent's own history. Nothing is said in it and nothing of this run is
+ * retained, but a provider that keeps its sessions keeps that one.
+ */
+const AGENT_OPTIONS_HELP = [
+  "Inspecting an agent reads the choices it advertises for a session, so xmd",
+  "creates one, reads it, and closes it without sending a prompt. The provider",
+  "may keep that empty conversation in its own history.",
+  "",
+  "The command runs no document, spends no model turn, writes no xmd journal and",
+  "creates no durable xmd session.",
+  "",
+  "  xmd agent options",
+  "  xmd agent options codex",
+  "  xmd agent options codex --model gpt-5.4",
+  "  xmd agent options codex --model gpt-5.4 --json",
+  "",
+  "Ids are exact provider ids, and they are what a <Session> writes:",
+  '  <Session name="architect" model="gpt-5.4" effort="high">',
+].join("\n");
 
 /** What `xmd --help` says the upgrade command is for. */
 const UPGRADE_DESCRIPTION =
@@ -440,6 +501,7 @@ const xmd = program({
       plan: { ...planConfig, description: PLAN_DESCRIPTION },
       test: testConfig,
       syntax: syntaxConfig,
+      agent: { ...agentConfig, description: AGENT_DESCRIPTION },
       upgrade: { ...upgradeConfig, description: UPGRADE_DESCRIPTION },
       "test-agent": testAgentConfig,
       workflow: workflowConfig,
@@ -2235,7 +2297,16 @@ const UPGRADE_HELP = [
   "leaves the installed xmd exactly as it was.",
 ].join("\n");
 
-const COMMAND_NAMES = ["run", "plan", "test", "syntax", "upgrade", "test-agent", "workflow"];
+const COMMAND_NAMES = [
+  "run",
+  "plan",
+  "test",
+  "syntax",
+  "upgrade",
+  "agent",
+  "test-agent",
+  "workflow",
+];
 
 /**
  * What a caller has to know to write a filename that contains reference
@@ -2357,7 +2428,9 @@ function renderHelp(phase: PropsPhase): string {
         ? PLAN_REQUEST_HELP
         : command === "upgrade"
           ? UPGRADE_HELP
-          : "";
+          : command === "agent"
+            ? AGENT_OPTIONS_HELP
+            : "";
   const withSource = epilogue === "" ? base : `${base}\n\n${epilogue}`;
 
   if (!phase.root) {
@@ -2790,6 +2863,79 @@ function* dispatch(
       if (!written.ok) {
         console.error(
           `xmd syntax: stdout did not accept the whole output: ${describeError(written.error)}`,
+        );
+        yield* exit(1);
+      }
+      break;
+    }
+    case "agent": {
+      // Fixed grammar first, and it reads nothing: a command line this command
+      // does not define is answered before an agent is resolved, before a
+      // provider exists and before anything could be created in an agent's own
+      // history.
+      const scan = scanAgentArgs(helpRequest.args);
+      if (scan.error !== undefined) {
+        console.error(scan.error);
+        yield* exit(1);
+        break;
+      }
+      // The same resolution an `xmd run` that named no agent performs, so the
+      // command reports on the agent a document would have used.
+      const stack = yield* resolvePlanWriterStack(
+        // An explicit positional wins, and it is this invocation's agent rather
+        // than a document-level default: nothing here runs a document.
+        { agentProvider: "acpx", defaultAgent: scan.agent },
+        sessions,
+      );
+      if (!stack.ok) {
+        console.error(stack.error.message);
+        yield* exit(1);
+        break;
+      }
+      const rendered = yield* scoped(function* (): Operation<Result<string>> {
+        try {
+          // Fixed `deny-all`: inspection sends no prompt and should request no
+          // tool, and a denial keeps an unexpected request from opening an
+          // interactive path this command does not own.
+          const provider = yield* useAcpxProvider(
+            { defaultAgent: stack.value.defaultAgent, permissionMode: "deny-all" },
+            hostAcpDependencies(stack.value),
+          );
+          // Installed as this scope's terminal, so a Plugin selected on the
+          // command line composes these operations in the ordinary order.
+          yield* Agent.around(
+            {
+              *agent([name]) {
+                return yield* provider.agent(name);
+              },
+              *options([agent, request]) {
+                return yield* provider.options(agent, request);
+              },
+            },
+            { at: "min" },
+          );
+          const options = yield* Agent.operations.options(
+            scan.agent,
+            scan.model === undefined ? undefined : { model: scan.model },
+          );
+          // Rendered whole before a byte is written: a failure part-way
+          // through would otherwise leave half a document on stdout, and half
+          // of this JSON is not JSON.
+          return Ok(scan.json ? renderAgentOptionsJson(options) : renderAgentOptions(options));
+        } catch (error) {
+          return Err(error instanceof Error ? error : new Error(String(error)));
+        }
+      });
+      if (!rendered.ok) {
+        console.error(describeError(rendered.error));
+        yield* exit(1);
+        break;
+      }
+      const written = yield* deliverWhole(rendered.value, process.stdout);
+      if (!written.ok) {
+        console.error(
+          `xmd agent options: stdout did not accept the whole output: ` +
+            describeError(written.error),
         );
         yield* exit(1);
       }

@@ -7,16 +7,27 @@
  * installed for *this* document. A call outside one refuses rather than
  * performing a launch no replay could resume.
  *
- * What travels contextually is the registry — composition data, so a document
- * and the components it expands find the same one. The coordinator does not: it
- * is handed to a provider factory directly. A replaced registry therefore
- * produces requests the real coordinator has never heard of, which is a refusal
- * rather than a way in.
+ * What travels contextually is the installation — composition data, so a
+ * document and the components it expands find the same one. What it holds does
+ * not: the coordinator is handed to a provider factory directly, and the owner
+ * that settles placements and issues configured uses is a closure inside the
+ * installing operation. A replaced installation therefore produces requests the
+ * real coordinator has never heard of, which is a refusal rather than a way
+ * in.
  */
 
-import { createContext } from "effection";
+import { createContext, ensure } from "effection";
 import type { Context, Operation } from "effection";
-import type { LaunchOptions, SessionLaunchResult } from "./agent-api.ts";
+import { Agent } from "./agent-api.ts";
+import type {
+  LaunchOptions,
+  Session,
+  SessionConfiguration,
+  SessionLaunchResult,
+} from "./agent-api.ts";
+import { configurationOf } from "./session-use.ts";
+import type { AgentSessionUse } from "./session-use.ts";
+import type { AgentSessionRequest } from "./session-request.ts";
 import { createLaunchCoordinator } from "./launch-coordinator.ts";
 import type { AgentLaunchCoordinator } from "./launch-coordinator.ts";
 import { createLaunchRegistry, launchSession } from "./launch-owner.ts";
@@ -25,6 +36,8 @@ import { AgentInternal } from "./internal.ts";
 import { installPermissionMode } from "./permission.ts";
 import { installAgentProvider } from "./provider-api.ts";
 import type { AgentProviderOptions } from "./provider-api.ts";
+import { createSessionPlacementOwner } from "./session-placement.ts";
+import { configurePlacement, sessionPlacement } from "./session-request.ts";
 
 interface LaunchInstallation {
   registry: LaunchRegistry;
@@ -40,11 +53,34 @@ const Installation: Context<LaunchInstallation | undefined> = createContext<
  * Open one launch installation for a live document, and hand back the
  * coordinator its providers are installed with.
  */
-export function* useLaunchInstallation(): Operation<AgentLaunchCoordinator> {
+export function* useLaunchInstallation(): Operation<void> {
   const registry = createLaunchRegistry();
   const generation = {};
   yield* Installation.set({ registry, generation });
-  return createLaunchCoordinator(generation, () => registry.live());
+}
+
+/**
+ * Build the coordinator one installed provider is handed, and own it.
+ *
+ * The placement owner is created here, in the operation that installs the
+ * provider, and closed immediately after that provider's own finalizers —
+ * cleanups registered later unwind first, so a provider is fully dismantled
+ * before the thing that could still configure its conversations goes away. A
+ * placement settled after that refuses rather than reaching a provider that is
+ * no longer there.
+ */
+export function* useInstalledCoordinator(): Operation<AgentLaunchCoordinator> {
+  const installation = yield* Installation.get();
+  if (!installation) {
+    throw new Error("an agent provider is installable only inside a document execution");
+  }
+  const owner = createSessionPlacementOwner();
+  yield* ensure(() => owner.close());
+  return createLaunchCoordinator(
+    installation.generation,
+    () => installation.registry.live(),
+    owner,
+  );
 }
 
 /**
@@ -72,6 +108,70 @@ export function* launchAgentSession(
     instructions,
     options,
   );
+}
+
+/**
+ * Resolve one session and issue an authentic use of it.
+ *
+ * The one way a configured session comes into being. A caller supplies what the
+ * conversation should run under; what comes back is the exact `Session` the
+ * provider issued, carrying an authority only this document installation can
+ * read. There is deliberately no operation that takes a session somebody
+ * already holds and pairs it with settings of their choosing: that value would
+ * be one any holder could rebuild, and the provider would act on it.
+ *
+ * Supported from anywhere inside an active document expansion, including a
+ * repository function component. `<Session model effort>` calls exactly this.
+ */
+export function* useConfiguredSession(
+  name: string | AgentSessionRequest | undefined,
+  configuration: SessionConfiguration,
+): Operation<Session> {
+  const installation = yield* Installation.get();
+  if (!installation) {
+    throw new Error(
+      `a configured session is available only while a document execution with an installed ` +
+        `agent provider is running — nothing outside one can say which installation a ` +
+        `configuration belongs to`,
+    );
+  }
+  if (typeof name === "object") {
+    // An element that already opened its placement is only now saying what it
+    // asks of the conversation. Sealed before anything routes, so the provider
+    // is told what the document authored rather than what a handler left.
+    configurePlacement(name, configuration);
+    return yield* Agent.operations.session(name);
+  }
+  // A programmatic caller has no element, so there is nothing durable to name:
+  // this placement exists for the length of this call and describes only the
+  // name it was given.
+  const issuance = sessionPlacement(undefined, name);
+  issuance.configure(configuration);
+  try {
+    return yield* Agent.operations.session(issuance.request);
+  } finally {
+    issuance.close();
+  }
+}
+
+/**
+ * What a session this installation issued says its conversation runs under.
+ *
+ * Core's own read, for the one thing core owns about a configuration: writing
+ * it down. A name or an ordinary session answers with nothing; a value that
+ * claims to be a configured use and is not one refuses here exactly as it would
+ * at the provider.
+ */
+export function* sessionUseConfiguration(
+  routed: string | Session | undefined,
+): Operation<SessionConfiguration | undefined> {
+  // What the value itself says, not what an installation admits: deciding
+  // whether a use may act belongs to the provider installation that issued it,
+  // and by the time this is asked that decision has already been made — the
+  // turn ran. What is left is writing down what it ran under. A name or an
+  // ordinary session says nothing; a value that claims to be a configured use
+  // and is not one refuses rather than being read as either.
+  return configurationOf(routed);
 }
 
 /**
@@ -113,8 +213,6 @@ export function* useProviderInstallation(
   if (!installation) {
     throw new Error(`<AgentProvider name="${name}"> is available only inside a document execution`);
   }
-  const launchCoordinator = createLaunchCoordinator(installation.generation, () =>
-    installation.registry.live(),
-  );
+  const launchCoordinator = yield* useInstalledCoordinator();
   yield* installAgentProvider(name, options, launchCoordinator);
 }

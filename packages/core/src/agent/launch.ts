@@ -31,7 +31,7 @@
  * to that same provider session.
  */
 
-import type { PermissionMode } from "./agent-api.ts";
+import type { PermissionMode, SessionConfiguration } from "./agent-api.ts";
 import type { AgentPromptCheckpoint } from "./checkpoint.ts";
 
 export type LaunchPhase = "prepared" | "materialized" | "detached" | "launched" | "exited";
@@ -308,15 +308,14 @@ export interface PreparedLaunchRecord {
   permissionMode: PermissionMode;
   launcher: string;
   /**
-   * What the `<Session>` asked this conversation to run under, and what the
-   * provider reported it was running under once it had applied and verified
-   * that. The requested pair is retained whatever happened; an effective value
-   * appears only where the provider observed one.
+   * What the conversation this launch prepared was put under.
+   *
+   * Present only on a preparation that succeeded: a refusal put the
+   * conversation under nothing, so a record carrying both this and a `failure`
+   * is describing two different launches and is refused. An unconfigured launch
+   * carries no member at all.
    */
-  requestedModel?: string;
-  requestedEffort?: string;
-  model?: string;
-  effort?: string;
+  configuration?: SessionConfiguration;
   failure?: LaunchFailure;
 }
 

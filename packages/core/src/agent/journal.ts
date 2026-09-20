@@ -1,13 +1,12 @@
 /**
  * Durable prompt records (specs/acp-client-spec.md §Journaling and replay).
  *
- * Each prompt is one durable operation. The description carries the
- * prompt's identity, input and the configuration its `<Session>` asked for;
- * the result record carries agent and session identity, terminal status, stop
- * reason, text (including partial text on failure), the structured failure, and
- * the requested and effective model and effort. `sequence` records prompt
- * execution order explicitly, so restoration never depends on asynchronous
- * completion order.
+ * Each prompt is one durable operation. The description carries the prompt's
+ * identity and input; the result record carries agent and session identity,
+ * terminal status, stop reason, text (including partial text on failure), the
+ * structured failure, and — for a turn that started — the one configuration the
+ * conversation ran under. `sequence` records prompt execution order explicitly,
+ * so restoration never depends on asynchronous completion order.
  *
  * On a full replay (journal already holds the root Close), durableRun
  * returns the stored root result without re-expanding, so the failed
@@ -42,6 +41,7 @@ import type {
 } from "@executablemd/durable-streams";
 import type { Operation } from "effection";
 import type { SessionConfiguration } from "./agent-api.ts";
+import { readConfiguration, serializeConfiguration } from "./configuration-record.ts";
 import { readCheckpoint } from "./checkpoint.ts";
 import type { AgentPromptCheckpoint } from "./checkpoint.ts";
 import { AgentPromptError, parsePromptFailure } from "./errors.ts";
@@ -64,20 +64,15 @@ export interface PromptRecord {
   text: string;
   error?: SerializedPromptFailure;
   /**
-   * What the `<Session>` this prompt belongs to asked its conversation to run
-   * under. Retained whatever the turn did — a prompt that stopped while the
-   * provider was applying it still asked for it.
+   * What the conversation this prompt ran in was running under.
+   *
+   * Present only once the provider said the turn started, because that is when
+   * the conversation was under these settings: a prompt that failed while they
+   * were still being applied ran under nothing, and one that started and then
+   * failed still ran under exactly them. A prompt beneath an unconfigured
+   * `<Session>` carries no member at all.
    */
-  requestedModel?: string;
-  requestedEffort?: string;
-  /**
-   * What the provider reported the conversation was running under when the turn
-   * started, verified before it began. Absent for a turn that never started and
-   * for one that asked for nothing, because an effective value nobody observed
-   * is not one to retain.
-   */
-  model?: string;
-  effort?: string;
+  configuration?: SessionConfiguration;
   /**
    * True only for failed prompts thrown through `throwOnError`. Replay
    * uses the stored marker: a partial replay re-throws, and a full
@@ -101,13 +96,7 @@ export interface PromptRecord {
 }
 
 export function* persistPrompt(
-  identity: {
-    name: string;
-    input: string;
-    position?: Readonly<SourcePosition>;
-    /** What the enclosing `<Session>` asked for, described before any turn. */
-    configuration?: SessionConfiguration;
-  },
+  identity: { name: string; input: string; position?: Readonly<SourcePosition> },
   live: () => Operation<PromptRecord>,
   association: () => AgentPromptAssociation | undefined = () => undefined,
 ): Workflow<PromptRecord> {
@@ -116,12 +105,6 @@ export function* persistPrompt(
       type: AGENT_PROMPT,
       name: identity.name,
       input: identity.input,
-      ...(identity.configuration?.model === undefined
-        ? {}
-        : { model: identity.configuration.model }),
-      ...(identity.configuration?.effort === undefined
-        ? {}
-        : { effort: identity.configuration.effort }),
       ...sourceDescription(identity.position),
     },
     function* (): Operation<Json> {
@@ -285,18 +268,7 @@ function serializePromptRecord(record: PromptRecord): Json {
   if (record.error !== undefined) {
     payload.error = record.error;
   }
-  if (record.requestedModel !== undefined) {
-    payload.requestedModel = record.requestedModel;
-  }
-  if (record.requestedEffort !== undefined) {
-    payload.requestedEffort = record.requestedEffort;
-  }
-  if (record.model !== undefined) {
-    payload.model = record.model;
-  }
-  if (record.effort !== undefined) {
-    payload.effort = record.effort;
-  }
+  Object.assign(payload, serializeConfiguration(record.configuration));
   if (record.raised === true) {
     payload.raised = true;
   }
@@ -312,17 +284,6 @@ function serializePromptRecord(record: PromptRecord): Json {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-/**
- * One configuration value as a record carries it: an exact provider ID.
- *
- * An empty string names no model and no effort level, so it is not a weaker
- * form of the value — it is a member that does not read back, and a record
- * carrying one is refused rather than replayed as having asked for nothing.
- */
-function configurationValue(value: unknown): string | undefined {
-  return typeof value === "string" && value.length > 0 ? value : undefined;
 }
 
 /**
@@ -346,10 +307,6 @@ export function parsePromptRecord(value: unknown): PromptRecord | undefined {
     stopReason,
     text,
     error,
-    requestedModel,
-    requestedEffort,
-    model,
-    effort,
     raised,
     checkpoint,
   } = value;
@@ -376,36 +333,14 @@ export function parsePromptRecord(value: unknown): PromptRecord | undefined {
     }
     record.error = parsed;
   }
-  // Each is refused rather than dropped: a dropped member would replay as a
-  // prompt that asked for nothing, or as one whose effective model nobody
-  // observed, and both are claims this record would be making up.
-  if (requestedModel !== undefined) {
-    const parsed = configurationValue(requestedModel);
-    if (parsed === undefined) {
-      return undefined;
-    }
-    record.requestedModel = parsed;
+  // Refused rather than read past: a record whose configuration does not read
+  // back is not describing work this build can say anything about.
+  const configuration = readConfiguration(value);
+  if (!configuration.ok) {
+    return undefined;
   }
-  if (requestedEffort !== undefined) {
-    const parsed = configurationValue(requestedEffort);
-    if (parsed === undefined) {
-      return undefined;
-    }
-    record.requestedEffort = parsed;
-  }
-  if (model !== undefined) {
-    const parsed = configurationValue(model);
-    if (parsed === undefined) {
-      return undefined;
-    }
-    record.model = parsed;
-  }
-  if (effort !== undefined) {
-    const parsed = configurationValue(effort);
-    if (parsed === undefined) {
-      return undefined;
-    }
-    record.effort = parsed;
+  if (configuration.value !== undefined) {
+    record.configuration = configuration.value;
   }
   if (raised === true && record.status !== "completed") {
     record.raised = true;

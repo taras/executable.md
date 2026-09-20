@@ -37,7 +37,7 @@ import type { IdentityComponent } from "../invocation-identity.ts";
 import type { PermissionMode } from "./agent-api.ts";
 import type { AgentProviderFactory, AgentProviderOptions } from "./provider-api.ts";
 import type { AgentLaunchCoordinator } from "./launch-coordinator.ts";
-import { useLaunchInstallation } from "./launch-install.ts";
+import { useInstalledCoordinator, useLaunchInstallation } from "./launch-install.ts";
 import { AgentInternal } from "./internal.ts";
 import { AgentPromptError } from "./errors.ts";
 import {
@@ -92,9 +92,11 @@ export function agentIdentityComponents(): readonly IdentityComponent[] {
       props: SESSION_PROPS,
       ...documented({
         description:
-          "Set the default session for every prompt in its content. " +
-          '`<Session name="review">…</Session>` reaches prompts sent from nested components ' +
-          'too. `<Session name="review" />` checks the session is usable.',
+          "Configure one Agent conversation for its content. " +
+          '`<Session name="architect" model="gpt-5.4" effort="high">…</Session>` uses that ' +
+          "exact session and configuration for prompts and native launches from nested " +
+          "components. A self-closing Session places or validates the conversation without " +
+          "sending a prompt.",
         as: null,
         context: "Markdown whose prompts and launches run in this session.",
       }),
@@ -287,14 +289,12 @@ export function* installAgentComponents(options?: AgentComponentsOptions): Opera
         yield* Execution.around({
           *document([request], nextDocument) {
             yield* scoped(function* () {
-              const launchCoordinator = yield* useLaunchInstallation();
+              yield* useLaunchInstallation();
               if (!rootProvider) {
                 yield* nextDocument(request);
                 return;
               }
-              yield* withRootProvider(rootProvider, launchCoordinator, teardown, () =>
-                nextDocument(request),
-              );
+              yield* withRootProvider(rootProvider, teardown, () => nextDocument(request));
             });
           },
         });
@@ -324,13 +324,15 @@ interface TeardownSlot {
  */
 function* withRootProvider(
   rootProvider: { factory: AgentProviderFactory; options: AgentProviderOptions },
-  launchCoordinator: AgentLaunchCoordinator,
   teardown: TeardownSlot,
   body: () => Operation<void>,
 ): Operation<void> {
   let completed = false;
   try {
     yield* scoped(function* () {
+      // Built here, in the scope the provider lives in, so what can configure
+      // this provider's conversations stops existing when the provider does.
+      const launchCoordinator = yield* useInstalledCoordinator();
       // The root provider bypasses provider selection entirely: it was
       // configured by the host, so there is no name to route and no middleware
       // chain to travel. It receives the coordinator directly, on the same terms

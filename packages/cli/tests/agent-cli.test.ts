@@ -174,3 +174,59 @@ describe("Tier CA — xmd run agent stack", { sanitizeOps: false, sanitizeResour
     }
   });
 });
+
+/**
+ * Tier CO — `xmd agent options` at the command line (issue #828).
+ *
+ * The command asks an agent what it advertises, so the cases that need no agent
+ * are the ones a test can state exactly: a command line this command does not
+ * define, and the help that says what asking costs. Both are answered before an
+ * agent is resolved, which is the point — inspecting creates a conversation in
+ * someone's history, and a wrong command line must not.
+ */
+describe("Tier CO — xmd agent options", { sanitizeOps: false, sanitizeResources: false }, () => {
+  it("CO1: a command line this command does not define is refused before an agent is asked", function* () {
+    const refusals: [string[], string][] = [
+      [["agent"], "xmd agent names an action"],
+      [["agent", "list"], 'does not have a "list" action'],
+      [["agent", "options", "codex", "claude"], "at most one agent name"],
+      [["agent", "options", "--effort", "high"], "does not recognize --effort"],
+      [["agent", "options", "--model"], "needs a model id"],
+      [["agent", "options", "--json=true"], "does not take a value"],
+    ];
+    for (const [args, message] of refusals) {
+      const result = yield* useFixture({}, function* (fixture) {
+        return yield* runCli(args, env(fixture)).join();
+      });
+      expect([args.join(" "), result.code]).toEqual([args.join(" "), 1]);
+      expect([args.join(" "), result.stderr.includes(message)]).toEqual([args.join(" "), true]);
+      // Nothing is written on the way out, so no reader ever sees half an
+      // answer — and half of this command's JSON is not JSON.
+      expect([args.join(" "), result.stdout]).toEqual([args.join(" "), ""]);
+    }
+  });
+
+  it("CO2: an agent that is not there fails without printing a partial answer", function* () {
+    const result = yield* useFixture({}, function* (fixture) {
+      return yield* runCli(
+        ["agent", "options", "definitely-not-an-agent-command", "--json"],
+        env(fixture),
+      ).join();
+    });
+    expect(result.code).toBe(1);
+    expect(result.stderr).toContain("definitely-not-an-agent-command");
+    expect(result.stdout).toBe("");
+  });
+
+  it("CO3: the help says what inspecting costs, and what it does not", function* () {
+    const result = yield* useFixture({}, function* (fixture) {
+      return yield* runCli(["agent", "--help"], env(fixture)).join();
+    });
+    expect(result.code).toBe(0);
+    expect(result.stdout).toContain("xmd agent options codex --model gpt-5.4 --json");
+    // The consequence a reader has to know before running it.
+    expect(result.stdout).toContain("may keep that empty conversation in its own history");
+    expect(result.stdout).toContain("spends no model turn");
+    expect(result.stdout).toContain("creates no durable xmd session");
+  });
+});

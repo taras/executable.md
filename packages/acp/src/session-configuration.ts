@@ -291,34 +291,18 @@ export interface ConfigurationTarget {
   markUnusable(): void;
 }
 
-/**
- * What one application settled on.
- *
- * `selectors` is the last status this operation read, normalized — which for an
- * empty request is the only one it read, and for a model change is the one that
- * carries that model's effort choices. An inspection needs the choices; a turn
- * needs only the values.
- */
-export interface AppliedConfiguration {
-  readonly effective: SessionConfiguration;
-  readonly selectors: AgentOptionSelectors;
-}
-
-/** What a conversation is running under, as the provider last reported it. */
-function effectiveOf(selectors: AgentOptionSelectors): SessionConfiguration {
-  return {
-    ...(selectors.model === null ? {} : { model: selectors.model.set.selected }),
-    ...(selectors.effort === null ? {} : { effort: selectors.effort.set.selected }),
-  };
-}
-
 function* read(target: ConfigurationTarget): Operation<AgentOptionSelectors> {
   return readAgentOptions(yield* target.readStatus());
 }
 
 /**
- * Put `request` into effect on this conversation, and say what it is running
- * under afterwards.
+ * Put `request` into effect on this conversation, or fail.
+ *
+ * There is nothing to report back about what it is running under: every
+ * requested value is verified to be exactly the value asked for, so an
+ * operation that returns has put the conversation under the request and one
+ * that could not has thrown. What comes back is the last status this operation
+ * read, normalized, because an inspection needs the choices themselves.
  *
  * An empty request writes nothing and reads once, which is what makes
  * "configured with nothing" indistinguishable to the provider from a session
@@ -327,8 +311,8 @@ function* read(target: ConfigurationTarget): Operation<AgentOptionSelectors> {
 export function* applySessionConfiguration(
   target: ConfigurationTarget,
   request: SessionConfiguration,
-): Operation<AppliedConfiguration> {
-  return yield* scoped(function* (): Operation<AppliedConfiguration> {
+): Operation<AgentOptionSelectors> {
+  return yield* scoped(function* (): Operation<AgentOptionSelectors> {
     const initial = yield* read(target);
     const priorModel = initial.model?.set.selected;
     const priorEffort = initial.effort?.set.selected;
@@ -414,7 +398,7 @@ export function* applySessionConfiguration(
 
       if (request.effort === undefined) {
         settled = true;
-        return { effective: effectiveOf(refreshed), selectors: refreshed };
+        return refreshed;
       }
 
       const model = refreshed.model?.set.selected;
@@ -445,7 +429,7 @@ export function* applySessionConfiguration(
         );
       }
       settled = true;
-      return { effective: effectiveOf(verified), selectors: verified };
+      return verified;
     } catch (error) {
       if (!touched) {
         recovered = true;

@@ -23,7 +23,9 @@ import { execute } from "../src/execute.ts";
 import { executeInstalled } from "../host.ts";
 import { agentIdentityComponents } from "../src/agent/components.ts";
 import { Agent } from "../src/agent/agent-api.ts";
-import type { Session, SessionLaunchResult } from "../src/agent/agent-api.ts";
+import { sessionOf } from "../src/agent/session-use.ts";
+import { isSessionRequest } from "../src/agent/session-request.ts";
+import type { Session, SessionConfiguration, SessionLaunchResult } from "../src/agent/agent-api.ts";
 import type {
   ExecutableBuildBindingV1,
   ExitedLaunchRecord,
@@ -59,6 +61,8 @@ interface LaunchStub {
   agentLookups: (string | undefined)[];
   /** Instructions each *live* preparation received, in order. */
   preparations: string[];
+  /** What each preparation was told its conversation runs under, in order. */
+  configurations: (SessionConfiguration | undefined)[];
   detaches: number;
   /** Live exit phases — one per native child this provider actually started. */
   exits: number;
@@ -85,15 +89,13 @@ interface LaunchStub {
   /** Assert an identity in a preparation that also plans a turn. */
   assertIdentityBeforeTurn?: boolean;
   /**
-   * Retain a preparation that asked for a different effort than the launch did.
+   * Retain a preparation naming a different effort than the launch runs under.
    *
-   * A provider asserts the session facts, but what was asked for is the
-   * document's — so a preparation that changed it describes a launch nobody
-   * authored.
+   * A provider asserts the session facts, but what the conversation runs under
+   * is the document's — so a preparation that changed it describes a launch
+   * nobody authored.
    */
   misreportConfiguration?: boolean;
-  /** What the provider reports the prepared conversation is running under. */
-  effectiveConfiguration?: { model?: string; effort?: string };
   /**
    * Refuse a configured launch at its preparation, as a provider that could
    * not put the conversation under what was asked does.
@@ -109,6 +111,7 @@ function createLaunchStub(overrides: Partial<LaunchStub> = {}): LaunchStub {
   const stub: LaunchStub = {
     agentLookups: [],
     preparations: [],
+    configurations: [],
     detaches: 0,
     exits: 0,
     factoryActivations: 0,
@@ -129,16 +132,28 @@ function createLaunchStub(overrides: Partial<LaunchStub> = {}): LaunchStub {
           },
           // deno-lint-ignore require-yield
           *session([name]) {
-            const session: Session = { sessionKey: `stub:${name ?? "default"}`, cwd: "/repo" };
-            return session;
+            const session: Session = {
+              sessionKey: `stub:${typeof name === "string" ? name : "default"}`,
+              cwd: "/repo",
+            };
+            // Every session this stub issues is a fresh placement: there is no
+            // conversation yet, so nothing is applied here and the launch
+            // beneath it constructs and configures.
+            if (!isSessionRequest(name)) {
+              return session;
+            }
+            return yield* launchCoordinator
+              .sessionPlacement(name)
+              .complete(session, { kind: "fresh" });
           },
           *launch([request]) {
             const agent = request.agent;
-            const requestedEffort = stub.misreportConfiguration ? "low" : request.effort;
+            const configuration = launchCoordinator.sessionUse(request.session)?.configuration;
+            const effort = stub.misreportConfiguration ? "low" : configuration?.effort;
+            const named = sessionOf(request.session);
             const sessionKey =
-              typeof request.session === "object"
-                ? request.session.sessionKey
-                : `stub:${request.session ?? "default"}`;
+              named?.sessionKey ??
+              `stub:${typeof request.session === "string" ? request.session : "default"}`;
 
             if (stub.fabricate) {
               // Structural data alone, from a handler that did no work. The
@@ -151,6 +166,7 @@ function createLaunchStub(overrides: Partial<LaunchStub> = {}): LaunchStub {
               // deno-lint-ignore require-yield
               *prepare(): Operation<PreparedLaunchRecord> {
                 stub.preparations.push(request.instructions);
+                stub.configurations.push(configuration);
                 prepared = {
                   phase: "prepared",
                   agent,
@@ -174,24 +190,19 @@ function createLaunchStub(overrides: Partial<LaunchStub> = {}): LaunchStub {
                   permissionMode: request.permissionMode,
                   launcher: "stub",
                 };
-                // What the provider was asked for, retained as it received it,
-                // and what it reports the conversation ended up running under.
-                if (request.model !== undefined) {
-                  prepared.requestedModel = request.model;
-                }
-                if (requestedEffort !== undefined) {
-                  prepared.requestedEffort = requestedEffort;
-                }
-                if (stub.effectiveConfiguration?.model !== undefined) {
-                  prepared.model = stub.effectiveConfiguration.model;
-                }
-                if (stub.effectiveConfiguration?.effort !== undefined) {
-                  prepared.effort = stub.effectiveConfiguration.effort;
-                }
                 if (stub.configurationRefused !== undefined) {
+                  // A refusal names no settings: nothing was put into force, so
+                  // there is nothing for this record to say it ran under.
                   prepared.failure = {
                     class: "configuration-refused",
                     message: stub.configurationRefused,
+                  };
+                } else if (configuration !== undefined) {
+                  // What this provider put the conversation under, retained as
+                  // the one thing a launch record says about its settings.
+                  prepared.configuration = {
+                    ...(configuration.model === undefined ? {} : { model: configuration.model }),
+                    ...(effort === undefined ? {} : { effort }),
                   };
                 }
                 if (stub.executableBinding !== undefined) {
@@ -1745,29 +1756,15 @@ const CONFIGURED_LAUNCH = [
 ].join("\n");
 
 describe("Tier SC — configured native launch", () => {
-  it("SC1: the request and the retained preparation carry both exact values", function* () {
-    const routed: { model?: string; effort?: string }[] = [];
-    const run = yield* runDoc(CONFIGURED_LAUNCH, {
-      declareSession: true,
-      stub: createLaunchStub({ effectiveConfiguration: { model: "gpt-5.4", effort: "high" } }),
-      intercept: function* (request, next) {
-        routed.push({
-          ...(request.model === undefined ? {} : { model: request.model }),
-          ...(request.effort === undefined ? {} : { effort: request.effort }),
-        });
-        return yield* next(request);
-      },
-    });
+  it("SC1: the routed use and the retained preparation carry the same two values", function* () {
+    const run = yield* runDoc(CONFIGURED_LAUNCH, { declareSession: true });
 
     expect(run.result.ok ? "" : run.result.error.message).toBe("");
-    // Public middleware reads them as facts about the launch, the same way it
-    // reads the cwd or the permission mode.
-    expect(routed).toEqual([{ model: "gpt-5.4", effort: "high" }]);
+    // It reaches the provider on the use this request names, together with the
+    // conversation it belongs to — one value, arriving with the operation.
+    expect(run.stub.configurations).toEqual([{ model: "gpt-5.4", effort: "high" }]);
     const record = preparedRecord(run.events);
-    expect(record.requestedModel).toBe("gpt-5.4");
-    expect(record.requestedEffort).toBe("high");
-    expect(record.model).toBe("gpt-5.4");
-    expect(record.effort).toBe("high");
+    expect(record.configuration).toEqual({ model: "gpt-5.4", effort: "high" });
     expect(run.launcher.requests.length).toBe(1);
   });
 
@@ -1779,7 +1776,7 @@ describe("Tier SC — configured native launch", () => {
 
     expect(run.result.ok).toBe(false);
     expect(run.result.ok ? "" : run.result.error.message).toContain(
-      "whose requested effort is not what this launch asked for",
+      "whose configuration is not what this launch asked for",
     );
     // The preparation was retained — it is what happened — and nothing after it
     // was: no detach, and no native UI.
@@ -1792,11 +1789,7 @@ describe("Tier SC — configured native launch", () => {
     const run = yield* runDoc(LAUNCH);
 
     expect(run.result.ok).toBe(true);
-    const record = preparedRecord(run.events);
-    expect(record.requestedModel).toBe(undefined);
-    expect(record.requestedEffort).toBe(undefined);
-    expect(record.model).toBe(undefined);
-    expect(record.effort).toBe(undefined);
+    expect(preparedRecord(run.events).configuration).toBe(undefined);
   });
 
   it("SC4: a completed configured launch replays without entering the provider", function* () {
@@ -1805,9 +1798,7 @@ describe("Tier SC — configured native launch", () => {
     yield* ensureDir(dir);
     yield* scoped(function* () {
       yield* ensure(() => rm(dir, { recursive: true, force: true }));
-      const stub = createLaunchStub({
-        effectiveConfiguration: { model: "gpt-5.4", effort: "high" },
-      });
+      const stub = createLaunchStub();
       const first = yield* runDoc(CONFIGURED_LAUNCH, { declareSession: true, stream, stub, dir });
       expect(first.result.ok ? "" : first.result.error.message).toBe("");
 
@@ -1818,8 +1809,88 @@ describe("Tier SC — configured native launch", () => {
       expect(stub.factoryActivations).toBe(1);
       expect(stub.preparations.length).toBe(1);
       expect(second.launcher.requests.length).toBe(0);
-      expect(preparedRecord(second.events).requestedEffort).toBe("high");
+      expect(preparedRecord(second.events).configuration).toEqual({
+        model: "gpt-5.4",
+        effort: "high",
+      });
     });
+  });
+});
+
+/**
+ * Tier SC — where a handler routes a launch is where it runs.
+ *
+ * A launch reaches the provider through the same public chain a prompt does,
+ * and a handler may narrow the request through `with()`. Narrowing the session
+ * routes the launch to another conversation, which is what middleware is for —
+ * so what these rows establish is that the provider and the journal both follow
+ * that route rather than the element the launch was written inside.
+ */
+describe("Tier SC — the final routed Session decides a launch", () => {
+  it("SC20: narrowing the request to the raw session runs unconfigured", function* () {
+    const run = yield* runDoc(CONFIGURED_LAUNCH, {
+      declareSession: true,
+      // The conversation, without what it was to run under.
+      intercept: (request, next) => next(request.with({ session: sessionOf(request.session) })),
+    });
+
+    expect(run.result.ok ? "" : run.result.error.message).toBe("");
+    // The launch happened, and nothing was configured or retained: a raw
+    // session carries no settings, and the record says only what ran.
+    expect(run.stub.configurations).toEqual([]);
+    expect(preparedRecord(run.events).configuration).toBe(undefined);
+    expect(run.launcher.requests.length).toBe(1);
+  });
+
+  it("SC21: narrowing to another authentic use runs under that use", function* () {
+    let first: string | Session | undefined;
+    const run = yield* runDoc(
+      [
+        '<Session name="architect" model="gpt-5.4">',
+        "<Session.Launch>",
+        "first",
+        "</Session.Launch>",
+        "</Session>",
+        '<Session name="reviewer" effort="high">',
+        "<Session.Launch>",
+        "second",
+        "</Session.Launch>",
+        "</Session>",
+        "",
+      ].join("\n"),
+      {
+        declareSession: true,
+        intercept: (request, next) => {
+          if (first === undefined) {
+            first = request.session;
+            return next(request);
+          }
+          return next(request.with({ session: first }));
+        },
+      },
+    );
+
+    expect(run.result.ok ? "" : run.result.error.message).toBe("");
+    // Both launches ran in the first element's conversation, so both ran under
+    // its settings — the second element's were never applied to anything.
+    expect(run.stub.configurations).toEqual([{ model: "gpt-5.4" }, { model: "gpt-5.4" }]);
+    expect(run.launcher.requests.length).toBe(2);
+  });
+
+  it("SC22: reading the use and delegating the request is unchanged", function* () {
+    const seen: (string | Session | undefined)[] = [];
+    const run = yield* runDoc(CONFIGURED_LAUNCH, {
+      declareSession: true,
+      intercept: (request, next) => {
+        seen.push(request.session);
+        return next(request.with({ instructions: request.instructions }));
+      },
+    });
+
+    expect(run.result.ok ? "" : run.result.error.message).toBe("");
+    expect(seen.length).toBe(1);
+    expect(run.stub.configurations).toEqual([{ model: "gpt-5.4", effort: "high" }]);
+    expect(run.launcher.requests.length).toBe(1);
   });
 });
 
@@ -1832,39 +1903,66 @@ describe("Tier SC — configured native launch", () => {
  */
 describe("Tier SJ — configuration in a retained preparation", () => {
   it("SJ1: a record without any of them parses as a launch that asked for nothing", function* () {
-    const parsed = parsePrepared(prepared());
-    expect(parsed?.requestedModel).toBe(undefined);
-    expect(parsed?.requestedEffort).toBe(undefined);
-    expect(parsed?.model).toBe(undefined);
-    expect(parsed?.effort).toBe(undefined);
+    expect(parsePrepared(prepared())?.configuration).toBe(undefined);
   });
 
-  it("SJ2: the requested and effective pairs round-trip unchanged", function* () {
-    const parsed = parsePrepared(
-      prepared({
-        requestedModel: "gpt-5.4",
-        requestedEffort: "high",
-        model: "gpt-5.4",
-        effort: "high",
-      }),
-    );
-    expect([
-      parsed?.requestedModel,
-      parsed?.requestedEffort,
-      parsed?.model,
-      parsed?.effort,
-    ]).toEqual(["gpt-5.4", "high", "gpt-5.4", "high"]);
+  it("SJ2: the one configuration round-trips unchanged", function* () {
+    const parsed = parsePrepared(prepared({ configuration: { model: "gpt-5.4", effort: "high" } }));
+    expect(parsed?.configuration).toEqual({ model: "gpt-5.4", effort: "high" });
   });
 
-  it("SJ3: a member that names no choice refuses the record", function* () {
-    for (const member of ["requestedModel", "requestedEffort", "model", "effort"]) {
-      for (const value of ["", 7, null, { id: "gpt-5.4" }]) {
-        expect([member, value, parsePrepared(prepared({ [member]: value as Json }))]).toEqual([
-          member,
-          value,
-          undefined,
-        ]);
-      }
+  it("SJ5: a released record's model and requestedModel are read and dropped", function* () {
+    // The shipped provider wrote `model` on every launch as observational
+    // evidence — the model it happened to be using, which nobody chose — and a
+    // third-party provider could have persisted `requestedModel` before core
+    // rejected the preparation. Reading either as a configuration would make a
+    // replay apply settings nobody asked for.
+    const readAndDropped: Record<string, Json>[] = [
+      { model: "gpt-5.4" },
+      { requestedModel: "gpt-5.4" },
+    ];
+    for (const released of readAndDropped) {
+      const described = JSON.stringify(released);
+      const parsed = parsePrepared(prepared(released));
+      expect([described, parsed?.configuration]).toEqual([described, undefined]);
+      expect([described, JSON.stringify(parsed)?.includes("gpt-5.4")]).toEqual([described, false]);
+    }
+    // Malformed is not read past: the record is describing something it cannot
+    // state.
+    const malformed: Record<string, Json>[] = [{ model: "" }, { requestedModel: 7 }];
+    for (const released of malformed) {
+      const described = JSON.stringify(released);
+      expect([described, parsePrepared(prepared(released))]).toEqual([described, undefined]);
+    }
+    // And a released member beside a canonical configuration is two accounts
+    // of one conversation, with nothing here to choose between them.
+    expect(
+      parsePrepared(prepared({ model: "gpt-5.4", configuration: { model: "gpt-5.4-mini" } })),
+    ).toBe(undefined);
+  });
+
+  it("SJ6: a refusal cannot also say what its conversation ran under", function* () {
+    // A preparation that failed put the conversation under nothing, so a record
+    // carrying both is describing two different launches.
+    expect(
+      parsePrepared(
+        prepared({
+          configuration: { model: "gpt-5.4" },
+          failure: { class: "configuration-refused", message: "why" },
+        }),
+      ),
+    ).toBe(undefined);
+  });
+
+  it("SJ3: a configuration that does not read back refuses the record", function* () {
+    // Exact members, and at least one: an empty object is not an unconfigured
+    // launch, it is a record that cannot say what its conversation ran under.
+    for (const carried of [{}, { model: "" }, { effort: 7 }, { model: "a", mode: "fast" }, "gpt"]) {
+      const described = JSON.stringify(carried);
+      expect([described, parsePrepared(prepared({ configuration: carried as Json }))]).toEqual([
+        described,
+        undefined,
+      ]);
     }
   });
 
@@ -1901,20 +1999,16 @@ describe("Tier SR — configured launch replay", () => {
     expect(retainedPhases(run.events)).toEqual(["prepared"]);
     expect(run.stub.detaches).toBe(0);
     expect(run.launcher.requests.length).toBe(0);
-    // What was asked for survives the refusal; what was never verified is
-    // absent rather than retained as a value this launch ran under.
+    // A refusal names no settings: this conversation was never put under any,
+    // and a record claiming otherwise would describe a launch that ran.
     const record = preparedRecord(run.events);
-    expect(record.requestedModel).toBe("gpt-5.4");
-    expect(record.requestedEffort).toBe("high");
     expect(record.model).toBe(undefined);
     expect(record.effort).toBe(undefined);
   });
 
   it("SR2: an interrupted configured launch replays its phases and appends no second detach", function* () {
     const stream = new InMemoryStream();
-    const stub = createLaunchStub({
-      effectiveConfiguration: { model: "gpt-5.4", effort: "high" },
-    });
+    const stub = createLaunchStub();
     const dir = path.join(os.tmpdir(), `xmd-sr-${randomUUID()}`);
     yield* ensure(() => rm(dir, { recursive: true, force: true }));
 
@@ -1936,9 +2030,9 @@ describe("Tier SR — configured launch replay", () => {
     expect(retainedPhases(resumed.events).filter((phase) => phase === "detached").length).toBe(1);
     // What it was prepared with survived the interruption, which is what a
     // provider reapplies before it continues.
-    const record = preparedRecord(resumed.events);
-    expect(record.requestedModel).toBe("gpt-5.4");
-    expect(record.requestedEffort).toBe("high");
-    expect(record.effort).toBe("high");
+    expect(preparedRecord(resumed.events).configuration).toEqual({
+      model: "gpt-5.4",
+      effort: "high",
+    });
   });
 });

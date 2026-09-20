@@ -8,13 +8,14 @@ the `rootProvider` factory seam described below.
 ## The Agent Api
 
 `Agent` is an Effection Api (`@executablemd/core`) for stateful coding-agent
-sessions, distinct from the stateless Sample Api. It has exactly five
+sessions, distinct from the stateless Sample Api. It has exactly six
 contextual operations:
 
 ```ts
 interface AgentApi {
   agent(name?: string): Operation<Agent>;
-  session(name?: string): Operation<Session>;
+  session(name?: string | AgentSessionRequest): Operation<Session>;
+  options(agent?: string, request?: AgentOptionsRequest): Operation<AgentOptions>;
   prompt(content: string, options?: PromptOptions): Operation<Stream<AgentPromptEvent, string>>;
   launch(request: AgentLaunchRequest): Operation<void>;
   requestPermission(request: PermissionRequest): Operation<PermissionOutcome>;
@@ -51,6 +52,19 @@ routes an opaque request and cannot manufacture that result.
 - `Agent` is a resolvable agent name (a string). `Session` is
   `{ sessionKey; cwd; agentSessionId? }`. `PromptOptions` is
   `{ agent?; session?: string | Session; timeout? }`.
+- `AgentSessionUse` is an opaque nominal subtype of `Session`: one Core-issued
+  configured use of a conversation, carrying the exact provider Session that
+  completed the final opaque placement and its configuration in Core-owned
+  identity state. One configured
+  `<Session>` issues one use and selects that same object for its nested
+  operations. Core freezes the carrier and its copied configuration; it does not
+  copy or freeze the provider Session.
+  `sessionOf()`, `configurationOf()` and `isSessionUse()` inspect an authentic
+  value. No public operation wraps an existing Session with arbitrary settings,
+  so a structural copy, a foreign loaded-copy carrier or the real Session paired
+  with substituted settings authorizes no configured operation. The provider
+  retains no desired-configuration association; the final authentic use routed
+  to an operation supplies its own settings.
 - `AgentPromptEvent` is `started` → zero or more `text_delta` → one `terminal`
   (`{ status: "completed" | "failed" | "cancelled"; stopReason?; error? }`).
 - `launch()` routes one frozen, one-use `AgentLaunchRequest` and answers
@@ -132,12 +146,65 @@ routes an opaque request and cannot manufacture that result.
 
 ### The provider-factory seam
 
-A provider is a factory that installs `Agent` middleware for its scope:
+A provider is a factory that installs `Agent` middleware for its scope. Core
+delivers its coordinator directly to the factory; it never travels through
+Agent middleware:
 
 ```ts
-type AgentProviderFactory = (options: AgentProviderOptions) => Operation<void>;
+type AgentProviderFactory = (
+  options: AgentProviderOptions,
+  coordinator: AgentProviderCoordinator,
+) => Operation<void>;
 interface AgentProviderOptions { defaultAgent: string; permissionMode: PermissionMode; }
+
+type ConfigureAgentSession = (
+  configuration: SessionConfiguration,
+) => Operation<SessionConfiguration>;
+
+type AgentSessionPlacementState =
+  | { readonly kind: "fresh" }
+  | {
+      readonly kind: "established";
+      readonly configure: ConfigureAgentSession;
+    };
+
+interface AgentSessionPlacement {
+  readonly sessionIdentity?: string;
+  complete(
+    session: Session,
+    state: AgentSessionPlacementState,
+  ): Operation<Session>;
+}
+
+interface AgentProviderCoordinator extends AgentLaunchCoordinator {
+  sessionPlacement(request: AgentSessionRequest): AgentSessionPlacement;
+}
 ```
+
+`sessionPlacement()` accepts one exact live opaque placement request. Its handle
+exposes the optional durable component identity and settles that placement once.
+For a fresh Session, `complete()` issues the configured use without reading or
+writing provider configuration. For an established Session, it invokes the
+provider's stable `configure` operation, requires the returned canonical value
+to equal the requested members exactly, and issues the use with that returned
+value. An unconfigured placement returns the provider's exact raw Session.
+
+One private registration owner is created inside the provider installation's
+operation. Its closure owns liveness, exact Session-to-`configure` registration,
+duplicate detection, completion and configured-use lookup. The same Session and
+operation may be registered again; a different operation for that Session, a
+second completion, registration after teardown or lookup after teardown
+refuses. Provider teardown runs while the owner is live, then closes it and
+drops its registrations deterministically. Sibling installations and runs have
+distinct owners.
+
+The public placement carries only an unreadable private reference to its own
+issuance. Middleware may transfer that whole route but cannot read, edit, copy
+or reattach its configuration. The owner and configuration operation are
+reachable through no Context, module registry, public Agent operation,
+middleware-readable member, return value or Session property. Another loaded
+provider copy composes through the coordinator it received; another loaded Core
+copy cannot manufacture a placement or use this owner admits.
 
 `installAgentComponents({ rootProvider: { factory, options } })` owns the root
 provider's lifetime through `Execution.document`: the handler delegates the
@@ -190,12 +257,139 @@ that selection for the element's body. A self-closing `<Agent />` performs the
 same resolution and availability validation, then renders nothing; it does not
 create a session or run a turn.
 
-`defaultAgent` names an ACP agent command, not a model. The stateful Agent and
-Session surface has no `model` prop or launch option in V1. Model routing on the
-stateless Sample Api is a different contract and does not create an implicit
-model-selection mechanism for `prompt()` or native launch. A provider may
-report the model already active in its session as observational evidence, but
-that observation neither selects nor changes it.
+`defaultAgent` names an ACP agent command, not a model. Which model and effort
+level a conversation runs under is said by the `<Session>` that owns it, and by
+nothing else — `<Agent>`, `<Prompt>` and `<Session.Launch>` have no such prop,
+and model routing on the stateless Sample Api is a different contract.
+
+### Session configuration
+
+`<Session>` accepts optional `model` and `effort` props:
+
+```md
+<Agent name="codex">
+  <Session name="architect" model="gpt-5.4" effort="high">
+    <Prompt>Review the design.</Prompt>
+  </Session>
+</Agent>
+```
+
+Values are exact provider ids — whatever the agent advertises, spelled the way
+it spells them. XMD translates no alias and substitutes no near value.
+
+Omission is not a value. With neither prop the conversation keeps whatever it is
+already using and nothing is read or written about either setting; with only
+`model` the effort level is left alone; with only `effort` it applies to the
+model the conversation is already on.
+
+Configuration is not an `Agent.session()` argument. Session middleware receives
+only a name or opaque placement and returns the Session selected by its final
+route. The placement's Core-private issuance carries its frozen configuration;
+only the coordinator delivered directly to the provider factory can read that
+issuance and complete it with the provider's exact Session. Core issues a
+configured use only from that completion.
+
+`request.with({ name })` keeps the same issuance and configuration. Replacing it
+with another live placement selects that placement's configuration and optional
+durable identity. Replacing it with a raw string, or returning an already-issued
+raw Session without completing a placement, selects the unconfigured path.
+Returning another authentic configured use selects that use. The configuration
+therefore moves only with its whole opaque route; middleware never receives a
+separate setting it can combine with another route.
+
+`useConfiguredSession(name, configuration)` accepts a string, omission or live
+placement request and returns `Operation<Session>`. A live request receives the
+frozen configuration before routing. A string or omission opens one fresh
+operation-local placement issuance with no durable component identity, routes
+that request, and closes it in `finally`. The result is an
+`AgentSessionUse` only when the final route completed a configured placement;
+middleware may instead select an unconfigured route.
+
+The settings then travel inside that frozen use when a prompt or launch names
+the conversation. Only Core and the installed provider can read them — a spread,
+a descriptor copy, the real Session presented as configured, or a use from
+another installation or loaded copy refuses rather than being treated as
+configured. The provider retains no desired settings between operations.
+
+Middleware may inspect, delegate or replace the whole Session. The final routed
+value decides the work: an authentic configured use applies its configuration;
+another authentic use applies that other use's configuration; and a raw Session,
+name or absence follows the unconfigured path with no configuration read or
+write. A copied or foreign value that claims to be configured refuses before
+provider work. `AgentLaunchRequest.with({ session })` follows the same rule and
+does not consult prompt state.
+
+What a durable record says the operation ran under is read from the final
+authentic use the provider consumed. If middleware selected an unconfigured
+route, the record carries no configuration. The journal therefore describes the
+turn or launch that actually ran rather than the enclosing element's earlier
+selection.
+
+The settings are applied in a live operation, under that session's existing
+serialization and ownership, and verified before the operation continues:
+
+1. read what the agent advertises;
+2. validate and apply `model`;
+3. refresh, because effort choices belong to a model;
+4. validate and apply `effort`;
+5. verify that both are exactly what was asked for.
+
+Only then does a prompt turn begin or a native UI open. A value the agent does
+not advertise, a rejected write, a readback naming something else, or an agent
+that cannot report or change its configuration all fail the operation before the
+turn — and never by substituting another setting or another conversation.
+
+A write that may have landed and then failed is put back, model first, and the
+original rejection is what the caller is told. A restoration that cannot be
+verified leaves a conversation whose configuration nobody can state: that exact
+session is refused for the rest of the run, before any later status read, write,
+prompt, detach or native process.
+
+Reconfiguring an existing session preserves its exact provider identity and its
+history. A provider that cannot reconfigure that conversation in place refuses.
+
+The configured-session carrier is issued by Core after `session()` resolves an
+exact value registered by the installed provider. A Core-owned
+resolve-and-issue operation supplies the programmatic path; middleware can
+inspect, delegate or reroute the resulting use but cannot mint or rebuild one.
+The private context used by `<Session>` only selects the enclosing lexical use
+for nested components. It is not admission and carries no second configuration
+value.
+
+### Option discovery
+
+`Agent.options()` reports what one agent advertises, in provider order:
+
+```ts
+interface AgentOption {
+  readonly id: string;
+  readonly name: string;
+  readonly description: string | null;
+  readonly group: { readonly id: string; readonly name: string } | null;
+}
+
+interface AgentOptionSet {
+  readonly selected: string;
+  readonly options: readonly AgentOption[];
+}
+
+interface AgentOptions {
+  readonly agent: string;
+  readonly model: AgentOptionSet | null;
+  readonly effort: AgentOptionSet | null;
+}
+```
+
+A setting the agent does not offer is `null` rather than an empty set. Groups
+are flattened, with the group repeated on each of its members and `null` on a
+choice the provider offered directly. `AgentOptionsRequest` is `{ model? }`,
+which asks about a model other than the current one — because effort choices
+belong to a model.
+
+Reading is strict about the selector it recognized and incurious about the rest.
+A selector with the wrong type, two equally preferred candidates, a duplicate
+value id, a missing id or name, or a current value the agent does not offer
+fails the operation rather than reading as "this agent offers you nothing".
 
 The current ordinary-run Agent surface grants the resolved contextual cwd and
 defines no directory-registration component. In particular, `Agent.AddDir` is
@@ -303,8 +497,13 @@ boundary runs after the component has returned.
 
 Each prompt is one durable operation (`agent_prompt`). The record carries the
 prompt's identity and input, the agent and session identity, terminal status,
-stop reason, text (including partial text on failure), and any structured
-failure. A `sequence` records execution order explicitly, and per-location
+stop reason, text (including partial text on failure), any structured failure,
+and one optional canonical `configuration`. The configuration is retained only
+after the provider emits `started`: a turn that started is one the provider put
+under exactly those settings, while a configuration refusal started no turn
+and retains none. A prompt that starts and later fails or is cancelled retains
+the configuration it ran under. An unconfigured prompt omits it. A `sequence`
+records execution order explicitly, and per-location
 ordinals keep durable identities stable across `<Each>` loops.
 
 On a **full replay** (the journal already holds the root `Close`), completed
@@ -319,6 +518,13 @@ retains its own `agent_session_launch` records, one per completed phase, so an
 interrupted launch resumes the provider session it already prepared rather than
 creating a replacement; the shape is specified in
 specs/native-agent-session-launch-spec.md.
+
+A completed replay contacts no provider, so it neither reads nor applies any
+configuration. A successful prepared launch reapplies its one canonical
+configuration to the exact retained Session before it continues; an
+unconfigured record performs no configuration read. Live prompt and launch
+records always derive their configuration from the final routed authentic use,
+never from a requested/effective pair.
 
 ## Config
 
@@ -520,6 +726,80 @@ Agent provider from the outer test.
 | `--deny-all` | deny every permission request |
 
 The permission options are mutually exclusive.
+
+### `xmd agent options`
+
+One command asks an agent what it advertises, so a document can be written with
+the exact ids in front of you:
+
+```sh
+xmd agent options
+xmd agent options codex
+xmd agent options codex --model gpt-5.4
+xmd agent options codex --model gpt-5.4 --json
+```
+
+`options` is the one action. The grammar is fixed: one optional agent name,
+`--model <id>`, `--json`, and nothing else. Another action, a second agent name,
+an unknown option, an empty option value or a value on `--json` is refused
+before an agent is resolved — because asking costs a conversation in that
+agent's own history, and a wrong command line must not.
+
+Omitting the agent resolves the one an `xmd run` that supplied no
+`--default-agent` would use. An explicit name is this invocation's agent and
+becomes no document-level default. `--model` selects a model for this inspection
+alone, so the command can report that model's effort choices.
+
+Some providers reveal their configuration only through a session, so the command
+may create one: it connects, creates the provider session, reads it, and closes
+without sending a prompt. The command creates no document run, model turn, XMD
+journal or durable XMD session, and the provider may keep that empty
+conversation in its own history — which `xmd agent options --help` states before
+the command is run.
+
+Human output preserves provider order and grouping, puts exact ids before
+display names and descriptions, and marks the selected value:
+
+```text
+Agent: codex
+Selected model: gpt-5.4
+
+Models
+  gpt-5.4       GPT-5.4 (selected)
+  gpt-5.4-mini  GPT-5.4 Mini
+
+Effort levels for gpt-5.4
+  low     Low
+  medium  Medium (selected)
+  high    High
+```
+
+Absence says so rather than printing an empty list:
+
+```text
+Model choices are unavailable for codex.
+
+Effort choices are unavailable for model "gpt-5.4".
+```
+
+`--json` writes version-1 JSON with members in the order `version`, `agent`,
+`model`, `effort`; each choice as `id`, `name`, `description`, `group`; and
+`null` — not an empty list — for a setting the agent does not offer.
+
+The whole rendering is built before a byte is written. An unknown agent, a
+failed inspection, a malformed response or a rejected value exits unsuccessfully
+and writes no partial output. Neither rendering carries a path, a provider
+session identity, provider history or a credential. Selection diagnostics are:
+
+```text
+Unknown model "gpt-x" for agent "codex".
+Available options are: gpt-5.4, gpt-5.4-mini
+```
+
+```text
+Invalid effort level "extreme" for model "gpt-5.4".
+Available options are: low, medium, high
+```
 
 Both commands also take the three timeout options, which belong to them in the
 same way:
