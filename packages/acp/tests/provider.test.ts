@@ -32,15 +32,20 @@ import { useSerialQueues } from "../src/serial-queue.ts";
 import type { AcpxProvider } from "../src/provider.ts";
 import { deriveSessionKey } from "../src/session-key.ts";
 import {
+  choice,
   createFakeRuntime,
+  makeCoordinator,
+  group,
   makeRecord,
   makeRegistry,
   makeStore,
+  selector,
   useFlatWorld,
   useGitWorld,
 } from "./helpers.ts";
 import type { AcpPermissionRequest, AcpRuntimeTurnResult } from "../src/acpx-runtime.ts";
-import type { FakeRuntimeHarness } from "./helpers.ts";
+import type { CoordinatorHarness, FakeRuntimeHarness } from "./helpers.ts";
+import type { NativeAdapter } from "../src/native-launch.ts";
 
 const CWD = "/work";
 
@@ -1150,7 +1155,8 @@ describe("Tier PT — partitioned provider installation", () => {
         // Rebuilt from the operations it offers.
         structural: () => ({
           agent: (name) => live.agent(name),
-          session: (option) => live.session(option),
+          session: (option, configuration) => live.session(option, configuration),
+          options: (agent, request) => live.options(agent, request),
           promptStream: (content, options) => live.promptStream(content, options),
         }),
         // Every own property descriptor, on the same prototype: the closest
@@ -1225,7 +1231,10 @@ describe("Tier PT — partitioned provider installation", () => {
       expect(Object.getOwnPropertySymbols(handle)).toEqual([]);
       expect(Object.values(Object.getOwnPropertyDescriptors(handle))).toEqual([]);
 
-      // The callable surface, wherever it lives, is the three public operations.
+      // The callable surface, wherever it lives, is the four public
+      // operations. `options` joined them with #828: inspecting what an agent
+      // advertises reaches no session state and coordinates nothing, so it
+      // belongs on the embedder surface beside the other three.
       const surface: string[] = [];
       for (
         let target: object | null = Object.getPrototypeOf(handle);
@@ -1238,7 +1247,7 @@ describe("Tier PT — partitioned provider installation", () => {
           }
         }
       }
-      expect(surface.sort()).toEqual(["agent", "promptStream", "session"]);
+      expect(surface.sort()).toEqual(["agent", "options", "promptStream", "session"]);
       expect("launch" in handle).toBe(false);
 
       // The class is reachable through the instance, as every class is. What it
@@ -1778,5 +1787,838 @@ describe("Tier APC — Prompt checkpoint metadata", () => {
     // turn the document is about to be told failed.
     expect(events.at(-1)).toMatchObject({ type: "terminal", status: "failed" });
     expect(checkpoints).toEqual([]);
+  });
+});
+
+/**
+ * Tier SC — configuring one conversation's model and effort (issue #828).
+ *
+ * Everything here drives the real provider against the scriptable runtime, so
+ * what it asserts is the sequence an agent actually receives: which status
+ * reads happened, which writes, in what order, and what did not happen at all.
+ * A turn is the thing that must never precede a verified configuration, so most
+ * of these rows end by counting turns.
+ */
+const MODELS = [
+  choice("gpt-5.4", "GPT-5.4", "the current one"),
+  choice("gpt-5.4-mini", "GPT-5.4 Mini"),
+];
+
+const EFFORTS = [choice("low", "Low"), choice("medium", "Medium"), choice("high", "High")];
+
+/** An agent that advertises both selectors the ordinary way. */
+function configured(harness: FakeRuntimeHarness): FakeRuntimeHarness {
+  harness.configOptions = [
+    selector("model", "model", "gpt-5.4", MODELS),
+    selector("effort", "thought_level", "medium", EFFORTS),
+  ];
+  return harness;
+}
+
+function* configuredPrompt(
+  harness: FakeRuntimeHarness,
+  configuration: { model?: string; effort?: string },
+): Operation<{ events: AgentPromptEvent[]; session: Session }> {
+  const session = yield* Agent.operations.session("review", configuration);
+  const { events } = yield* collectPrompt("hello", { session });
+  return { events, session };
+}
+
+/**
+ * The same provider, assembled the way a host that can hand a session to a
+ * native UI assembles it.
+ *
+ * Ownership is what changes: an agent whose sessions a native process may take
+ * is coordinated, so reconfiguring one has to give the handle back and say it
+ * holds nothing — however the reconfiguration ends.
+ */
+const OWNED_CLAUDE: NativeAdapter = {
+  launcher: "claude",
+  identity: "provider-returned",
+  resume: (nativeSessionId) => ["claude", "--resume", nativeSessionId],
+};
+
+function* installOwnedProvider(
+  harness: FakeRuntimeHarness,
+  ownership: CoordinatorHarness,
+): Operation<void> {
+  yield* useFlatWorld(CWD);
+  const factory = createAcpxProvider({
+    createRuntime: harness.create,
+    sessionStore: makeStore(),
+    agentRegistry: makeRegistry({ claude: "claude-cmd" }),
+    advertiseNativeLaunch: ["claude"],
+    advertiseClientNativeAttachment: [],
+    nativeAdapters: { claude: OWNED_CLAUDE },
+    coordinator: ownership.coordinator,
+  });
+  yield* factory({ defaultAgent: "claude", permissionMode: "deny-all" }, stubCoordinator());
+}
+
+function refusalOf(operation: () => Operation<unknown>): Operation<string> {
+  return (function* () {
+    try {
+      yield* operation();
+      return "";
+    } catch (error) {
+      return error instanceof Error ? error.message : String(error);
+    }
+  })();
+}
+
+describe("Tier SC — session configuration", () => {
+  it("SC1: a first prompt configures model then effort, verifies, and only then takes the turn", function* () {
+    const harness = configured(createFakeRuntime());
+    yield* scoped(function* () {
+      yield* installProvider(harness);
+      const { events } = yield* configuredPrompt(harness, {
+        model: "gpt-5.4-mini",
+        effort: "high",
+      });
+
+      // Read, write the model, refresh for that model's effort choices, write
+      // the effort, verify. The refresh between the two writes is what makes
+      // the second one a choice this model actually offers.
+      expect(harness.configCalls).toEqual([
+        "status",
+        "set model=gpt-5.4-mini",
+        "status",
+        "set effort=high",
+        "status",
+      ]);
+      // One conversation throughout: one ensure, one handle, one turn.
+      expect(harness.ensureCalls.length).toBe(1);
+      expect(harness.handleIds.length).toBe(1);
+      expect(harness.turns.length).toBe(1);
+      const started = events[0];
+      expect(started?.type).toBe("started");
+      if (started?.type === "started") {
+        expect(started.requestedConfiguration).toEqual({
+          model: "gpt-5.4-mini",
+          effort: "high",
+        });
+        expect(started.effectiveConfiguration).toEqual({
+          model: "gpt-5.4-mini",
+          effort: "high",
+        });
+      }
+    });
+  });
+
+  it("SC2: an unconfigured session reads no status and writes nothing", function* () {
+    const harness = configured(createFakeRuntime());
+    yield* scoped(function* () {
+      yield* installProvider(harness);
+      const session = yield* Agent.operations.session("review");
+      const { events } = yield* collectPrompt("hello", { session });
+
+      expect(harness.configCalls).toEqual([]);
+      expect(harness.turns.length).toBe(1);
+      const started = events[0];
+      if (started?.type === "started") {
+        expect(started.requestedConfiguration).toBe(undefined);
+        expect(started.effectiveConfiguration).toBe(undefined);
+      }
+    });
+  });
+
+  it("SC3: each setting is written only where it was authored", function* () {
+    const harness = configured(createFakeRuntime());
+    yield* scoped(function* () {
+      yield* installProvider(harness);
+      yield* configuredPrompt(harness, { model: "gpt-5.4-mini" });
+      // A model-only request verifies through the refresh it already needed,
+      // and never touches the effort selector.
+      expect(harness.configCalls).toEqual(["status", "set model=gpt-5.4-mini", "status"]);
+    });
+
+    const effortOnly = configured(createFakeRuntime());
+    yield* scoped(function* () {
+      yield* installProvider(effortOnly);
+      yield* configuredPrompt(effortOnly, { effort: "high" });
+      // Effort alone applies to the model the conversation is already on, so
+      // no model is read for a second time and none is written.
+      expect(effortOnly.configCalls).toEqual(["status", "set effort=high", "status"]);
+    });
+  });
+
+  it("SC4: a value the conversation already has is verified rather than rewritten", function* () {
+    const harness = configured(createFakeRuntime());
+    yield* scoped(function* () {
+      yield* installProvider(harness);
+      yield* configuredPrompt(harness, { model: "gpt-5.4", effort: "medium" });
+      expect(harness.configCalls).toEqual(["status", "status", "status"]);
+    });
+  });
+
+  it("SC5: effort is validated against the model this conversation was just put on", function* () {
+    const harness = configured(createFakeRuntime());
+    // The new model offers a level the old one does not, which is the whole
+    // reason the refresh exists.
+    harness.afterWrite = ({ key, value }) => {
+      if (key === "model" && value === "gpt-5.4-mini") {
+        harness.configOptions = [
+          selector("model", "model", "gpt-5.4-mini", MODELS),
+          selector("effort", "thought_level", "medium", [...EFFORTS, choice("extreme", "Extreme")]),
+        ];
+      }
+    };
+    yield* scoped(function* () {
+      yield* installProvider(harness);
+      const { events } = yield* configuredPrompt(harness, {
+        model: "gpt-5.4-mini",
+        effort: "extreme",
+      });
+      expect(harness.configCalls).toEqual([
+        "status",
+        "set model=gpt-5.4-mini",
+        "status",
+        "set effort=extreme",
+        "status",
+      ]);
+      const started = events[0];
+      if (started?.type === "started") {
+        expect(started.effectiveConfiguration).toEqual({
+          model: "gpt-5.4-mini",
+          effort: "extreme",
+        });
+      }
+    });
+  });
+
+  it("SC6: an unknown model is refused before any write, and nothing is prompted", function* () {
+    const harness = configured(createFakeRuntime());
+    yield* scoped(function* () {
+      yield* installProvider(harness);
+      const refused = yield* refusalOf(() => configuredPrompt(harness, { model: "gpt-x" }));
+
+      expect(refused).toBe(
+        'Unknown model "gpt-x" for agent "scribe".\nAvailable options are: gpt-5.4, gpt-5.4-mini',
+      );
+      expect(harness.configCalls).toEqual(["status"]);
+      expect(harness.turns.length).toBe(0);
+    });
+  });
+
+  it("SC7: an invalid effort names the model it was invalid for, and takes no turn", function* () {
+    const harness = configured(createFakeRuntime());
+    yield* scoped(function* () {
+      yield* installProvider(harness);
+      const refused = yield* refusalOf(() =>
+        configuredPrompt(harness, { model: "gpt-5.4", effort: "extreme" }),
+      );
+
+      expect(refused).toBe(
+        'Invalid effort level "extreme" for model "gpt-5.4".\n' +
+          "Available options are: low, medium, high",
+      );
+      // The model was already what was asked for, so nothing was written and
+      // there is nothing to put back.
+      expect(harness.configCalls).toEqual(["status", "status"]);
+      expect(harness.turns.length).toBe(0);
+    });
+  });
+
+  it("SC8: a setting this agent does not offer says so rather than offering nothing", function* () {
+    const harness = createFakeRuntime();
+    harness.configOptions = [selector("model", "model", "gpt-5.4", MODELS)];
+    yield* scoped(function* () {
+      yield* installProvider(harness);
+      const refused = yield* refusalOf(() => configuredPrompt(harness, { effort: "high" }));
+      expect(refused).toBe('Effort choices are unavailable for model "gpt-5.4".');
+      expect(harness.turns.length).toBe(0);
+    });
+  });
+
+  it("SC9: a rejected effort restores the model it had already changed", function* () {
+    const harness = configured(createFakeRuntime());
+    harness.writeFailures = { effort: new Error("the agent refused that effort level") };
+    yield* scoped(function* () {
+      yield* installProvider(harness);
+      const refused = yield* refusalOf(() =>
+        configuredPrompt(harness, { model: "gpt-5.4-mini", effort: "high" }),
+      );
+
+      // The provider's own rejection, not a relabelling of it as unknown.
+      expect(refused).toContain("the agent refused that effort level");
+      expect(refused).not.toContain("may remain reconfigured");
+      // Restoration is model-first and verified: read, put the model back,
+      // refresh, read again to prove both are where they started.
+      expect(harness.configCalls).toEqual([
+        "status",
+        "set model=gpt-5.4-mini",
+        "status",
+        "set effort=high",
+        "status",
+        "set model=gpt-5.4",
+        "status",
+        "status",
+      ]);
+      expect(harness.configOptions?.[0]?.currentValue).toBe("gpt-5.4");
+      expect(harness.configOptions?.[1]?.currentValue).toBe("medium");
+      expect(harness.turns.length).toBe(0);
+
+      // The same session is still usable, because its configuration is back
+      // where it was.
+      harness.writeFailures = {};
+      harness.configCalls = [];
+      const session = yield* Agent.operations.session("review");
+      yield* collectPrompt("again", { session });
+      expect(harness.turns.length).toBe(1);
+    });
+  });
+
+  it("SC10: a restoration that cannot be verified makes every later route refuse", function* () {
+    const harness = configured(createFakeRuntime());
+    // The write that would put the model back fails too, so what this
+    // conversation is running under is not something anyone can state.
+    harness.writeFailures = {
+      effort: new Error("the agent refused that effort level"),
+      model: new Error("the agent refused that model"),
+    };
+    yield* scoped(function* () {
+      yield* installProvider(harness);
+      // The first model write has to land before the effort one is refused,
+      // so the model selector rejects only after it has been applied once.
+      harness.writeFailures = { effort: new Error("the agent refused that effort level") };
+      const failing = yield* Agent.operations.session("review", {
+        model: "gpt-5.4-mini",
+        effort: "high",
+      });
+      harness.afterWrite = () => {
+        harness.writeFailures = {
+          effort: new Error("the agent refused that effort level"),
+          model: new Error("the agent refused that model"),
+        };
+      };
+      const refused = yield* refusalOf(() => collectPrompt("hello", { session: failing }));
+
+      expect(refused).toContain("the agent refused that effort level");
+      expect(refused).toContain(
+        'Restoring the prior configuration failed. Session "' +
+          failing.sessionKey +
+          '" may remain reconfigured and will not be used again during this run.',
+      );
+      expect(harness.turns.length).toBe(0);
+
+      const before = [...harness.configCalls];
+      const ensures = harness.ensureCalls.length;
+      // Every later route to that exact session refuses before the provider is
+      // asked anything at all.
+      const again = yield* refusalOf(() => collectPrompt("again", { session: failing }));
+      const placed = yield* refusalOf(() => Agent.operations.session("review"));
+      for (const message of [again, placed]) {
+        expect(message).toBe(
+          `Session "${failing.sessionKey}" may remain reconfigured after a failed ` +
+            `restoration and will not be used again during this run.`,
+        );
+      }
+      expect(harness.configCalls).toEqual(before);
+      expect(harness.ensureCalls.length).toBe(ensures);
+      expect(harness.turns.length).toBe(0);
+    });
+  });
+
+  it("SC11: an existing session is reconfigured in place, with its identity and history intact", function* () {
+    const harness = configured(createFakeRuntime());
+    yield* scoped(function* () {
+      yield* installProvider(harness);
+      const first = yield* Agent.operations.session("review");
+      yield* collectPrompt("hello", { session: first });
+      const identity = first.agentSessionId;
+      const ensures = harness.ensureCalls.length;
+
+      // The same placement, now configured. It is established, so this is a
+      // real reconfiguration request rather than an inert placement.
+      const again = yield* Agent.operations.session("review", { model: "gpt-5.4-mini" });
+      expect(again).toBe(first);
+      expect(again.agentSessionId).toBe(identity);
+      expect(harness.configCalls).toEqual(["status", "set model=gpt-5.4-mini", "status"]);
+      // Reattached, not replaced: the second ensure reopens the same session
+      // key, and no second conversation was created.
+      expect(harness.ensureCalls.length).toBe(ensures + 1);
+      expect(harness.ensureCalls.at(-1)?.sessionKey).toBe(first.sessionKey);
+      expect(harness.turns.length).toBe(1);
+    });
+  });
+
+  it("SC12: an agent that cannot report or change configuration refuses in place", function* () {
+    const harness = createFakeRuntime();
+    harness.omitConfiguration = true;
+    yield* scoped(function* () {
+      yield* installProvider(harness);
+      const refused = yield* refusalOf(() => configuredPrompt(harness, { model: "gpt-5.4" }));
+      expect(refused).toContain("cannot be configured in place");
+      expect(harness.turns.length).toBe(0);
+    });
+  });
+
+  it("SC13: a configuration cancelled mid-refresh still puts the conversation back", function* () {
+    const harness = configured(createFakeRuntime());
+    const refreshing = withResolvers<void>();
+    const held = withResolvers<void>();
+    // The refresh that follows the model write is held open, which is exactly
+    // where a cancellation finds a write that has already landed.
+    harness.statusGate = (call) => {
+      if (call !== 2) {
+        return undefined;
+      }
+      return (function* () {
+        refreshing.resolve();
+        yield* held.operation;
+      })();
+    };
+    yield* scoped(function* () {
+      yield* installProvider(harness);
+      const session = yield* Agent.operations.session("review", {
+        model: "gpt-5.4-mini",
+        effort: "high",
+      });
+      const prompting = yield* spawn(() => collectPrompt("hello", { session }));
+      yield* refreshing.operation;
+      expect(harness.configCalls).toEqual(["status", "set model=gpt-5.4-mini", "status"]);
+
+      // Cancelled with the write applied and its answer still in flight. A
+      // cleanup that skipped restoration here would leave the conversation on
+      // a model nobody asked it to stay on.
+      yield* prompting.halt();
+
+      expect(harness.configCalls).toEqual([
+        "status",
+        "set model=gpt-5.4-mini",
+        "status",
+        "status",
+        "set model=gpt-5.4",
+        "status",
+        "status",
+      ]);
+      expect(harness.configOptions?.[0]?.currentValue).toBe("gpt-5.4");
+      expect(harness.turns.length).toBe(0);
+      // Let the held refresh settle, so nothing outlives this case.
+      held.resolve();
+    });
+  });
+
+  it("SC15: a write still in flight lands before restoration, never after it", function* () {
+    const harness = configured(createFakeRuntime());
+    const writing = withResolvers<void>();
+    // The effort write takes measurably longer to land than a cancellation
+    // takes to unwind. A barrier cannot express that: what this case is about
+    // is whether cleanup waits for an outstanding write at all, and an
+    // outstanding write that only lands when the test says so would be waited
+    // for by construction.
+    harness.writeGate = (write) =>
+      write.key === "effort"
+        ? (function* () {
+            writing.resolve();
+            yield* sleep(50);
+          })()
+        : undefined;
+    yield* scoped(function* () {
+      yield* installProvider(harness);
+      const session = yield* Agent.operations.session("review", {
+        model: "gpt-5.4-mini",
+        effort: "high",
+      });
+      const prompting = yield* spawn(() => collectPrompt("hello", { session }));
+      yield* writing.operation;
+
+      // Cancelled with that write in flight. Restoration may not start until
+      // it has settled: a write that landed afterwards would land on top of
+      // the value restoration had just put back.
+      yield* prompting.halt();
+      // Long enough for a write nobody waited for to have landed by now.
+      yield* sleep(120);
+
+      // Both settings are where they started. Restoration saw the effort this
+      // write applied and put that back too, which is what a cleanup that
+      // waited for it looks like — and what one that did not cannot produce.
+      expect(harness.configCalls).toContain("set effort=medium");
+      expect(harness.configOptions?.[0]?.currentValue).toBe("gpt-5.4");
+      expect(harness.configOptions?.[1]?.currentValue).toBe("medium");
+      expect(harness.turns.length).toBe(0);
+
+      // Restored rather than unusable, so the same session still works.
+      harness.writeGate = undefined;
+      const again = yield* Agent.operations.session("review");
+      yield* collectPrompt("again", { session: again });
+      expect(harness.turns.length).toBe(1);
+    });
+  });
+
+  it("SC16: a restoration cut short by cancellation is finished by cleanup", function* () {
+    const harness = configured(createFakeRuntime());
+    harness.writeFailures = { effort: new Error("the agent refused that effort level") };
+    const restoring = withResolvers<void>();
+    const held = withResolvers<void>();
+    // The status read that opens the failure path's own restoration is held
+    // open, so the cancellation lands on a restoration that has started and
+    // has not yet put anything back.
+    harness.statusGate = (call) =>
+      call === 3
+        ? (function* () {
+            restoring.resolve();
+            yield* held.operation;
+          })()
+        : undefined;
+    yield* scoped(function* () {
+      yield* installProvider(harness);
+      const session = yield* Agent.operations.session("review", {
+        model: "gpt-5.4-mini",
+        effort: "high",
+      });
+      const prompting = yield* spawn(() => collectPrompt("hello", { session }));
+      yield* restoring.operation;
+      expect(harness.configCalls).toEqual([
+        "status",
+        "set model=gpt-5.4-mini",
+        "status",
+        "set effort=high",
+        "status",
+      ]);
+
+      yield* prompting.halt();
+      held.resolve();
+
+      // Cleanup started the restoration again rather than reading the
+      // interrupted attempt as one that had already settled.
+      expect(harness.configCalls).toEqual([
+        "status",
+        "set model=gpt-5.4-mini",
+        "status",
+        "set effort=high",
+        "status",
+        "status",
+        "set model=gpt-5.4",
+        "status",
+        "status",
+      ]);
+      expect(harness.configOptions?.[0]?.currentValue).toBe("gpt-5.4");
+      expect(harness.configOptions?.[1]?.currentValue).toBe("medium");
+      expect(harness.turns.length).toBe(0);
+
+      // Finished restored, so this session is still one a document may use.
+      harness.writeFailures = {};
+      harness.statusGate = undefined;
+      const again = yield* Agent.operations.session("review");
+      yield* collectPrompt("again", { session: again });
+      expect(harness.turns.length).toBe(1);
+    });
+  });
+
+  it("SC17: a cancelled configuration nobody can put back leaves the session refusing", function* () {
+    const harness = configured(createFakeRuntime());
+    const refreshing = withResolvers<void>();
+    const held = withResolvers<void>();
+    harness.statusGate = (call) =>
+      call === 2
+        ? (function* () {
+            refreshing.resolve();
+            yield* held.operation;
+          })()
+        : undefined;
+    // The write that would put the model back starts failing once the first
+    // one has landed, so cleanup finds a conversation it cannot restore.
+    harness.afterWrite = ({ key }) => {
+      if (key === "model") {
+        harness.writeFailures = { model: new Error("the agent refused that model") };
+      }
+    };
+    yield* scoped(function* () {
+      yield* installProvider(harness);
+      const session = yield* Agent.operations.session("review", { model: "gpt-5.4-mini" });
+      const prompting = yield* spawn(() => collectPrompt("hello", { session }));
+      yield* refreshing.operation;
+
+      yield* prompting.halt();
+      held.resolve();
+
+      // Nothing can say what this conversation is running under, so nothing
+      // uses it again — and the refusal costs no provider call at all.
+      const before = [...harness.configCalls];
+      const ensures = harness.ensureCalls.length;
+      const refused = yield* refusalOf(() => collectPrompt("again", { session }));
+      expect(refused).toBe(
+        `Session "${session.sessionKey}" may remain reconfigured after a failed ` +
+          `restoration and will not be used again during this run.`,
+      );
+      expect(harness.configCalls).toEqual(before);
+      expect(harness.ensureCalls.length).toBe(ensures);
+      expect(harness.turns.length).toBe(0);
+    });
+  });
+
+  it("SC14: a status this run cannot read fails rather than reading as no choices", function* () {
+    const malformed: Record<string, Record<string, unknown>[]> = {
+      "two model selectors": [
+        selector("model", "model", "gpt-5.4", MODELS),
+        selector("primary", "model", "gpt-5.4", MODELS),
+      ],
+      "a selector that is not a list of choices": [
+        { id: "model", name: "Model", type: "boolean", category: "model", currentValue: true },
+      ],
+      "a choice offered twice": [
+        selector("model", "model", "gpt-5.4", [...MODELS, choice("gpt-5.4", "GPT-5.4 again")]),
+      ],
+      "a current value nothing offers": [selector("model", "model", "gpt-9", MODELS)],
+      "a choice with no id": [selector("model", "model", "gpt-5.4", [{ name: "GPT-5.4" }])],
+      "a group with no name": [
+        selector("model", "model", "gpt-5.4", [{ group: "frontier", options: MODELS }]),
+      ],
+    };
+    for (const [shape, configOptions] of Object.entries(malformed)) {
+      const harness = createFakeRuntime();
+      harness.configOptions = configOptions;
+      yield* scoped(function* () {
+        yield* installProvider(harness);
+        const refused = yield* refusalOf(() => configuredPrompt(harness, { model: "gpt-5.4" }));
+        expect([shape, refused.length > 0, harness.turns.length]).toEqual([shape, true, 0]);
+      });
+    }
+  });
+});
+
+/**
+ * Tier SO — what one agent advertises, inspected through `options()`.
+ *
+ * Inspection is not a document session: it creates a conversation of its own,
+ * reads it, and gives it up. These rows are as much about what it does not do —
+ * no prompt, no host mapping, no placement, nothing left behind for a document
+ * to find — as about the choices it returns.
+ */
+describe("Tier SO — agent option discovery", () => {
+  it("SO1: direct and grouped choices keep the provider's own order and meaning", function* () {
+    const harness = createFakeRuntime();
+    harness.configOptions = [
+      selector("model", "model", "gpt-5.4-mini", [
+        choice("gpt-5.4", "GPT-5.4", "the current one"),
+        group("frontier", "Frontier", [choice("gpt-5.4-mini", "GPT-5.4 Mini")]),
+      ]),
+      selector("effort", "thought_level", "medium", EFFORTS),
+    ];
+    yield* scoped(function* () {
+      yield* installProvider(harness);
+      const options = yield* Agent.operations.options("scribe");
+
+      expect(options.agent).toBe("scribe");
+      expect(options.model).toEqual({
+        selected: "gpt-5.4-mini",
+        options: [
+          { id: "gpt-5.4", name: "GPT-5.4", description: "the current one", group: null },
+          {
+            id: "gpt-5.4-mini",
+            name: "GPT-5.4 Mini",
+            description: null,
+            group: { id: "frontier", name: "Frontier" },
+          },
+        ],
+      });
+      expect(options.effort?.selected).toBe("medium");
+      expect(options.effort?.options.map((entry) => entry.id)).toEqual(["low", "medium", "high"]);
+    });
+  });
+
+  it("SO2: an agent that advertises nothing reports no choices rather than empty ones", function* () {
+    const harness = createFakeRuntime();
+    yield* scoped(function* () {
+      yield* installProvider(harness);
+      const options = yield* Agent.operations.options("scribe");
+      expect(options).toEqual({ agent: "scribe", model: null, effort: null });
+    });
+  });
+
+  it("SO3: a selector recognized by its exact id is read where no category says so", function* () {
+    const harness = createFakeRuntime();
+    harness.configOptions = [
+      { id: "model", name: "Model", type: "select", currentValue: "gpt-5.4", options: MODELS },
+      { id: "effort", name: "Effort", type: "select", currentValue: "low", options: EFFORTS },
+    ];
+    yield* scoped(function* () {
+      yield* installProvider(harness);
+      const options = yield* Agent.operations.options("scribe");
+      expect(options.model?.selected).toBe("gpt-5.4");
+      expect(options.effort?.selected).toBe("low");
+    });
+  });
+
+  it("SO4: inspection creates one session, sends no prompt, and gives it up", function* () {
+    const harness = configured(createFakeRuntime());
+    yield* scoped(function* () {
+      yield* installProvider(harness);
+      yield* Agent.operations.options("scribe");
+
+      expect(harness.ensureCalls.length).toBe(1);
+      expect(harness.turns.length).toBe(0);
+      expect(harness.closeCalls.length).toBe(1);
+      // Its own conversation, under a key no placement would produce, and
+      // closed without asking the provider to forget its history.
+      expect(harness.ensureCalls[0]?.sessionKey).toContain("xmd:inspect:");
+      expect(harness.ensureCalls[0]?.sessionKey).not.toBe(deriveSessionKey("scribe-cmd", CWD));
+      expect(harness.closeInputs[0]?.discardPersistentState).toBe(undefined);
+
+      // Nothing a document can reach: placing a session afterwards produces
+      // the key that placement derives, never the inspection's.
+      const session = yield* Agent.operations.session();
+      expect(session.sessionKey).toBe(deriveSessionKey("scribe-cmd", CWD));
+    });
+  });
+
+  it("SO5: --model selects for the inspection and reports that model's effort choices", function* () {
+    const harness = configured(createFakeRuntime());
+    harness.afterWrite = ({ key, value }) => {
+      if (key === "model" && value === "gpt-5.4-mini") {
+        harness.configOptions = [
+          selector("model", "model", "gpt-5.4-mini", MODELS),
+          selector("effort", "thought_level", "low", [choice("low", "Low")]),
+        ];
+      }
+    };
+    yield* scoped(function* () {
+      yield* installProvider(harness);
+      const options = yield* Agent.operations.options("scribe", { model: "gpt-5.4-mini" });
+
+      expect(harness.configCalls).toEqual(["status", "set model=gpt-5.4-mini", "status"]);
+      expect(options.model?.selected).toBe("gpt-5.4-mini");
+      expect(options.effort?.options.map((entry) => entry.id)).toEqual(["low"]);
+      expect(harness.turns.length).toBe(0);
+    });
+  });
+
+  it("SO6: an unknown inspection model is refused with the same diagnostic a session gets", function* () {
+    const harness = configured(createFakeRuntime());
+    yield* scoped(function* () {
+      yield* installProvider(harness);
+      const refused = yield* refusalOf(() =>
+        Agent.operations.options("scribe", { model: "gpt-x" }),
+      );
+      expect(refused).toBe(
+        'Unknown model "gpt-x" for agent "scribe".\nAvailable options are: gpt-5.4, gpt-5.4-mini',
+      );
+      // Still given up, however it ended.
+      expect(harness.closeCalls.length).toBe(1);
+      expect(harness.turns.length).toBe(0);
+    });
+  });
+
+  it("SO8: a cancelled inspection closes its conversation exactly once", function* () {
+    const harness = configured(createFakeRuntime());
+    const reading = withResolvers<void>();
+    const held = withResolvers<void>();
+    harness.statusGate = (call) =>
+      call === 1
+        ? (function* () {
+            reading.resolve();
+            yield* held.operation;
+          })()
+        : undefined;
+    yield* scoped(function* () {
+      yield* installProvider(harness);
+      const inspecting = yield* spawn(() => Agent.operations.options("scribe"));
+      yield* reading.operation;
+      expect(harness.ensureCalls.length).toBe(1);
+
+      const halting = yield* spawn(() => inspecting.halt());
+      held.resolve();
+      yield* halting;
+
+      // One conversation, one close, and the provider's own history left alone.
+      expect(harness.closeCalls.length).toBe(1);
+      expect(harness.closeInputs[0]?.discardPersistentState).toBe(undefined);
+      expect(harness.turns.length).toBe(0);
+    });
+  });
+
+  it("SO7: an unavailable agent is refused before any session exists", function* () {
+    const harness = configured(createFakeRuntime());
+    harness.doctorReports.push({ ok: false, message: "scribe is not installed" });
+    yield* scoped(function* () {
+      yield* installProvider(harness);
+      const refused = yield* refusalOf(() => Agent.operations.options("scribe"));
+      expect(refused).toContain("scribe is not installed");
+      // The agent is validated first, so nothing was created to inspect.
+      expect(harness.ensureCalls.length).toBe(0);
+      expect(harness.closeCalls.length).toBe(0);
+      expect(harness.turns.length).toBe(0);
+    });
+  });
+});
+
+/**
+ * Tier SE — reconfiguring a session a native UI could take (issue #828).
+ *
+ * An established session is reattached eagerly, so the reconfiguration happens
+ * while this run holds both a handle and the session's ownership. Neither may
+ * outlive the attempt: a handle kept past it is a second owner of a
+ * conversation a native process may be in, and ownership left claimed is a
+ * session no other operation can reach.
+ */
+describe("Tier SE — reconfiguring an owned session", () => {
+  it("SE1: a refused reconfiguration gives the handle and the ownership back", function* () {
+    const harness = configured(createFakeRuntime());
+    const ownership = makeCoordinator();
+    yield* scoped(function* () {
+      yield* installOwnedProvider(harness, ownership);
+      const session = yield* Agent.operations.session("review");
+      yield* collectPrompt("hello", { session });
+      const closes = harness.closeCalls.length;
+      const settled = ownership.events.length;
+
+      harness.writeFailures = { effort: new Error("the agent refused that effort level") };
+      const refused = yield* refusalOf(() =>
+        Agent.operations.session("review", { model: "gpt-5.4-mini", effort: "high" }),
+      );
+
+      expect(refused).toContain("the agent refused that effort level");
+      // The handle this reattachment took is closed, and the ownership it
+      // acquired is released as idle rather than left looking active.
+      expect(harness.closeCalls.length).toBe(closes + 1);
+      expect(ownership.events.slice(settled)).toEqual(["owned", "quiesced", "released-idle"]);
+      // Restored, so the same conversation is still one a document may use —
+      // and it is the same one, under the same identity.
+      expect(harness.configOptions?.[0]?.currentValue).toBe("gpt-5.4");
+      harness.writeFailures = {};
+      const again = yield* Agent.operations.session("review");
+      expect(again).toBe(session);
+      expect(again.agentSessionId).toBe(session.agentSessionId);
+      yield* collectPrompt("again", { session: again });
+      expect(harness.turns.length).toBe(2);
+    });
+  });
+
+  it("SE2: a cancelled reconfiguration gives them back too", function* () {
+    const harness = configured(createFakeRuntime());
+    const ownership = makeCoordinator();
+    const reading = withResolvers<void>();
+    const held = withResolvers<void>();
+    yield* scoped(function* () {
+      yield* installOwnedProvider(harness, ownership);
+      const session = yield* Agent.operations.session("review");
+      yield* collectPrompt("hello", { session });
+      const closes = harness.closeCalls.length;
+      const settled = ownership.events.length;
+
+      // Held on the reconfiguration's first status read, which is after the
+      // handle and the ownership have both been taken.
+      harness.statusGate = (call) =>
+        call === 1
+          ? (function* () {
+              reading.resolve();
+              yield* held.operation;
+            })()
+          : undefined;
+      const configuring = yield* spawn(() =>
+        Agent.operations.session("review", { model: "gpt-5.4-mini" }),
+      );
+      yield* reading.operation;
+
+      yield* configuring.halt();
+      held.resolve();
+
+      expect(harness.closeCalls.length).toBe(closes + 1);
+      expect(ownership.events.slice(settled)).toEqual(["owned", "quiesced", "released-idle"]);
+      // Nothing was written, so there was nothing to put back.
+      expect(harness.configOptions?.[0]?.currentValue).toBe("gpt-5.4");
+      expect(harness.turns.length).toBe(1);
+    });
   });
 });

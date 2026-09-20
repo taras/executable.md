@@ -42,6 +42,8 @@ import { join, resolve } from "node:path";
 import { Agent, isSessionRequest, sameExecutableBuild } from "@executablemd/core";
 import type {
   ExecutableBuildBindingV1,
+  AgentOptions,
+  AgentOptionsRequest,
   AgentSessionRequest,
   AgentLaunchRequest,
   AgentLaunchCoordinator,
@@ -60,8 +62,15 @@ import type {
   PreparedLaunchRecord,
   PromptOptions,
   Session,
+  SessionConfiguration,
   SessionLaunchResult,
 } from "@executablemd/core";
+import {
+  AcpConfigurationError,
+  applySessionConfiguration,
+  sessionUnusable,
+} from "./session-configuration.ts";
+import type { ConfigurationTarget } from "./session-configuration.ts";
 import { allocatesIdentity, bindsBuild } from "./native-launch.ts";
 import type {
   BoundProviderReturnedAdapter,
@@ -392,6 +401,24 @@ interface DetachedSession {
   agentCommand: string;
   cwd: string;
   /**
+   * What the `<Session>` holding this value asked its conversation to run
+   * under, when it asked for anything.
+   *
+   * Kept beside the exact value this provider issued rather than under the
+   * session key alone: the configuration belongs to the element that authored
+   * it, and a value this provider did not issue reaches none of this state.
+   */
+  configuration?: SessionConfiguration;
+  /**
+   * Set when a configuration write may have landed and could not be undone.
+   *
+   * What it guards is not this session's configuration but the fact that
+   * nobody can state it. Every later route to this session refuses before
+   * contacting the provider, because continuing would be prompting a
+   * conversation under settings the document never asked for.
+   */
+  unusable?: boolean;
+  /**
    * The exact value `session()` issued for this placement.
    *
    * Retained rather than rebuilt, and compared by identity rather than by
@@ -552,7 +579,18 @@ interface LaunchInvocation {
  */
 export interface AcpxProvider {
   agent(name?: string): Operation<string>;
-  session(option?: string | Session | AgentSessionRequest): Operation<Session>;
+  session(
+    option?: string | Session | AgentSessionRequest,
+    configuration?: SessionConfiguration,
+  ): Operation<Session>;
+  /**
+   * What model and effort choices one agent advertises.
+   *
+   * Reads a session of its own and gives it up: no placement, no host mapping,
+   * no route, no queue and no turn. What comes back is provider-neutral, in the
+   * order the agent listed it.
+   */
+  options(agent?: string, request?: AgentOptionsRequest): Operation<AgentOptions>;
   promptStream(content: string, options?: PromptOptions): Stream<AgentPromptEvent, string>;
 }
 
@@ -615,8 +653,13 @@ export function createPartitionedAcpxProvider(select: AcpxPartitionSelector): Ag
         *agent([name], _next) {
           return yield* (yield* selected()).agent(name);
         },
-        *session([name], _next) {
-          return yield* (yield* selected()).placeSession(name, launchCoordinator);
+        *session([name, configuration], _next) {
+          return yield* (yield* selected()).placeSession(name, configuration, launchCoordinator);
+        },
+        // Inspection, and nothing this document's sessions can be reached
+        // through: it takes no placement and is handed no coordinator.
+        *options([agent, request], _next) {
+          return yield* (yield* selected()).options(agent, request);
         },
         *prompt([content, options], _next) {
           // Selection belongs inside the subscription, with the rest of the
@@ -688,6 +731,7 @@ interface AcpxProviderState extends AcpxProvider {
    */
   placeSession(
     option: string | Session | AgentSessionRequest | undefined,
+    configuration: SessionConfiguration | undefined,
     launchCoordinator: AgentLaunchCoordinator,
   ): Operation<Session>;
 }
@@ -780,8 +824,15 @@ class AcpxPartition implements AcpxProvider {
     return this.#live().agent(name);
   }
 
-  session(option?: string | Session | AgentSessionRequest): Operation<Session> {
-    return this.#live().session(option);
+  session(
+    option?: string | Session | AgentSessionRequest,
+    configuration?: SessionConfiguration,
+  ): Operation<Session> {
+    return this.#live().session(option, configuration);
+  }
+
+  options(agent?: string, request?: AgentOptionsRequest): Operation<AgentOptions> {
+    return this.#live().options(agent, request);
   }
 
   promptStream(content: string, options?: PromptOptions): Stream<AgentPromptEvent, string> {
@@ -986,6 +1037,19 @@ function* useAcpxProviderState(
     return entry;
   }
 
+  /**
+   * Refuse a session whose configuration could not be put back.
+   *
+   * Called where a route resolves which session it means and before anything
+   * is asked of the provider, so the refusal costs no status read, no write,
+   * no ensure, no turn and no process.
+   */
+  function refuseIfUnusable(sessionKey: string): void {
+    if (managed.get(sessionKey)?.unusable === true) {
+      throw new AcpConfigurationError(sessionUnusable(sessionKey));
+    }
+  }
+
   /** Whether this placement still names a handle this provider can act through. */
   function isLive(placed: ManagedSession | DetachedSession): placed is ManagedSession {
     return "handle" in placed;
@@ -1005,6 +1069,8 @@ function* useAcpxProviderState(
       cwd: entry.cwd,
       session: entry.session,
       state: entry.state,
+      ...(entry.configuration === undefined ? {} : { configuration: entry.configuration }),
+      ...(entry.unusable === undefined ? {} : { unusable: entry.unusable }),
     });
   }
 
@@ -1247,6 +1313,7 @@ function* useAcpxProviderState(
         // released, or handed to a native UI. Reaching for the same key
         // re-ensures it, which reattaches ACP to whatever holds it now rather
         // than reusing a connection older than that.
+        refuseIfUnusable(entry.session.sessionKey);
         return {
           kind: "placement",
           sessionKey: entry.session.sessionKey,
@@ -1259,6 +1326,7 @@ function* useAcpxProviderState(
           issued: entry.session,
         };
       }
+      refuseIfUnusable(option.sessionKey);
       return { kind: "existing", sessionKey: option.sessionKey, entry };
     }
     const agentCommand = registry.resolve(agentName);
@@ -1283,6 +1351,7 @@ function* useAcpxProviderState(
    * leave the first one unusable.
    */
   function placedPrepared(agentCommand: string, placement: AcpxSessionPlacement): Prepared {
+    refuseIfUnusable(placement.sessionKey);
     const held = managed.get(placement.sessionKey);
     const prepared: Prepared = {
       kind: "placement",
@@ -1370,6 +1439,28 @@ function* useAcpxProviderState(
     return session;
   }
 
+  /**
+   * Keep what this placement's `<Session>` asked its conversation to run under.
+   *
+   * Kept rather than applied: a fresh placement is inert, and the first
+   * operation that actually reaches the provider is the one that puts it into
+   * effect. An element that authored nothing changes nothing here, so a second
+   * `<Session>` naming the same placement without configuration does not erase
+   * what the first one asked for.
+   */
+  function rememberConfiguration(
+    sessionKey: string,
+    configuration: SessionConfiguration | undefined,
+  ): void {
+    if (configuration === undefined) {
+      return;
+    }
+    const entry = managed.get(sessionKey);
+    if (entry) {
+      entry.configuration = configuration;
+    }
+  }
+
   /** This placement now has a route and an identity of its own. */
   function markEstablished(sessionKey: string): void {
     const held = managed.get(sessionKey);
@@ -1422,6 +1513,9 @@ function* useAcpxProviderState(
     // bound to its creator, and every check below can still refuse it — which
     // is why the ensure settles its own claim rather than leaving that to a
     // `catch` a cancellation never reaches.
+    // What this provider already knows about this placement, so an ensure that
+    // replaces the entry does not drop what its <Session> asked for.
+    const held = managed.get(prepared.placement.sessionKey);
     let managedEntry: ManagedSession;
     try {
       managedEntry = yield* ensureThrough(
@@ -1455,6 +1549,8 @@ function* useAcpxProviderState(
             cwd: prepared.placement.cwd,
             session,
             state: intent.state,
+            ...(held?.configuration === undefined ? {} : { configuration: held.configuration }),
+            ...(held?.unusable === undefined ? {} : { unusable: held.unusable }),
           };
         },
       );
@@ -2168,6 +2264,165 @@ function* useAcpxProviderState(
     entry.state = "established";
   }
 
+  /**
+   * Put one live session into the configuration its `<Session>` asked for.
+   *
+   * Called with the session's queue slot granted and, for an advertised
+   * native-capable session, its ownership held — so the status reads and the
+   * writes below are this run's alone. The handle is the one the caller just
+   * ensured, and the runtime is the one that made it: configuration belongs to
+   * the exact conversation a turn or a handoff is about to use.
+   */
+  function configurationTarget(
+    agentName: string,
+    entry: ManagedSession,
+    requireWrite: boolean,
+  ): ConfigurationTarget {
+    const runtime = entry.runtime.runtime;
+    const readStatus = runtime.getStatus;
+    const writeOption = runtime.setConfigOption;
+    const sessionKey = entry.session.sessionKey;
+    if (readStatus === undefined || (requireWrite && writeOption === undefined)) {
+      throw new AcpConfigurationError(
+        `agent "${agentName}" cannot report or change what session "${sessionKey}" is ` +
+          `running under, so it cannot be configured in place — and replacing the ` +
+          `conversation is not what a configured session asks for`,
+      );
+    }
+    return {
+      agent: agentName,
+      sessionKey,
+      readStatus: () => until(readStatus.call(runtime, { handle: entry.handle })),
+      /**
+       * One write, and the Promise it started, owned by this operation.
+       *
+       * `setConfigOption()` runs whether or not anybody is still waiting: a
+       * scope halted at the `until()` below leaves it in flight, and a write
+       * that lands afterwards would land on top of the value restoration had
+       * just put back. So the settlement is scope-owned rather than awaited —
+       * registered with the Promise already started and before anything
+       * yields, so restoration cannot begin until this exact write is done
+       * moving the conversation.
+       */
+      write(optionId, value) {
+        return scoped(function* (): Operation<void> {
+          if (writeOption === undefined) {
+            throw new AcpConfigurationError(
+              `agent "${agentName}" cannot change what session "${sessionKey}" is running under`,
+            );
+          }
+          let pending: Promise<void> | undefined;
+          let observed = false;
+          yield* ensure(function* () {
+            if (observed || pending === undefined) {
+              return;
+            }
+            observed = true;
+            yield* until(
+              pending.then(
+                () => undefined,
+                () => undefined,
+              ),
+            );
+          });
+          pending = writeOption.call(runtime, {
+            handle: entry.handle,
+            key: optionId,
+            value,
+          });
+          yield* until(pending);
+          // Only where the write answered. A `finally` here would run while
+          // this very operation was being cancelled, which is the one moment
+          // the cleanup below has to do its waiting.
+          observed = true;
+        });
+      },
+      markUnusable: () => {
+        entry.unusable = true;
+        const current = managed.get(sessionKey);
+        if (current) {
+          current.unusable = true;
+        }
+      },
+    };
+  }
+
+  function* configureSession(
+    agentName: string,
+    entry: ManagedSession,
+    configuration: SessionConfiguration,
+  ): Operation<SessionConfiguration> {
+    const applied = yield* applySessionConfiguration(
+      configurationTarget(agentName, entry, true),
+      configuration,
+    );
+    return applied.effective;
+  }
+
+  /**
+   * What one agent advertises, read through a session of its own.
+   *
+   * Some agents reveal their configuration only once a session exists, so this
+   * creates one, reads it, and gives it up — whatever happens. It is not a
+   * document session: it is under no placement, reaches no host mapping, joins
+   * no queue and publishes no route, and nothing here sends a prompt. The
+   * provider may keep an empty conversation in its own history afterwards,
+   * which is a thing the command that calls this says before it runs.
+   */
+  function* inspectAgentOptions(
+    name?: string,
+    request?: AgentOptionsRequest,
+  ): Operation<AgentOptions> {
+    const agentName = yield* resolveAgent(name);
+    const agentCommand = registry.resolve(agentName);
+    const inspectionCwd = resolve(yield* agentCwd());
+    // Random, and deliberately not derived from the directory: a key a
+    // placement could also produce would make this inspection the session a
+    // document is holding.
+    const sessionKey = `xmd:inspect:${randomUUID()}`;
+    return yield* scoped(function* (): Operation<AgentOptions> {
+      // Registered before the session exists, because registering afterwards is
+      // itself a suspension: a cancellation delivered in that gap would leave a
+      // conversation open that nothing in this scope ever closes. The ensure
+      // below acts only on a handle this scope actually took, and an ensure
+      // cancelled mid-acquisition is already the acquisition's own to give up —
+      // so the conversation is closed exactly once either way, and never with
+      // `discardPersistentState`, because what the provider keeps of its own
+      // history is the provider's business.
+      const held: { entry?: ManagedSession } = {};
+      yield* ensure(function* () {
+        const taken = held.entry;
+        if (taken === undefined) {
+          return;
+        }
+        held.entry = undefined;
+        yield* abandonHandle(taken, "agent options inspected");
+      });
+      const entry = yield* ensureThrough(
+        undefined,
+        { sessionKey, agent: agentName, mode: "persistent", cwd: inspectionCwd },
+        (handle, runtimeEntry) => ({
+          handle,
+          runtime: runtimeEntry,
+          agentCommand,
+          cwd: inspectionCwd,
+          session: { sessionKey, cwd: inspectionCwd },
+          state: "pending",
+        }),
+      );
+      held.entry = entry;
+      const applied = yield* applySessionConfiguration(
+        configurationTarget(agentName, entry, request?.model !== undefined),
+        request?.model === undefined ? {} : { model: request.model },
+      );
+      return {
+        agent: agentName,
+        model: applied.selectors.model?.set ?? null,
+        effort: applied.selectors.effort?.set ?? null,
+      };
+    });
+  }
+
   function promptStream(
     content: string,
     options: PromptOptions | undefined,
@@ -2255,6 +2510,14 @@ function* useAcpxProviderState(
           // From here this session has been spoken to, whatever the cache
           // later says, so nothing may discard it to install a new layer.
 
+          // Before the turn, and after the conversation exists: a prompt sent
+          // under the wrong model is a turn that cannot be taken back, so the
+          // values are applied and verified first and the turn only follows a
+          // configuration this provider observed.
+          const desired = entry.configuration;
+          const effective =
+            desired === undefined ? undefined : yield* configureSession(agentName, entry, desired);
+
           const scope = yield* useScope();
           const recordKey = entry.handle.acpxRecordId ?? entry.session.sessionKey;
           // Route by the record's ACP session id, refreshed on demand so
@@ -2331,7 +2594,12 @@ function* useAcpxProviderState(
           yield* spawn(() =>
             consumeTurn(
               turn,
-              { agent: agentName, session: entry.session },
+              {
+                agent: agentName,
+                session: entry.session,
+                ...(desired === undefined ? {} : { requestedConfiguration: desired }),
+                ...(effective === undefined ? {} : { effectiveConfiguration: effective }),
+              },
               channel,
               () => {
                 completed = true;
@@ -3612,6 +3880,7 @@ function* useAcpxProviderState(
    */
   function* resolveSession(
     option: string | Session | AgentSessionRequest | undefined,
+    configuration: SessionConfiguration | undefined,
     launchCoordinator: AgentLaunchCoordinator | undefined,
   ): Operation<Session> {
     let named: string | Session | undefined;
@@ -3645,14 +3914,27 @@ function* useAcpxProviderState(
       // constructed, and choosing here would take that choice away from a
       // <Session.Launch> nested inside this very element.
       requireAssembly(agentName, prepared.sessionKey);
-      return placePending(prepared);
+      const placed = placePending(prepared);
+      rememberConfiguration(prepared.sessionKey, configuration);
+      return placed;
     }
+    rememberConfiguration(prepared.sessionKey, configuration);
     return yield* owning(
       agentName,
       agentCommandOf(prepared),
       prepared.sessionKey,
       "session",
       function* (ownership) {
+        // Establishing a session is not owning one, and reconfiguring one can
+        // fail or be cancelled — so both halves of giving it back are
+        // registered before anything is acquired. They unwind innermost first,
+        // which is the order they have to happen in: the handle is released,
+        // and only then does this scope say it holds nothing.
+        yield* ensure(() => {
+          if (!holding(prepared.sessionKey)) {
+            ownership.quiesced();
+          }
+        });
         // An established session, reattached eagerly: its route and its durable
         // identity both exist, so validating them here is what makes a
         // mismatched or missing history refusable before any turn. A failed
@@ -3662,25 +3944,30 @@ function* useAcpxProviderState(
         // client-native.
         const construction = yield* constructRoute(agentName, prepared);
         const resumeSessionId = construction?.resumeSessionId;
-        const session = yield* turns.withSlot(prepared.sessionKey, () =>
-          withSessionRoute(context, function* () {
-            const entry = yield* ensureFromPrepared(agentName, prepared, {
-              ...(construction === undefined ? {} : { build: construction.build }),
-              ...(resumeSessionId === undefined ? {} : { attachment: { resumeSessionId } }),
-              state,
-            });
-            return entry.session;
-          }),
+        return yield* turns.withSlot(prepared.sessionKey, () =>
+          withSessionRoute(context, () =>
+            scoped(function* (): Operation<Session> {
+              // Before the ensure that creates it, so nothing this scope takes
+              // outlives the scope — a handle held past this operation is a
+              // second owner of a session a native UI may take.
+              yield* ensure(() => releaseHandle(prepared.sessionKey));
+              const entry = yield* ensureFromPrepared(agentName, prepared, {
+                ...(construction === undefined ? {} : { build: construction.build }),
+                ...(resumeSessionId === undefined ? {} : { attachment: { resumeSessionId } }),
+                state,
+              });
+              // An established session is reattached here, so this is where a
+              // configuration it already asked for is put into effect: its
+              // route and its identity exist, and a conversation that cannot be
+              // reconfigured in place has to refuse before anything prompts it.
+              const desired = entry.configuration;
+              if (desired !== undefined) {
+                yield* configureSession(agentName, entry, desired);
+              }
+              return entry.session;
+            }),
+          ),
         );
-        // Establishing a session is not owning one. The handle is released
-        // here, so nothing this provider holds afterwards is a second owner of
-        // a session a native UI may take — the next operation reattaches under
-        // its own acquisition.
-        yield* releaseHandle(prepared.sessionKey);
-        if (!holding(prepared.sessionKey)) {
-          ownership.quiesced();
-        }
-        return session;
       },
     );
   }
@@ -3734,12 +4021,13 @@ function* useAcpxProviderState(
     *agent(name) {
       return yield* resolveAgent(name);
     },
-    *session(option) {
-      return yield* resolveSession(option, undefined);
+    *session(option, configuration) {
+      return yield* resolveSession(option, configuration, undefined);
     },
-    *placeSession(option, launchCoordinator) {
-      return yield* resolveSession(option, launchCoordinator);
+    *placeSession(option, configuration, launchCoordinator) {
+      return yield* resolveSession(option, configuration, launchCoordinator);
     },
+    options: inspectAgentOptions,
     promptStream,
     launch,
   };

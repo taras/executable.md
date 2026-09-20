@@ -18,13 +18,28 @@
 
 import { each, stream, until } from "effection";
 import type { Channel, Operation } from "effection";
-import type { AgentPromptCheckpoint, AgentPromptEvent, Session } from "@executablemd/core";
+import type {
+  AgentPromptCheckpoint,
+  AgentPromptEvent,
+  Session,
+  SessionConfiguration,
+} from "@executablemd/core";
 import type { AcpRuntimeTurn, AcpRuntimeTurnResult } from "./acpx-runtime.ts";
 import { checkpointFromResult } from "./checkpoint.ts";
 
 export interface TurnIdentity {
   agent: string;
   session: Session;
+  /**
+   * What this turn's session was asked to run under, and what the provider
+   * reported after applying it.
+   *
+   * Both are present only where a `<Session>` authored a configuration: a turn
+   * nobody configured reports neither, because an effective value read for its
+   * own sake would be an observation this provider never made.
+   */
+  requestedConfiguration?: SessionConfiguration;
+  effectiveConfiguration?: SessionConfiguration;
 }
 
 /**
@@ -53,7 +68,17 @@ export function* consumeTurn(
   refused?: TurnRefusal,
   checkpoint?: TurnCheckpoint,
 ): Operation<void> {
-  yield* channel.send({ type: "started", agent: identity.agent, session: identity.session });
+  yield* channel.send({
+    type: "started",
+    agent: identity.agent,
+    session: identity.session,
+    ...(identity.requestedConfiguration === undefined
+      ? {}
+      : { requestedConfiguration: identity.requestedConfiguration }),
+    ...(identity.effectiveConfiguration === undefined
+      ? {}
+      : { effectiveConfiguration: identity.effectiveConfiguration }),
+  });
   let text = "";
   let terminal: AgentPromptEvent;
   let named: AgentPromptCheckpoint | undefined;
