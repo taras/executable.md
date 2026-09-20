@@ -232,6 +232,15 @@ export interface FakeRuntimeHarness {
   afterWrite?: (write: { key: string; value: string }) => void;
   /** Build runtimes that cannot report or change configuration at all. */
   omitConfiguration?: boolean;
+  /**
+   * Every runtime call, as it happens, for a caller keeping one ordered log.
+   *
+   * `ensure`, `status`, `set <key>=<value>`, `turn` and `close`. A launch
+   * interleaves provider work with a native handoff, and the order of the two
+   * is the contract — so a case that owns both logs can state the whole
+   * sequence in one assertion instead of two that cannot see each other.
+   */
+  activity?: (event: string) => void;
   script(turn: ScriptedTurn): void;
 }
 
@@ -395,6 +404,7 @@ export function createFakeRuntime(): FakeRuntimeHarness {
           if (harness.ensureFailure) {
             return Promise.reject(harness.ensureFailure);
           }
+          harness.activity?.("ensure");
           harness.ensureCalls.push(input);
           const handleId = `${input.sessionKey}#${harness.handleIds.length}`;
           harness.handleIds.push(handleId);
@@ -447,6 +457,7 @@ export function createFakeRuntime(): FakeRuntimeHarness {
           return gate ? run(() => gate).then(answer) : Promise.resolve(answer());
         },
         startTurn(input) {
+          harness.activity?.("turn");
           const script = scripted.shift() ?? {};
           const recordId = input.handle.acpxRecordId ?? input.handle.sessionKey;
           const awaiting = withheld.has(recordId);
@@ -587,6 +598,7 @@ export function createFakeRuntime(): FakeRuntimeHarness {
           ? {}
           : {
               getStatus() {
+                harness.activity?.("status");
                 harness.configCalls.push("status");
                 if (harness.statusFailure) {
                   return Promise.reject(harness.statusFailure);
@@ -603,6 +615,7 @@ export function createFakeRuntime(): FakeRuntimeHarness {
                 return gate ? run(() => gate).then(answer) : Promise.resolve(answer());
               },
               setConfigOption(input: { handle: AcpRuntimeHandle; key: string; value: string }) {
+                harness.activity?.(`set ${input.key}=${input.value}`);
                 harness.configCalls.push(`set ${input.key}=${input.value}`);
                 const failure = harness.writeFailures?.[input.key];
                 if (failure) {
@@ -630,6 +643,7 @@ export function createFakeRuntime(): FakeRuntimeHarness {
           return Promise.resolve();
         },
         close(input) {
+          harness.activity?.("close");
           harness.closeRuntimes.push(options.agentProcessEnv?.CLAUDE_CODE_EXECUTABLE);
           harness.closeRuntimeIndexes.push(runtimeIndex);
           harness.closeCalls.push(input.handle);

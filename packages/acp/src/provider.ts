@@ -550,6 +550,16 @@ interface LaunchInvocation {
   /** Sessions whose detach phase ran live in this invocation. */
   readonly detachedLive: Set<string>;
   /**
+   * Sessions this invocation has already put into their requested
+   * configuration.
+   *
+   * A launch configures once: the run that prepared the session did it before
+   * anything was spent in it, and a replay does it at its own first live phase.
+   * Recording it is what keeps a detach and the spawn after it from reapplying
+   * what is already in force.
+   */
+  readonly configured: Set<string>;
+  /**
    * Sessions whose retained record this invocation has already checked against
    * its route.
    *
@@ -2885,13 +2895,44 @@ function* useAcpxProviderState(
     return record;
   }
 
+  /** What a routed launch asked its conversation to run under, if anything. */
+  function requestedConfiguration(request: AgentLaunchRequest): SessionConfiguration | undefined {
+    if (request.model === undefined && request.effort === undefined) {
+      return undefined;
+    }
+    return {
+      ...(request.model === undefined ? {} : { model: request.model }),
+      ...(request.effort === undefined ? {} : { effort: request.effort }),
+    };
+  }
+
+  /** The same question of a retained preparation, for a replay to reapply. */
+  function retainedConfiguration(prepared: PreparedLaunchRecord): SessionConfiguration | undefined {
+    if (prepared.requestedModel === undefined && prepared.requestedEffort === undefined) {
+      return undefined;
+    }
+    return {
+      ...(prepared.requestedModel === undefined ? {} : { model: prepared.requestedModel }),
+      ...(prepared.requestedEffort === undefined ? {} : { effort: prepared.requestedEffort }),
+    };
+  }
+
   function* prepareLaunch(
     invocation: LaunchInvocation,
     agentName: string,
     callerCwd: string,
     instructions: string,
     prepared: Prepared,
+    configuration: SessionConfiguration | undefined,
   ): Operation<PreparedLaunchRecord> {
+    // What this launch asked its conversation to run under, retained by every
+    // outcome below including each refusal: what was asked is the document's,
+    // and it stays true whether or not anything was applied. What a refusal
+    // never carries is an effective value, because nothing verified one.
+    const asked: Partial<PreparedLaunchRecord> = {
+      ...(configuration?.model === undefined ? {} : { requestedModel: configuration.model }),
+      ...(configuration?.effort === undefined ? {} : { requestedEffort: configuration.effort }),
+    };
     const adapter = adapterFor(agentName);
     if (!adapter || !launchAdvertised.has(agentName)) {
       const known = knownNativeAdapters().join(", ");
@@ -2901,13 +2942,29 @@ function* useAcpxProviderState(
           `is advertised only once its integration proof shows the native UI resumes ` +
           `the session ACP created and the prepared instructions are in force on its ` +
           `first turn. Adapters with a known command shape: ${known || "none"}.`,
-        { agent: agentName, cwd: callerCwd },
+        { agent: agentName, cwd: callerCwd, ...asked },
       );
     }
 
     const sessionKey = prepared.sessionKey;
     const sessionCwd = prepared.kind === "existing" ? prepared.entry.cwd : prepared.placement.cwd;
     const agentCommand = agentCommandOf(prepared);
+
+    // An adapter whose session the native process creates has nothing to
+    // configure before it opens: there is no conversation yet, and there is no
+    // moment between the UI creating one and the person typing in it. So a
+    // configured launch on that route refuses here — before a route is
+    // published, before an identity is allocated, before a private instruction
+    // file exists, and before anything could be detached or spawned.
+    if (configuration !== undefined && allocatesIdentity(adapter)) {
+      return refusal(
+        "unsupported-capability",
+        `agent "${agentName}" creates its session in its own interface, so a <Session> that ` +
+          `names a model or an effort level cannot be put into force before that interface ` +
+          `opens. Launch it without them, or use an agent whose session XMD creates.`,
+        { agent: agentName, sessionKey, cwd: sessionCwd, launcher: adapter.launcher, ...asked },
+      );
+    }
 
     // An adapter that names its own sessions never goes through ACP session
     // creation at all: the native process is what materializes the session.
@@ -2946,7 +3003,13 @@ function* useAcpxProviderState(
         : undefined;
     const sessionState: "created" | "resumed" = existing ? "resumed" : "created";
     const reconciliation: InstructionReconciliation = existing ? "resumed" : "installed";
-    const known = { agent: agentName, sessionKey, cwd: sessionCwd, launcher: adapter.launcher };
+    const known = {
+      agent: agentName,
+      sessionKey,
+      cwd: sessionCwd,
+      launcher: adapter.launcher,
+      ...asked,
+    };
 
     if (existing && storedSystemPrompt(existing) !== instructions) {
       // ACPX fixes a session's instruction layer when its ACP session is
@@ -3070,6 +3133,21 @@ function* useAcpxProviderState(
       );
     }
 
+    // The exact session now exists, and nothing has been said in it. This is
+    // the only moment a launch can put it under what the document asked for:
+    // after it the next thing that happens is a turn this launch may owe, a
+    // detach, and a native UI drawing in the conversation.
+    let effective: SessionConfiguration | undefined;
+    if (configuration !== undefined) {
+      try {
+        effective = yield* configureSession(agentName, managedEntry, configuration);
+        invocation.configured.add(sessionKey);
+      } catch (error) {
+        yield* releaseHandle(sessionKey);
+        return refusal("configuration-refused", toError(error).message, known);
+      }
+    }
+
     const record: PreparedLaunchRecord = {
       phase: "prepared",
       agent: agentName,
@@ -3097,18 +3175,98 @@ function* useAcpxProviderState(
       record.materialization = plan;
     }
     let model: string | undefined;
-    try {
-      model = yield* effectiveModel(managedEntry.runtime.runtime, managedEntry.handle);
-    } catch (error) {
-      // Asking for status is the last thing preparation does, and a provider
-      // that cannot answer leaves a handle this launch will never hand over.
-      yield* releaseHandle(sessionKey);
-      throw error;
+    if (effective === undefined) {
+      try {
+        // Only where nothing was configured. A configured launch already read
+        // this agent's own account of what the conversation is running under,
+        // and asking a second time would be reading past the answer it
+        // verified.
+        model = yield* effectiveModel(managedEntry.runtime.runtime, managedEntry.handle);
+      } catch (error) {
+        // Asking for status is the last thing preparation does, and a provider
+        // that cannot answer leaves a handle this launch will never hand over.
+        yield* releaseHandle(sessionKey);
+        throw error;
+      }
     }
     if (model !== undefined) {
       record.model = model;
     }
+    if (configuration?.model !== undefined) {
+      record.requestedModel = configuration.model;
+    }
+    if (configuration?.effort !== undefined) {
+      record.requestedEffort = configuration.effort;
+    }
+    // What this provider verified, which outranks the model summary above: one
+    // was read for its own sake, the other was applied and checked.
+    if (effective?.model !== undefined) {
+      record.model = effective.model;
+    }
+    if (effective?.effort !== undefined) {
+      record.effort = effective.effort;
+    }
     return record;
+  }
+
+  /**
+   * Put a replayed launch's conversation back under what it was prepared with.
+   *
+   * Reached at a replay's own first live phase, which is wherever the journal
+   * stopped: the detach for a launch that never handed over, and the spawn for
+   * one that did. The session is reattached by the exact identity the
+   * preparation retained, configured, and given up again — a replay reopens a
+   * conversation, it does not author a second account of relinquishing it.
+   */
+  function* reconfigureRetained(
+    invocation: LaunchInvocation,
+    prepared: PreparedLaunchRecord,
+    agentCommand: string,
+  ): Operation<LaunchFailure | undefined> {
+    const requested = retainedConfiguration(prepared);
+    if (requested === undefined || invocation.configured.has(prepared.sessionKey)) {
+      return undefined;
+    }
+    const sessionKey = prepared.sessionKey;
+    const held = managed.get(sessionKey);
+    return yield* scoped(function* (): Operation<LaunchFailure | undefined> {
+      let entry: ManagedSession;
+      if (held !== undefined && isLive(held)) {
+        entry = held;
+      } else {
+        // Given up however this ends, and registered before the attachment
+        // exists: ACP holds this conversation only for as long as it takes to
+        // put it back under what the document asked for.
+        yield* ensure(() => releaseHandle(sessionKey));
+        const placement: Prepared = {
+          kind: "placement",
+          sessionKey,
+          agentCommand,
+          placement: { sessionKey, cwd: prepared.cwd, state: "established" },
+          ...(held === undefined ? {} : { issued: held.session }),
+        };
+        const bound = invocation.bound.get(sessionKey);
+        try {
+          entry = yield* ensureFromPrepared(prepared.agent, placement, {
+            ...(bound === undefined ? {} : { build: bound.build }),
+            attachment: { resumeSessionId: prepared.nativeSessionId },
+            state: "established",
+          });
+        } catch (error) {
+          if (error instanceof AttachmentRefused) {
+            return error.failure;
+          }
+          return { class: "configuration-refused", message: toError(error).message };
+        }
+      }
+      try {
+        yield* configureSession(prepared.agent, entry, requested);
+      } catch (error) {
+        return { class: "configuration-refused", message: toError(error).message };
+      }
+      invocation.configured.add(sessionKey);
+      return undefined;
+    });
   }
 
   function* effectiveModel(
@@ -3484,6 +3642,13 @@ function* useAcpxProviderState(
         return { phase: "detached", failure: refused };
       }
     }
+    // A replay that stopped before handing over reaches its conversation here
+    // for the first time, so this is where what it was prepared with is put
+    // back into force — before the detach that follows says the handoff began.
+    const unconfigured = yield* reconfigureRetained(invocation, prepared, agentCommand);
+    if (unconfigured) {
+      return { phase: "detached", failure: unconfigured };
+    }
     // Reached live means the detach phase was absent from the journal, which is
     // what tells a resumed launch that native creation may not have begun.
     invocation.detachedLive.add(sessionKey);
@@ -3545,6 +3710,7 @@ function* useAcpxProviderState(
         bound: new Map(),
         detachedLive: new Set(),
         reconciled: new Set(),
+        configured: new Set(),
       };
 
       try {
@@ -3565,7 +3731,14 @@ function* useAcpxProviderState(
             yield* launchCoordinator.perform(request, {
               prepare: () =>
                 withSessionRoute(context, () =>
-                  prepareLaunch(invocation, agentName, callerCwd, request.instructions, placement),
+                  prepareLaunch(
+                    invocation,
+                    agentName,
+                    callerCwd,
+                    request.instructions,
+                    placement,
+                    requestedConfiguration(request),
+                  ),
                 ),
               materialize: (prepared, plan) => materializeSession(placement, prepared, plan),
               detach: (prepared) => detachSession(invocation, prepared, agentCommandOf(placement)),
@@ -3587,7 +3760,13 @@ function* useAcpxProviderState(
         // Contention and an unrecovered session are launch outcomes, not
         // crashes: they are retained as a refusal, before any ACP ensure,
         // detach or child, so the reader is told what to do about it.
-        const refusal = ownershipRefusal(error, agentName, placement.sessionKey, callerCwd);
+        const refusal = ownershipRefusal(
+          error,
+          agentName,
+          placement.sessionKey,
+          callerCwd,
+          requestedConfiguration(request),
+        );
         if (!refusal) {
           throw error;
         }
@@ -3806,6 +3985,36 @@ function* useAcpxProviderState(
         },
       };
     }
+    // The two durable accounts first, because reattaching to configure is
+    // already acting on the session: a replay that reopened a conversation, put
+    // a model into force in it and only then discovered its route or its build
+    // had drifted would have written to a session it could not confirm. This
+    // also settles which build the reattachment goes through, and it runs once
+    // per invocation — a prepared-only replay checked them at its own first
+    // live phase, and a launch that prepared live checked them there.
+    if (invocation.fresh.get(prepared.sessionKey) === undefined && bindsBuild(adapter)) {
+      let unconfirmed: LaunchFailure | undefined;
+      try {
+        unconfirmed = yield* reconcile(invocation, prepared, agentCommand);
+      } catch {
+        // Everything this check reaches for is private: a route store on a real
+        // filesystem, an executable this run observes, an adapter's own code.
+        // A settled refusal comes back as one and keeps its class; anything
+        // raised says nothing that may be repeated.
+        return { phase: "exited", failure: privateFailure() };
+      }
+      if (unconfirmed) {
+        return { phase: "exited", failure: unconfirmed };
+      }
+    }
+    // A launch whose detach was already retained reaches its conversation for
+    // the first time here. It is configured and relinquished again before the
+    // UI opens, and nothing durable is appended for that: the detach this
+    // replay is standing on is the one that happened.
+    const unconfigured = yield* reconfigureRetained(invocation, prepared, agentCommand);
+    if (unconfigured) {
+      return { phase: "exited", failure: unconfigured };
+    }
     let resolved: Result<string[]>;
     try {
       resolved = yield* nativeCommand(invocation, prepared, adapter, agentCommand);
@@ -3847,12 +4056,18 @@ function* useAcpxProviderState(
     agentName: string,
     sessionKey: string,
     sessionCwd: string,
+    configuration: SessionConfiguration | undefined,
   ): PreparedLaunchRecord | undefined {
     const known = {
       agent: agentName,
       sessionKey,
       cwd: sessionCwd,
       launcher: adapterFor(agentName)?.launcher ?? "",
+      // A launch that never reached the session still asked for something, and
+      // what it asked for is the document's. No effective value appears beside
+      // it: nothing was contacted, so nothing was verified.
+      ...(configuration?.model === undefined ? {} : { requestedModel: configuration.model }),
+      ...(configuration?.effort === undefined ? {} : { requestedEffort: configuration.effort }),
     };
     if (error instanceof AgentSessionBusy) {
       return refusal("session-busy", error.message, known);

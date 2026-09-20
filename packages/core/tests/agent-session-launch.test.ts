@@ -94,6 +94,11 @@ interface LaunchStub {
   misreportConfiguration?: boolean;
   /** What the provider reports the prepared conversation is running under. */
   effectiveConfiguration?: { model?: string; effort?: string };
+  /**
+   * Refuse a configured launch at its preparation, as a provider that could
+   * not put the conversation under what was asked does.
+   */
+  configurationRefused?: string;
 }
 
 function digest(text: string): string {
@@ -182,6 +187,12 @@ function createLaunchStub(overrides: Partial<LaunchStub> = {}): LaunchStub {
                 }
                 if (stub.effectiveConfiguration?.effort !== undefined) {
                   prepared.effort = stub.effectiveConfiguration.effort;
+                }
+                if (stub.configurationRefused !== undefined) {
+                  prepared.failure = {
+                    class: "configuration-refused",
+                    message: stub.configurationRefused,
+                  };
                 }
                 if (stub.executableBinding !== undefined) {
                   prepared.executableBinding = stub.executableBinding;
@@ -443,6 +454,7 @@ function* runInterrupted(
   stream: InMemoryStream,
   stub: LaunchStub,
   dir: string,
+  declareSession = false,
 ): Operation<LauncherLog> {
   const arrived = withResolvers<void>();
   const hold = withResolvers<void>();
@@ -477,7 +489,11 @@ function* runInterrupted(
           options: { defaultAgent: "stub-agent", permissionMode: "deny-all" },
         },
       });
-      const execution = yield* execute({ path: docPath, stream });
+      const execution = declareSession
+        ? yield* executeInstalled({ path: docPath, stream }, [
+            { components: agentIdentityComponents() },
+          ])
+        : yield* execute({ path: docPath, stream });
       yield* spawn(function* () {
         const subscription = yield* execution.output;
         let next = yield* subscription.next();
@@ -1857,5 +1873,72 @@ describe("Tier SJ — configuration in a retained preparation", () => {
       prepared({ failure: { class: "configuration-refused", message: "why" } }),
     );
     expect(parsed?.failure).toEqual({ class: "configuration-refused", message: "why" });
+  });
+});
+
+/**
+ * Tier SR — replaying a configured launch (issue #828).
+ *
+ * What a launch asked its conversation to run under is retained, so a resumed
+ * launch reads it rather than deciding again — and the phases it retained stay
+ * the phases that happened. Applying the configuration is the provider's; what
+ * these rows own is the durable sequence around it.
+ */
+describe("Tier SR — configured launch replay", () => {
+  it("SR1: a provider that cannot configure the conversation stops at the preparation", function* () {
+    const run = yield* runDoc(CONFIGURED_LAUNCH, {
+      declareSession: true,
+      stub: createLaunchStub({
+        configurationRefused: 'Unknown model "gpt-5.4" for agent "stub-agent".',
+      }),
+    });
+
+    expect(run.result.ok).toBe(false);
+    expect(run.result.ok ? "" : run.result.error.message).toContain("Unknown model");
+    // Retained as what happened, under the class an author can act on, and
+    // nothing after it was authored.
+    expect(preparedFailure(run.events)).toBe("configuration-refused");
+    expect(retainedPhases(run.events)).toEqual(["prepared"]);
+    expect(run.stub.detaches).toBe(0);
+    expect(run.launcher.requests.length).toBe(0);
+    // What was asked for survives the refusal; what was never verified is
+    // absent rather than retained as a value this launch ran under.
+    const record = preparedRecord(run.events);
+    expect(record.requestedModel).toBe("gpt-5.4");
+    expect(record.requestedEffort).toBe("high");
+    expect(record.model).toBe(undefined);
+    expect(record.effort).toBe(undefined);
+  });
+
+  it("SR2: an interrupted configured launch replays its phases and appends no second detach", function* () {
+    const stream = new InMemoryStream();
+    const stub = createLaunchStub({
+      effectiveConfiguration: { model: "gpt-5.4", effort: "high" },
+    });
+    const dir = path.join(os.tmpdir(), `xmd-sr-${randomUUID()}`);
+    yield* ensure(() => rm(dir, { recursive: true, force: true }));
+
+    const interrupted = yield* runInterrupted(CONFIGURED_LAUNCH, stream, stub, dir, true);
+    expect(interrupted.requests.length).toBe(1);
+    expect(stub.preparations.length).toBe(1);
+    expect(stub.detaches).toBe(1);
+
+    const resumed = yield* runDoc(CONFIGURED_LAUNCH, {
+      declareSession: true,
+      stream,
+      stub,
+      dir,
+    });
+    expect(resumed.result.ok ? "" : resumed.result.error.message).toBe("");
+    // Neither phase ran again, and the journal still holds exactly one of each.
+    expect(stub.preparations.length).toBe(1);
+    expect(stub.detaches).toBe(1);
+    expect(retainedPhases(resumed.events).filter((phase) => phase === "detached").length).toBe(1);
+    // What it was prepared with survived the interruption, which is what a
+    // provider reapplies before it continues.
+    const record = preparedRecord(resumed.events);
+    expect(record.requestedModel).toBe("gpt-5.4");
+    expect(record.requestedEffort).toBe("high");
+    expect(record.effort).toBe("high");
   });
 });

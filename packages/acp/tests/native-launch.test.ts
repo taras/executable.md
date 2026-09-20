@@ -54,8 +54,10 @@ import { AgentSessionRouteError, createMemorySessionRouteStore } from "../src/se
 import type { AgentSessionRoute, AgentSessionRouteStore } from "../src/session-route.ts";
 import { deriveSessionKey } from "../src/session-key.ts";
 import {
+  choice,
   createFakeObserver,
   createFakeRuntime,
+  selector,
   makeCoordinator,
   makeRecord,
   makeRegistry,
@@ -447,7 +449,7 @@ const PROVIDER_RETURNED_CLAUDE: NativeAdapter = {
  */
 function launchRequest(
   instructions: string,
-  options: { agent?: string; session?: string | Session } = {},
+  options: { agent?: string; session?: string | Session; model?: string; effort?: string } = {},
 ): AgentLaunchRequest {
   const request = {
     instructions,
@@ -456,6 +458,10 @@ function launchRequest(
     cwd: CWD,
     additionalDirectories: [] as readonly string[],
     permissionMode: "approve-reads" as const,
+    // What the enclosing `<Session>` asked this conversation to run under.
+    // Facts about the launch, exactly as core routes them.
+    ...(options.model === undefined ? {} : { model: options.model }),
+    ...(options.effort === undefined ? {} : { effort: options.effort }),
     with: () => request,
   };
   return request;
@@ -465,7 +471,7 @@ function launchRequest(
 function* attempt(
   trace: Trace,
   instructions: string,
-  options: { agent?: string; session?: string | Session } = {},
+  options: { agent?: string; session?: string | Session; model?: string; effort?: string } = {},
 ): Operation<PreparedLaunchRecord["failure"] | undefined> {
   yield* Agent.operations.launch(launchRequest(instructions, options));
   // The last one, so a case that launches more than once reads the attempt it
@@ -494,7 +500,7 @@ function* prompt(text: string, options: { session?: string | Session } = {}): Op
 /** Run a launch that is expected to complete. */
 function* launch(
   instructions: string,
-  options: { agent?: string; session?: string | Session } = {},
+  options: { agent?: string; session?: string | Session; model?: string; effort?: string } = {},
 ): Operation<void> {
   yield* Agent.operations.launch(launchRequest(instructions, options));
 }
@@ -4895,5 +4901,577 @@ describe("Tier MZ — the materialization turn", () => {
     expect(second.turns).toEqual([]);
     expect(preparedOf(later).nativeSessionId).toBe(ASSERTED);
     expect(later.launches[0]?.command).toEqual([OBSERVED_PATH, "--resume", ASSERTED]);
+  });
+});
+
+/**
+ * Tier NC — launching a configured conversation (issue #828).
+ *
+ * A `<Session>` that names a model or an effort level says what the native UI
+ * is about to be handed. The order is the whole contract: the session exists,
+ * it is put under what the document asked for, and only then may a turn be
+ * spent in it, ACP let go of it, or a UI draw in it. These cases keep the
+ * provider's log and the launcher's in one array so that order is one
+ * assertion rather than two that cannot see each other.
+ */
+const NC_MODELS = [choice("gpt-5.4", "GPT-5.4"), choice("gpt-5.4-mini", "GPT-5.4 Mini")];
+const NC_EFFORTS = [choice("low", "Low"), choice("medium", "Medium"), choice("high", "High")];
+
+function advertiseConfiguration(harness: FakeRuntimeHarness, trace: Trace): FakeRuntimeHarness {
+  harness.configOptions = [
+    selector("model", "model", "gpt-5.4", NC_MODELS),
+    selector("effort", "thought_level", "medium", NC_EFFORTS),
+  ];
+  harness.activity = (event) => trace.order.push(event);
+  return harness;
+}
+
+describe("Tier NC — configured native launch", () => {
+  it("NC1: the conversation is configured and verified before anything is spent in it", function* () {
+    const harness = createFakeRuntime();
+    const trace = newTrace();
+    advertiseConfiguration(harness, trace);
+    yield* scoped(function* () {
+      yield* installLaunchStack(harness, trace);
+      yield* launch(INSTRUCTIONS, { model: "gpt-5.4-mini", effort: "high" });
+
+      // One sequence, provider and launcher together: the session exists, the
+      // model is applied, its effort choices are refreshed, the effort is
+      // applied and verified, and only after all of that is the preparation
+      // retained, ACP let go of, and the native UI started.
+      expect(trace.order).toEqual([
+        "ensure",
+        "status",
+        "set model=gpt-5.4-mini",
+        "status",
+        "set effort=high",
+        "status",
+        "prepared",
+        "close",
+        "detached",
+        "spawn",
+        "exited",
+      ]);
+      const prepared = trace.records[0] as PreparedLaunchRecord;
+      expect(prepared.requestedModel).toBe("gpt-5.4-mini");
+      expect(prepared.requestedEffort).toBe("high");
+      expect(prepared.model).toBe("gpt-5.4-mini");
+      expect(prepared.effort).toBe("high");
+      // The same conversation throughout: one ensure, and the identity the
+      // native UI was handed is the one this preparation named.
+      expect(harness.ensureCalls.length).toBe(1);
+      expect(trace.launches[0]?.command).toContain(prepared.nativeSessionId);
+    });
+  });
+
+  it("NC2: an unconfigured launch asks the agent nothing about configuration", function* () {
+    const harness = createFakeRuntime();
+    const trace = newTrace();
+    advertiseConfiguration(harness, trace);
+    yield* scoped(function* () {
+      yield* installLaunchStack(harness, trace);
+      yield* launch(INSTRUCTIONS);
+
+      expect(trace.order).toEqual([
+        "ensure",
+        "status",
+        "prepared",
+        "close",
+        "detached",
+        "spawn",
+        "exited",
+      ]);
+      // The one status read is the model summary a launch has always retained,
+      // and it writes nothing.
+      expect(harness.configCalls).toEqual(["status"]);
+      const prepared = trace.records[0] as PreparedLaunchRecord;
+      expect(prepared.requestedModel).toBe(undefined);
+      expect(prepared.requestedEffort).toBe(undefined);
+      expect(prepared.effort).toBe(undefined);
+    });
+  });
+
+  it("NC3: a model this agent does not offer stops the launch before it hands anything over", function* () {
+    const harness = createFakeRuntime();
+    const trace = newTrace();
+    advertiseConfiguration(harness, trace);
+    yield* scoped(function* () {
+      yield* installLaunchStack(harness, trace);
+      const failure = yield* attempt(trace, INSTRUCTIONS, { model: "gpt-x" });
+
+      expect(failure?.class).toBe("configuration-refused");
+      expect(failure?.message).toBe(
+        'Unknown model "gpt-x" for agent "claude".\nAvailable options are: gpt-5.4, gpt-5.4-mini',
+      );
+      // The session was created and given back, and nothing after preparation
+      // happened at all.
+      expect(trace.order).toEqual(["ensure", "status", "close", "prepared"]);
+      expect(trace.launches).toEqual([]);
+      // What the document asked for is retained whatever happened to it; what
+      // is not retained is an effective value, because nothing verified one.
+      const prepared = preparedOf(trace);
+      expect(prepared.requestedModel).toBe("gpt-x");
+      expect(prepared.model).toBe(undefined);
+      expect(prepared.effort).toBe(undefined);
+    });
+  });
+
+  it("NC4: an effort the agent rejects restores the model and never reaches the UI", function* () {
+    const harness = createFakeRuntime();
+    const trace = newTrace();
+    advertiseConfiguration(harness, trace);
+    harness.writeFailures = { effort: new Error("the agent refused that effort level") };
+    yield* scoped(function* () {
+      yield* installLaunchStack(harness, trace);
+      const failure = yield* attempt(trace, INSTRUCTIONS, {
+        model: "gpt-5.4-mini",
+        effort: "high",
+      });
+
+      expect(failure?.class).toBe("configuration-refused");
+      expect(failure?.message).toContain("the agent refused that effort level");
+      expect(failure?.message).not.toContain("may remain reconfigured");
+      // Put back where it was, and the launch stopped at its preparation.
+      expect(harness.configOptions?.[0]?.currentValue).toBe("gpt-5.4");
+      expect(trace.order.filter((event) => event !== "status")).toEqual([
+        "ensure",
+        "set model=gpt-5.4-mini",
+        "set effort=high",
+        "set model=gpt-5.4",
+        "close",
+        "prepared",
+      ]);
+      expect(trace.launches).toEqual([]);
+      // Both asked-for values survive the refusal, and neither effective one
+      // appears: the model was put back, and the effort was never applied.
+      const prepared = preparedOf(trace);
+      expect(prepared.requestedModel).toBe("gpt-5.4-mini");
+      expect(prepared.requestedEffort).toBe("high");
+      expect(prepared.model).toBe(undefined);
+      expect(prepared.effort).toBe(undefined);
+    });
+  });
+
+  it("NC6: a turn this launch owes is spent only after the configuration is verified", function* () {
+    const harness = createFakeRuntime();
+    const trace = newTrace();
+    advertiseConfiguration(harness, trace);
+    harness.script({
+      events: [{ type: "text_delta", text: "Acknowledged.", stream: "output" }],
+      result: {
+        status: "completed",
+        stopReason: "end_turn",
+        _meta: { codex: { turnId: "turn-0001" } },
+      },
+    });
+    const owes: NativeAdapter = {
+      launcher: "claude",
+      identity: "provider-returned",
+      binding: TEST_BINDING,
+      materialization: {
+        promptVersion: "codex-materialization.v1",
+        prompt: "Reply with a brief acknowledgement only.",
+      },
+      resume: (nativeSessionId) => ["claude", "--resume", nativeSessionId],
+    };
+    yield* scoped(function* () {
+      yield* installLaunchStack(harness, trace, {
+        adapters: { claude: owes },
+        routeStore: createMemorySessionRouteStore(),
+      });
+      yield* launch(INSTRUCTIONS, { model: "gpt-5.4-mini", effort: "high" });
+
+      // The turn that makes this conversation openable is a turn in it, so it
+      // is spent under the configuration the document asked for rather than
+      // under whatever the agent happened to be set to.
+      expect(trace.order.filter((event) => event !== "notify")).toEqual([
+        "ensure",
+        "status",
+        "set model=gpt-5.4-mini",
+        "status",
+        "set effort=high",
+        "status",
+        "prepared",
+        "turn",
+        "materialized",
+        "close",
+        "detached",
+        "spawn",
+        "exited",
+      ]);
+    });
+  });
+
+  it("NC5: a launch whose session its own interface creates refuses before it creates anything", function* () {
+    const harness = createFakeRuntime();
+    const trace = newTrace();
+    const routes = createMemorySessionRouteStore();
+    let allocated = 0;
+    const clientNative: NativeAdapter = {
+      launcher: "claude",
+      identity: "client-allocated",
+      binding: TEST_BINDING,
+      allocate: () => {
+        allocated += 1;
+        return "11111111-2222-3333-4444-555555555555";
+      },
+      create: (nativeSessionId, instructionFile) => [
+        "claude",
+        "--session-id",
+        nativeSessionId,
+        "--system-prompt-file",
+        instructionFile,
+      ],
+      resume: (nativeSessionId) => ["claude", "--resume", nativeSessionId],
+    };
+    advertiseConfiguration(harness, trace);
+    yield* scoped(function* () {
+      yield* installLaunchStack(harness, trace, {
+        adapters: { claude: clientNative },
+        routeStore: routes,
+      });
+      const failure = yield* attempt(trace, INSTRUCTIONS, { model: "gpt-5.4-mini" });
+
+      expect(failure?.class).toBe("unsupported-capability");
+      expect(failure?.message).toContain("creates its session in its own interface");
+      // No identity was allocated, no route published, no session created, and
+      // nothing was detached or spawned.
+      expect(allocated).toBe(0);
+      expect(
+        yield* routes.read({ provider: "acpx", agent: AGENT_COMMAND, sessionKey: SESSION_KEY }),
+      ).toBe(undefined);
+      expect(trace.order).toEqual(["prepared"]);
+      expect(harness.ensureCalls).toEqual([]);
+      expect(trace.launches).toEqual([]);
+      // The refusal still says what the document asked for, and claims no
+      // effective value for a conversation that was never created.
+      const prepared = preparedOf(trace);
+      expect(prepared.requestedModel).toBe("gpt-5.4-mini");
+      expect(prepared.model).toBe(undefined);
+      expect(prepared.effort).toBe(undefined);
+    });
+  });
+});
+
+/**
+ * Tier NR — replaying a configured launch (issue #828).
+ *
+ * An interrupted launch reaches its conversation again at whatever phase the
+ * journal stopped at, and what it was prepared with has to be in force before
+ * it goes any further. Reaching it is an attachment to the exact identity the
+ * preparation named, and letting go of it again is not a second account of
+ * having handed the session over — the detach this replay is standing on is
+ * the one that happened.
+ */
+describe("Tier NR — configured incomplete replay", () => {
+  function retainedConfigured(overrides: Partial<PreparedLaunchRecord> = {}): PreparedLaunchRecord {
+    return {
+      phase: "prepared",
+      agent: "claude",
+      sessionKey: SESSION_KEY,
+      provider: "acpx",
+      nativeSessionId: `agent-session:${SESSION_KEY}`,
+      sessionState: "created",
+      instructionChannel: "acp.session.systemPrompt",
+      instructionReconciliation: "installed",
+      identityProvenance: "provider-returned",
+      instructionsDigest: createHash("sha256").update(INSTRUCTIONS).digest("hex"),
+      instructions: INSTRUCTIONS,
+      cwd: CWD,
+      additionalDirectories: [],
+      permissionMode: "approve-reads",
+      launcher: "claude",
+      requestedModel: "gpt-5.4-mini",
+      requestedEffort: "high",
+      model: "gpt-5.4-mini",
+      effort: "high",
+      ...overrides,
+    };
+  }
+
+  it("NR1: a launch that never handed over reattaches, reconfigures, and then detaches", function* () {
+    const harness = createFakeRuntime();
+    const trace = newTrace();
+    advertiseConfiguration(harness, trace);
+    yield* scoped(function* () {
+      yield* installLaunchStack(harness, trace);
+      trace.replay = { prepared: retainedConfigured(), suffix: "prepared" };
+
+      yield* Agent.operations.launch(
+        launchRequest(INSTRUCTIONS, { model: "gpt-5.4-mini", effort: "high" }),
+      );
+
+      expect(trace.order).toEqual([
+        "prepared",
+        "ensure",
+        "status",
+        "set model=gpt-5.4-mini",
+        "status",
+        "set effort=high",
+        "status",
+        "close",
+        "detached",
+        "spawn",
+        "exited",
+      ]);
+      // The exact conversation the preparation named, reopened rather than
+      // replaced, and prepared again by nobody.
+      expect(harness.ensureCalls.length).toBe(1);
+      expect(harness.ensureCalls[0]?.resumeSessionId).toBe(`agent-session:${SESSION_KEY}`);
+      expect(harness.turns.length).toBe(0);
+      expect(trace.launches[0]?.command).toContain(`agent-session:${SESSION_KEY}`);
+    });
+  });
+
+  /** A provider-returned adapter whose sessions are pinned to a build. */
+  const BOUND_CLAUDE: NativeAdapter = {
+    launcher: "claude",
+    identity: "provider-returned",
+    binding: TEST_BINDING,
+    resume: (nativeSessionId) => ["claude", "--resume", nativeSessionId],
+  };
+
+  /** The account a bound provider-named session's route carries. */
+  const BOUND_ACP_ROUTE: AgentSessionRoute = {
+    schema: "session-route.v3",
+    route: "acp-first",
+    provider: "acpx",
+    agent: AGENT_COMMAND,
+    sessionKey: SESSION_KEY,
+    executableBinding: OBSERVED_BUILD,
+  };
+
+  it("NR2: a launch that already detached reconfigures and reopens without a second detach", function* () {
+    const harness = createFakeRuntime();
+    const trace = newTrace();
+    const routes = createMemorySessionRouteStore();
+    const observer = createFakeObserver();
+    advertiseConfiguration(harness, trace);
+    yield* scoped(function* () {
+      yield* installLaunchStack(harness, trace, {
+        adapters: { claude: BOUND_CLAUDE },
+        routeStore: routes,
+        observer: observer.observer,
+      });
+      yield* routes.publish(BOUND_ACP_ROUTE);
+      trace.replay = {
+        prepared: retainedConfigured({ executableBinding: OBSERVED_BUILD }),
+        suffix: "prepared+detached",
+      };
+
+      yield* Agent.operations.launch(
+        launchRequest(INSTRUCTIONS, { model: "gpt-5.4-mini", effort: "high" }),
+      );
+
+      expect(trace.order).toEqual([
+        "prepared",
+        "detached",
+        "ensure",
+        "status",
+        "set model=gpt-5.4-mini",
+        "status",
+        "set effort=high",
+        "status",
+        "close",
+        "spawn",
+        "exited",
+      ]);
+      // Reconciled before the conversation was reached at all, and the
+      // reattachment went through the build that check verified: the runtime
+      // this ensure was made on carries that build's transient environment,
+      // and the native UI runs the same file.
+      expect(observer.observed).toEqual(["claude"]);
+      const created = only(harness.createdOptions, "a created runtime");
+      expect(created.agentProcessEnv?.CLAUDE_CODE_EXECUTABLE).toBe(OBSERVED_PATH);
+      expect(harness.closeRuntimes).toEqual([OBSERVED_PATH]);
+      // The exact conversation the preparation named, reopened by name.
+      expect(harness.ensureCalls.length).toBe(1);
+      expect(harness.ensureCalls[0]?.resumeSessionId).toBe(`agent-session:${SESSION_KEY}`);
+      expect(trace.launches[0]?.command).toEqual([
+        OBSERVED_PATH,
+        "--resume",
+        `agent-session:${SESSION_KEY}`,
+      ]);
+      // ACP was reacquired and given up again, and the journal says so exactly
+      // once — the phase this replay stood on.
+      expect(trace.records.filter((record) => record.phase === "detached").length).toBe(1);
+      expect(harness.closeCalls.length).toBe(1);
+      expect(harness.turns.length).toBe(0);
+    });
+  });
+
+  it("NR5: a detached replay whose build drifted refuses before it reopens anything", function* () {
+    const harness = createFakeRuntime();
+    const trace = newTrace();
+    const routes = createMemorySessionRouteStore();
+    // Another build of the same provider: it accepts the same identity string
+    // and disagrees silently about which conversation it names.
+    const observer = createFakeObserver({
+      versionOutput: "2.1.242 (Claude Code)\n",
+      digest: "b".repeat(64),
+    });
+    advertiseConfiguration(harness, trace);
+    yield* scoped(function* () {
+      yield* installLaunchStack(harness, trace, {
+        adapters: { claude: BOUND_CLAUDE },
+        routeStore: routes,
+        observer: observer.observer,
+      });
+      yield* routes.publish(BOUND_ACP_ROUTE);
+      trace.replay = {
+        prepared: retainedConfigured({ executableBinding: OBSERVED_BUILD }),
+        suffix: "prepared+detached",
+      };
+
+      yield* Agent.operations.launch(
+        launchRequest(INSTRUCTIONS, { model: "gpt-5.4-mini", effort: "high" }),
+      );
+
+      const exited = trace.records.find((record) => record.phase === "exited");
+      expect(exited?.failure?.class).toBe("executable-binding-refused");
+      // Refused before the conversation was reached: nothing was reopened, no
+      // status was read, nothing was written, and no process started.
+      expect(trace.order).toEqual(["prepared", "detached", "exited"]);
+      expect(harness.ensureCalls).toEqual([]);
+      expect(harness.configCalls).toEqual([]);
+      expect(trace.launches).toEqual([]);
+    });
+  });
+
+  it("NR6: a reconciliation that fails says nothing about how it failed", function* () {
+    const harness = createFakeRuntime();
+    const trace = newTrace();
+    const routes = createMemorySessionRouteStore();
+    const marker = "xmd-record-marker-7c31";
+    // Reconciling reads ACPX's own record, which lives on a real filesystem.
+    // Whatever that read raises is private — a path, a host's own message — and
+    // a durable record is not the place for any of it. Only the read this
+    // reconciliation makes fails, which is why it is armed by the route read
+    // immediately before it.
+    let reconciling = false;
+    const reading: AgentSessionRouteStore = {
+      *read(key) {
+        reconciling = true;
+        return yield* routes.read(key);
+      },
+      publish: routes.publish,
+    };
+    const inner = makeStore();
+    const exploding: AcpSessionStore = {
+      load: (sessionId) =>
+        reconciling
+          ? Promise.reject(new Error(`EACCES: /var/private/${marker}/records/abc.json`))
+          : inner.load(sessionId),
+      save: inner.save,
+    };
+    advertiseConfiguration(harness, trace);
+    yield* scoped(function* () {
+      yield* installLaunchStack(harness, trace, {
+        adapters: { claude: BOUND_CLAUDE },
+        routeStore: reading,
+        store: exploding,
+      });
+      yield* routes.publish(BOUND_ACP_ROUTE);
+      trace.replay = {
+        prepared: retainedConfigured({ executableBinding: OBSERVED_BUILD }),
+        suffix: "prepared+detached",
+      };
+
+      yield* Agent.operations.launch(
+        launchRequest(INSTRUCTIONS, { model: "gpt-5.4-mini", effort: "high" }),
+      );
+
+      const exited = trace.records.find((record) => record.phase === "exited");
+      expect(exited?.failure?.class).toBe("process-creation-failed");
+      expect(JSON.stringify(trace.records)).not.toContain(marker);
+      // The conversation was never reached: nothing reopened, nothing read,
+      // nothing written, nothing spawned.
+      expect(harness.ensureCalls).toEqual([]);
+      expect(harness.configCalls).toEqual([]);
+      expect(trace.launches).toEqual([]);
+    });
+  });
+
+  it("NR7: a session this run may not have retains what the launch asked for", function* () {
+    const harness = createFakeRuntime();
+    const trace = newTrace();
+    advertiseConfiguration(harness, trace);
+    yield* scoped(function* () {
+      yield* installLaunchStack(harness, trace);
+      // What a crashed owner leaves: the lock is gone, the record is not.
+      trace.ownership.tombstone({
+        provider: "acpx",
+        agent: AGENT_COMMAND,
+        sessionKey: SESSION_KEY,
+      });
+
+      const refusal = yield* attempt(trace, INSTRUCTIONS, {
+        model: "gpt-5.4-mini",
+        effort: "high",
+      });
+
+      expect(refusal?.class).toBe("session-recovery-required");
+      // The launch never reached the agent, and what it asked for is still
+      // what the journal says it asked for — with no effective value beside
+      // it, because nothing was contacted to verify one.
+      const prepared = preparedOf(trace);
+      expect(prepared.requestedModel).toBe("gpt-5.4-mini");
+      expect(prepared.requestedEffort).toBe("high");
+      expect(prepared.model).toBe(undefined);
+      expect(prepared.effort).toBe(undefined);
+      expect(harness.ensureCalls).toEqual([]);
+      expect(harness.configCalls).toEqual([]);
+      expect(trace.launches).toEqual([]);
+    });
+  });
+
+  it("NR3: an unconfigured replay reattaches nothing and behaves as it always did", function* () {
+    const harness = createFakeRuntime();
+    const trace = newTrace();
+    advertiseConfiguration(harness, trace);
+    yield* scoped(function* () {
+      yield* installLaunchStack(harness, trace);
+      trace.replay = {
+        prepared: retainedConfigured({
+          requestedModel: undefined,
+          requestedEffort: undefined,
+          model: undefined,
+          effort: undefined,
+        }),
+        suffix: "prepared+detached",
+      };
+
+      yield* Agent.operations.launch(launchRequest(INSTRUCTIONS));
+
+      expect(trace.order).toEqual(["prepared", "detached", "spawn", "exited"]);
+      expect(harness.ensureCalls).toEqual([]);
+      expect(harness.configCalls).toEqual([]);
+    });
+  });
+
+  it("NR4: a replay that cannot restore what it was prepared with never opens the UI", function* () {
+    const harness = createFakeRuntime();
+    const trace = newTrace();
+    advertiseConfiguration(harness, trace);
+    // This agent no longer offers the model the launch was prepared with.
+    harness.configOptions = [
+      selector("model", "model", "gpt-5.4", [choice("gpt-5.4", "GPT-5.4")]),
+      selector("effort", "thought_level", "medium", NC_EFFORTS),
+    ];
+    yield* scoped(function* () {
+      yield* installLaunchStack(harness, trace);
+      trace.replay = { prepared: retainedConfigured(), suffix: "prepared+detached" };
+
+      yield* Agent.operations.launch(
+        launchRequest(INSTRUCTIONS, { model: "gpt-5.4-mini", effort: "high" }),
+      );
+
+      const exited = trace.records.find((record) => record.phase === "exited");
+      expect(exited?.failure?.class).toBe("configuration-refused");
+      expect(exited?.failure?.message).toContain('Unknown model "gpt-5.4-mini"');
+      // Reattached and given up again, and no native process was started.
+      expect(harness.closeCalls.length).toBe(1);
+      expect(trace.launches).toEqual([]);
+    });
   });
 });
