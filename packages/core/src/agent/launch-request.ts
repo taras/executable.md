@@ -35,7 +35,13 @@ export interface AgentLaunchRequest {
   readonly cwd: string;
   readonly additionalDirectories: readonly string[];
   readonly permissionMode: PermissionMode;
+  /**
+   * The exact model and effort the enclosing `<Session>` asked its conversation
+   * to run under. Facts about the launch, like every other member: a handler
+   * may read them, and `with()` offers no way to change them.
+   */
   readonly model?: string;
+  readonly effort?: string;
   /**
    * Derive a narrower request, superseding this one.
    *
@@ -120,6 +126,7 @@ export interface LaunchFacts {
   additionalDirectories: readonly string[];
   permissionMode: PermissionMode;
   model?: string;
+  effort?: string;
 }
 
 function build(facts: LaunchFacts, invocation: LaunchInvocation): AgentLaunchRequest {
@@ -131,6 +138,7 @@ function build(facts: LaunchFacts, invocation: LaunchInvocation): AgentLaunchReq
     additionalDirectories: Object.freeze([...facts.additionalDirectories]),
     permissionMode: facts.permissionMode,
     ...(facts.model === undefined ? {} : { model: facts.model }),
+    ...(facts.effort === undefined ? {} : { effort: facts.effort }),
     with(changes: {
       instructions?: string;
       agent?: Agent;

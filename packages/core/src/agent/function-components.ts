@@ -27,7 +27,13 @@ import { cwd, flushOutput, parseDuration, reserveTerminal } from "@executablemd/
 import type { Json, PropsSchema } from "../types.ts";
 import type { Expansion } from "../expansion.ts";
 import { Agent } from "./agent-api.ts";
-import type { LaunchOptions, PromptOptions, Session, SessionLaunchResult } from "./agent-api.ts";
+import type {
+  LaunchOptions,
+  PromptOptions,
+  Session,
+  SessionConfiguration,
+  SessionLaunchResult,
+} from "./agent-api.ts";
 import { launchAgentSession, useProviderInstallation } from "./launch-install.ts";
 import { AgentLaunchError } from "./launch.ts";
 import type {
@@ -72,7 +78,11 @@ export const AGENT_PROPS: PropsSchema = {
 
 export const SESSION_PROPS: PropsSchema = {
   type: "object",
-  properties: { name: { type: "string" } },
+  properties: {
+    name: { type: "string" },
+    model: { type: "string" },
+    effort: { type: "string" },
+  },
   additionalProperties: false,
 };
 
@@ -99,6 +109,26 @@ export const PROMPT_PROPS: PropsSchema = {
 
 function asString(value: Json | undefined): string | undefined {
   return typeof value === "string" ? value : undefined;
+}
+
+/**
+ * What a `<Session>` element authored, or nothing at all.
+ *
+ * Nothing is the released one-argument call: an element that configured nothing
+ * asks for nothing, and an empty configuration object would be a request to
+ * leave everything alone — which a provider cannot tell from a request to write
+ * two values it was never given.
+ */
+function sessionConfigurationOf(props: Record<string, Json>): SessionConfiguration | undefined {
+  const model = asString(props.model);
+  const effort = asString(props.effort);
+  if (model === undefined && effort === undefined) {
+    return undefined;
+  }
+  return {
+    ...(model === undefined ? {} : { model }),
+    ...(effort === undefined ? {} : { effort }),
+  };
 }
 
 /**
@@ -199,22 +229,39 @@ export function sessionComponent(claim: IdentityClaimant): FunctionComponent {
     // synchronous, so the guarantee holds however the call left.
     const identity = yield* claim(invocation);
     const issuance = sessionPlacement(identity, asString(props.name));
+    // Read before the placement is routed, so what a prompt or a launch beneath
+    // this element describes durably is what the document authored here.
+    const configuration = sessionConfigurationOf(props);
     let session: Session;
     try {
-      session = yield* Agent.operations.session(issuance.request);
+      // Two calls rather than one with an undefined second argument: a handler
+      // reads the arguments it was routed, and a Session that authored nothing
+      // must reach it as the released one-argument call.
+      session =
+        configuration === undefined
+          ? yield* Agent.operations.session(issuance.request)
+          : yield* Agent.operations.session(issuance.request, configuration);
     } finally {
       issuance.close();
     }
     if (!(yield* hasContent())) {
       return "";
     }
+    // Installed whether or not this element configured anything, because the
+    // innermost `<Session>` is the one whose conversation a nested prompt or
+    // launch belongs to: an unconfigured Session inside a configured one must
+    // not describe the outer element's request as its own.
+    yield* AgentInternal.around({ sessionConfiguration: () => configuration }, { at: "min" });
     yield* Agent.around(
       {
-        *session([name], next) {
+        *session(routed, next) {
+          const [name] = routed;
           if (name === undefined) {
             return session;
           }
-          return yield* next(name);
+          // Delegated exactly as it arrived, arity included: a nested Session
+          // that authored nothing stays a one-argument call on its way past.
+          return yield* next(...routed);
         },
         *prompt([text, options], next) {
           return yield* next(text, { session, ...options });
@@ -263,13 +310,22 @@ export function* Prompt(props: Record<string, Json>): Operation<Json> {
   const location = formatLocation(expansion);
   const ordinal = yield* AgentInternal.operations.promptOrdinal(location);
   const sequence = yield* AgentInternal.operations.nextPromptSequence();
+  // What the enclosing `<Session>` authored, described before the turn so a
+  // prompt that stopped while the provider was applying it still says what it
+  // asked for.
+  const configuration = yield* AgentInternal.operations.sessionConfiguration;
 
   // Held here rather than on the record: what the journal keeps about a prompt
   // is unchanged, and this is what a host may retain beside it.
   const carried: { association?: AgentPromptAssociation } = {};
   const record = yield* persistPrompt(
-    { name: `prompt:${location}#${ordinal}`, input: text, position: expansion.position },
-    () => runPrompt(text, options, sequence, throwOnError, carried),
+    {
+      name: `prompt:${location}#${ordinal}`,
+      input: text,
+      position: expansion.position,
+      ...(configuration === undefined ? {} : { configuration }),
+    },
+    () => runPrompt(text, options, sequence, throwOnError, carried, configuration),
     () => carried.association,
   );
 
@@ -296,6 +352,10 @@ interface ConsumedTurn {
   agent?: string;
   sessionKey?: string;
   agentSessionId?: string;
+  /** What the provider said it was asked to configure for this turn. */
+  requested?: SessionConfiguration;
+  /** What the provider said the turn ran under, verified before it began. */
+  effective?: SessionConfiguration;
   status?: PromptRecord["status"];
   stopReason?: string;
   failure?: SerializedPromptFailure;
@@ -316,6 +376,7 @@ function* runPrompt(
   sequence: number,
   throwOnError: boolean,
   carried: { association?: AgentPromptAssociation },
+  configuration: SessionConfiguration | undefined,
 ): Operation<PromptRecord> {
   let consumed: ConsumedTurn = { text: "" };
 
@@ -336,6 +397,12 @@ function* runPrompt(
           result.sessionKey = event.session.sessionKey;
           if (event.session.agentSessionId !== undefined) {
             result.agentSessionId = event.session.agentSessionId;
+          }
+          if (event.requestedConfiguration !== undefined) {
+            result.requested = event.requestedConfiguration;
+          }
+          if (event.effectiveConfiguration !== undefined) {
+            result.effective = event.effectiveConfiguration;
           }
         } else if (event.type === "terminal") {
           result.status = event.status;
@@ -384,6 +451,22 @@ function* runPrompt(
   };
   if (consumed.agentSessionId !== undefined) {
     record.agentSessionId = consumed.agentSessionId;
+  }
+  // What the document authored wins over the provider's echo of it: a provider
+  // that reports a request other than the one it was given has substituted a
+  // value, and the record must not adopt the substitution as what was asked.
+  const requested = configuration ?? consumed.requested;
+  if (requested?.model !== undefined) {
+    record.requestedModel = requested.model;
+  }
+  if (requested?.effort !== undefined) {
+    record.requestedEffort = requested.effort;
+  }
+  if (consumed.effective?.model !== undefined) {
+    record.model = consumed.effective.model;
+  }
+  if (consumed.effective?.effort !== undefined) {
+    record.effort = consumed.effective.effort;
   }
   if (consumed.stopReason !== undefined) {
     record.stopReason = consumed.stopReason;

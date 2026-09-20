@@ -46,6 +46,34 @@ export {
 export type { ActivePluginsApi, DocumentApi, RootMetadataApi } from "./src/plugin-apis.ts";
 
 /**
+ * The Agent Api, and the contracts its operations are written in.
+ *
+ * A Plugin composes agent work the same way it composes a document: around
+ * these operations, in the ordinary order. What it reaches here is
+ * provider-neutral — exact choice IDs, normalized options, and the session a
+ * provider issued — and never a protocol type belonging to whichever provider
+ * happens to be installed.
+ */
+export { Agent } from "./src/agent/agent-api.ts";
+export type {
+  AgentApi,
+  AgentOption,
+  AgentOptions,
+  AgentOptionSet,
+  AgentOptionsRequest,
+  AgentPromptEvent,
+  PermissionMode,
+  PermissionOption,
+  PermissionOutcome,
+  PermissionRequest,
+  PromptOptions,
+  Session,
+  SessionConfiguration,
+} from "./src/agent/agent-api.ts";
+export type { AgentSessionRequest } from "./src/agent/session-request.ts";
+export type { AgentLaunchRequest } from "./src/agent/launch-request.ts";
+
+/**
  * The types the accepted `PluginInstallation` members are written in.
  *
  * Types only. `Markdown({…})`, `sourceDigest` and `Structural({…})` construct

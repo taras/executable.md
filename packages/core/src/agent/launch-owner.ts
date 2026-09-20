@@ -20,10 +20,13 @@ import { cwd, flushOutput, reserveTerminal } from "@executablemd/runtime";
 import { Agent, AGENT_API } from "./agent-api.ts";
 import type {
   AgentApi,
+  AgentOptions,
+  AgentOptionsRequest,
   AgentPromptEvent,
   LaunchOptions,
   PermissionRequest,
   Session,
+  SessionConfiguration,
   SessionLaunchResult,
 } from "./agent-api.ts";
 import { AgentInternal, formatLocation } from "./internal.ts";
@@ -36,6 +39,7 @@ import type {
 } from "./launch.ts";
 import { AgentLaunchProtocolError, issueLaunch } from "./launch-request.ts";
 import type { AgentLaunchRequest } from "./launch-request.ts";
+import type { AgentSessionRequest } from "./session-request.ts";
 import type { LiveLaunch } from "./launch-coordinator.ts";
 import {
   persistDetach,
@@ -52,6 +56,8 @@ export interface LaunchSite {
   cwd: string;
   additionalDirectories: string[];
   permissionMode: "approve-all" | "approve-reads" | "deny-all";
+  /** What the enclosing `<Session>` asked its conversation to run under. */
+  configuration?: SessionConfiguration;
 }
 
 /**
@@ -65,6 +71,7 @@ export function* launchSite(): Operation<LaunchSite> {
   const expansion = yield* getExpansion();
   const location = formatLocation(expansion);
   const ordinal = yield* AgentInternal.operations.launchOrdinal(location);
+  const configuration = yield* AgentInternal.operations.sessionConfiguration;
   const identity: LaunchIdentity = { name: `launch:${location}#${ordinal}` };
   if (expansion.position) {
     identity.position = expansion.position;
@@ -76,6 +83,7 @@ export function* launchSite(): Operation<LaunchSite> {
     // and the retained request says so explicitly rather than omitting it.
     additionalDirectories: [],
     permissionMode: yield* AgentInternal.operations.permissionMode,
+    ...(configuration === undefined ? {} : { configuration }),
   };
 }
 
@@ -126,6 +134,7 @@ function parseFailureClass(value: string): AgentLaunchError["failureClass"] {
     case "session-recovery-required":
     case "executable-binding-refused":
     case "materialization-failed":
+    case "configuration-refused":
       return value;
     default:
       return "unsupported-capability";
@@ -195,6 +204,8 @@ export function launchSession(
         cwd: site.cwd,
         additionalDirectories: site.additionalDirectories,
         permissionMode: site.permissionMode,
+        ...(site.configuration?.model === undefined ? {} : { model: site.configuration.model }),
+        ...(site.configuration?.effort === undefined ? {} : { effort: site.configuration.effort }),
       },
       generation,
     );
@@ -216,6 +227,12 @@ export function launchSession(
               cwd: site.cwd,
               additionalDirectories: site.additionalDirectories,
               permissionMode: site.permissionMode,
+              ...(site.configuration?.model === undefined
+                ? {}
+                : { model: site.configuration.model }),
+              ...(site.configuration?.effort === undefined
+                ? {}
+                : { effort: site.configuration.effort }),
             },
             function* () {
               preparedThisRun = true;
@@ -317,8 +334,16 @@ function terminalHandlers(request: AgentLaunchRequest): AgentApi {
     *agent(name?: string) {
       return yield* Agent.operations.agent(name);
     },
-    *session(name?: string): Operation<Session> {
-      return yield* Agent.operations.session(name);
+    // Forwarded by spread so this adapter is transparent to how it was called:
+    // routing an absent configuration as an explicit undefined would make an
+    // unconfigured Session look like one asking for nothing in particular.
+    *session(
+      ...routed: [(string | AgentSessionRequest)?, SessionConfiguration?]
+    ): Operation<Session> {
+      return yield* Agent.operations.session(...routed);
+    },
+    *options(...routed: [string?, AgentOptionsRequest?]): Operation<AgentOptions> {
+      return yield* Agent.operations.options(...routed);
     },
     *prompt(
       content: string,

@@ -161,6 +161,9 @@ function crossCheck(request: AgentLaunchRequest, record: PreparedLaunchRecord): 
   if ((record.requestedModel ?? undefined) !== (request.model ?? undefined)) {
     return "requested model";
   }
+  if ((record.requestedEffort ?? undefined) !== (request.effort ?? undefined)) {
+    return "requested effort";
+  }
   const requested =
     typeof request.session === "object" ? request.session.sessionKey : request.session;
   if (requested !== undefined && record.sessionKey !== requested && record.sessionKey.length > 0) {

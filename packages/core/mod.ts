@@ -325,6 +325,10 @@ export type { AgentComponentsOptions } from "./src/agent/components.ts";
 export { Agent } from "./src/agent/agent-api.ts";
 export type {
   AgentApi,
+  AgentOption,
+  AgentOptions,
+  AgentOptionSet,
+  AgentOptionsRequest,
   AgentPromptEvent,
   LaunchOptions,
   PermissionMode,
@@ -333,6 +337,7 @@ export type {
   PermissionRequest,
   PromptOptions,
   Session,
+  SessionConfiguration,
   SessionLaunchResult,
 } from "./src/agent/agent-api.ts";
 export { AgentPromptError } from "./src/agent/errors.ts";

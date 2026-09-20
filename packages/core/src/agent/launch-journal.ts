@@ -53,8 +53,8 @@ const AGENT_SESSION_LAUNCH = "agent_session_launch";
  * preparation effect's description.
  *
  * The rendered instructions are the effect's `input`; the rest describes the
- * filesystem permissions, model request and permission configuration the request
- * was made under, so a reader of the journal can tell what the native session
+ * filesystem permissions, the model and effort the session asked for, and the
+ * permission configuration the request was made under, so a reader of the journal can tell what the native session
  * was prepared to be able to do.
  */
 export interface LaunchRequestDescription {
@@ -65,6 +65,7 @@ export interface LaunchRequestDescription {
   additionalDirectories: string[];
   permissionMode: PermissionMode;
   model?: string;
+  effort?: string;
 }
 
 export interface LaunchIdentity {
@@ -85,6 +86,7 @@ const FAILURE_CLASSES: readonly LaunchFailureClass[] = [
   "session-recovery-required",
   "executable-binding-refused",
   "materialization-failed",
+  "configuration-refused",
 ];
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -267,8 +269,14 @@ function serializePrepared(record: PreparedLaunchRecord): Json {
   if (record.requestedModel !== undefined) {
     payload.requestedModel = record.requestedModel;
   }
+  if (record.requestedEffort !== undefined) {
+    payload.requestedEffort = record.requestedEffort;
+  }
   if (record.model !== undefined) {
     payload.model = record.model;
+  }
+  if (record.effort !== undefined) {
+    payload.effort = record.effort;
   }
   if (record.failure !== undefined) {
     payload.failure = serializeFailure(record.failure);
@@ -300,7 +308,9 @@ export function parsePrepared(value: unknown): PreparedLaunchRecord | undefined 
     additionalDirectories,
     launcher,
     requestedModel,
+    requestedEffort,
     model,
+    effort,
     failure,
   } = value;
   if (typeof agent !== "string" || typeof sessionKey !== "string") {
@@ -376,11 +386,22 @@ export function parsePrepared(value: unknown): PreparedLaunchRecord | undefined 
   if (plan !== undefined) {
     record.materialization = plan;
   }
-  if (typeof requestedModel === "string") {
-    record.requestedModel = requestedModel;
-  }
-  if (typeof model === "string") {
-    record.model = model;
+  // Each is refused rather than read past, because an empty model or effort
+  // names no choice: a record carrying one would replay as a launch that asked
+  // for nothing, and a launch that asked for nothing is a different launch.
+  for (const [member, entry] of [
+    ["requestedModel", requestedModel],
+    ["requestedEffort", requestedEffort],
+    ["model", model],
+    ["effort", effort],
+  ] as const) {
+    if (entry === undefined) {
+      continue;
+    }
+    if (typeof entry !== "string" || entry.length === 0) {
+      return undefined;
+    }
+    record[member] = entry;
   }
   if (failure !== undefined) {
     const parsed = parseFailure(failure);
@@ -629,6 +650,9 @@ export function persistPreparation(
   }
   if (request.model !== undefined) {
     description.model = request.model;
+  }
+  if (request.effort !== undefined) {
+    description.effort = request.effort;
   }
   return persistPhase(identity, "prepared", description, live, serializePrepared, parsePrepared);
 }
