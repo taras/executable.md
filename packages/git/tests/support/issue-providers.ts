@@ -16,7 +16,7 @@ import type { IssueDetails, IssueInput, IssueReference } from "../../src/issue/a
 import { IssueUnavailableError } from "../../src/issue/errors.ts";
 import { withinIssueCeiling } from "../../src/issue/tracker.ts";
 import { useGitHubIssues } from "../../src/deno/issue/github.ts";
-import { denoGitHubAccess } from "../../src/deno/composition/github.ts";
+import { denoGitHubAccess } from "../../src/deno/composition/github-host.ts";
 import type { GitHubAccess, GitHubHttpResponse } from "../../src/deno/composition/github.ts";
 import { credentialFor } from "./issue-tracker-server.ts";
 import type { CredentialCondition } from "./issue-tracker-server.ts";
@@ -159,7 +159,10 @@ export function useProviderComponents(log: ProviderLog): Operation<void> {
           failsTransport: props.failsTransport === true,
           interruptsAfterCreate: props.interruptsAfterCreate === true,
         });
-        yield* useGitHubIssues({ ceiling, access: gitHubSource(access) });
+        yield* useGitHubIssues({
+          access: gitHubSource(access),
+          configuration: { ceiling },
+        });
         return yield* content();
       },
     },

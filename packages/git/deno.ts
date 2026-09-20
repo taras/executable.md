@@ -19,8 +19,8 @@ export {
   parseGitHubPullRequestUrl,
   pullRequestAllowed,
   recognizesGitHubPullRequestUrl,
-  useGitHubPullRequests,
 } from "./src/deno/composition/pull-request-reads.ts";
+export { useGitHubPullRequests } from "./src/deno/composition/pull-request.ts";
 export type { GitHubPullRequestsOptions } from "./src/deno/composition/pull-request-reads.ts";
 export {
   WORKSPACE_GIT_ADD,

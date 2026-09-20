@@ -173,7 +173,10 @@ describe("ORC5 — origin is not local admission", () => {
           cwd: solo.root,
           host: counting.host,
           gitHubPullRequests: { access: gitHubSource(github.access) },
-          gitHubIssues: { ceiling: [GITHUB_LOCATOR], access: gitHubSource(github.access) },
+          gitHubIssues: {
+            access: gitHubSource(github.access),
+            configuration: { ceiling: [GITHUB_LOCATOR] },
+          },
         }),
       );
       expect(`${source} ${String(failure)}`).toContain("no usable origin");
@@ -220,7 +223,10 @@ describe("ORC5 — origin is not local admission", () => {
       {
         root,
         cwd: checkout.root,
-        gitHubPullRequests: { allowed: [GITHUB_LOCATOR], access: gitHubSource(github.access) },
+        gitHubPullRequests: {
+          access: gitHubSource(github.access),
+          configuration: { allowed: [GITHUB_LOCATOR] },
+        },
       },
     );
 

@@ -198,6 +198,24 @@ const DENO_ONLY_TOOLING: RuntimeExclusion[] = [
     issue: "https://github.com/taras/executable.md/issues/365",
   },
   {
+    path: "packages/cli/tests/github-zero-effect.test.ts",
+    reason:
+      "renders the syntax catalog and validates a Plan draft through the CLI's own surfaces, which reach `@executablemd/git/deno` and so Workflow's storage adapter and `node:sqlite` — absent from Bun and behind --experimental-sqlite on Node 22. The adapters' own activation ordering, and every refusal before configuration, are proven portably in packages/git/tests/github-activation.test.ts",
+    issue: DERIVED_SCOPE,
+  },
+  {
+    path: "packages/git/tests/github-workflow-activation.test.ts",
+    reason:
+      "assembles the real ordinary-run profile and executes a retained source-bundle run through the real Workflow host; both reach Workflow's storage adapter and so `node:sqlite` — absent from Bun and behind --experimental-sqlite on Node 22. What is lost is only the assembled-profile reading: the adapters' own activation ordering, and every refusal before configuration, are proven portably in github-activation.test.ts, which runs on all three runtimes",
+    issue: DERIVED_SCOPE,
+  },
+  {
+    path: "packages/git/tests/public-entrypoint.test.ts",
+    reason:
+      "both of its cases import `@executablemd/git` and `@executablemd/git/deno` to read what the entrypoint actually publishes, and that entrypoint reaches Workflow's Deno storage adapter and so `node:sqlite` — absent from Bun and behind --experimental-sqlite on Node 22. What is lost is only the runtime-namespace reading: the same two entrypoints are read as source by module-partition.test.ts, which also reads both manifest export maps and runs on all three runtimes",
+    issue: DERIVED_SCOPE,
+  },
+  {
     path: "packages/git/tests/ambient-authentication.test.ts",
     reason:
       "drives the Deno host adapter's HTTP credential acquisition against a real node:sqlite WorkflowRun database, a real `git` subprocess and a provider-owned helper the Deno source assembly launches; the adapter, the store and the helper are all the Deno one by design",

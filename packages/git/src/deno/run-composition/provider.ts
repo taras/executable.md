@@ -84,8 +84,10 @@ import { currentBranch, gitSession, resolveCommit, type GitSession } from "../co
 import { denoRepositoryHost, type RepositoryHost } from "../composition/host.ts";
 import type { GitAuthentication } from "../composition/authentication.ts";
 import type { HelperAssembly } from "../composition/credential-helper.ts";
-import { denoGitHubSource, type GitHubSource } from "../composition/github.ts";
+import type { GitHubSource } from "../composition/github.ts";
+import { denoGitHubSource } from "../composition/github-host.ts";
 import {
+  gitHubPullRequestAccess,
   useGitHubPullRequestReads,
   type GitHubPullRequestsOptions,
 } from "../composition/pull-request-reads.ts";
@@ -368,12 +370,17 @@ export function* useRunComposition(options: RunCompositionOptions): Operation<vo
   );
 
   // The transport middlewares both profiles share, installed beneath the
-  // ordinary lifecycle below. Absent configuration installs no matching
-  // provider, and a document naming one then reaches the surface's own error.
-  if (options.gitHubIssues !== undefined) {
-    yield* useGitHubIssues(options.gitHubIssues);
-  }
-  yield* useGitHubPullRequestReads(options.gitHubPullRequests ?? {});
+  // ordinary lifecycle below. Installing them reads no configuration and
+  // obtains no credential: each one matches a request against its own target
+  // first, and only a request that turns out to be its own reaches what this
+  // deployment authorized. Absent configuration then authorizes nothing, and a
+  // document naming one reaches the surface's own error exactly as it did when
+  // absence installed no provider at all.
+  // The platform's transport, handed to adapters that know the protocol and
+  // not the platform. Naming it here is not building one: it is a factory the
+  // adapter calls if and when a request turns out to be its own.
+  yield* useGitHubIssues({ host: denoGitHubSource, ...options.gitHubIssues });
+  yield* useGitHubPullRequestReads({ host: denoGitHubSource, ...options.gitHubPullRequests });
 
   yield* IssueOperations.around(
     {
@@ -417,11 +424,18 @@ export function* useRunComposition(options: RunCompositionOptions): Operation<vo
     { at: "min" },
   );
 
-  const source: GitHubSource =
-    options.gitHubPullRequests?.access ??
-    (options.gitHubPullRequests?.endpoint === undefined
-      ? denoGitHubSource()
-      : denoGitHubSource(options.gitHubPullRequests.endpoint));
+  /**
+   * The transport the live upsert reaches GitHub through.
+   *
+   * The adapter's own resolver rather than a second reading beside it: where
+   * the API lives is configuration, configuration belongs to the GitHub half,
+   * and two places parsing the same variable is two places to get it wrong.
+   * A run that opens no pull request reads the variable not at all.
+   */
+  const pullRequestSource = gitHubPullRequestAccess({
+    host: denoGitHubSource,
+    ...options.gitHubPullRequests,
+  });
 
   yield* PullRequestOperations.around(
     {
@@ -486,7 +500,7 @@ export function* useRunComposition(options: RunCompositionOptions): Operation<vo
           headSha,
           baseBranch: request.pullRequest.base,
         });
-        const access = yield* source.open();
+        const access = yield* (yield* pullRequestSource()).open();
         return yield* liveUpsertPullRequest(access, checkout.origin, inputs);
       },
     },

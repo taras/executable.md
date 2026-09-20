@@ -45,13 +45,14 @@ import type {
   GitAuthentication,
   GitAuthenticationSession,
 } from "../src/deno/composition/authentication.ts";
-import { denoGitHubAccess, gitHubSource } from "../src/deno/composition/github.ts";
 import type {
   GitHubAccess,
   GitHubHttpResponse,
   GitHubLogin,
   GitHubSource,
 } from "../src/deno/composition/github.ts";
+import { gitHubSource } from "../src/deno/composition/github.ts";
+import { denoGitHubAccess, denoGitHubSource } from "../src/deno/composition/github-host.ts";
 import { GITHUB, useGitHubIssues } from "../src/deno/issue/github.ts";
 import { IssueApi } from "../src/issue/api.ts";
 import { transactWorkspaceRoots } from "../../workflow/src/deno/workspace/private.ts";
@@ -1323,8 +1324,8 @@ describe("workflow GitHub source sessions", () => {
 
     const refusal = yield* scoped(function* () {
       yield* useGitHubIssues({
-        ceiling: ["https://github.com/octo/authorized"],
         access: source,
+        configuration: { ceiling: ["https://github.com/octo/authorized"] },
       });
       return yield* raised(
         IssueApi.operations.read("https://github.com/octo/elsewhere/issues/7", {
@@ -1370,8 +1371,11 @@ describe("workflow GitHub source sessions", () => {
 
     const details = yield* scoped(function* () {
       yield* useGitHubIssues({
-        ceiling: ["https://github.com/octo/project"],
-        endpoint: server.url,
+        // The host's own transport, exactly as the Deno adapter supplies it.
+        // What this case measures is that the base the adapter builds against
+        // is the configured one, so the factory has to be the real one.
+        host: denoGitHubSource,
+        configuration: { ceiling: ["https://github.com/octo/project"], endpoint: server.url },
       });
       return yield* IssueApi.operations.read("https://github.com/octo/project/issues/7", {
         provider: GITHUB,

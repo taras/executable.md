@@ -21,7 +21,8 @@ import type { Operation } from "effection";
 import type { WorkflowWorkspaceAttachment } from "@executablemd/workflow/deno";
 import { useRetainedIssueOperations } from "../issue/effect.ts";
 import { denoRepositoryHost } from "./composition/host.ts";
-import { useGitHubPullRequests } from "./composition/pull-request-reads.ts";
+import { denoGitHubSource } from "./composition/github-host.ts";
+import { useGitHubPullRequests } from "./composition/pull-request.ts";
 import type { GitHubPullRequestsOptions } from "./composition/pull-request-reads.ts";
 import type { HelperAssembly } from "./composition/credential-helper.ts";
 import {
@@ -102,9 +103,12 @@ export function gitWorkspaceAttachment(
     };
     yield* useRepositoryComposition(database, composition);
     yield* useGitComposition(database, composition);
-    if (options.gitHubIssues !== undefined) {
-      yield* useGitHubIssues(options.gitHubIssues);
-    }
+    // Installed whether or not this deployment authorized any tracker. What
+    // absence decides is what the adapter answers, not whether it is present:
+    // it matches a destination from the request alone, reads configuration only
+    // once a destination is its own, and passes an unauthorized one on to
+    // `IssueApi`'s base — the same answer installing nothing used to give.
+    yield* useGitHubIssues({ host: denoGitHubSource, ...options.gitHubIssues });
     // The retained lifecycle for both service-reaching vocabularies, above
     // whichever transport middleware this host installed for them.
     yield* useRetainedIssueOperations();
@@ -120,7 +124,7 @@ export function gitWorkspaceAttachment(
     yield* useGitHubPullRequests(
       database,
       composition.host ?? denoRepositoryHost(),
-      options.gitHubPullRequests ?? {},
+      { host: denoGitHubSource, ...options.gitHubPullRequests },
       selections,
     );
   };

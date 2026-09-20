@@ -496,8 +496,8 @@ describe("ORC16 — live Issues", () => {
       root,
       cwd: checkout.root,
       gitHubIssues: {
-        ceiling: [GITHUB_LOCATOR],
         access: gitHubSource(fakeGitHubAccess(store)),
+        configuration: { ceiling: [GITHUB_LOCATOR] },
       },
     };
 
@@ -544,8 +544,8 @@ describe("ORC16 — live Issues", () => {
         root,
         cwd: checkout.root,
         gitHubIssues: {
-          ceiling: [GITHUB_LOCATOR],
           access: gitHubSource(fakeGitHubAccess(store)),
+          configuration: { ceiling: [GITHUB_LOCATOR] },
         },
       }),
     );
@@ -628,7 +628,7 @@ describe("ORC17 — live PullRequests", () => {
       {
         root,
         cwd: checkout.root,
-        gitHubPullRequests: { allowed: [GITHUB_LOCATOR], access },
+        gitHubPullRequests: { access, configuration: { allowed: [GITHUB_LOCATOR] } },
       },
     );
 
@@ -663,7 +663,11 @@ describe("ORC17 — live PullRequests", () => {
     const failure = yield* raised(
       runOrdinaryDocument(
         `<PullRequest.Reviews url="https://github.com/other/repo/pull/4" as="reviews" />`,
-        { root, cwd: checkout.root, gitHubPullRequests: { allowed: [GITHUB_LOCATOR], access } },
+        {
+          root,
+          cwd: checkout.root,
+          gitHubPullRequests: { access, configuration: { allowed: [GITHUB_LOCATOR] } },
+        },
       ),
     );
     expect(String(failure)).toContain("has not authorized");

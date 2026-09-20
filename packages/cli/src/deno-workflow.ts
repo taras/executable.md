@@ -35,8 +35,6 @@ import type { WorkflowRunDatabase } from "@executablemd/workflow";
 import type { HelperAssembly } from "@executablemd/git/credential-helper";
 import { readLegacyDefinitionSource } from "./workflow-source.ts";
 import type { WorkflowHost } from "./workflow.ts";
-import { gitHubIssuesConfiguration } from "./github-issues-config.ts";
-import { gitHubPullRequestsConfiguration } from "./github-pull-requests-config.ts";
 import { useWorkflowAgentProfile } from "./workflow-agent.ts";
 
 /** Where a run lives when nothing says otherwise. */
@@ -49,13 +47,6 @@ export function* useDenoWorkflowHost(helper: HelperAssembly): Operation<Workflow
   const configured = yield* readEnv(RUN_STORAGE_ROOT_ENV);
   const root =
     configured === undefined || configured === "" ? DEFAULT_RUN_STORAGE_ROOT : configured;
-  // Read once, at host construction, so an operator who wrote something this
-  // host cannot use learns it before a document runs rather than in the middle
-  // of one. Absent installs no issue provider at all.
-  const gitHubIssues = yield* gitHubIssuesConfiguration();
-  // Read once, here, for the same reason: an operator who wrote something this
-  // host cannot use learns it before a document runs.
-  const gitHubPullRequests = yield* gitHubPullRequestsConfiguration();
   return {
     useRunHost(): Operation<WorkflowExecutionTransitions> {
       // The same reader the lifecycle installation captures. A version-1 run
@@ -82,8 +73,6 @@ export function* useDenoWorkflowHost(helper: HelperAssembly): Operation<Workflow
         // the run.
         attachments: [
           gitWorkspaceAttachment({
-            ...(gitHubIssues === undefined ? {} : { gitHubIssues }),
-            ...(gitHubPullRequests === undefined ? {} : { gitHubPullRequests }),
             helper,
           }),
         ],

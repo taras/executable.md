@@ -14,7 +14,6 @@ import process from "node:process";
 import type { Operation } from "effection";
 import type { RepositoryIdentity } from "../src/composition/selection.ts";
 import {
-  denoGitHubAccess,
   gitHubPullRequests,
   openSnapshot,
   readPullRequest,
@@ -25,6 +24,7 @@ import {
   type GitHubHttpRequest,
   type GitHubHttpResponse,
 } from "../src/deno/composition/github.ts";
+import { denoGitHubAccess } from "../src/deno/composition/github-host.ts";
 import type {
   PullRequestInputs,
   PullRequestSnapshot,

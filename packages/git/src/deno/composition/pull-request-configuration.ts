@@ -1,5 +1,5 @@
 /**
- * Where the production host learns which pull requests it may read.
+ * Where this adapter learns which pull requests it may read.
  *
  * A URL a document writes is composition data: it says which pull request is
  * wanted, not that this deployment allows reading it. What allows it is here,
@@ -16,10 +16,16 @@
  * own matching Push evidence and the Git-host reconciliation behind it. Nothing
  * here is what admits it, so nothing here can withdraw it.
  *
+ * Read when an invoked read turns out to be this adapter's, never at startup.
+ * Installing the Plugin, describing its syntax, validating a Plan and reading
+ * a pull request somewhere else read this variable not at all.
+ *
  * Malformed configuration is refused rather than narrowed to what parsed. An
  * operator who wrote a list this host could not read has not authorized the
  * empty set — they have made a mistake, and running with fewer targets than
- * they wrote would hide it until the day it mattered.
+ * they wrote would hide it until the day it mattered. The refusal reaches the
+ * operation that needed it rather than the command that started, which is the
+ * one thing lazy reading changes about it.
  *
  * The member is `allowed`, not `ceiling`. "Permission ceiling" is what the
  * architecture calls the bound; what an operator writes is the list of places
@@ -31,8 +37,8 @@
 
 import { env as readEnv } from "@executablemd/runtime";
 import type { Operation } from "effection";
-import { canonicalPullRequestUrl } from "@executablemd/git";
-import type { GitHubPullRequestsOptions } from "@executablemd/git/deno";
+import { canonicalPullRequestUrl } from "../../composition/pull-request-target.ts";
+import type { GitHubPullRequestsConfiguration } from "./pull-request-reads.ts";
 
 /** The variable that configures GitHub pull-request reading. */
 export const GITHUB_PULL_REQUESTS_ENV = "XMD_WORKFLOW_GITHUB_PULL_REQUESTS";
@@ -87,11 +93,11 @@ function canonicalEndpoint(value: unknown): string | undefined {
  *
  * Strict about shape and about the URLs it holds. An entry that is not the
  * canonical name of a container is refused here rather than at the first
- * request, because an operator reading a startup failure can fix it and a
- * document author reading a refusal mid-run cannot.
+ * request, because a list this host cannot read authorizes nothing and saying
+ * so is the only honest answer to the read that asked.
  */
 export function* gitHubPullRequestsConfiguration(): Operation<
-  GitHubPullRequestsOptions | undefined
+  GitHubPullRequestsConfiguration | undefined
 > {
   const written = yield* readEnv(GITHUB_PULL_REQUESTS_ENV);
   if (written === undefined || written === "") {

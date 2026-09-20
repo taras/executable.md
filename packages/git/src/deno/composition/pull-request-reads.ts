@@ -37,7 +37,6 @@
  */
 
 import type { Operation } from "effection";
-import type { WorkflowRunDatabase } from "@executablemd/workflow";
 import { GitOperationAdmissionError, PullRequestReadError } from "../../composition/errors.ts";
 import type {
   PullRequestReadKind,
@@ -48,10 +47,10 @@ import { PullRequestReadExecution } from "../../composition/pull-request-read-ex
 import type { PullRequestReadOptions } from "../../composition/pull-request-api.ts";
 import type { RepositoryRecord } from "../../composition/records.ts";
 import type { SelectionRegistry } from "../selections.ts";
-import { denoGitHubSource } from "./github.ts";
 import type { GitHubRepositoryName, GitHubSource } from "./github.ts";
 import { readPullRequestEvidence as readEvidence } from "./pull-request-evidence.ts";
 import { upsertPullRequest } from "./pull-request.ts";
+import { gitHubPullRequestsConfiguration } from "./pull-request-configuration.ts";
 import type { RepositoryHost } from "./host.ts";
 import { PULL_REQUEST_ELEMENT } from "../../composition/components/PullRequest.ts";
 import type { PullRequestResult } from "../../composition/pull-request-records.ts";
@@ -145,7 +144,7 @@ export function pullRequestAllowed(allowed: readonly string[], url: string): boo
   return allowed.some((entry) => url === entry || url.startsWith(`${entry}/`));
 }
 
-export interface GitHubPullRequestsOptions {
+export interface GitHubPullRequestsConfiguration {
   /**
    * The canonical containers whose pull requests this host may read.
    *
@@ -157,8 +156,35 @@ export interface GitHubPullRequestsOptions {
   readonly allowed?: readonly string[];
   /** The API base every request is built against, when not the default. */
   readonly endpoint?: string;
+}
+
+/**
+ * What a host installs this adapter with.
+ *
+ * Nothing here is an operator's authorization. What is allowed and where the
+ * API lives are configuration, and configuration is read when an invoked
+ * operation needs it — so what a host supplies is only the substitutions a
+ * suite makes for the two things it cannot arrange.
+ */
+export interface GitHubPullRequestsOptions {
   /** An injected transport, which outranks any configured endpoint. */
   readonly access?: GitHubSource;
+  /**
+   * How a source is built when none is injected.
+   *
+   * Supplied by the host, never reached for: this implementation knows the
+   * protocol and not the platform, so the concrete transport and the
+   * credential behind it arrive from the adapter that owns them. A suite that
+   * injects `access` needs none of this.
+   */
+  readonly host?: (endpoint?: string) => GitHubSource;
+  /**
+   * Configuration stated directly, read instead of the environment.
+   *
+   * A suite says what an operator would have written rather than writing it
+   * into the process it is running in.
+   */
+  readonly configuration?: GitHubPullRequestsConfiguration;
 }
 
 /**
@@ -172,11 +198,63 @@ export interface GitHubPullRequestsOptions {
  * platform's own GitHub. A suite that supplies its own access is not asking for
  * a different endpoint as well.
  */
-function sourceOf(options: GitHubPullRequestsOptions): GitHubSource {
-  return (
-    options.access ??
-    (options.endpoint === undefined ? denoGitHubSource() : denoGitHubSource(options.endpoint))
-  );
+function sourceOf(
+  options: GitHubPullRequestsOptions,
+  configuration: GitHubPullRequestsConfiguration,
+): GitHubSource {
+  const source = options.access ?? options.host?.(configuration.endpoint);
+  if (source === undefined) {
+    throw new PullRequestReadError(
+      "unavailable",
+      PULL_REQUEST_ELEMENT,
+      "no transport was installed for this Git host, so nothing could be asked of it.",
+    );
+  }
+  return source;
+}
+
+/**
+ * What this deployment authorized, read when an invoked request needs it.
+ *
+ * Memoized including its absence: an unset variable is an answer, and asking
+ * the environment again on the next request would be asking a question this
+ * adapter has already had answered. Matching a URL reads nothing outside the
+ * process, so a request that is not this adapter's never reaches here.
+ */
+function transports(
+  options: GitHubPullRequestsOptions,
+): (configuration: GitHubPullRequestsConfiguration) => GitHubSource {
+  let opened: GitHubSource | undefined;
+  return (configuration) => (opened ??= sourceOf(options, configuration));
+}
+
+/**
+ * The transport this adapter reaches GitHub through, resolved on first use.
+ *
+ * What the orchestration above asks for when it has a reconciliation to make.
+ * Configuration belongs to this set, so it is read here rather than passed in —
+ * and read only when something actually needs a session.
+ */
+export function gitHubPullRequestAccess(
+  options: GitHubPullRequestsOptions = {},
+): () => Operation<GitHubSource> {
+  const authorized = resolver(options);
+  const transport = transports(options);
+  return function* (): Operation<GitHubSource> {
+    return transport((yield* authorized()) ?? {});
+  };
+}
+
+function resolver(
+  options: GitHubPullRequestsOptions,
+): () => Operation<GitHubPullRequestsConfiguration | undefined> {
+  let settled: { readonly configuration: GitHubPullRequestsConfiguration | undefined } | undefined;
+  return function* (): Operation<GitHubPullRequestsConfiguration | undefined> {
+    settled ??= {
+      configuration: options.configuration ?? (yield* gitHubPullRequestsConfiguration()),
+    };
+    return settled.configuration;
+  };
 }
 
 /**
@@ -191,23 +269,33 @@ function sourceOf(options: GitHubPullRequestsOptions): GitHubSource {
  * installing none leaves `PullRequestAPI`'s own base error to report that
  * nothing handled the request.
  */
-export function* useGitHubPullRequestReads(options: GitHubPullRequestsOptions): Operation<void> {
-  const source = sourceOf(options);
+export function* useGitHubPullRequestReads(
+  options: GitHubPullRequestsOptions = {},
+): Operation<void> {
+  const authorized = resolver(options);
+  const transport = transports(options);
 
   yield* PullRequestAPI.around({
     *read([url, read], next): Operation<PullRequestReadResult> {
-      // Matched by discriminator, or — with no discriminator — by URL.
-      // With nothing allowed there is no URL read this host performs, so the
-      // request passes to whatever else is installed and, finding nothing,
-      // reaches the surface's own base error. Upsert is untouched by this: it
-      // is handled below whether or not any URL is allowed.
-      const configured = options.allowed !== undefined && options.allowed.length > 0;
+      // Matched by discriminator, or — with no discriminator — by URL. The
+      // match is decided from the request alone, so a URL that is not this
+      // adapter's reads no configuration on its way past.
       const mine =
-        configured &&
-        (read.provider === undefined
+        read.provider === undefined
           ? recognizesGitHubPullRequestUrl(url)
-          : read.provider === GITHUB);
+          : read.provider === GITHUB;
       if (!mine) {
+        return yield* next(url, read);
+      }
+
+      // The URL is this adapter's, so now — and only now — what this deployment
+      // authorized is read. With nothing allowed there is no URL read this host
+      // performs, so the request passes to whatever else is installed and,
+      // finding nothing, reaches the surface's own base error. Upsert is
+      // untouched by this: it is handled below whether or not any URL is
+      // allowed.
+      const configuration = yield* authorized();
+      if (configuration?.allowed === undefined || configuration.allowed.length === 0) {
         return yield* next(url, read);
       }
 
@@ -215,7 +303,7 @@ export function* useGitHubPullRequestReads(options: GitHubPullRequestsOptions): 
       // From here this middleware owns the answer, and what is allowed is asked
       // before anything is built: a URL a document wrote is not a place this
       // host authorized until the configuration says so.
-      if (!pullRequestAllowed(options.allowed ?? [], url)) {
+      if (!pullRequestAllowed(configuration.allowed, url)) {
         throw new PullRequestReadError(
           "unavailable",
           element,
@@ -246,7 +334,7 @@ export function* useGitHubPullRequestReads(options: GitHubPullRequestsOptions): 
         function* (): Operation<PullRequestReadResult> {
           // After the ceiling, never before: a session opened first would be an
           // identity established for a target this host had not authorized.
-          const access = yield* source.open();
+          const access = yield* transport(configuration).open();
           const reading = yield* readEvidence(access, name, name.number, read.kind);
           if (reading.state === "unavailable") {
             throw new PullRequestReadError(
@@ -270,60 +358,6 @@ export function* useGitHubPullRequestReads(options: GitHubPullRequestsOptions): 
       );
     },
   });
-}
-
-/**
- * Install the workflow host's reconciled pull-request upsert, and its reads.
- *
- * The upsert is unchanged in everything but where it is reached from: it still
- * proves this run published the branch, still reconciles through the Git-host
- * engine, and still refuses a pull request belonging to another Repository. The
- * selection it is handed is resolved through the provider's own registry, never
- * believed, which is the same rule every Git operation follows.
- */
-export function* useGitHubPullRequests(
-  database: WorkflowRunDatabase,
-  host: RepositoryHost,
-  options: GitHubPullRequestsOptions,
-  selections: SelectionRegistry<RepositoryRecord>,
-): Operation<void> {
-  const source = sourceOf(options);
-
-  yield* PullRequestAPI.around({
-    *upsert([pullRequest, upsert], next): Operation<PullRequestResult> {
-      const mine = upsert.provider === undefined || upsert.provider === GITHUB;
-      if (!mine) {
-        return yield* next(pullRequest, upsert);
-      }
-      const outcome = yield* upsertPullRequest(
-        database,
-        host,
-        {
-          // The record this provider itself holds for the selection, never the
-          // selection's own words: a Repository nobody selected is exactly what
-          // a replaced context would name.
-          repository: selections.authenticate(
-            upsert.repository,
-            () =>
-              new GitOperationAdmissionError(
-                PULL_REQUEST_ELEMENT,
-                "the Repository in scope is not one this run selected, so it names no retained " +
-                  "checkout",
-              ),
-          ),
-          workingDirectory: upsert.workingDirectory,
-          number: pullRequest.number,
-          title: pullRequest.title,
-          body: pullRequest.body,
-          draft: pullRequest.draft,
-          base: pullRequest.base,
-        },
-        source,
-      );
-      return outcome.result;
-    },
-  });
-  yield* useGitHubPullRequestReads(options);
 }
 
 /** The options a read carries, re-exported for a host installing this. */

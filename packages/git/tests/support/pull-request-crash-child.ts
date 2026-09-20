@@ -23,7 +23,7 @@ import { useWorkflowRunStorage } from "@executablemd/workflow/deno";
 import { retainedWorkflowInstallation } from "../../../workflow/src/run.ts";
 import { gitWorkspaceAttachment } from "../../src/deno/attachment.ts";
 import { withWorkflowWorkspace } from "../../../workflow/src/deno/workspace/host.ts";
-import { denoGitHubAccess } from "../../src/deno/composition/github.ts";
+import { denoGitHubAccess } from "../../src/deno/composition/github-host.ts";
 import type {
   GitHubAccess,
   GitHubHttpRequest,

@@ -1,14 +1,19 @@
 /**
- * Where the production host learns which issue trackers it may reach.
+ * Where this adapter learns which issue trackers it may reach.
  *
  * A tracker URL a document writes is composition data: it says where an issue
  * is wanted, not that this deployment allows it. What allows it is here, beside
  * the credential, and it is the operator's to state — so it is read from the
  * environment rather than from anything a run can influence.
  *
- * Absence installs nothing, and that is fail-closed by construction: with no
- * provider installed, `<Issue>` reaches `IssueApi`'s own base error and says
- * that nothing handles the destination. A deployment that wants issues says so.
+ * Absence authorizes nothing, and that is fail-closed by construction: with no
+ * ceiling, this adapter handles no destination and `<Issue>` reaches
+ * `IssueApi`'s own base error, which says that nothing handles it. A deployment
+ * that wants issues says so.
+ *
+ * Read when an invoked GitHub-backed operation needs it, never at startup.
+ * Installing the Plugin, describing its syntax, validating a Plan and running
+ * unrelated work read this variable not at all.
  *
  * Malformed configuration is refused rather than narrowed to what parsed. An
  * operator who wrote a ceiling this host could not read has not authorized the
@@ -18,8 +23,8 @@
 
 import { env as readEnv } from "@executablemd/runtime";
 import type { Operation } from "effection";
-import { canonicalIssueTarget } from "@executablemd/git";
-import type { GitHubIssuesOptions } from "@executablemd/git/deno";
+import { canonicalIssueTarget } from "../../issue/tracker.ts";
+import type { GitHubIssuesConfiguration } from "./github.ts";
 
 /** The variable that configures GitHub issue handling. */
 export const GITHUB_ISSUES_ENV = "XMD_WORKFLOW_GITHUB_ISSUES";
@@ -32,7 +37,7 @@ export class GitHubIssuesConfigError extends Error {
     super(
       `${GITHUB_ISSUES_ENV} is not usable: ${sentence} Expected JSON such as ` +
         `{"ceiling":["https://github.com/owner/repo"],"endpoint":"https://api.github.com"} — ` +
-        "ceiling is required, endpoint is optional. Unset it to install no issue provider.",
+        "ceiling is required, endpoint is optional. Unset it to authorize no tracker at all.",
     );
   }
 }
@@ -42,10 +47,10 @@ export class GitHubIssuesConfigError extends Error {
  *
  * Strict about shape and about the URLs it holds. A ceiling entry that is not
  * the canonical name of a container is refused here rather than at the first
- * request, because an operator reading a startup failure can fix it and a
- * document author reading a refusal mid-run cannot.
+ * request, because a ceiling this host cannot read authorizes nothing and
+ * saying so is the only honest answer to the operation that asked.
  */
-export function* gitHubIssuesConfiguration(): Operation<GitHubIssuesOptions | undefined> {
+export function* gitHubIssuesConfiguration(): Operation<GitHubIssuesConfiguration | undefined> {
   const written = yield* readEnv(GITHUB_ISSUES_ENV);
   if (written === undefined || written === "") {
     return undefined;

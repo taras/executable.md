@@ -53,7 +53,6 @@ import type { Operation } from "effection";
 import { canonicalFingerprint } from "@executablemd/core";
 import {
   authorizedHeaders,
-  denoGitHubSource,
   member,
   nextPage,
   nonEmpty,
@@ -78,6 +77,7 @@ import {
   IssueUnavailableError,
 } from "../../issue/errors.ts";
 import { withinIssueCeiling } from "../../issue/tracker.ts";
+import { gitHubIssuesConfiguration } from "./configuration.ts";
 import { normalizedTags } from "../../issue/records.ts";
 
 /** The discriminator this adapter answers for. */
@@ -297,7 +297,7 @@ export function recognizesGitHubUrl(target: string): boolean {
   }
 }
 
-export interface GitHubIssuesOptions {
+export interface GitHubIssuesConfiguration {
   /**
    * The canonical targets this host authorizes, as containers.
    *
@@ -308,8 +308,36 @@ export interface GitHubIssuesOptions {
   readonly ceiling: readonly string[];
   /** The API base every request is built against, when not the default. */
   readonly endpoint?: string;
+}
+
+/**
+ * What a host installs this adapter with.
+ *
+ * Nothing here is an operator's authorization. The ceiling and the endpoint are
+ * configuration, and configuration is read when an invoked operation needs it —
+ * so what a host supplies is only the substitutions a suite makes for the two
+ * things it cannot arrange: the transport, and the configuration a deployment
+ * would have written.
+ */
+export interface GitHubIssuesOptions {
   /** An injected transport, which outranks any configured endpoint. */
   readonly access?: GitHubSource;
+  /**
+   * How a source is built when none is injected.
+   *
+   * Supplied by the host, never reached for: this implementation knows the
+   * protocol and not the platform, so the concrete transport and the
+   * credential behind it arrive from the adapter that owns them. A suite that
+   * injects `access` needs none of this.
+   */
+  readonly host?: (endpoint?: string) => GitHubSource;
+  /**
+   * Configuration stated directly, read instead of the environment.
+   *
+   * A suite says what an operator would have written rather than writing it
+   * into the process it is running in.
+   */
+  readonly configuration?: GitHubIssuesConfiguration;
 }
 
 /**
@@ -320,17 +348,44 @@ export interface GitHubIssuesOptions {
  * it needs no coordination between them, and installing none leaves
  * `IssueApi`'s own base error to report that nothing handled the request.
  */
-export function* useGitHubIssues(options: GitHubIssuesOptions): Operation<void> {
-  // A source rather than an access: it is credential-free, so holding one for
-  // the middleware's whole lifetime retains nothing. A session — which does have
-  // an identity — is opened per request below, after that request's ceiling.
+export function* useGitHubIssues(options: GitHubIssuesOptions = {}): Operation<void> {
+  // Resolved when an invoked request turns out to be this adapter's, and never
+  // at installation. Matching a destination reads nothing outside the process,
+  // so a command that installs this and writes no `<Issue>` — or writes one
+  // somewhere else — reads no configuration and obtains no credential.
   //
-  // Precedence: an injected transport, then a configured endpoint, then the
-  // platform's own GitHub. A suite that supplies its own access is not asking
-  // for a different endpoint as well.
-  const source =
-    options.access ??
-    (options.endpoint === undefined ? denoGitHubSource() : denoGitHubSource(options.endpoint));
+  // Memoized including its absence: an unset variable is an answer, and asking
+  // the environment again on the next request would be asking a question this
+  // adapter has already had answered.
+  let settled: { readonly configuration: GitHubIssuesConfiguration | undefined } | undefined;
+  let opened: GitHubSource | undefined;
+
+  function* authorized(): Operation<GitHubIssuesConfiguration | undefined> {
+    settled ??= {
+      configuration: options.configuration ?? (yield* gitHubIssuesConfiguration()),
+    };
+    return settled.configuration;
+  }
+
+  /**
+   * The transport for this adapter, built once.
+   *
+   * A source rather than an access: it is credential-free, so holding one for
+   * the middleware's whole lifetime retains nothing. A session — which does have
+   * an identity — is opened per request below, after that request's ceiling.
+   *
+   * Precedence: an injected transport, then the host's own, built against
+   * whatever endpoint this deployment configured. A suite that supplies its
+   * own access is not asking for a different endpoint as well. With neither,
+   * this adapter has no way to reach anything and says so.
+   */
+  function transport(configuration: GitHubIssuesConfiguration): GitHubSource {
+    opened ??= options.access ?? options.host?.(configuration.endpoint);
+    if (opened === undefined) {
+      throw new IssueUnavailableError();
+    }
+    return opened;
+  }
 
   yield* IssueApi.around(
     {
@@ -342,10 +397,18 @@ export function* useGitHubIssues(options: GitHubIssuesOptions): Operation<void> 
         if (!mine) {
           return yield* next(url, read);
         }
+        // The destination is this adapter's, so now — and only now — what this
+        // deployment authorized is read. Nothing authorized is the same answer
+        // as no adapter at all: the request is passed on, and `IssueApi`'s base
+        // says that nothing handles it.
+        const configuration = yield* authorized();
+        if (configuration === undefined) {
+          return yield* next(url, read);
+        }
         // From here this middleware owns the answer, and the ceiling is asked
         // before anything is built: a URL a document wrote is not a place this
         // host authorized until the ceiling says so.
-        if (!withinIssueCeiling(options.ceiling, url)) {
+        if (!withinIssueCeiling(configuration.ceiling, url)) {
           throw new IssueUnavailableError();
         }
         if (issue === undefined) {
@@ -353,7 +416,7 @@ export function* useGitHubIssues(options: GitHubIssuesOptions): Operation<void> 
         }
         // After the ceiling, never before: a session opened first would be an
         // identity established for a target this host had not authorized.
-        return yield* observed(yield* source.open(), issue, url);
+        return yield* observed(yield* transport(configuration).open(), issue, url);
       },
 
       *upsert([issue, upsert], next): Operation<IssueReference> {
@@ -365,9 +428,17 @@ export function* useGitHubIssues(options: GitHubIssuesOptions): Operation<void> 
         if (!mine) {
           return yield* next(issue, upsert);
         }
+        // The destination is this adapter's, so now — and only now — what this
+        // deployment authorized is read. Nothing authorized is the same answer
+        // as no adapter at all: the request is passed on, and `IssueApi`'s base
+        // says that nothing handles it.
+        const configuration = yield* authorized();
+        if (configuration === undefined) {
+          return yield* next(issue, upsert);
+        }
         // From here this middleware owns the answer. A refusal is the end of
         // the request rather than a reason to let somebody else try.
-        if (!withinIssueCeiling(options.ceiling, upsert.url)) {
+        if (!withinIssueCeiling(configuration.ceiling, upsert.url)) {
           throw new IssueUnavailableError();
         }
         // Named outright but not a repository issue collection: this adapter
@@ -376,7 +447,7 @@ export function* useGitHubIssues(options: GitHubIssuesOptions): Operation<void> 
         if (name === undefined) {
           throw new IssueUnavailableError();
         }
-        return yield* reconcile(yield* source.open(), name, issue, upsert);
+        return yield* reconcile(yield* transport(configuration).open(), name, issue, upsert);
       },
     },
     { at: "min" },

@@ -8,7 +8,7 @@
  *
  * What stays in TypeScript is what a document cannot construct: GitHub payload
  * parsing, pagination, marker reconciliation and serialization live in
- * `issue-github.test.ts`, and nothing there duplicates a scenario here.
+ * `github-issues.test.ts`, and nothing there duplicates a scenario here.
  */
 
 import { describe, it } from "@executablemd/test-support/bdd";

@@ -18,8 +18,6 @@ import type { Operation } from "effection";
 import { cwd } from "@executablemd/runtime";
 import { useRunComposition } from "@executablemd/git/deno";
 import type { HelperAssembly } from "@executablemd/git/credential-helper";
-import { gitHubIssuesConfiguration } from "./github-issues-config.ts";
-import { gitHubPullRequestsConfiguration } from "./github-pull-requests-config.ts";
 import { DEFAULT_REPOSITORY_ROOT } from "./run-repositories.ts";
 import type { RepositoryInstaller } from "./run-repositories.ts";
 
@@ -35,8 +33,6 @@ export function denoRunRepositories(
   root: string = DEFAULT_REPOSITORY_ROOT,
 ): RepositoryInstaller {
   return function* (): Operation<void> {
-    const gitHubIssues = yield* gitHubIssuesConfiguration();
-    const gitHubPullRequests = yield* gitHubPullRequestsConfiguration();
     yield* useRunComposition({
       root,
       // The directory this execution starts in, which is where the ambient
@@ -45,8 +41,6 @@ export function denoRunRepositories(
       // working directory is discovered from that one.
       cwd: yield* cwd(),
       helper,
-      ...(gitHubIssues === undefined ? {} : { gitHubIssues }),
-      ...(gitHubPullRequests === undefined ? {} : { gitHubPullRequests }),
     });
   };
 }

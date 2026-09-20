@@ -130,7 +130,10 @@ function ahead<T>(handler: () => Operation<void>, body: () => Operation<T>): Ope
 function reading(host: Server, allowed: readonly string[] = [SUBJECT_REPO]) {
   return {
     composition: {},
-    gitHubPullRequests: { allowed, access: gitHubSource(host.access) },
+    gitHubPullRequests: {
+      access: gitHubSource(host.access),
+      configuration: { allowed },
+    },
   };
 }
 
@@ -985,7 +988,10 @@ describe("Tier PRR — pull-request evidence", () => {
           {
             composition: {},
             // Authorizes a different repository entirely.
-            gitHubPullRequests: { allowed: ["https://github.com/octo/other"], access: counted },
+            gitHubPullRequests: {
+              access: counted,
+              configuration: { allowed: ["https://github.com/octo/other"] },
+            },
           },
         ),
       );
@@ -1023,8 +1029,8 @@ describe("Tier PRR — pull-request evidence", () => {
     // No storage, no run, no attachment — just the adapter and the components.
     const answers = yield* scoped(function* () {
       yield* useGitHubPullRequestReads({
-        allowed: [SUBJECT_REPO],
         access: gitHubSource(host.access),
+        configuration: { allowed: [SUBJECT_REPO] },
       });
       const first = yield* PullRequestAPI.operations.read(SUBJECT_URL, { kind: "reviews" });
       const second = yield* PullRequestAPI.operations.read(SUBJECT_URL, { kind: "reviews" });
@@ -1062,8 +1068,8 @@ describe("Tier PRR — pull-request evidence", () => {
     const failure = yield* raised(
       scoped(function* () {
         yield* useGitHubPullRequestReads({
-          allowed: ["https://github.com/octo/other"],
           access: counted,
+          configuration: { allowed: ["https://github.com/octo/other"] },
         });
         return yield* PullRequestAPI.operations.read(SUBJECT_URL, { kind: "reviews" });
       }),
@@ -1111,7 +1117,7 @@ describe("Tier PRR — pull-request evidence", () => {
             composition: {},
             // The ceiling would admit the target; the discriminator is what
             // this adapter does not answer to.
-            gitHubPullRequests: { allowed: [SUBJECT_REPO], access: counted },
+            gitHubPullRequests: { access: counted, configuration: { allowed: [SUBJECT_REPO] } },
           },
         ),
       );
@@ -1157,7 +1163,7 @@ describe("Tier PRR — pull-request evidence", () => {
           `<PullRequest.Reviews url="${notAPullRequest}" provider="github" as="reviews" />\n`,
           {
             composition: {},
-            gitHubPullRequests: { allowed: [SUBJECT_REPO], access: counted },
+            gitHubPullRequests: { access: counted, configuration: { allowed: [SUBJECT_REPO] } },
           },
         ),
       );
@@ -1315,7 +1321,7 @@ describe("Tier PRR — pull-request evidence", () => {
     };
     const options = {
       composition: {},
-      gitHubPullRequests: { allowed: [SUBJECT_REPO], access: counted },
+      gitHubPullRequests: { access: counted, configuration: { allowed: [SUBJECT_REPO] } },
     };
     const document = `<PullRequest.Reviews url="${SUBJECT_URL}" as="reviews" />\n\n{reviews.length} reviews\n`;
 
@@ -1379,7 +1385,10 @@ describe("Tier PRR — pull-request evidence", () => {
       yield* runWorkflowDocument(
         database,
         `<PullRequest.Reviews url="${SUBJECT_URL}" as="reviews" />\n`,
-        { composition: {}, gitHubPullRequests: { allowed: [SUBJECT_REPO], access: counted } },
+        {
+          composition: {},
+          gitHubPullRequests: { access: counted, configuration: { allowed: [SUBJECT_REPO] } },
+        },
       );
     });
 
@@ -1424,7 +1433,7 @@ describe("Tier PRR — pull-request evidence", () => {
           yield* raised(
             runWorkflowDocument(database, document, {
               composition: {},
-              gitHubPullRequests: { allowed: [SUBJECT_REPO], access: hanging },
+              gitHubPullRequests: { access: hanging, configuration: { allowed: [SUBJECT_REPO] } },
             }),
           );
         }),
