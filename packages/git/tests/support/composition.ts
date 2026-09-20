@@ -61,15 +61,20 @@ import {
 } from "@executablemd/workflow";
 
 /**
- * The admissions the Git Plugin contributes, as a host installing it receives
- * them.
+ * The bundled Git Plugin, installed where a command installs it.
+ *
+ * Every host in this package that executes a document needs this: `<Repository>`
+ * and the twelve components beside it are the Plugin's, and nothing bootstraps
+ * them any more. Call it once, in the scope that encloses the document — above
+ * any Workspace attachment, which owns providers and durable state rather than
+ * names — and use the installation it returns for the run's own admissions.
  *
  * Asked of the Plugin value rather than assembled here, so what these cases
  * exercise is the same contribution a command gets — one Plugin value, and an
  * admission that derives this execution's identities from this execution's own
  * retained history.
  */
-function* gitPluginAdmissions(): Operation<ExecutionInstallation> {
+export function* gitPluginAdmissions(): Operation<ExecutionInstallation> {
   const install = gitPlugin.install;
   if (install === undefined) {
     throw new Error("the Git Plugin installed nothing");

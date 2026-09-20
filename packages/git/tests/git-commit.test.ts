@@ -72,6 +72,7 @@ import {
   workspaceText,
   writeCheckoutFile,
 } from "./support/composition.ts";
+import { gitPluginAdmissions } from "./support/composition.ts";
 import { dropRootClose } from "./support/replay.ts";
 
 import type { RepositorySelection } from "../src/composition/selection.ts";
@@ -176,6 +177,7 @@ function runForged(
   options: GitWorkspaceOptions,
 ): Operation<Json> {
   return scoped(function* () {
+    yield* gitPluginAdmissions();
     return yield* withWorkflowWorkspace(
       database,
       scoped(function* () {
@@ -628,6 +630,7 @@ describe("workflow Git.Commit leading content", () => {
   /** Run one document with `<Body />` registered for it. */
   function withBody(database: WorkflowRunDatabase, text: string, source: string): Operation<Json> {
     return scoped(function* () {
+      yield* gitPluginAdmissions();
       return yield* withWorkflowWorkspace(
         database,
         scoped(function* () {
@@ -964,6 +967,7 @@ describe("workflow Git.Commit selection", () => {
       const database = yield* createRun();
       const counting = countingHost();
       const output = yield* scoped(function* () {
+        yield* gitPluginAdmissions();
         return yield* withWorkflowWorkspace(
           database,
           scoped(function* () {
@@ -1144,6 +1148,7 @@ describe("workflow Git.Commit request ownership", () => {
       });
 
       yield* scoped(function* () {
+        yield* gitPluginAdmissions();
         return yield* withWorkflowWorkspace(
           database,
           scoped(function* () {

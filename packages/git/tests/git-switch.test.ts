@@ -68,6 +68,7 @@ import {
   survivingRoots,
   workspaceText,
 } from "./support/composition.ts";
+import { gitPluginAdmissions } from "./support/composition.ts";
 import type { LoadedGitApi } from "./support/composition.ts";
 import { committedRoot, dropRootClose, latestRoot, publishedRoots } from "./support/replay.ts";
 
@@ -148,6 +149,7 @@ function runForged(
   options: GitWorkspaceOptions,
 ): Operation<Json> {
   return scoped(function* () {
+    yield* gitPluginAdmissions();
     return yield* withWorkflowWorkspace(
       database,
       scoped(function* () {
@@ -737,6 +739,7 @@ describe("workflow Git.Switch selection", () => {
       const database = yield* createRun();
       const counting = countingHost();
       const output = yield* scoped(function* () {
+        yield* gitPluginAdmissions();
         return yield* withWorkflowWorkspace(
           database,
           scoped(function* () {
@@ -936,6 +939,7 @@ describe("workflow Git composition routing", () => {
     yield* withStorage(root, function* () {
       const database = yield* createRun();
       const output = yield* scoped(function* () {
+        yield* gitPluginAdmissions();
         return yield* withWorkflowWorkspace(
           database,
           scoped(function* () {
@@ -971,6 +975,7 @@ describe("workflow Git composition routing", () => {
       const forgedRun = yield* createRun({ runId: "loaded-copy-forged" });
       const failure = yield* raised(
         scoped(function* () {
+          yield* gitPluginAdmissions();
           return yield* withWorkflowWorkspace(
             forgedRun,
             scoped(function* () {
@@ -1087,6 +1092,7 @@ describe("workflow Git.Switch request ownership", () => {
       const database = yield* createRun();
       const perform = (options: GitWorkspaceOptions): Operation<Json> =>
         scoped(function* () {
+          yield* gitPluginAdmissions();
           return yield* withWorkflowWorkspace(
             database,
             scoped(function* () {

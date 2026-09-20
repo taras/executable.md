@@ -13,9 +13,12 @@
  * unknown heading and a component documented twice each fail the build for
  * exactly the reason they would fail a run.
  *
- * XMD bundles no Plugin, so the selection is explicit here too. This script is
- * a build tool rather than the product, which is why it may name the package
- * that ships the graph; nothing in the CLI does.
+ * XMD bundles one Plugin — `@executablemd/git` — so this assembles the run
+ * profile: the bundled value, then the review graph named explicitly. A
+ * distribution carries the first, which makes its documentation this gate's
+ * business; the second is an operator's selection, and this script is a build
+ * tool rather than the product, which is why it may name the package that
+ * ships it. Nothing in the CLI does.
  */
 
 import { main, scoped } from "effection";
@@ -23,6 +26,7 @@ import type { Operation } from "effection";
 import { capturedDocumentation, documentationIndexFor } from "@executablemd/core";
 import type { ComponentOrigin, DocumentationIndex } from "@executablemd/core";
 import { useCommandComponents } from "../packages/cli/src/syntax.ts";
+import { BUNDLED_PLUGIN } from "../packages/cli/src/run-profile.ts";
 import { installPlugins } from "../packages/cli/src/plugin-host.ts";
 import reviewPlugin from "../packages/code-review-agent/mod.ts";
 
@@ -32,10 +36,13 @@ export function* validateDocumentation(): Operation<number> {
   // that installed it: collecting outside would find core's terminal alone and
   // pass every rule vacuously.
   const index = yield* scoped(function* () {
-    // The first-party Plugin, installed exactly as `--plugin` installs one: a
+    // The run profile as a command assembles it: the bundled Git Plugin first,
+    // then the first-party review Plugin exactly as `--plugin` installs one. A
     // Plugin's registrations and the documentation describing them arrive
-    // together, so a build that shipped one without the other fails here.
-    yield* installPlugins([reviewPlugin], { command: "run", args: [] });
+    // together, so a build that shipped one without the other fails here — and
+    // the bundled one is in this list because a distribution carries it, which
+    // makes its documentation this gate's business too.
+    yield* installPlugins([BUNDLED_PLUGIN, reviewPlugin], { command: "run", args: ["run"] });
     yield* useCommandComponents();
     return documentationIndexFor(yield* capturedDocumentation());
   });

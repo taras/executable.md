@@ -15,6 +15,7 @@
 
 import { describe, it } from "@executablemd/test-support/bdd";
 import { directoryEntry, executeInstalled } from "@executablemd/core/host";
+import type { FragmentEntry } from "@executablemd/core/host";
 import { expect } from "@executablemd/test-support/expect";
 import { scoped, spawn, suspend, withResolvers } from "effection";
 import type { Operation } from "effection";
@@ -126,7 +127,19 @@ function runDocument(
               // `<Evaluate>` is canonical core's. What this run states is the
               // ceiling, captured by canonical execution before any document
               // code exists.
-              [{ evaluation: yield* evaluationProfile(database, evaluation) }],
+              [
+                {
+                  evaluation: yield* evaluationProfile(database, {
+                    // A directory capability, stated by this host. This package
+                    // states none of its own — `<Dir>` belongs to
+                    // `@executablemd/git`, and a Workflow host that wants the
+                    // capability supplies an entry for it, exactly as WGAC16
+                    // shows a host doing explicitly.
+                    directory: HOST_DIRECTORY,
+                    ...evaluation,
+                  }),
+                },
+              ],
             ),
           );
         }),
@@ -902,6 +915,25 @@ describe("Tier WGAC — the registered Evaluate component", () => {
 });
 
 /**
+ * The directory entry this test host states.
+ *
+ * The identity released builds retained, written out here as this suite's own
+ * compatibility data — several rows below assert the table a run admits, and
+ * what they assert is exactly these strings.
+ *
+ * This package states no entry of its own any more: `<Dir>` belongs to
+ * `@executablemd/git`, and the XMD workflow profile supplies Git's. A test
+ * host standing in for that profile therefore states the same identity rather
+ * than importing it, which is what keeps this suite free of the package under
+ * it.
+ */
+const HOST_DIRECTORY: FragmentEntry = directoryEntry(
+  { origin: "@executablemd/workflow/composition", key: "Dir", revision: "3" },
+  "Dir",
+  ["@executablemd/workflow/composition/dir-v2#Dir"],
+);
+
+/**
  * Tier WGAC — the effect classes `<Evaluate>` selects between
  * (specs/workflow-workspace-spec.md §8.4).
  *
@@ -1048,8 +1080,8 @@ describe("Tier WGAC — the standard write table", () => {
       const database = yield* createRun();
 
       // A host states the component behind `<Dir>`; this package states the
-      // rest of the ceiling. The entry above is the one released builds
-      // retained and is what a host that captures none is admitted under.
+      // rest of the ceiling. A host that states none is admitted under no
+      // directory entry at all, which is why every case here supplies one.
       const attempt = yield* runDocument(database, evaluates(WRITES, ["write"]), {
         directory: directoryEntry({ origin: "tier-wgac", key: "Dir", revision: "1" }, "Dir"),
       });

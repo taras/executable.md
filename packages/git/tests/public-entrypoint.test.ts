@@ -43,6 +43,16 @@ const INTERNAL: readonly string[] = [
 ];
 
 /**
+ * What the root entrypoint publishes for a host that bundles this Plugin.
+ *
+ * `gitPlugin` is the value a distribution carries; `gitPluginDeclaresFor` is
+ * how the host asks, before assembling a profile, whether this command's
+ * profile carries it at all. Both are host seams rather than document
+ * vocabulary, and both are named for the Plugin they belong to.
+ */
+const ROOT_PUBLISHED: readonly string[] = ["gitPlugin", "gitPluginDeclaresFor"];
+
+/**
  * GitHub names this package publishes on purpose.
  *
  * Listed so that losing one is a failure rather than a silent narrowing: a
@@ -69,6 +79,13 @@ describe("what @executablemd/git publishes", () => {
     // absence below while proving nothing at all.
     expect(names.length > 0).toBe(true);
     expect(PUBLISHED.filter((name) => !names.includes(name))).toEqual([]);
+  });
+
+  it("publishes the host seams a bundled profile needs", function* () {
+    const published = yield* until(import("@executablemd/git"));
+    const names = Object.keys(published);
+    expect(names.length > 0).toBe(true);
+    expect(ROOT_PUBLISHED.filter((name) => !names.includes(name))).toEqual([]);
   });
 
   it("publishes no package-local seam from either entrypoint", function* () {

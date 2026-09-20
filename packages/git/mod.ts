@@ -55,6 +55,29 @@
 
 export { default } from "./src/plugin.ts";
 export { gitPlugin } from "./src/plugin.ts";
+/**
+ * `<Dir>`'s entry in a workflow run's generated-XMD write table.
+ *
+ * Published because the component is this package's and the table is
+ * Workflow's: a host assembling the generated-evaluation profile asks the
+ * owner for the entry rather than either package writing the identity twice.
+ */
+export { gitDirectoryEntry } from "./src/composition/definitions.ts";
+/**
+ * Whether *this* Plugin declares anything for a command.
+ *
+ * Published because a host that bundles it has to decide, before it assembles
+ * a profile, whether the command it is about to run is one this vocabulary
+ * belongs to. Carrying the value where it declares nothing would still put it
+ * in the active list, and being in the active list *is* having the default
+ * prefix — so the host asks rather than guesses, and asks the same predicate
+ * `install()` itself uses.
+ *
+ * Named for the Plugin it classifies. A bare `declaresFor` at a package root
+ * reads like a general question about Plugins, and this answers only for the
+ * one this package ships.
+ */
+export { declaresFor as gitPluginDeclaresFor } from "./src/plugin.ts";
 export { workflowInstallation } from "./src/installation.ts";
 export {
   Git,

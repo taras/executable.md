@@ -70,6 +70,7 @@ import { field, object, cli } from "configliere";
 import { z } from "zod";
 import type { DurableEvent, DurableStream, Json } from "@executablemd/durable-streams";
 import { retainedSource, validateProps } from "@executablemd/core";
+import { gitDirectoryEntry } from "@executablemd/git";
 import type { PropsSchema } from "@executablemd/core";
 import type { RootDocumentSource } from "@executablemd/core";
 import {
@@ -79,7 +80,6 @@ import {
   WORKFLOW_RUN_STATUSES,
   WorkflowLifecycle,
 } from "@executablemd/workflow";
-import { gitPluginInstallation } from "./git-plugin-installation.ts";
 import type { ExecutionInstallation } from "@executablemd/core/host";
 import type {
   ExecutorLock,
@@ -923,13 +923,6 @@ export function runWorkflow(
       return { exitCode: 1 };
     }
 
-    // Asked of the Plugin once, here, because a Plugin installs once per
-    // command. Its declarations are the command's and belong in this scope;
-    // asking again lower down would register the same names in the same scope
-    // a second time. Both the fork preflight and the run's own execution are
-    // handed this one value.
-    const git = yield* gitPluginInstallation(request.action);
-
     // Before the executor lock, and before a destination exists: a fork that
     // cannot reproduce the prefix it asked to inherit is a request being
     // refused, not a run that failed.
@@ -941,7 +934,6 @@ export function runWorkflow(
       host,
       transitions,
       execute,
-      git,
     );
     if (!inheritance.ok) {
       report(inheritance.error.message);
@@ -1073,12 +1065,6 @@ export function runWorkflow(
       // real adapter.
       installations: [
         retainedWorkflowInstallation(installedRun(record)),
-        // What the Git Plugin admits of this run's retained history, taken from
-        // the Plugin value itself. Its admissions are what let a replay
-        // recognize the Git-host and Issue records it inherited, and each one
-        // derives this execution's identities from this execution's own
-        // snapshot.
-        git,
         // The bundle this run is a run of, when it is a run of one. Both start
         // and resume install it, and a completed replay installs it too: the
         // retained history is held to the same components before its recorded
@@ -1091,7 +1077,15 @@ export function runWorkflow(
         // about the component. Stated where the Workspace is attached — a
         // completed replay restores its retained output and expands nothing, so
         // it needs no ceiling of its own.
-        ...(completed || replay ? [] : [{ evaluation: yield* evaluationProfile(database) }]),
+        // `<Dir>`'s entry comes from the package that owns the component, so
+        // the write table names one identity rather than two copies of it.
+        ...(completed || replay
+          ? []
+          : [
+              {
+                evaluation: yield* evaluationProfile(database, { directory: gitDirectoryEntry() }),
+              },
+            ]),
       ],
       around<T>(operation: Operation<T>): Operation<T> {
         // A completed run replays its retained output and result. Attaching a
@@ -1234,7 +1228,6 @@ function* forkInheritance(
   host: WorkflowHost,
   transitions: WorkflowExecutionTransitions,
   execute: (execution: WorkflowExecution) => Operation<Result<void>>,
-  git: ExecutionInstallation,
 ): Operation<Result<ForkInheritance | undefined>> {
   if (request.action !== "fork") {
     return Ok(undefined);
@@ -1256,7 +1249,6 @@ function* forkInheritance(
     },
     { transitions, attach: (database, operation) => host.attach(database, operation) },
     execute,
-    git,
   );
   if (!checked.ok) {
     return checked;

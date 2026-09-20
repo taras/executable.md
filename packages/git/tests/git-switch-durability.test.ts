@@ -64,6 +64,7 @@ import {
   survivingRoots,
   workspaceText,
 } from "./support/composition.ts";
+import { gitPluginAdmissions } from "./support/composition.ts";
 import { committedRoot, dropRootClose, latestRoot, publishedRoots } from "./support/replay.ts";
 
 const REMOTE = {
@@ -222,6 +223,7 @@ function runObserved(
   options: GitWorkspaceOptions,
 ): Operation<Json> {
   return scoped(function* () {
+    yield* gitPluginAdmissions();
     return yield* withWorkflowWorkspace(
       database,
       scoped(function* () {

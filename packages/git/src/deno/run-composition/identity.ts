@@ -8,8 +8,9 @@
  * attributing it to `Executable.md workflow` would put a name in their history
  * that nobody there recognizes.
  *
- * So the invoking user's effective identity is captured once, before the
- * document expands, and used for `<Git.Commit>` alone.
+ * So the invoking user's effective identity is captured once, by the first
+ * `<Git.Commit>` that needs it, and used for that alone. A run that commits
+ * nothing asks the host nothing about who it is.
  *
  * ## Captured from the trusted host, and nowhere else
  *
@@ -17,8 +18,9 @@
  * Git would use: the `GIT_*_NAME`/`GIT_*_EMAIL` variables, then `user.name` and
  * `user.email` from the configuration Git itself resolves, then whatever the
  * host can auto-detect. Reading it takes the caller's own environment and the
- * directory the command was run in, which is why it happens here — at the
- * trusted entrypoint's provider construction, before any document code exists.
+ * directory the command was run in, which is why the reader is the trusted
+ * entrypoint's — constructed at provider installation, where no document code
+ * exists, and consulted later from the commit that needs an answer.
  *
  * It is not a prop, a Context value, a component result or a middleware answer,
  * and no document can read it, replace it or ask for a different one.

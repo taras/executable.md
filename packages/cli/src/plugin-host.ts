@@ -1,10 +1,12 @@
 /**
  * Installing the Plugins one command runs with.
  *
- * The modules the operator selected, in the order they wrote them, and nothing
- * else: XMD ships no Plugin and installs none by default, so a command that
- * named none installs none. That order fixes how middleware composes — the
- * first Plugin installed is the outermost wrapper — and decides nothing else:
+ * The list it is handed, in the order it is handed them, and nothing else.
+ * This is the generic installer: which Plugins a command runs with is the
+ * caller's business — `assembleRunProfile()` is where XMD's own bundled prefix
+ * is decided — and an empty list installs nothing at all. That order fixes how
+ * middleware composes — the first Plugin installed is the outermost wrapper —
+ * and decides nothing else:
  * two Plugins claiming one name, one component name or one structural construct
  * are refused rather than settled by position.
  *

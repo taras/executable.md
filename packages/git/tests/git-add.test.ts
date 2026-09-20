@@ -59,6 +59,7 @@ import {
   stagedPaths,
   subcommands,
 } from "./support/composition.ts";
+import { gitPluginAdmissions } from "./support/composition.ts";
 
 /**
  * A tracked file at the root, one in a subdirectory, and one more of each.
@@ -142,6 +143,7 @@ function runForged(
   options: GitWorkspaceOptions,
 ): Operation<Json> {
   return scoped(function* () {
+    yield* gitPluginAdmissions();
     return yield* withWorkflowWorkspace(
       database,
       scoped(function* () {
@@ -618,6 +620,7 @@ describe("workflow Git.Add selection", () => {
       const database = yield* createRun();
       const counting = countingHost();
       const output = yield* scoped(function* () {
+        yield* gitPluginAdmissions();
         return yield* withWorkflowWorkspace(
           database,
           scoped(function* () {
@@ -844,6 +847,7 @@ describe("workflow Git.Add pathspec text", () => {
       let refused: unknown;
 
       const output = yield* scoped(function* () {
+        yield* gitPluginAdmissions();
         return yield* withWorkflowWorkspace(
           database,
           scoped(function* () {
@@ -948,6 +952,7 @@ describe("workflow Git.Add request ownership", () => {
       });
 
       yield* scoped(function* () {
+        yield* gitPluginAdmissions();
         return yield* withWorkflowWorkspace(
           database,
           scoped(function* () {

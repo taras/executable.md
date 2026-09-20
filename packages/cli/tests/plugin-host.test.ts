@@ -480,9 +480,13 @@ describe("PH6 — the selected review Plugin claims the commands that run a revi
     }
   });
 
-  it("contributes nothing at all when it is not selected", function* () {
-    // XMD bundles no Plugin. A command that named none installs none, whichever
-    // command it is — the graph arrives because an operator asked for it.
+  it("contributes nothing at all when it is not in the list", function* () {
+    // A claim about this primitive, not about the product. `installPlugins()`
+    // installs the list it is handed and nothing else, so an empty list
+    // contributes nothing whichever command it is for. Which Plugins a command
+    // actually runs with — XMD's bundled prefix among them — is assembled by
+    // the caller, in `assembleRunProfile()`, and is not this function's to
+    // decide.
     for (const command of ["run", "syntax", "plan", "workflow"]) {
       const assembly = yield* scoped(function* () {
         return yield* installPlugins([], { command, args: [command] });

@@ -134,7 +134,7 @@ import {
   renderSyntaxMarkdown,
   syntaxSymbols,
 } from "./syntax.ts";
-import { loadPlugins } from "./plugin-loader.ts";
+import { assembleRunProfile } from "./run-profile.ts";
 import type { PluginModuleLoader } from "./plugin-loader.ts";
 import { installPlugins, NO_PLUGINS } from "./plugin-host.ts";
 import type { CommandPlugins } from "./plugin-host.ts";
@@ -161,7 +161,6 @@ import { runWorkflowManagement } from "./workflow-management.ts";
 import { establishDefinition } from "./workflow-definition.ts";
 import type { EstablishedDefinition } from "./workflow-definition.ts";
 import { useWorkflowServiceDenial } from "@executablemd/workflow";
-import { useCompositionComponents } from "@executablemd/git";
 import denoJson from "../deno.json" with { type: "json" };
 
 const SECRET_DETECTION_OPTION = "--secret-detection";
@@ -955,12 +954,11 @@ export function* installDocumentComponents(mode: DocumentMode, verbose: boolean)
   // `<Verbose>` is registered at all.
   yield* Config.around({ verbose: () => verbose }, { at: "min" });
 
-  // The repository-composition vocabulary, as ordinary shadowable defaults,
-  // with the documentation that describes it. Bootstrapping it installs no
-  // provider, discovers no repository, acquires no lock and reaches no network:
-  // what a name *does* is decided by whichever provider the command installed,
-  // and a runtime that installs none still resolves every one of these.
-  yield* useCompositionComponents();
+  // The repository-composition vocabulary is not bootstrapped here. It belongs
+  // to the bundled Git Plugin, which the run profile installs in the command
+  // scope this assembly runs inside — so `xmd run` and a nested
+  // `host="run"` child resolve every one of those names, and the `xmd test`
+  // root, whose profile carries no Plugin, resolves none of them.
 
   // Compose testing around the single core execution entrypoint: both
   // commands register the components (assertions work in regular documents,
@@ -2981,10 +2979,12 @@ export function* runXmd(
  * document. `undefined` is an invocation that installs none — help, the
  * version, and the internal worker mode.
  *
- * What a command line selected is the complete list, in the order it was
- * written. XMD bundles none and defaults to none: a command that named no
- * `--plugin` installs nothing, and a package that happens to be installed stays
- * inert until it is named.
+ * What a command runs with is the profile `assembleRunProfile()` builds: the
+ * one Plugin XMD bundles, for the commands that execute or describe a
+ * document, and then whatever the operator selected in the order they wrote
+ * it. A package that happens to be installed stays inert until it is named,
+ * and a command outside that profile — `xmd test`, `upgrade`, a workflow
+ * management action — carries no Plugin it did not ask for.
  */
 function* withPlugins(
   selection: PluginSelection | undefined,
@@ -2997,10 +2997,7 @@ function* withPlugins(
     }
     let plugins: CommandPlugins;
     try {
-      // Captured before the first module is loaded, so a relative path and a
-      // package specifier both resolve where the caller is standing.
-      const directory = yield* cwd();
-      const loaded = yield* loadPlugins(selection.specifiers, directory, loadPluginModule);
+      const loaded = yield* assembleRunProfile(selection, loadPluginModule);
       plugins = yield* installPlugins(loaded, {
         command: selection.command,
         args: selection.args,

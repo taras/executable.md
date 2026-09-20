@@ -82,14 +82,16 @@ describe("compiled xmd", { sanitizeOps: false, sanitizeResources: false }, () =>
     });
   });
 
-  it("describes only the engine's own language when nothing was selected", function* () {
+  it("describes the engine's language and the bundled Plugin's, and nothing else", function* () {
     if (!(yield* exists(BINARY))) {
       throw new Error(`${BINARY} is missing — run \`deno task build\` before this case`);
     }
-    // The binary bundles no Plugin and embeds no Plugin's assets. What it
-    // describes with no `--plugin` is the language `xmd` itself is — which is
-    // also what makes the row below a claim about selection rather than about
-    // what happened to be compiled in.
+    // The binary bundles exactly one Plugin — `@executablemd/git` — and embeds
+    // its assets. What it describes with no `--plugin` is therefore the
+    // language `xmd` itself is *plus* that one vocabulary, and nothing an
+    // operator did not select. Both halves matter: the first proves the
+    // distribution really carries the Plugin rather than depending on one, and
+    // the second is what makes the row below a claim about selection.
     yield* useElsewhere(function* (dir) {
       const run = yield* runBinary(["syntax", "--json", "--include", dir], dir);
       if (run.code !== 0) {
@@ -97,6 +99,11 @@ describe("compiled xmd", { sanitizeOps: false, sanitizeResources: false }, () =>
       }
       const names = describedNames(run.stdout);
       expect(names).toContain("Syntax");
+      // The bundled vocabulary, compiled in and active by default.
+      for (const name of ["Repository", "Worktree", "Dir", "PullRequest", "Issue"]) {
+        expect(`${name}: ${names.includes(name)}`).toBe(`${name}: true`);
+      }
+      // And nothing from a Plugin nobody named.
       expect(names).not.toContain("Finding");
       expect(names).not.toContain("ReviewContext");
     });
@@ -233,3 +240,127 @@ describe(
     });
   },
 );
+
+describe("the bundled Git Plugin", { sanitizeOps: false, sanitizeResources: false }, () => {
+  it("is compiled in once, with its documentation and released origins", function* () {
+    if (!(yield* exists(BINARY))) {
+      throw new Error(`${BINARY} is missing — run \`deno task build\` before this case`);
+    }
+    yield* useElsewhere(function* (dir) {
+      const run = yield* runBinary(["syntax", "--json", "--include", dir], dir);
+      if (run.code !== 0) {
+        throw new Error(`the compiled binary exited ${run.code}\n${run.stderr}`);
+      }
+      const catalog = JSON.parse(run.stdout);
+      const entries: Record<string, unknown>[] = catalog.categories.flatMap(
+        (category: { entries: Record<string, unknown>[] }) => category.entries,
+      );
+
+      // Once each. A Plugin bundled *and* resolved would describe its
+      // vocabulary twice, which is the shape a second copy takes.
+      for (const name of BUNDLED_COMPONENTS) {
+        const found = entries.filter((entry) => entry.name === name);
+        expect(`${name}: ${found.length}`).toBe(`${name}: 1`);
+        // Complete, not a bare name: the assets travel with the binary.
+        expect(`${name} described: ${typeof found[0]?.description === "string"}`).toBe(
+          `${name} described: true`,
+        );
+      }
+
+      // The GitHub half ships with it: `<PullRequest>`'s evidence components
+      // are the adapter's subject, and a distribution carrying the Plugin
+      // without them would be carrying half of it.
+      for (const name of ["PullRequest.Reviews", "PullRequest.Comments", "PullRequest.Checks"]) {
+        expect(`${name}: ${entries.some((entry) => entry.name === name)}`).toBe(`${name}: true`);
+      }
+    });
+  });
+
+  it("is idempotent under the reserved selector, however many times it is written", function* () {
+    if (!(yield* exists(BINARY))) {
+      throw new Error(`${BINARY} is missing — run \`deno task build\` before this case`);
+    }
+    yield* useElsewhere(function* (dir) {
+      const bare = yield* runBinary(["syntax", "--json", "--include", dir], dir);
+      const selected = yield* runBinary(
+        ["syntax", "--json", "--include", dir, "--plugin", "git", "--plugin", "git"],
+        dir,
+      );
+      if (selected.code !== 0) {
+        throw new Error(`the compiled binary exited ${selected.code}\n${selected.stderr}`);
+      }
+      // The same catalog, byte for byte: writing the selector names the value
+      // the profile already carries, so it adds nothing and reorders nothing.
+      expect(selected.stdout).toBe(bare.stdout);
+    });
+  });
+
+  it("refuses a module that claims the bundled Plugin's name", function* () {
+    if (!(yield* exists(BINARY))) {
+      throw new Error(`${BINARY} is missing — run \`deno task build\` before this case`);
+    }
+    yield* useElsewhere(function* (dir) {
+      // An impostor: a real module, exporting a real Plugin, named
+      // `@executablemd/git`. The reserved selector is idempotent for the
+      // host's own value; a module claiming that name is a duplicate.
+      const impostor = path.join(dir, "impostor.mjs");
+      yield* writeTextFile(
+        impostor,
+        [
+          "export default {",
+          '  name: "@executablemd/git",',
+          "  *install() {",
+          "    return undefined;",
+          "  },",
+          "};",
+          "",
+        ].join("\n"),
+      );
+      const run = yield* runBinary(["run", `--plugin=${impostor}`, "doc.md"], dir);
+      expect(run.code).not.toBe(0);
+      expect(`${run.stdout}\n${run.stderr}`).toContain(
+        "two selected Plugins are named @executablemd/git",
+      );
+    });
+  });
+
+  it("performs no GitHub configuration, credential or transport work when loaded", function* () {
+    if (!(yield* exists(BINARY))) {
+      throw new Error(`${BINARY} is missing — run \`deno task build\` before this case`);
+    }
+    yield* useElsewhere(function* (dir) {
+      // Deliberately unusable configuration. If loading the bundled Plugin
+      // read either variable, this run would refuse before the document ran;
+      // the variables are read by an invoked GitHub-backed operation, and this
+      // document invokes none.
+      const run = yield* timebox<ProcessResult>(TIMEOUT, function* () {
+        return yield* exec(BINARY, {
+          arguments: ["run", "doc.md"],
+          cwd: dir,
+          env: {
+            XMD_WORKFLOW_GITHUB_ISSUES: "{not json at all",
+            XMD_WORKFLOW_GITHUB_PULL_REQUESTS: "{also not json",
+          },
+        }).join();
+      });
+      if (run.timeout) {
+        throw new Error("the compiled binary timed out");
+      }
+      expect(`${run.value.code}: ${run.value.stdout.includes("document body")}`).toBe("0: true");
+    });
+  });
+});
+
+/** The vocabulary the bundled Plugin brings, as the catalog names it. */
+const BUNDLED_COMPONENTS: readonly string[] = [
+  "Repository",
+  "Worktree",
+  "Dir",
+  "Git.Switch",
+  "Git.Add",
+  "Git.Commit",
+  "Git.Push",
+  "PullRequest",
+  "IssueTracker",
+  "Issue",
+];

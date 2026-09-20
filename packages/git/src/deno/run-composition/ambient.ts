@@ -24,10 +24,12 @@
  *
  * ## Discovery is not an operation the document asked for
  *
- * It happens once, before root expansion, from the invocation's starting
- * directory. Being outside a repository is not a startup failure: a document
- * that never asks for a Repository-dependent operation runs exactly as it would
- * anywhere else, and only an element that needs one refuses.
+ * It happens once, on the first ambient request, from the invocation's
+ * starting directory — never at installation. Being outside a repository is not
+ * a startup failure: a document that never asks for a Repository-dependent
+ * operation runs exactly as it would anywhere else and never looks at all, and
+ * only an element that needs one refuses. The answer, including "there is
+ * none", is kept for the rest of the execution.
  *
  * The `origin` is read the same way, and its absence is likewise not a failure.
  * A repository with no origin is a perfectly good Repository for a Worktree, a

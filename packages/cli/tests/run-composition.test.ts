@@ -27,7 +27,10 @@ import { exists, readdir, readTextFile, writeTextFile } from "@effectionx/fs";
 import { useTempDirectory } from "@executablemd/test-support/temp";
 import { join } from "node:path";
 import { COMPOSITION_REGISTRATIONS } from "@executablemd/git";
-import { syntaxSymbols, useCommandComponents } from "../src/syntax.ts";
+import { syntaxSymbols } from "../src/syntax.ts";
+import { installPlugins } from "../src/plugin-host.ts";
+import type { CommandPlugins } from "../src/plugin-host.ts";
+import { BUNDLED_PLUGIN } from "../src/run-profile.ts";
 import { DEFAULT_REPOSITORY_ROOT, unsupportedRepositories } from "../src/run-repositories.ts";
 
 /** Every element an author can write that needs a repository provider. */
@@ -98,6 +101,19 @@ function ordinaryWithoutProvider(source: string, cwd: string): Operation<unknown
   });
 }
 
+/**
+ * The bundled run profile, installed the way a command installs it.
+ *
+ * The repository vocabulary is the Git Plugin's, so a case that wants to
+ * describe or resolve it assembles the profile rather than reaching for the
+ * registration directly. Assembling installs declarations and admissions and
+ * nothing else — no provider, no repository, no subprocess — which is what
+ * these cases are about.
+ */
+function* gitProfile(command: string): Operation<CommandPlugins> {
+  return yield* installPlugins([BUNDLED_PLUGIN], { command, args: [command] });
+}
+
 describe("ORC1 — describing the vocabulary reaches nothing", () => {
   it("builds the catalog without a subprocess, a service, a request or a lock", function* () {
     const managed = yield* useTempDirectory("xmd-orc1-managed-");
@@ -142,7 +158,7 @@ describe("ORC1 — describing the vocabulary reaches nothing", () => {
         },
         { at: "min" },
       );
-      return yield* syntaxSymbols([]);
+      return yield* syntaxSymbols([], yield* gitProfile("syntax"));
     });
 
     // The whole vocabulary is described.
@@ -162,7 +178,10 @@ describe("ORC1 — describing the vocabulary reaches nothing", () => {
     // Registering the declarations installs no provider: the Apis still answer
     // with their own defaults, which is what a catalog is allowed to leave
     // behind.
-    yield* useCommandComponents();
+    // Assembled rather than bootstrapped: the vocabulary belongs to the
+    // bundled Plugin, and installing it is what a run profile does. Installing
+    // it still installs no provider, which is the claim.
+    yield* gitProfile("run");
     const failure = yield* raisedValue(
       collect(yield* execute({ ...inlineSource(`<Git.Push />`), stream: new InMemoryStream() })),
     );
@@ -174,16 +193,19 @@ describe("ORC1 — describing the vocabulary reaches nothing", () => {
 
 describe("ORC2 — one language, described everywhere and operated somewhere", () => {
   it("registers the same thirteen declarations the syntax catalog describes", function* () {
-    // The array itself, rather than a second list: `useCommandComponents()`,
-    // `installDocumentComponents()` and `useCompositionComponents()` all
-    // consume this one, so there is nothing for a runtime to disagree about.
+    // The array itself, rather than a second list: the Plugin's own
+    // registration and the catalog both consume this one, so there is nothing
+    // for a runtime to disagree about.
     expect(COMPOSITION_REGISTRATIONS).toHaveLength(13);
     expect([...COMPOSITION_REGISTRATIONS].map((registration) => registration.name).sort()).toEqual(
       [...COMPOSITION_NAMES].sort(),
     );
 
-    // And the catalog every runtime builds describes each of them completely.
-    const catalog = yield* scoped(() => syntaxSymbols([]));
+    // And the catalog every runtime builds describes each of them completely,
+    // once the profile that owns them is assembled.
+    const catalog = yield* scoped(function* () {
+      return yield* syntaxSymbols([], yield* gitProfile("syntax"));
+    });
     const builtIn = catalog.categories[1].entries;
     for (const name of COMPOSITION_NAMES) {
       const entry = builtIn.find((candidate) => candidate.name === name);

@@ -51,6 +51,7 @@ import {
 } from "../../src/deno/composition/provider.ts";
 import { useWorkspaceEffects } from "../../../workflow/src/deno/workspace/effect.ts";
 import { gitWorkspaceAttachment } from "../../src/deno/attachment.ts";
+import { gitPluginAdmissions } from "./composition.ts";
 import { withWorkflowWorkspace } from "../../../workflow/src/deno/workspace/host.ts";
 import { currentWorkspaceRoot } from "../../../workflow/src/deno/workspace/root.ts";
 import {
@@ -131,6 +132,9 @@ function* crash(
   yield* useWorkspaceEffects(connections);
   const database = yield* openWorkflowRunDatabase({ connection, connections, record });
 
+  // The bundled Plugin, installed where a command installs it: above the
+  // attachment, which owns this run's providers rather than its names.
+  yield* gitPluginAdmissions();
   yield* withWorkflowWorkspace(
     database,
     scoped(function* () {
@@ -235,6 +239,9 @@ function* pushCrash(
     throw new Error(`expected a Git run record, got ${record.definition.kind}`);
   }
 
+  // The bundled Plugin, installed where a command installs it: above the
+  // attachment, which owns this run's providers rather than its names.
+  yield* gitPluginAdmissions();
   yield* withWorkflowWorkspace(
     database,
     scoped(function* () {

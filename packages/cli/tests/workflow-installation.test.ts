@@ -291,12 +291,11 @@ describe("Tier WFI — what a run hands to canonical core", () => {
     );
     expect(preparing.length).toEqual(1);
     expect(preparing[0]?.admissions?.length).toEqual(1);
-    // Every installation this run was given is one of four things, and none of
+    // Every installation this run was given is one of three things, and none of
     // them is a second execution: one `executeInstalled()`, not one per phase.
     // A run-contract installation carries its admission; a bundle carries its
-    // own admission and no preparation; the bundled Git Plugin carries the two
-    // journal admissions that let a replay recognize the Git-host and Issue
-    // records this history holds; and the fragment-evaluation profile carries a
+    // own admission and no preparation; and the fragment-evaluation profile
+    // carries a
     // ceiling and no admission at all, because stating what a generated
     // fragment may do is not a claim about this run's history.
     const profiles = (execution?.installations ?? []).filter(
@@ -310,16 +309,21 @@ describe("Tier WFI — what a run hands to canonical core", () => {
       }
     }
     // The exact contribution, rather than a rule each one satisfies: this run
-    // installs no bundle, so what reaches core is the run contract's one
-    // admission and the Git Plugin's two. A contribution that went missing, an
-    // installation that arrived twice, or an admission that was dropped on the
-    // way all change this list.
+    // installs no bundle, so what the *workflow command* hands core is the run
+    // contract's one admission and nothing else.
+    //
+    // The bundled Git Plugin's two admissions are not here, and their absence
+    // is the point. They arrive with the command's profile — assembled once by
+    // `assembleRunProfile()` and threaded into every execution — rather than
+    // being built a second time by the workflow command, which is what it used
+    // to do. This harness drives `runWorkflow()` directly, with no profile, so
+    // what it sees is the run's own contribution alone.
     expect(
       (execution?.installations ?? [])
         .filter((candidate) => candidate.evaluation === undefined)
         .map((candidate) => candidate.admissions?.length ?? 0)
         .toSorted((left, right) => left - right),
-    ).toEqual([1, 2]);
+    ).toEqual([1]);
 
     // The ceiling is stated exactly once, and it is a real one: a run that
     // installed no profile, or an empty one, would leave `<Evaluate>` with

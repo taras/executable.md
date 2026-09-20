@@ -44,6 +44,7 @@ import {
   withStorage,
 } from "../../workflow/tests/support/storage.ts";
 import { useBareRemote } from "./support/git-remotes.ts";
+import { gitPluginAdmissions } from "./support/composition.ts";
 import {
   causedBy,
   countingHost,
@@ -519,6 +520,7 @@ describe("workflow Git.Commit composition routing", () => {
     yield* withStorage(root, function* () {
       const database = yield* createRun();
       yield* scoped(function* () {
+        yield* gitPluginAdmissions();
         return yield* withWorkflowWorkspace(
           database,
           scoped(function* () {
@@ -539,6 +541,7 @@ describe("workflow Git.Commit composition routing", () => {
       const forged = yield* createRun({ runId: "loaded-copy-forged" });
       const failure = yield* raised(
         scoped(function* () {
+          yield* gitPluginAdmissions();
           return yield* withWorkflowWorkspace(
             forged,
             scoped(function* () {

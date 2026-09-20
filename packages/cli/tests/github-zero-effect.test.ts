@@ -85,17 +85,9 @@ describe("describing the bundled profile costs nothing", () => {
   it("validates a Plan draft without reading GitHub configuration", function* () {
     // Real structural validation, not merely loading the declaration: a draft
     // written in Git-owned syntax, checked through the profile a `plan` command
-    // assembles.
-    //
-    // `<Dir>` is Git's, but omitting the Plugin from this validation does not
-    // yet refuse the draft: `useCommandComponents()` still calls
-    // `useCompositionComponents()` directly (`packages/cli/src/syntax.ts`), so
-    // the vocabulary reaches syntax and Plan whether or not a Plugin supplied
-    // it. Slice 4 removes that call and makes the profile the only route, and
-    // the Plugin-omission probe becomes discriminating then. What this case
-    // proves now is that validating Git-owned syntax reads no GitHub
-    // configuration and opens no transport — which the refusing boundaries
-    // around it enforce, and which the eager-configuration probe fails.
+    // assembles. `<Dir>` is Git's, and the profile is now the only route to it
+    // — nothing bootstraps the vocabulary any more — so the omission case
+    // below refuses this very draft.
     const draft = '# Plan\n\n<Dir path="notes">work here</Dir>\n';
     const result = yield* scoped(function* () {
       yield* refusing();
@@ -121,5 +113,33 @@ describe("describing the bundled profile costs nothing", () => {
       return yield* validate("# Plan\n\n<NotAComponent />\n");
     });
     expect(refused.outcome).toBe("invalid");
+  });
+
+  it("refuses the same draft when the Git Plugin is not in the profile", function* () {
+    // The omission case. `<Dir>` reaches a Plan only because the profile
+    // carries the Plugin that declares it: nothing bootstraps that vocabulary,
+    // so a validation assembled without the Plugin does not merely lose a
+    // provider — it does not know the name.
+    //
+    // This is what makes the positive case above a claim about the *profile*
+    // rather than about whatever the engine happens to declare.
+    const draft = '# Plan\n\n<Dir path="notes">work here</Dir>\n';
+    const result = yield* scoped(function* () {
+      yield* refusing();
+      yield* adapters();
+      // Deliberately empty: a `plan` command that assembled no Plugin.
+      const plugins = yield* installPlugins([], { command: "plan", args: ["plan"] });
+      const validate = structuralValidation([], [yield* planComponentDescription()], plugins);
+      return yield* validate(draft);
+    });
+
+    expect(result.outcome).toBe("invalid");
+    const unresolved = result.diagnostics.filter(
+      (diagnostic) => diagnostic.code === "component-unresolved",
+    );
+    // Named, not merely refused: a draft rejected for some other reason would
+    // satisfy `invalid` while proving nothing about the vocabulary.
+    expect(`unresolved: ${unresolved.length > 0}`).toBe("unresolved: true");
+    expect(unresolved.map((diagnostic) => diagnostic.component)).toContain("Dir");
   });
 });

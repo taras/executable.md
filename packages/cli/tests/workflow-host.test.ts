@@ -28,12 +28,12 @@ import {
   GITHUB_ISSUES_ENV,
   GitHubIssuesConfigError,
   gitHubIssuesConfiguration,
-} from "../src/github-issues-config.ts";
+} from "../../git/src/deno/issue/configuration.ts";
 import {
   GITHUB_PULL_REQUESTS_ENV,
   GitHubPullRequestsConfigError,
   gitHubPullRequestsConfiguration,
-} from "../src/github-pull-requests-config.ts";
+} from "../../git/src/deno/composition/pull-request-configuration.ts";
 import {
   HELPER_MODE,
   helperCommand,
@@ -159,7 +159,7 @@ describe("Tier WFH — workflow host boundary", () => {
   });
 });
 
-describe("Tier WFH — GitHub issue handling is host configuration", () => {
+describe("Tier WFH — GitHub issue handling is adapter configuration", () => {
   /**
    * H1. Which trackers a run may reach is the operator's to state, so it is
    * read from the environment and from nowhere a document can influence.
@@ -233,7 +233,7 @@ describe("Tier WFH — GitHub issue handling is host configuration", () => {
   });
 });
 
-describe("Tier WFH — GitHub pull-request reading is host configuration", () => {
+describe("Tier WFH — GitHub pull-request reading is adapter configuration", () => {
   /**
    * H2. Which pull requests a run may *read* is the operator's to state, and it
    * is stated as `allowed` — the list of places this host permits — rather than

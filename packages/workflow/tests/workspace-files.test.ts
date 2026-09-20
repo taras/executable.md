@@ -35,6 +35,22 @@ import type { HostFilesEvent } from "@executablemd/runtime";
 import type { WorkflowRunDatabase } from "../mod.ts";
 import { withWorkflowWorkspace } from "../src/deno/workspace/host.ts";
 import { gitWorkspaceAttachment } from "../../git/src/deno/attachment.ts";
+import { gitPlugin } from "../../git/src/plugin.ts";
+
+/**
+ * The bundled Git Plugin, installed once for this scope.
+ *
+ * Reached through Git's source the same way the attachment is — this suite
+ * already depends on that package's tree, and nothing in Workflow's own
+ * production code does.
+ */
+function* installGitPlugin(): Operation<void> {
+  const install = gitPlugin.install;
+  if (install === undefined) {
+    throw new Error("the Git Plugin installed nothing");
+  }
+  yield* install.call(gitPlugin, { command: "run", args: ["run"] });
+}
 import { WORKSPACE_FILE } from "../src/deno/workspace/files.ts";
 import { throwWorkspaceFilesystemFailure } from "../src/deno/workspace/errors.ts";
 import type { DenoWorkspaceFilesystem } from "../src/deno/workspace/filesystem.ts";
@@ -133,6 +149,12 @@ interface Run {
 function runDocument(database: WorkflowRunDatabase, source: string): Operation<Run> {
   return scoped(function* () {
     const host = yield* useHostSpy();
+    // `<Dir>` belongs to `@executablemd/git` now, and these cases drive this
+    // run's own directory handling through it. The Plugin is installed here,
+    // at the profile scope, because that is where a command installs one: the
+    // attachment below owns this run's providers and durable state, not the
+    // names. Installing it declares and admits and does nothing else.
+    yield* installGitPlugin();
     const output = yield* withWorkflowWorkspace(
       database,
       scoped(function* () {
@@ -140,8 +162,6 @@ function runDocument(database: WorkflowRunDatabase, source: string): Operation<R
           yield* execute({ ...inlineSource(source), stream: database.journal }),
         );
       }),
-      // `<Dir>` belongs to `@executablemd/git` now, and these cases drive this
-      // run's own directory handling through it.
       { attachments: [gitWorkspaceAttachment()] },
     );
     return { output, host };

@@ -22,6 +22,7 @@ import { isGitWorkflowRunRecord, WorkflowRunStorage } from "@executablemd/workfl
 import { useWorkflowRunStorage } from "@executablemd/workflow/deno";
 import { retainedWorkflowInstallation } from "../../../workflow/src/run.ts";
 import { gitWorkspaceAttachment } from "../../src/deno/attachment.ts";
+import { gitPluginAdmissions } from "./composition.ts";
 import { withWorkflowWorkspace } from "../../../workflow/src/deno/workspace/host.ts";
 import { denoGitHubAccess } from "../../src/deno/composition/github-host.ts";
 import type {
@@ -70,6 +71,9 @@ function* open(root: string, runId: string, locator: string, endpoint: string): 
     throw new Error(`expected a Git run record, got ${record.definition.kind}`);
   }
 
+  // The bundled Plugin, installed where a command installs it: above the
+  // attachment, which owns this run's providers rather than its names.
+  yield* gitPluginAdmissions();
   yield* withWorkflowWorkspace(
     database,
     scoped(function* () {

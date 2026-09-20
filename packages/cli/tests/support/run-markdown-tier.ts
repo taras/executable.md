@@ -81,7 +81,8 @@ export function runMarkdownTier(document: string): Operation<MarkdownTierRun> {
       includes: ["components", "."],
       // The Plugin a run would have selected, because a `host="run"` child gets
       // what `xmd run` gets: the child installs it again in its own scope, with
-      // command `run`. XMD bundles none, so this harness names it exactly as an
+      // command `run`. XMD bundles only Git, so this harness names the rest
+      // exactly as an
       // operator does.
       plugins: [reviewPlugin],
       pluginArgs: [],

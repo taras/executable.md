@@ -12,6 +12,8 @@
  */
 
 import { formDispatcher } from "@executablemd/core";
+import { directoryEntry } from "@executablemd/core/host";
+import type { FragmentEntry } from "@executablemd/core/host";
 import type { FunctionComponentDefinition } from "@executablemd/core";
 import { form as dirForm, props as dirProps } from "./components/Dir.ts";
 
@@ -30,4 +32,28 @@ const fn = formDispatcher(dirForm);
 
 export function dirDefinition(): FunctionComponentDefinition {
   return { kind: "function", name: "Dir", props: dirProps, fn };
+}
+
+/**
+ * The origin released builds retained for `<Dir>`'s generated-XMD entry.
+ *
+ * Written out rather than derived from this package's own name. It identifies
+ * *retained history*: every journal a released build wrote holds this string,
+ * and a continuation compares the write table position by position. The
+ * component moved packages; what a run already recorded did not.
+ */
+export const RETAINED_DIRECTORY_ORIGIN = "@executablemd/workflow/composition";
+
+/**
+ * `<Dir>`'s entry in a workflow run's generated-XMD write table.
+ *
+ * Stated here, beside the definition the ordinary registration uses, because
+ * both describe the same component and a second copy of either would drift.
+ * A host assembling the generated-evaluation profile asks for this rather than
+ * writing the identity out again.
+ */
+export function gitDirectoryEntry(): FragmentEntry {
+  return directoryEntry({ origin: RETAINED_DIRECTORY_ORIGIN, key: "Dir", revision: "3" }, "Dir", [
+    "@executablemd/workflow/composition/dir-v2#Dir",
+  ]);
 }

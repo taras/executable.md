@@ -55,7 +55,6 @@ import type { Operation } from "effection";
 import {
   detachHeaders,
   detachStatus,
-  directoryEntry,
   fetchEntry,
   fileDeleteEntry,
   fileReadEntry,
@@ -100,9 +99,14 @@ export interface GeneratedEvaluationOptions {
    *
    * Its own member rather than one of the additive entries above, because it is
    * not an addition: it occupies the position the standard profile has always
-   * had a directory entry in, and a continuation compares that table position by
-   * position. A host that captures none is admitted under the entry released
-   * builds retained, which this package still states.
+   * had a directory entry in, and a continuation compares that table position
+   * by position.
+   *
+   * Optional, and absence grants nothing. `<Dir>` belongs to
+   * `@executablemd/git`, and this package states no entry for it: a host that
+   * supplies none is a Workflow host without a directory capability, which is
+   * a thing a generic host is entitled to be. The XMD workflow profile supplies
+   * Git's.
    */
   readonly directory?: FragmentEntry;
 }
@@ -164,46 +168,6 @@ function workspaceFiles(database: WorkflowRunDatabase): FragmentFileAccess {
 }
 
 /**
- * The directory entry a host that captures none of its own is admitted under.
- *
- * The exact entry released builds admitted, stated here rather than derived
- * from a registration this package no longer owns. Versioned in its revision
- * because what the entry authorizes
- * changed: the former `Dir` authorized placement that created nothing, and
- * `<Dir>` now recursively creates the directory it names. A continuation
- * granted under the earlier revision must not silently receive the wider
- * permission, and the retained comparison refuses it before generated
- * execution.
- *
- * Revision 3: the grant is the workflow's, so the identity names this package.
- * What changed from revision 2 is the operation behind it — the body is now
- * closed over the `ensureDirectory` this profile handed over rather than
- * resolving a Files provider when it runs — so a continuation granted under the
- * older, composable one is refused rather than re-granted.
- *
- * The version-1 alias is the exact string released builds retained for this
- * entry, written out rather than assembled: that is what those journals hold,
- * and nothing derives it. The pre-`dir-v2` spelling is deliberately absent — it
- * named the placement-only `<Dir>`, which created nothing, so answering for it
- * here would hand a narrower grant the wider one.
- */
-/**
- * The origin released builds retained for this entry.
- *
- * Written out rather than imported. The component behind `<Dir>` belongs to
- * `@executablemd/git` now, and this string identifies retained history rather
- * than current source ownership — every journal a released build wrote holds
- * it, so it is this package's own compatibility data.
- */
-const RETAINED_DIRECTORY_ORIGIN = "@executablemd/workflow/composition";
-
-function retainedDirectoryEntry(): FragmentEntry {
-  return directoryEntry({ origin: RETAINED_DIRECTORY_ORIGIN, key: "Dir", revision: "3" }, "Dir", [
-    "@executablemd/workflow/composition/dir-v2#Dir",
-  ]);
-}
-
-/**
  * The ceiling a workflow run's generated fragments are admitted under.
  *
  * An operation, because the effective Fetch timeout is resolved here — once,
@@ -230,7 +194,16 @@ export function* evaluationProfile(
     ],
     write: [
       fileWriteEntry(),
-      options.directory ?? retainedDirectoryEntry(),
+      // The directory capability is the host's to supply, and a host that
+      // supplies none grants none: `<Dir>` belongs to `@executablemd/git`, and
+      // a generic Workflow host composing this profile without it is not
+      // withholding a capability so much as never having had one.
+      //
+      // Its position is the contract. A released journal holds this table
+      // position by position, so the entry a host does supply occupies the
+      // slot between the file write and the file delete, exactly where every
+      // retained continuation expects to find it.
+      ...(options.directory === undefined ? [] : [options.directory]),
       fileDeleteEntry(),
       ...(options.writes ?? []),
     ],

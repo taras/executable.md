@@ -542,10 +542,11 @@ describe("ORC19 — a nested run profile", () => {
       fixture,
     );
 
-    // Nothing was checked out for it. The managed root itself exists — every
-    // run creates one before a document expands — so what says the child did no
-    // work is that it never reached a repository to make a slot under.
-    expect(yield* exists(fixture.managed)).toBe(true);
-    expect(yield* exists(join(fixture.managed, "worktrees"))).toBe(false);
+    // Nothing was made for it at all — not a slot, and not the managed root
+    // itself. Installing the provider acquires nothing: the root is created by
+    // the first operation that needs somewhere to put a checkout, and this
+    // child refused before it had one. A run that touches no repository
+    // therefore leaves the filesystem exactly as it found it.
+    expect(yield* exists(fixture.managed)).toBe(false);
   });
 });

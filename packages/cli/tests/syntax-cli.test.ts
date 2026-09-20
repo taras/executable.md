@@ -29,6 +29,8 @@ import { API } from "@executablemd/runtime";
 import { CORE_COMPONENT_NAMES } from "@executablemd/core";
 import type { PropsSchema, SyntaxSymbols } from "@executablemd/core";
 import { renderSyntaxJson, renderSyntaxMarkdown, syntaxSymbols } from "../src/syntax.ts";
+import { installPlugins } from "../src/plugin-host.ts";
+import { BUNDLED_PLUGIN } from "../src/run-profile.ts";
 
 function* useWorkspace<T>(
   files: Record<string, string>,
@@ -211,7 +213,13 @@ describe("Tier SX — the run profile the command describes", () => {
   });
 
   it("ORC1: names all thirteen repository-composition components, with contracts", function* () {
-    const catalog = yield* syntaxSymbols([]);
+    // Described because the profile carries the Plugin that declares them.
+    // `xmd syntax` renders the run profile's vocabulary, and the repository
+    // components are the bundled Plugin's rather than the engine's own.
+    const catalog = yield* syntaxSymbols(
+      [],
+      yield* installPlugins([BUNDLED_PLUGIN], { command: "syntax", args: ["syntax"] }),
+    );
     const entries = catalog.categories[1].entries;
     const builtIn = names(entries);
 

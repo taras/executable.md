@@ -171,8 +171,10 @@ describe("npm CLI package", { sanitizeOps: false, sanitizeResources: false }, ()
    *
    * The Plugin itself imports nothing, because that is the portable contract —
    * what this proves is that a Node installation with no checkout loads a
-   * module an operator named and runs it. It is also the only way this package
-   * reaches a Plugin at all now: it bundles none and depends on none.
+   * module an operator named and runs it. It is not the only Plugin this
+   * package reaches: `@executablemd/git` is bundled and depended on, and is
+   * active for every run without being named. What is proven here is the other
+   * route — the one an operator drives.
    */
   it("publishes the /api subpath and loads a Plugin named on the command line", function* () {
     yield* ensure(removeNpmOutput);
