@@ -19,7 +19,6 @@
 
 import type { Operation } from "effection";
 import type { WorkflowWorkspaceAttachment } from "@executablemd/workflow/deno";
-import { useCompositionComponents } from "../composition/installation.ts";
 import { useRetainedIssueOperations } from "../issue/effect.ts";
 import { denoRepositoryHost } from "./composition/host.ts";
 import { useGitHubPullRequests } from "./composition/pull-request-reads.ts";
@@ -76,7 +75,18 @@ export interface GitWorkspaceOptions {
   readonly helper?: HelperAssembly;
 }
 
-/** The attachment a host names to give a workflow run this vocabulary. */
+/**
+ * The attachment a host names to give a workflow run this vocabulary's
+ * providers.
+ *
+ * Providers and per-run durable state, and not the declarations: what names
+ * `<Repository>` is the Plugin, installed once per command in the scope that
+ * encloses everything the command does. A Workspace attachment is nested
+ * inside that scope, so declaring here would register the same names a second
+ * time, one scope deeper — which is not a collision but a shadow, and a shadow
+ * of the defaults is exactly the position a document's own registration is
+ * entitled to.
+ */
 export function gitWorkspaceAttachment(
   options: GitWorkspaceOptions = {},
 ): (attachment: WorkflowWorkspaceAttachment) => Operation<void> {
@@ -102,7 +112,6 @@ export function gitWorkspaceAttachment(
     // Durability for an admitted read, installed beside the transport rather
     // than above it: the adapter admits, this retains.
     yield* useRetainedPullRequestReads();
-    yield* useCompositionComponents();
     // Ordinary middleware, installed the way the Issue adapter is: it owns
     // the URLs it recognizes and delegates the rest.
     // Installed on every live or partial attachment, configured or not: the

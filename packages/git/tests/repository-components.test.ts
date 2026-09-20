@@ -33,6 +33,8 @@ import { DirInvocationError } from "../src/composition/components/Dir.ts";
 import { denoRepositoryHost } from "../src/deno/composition/host.ts";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import { createRun, useStorageRoot, withStorage } from "../../workflow/tests/support/storage.ts";
+import { withWorkflowWorkspace } from "../../workflow/src/deno/workspace/host.ts";
+import { gitWorkspaceAttachment } from "../src/deno/attachment.ts";
 import { useBareRemote } from "./support/git-remotes.ts";
 import {
   causedBy,
@@ -841,5 +843,47 @@ describe("Dir without a Files provider", () => {
     // And nothing was made. The path is relative, so a provider that had
     // answered would have created it beneath the process directory.
     expect(yield* exists(join(process.cwd(), "made"))).toBe(false);
+  });
+});
+
+describe("workflow Git declarations belong to the Plugin", () => {
+  it("are contributed by no Workspace attachment, so a host may name them itself", function* () {
+    // The attachment owns this run's providers and durable state; the Plugin
+    // owns the names. So the attachment's own scope holds no `Repository`
+    // declaration, and a host registering one there meets nothing to collide
+    // with.
+    //
+    // Falsifiable by construction: duplicate registration at one scope is a
+    // refusal, so restoring `useCompositionComponents()` to the attachment
+    // turns this registration into a `ComponentRegistrationError`. What the
+    // nested-shadow case above proves is a different thing — that a *nested*
+    // registration wins — and it cannot see this one, because a shadow is
+    // legitimate at any depth.
+    const root = yield* useStorageRoot();
+
+    yield* withStorage(root, function* () {
+      const database = yield* createRun();
+      const named: ComponentRegistration = {
+        name: "Repository",
+        origin: "test",
+        props: { type: "object", additionalProperties: true },
+        // deno-lint-ignore require-yield
+        *fn(): Operation<string> {
+          return "host-named";
+        },
+      };
+      let registered = false;
+      yield* withWorkflowWorkspace(
+        database,
+        (function* (): Operation<void> {
+          // Deliberately not wrapped in `scoped`: this registration has to land
+          // in the attachment's own scope for the claim to mean anything.
+          yield* registerComponents([named]);
+          registered = true;
+        })(),
+        { attachments: [gitWorkspaceAttachment()] },
+      );
+      expect(registered).toBe(true);
+    });
   });
 });

@@ -30,6 +30,7 @@ import {
 import type { WorkflowRunDatabase } from "@executablemd/workflow";
 import { withWorkflowWorkspace } from "../../../workflow/src/deno/workspace/host.ts";
 import { gitWorkspaceAttachment } from "../../src/deno/attachment.ts";
+import { useCompositionComponents } from "../../src/composition/installation.ts";
 import { gitPlugin } from "../../src/plugin.ts";
 import type { GitWorkspaceOptions } from "../../src/deno/attachment.ts";
 import {
@@ -175,6 +176,9 @@ export function runDocument(
   options: GitWorkspaceOptions = {},
 ): Operation<Json> {
   return scoped(function* () {
+    // Where a command installs them: outside the Workspace attachment, which
+    // owns providers and per-run durable state rather than names.
+    yield* useCompositionComponents();
     return yield* withWorkflowWorkspace(
       database,
       scoped(function* () {
@@ -207,6 +211,11 @@ export function runWorkflowDocument(
   around: (execute: () => Operation<Json>) => Operation<Json> = (execute) => execute(),
 ): Operation<Json> {
   return scoped(function* () {
+    // The Plugin, installed where a command installs it: once, in the scope
+    // that encloses everything below. Its declarations land here rather than
+    // beside the document, so a registration a case makes inside `around` is
+    // strictly nested and shadows them.
+    const git = yield* gitPluginAdmissions();
     return yield* withWorkflowWorkspace(
       database,
       scoped(function* () {
@@ -214,7 +223,7 @@ export function runWorkflowDocument(
           return yield* collect(
             yield* executeInstalled({ ...inlineSource(source), stream: database.journal }, [
               retainedWorkflowInstallation(retainedRunValue(database.record)),
-              yield* gitPluginAdmissions(),
+              git,
             ]),
           );
         });
