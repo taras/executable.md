@@ -4,6 +4,9 @@ import { expect } from "@executablemd/test-support/expect";
 import type { Operation } from "effection";
 import { readTextFile } from "@effectionx/fs";
 import { exec } from "@effectionx/process";
+import { glob } from "@executablemd/runtime";
+import { fileURLToPath } from "node:url";
+import ts from "typescript";
 
 import { applicableTestFiles } from "../lib/test-files.ts";
 import { partitionTests } from "../lib/test-shards.ts";
@@ -421,6 +424,59 @@ describe("the sharded runtime jobs", () => {
     const source = yield* readTextFile(CI_WORKFLOW);
 
     expect(source).not.toContain("continue-on-error");
+  });
+
+  /**
+   * The Node typecheck's scope, which is the only place `lib: ES2022` is
+   * enforced.
+   *
+   * Deno's lib is newer than the one `tsconfig.node.json` pins, so a call like
+   * `toSorted` compiles under Deno and fails under Node. `pnpm exec tsc` is
+   * what catches that — but only for the files its `include` reaches, and a
+   * package missing from that list is checked by nothing at all.
+   *
+   * Nothing else notices the omission: shard discovery walks the workspace
+   * rather than the tsconfig, so an unchecked package still *executes* under
+   * Node and its shards stay green. That is how `packages/git` was extracted
+   * out of `packages/workflow` — which is included — into a member that was
+   * not, and stayed invisible until an ES2023 call happened to be written in
+   * it.
+   *
+   * So the list is asserted against the filesystem rather than against itself:
+   * adding a package is what must fail here, not remembering to add it.
+   */
+  it("typechecks every workspace package under Node", function* () {
+    const text = yield* readTextFile(new URL("tsconfig.node.json", ROOT));
+    // Through TypeScript's own reader: the file carries `//` comments, so
+    // `JSON.parse` would refuse it and a hand-rolled stripper would be one
+    // more thing that can quietly be wrong.
+    const parsed = ts.parseConfigFileTextToJson("tsconfig.node.json", text);
+    expect(parsed.error).toBeUndefined();
+    const include: unknown = (parsed.config as { include?: unknown } | undefined)?.include;
+    expect(Array.isArray(include)).toBe(true);
+    const globs = include as string[];
+
+    // Every workspace package on disk, which is the thing that grows.
+    const manifests = yield* glob({
+      root: fileURLToPath(ROOT),
+      patterns: ["packages/*/deno.json"],
+    });
+    const members = manifests
+      .map((entry) => /packages[/\\]([^/\\]+)[/\\]deno\.json$/.exec(entry.path)?.[1])
+      .filter((name): name is string => name !== undefined)
+      .sort();
+
+    // The scan has to be looking at something. An empty members list, or an
+    // empty include, would satisfy the comparison below every time.
+    expect(globs.length).toBeGreaterThan(5);
+    expect(members.length).toBeGreaterThan(5);
+    // And it has to be looking at the right thing: these two are the packages
+    // the extraction split, and the pair the omission was found between.
+    expect(members).toContain("git");
+    expect(members).toContain("workflow");
+
+    const missing = members.filter((name) => !globs.includes(`packages/${name}/**/*.ts`));
+    expect(missing).toEqual([]);
   });
 });
 
