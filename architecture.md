@@ -266,6 +266,23 @@ start` and `xmd workflow resume` are the CLI lifecycle, and they resume through
 the run storage below. Ordinary `xmd run` carries the bundled Git Plugin, so
 the repository vocabulary is available there without an operator naming it.
 
+Git publishes on three subpaths, and which one a consumer imports from says
+what kind of thing it is reaching for. `@executablemd/git/api` is the only
+route to the contextual Apis — `Git`, `RepositoryComposition`,
+`RepositoryContext`, `GitComposition`, `PullRequestAPI`, `IssueApi`,
+`IssueTrackerContext` and `GitHost` — together with their named interfaces,
+the identity each was minted under, the base refusal each falls back to, the
+direct operations and accessors consumers call, and the types those interfaces
+are written in. Those are the seams: a consumer reaches one to call an
+operation and replaces one to answer it. The root publishes the Plugin and its
+profile predicate, the component registrations and definitions, the workflow
+installation, the durable effect identifiers, the errors and the record
+parsers — what was said, rather than who answers. `@executablemd/git/deno`
+publishes the host adapters that implement the seams, and
+`@executablemd/git/credential-helper` is the standalone program Git spawns as
+itself. An Api is published from exactly one of these, not re-exported from
+the others, because a seam reachable two ways is two contracts.
+
 ## Workflow run storage
 
 A workflow run recorded only in the journal of the document execution that

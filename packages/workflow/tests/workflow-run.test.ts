@@ -31,7 +31,7 @@ import { createApi } from "@effectionx/context-api";
 import type { Api } from "@effectionx/context-api";
 import { executeInstalled } from "@executablemd/core/host";
 import type { ExecutionInstallation } from "@executablemd/core/host";
-import { Git } from "../../git/src/git.ts";
+import { Git } from "@executablemd/git/api";
 import { createWorkflowRunInstallation, getWorkflowRun } from "../src/run.ts";
 import { workflowInstallation } from "../../git/src/installation.ts";
 import { describeGitWorkflowRun } from "../src/journal.ts";

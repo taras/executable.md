@@ -43,6 +43,7 @@ const PACKAGE = "packages/git";
  * module would join it by existing, which is the one thing this scan is for.
  */
 const PROVIDER_NEUTRAL: readonly string[] = [
+  "api.ts",
   "mod.ts",
   "src/composition/api.ts",
   "src/composition/components/Dir.ts",
@@ -211,6 +212,66 @@ function subpaths(declared: unknown): string[] | undefined {
   return Object.keys(exports);
 }
 
+/**
+ * The names an entrypoint's source exports, read as named bindings.
+ *
+ * Line-oriented rather than parsed, because what is needed here is which names
+ * a module lists — and an export block spanning several lines lists one name
+ * per line. A statement this cannot read contributes nothing, which the
+ * non-vacuity checks below are what guard.
+ */
+function exportedNames(source: string): string[] {
+  const found = new Set<string>();
+  for (const block of source.matchAll(/export\s+(?:type\s+)?\{([^}]*)\}\s*from/g)) {
+    for (const entry of (block[1] ?? "").split(",")) {
+      const name = entry.replace("type ", "").split(" as ").pop()?.trim();
+      if (name !== undefined && name !== "") {
+        found.add(name);
+      }
+    }
+  }
+  return [...found].sort();
+}
+
+/** The named bindings one import statement brings in, with where from. */
+function importedNames(source: string): { specifier: string; names: string[] }[] {
+  const found: { specifier: string; names: string[] }[] = [];
+  for (const statement of source.matchAll(
+    /import\s+(?:type\s+)?\{([^}]*)\}\s*from\s*"([^"]+)";/g,
+  )) {
+    const specifier = statement[2] ?? "";
+    const names = (statement[1] ?? "")
+      .split(",")
+      .map((entry) => entry.replace("type ", "").split(" as ")[0]?.trim() ?? "")
+      .filter((name) => name !== "");
+    found.push({ specifier, names });
+  }
+  return found;
+}
+
+/**
+ * Which rule a specifier is judged by, or nothing when it names neither route.
+ *
+ * The two differ, and the difference is the point. The **root** is a legitimate
+ * home for a record a consumer only wants to read, so importing `IssueInput`
+ * from `@executablemd/git` is fine and only a name the root no longer exports
+ * is a violation. A **source module** is nobody's route: reaching
+ * `../src/issue/api.ts` bypasses the export map entirely, so every name `/api`
+ * publishes is a violation there, additive contract types included.
+ */
+function route(consumer: string, specifier: string): "root" | "source" | undefined {
+  if (specifier === "@executablemd/git") {
+    return "root";
+  }
+  if (!specifier.startsWith(".")) {
+    return undefined;
+  }
+  const reaches =
+    specifier.includes("git/src/") ||
+    (consumer.startsWith(`${PACKAGE}/tests/`) && specifier.startsWith("../src/"));
+  return reaches ? "source" : undefined;
+}
+
 /** Where a module the scan finds is resolved from. */
 function path(relative: string): string {
   return `${PACKAGE}/${relative}`;
@@ -221,6 +282,7 @@ function* production(): Operation<string[]> {
   const found = yield* glob({
     root: REPOSITORY,
     patterns: [
+      `${PACKAGE}/api.ts`,
       `${PACKAGE}/mod.ts`,
       `${PACKAGE}/deno.ts`,
       `${PACKAGE}/credential-helper.ts`,
@@ -380,9 +442,11 @@ describe("the three halves of @executablemd/git", () => {
     }
   });
 
-  it("admits exactly the two entrypoints the manifests declare", function* () {
-    // A third subpath would be a third contract. `./credential-helper` is the
-    // one beside them, and it is Git's own rather than GitHub's.
+  it("admits exactly the entrypoints the manifests declare", function* () {
+    // Each subpath is a separate contract, so the list is exact rather than a
+    // minimum: `./api` publishes the contextual Apis, `./deno` the host that
+    // answers them, and `./credential-helper` the standalone program Git spawns
+    // as itself. None of them is GitHub's.
     for (const manifest of ["deno.json", "package.json"]) {
       const declared: unknown = JSON.parse(
         yield* readTextFile(join(REPOSITORY, PACKAGE, manifest)),
@@ -397,7 +461,7 @@ describe("the three halves of @executablemd/git", () => {
       // Copied before sorting: `toSorted` is ES2023 and the Node typecheck's
       // lib is ES2022, and `names` is read again below.
       expect(`${manifest}: ${[...names].sort().join(" ")}`).toBe(
-        `${manifest}: . ./credential-helper ./deno`,
+        `${manifest}: . ./api ./credential-helper ./deno`,
       );
       // And no subpath names GitHub: the implementation ships inside this
       // package rather than beside it.
@@ -405,5 +469,71 @@ describe("the three halves of @executablemd/git", () => {
         `${manifest}: 0`,
       );
     }
+  });
+  /**
+   * A public contextual Api is imported from `/api` and from nowhere else.
+   *
+   * The runtime namespace says what an entrypoint publishes; this says what
+   * consumers actually reach for. Those are different failures: the root could
+   * publish no Api while a consumer still imported one by relative path into
+   * `packages/git/src`, which resolves, typechecks, and quietly makes the
+   * subpath optional.
+   *
+   * The exclusive set is computed rather than listed — whatever `/api` exports
+   * and the root does not — so a name added to `/api` is covered here the day
+   * it is added, without a list to keep in step.
+   */
+  it("keeps every consumer's public Api imports on the subpath", function* () {
+    const api = exportedNames(yield* readTextFile(join(REPOSITORY, PACKAGE, "api.ts")));
+    const root = exportedNames(yield* readTextFile(join(REPOSITORY, PACKAGE, "mod.ts")));
+    const exclusive = api.filter((name) => !root.includes(name));
+
+    // Both readings have to have worked. An unreadable `api.ts` would make the
+    // exclusive set empty and every consumer below innocent.
+    expect(api.length > 0).toBe(true);
+    expect(root.length > 0).toBe(true);
+    expect(exclusive).toContain("Git");
+    expect(exclusive).toContain("GitHost");
+    expect(exclusive).toContain("RepositoryComposition");
+    // And the additive branch has something to catch: these are published by
+    // `/api` *and* by the root, so they are legal from the root and forbidden
+    // from a source module. A set holding only exclusive names would make the
+    // second rule identical to the first.
+    const additive = api.filter((name) => root.includes(name));
+    expect(additive).toContain("GitHostProvider");
+    expect(additive).toContain("IssueInput");
+
+    // Every module that could consume Git, except the package's own
+    // implementation — which is entitled to its relative imports — and the two
+    // entrypoints that define the split.
+    const candidates = yield* glob({
+      root: REPOSITORY,
+      patterns: ["packages/*/src/**/*.ts", "packages/*/tests/**/*.ts", "scripts/**/*.ts"],
+    });
+    const consumers = candidates
+      .map((entry) => entry.path)
+      .filter((file) => !file.startsWith(`${PACKAGE}/src/`))
+      .sort();
+    expect(consumers.length > 0).toBe(true);
+
+    const violations: string[] = [];
+    for (const consumer of consumers) {
+      const source = yield* readTextFile(join(REPOSITORY, consumer));
+      for (const { specifier, names } of importedNames(source)) {
+        const judged = route(consumer, specifier);
+        if (judged === undefined) {
+          continue;
+        }
+        // The root is judged against the names it no longer publishes; a
+        // source module against everything `/api` does.
+        const forbidden = judged === "root" ? exclusive : api;
+        for (const name of names) {
+          if (forbidden.includes(name)) {
+            violations.push(`${consumer} imports ${name} from ${specifier}`);
+          }
+        }
+      }
+    }
+    expect(violations).toEqual([]);
   });
 });

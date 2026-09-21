@@ -23,9 +23,23 @@ import type { IssueTracker } from "./tracker.ts";
 
 export const ISSUE_TRACKER_CONTEXT = "executablemd.workflow.issue-tracker";
 
-export const IssueTrackerContext: Api<{ readonly current: IssueTracker | undefined }> = createApi<{
+/**
+ * What the nearest enclosing `<IssueTracker>` states, or nothing.
+ *
+ * Named rather than written inline at the `createApi()` call, because a
+ * consumer replacing this context has to spell the shape it is answering with,
+ * and an anonymous one leaves that shape as something to copy out of the
+ * implementation. `undefined` is a value here — "no tracker is in scope" — not
+ * an absence of an answer.
+ */
+export interface IssueTrackerContextApi {
   readonly current: IssueTracker | undefined;
-}>(ISSUE_TRACKER_CONTEXT, { current: undefined });
+}
+
+export const IssueTrackerContext: Api<IssueTrackerContextApi> = createApi<IssueTrackerContextApi>(
+  ISSUE_TRACKER_CONTEXT,
+  { current: undefined },
+);
 
 /** The nearest enclosing Issue tracker, or `undefined` when there is none. */
 export function currentIssueTracker(): Operation<IssueTracker | undefined> {

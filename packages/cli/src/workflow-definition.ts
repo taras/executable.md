@@ -49,7 +49,7 @@ import {
   sourceBundleHash,
   sourceContentHash,
 } from "@executablemd/workflow";
-import { gitObjectFormat, readGitObject, repositoryRoot, revParse } from "@executablemd/git";
+import { gitObjectFormat, readGitObject, repositoryRoot, revParse } from "@executablemd/git/api";
 import type {
   GitWorkflowDefinitionV1,
   SourceBundleEntryV2,

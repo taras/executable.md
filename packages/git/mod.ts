@@ -8,6 +8,17 @@
  * default export is the Plugin itself; everything beside it is the surface a
  * provider adapter composes against.
  *
+ * **The contextual Apis are not here.** `Git`, `RepositoryComposition`,
+ * `RepositoryContext`, `GitComposition`, `PullRequestAPI`, `IssueApi`,
+ * `IssueTrackerContext` and `GitHost` — with their interfaces, identities,
+ * direct operations and the types those interfaces are written in — publish
+ * from `@executablemd/git/api`. A seam a consumer can answer is a different
+ * kind of thing from a record it can read, and one route to each is what
+ * keeps that legible. What stays here is the Plugin and its profile
+ * predicate, the component registrations and definitions, the workflow
+ * installation, the durable effect identifiers, the errors, and the record
+ * parsers and their types.
+ *
  * ```md
  * <Repository name="site" url="https://github.com/octo/site.git">
  *   <Git.Switch branch="topic" />
@@ -79,21 +90,8 @@ export { gitDirectoryEntry } from "./src/composition/definitions.ts";
  */
 export { declaresFor as gitPluginDeclaresFor } from "./src/plugin.ts";
 export { workflowInstallation } from "./src/installation.ts";
-export {
-  Git,
-  gitObjectFormat,
-  GitObjectError,
-  GitRepositoryError,
-  GitRevisionError,
-  readGitObject,
-  repositoryRoot,
-  revParse,
-} from "./src/git.ts";
-export type { GitApi, GitObjectFormat } from "./src/git.ts";
-export { RepositoryComposition } from "./src/composition/api.ts";
-export type { RepositoryCompositionApi } from "./src/composition/api.ts";
-export { currentRepository, RepositoryContext } from "./src/composition/context.ts";
-export type { RepositoryContextApi } from "./src/composition/context.ts";
+export { GitObjectError, GitRepositoryError, GitRevisionError } from "./src/git.ts";
+export type { GitObjectFormat } from "./src/git.ts";
 export {
   GitCompositionProviderError,
   GitOperationError,
@@ -125,13 +123,7 @@ export type {
   WorktreeCreationRequest,
   WorktreeRecord,
 } from "./src/composition/records.ts";
-export {
-  NoPullRequestProvider,
-  PULL_REQUEST_API,
-  PullRequestAPI,
-} from "./src/composition/pull-request-api.ts";
 export type {
-  PullRequestApi,
   PullRequestInput,
   PullRequestReadOptions,
   PullRequestUpsertOptions,
@@ -141,8 +133,6 @@ export {
   pullRequestProviderName,
 } from "./src/composition/pull-request-target.ts";
 export type { PullRequestTarget } from "./src/composition/pull-request-target.ts";
-export { GitComposition } from "./src/composition/git-api.ts";
-export type { GitCompositionApi } from "./src/composition/git-api.ts";
 export {
   gitAddResultJson,
   gitCommitResultJson,
@@ -241,7 +231,6 @@ export {
   compositionDocumentation,
   useCompositionComponents,
 } from "./src/composition/installation.ts";
-export { ISSUE_API, IssueApi, NoIssueProvider } from "./src/issue/api.ts";
 export type {
   IssueDetails,
   IssueInput,
@@ -250,11 +239,6 @@ export type {
   IssueReference,
   IssueUpsertOptions,
 } from "./src/issue/api.ts";
-export {
-  ISSUE_TRACKER_CONTEXT,
-  IssueTrackerContext,
-  currentIssueTracker,
-} from "./src/issue/context.ts";
 export { ISSUE_EFFECT } from "./src/issue/effect-type.ts";
 export {
   IssueAmbiguousError,
@@ -272,9 +256,7 @@ export {
   withinIssueCeiling,
 } from "./src/issue/tracker.ts";
 export type { IssueDestination, IssueTracker } from "./src/issue/tracker.ts";
-export { GIT_HOST_API, GitHost } from "./src/git-host/api.ts";
 export type {
-  GitHostApi,
   GitHostCall,
   GitHostPhase,
   GitHostPhaseDetails,
@@ -307,11 +289,7 @@ export type {
   GitHostObservation,
   GitHostReconciliationRecord,
 } from "./src/git-host/records.ts";
-export {
-  GIT_HOST_EFFECT,
-  reconcileGitHostEffect,
-  withGitHostProvider,
-} from "./src/git-host/effect.ts";
+export { GIT_HOST_EFFECT } from "./src/git-host/effect.ts";
 export {
   filteredRepositoryIdentity,
   parseRepositoryIdentity,

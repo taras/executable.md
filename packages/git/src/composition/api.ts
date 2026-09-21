@@ -86,7 +86,7 @@ export interface RepositoryCompositionApi {
    * has no such thing at all — a workflow document names its repositories, and
    * the component's own refusal is what says so.
    */
-  ambientRepository(): Operation<RepositorySelection | undefined>;
+  repository(): Operation<RepositorySelection | undefined>;
 }
 
 export const RepositoryComposition: Api<RepositoryCompositionApi> =
@@ -103,7 +103,7 @@ export const RepositoryComposition: Api<RepositoryCompositionApi> =
       throw new RepositoryCompositionProviderError("<Worktree>");
     },
     // deno-lint-ignore require-yield
-    *ambientRepository(): Operation<RepositorySelection | undefined> {
+    *repository(): Operation<RepositorySelection | undefined> {
       throw new RepositoryCompositionProviderError("an element written outside a <Repository>");
     },
   });

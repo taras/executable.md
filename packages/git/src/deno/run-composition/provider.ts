@@ -362,7 +362,7 @@ export function* useRunComposition(options: RunCompositionOptions): Operation<vo
       },
 
       // deno-lint-ignore require-yield
-      *ambientRepository(): Operation<RepositorySelection | undefined> {
+      *repository(): Operation<RepositorySelection | undefined> {
         const { selection: ambientSelection } = yield* useAmbient();
         if (ambientSelection === undefined) {
           // This profile *has* ambient repositories; this invocation is not in

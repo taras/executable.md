@@ -27,7 +27,7 @@ import { exec } from "@effectionx/process";
 import { when } from "@effectionx/converge";
 import type { Close, DurableEvent, Yield } from "@executablemd/durable-streams";
 import { SOURCE_POSITION_FIELD } from "@executablemd/core";
-import { Git } from "../../git/src/git.ts";
+import { Git } from "@executablemd/git/api";
 import {
   isGitWorkflowRunRecord,
   WorkflowDatabaseFormatError,

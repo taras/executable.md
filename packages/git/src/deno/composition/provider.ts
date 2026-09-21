@@ -308,7 +308,7 @@ export function useRepositoryComposition(
       // `undefined` rather than a refusal: which component was written, and
       // what it needed a repository for, is the component's own sentence.
       // deno-lint-ignore require-yield
-      *ambientRepository(): Operation<RepositorySelection | undefined> {
+      *repository(): Operation<RepositorySelection | undefined> {
         return undefined;
       },
     },

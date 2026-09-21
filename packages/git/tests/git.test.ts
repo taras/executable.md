@@ -13,7 +13,7 @@ import { expect } from "@executablemd/test-support/expect";
 import { scoped } from "effection";
 import type { Operation } from "effection";
 import { API } from "@executablemd/runtime";
-import { Git, revParse } from "../src/git.ts";
+import { Git, revParse } from "@executablemd/git/api";
 
 interface ExecCall {
   command: string[];

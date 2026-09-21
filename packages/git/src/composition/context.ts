@@ -52,5 +52,5 @@ export function* selectedRepository(): Operation<RepositorySelection | undefined
   if (lexical !== undefined) {
     return lexical;
   }
-  return yield* RepositoryComposition.operations.ambientRepository();
+  return yield* RepositoryComposition.operations.repository();
 }

@@ -36,7 +36,7 @@ import {
   type GitPushInputs,
 } from "../src/composition/git-push-records.ts";
 import { GIT_HOST_EFFECT } from "../src/git-host/effect.ts";
-import { GitComposition } from "../src/composition/git-api.ts";
+import { GitComposition } from "@executablemd/git/api";
 import type { RepositoryRecord } from "../src/composition/records.ts";
 import { denoRepositoryHost } from "../src/deno/composition/host.ts";
 import type { GitInvocation, GitOutcome } from "../src/deno/composition/host.ts";
@@ -49,8 +49,8 @@ import {
   withStorage,
 } from "../../workflow/tests/support/storage.ts";
 import { remoteBranch, remoteRefs, useBareRemote } from "./support/git-remotes.ts";
-import { currentRepository } from "../src/composition/context.ts";
-import type { RepositorySelection } from "../src/composition/selection.ts";
+import { currentRepository } from "@executablemd/git/api";
+import type { RepositorySelection } from "@executablemd/git/api";
 import type { RepositoryIdentity } from "../src/composition/selection.ts";
 import {
   causedBy,

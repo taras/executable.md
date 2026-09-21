@@ -102,6 +102,9 @@ importers:
       '@executablemd/durable-streams':
         specifier: workspace:*
         version: link:packages/durable-streams
+      '@executablemd/git':
+        specifier: workspace:*
+        version: link:packages/git
       '@executablemd/runtime':
         specifier: workspace:*
         version: link:packages/runtime

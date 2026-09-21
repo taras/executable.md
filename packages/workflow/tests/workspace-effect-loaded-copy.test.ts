@@ -36,30 +36,25 @@ import { createDurableWorkspaceOperation } from "../mod.ts";
 import { retainedWorkflowInstallation } from "../src/run.ts";
 import { gitPlugin } from "../../git/src/plugin.ts";
 import type { WorkflowRun } from "../src/run.ts";
-import {
-  GIT_HOST_EFFECT,
-  reconcileGitHostEffect,
-  withGitHostProvider,
-} from "../../git/src/git-host/effect.ts";
-import { GIT_HOST_API, GitHost } from "../../git/src/git-host/api.ts";
-import type {
-  GitHostApi,
-  GitHostCall,
-  GitHostProvider,
-  GitHostRoutingRequest,
-} from "../../git/src/git-host/api.ts";
+import { GIT_HOST_EFFECT } from "../../git/src/git-host/effect.ts";
+import { reconcileGitHostEffect, withGitHostProvider } from "@executablemd/git/api";
+import { GIT_HOST_API, GitHost } from "@executablemd/git/api";
+import type { GitHostCall, GitHostProvider, GitHostRoutingRequest } from "@executablemd/git/api";
+import type { GitHostApi } from "@executablemd/git/api";
 import { GitHostProviderError } from "../../git/src/git-host/errors.ts";
 import {
   gitHostRequestFingerprint,
   parseGitHostReconciliationRecord,
 } from "../../git/src/git-host/records.ts";
 import type {
-  CompleteGitHostEffectRequest,
-  GitHostCompletion,
   GitHostEffectRequest,
-  GitHostObservation,
   GitHostReconciliationRecord,
 } from "../../git/src/git-host/records.ts";
+import type {
+  CompleteGitHostEffectRequest,
+  GitHostCompletion,
+  GitHostObservation,
+} from "@executablemd/git/api";
 
 /**
  * The admissions the Git Plugin contributes, as a host installing it receives

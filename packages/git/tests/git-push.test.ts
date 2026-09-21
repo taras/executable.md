@@ -20,9 +20,9 @@ import { useTempDirectory } from "@executablemd/test-support/temp";
 import { collect, execute, inlineSource, registerComponents } from "@executablemd/core";
 import type { ComponentRegistration } from "@executablemd/core";
 import type { Json } from "@executablemd/durable-streams";
-import { GitHost } from "../src/git-host/api.ts";
-import type { GitHostCall } from "../src/git-host/api.ts";
-import { RepositoryContext } from "../src/composition/context.ts";
+import { GitHost } from "@executablemd/git/api";
+import type { GitHostCall } from "@executablemd/git/api";
+import { RepositoryContext } from "@executablemd/git/api";
 import {
   GitCompositionProviderError,
   GitOperationAdmissionError,
@@ -71,7 +71,7 @@ import {
 import type { CountingHost } from "./support/composition.ts";
 import { committedRoot, latestRoot, publishedRoots } from "./support/replay.ts";
 
-import type { RepositorySelection } from "../src/composition/selection.ts";
+import type { RepositorySelection } from "@executablemd/git/api";
 const REMOTE = {
   commits: [
     {

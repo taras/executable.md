@@ -4,7 +4,8 @@
   "license": "MIT",
   "exports": {
     ".": "./mod.ts",
-    "./deno": "./deno.ts",
-    "./credential-helper": "./credential-helper.ts"
+    "./api": "./api.ts",
+    "./credential-helper": "./credential-helper.ts",
+    "./deno": "./deno.ts"
   }
 }
