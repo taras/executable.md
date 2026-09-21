@@ -20,7 +20,7 @@ import { API, cwd } from "@executablemd/runtime";
 import { spawn, suspend, withResolvers } from "effection";
 import type { Operation } from "effection";
 import { selectedRepository } from "../src/composition/context.ts";
-import type { RepositorySelection } from "../src/composition/selection.ts";
+import type { RepositorySelection } from "@executablemd/git/api";
 import type { ComponentRegistration } from "@executablemd/core";
 import { expect } from "@executablemd/test-support/expect";
 import { scoped } from "effection";

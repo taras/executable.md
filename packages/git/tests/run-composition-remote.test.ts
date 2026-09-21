@@ -16,13 +16,13 @@ import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { type Operation } from "effection";
 import { admitLivePushEvidence } from "../src/deno/run-composition/operations.ts";
-import { GitComposition } from "../src/composition/git-api.ts";
-import type { GitPushOutcome } from "../src/composition/git-push-records.ts";
+import { GitComposition } from "@executablemd/git/api";
+import type { GitPushOutcome } from "@executablemd/git/api";
 import { LivePushEvidenceError } from "../src/deno/run-composition/errors.ts";
 import { git, remoteBranch, remoteRefs, useBareRemote } from "./support/git-remotes.ts";
 import type { BareRemote } from "./support/git-remotes.ts";
 import { selectedRepository } from "../src/composition/context.ts";
-import type { RepositorySelection } from "../src/composition/selection.ts";
+import type { RepositorySelection } from "@executablemd/git/api";
 import { gitHubSource } from "../src/deno/composition/github.ts";
 import {
   creations,

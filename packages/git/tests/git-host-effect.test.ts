@@ -38,18 +38,11 @@ import type { ExecutionInstallation } from "@executablemd/core/host";
 import { retainedWorkflowInstallation } from "../../workflow/src/run.ts";
 import { gitPlugin } from "../src/plugin.ts";
 import type { WorkflowRun } from "../../workflow/src/run.ts";
-import {
-  GIT_HOST_EFFECT,
-  reconcileGitHostEffect,
-  withGitHostProvider,
-} from "../src/git-host/effect.ts";
-import { GIT_HOST_API } from "../src/git-host/api.ts";
-import type {
-  GitHostApi,
-  GitHostCall,
-  GitHostProvider,
-  GitHostRoutingRequest,
-} from "../src/git-host/api.ts";
+import { GIT_HOST_EFFECT } from "../src/git-host/effect.ts";
+import { reconcileGitHostEffect, withGitHostProvider } from "@executablemd/git/api";
+import { GIT_HOST_API } from "@executablemd/git/api";
+import type { GitHostCall, GitHostProvider, GitHostRoutingRequest } from "@executablemd/git/api";
+import type { GitHostApi } from "@executablemd/git/api";
 import {
   GitHostAmbiguousError,
   GitHostConflictError,
@@ -61,13 +54,12 @@ import {
   gitHostRequestFingerprint,
   parseGitHostReconciliationRecord,
 } from "../src/git-host/records.ts";
+import type { GitHostEffectRequest, GitHostReconciliationRecord } from "../src/git-host/records.ts";
 import type {
   CompleteGitHostEffectRequest,
   GitHostCompletion,
-  GitHostEffectRequest,
   GitHostObservation,
-  GitHostReconciliationRecord,
-} from "../src/git-host/records.ts";
+} from "@executablemd/git/api";
 
 /**
  * The admissions the Git Plugin contributes, as a host installing it receives

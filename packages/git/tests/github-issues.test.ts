@@ -25,7 +25,7 @@ import {
   withinIssueCeiling,
 } from "../src/issue/tracker.ts";
 import { issueIdempotencyKey, normalizedTags } from "../src/issue/records.ts";
-import type { IssueInput } from "../src/issue/api.ts";
+import type { IssueInput } from "@executablemd/git/api";
 import type { StoredIssue } from "./support/github.ts";
 
 const TARGET = "https://github.com/octo/project";

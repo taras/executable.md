@@ -26,18 +26,15 @@ import { retainedWorkflowInstallation } from "../../workflow/src/run.ts";
 import type { WorkflowRun } from "../../workflow/src/run.ts";
 import { declaresFor, gitPlugin } from "../src/plugin.ts";
 import { retainedGitHostIdentitiesHere, retainedIssueIdentitiesHere } from "../src/identities.ts";
-import {
-  GIT_HOST_EFFECT,
-  reconcileGitHostEffect,
-  withGitHostProvider,
-} from "../src/git-host/effect.ts";
-import type { GitHostProvider } from "../src/git-host/api.ts";
+import { GIT_HOST_EFFECT } from "../src/git-host/effect.ts";
+import { reconcileGitHostEffect, withGitHostProvider } from "@executablemd/git/api";
+import type { GitHostProvider } from "@executablemd/git/api";
+import type { GitHostEffectRequest } from "../src/git-host/records.ts";
 import type {
   CompleteGitHostEffectRequest,
   GitHostCompletion,
-  GitHostEffectRequest,
   GitHostObservation,
-} from "../src/git-host/records.ts";
+} from "@executablemd/git/api";
 
 const SOURCE = "<Effect />\n";
 

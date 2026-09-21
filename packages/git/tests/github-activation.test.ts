@@ -32,11 +32,11 @@ import { collect, inlineSource } from "@executablemd/core";
 import { executeInstalled } from "@executablemd/core/host";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import { gitPlugin } from "../src/plugin.ts";
-import { IssueApi } from "../src/issue/api.ts";
+import { IssueApi } from "@executablemd/git/api";
 import { GITHUB, useGitHubIssues } from "../src/deno/issue/github.ts";
 import { useGitHubPullRequestReads } from "../src/deno/composition/pull-request-reads.ts";
 import { GITHUB_PULL_REQUESTS_ENV } from "../src/deno/composition/pull-request-configuration.ts";
-import { PullRequestAPI } from "../src/composition/pull-request-api.ts";
+import { PullRequestAPI } from "@executablemd/git/api";
 import type {
   GitHubAccess,
   GitHubHttpResponse,

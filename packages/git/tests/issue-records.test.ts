@@ -39,7 +39,7 @@ import {
   type IssueRequest,
   type IssueUpsertRequest,
 } from "../src/issue/records.ts";
-import type { IssueInput } from "../src/issue/api.ts";
+import type { IssueInput } from "@executablemd/git/api";
 
 const TARGET = "https://github.com/octo/project";
 

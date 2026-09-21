@@ -30,8 +30,8 @@ import {
   GitOperationError,
   GitOperationInfrastructureError,
 } from "../src/composition/errors.ts";
-import { currentRepository, RepositoryContext } from "../src/composition/context.ts";
-import { GitComposition } from "../src/composition/git-api.ts";
+import { currentRepository, RepositoryContext } from "@executablemd/git/api";
+import { GitComposition } from "@executablemd/git/api";
 import { parseGitSwitchResult } from "../src/composition/git-records.ts";
 import type { GitSwitchExpectation } from "../src/composition/git-records.ts";
 import { useCompositionComponents } from "../src/composition/installation.ts";
@@ -72,10 +72,8 @@ import { gitPluginAdmissions } from "./support/composition.ts";
 import type { LoadedGitApi } from "./support/composition.ts";
 import { committedRoot, dropRootClose, latestRoot, publishedRoots } from "./support/replay.ts";
 
-import {
-  filteredRepositoryIdentity,
-  type RepositorySelection,
-} from "../src/composition/selection.ts";
+import { filteredRepositoryIdentity } from "../src/composition/selection.ts";
+import { type RepositorySelection } from "@executablemd/git/api";
 /**
  * Two branches whose content differs, plus one file that does not.
  *

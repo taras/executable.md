@@ -54,7 +54,7 @@ import type {
 import { gitHubSource } from "../src/deno/composition/github.ts";
 import { denoGitHubAccess, denoGitHubSource } from "../src/deno/composition/github-host.ts";
 import { GITHUB, useGitHubIssues } from "../src/deno/issue/github.ts";
-import { IssueApi } from "../src/issue/api.ts";
+import { IssueApi } from "@executablemd/git/api";
 import { transactWorkspaceRoots } from "../../workflow/src/deno/workspace/private.ts";
 import type { WorkflowRunDatabase } from "../../workflow/src/storage/api.ts";
 import { createRun, useStorageRoot, withStorage } from "../../workflow/tests/support/storage.ts";

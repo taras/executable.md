@@ -26,13 +26,11 @@ import {
   GitOperationError,
   GitOperationInfrastructureError,
 } from "../src/composition/errors.ts";
-import { currentRepository, RepositoryContext } from "../src/composition/context.ts";
-import { GitComposition } from "../src/composition/git-api.ts";
+import { currentRepository, RepositoryContext } from "@executablemd/git/api";
+import { GitComposition } from "@executablemd/git/api";
 import { parseGitCommitResult } from "../src/composition/git-records.ts";
-import type {
-  GitCommitExpectation,
-  GitCommitMessageSource,
-} from "../src/composition/git-records.ts";
+import type { GitCommitExpectation } from "../src/composition/git-records.ts";
+import type { GitCommitMessageSource } from "@executablemd/git/api";
 import { useCompositionComponents } from "../src/composition/installation.ts";
 import {
   admitCommitMessage,
@@ -75,7 +73,7 @@ import {
 import { gitPluginAdmissions } from "./support/composition.ts";
 import { dropRootClose } from "./support/replay.ts";
 
-import type { RepositorySelection } from "../src/composition/selection.ts";
+import type { RepositorySelection } from "@executablemd/git/api";
 /** One tracked file at the root and one in a subdirectory. */
 const REMOTE = {
   commits: [

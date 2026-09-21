@@ -1,0 +1,141 @@
+/**
+ * @module
+ *
+ * Every contextual Api this package owns, and the contract each is written in.
+ *
+ * A contextual Api is a seam: a consumer reaches one to *call* an operation,
+ * and replaces one — `Git.around({…}, { at: "min" })` — to *answer* it. Both
+ * sides need the same value, so both sides need one place to import it from.
+ * Mixed in among records, errors, parsers and component definitions on the
+ * package root, that value was indistinguishable from data, and which names
+ * were replaceable seams was something a reader had to already know.
+ *
+ * So this is the consumer route, and the only one. Eight Apis live here with
+ * their named interfaces, the identity each was minted under, the base refusal
+ * each falls back to when nobody answered, the direct operations and accessors
+ * consumers actually call, and every type those interfaces are spelled in. A
+ * name here is something you can implement.
+ *
+ * ```ts
+ * import { Git, RepositoryComposition } from "@executablemd/git/api";
+ *
+ * // Call one.
+ * const repository = yield* RepositoryComposition.operations.ambientRepository();
+ *
+ * // Or answer it. Providers install at `min` so a nested replacement wins
+ * // rather than being shadowed by an outer handler.
+ * yield* Git.around({ *revParse(revision) { … } }, { at: "min" });
+ * ```
+ *
+ * The types travel with the Apis because an interface you cannot spell is one
+ * you cannot implement. They stay exported from the package root as well: a
+ * record that appears in an Api signature is still an ordinary record when a
+ * consumer only wants to read one, and that is an additive re-export rather
+ * than a second home.
+ *
+ * What is *not* here: the Plugin value and its profile predicate, the
+ * component registrations and definitions, the workflow installation, the
+ * durable effect identifiers, the error classes and the record parsers. Those
+ * describe what was said, not who answers. The runtime providers that
+ * implement these seams are not here either — they live behind
+ * `@executablemd/git/deno`, because which host can answer is a different
+ * question from what the question is.
+ */
+
+// The Git capability, and the four operations pre-bound for callers who want
+// the operation rather than the seam.
+export { Git, gitObjectFormat, readGitObject, repositoryRoot, revParse } from "./src/git.ts";
+export type { GitApi, GitObjectFormat } from "./src/git.ts";
+
+// Repository composition: what a `<Repository>` or `<Worktree>` selects, and
+// the credential-free selection it hands back.
+export { RepositoryComposition } from "./src/composition/api.ts";
+export type {
+  RepositoryCompositionApi,
+  RepositoryRequest,
+  WorktreeRequest,
+} from "./src/composition/api.ts";
+export type { RepositorySelection } from "./src/composition/selection.ts";
+
+// Which repository is lexically in scope, and the accessor that reads it.
+export { currentRepository, RepositoryContext } from "./src/composition/context.ts";
+export type { RepositoryContextApi } from "./src/composition/context.ts";
+
+// The authored local Git transitions — switch, add, commit, push — with the
+// places they are invoked at and the results they record.
+export { GitComposition } from "./src/composition/git-api.ts";
+export type {
+  GitAddInvocation,
+  GitCommitInvocation,
+  GitCompositionApi,
+  GitInvocationPlace,
+  GitPushInvocation,
+  GitSwitchInvocation,
+} from "./src/composition/git-api.ts";
+export type {
+  GitAddResult,
+  GitCommitMessageSource,
+  GitCommitResult,
+  GitSwitchResult,
+} from "./src/composition/git-records.ts";
+export type { GitPushOutcome } from "./src/composition/git-push-records.ts";
+
+// Pull requests, with the identity the Api was minted under and the refusal a
+// request nobody answered reaches.
+export {
+  NoPullRequestProvider,
+  PULL_REQUEST_API,
+  PullRequestAPI,
+} from "./src/composition/pull-request-api.ts";
+export type {
+  PullRequestApi,
+  PullRequestInput,
+  PullRequestOperation,
+  PullRequestReadOptions,
+  PullRequestUpsertOptions,
+} from "./src/composition/pull-request-api.ts";
+export type {
+  PullRequestReadKind,
+  PullRequestReadResult,
+} from "./src/composition/pull-request-read-records.ts";
+export type { PullRequestResult } from "./src/composition/pull-request-records.ts";
+
+// Issues, on the same terms: middleware matches its own targets, and a request
+// everyone delegated reaches `NoIssueProvider` unchanged.
+export { ISSUE_API, IssueApi, NoIssueProvider } from "./src/issue/api.ts";
+export type {
+  IssueDetails,
+  IssueInput,
+  IssueOperation,
+  IssueReadOptions,
+  IssueReference,
+  IssueUpsertOptions,
+} from "./src/issue/api.ts";
+
+// The nearest lexical `<IssueTracker>`, the accessor that reads it, and the
+// tracker value itself.
+export {
+  currentIssueTracker,
+  ISSUE_TRACKER_CONTEXT,
+  IssueTrackerContext,
+} from "./src/issue/context.ts";
+export type { IssueTrackerContextApi } from "./src/issue/context.ts";
+export type { IssueTracker } from "./src/issue/tracker.ts";
+
+// The Git host the pull-request and issue providers reconcile through, with
+// the durable reconciliation a provider takes part in.
+export { GIT_HOST_API, GitHost } from "./src/git-host/api.ts";
+export type {
+  GitHostApi,
+  GitHostCall,
+  GitHostPhase,
+  GitHostPhaseDetails,
+  GitHostProvider,
+  GitHostRoutingRequest,
+} from "./src/git-host/api.ts";
+export { reconcileGitHostEffect, withGitHostProvider } from "./src/git-host/effect.ts";
+export type {
+  CompleteGitHostEffectRequest,
+  GitHostCompletion,
+  GitHostObservation,
+} from "./src/git-host/records.ts";

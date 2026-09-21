@@ -56,6 +56,7 @@
     "@executablemd/code-review-agent": "workspace:*",
     "@executablemd/core": "workspace:*",
     "@executablemd/durable-streams": "workspace:*",
+    "@executablemd/git": "workspace:*",
     "@executablemd/runtime": "workspace:*",
     "@executablemd/test-agent": "workspace:*",
     "@executablemd/test-support": "workspace:*",

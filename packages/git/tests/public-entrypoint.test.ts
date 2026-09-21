@@ -71,6 +71,61 @@ const PUBLISHED: readonly string[] = [
   "useGitHubPullRequests",
 ];
 
+/**
+ * Every contextual Api this package owns, with what travels beside it.
+ *
+ * Named, so that losing one is a failure rather than a silent narrowing: each
+ * is a seam a consumer either calls or replaces, and an Api that quietly stops
+ * being published is a consumer that can no longer answer.
+ */
+const API_PUBLISHED: readonly string[] = [
+  "GIT_HOST_API",
+  "Git",
+  "GitComposition",
+  "GitHost",
+  "ISSUE_API",
+  "ISSUE_TRACKER_CONTEXT",
+  "IssueApi",
+  "IssueTrackerContext",
+  "NoIssueProvider",
+  "NoPullRequestProvider",
+  "PULL_REQUEST_API",
+  "PullRequestAPI",
+  "RepositoryComposition",
+  "RepositoryContext",
+  "currentIssueTracker",
+  "currentRepository",
+  "gitObjectFormat",
+  "readGitObject",
+  "repositoryRoot",
+  "revParse",
+];
+
+/**
+ * Whether a published value is a contextual Api.
+ *
+ * A `createApi()` value carries `around` — how a provider replaces it — and
+ * `operations` — how a caller reaches it. Together those are what makes a name
+ * a seam rather than data, and testing for them recognizes an Api nobody
+ * thought to list.
+ */
+function isApi(value: unknown): boolean {
+  if (typeof value !== "object" || value === null) {
+    return false;
+  }
+  // Narrowed by `in` rather than asserted: what arrives here is whatever a
+  // module exported, so the members have to be proven present rather than
+  // claimed.
+  if (!("around" in value) || !("operations" in value)) {
+    return false;
+  }
+  return (
+    typeof value.around === "function" &&
+    typeof value.operations === "object" &&
+    value.operations !== null
+  );
+}
+
 describe("what @executablemd/git publishes", () => {
   it("publishes the GitHub contracts a host needs", function* () {
     const published = yield* until(import("@executablemd/git/deno"));
@@ -86,6 +141,52 @@ describe("what @executablemd/git publishes", () => {
     const names = Object.keys(published);
     expect(names.length > 0).toBe(true);
     expect(ROOT_PUBLISHED.filter((name) => !names.includes(name))).toEqual([]);
+  });
+
+  /**
+   * Every contextual Api, reached the way a consumer reaches it.
+   *
+   * Through the bare `@executablemd/git/api` specifier, so this fails if the
+   * subpath is missing from an export map rather than only if the file is
+   * missing from the tree — a module that exists and is unreachable publishes
+   * nothing.
+   */
+  it("publishes every contextual Api from /api", function* () {
+    const published = yield* until(import("@executablemd/git/api"));
+    const names = Object.keys(published);
+    expect(names.length > 0).toBe(true);
+    expect(API_PUBLISHED.filter((name) => !names.includes(name))).toEqual([]);
+  });
+
+  /**
+   * The boundary itself: an Api is reachable from `/api` and from nowhere else.
+   *
+   * Recognized by shape rather than by name, because a list of names is a list
+   * of the seams somebody remembered. Anything carrying both `around` and
+   * `operations` is a `createApi()` value — something a consumer can replace —
+   * and the whole point of the split is that those live in one place. A new Api
+   * re-exported from the root fails here without anyone updating a list.
+   */
+  it("publishes no contextual Api from the root or the Deno entrypoint", function* () {
+    // The positive control for the detector: if this recognized nothing, every
+    // absence below would be vacuous.
+    const api = yield* until(import("@executablemd/git/api"));
+    const seams = Object.entries(api)
+      .filter(([, value]) => isApi(value))
+      .map(([name]) => name);
+    expect(seams.length > 0).toBe(true);
+    expect(seams).toContain("Git");
+
+    for (const specifier of ["@executablemd/git", "@executablemd/git/deno"]) {
+      const published = yield* until(import(specifier));
+      const names = Object.keys(published);
+      expect(`${specifier}: ${names.length > 0}`).toBe(`${specifier}: true`);
+      const leaked = Object.entries(published)
+        .filter(([, value]) => isApi(value))
+        .map(([name]) => name)
+        .sort();
+      expect(`${specifier}: ${leaked.join(",")}`).toBe(`${specifier}: `);
+    }
   });
 
   it("publishes no package-local seam from either entrypoint", function* () {

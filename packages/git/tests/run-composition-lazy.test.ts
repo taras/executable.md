@@ -26,7 +26,7 @@ import { InMemoryStream } from "@executablemd/durable-streams";
 import { useHostFiles } from "@executablemd/runtime";
 import { useRunComposition } from "../src/deno/run-composition/provider.ts";
 import { useCompositionComponents } from "../src/composition/installation.ts";
-import { RepositoryComposition } from "../src/composition/api.ts";
+import { RepositoryComposition } from "@executablemd/git/api";
 import type { RepositoryHost, GitInvocation, GitOutcome } from "../src/deno/composition/host.ts";
 
 /** Every acquisition this provider can make, counted where it happens. */

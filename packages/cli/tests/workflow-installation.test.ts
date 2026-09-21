@@ -28,7 +28,7 @@ import {
 } from "@executablemd/workflow/deno";
 import type { WorkflowExecutionTransitions } from "@executablemd/workflow/deno";
 import { WorkflowLifecycle, WorkflowRunStorage } from "@executablemd/workflow";
-import { Git } from "@executablemd/git";
+import { Git } from "@executablemd/git/api";
 import type { WorkflowRunDatabase, WorkflowRunStatus } from "@executablemd/workflow";
 import { runWorkflow } from "../src/workflow.ts";
 import type { WorkflowExecution, WorkflowHost, WorkflowRequest } from "../src/workflow.ts";

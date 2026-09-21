@@ -27,9 +27,9 @@ import {
   GitOperationProtocolError,
 } from "../src/composition/errors.ts";
 import { DivergenceError } from "@executablemd/durable-streams";
-import { RepositoryComposition } from "../src/composition/api.ts";
-import { GitComposition } from "../src/composition/git-api.ts";
-import type { RepositorySelection } from "../src/composition/selection.ts";
+import { RepositoryComposition } from "@executablemd/git/api";
+import { GitComposition } from "@executablemd/git/api";
+import type { RepositorySelection } from "@executablemd/git/api";
 import { gitOperationFingerprint } from "../src/deno/composition/operations.ts";
 import { gitWorkspaceAttachment } from "../src/deno/attachment.ts";
 import { withWorkflowWorkspace } from "../../workflow/src/deno/workspace/host.ts";

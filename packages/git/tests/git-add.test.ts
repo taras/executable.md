@@ -28,8 +28,8 @@ import {
   GitOperationAdmissionError,
   GitOperationError,
 } from "../src/composition/errors.ts";
-import { currentRepository, RepositoryContext } from "../src/composition/context.ts";
-import { GitComposition } from "../src/composition/git-api.ts";
+import { currentRepository, RepositoryContext } from "@executablemd/git/api";
+import { GitComposition } from "@executablemd/git/api";
 import { parseGitAddResult } from "../src/composition/git-records.ts";
 import type { GitAddExpectation } from "../src/composition/git-records.ts";
 import { useCompositionComponents } from "../src/composition/installation.ts";
@@ -44,7 +44,7 @@ import type { GitWorkspaceOptions } from "../src/deno/attachment.ts";
 import type { WorkflowRunDatabase } from "../../workflow/src/storage/api.ts";
 import { createRun, useStorageRoot, withStorage } from "../../workflow/tests/support/storage.ts";
 import { useBareRemote } from "./support/git-remotes.ts";
-import type { RepositorySelection } from "../src/composition/selection.ts";
+import type { RepositorySelection } from "@executablemd/git/api";
 import {
   causedBy,
   countingHost,

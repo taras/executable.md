@@ -25,8 +25,8 @@ import {
   GitOperationError,
   GitOperationProtocolError,
 } from "../src/composition/errors.ts";
-import { currentRepository } from "../src/composition/context.ts";
-import { GitComposition } from "../src/composition/git-api.ts";
+import { currentRepository } from "@executablemd/git/api";
+import { GitComposition } from "@executablemd/git/api";
 import type { RepositoryRecord } from "../src/composition/records.ts";
 import { WORKSPACE_GIT_ADD } from "../src/deno/composition/provider.ts";
 import { denoRepositoryHost } from "../src/deno/composition/host.ts";
@@ -62,7 +62,7 @@ import {
 import type { LoadedGitApi } from "./support/composition.ts";
 import { committedRoot, dropRootClose, latestRoot, publishedRoots } from "./support/replay.ts";
 
-import type { RepositorySelection } from "../src/composition/selection.ts";
+import type { RepositorySelection } from "@executablemd/git/api";
 const REMOTE = {
   commits: [
     {

@@ -17,7 +17,7 @@ import { expect } from "@executablemd/test-support/expect";
 import { scoped, type Operation } from "effection";
 import { collect, execute, inlineSource, registerComponents } from "@executablemd/core";
 import type { ComponentRegistration } from "@executablemd/core";
-import { RepositoryContext } from "../src/composition/context.ts";
+import { RepositoryContext } from "@executablemd/git/api";
 import {
   GitOperationAdmissionError,
   PullRequestAdmissionError,

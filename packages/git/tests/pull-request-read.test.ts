@@ -17,8 +17,8 @@ import { exists } from "@effectionx/fs";
 import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import type { Operation } from "effection";
-import type { PullRequestReadResult } from "../src/composition/pull-request-read-records.ts";
-import { PullRequestAPI } from "../src/composition/pull-request-api.ts";
+import type { PullRequestReadResult } from "@executablemd/git/api";
+import { PullRequestAPI } from "@executablemd/git/api";
 import {
   parseGitHubPullRequestUrl,
   recognizesGitHubPullRequestUrl,
