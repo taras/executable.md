@@ -42,7 +42,6 @@ import { join, resolve } from "node:path";
 import {
   Agent,
   claimsConfiguration,
-  isSessionRequest,
   isSessionUse,
   sameExecutableBuild,
   sessionOf,
@@ -4097,6 +4096,50 @@ function* useAcpxProviderState(
   }
 
   /**
+   * Whether `value` is a conversation somebody already resolved.
+   *
+   * By its public data, because that is the one thing every copy of core agrees
+   * about: a `Session` carries a `sessionKey` and a `cwd`, and a placement
+   * carries neither. Asked first, so a session is never mistaken for a
+   * placement candidate.
+   */
+  function isResolvedSession(value: object | null): value is Session {
+    if (value === null) {
+      return false;
+    }
+    return (
+      typeof Reflect.get(value, "sessionKey") === "string" &&
+      typeof Reflect.get(value, "cwd") === "string"
+    );
+  }
+
+  /**
+   * Whether `value` has the public shape of a routed placement.
+   *
+   * Classification, and only that. It says this is the kind of value a
+   * placement is — a descriptive name that is a string when it is there, and a
+   * `with()` to derive a sibling — never that it is a live one, and never whose
+   * it is. That question belongs to the coordinator delivered to this factory,
+   * which is asked next and whose refusal is the answer.
+   *
+   * Deliberately not asked of this package's own copy of core. A placement is
+   * authentic to the installation that issued it, and a provider that tested
+   * the value against its own copy would call a genuine placement from another
+   * loaded copy an ordinary session and run the conversation unconfigured —
+   * which is the one answer that must never be reached by guessing.
+   */
+  function isPlacementShaped(value: object | null): value is AgentSessionRequest {
+    if (value === null) {
+      return false;
+    }
+    const name = Reflect.get(value, "name");
+    return (
+      (name === undefined || typeof name === "string") &&
+      typeof Reflect.get(value, "with") === "function"
+    );
+  }
+
+  /**
    * Resolve one session, reading a routed placement's engine identity through
    * the coordinator when there is one.
    *
@@ -4111,16 +4154,30 @@ function* useAcpxProviderState(
     let named: string | Session | undefined;
     let sessionIdentity: string | undefined;
     let placement: AgentSessionPlacement | undefined;
-    if (option !== undefined && typeof option === "object" && isSessionRequest(option)) {
+    if (typeof option === "object" && !isResolvedSession(option)) {
+      if (!isPlacementShaped(option)) {
+        // Neither a conversation nor the shape of a placement. Running it as an
+        // unconfigured route would resolve some other conversation and say
+        // nothing about it, so it refuses instead.
+        throw new Error(
+          "this is neither an agent session nor a session placement, so it names no " +
+            "conversation this provider could resolve",
+        );
+      }
       if (launchCoordinator === undefined) {
         throw new Error(
           "a session placement reached this provider without the coordinator that reads it",
         );
       }
+      // Descriptive only: the name is a public member a handler may change, and
+      // nothing here depends on it being there.
       named = option.name;
-      // One acceptance of this exact placement, and the handle that settles it.
-      // What the element asked of the conversation travels inside it, where no
-      // handler could read or replace it on the way here.
+      // One acceptance of this exact placement, handed over unchanged, and the
+      // handle that settles it. What the element asked of the conversation
+      // travels inside it, where no handler could read or replace it on the way
+      // here — and whether this installation issued it is the coordinator's to
+      // say. Its refusal is the answer: not caught, with no raw-session path
+      // behind it.
       placement = launchCoordinator.sessionPlacement(option);
       sessionIdentity = placement.sessionIdentity;
     } else {
