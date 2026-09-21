@@ -25,6 +25,7 @@ import {
 } from "@executablemd/durable-streams";
 import { collect, inlineSource, registerComponents } from "@executablemd/core";
 import { executeInstalled } from "@executablemd/core/host";
+import type { ExecutionInstallation } from "@executablemd/core/host";
 import { WorkspaceCoordination, WorkspaceCoordinationProviderError } from "../src/workspace/api.ts";
 import {
   type WorkspaceEffectExecution,
@@ -33,31 +34,50 @@ import {
 } from "../src/workspace/effect.ts";
 import { createDurableWorkspaceOperation } from "../mod.ts";
 import { retainedWorkflowInstallation } from "../src/run.ts";
+import { gitPlugin } from "../../git/src/plugin.ts";
 import type { WorkflowRun } from "../src/run.ts";
 import {
   GIT_HOST_EFFECT,
   reconcileGitHostEffect,
   withGitHostProvider,
-} from "../src/git-host/effect.ts";
-import { GIT_HOST_API, GitHost } from "../src/git-host/api.ts";
+} from "../../git/src/git-host/effect.ts";
+import { GIT_HOST_API, GitHost } from "../../git/src/git-host/api.ts";
 import type {
   GitHostApi,
   GitHostCall,
   GitHostProvider,
   GitHostRoutingRequest,
-} from "../src/git-host/api.ts";
-import { GitHostProviderError } from "../src/git-host/errors.ts";
+} from "../../git/src/git-host/api.ts";
+import { GitHostProviderError } from "../../git/src/git-host/errors.ts";
 import {
   gitHostRequestFingerprint,
   parseGitHostReconciliationRecord,
-} from "../src/git-host/records.ts";
+} from "../../git/src/git-host/records.ts";
 import type {
   CompleteGitHostEffectRequest,
   GitHostCompletion,
   GitHostEffectRequest,
   GitHostObservation,
   GitHostReconciliationRecord,
-} from "../src/git-host/records.ts";
+} from "../../git/src/git-host/records.ts";
+
+/**
+ * The admissions the Git Plugin contributes, as a host installing it receives
+ * them.
+ *
+ * Asked of the Plugin value rather than assembled here, so what these cases
+ * exercise is the same contribution a command gets — one Plugin value, and an
+ * admission that derives this execution's identities from this execution's own
+ * retained history.
+ */
+function* gitPluginAdmissions(): Operation<ExecutionInstallation> {
+  const install = gitPlugin.install;
+  if (install === undefined) {
+    throw new Error("the Git Plugin installed nothing");
+  }
+  const installed = yield* install.call(gitPlugin, { command: "run", args: [] });
+  return { admissions: [...(installed?.admissions ?? [])] };
+}
 
 interface LoadedWorkspaceCopy {
   createDurableWorkspaceOperation: typeof createDurableWorkspaceOperation;
@@ -211,18 +231,22 @@ function loadedGitHostCopy(value: unknown): value is LoadedGitHostCopy {
 }
 
 /**
- * A second physical copy of this package's shared source, loaded as its own
+ * A second physical copy of the Git package's shared source, loaded as its own
  * module graph.
  *
  * The whole shared tree is copied rather than the four Git-host modules,
- * because what the copy must reach — the run, the journal and the canonical
- * encoding — is exactly what a real second copy reaches. The host adapter is
- * left behind: this boundary names no host, so a copy of it needs none.
+ * because what the copy must reach — the retained identities and the canonical
+ * encoding beside them — is exactly what a real second copy reaches. The host
+ * adapter is left behind: this boundary names no host, so a copy of it needs
+ * none. What the copy does *not* carry is `@executablemd/workflow`: a second
+ * installation of one package does not duplicate its dependency, so the copy
+ * resolves the run and the journal through the same published specifiers the
+ * original does.
  */
 function* physicalGitHostCopy(): Operation<LoadedGitHostCopy> {
   const directory = yield* until(Deno.makeTempDir({ prefix: "xmd-workflow-git-host-copy-" }));
   yield* ensure(() => rm(directory, { recursive: true, force: true }));
-  const source = fileURLToPath(new URL("../src/", import.meta.url));
+  const source = fileURLToPath(new URL("../../git/src/", import.meta.url));
   const entries = yield* glob({ root: source, patterns: ["**/*.ts"], exclude: ["deno/**"] });
   expect(entries.length).toBeGreaterThan(4);
   for (const entry of entries) {
@@ -230,6 +254,22 @@ function* physicalGitHostCopy(): Operation<LoadedGitHostCopy> {
     yield* ensureDir(dirname(destination));
     yield* writeTextFile(destination, yield* readTextFile(join(source, entry.path)));
   }
+  // A manifest, because an installed second copy has one. The copy reaches the
+  // run, the journal and the canonical encoding through the same published
+  // specifiers a real one would, rather than through a second physical copy of
+  // a package it does not own.
+  yield* writeTextFile(
+    join(directory, "deno.json"),
+    JSON.stringify({
+      name: "@executablemd/git-loaded-copy",
+      version: "0.0.0",
+      exports: { ".": "./git-host/effect.ts" },
+      imports: {
+        "@executablemd/workflow": new URL("../mod.ts", import.meta.url).href,
+        "@executablemd/workflow/deno": new URL("../deno.ts", import.meta.url).href,
+      },
+    }),
+  );
   const copy = yield* until(import(pathToFileURL(join(directory, "git-host/effect.ts")).href));
   if (!loadedGitHostCopy(copy)) {
     throw new Error("the physical workflow package copy did not export its Git-host surface");
@@ -273,6 +313,7 @@ function* gitHostDocument(stream: InMemoryStream): Operation<unknown> {
   return yield* collect(
     yield* executeInstalled({ ...inlineSource(GIT_HOST_SOURCE), stream }, [
       retainedWorkflowInstallation(GIT_HOST_RUN),
+      yield* gitPluginAdmissions(),
     ]),
   );
 }

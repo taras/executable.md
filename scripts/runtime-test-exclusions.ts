@@ -210,7 +210,25 @@ const DENO_ONLY_TOOLING: RuntimeExclusion[] = [
     issue: "https://github.com/taras/executable.md/issues/365",
   },
   {
-    path: "packages/workflow/tests/ambient-authentication.test.ts",
+    path: "packages/cli/tests/github-zero-effect.test.ts",
+    reason:
+      "renders the syntax catalog and validates a Plan draft through the CLI's own surfaces, which reach `@executablemd/git/deno` and so Workflow's storage adapter and `node:sqlite` — absent from Bun and behind --experimental-sqlite on Node 22. The adapters' own activation ordering, and every refusal before configuration, are proven portably in packages/git/tests/github-activation.test.ts",
+    issue: DERIVED_SCOPE,
+  },
+  {
+    path: "packages/git/tests/github-workflow-activation.test.ts",
+    reason:
+      "assembles the real ordinary-run profile and executes a retained source-bundle run through the real Workflow host; both reach Workflow's storage adapter and so `node:sqlite` — absent from Bun and behind --experimental-sqlite on Node 22. What is lost is only the assembled-profile reading: the adapters' own activation ordering, and every refusal before configuration, are proven portably in github-activation.test.ts, which runs on all three runtimes",
+    issue: DERIVED_SCOPE,
+  },
+  {
+    path: "packages/git/tests/public-entrypoint.test.ts",
+    reason:
+      "both of its cases import `@executablemd/git` and `@executablemd/git/deno` to read what the entrypoint actually publishes, and that entrypoint reaches Workflow's Deno storage adapter and so `node:sqlite` — absent from Bun and behind --experimental-sqlite on Node 22. What is lost is only the runtime-namespace reading: the same two entrypoints are read as source by module-partition.test.ts, which also reads both manifest export maps and runs on all three runtimes",
+    issue: DERIVED_SCOPE,
+  },
+  {
+    path: "packages/git/tests/ambient-authentication.test.ts",
     reason:
       "drives the Deno host adapter's HTTP credential acquisition against a real node:sqlite WorkflowRun database, a real `git` subprocess and a provider-owned helper the Deno source assembly launches; the adapter, the store and the helper are all the Deno one by design",
     issue: "https://github.com/taras/executable.md/issues/522",
@@ -222,103 +240,103 @@ const DENO_ONLY_TOOLING: RuntimeExclusion[] = [
     issue: "https://github.com/taras/executable.md/issues/522",
   },
   {
-    path: "packages/workflow/tests/credential-helper.test.ts",
+    path: "packages/git/tests/credential-helper.test.ts",
     reason:
       "runs the provider-owned credential helper through the Deno source launcher and drives `git credential fill` against isolated fixture homes; the helper mode is dispatched by the Deno entrypoints and has no Node or Bun assembly yet",
     issue: "https://github.com/taras/executable.md/issues/522",
   },
   {
-    path: "packages/workflow/tests/repository-components.test.ts",
+    path: "packages/git/tests/repository-components.test.ts",
     reason:
       "drives <Repository> and <Dir> against a real node:sqlite WorkflowRun database, the Deno DOFS Workspace adapter and a real `git` subprocess; Bun has no node:sqlite at all and Node 22 keeps it behind --experimental-sqlite",
     issue: "https://github.com/taras/executable.md/issues/293",
   },
   {
-    path: "packages/workflow/tests/repository-storage.test.ts",
+    path: "packages/git/tests/repository-storage.test.ts",
     reason:
       "clones local bare repositories with a real `git` into the Deno DOFS Workspace and reads the retained node:sqlite rows back; the provider is the Deno one by design",
     issue: "https://github.com/taras/executable.md/issues/293",
   },
   {
-    path: "packages/workflow/tests/repository-replay.test.ts",
+    path: "packages/git/tests/repository-replay.test.ts",
     reason:
       "replays a partial node:sqlite WorkflowRun after deleting the remote and every host materialization, and halts a real blocked `git` child; both the store and the subprocess are the Deno adapter's",
     issue: "https://github.com/taras/executable.md/issues/293",
   },
   {
-    path: "packages/workflow/tests/repository-materialization.test.ts",
+    path: "packages/git/tests/repository-materialization.test.ts",
     reason:
       "exports retained checkouts to host directories and links their roots at external clones, against a real node:sqlite WorkflowRun database",
     issue: "https://github.com/taras/executable.md/issues/293",
   },
   {
-    path: "packages/workflow/tests/materialization.test.ts",
+    path: "packages/git/tests/materialization.test.ts",
     reason:
       "drives <Repository>, <Worktree> and <Dir> against a real node:sqlite WorkflowRun database, the Deno DOFS Workspace adapter and a real `git` subprocess; node:sqlite remains behind --experimental-sqlite on Node 22",
     issue: "https://github.com/taras/executable.md/issues/293",
   },
   {
-    path: "packages/workflow/tests/worktree-replay.test.ts",
+    path: "packages/git/tests/worktree-replay.test.ts",
     reason:
       "substitutes a Worktree's retained checkout through the Deno DOFS Workspace and reads it back with a real `git`; node:sqlite remains behind --experimental-sqlite on Node 22",
     issue: "https://github.com/taras/executable.md/issues/293",
   },
   {
-    path: "packages/workflow/tests/git-add.test.ts",
+    path: "packages/git/tests/git-add.test.ts",
     reason:
       "drives <Git.Add> against a real node:sqlite WorkflowRun database, the Deno DOFS Workspace adapter and a real `git` subprocess, and imports a physical copy of the Api module through the Deno module loader; Bun has no node:sqlite at all and Node 22 keeps it behind --experimental-sqlite",
     issue: "https://github.com/taras/executable.md/issues/294",
   },
   {
-    path: "packages/workflow/tests/git-add-durability.test.ts",
+    path: "packages/git/tests/git-add-durability.test.ts",
     reason:
       "replays and cancels a staging against a real node:sqlite WorkflowRun database and halts a real blocked `git` child; both the store and the subprocess are the Deno adapter's",
     issue: "https://github.com/taras/executable.md/issues/294",
   },
   {
-    path: "packages/workflow/tests/git-add-crash.test.ts",
+    path: "packages/git/tests/git-add-crash.test.ts",
     reason:
       "kills a real Deno child with SIGKILL mid-staging and reads the recovered node:sqlite WorkflowRun database it leaves behind; the child runs under the Deno executable and node:sqlite remains behind --experimental-sqlite on Node 22",
     issue: "https://github.com/taras/executable.md/issues/294",
   },
   {
-    path: "packages/workflow/tests/git-commit.test.ts",
+    path: "packages/git/tests/git-commit.test.ts",
     reason:
       "drives <Git.Commit> against a real node:sqlite WorkflowRun database, the Deno DOFS Workspace adapter and a real `git` subprocess that receives its message on standard input; Bun has no node:sqlite at all and Node 22 keeps it behind --experimental-sqlite",
     issue: "https://github.com/taras/executable.md/issues/294",
   },
   {
-    path: "packages/workflow/tests/git-commit-durability.test.ts",
+    path: "packages/git/tests/git-commit-durability.test.ts",
     reason:
       "replays and cancels a commit against a real node:sqlite WorkflowRun database and halts a real blocked `git` child; both the store and the subprocess are the Deno adapter's",
     issue: "https://github.com/taras/executable.md/issues/294",
   },
   {
-    path: "packages/workflow/tests/git-commit-crash.test.ts",
+    path: "packages/git/tests/git-commit-crash.test.ts",
     reason:
       "kills a real Deno child with SIGKILL mid-commit and reads the recovered node:sqlite WorkflowRun database it leaves behind; the child runs under the Deno executable and node:sqlite remains behind --experimental-sqlite on Node 22",
     issue: "https://github.com/taras/executable.md/issues/294",
   },
   {
-    path: "packages/workflow/tests/git-push.test.ts",
+    path: "packages/git/tests/git-push.test.ts",
     reason:
       "drives <Git.Push> against a real node:sqlite WorkflowRun database, the Deno DOFS Workspace adapter, a real local bare remote and a real `git` subprocess that observes and pushes; Bun has no node:sqlite at all and Node 22 keeps it behind --experimental-sqlite",
     issue: "https://github.com/taras/executable.md/issues/370",
   },
   {
-    path: "packages/workflow/tests/git-push-durability.test.ts",
+    path: "packages/git/tests/git-push-durability.test.ts",
     reason:
       "replays and cancels a push against a real node:sqlite WorkflowRun database, halts a real blocked `git` child and imports a physical copy of the Api module through the Deno module loader; both the store and the subprocess are the Deno adapter's",
     issue: "https://github.com/taras/executable.md/issues/370",
   },
   {
-    path: "packages/workflow/tests/git-push-crash.test.ts",
+    path: "packages/git/tests/git-push-crash.test.ts",
     reason:
       "kills a real Deno child with SIGKILL after native Git updated the remote and before the result was appended, then reads the recovered node:sqlite WorkflowRun database it leaves behind; the child runs under the Deno executable and node:sqlite remains behind --experimental-sqlite on Node 22",
     issue: "https://github.com/taras/executable.md/issues/370",
   },
   {
-    path: "packages/workflow/tests/pull-request.test.ts",
+    path: "packages/git/tests/pull-request.test.ts",
     reason:
       "drives <PullRequest> against a real node:sqlite WorkflowRun database, the Deno DOFS Workspace adapter, a real local bare remote and a real `git` subprocess; Bun has no node:sqlite at all and Node 22 keeps it behind --experimental-sqlite",
     issue: "https://github.com/taras/executable.md/issues/295",
@@ -330,43 +348,43 @@ const DENO_ONLY_TOOLING: RuntimeExclusion[] = [
     issue: "https://github.com/taras/executable.md/issues/576",
   },
   {
-    path: "packages/workflow/tests/pull-request-read.test.ts",
+    path: "packages/git/tests/pull-request-read.test.ts",
     reason:
       "drives the three evidence reads against a real node:sqlite WorkflowRun database, the Deno DOFS Workspace adapter and a real `git` subprocess, and replays one from the retained journal; Bun has no node:sqlite at all and Node 22 keeps it behind --experimental-sqlite",
     issue: "https://github.com/taras/executable.md/issues/576",
   },
   {
-    path: "packages/workflow/tests/pull-request-durability.test.ts",
+    path: "packages/git/tests/pull-request-durability.test.ts",
     reason:
       "replays, damages and cancels a pull request against a real node:sqlite WorkflowRun database and the Deno DOFS Workspace adapter; both the store and the Git subprocess are the Deno adapter's",
     issue: "https://github.com/taras/executable.md/issues/295",
   },
   {
-    path: "packages/workflow/tests/pull-request-crash.test.ts",
+    path: "packages/git/tests/pull-request-crash.test.ts",
     reason:
       "kills a real Deno child with SIGKILL after GitHub answered 201 and before the result was appended, then reads the recovered node:sqlite WorkflowRun database it leaves behind; the child runs under the Deno executable and node:sqlite remains behind --experimental-sqlite on Node 22",
     issue: "https://github.com/taras/executable.md/issues/295",
   },
   {
-    path: "packages/workflow/tests/git-switch.test.ts",
+    path: "packages/git/tests/git-switch.test.ts",
     reason:
       "drives <Git.Switch> against a real node:sqlite WorkflowRun database, the Deno DOFS Workspace adapter and a real `git` subprocess, and imports a physical copy of the Api module through the Deno module loader; Bun has no node:sqlite at all and Node 22 keeps it behind --experimental-sqlite",
     issue: "https://github.com/taras/executable.md/issues/294",
   },
   {
-    path: "packages/workflow/tests/git-switch-durability.test.ts",
+    path: "packages/git/tests/git-switch-durability.test.ts",
     reason:
       "replays and cancels a switch against a real node:sqlite WorkflowRun database and halts a real blocked `git` child; both the store and the subprocess are the Deno adapter's",
     issue: "https://github.com/taras/executable.md/issues/294",
   },
   {
-    path: "packages/workflow/tests/git-switch-crash.test.ts",
+    path: "packages/git/tests/git-switch-crash.test.ts",
     reason:
       "kills a real Deno child with SIGKILL mid-switch and reads the recovered node:sqlite WorkflowRun database it leaves behind; the child runs under the Deno executable and node:sqlite remains behind --experimental-sqlite on Node 22",
     issue: "https://github.com/taras/executable.md/issues/294",
   },
   {
-    path: "packages/workflow/tests/repository-control-plane.test.ts",
+    path: "packages/git/tests/repository-control-plane.test.ts",
     reason:
       "writes Git administration a real `git` then reads, through the Deno DOFS Workspace adapter; node:sqlite remains behind --experimental-sqlite on Node 22",
     issue: "https://github.com/taras/executable.md/issues/293",
@@ -617,19 +635,19 @@ const COMPILED_BINARY: RuntimeExclusion[] = [
  */
 const DENO_ONLY_REPOSITORY_PROVIDER: RuntimeExclusion[] = [
   {
-    path: "packages/workflow/tests/run-composition-ambient.test.ts",
+    path: "packages/git/tests/run-composition-ambient.test.ts",
     reason:
       "the subject is the ordinary run's repository provider, installed directly by the suite; it discovers an ambient repository and writes to a real checkout through the Deno runtime",
     issue: DERIVED_SCOPE,
   },
   {
-    path: "packages/workflow/tests/run-composition-managed.test.ts",
+    path: "packages/git/tests/run-composition-managed.test.ts",
     reason:
       "the same provider, holding managed checkouts under a kernel-released exclusive advisory lock taken through the Deno runtime; Node and Bun expose no equivalent",
     issue: DERIVED_SCOPE,
   },
   {
-    path: "packages/workflow/tests/run-composition-remote.test.ts",
+    path: "packages/git/tests/run-composition-remote.test.ts",
     reason:
       "the same provider, publishing and reconciling against a modeled Git host; the transport and its evidence are Deno-only for the same reason the rest of the provider is",
     issue: DERIVED_SCOPE,

@@ -28,7 +28,8 @@ import { fileURLToPath } from "node:url";
 import { withWorkflowWorkspace } from "@executablemd/workflow/deno";
 import type { WorkflowWorkspaceOptions } from "@executablemd/workflow/deno";
 import * as published from "@executablemd/workflow/deno";
-import { useInvokingHome } from "./support/credential-home.ts";
+import * as root from "@executablemd/workflow";
+import { useInvokingHome } from "../../git/tests/support/credential-home.ts";
 import { readdir, readTextFile, stat } from "@effectionx/fs";
 import type { Operation } from "effection";
 
@@ -52,7 +53,7 @@ const LOCATOR = "https://exploit.invalid/octo/one.git";
 
 const PROBE = fileURLToPath(new URL("./support/public-entrypoint-probe.ts", import.meta.url));
 const HELPER_MODULE = fileURLToPath(
-  new URL("./support/credential-helper-entry.ts", import.meta.url),
+  new URL("../../git/tests/support/credential-helper-entry.ts", import.meta.url),
 );
 
 describe("workflow published Deno entrypoint", () => {
@@ -141,67 +142,97 @@ describe("workflow published Deno entrypoint", () => {
     // anywhere in the graph is caught here.
     const reachable = Object.keys(published);
     expect(reachable).toContain("withWorkflowWorkspace");
-    for (const constant of [
+    // The Git vocabulary is not this package's to publish any more. Its effect
+    // types, its providers and its leaf substitution seams are all absent —
+    // the constants because the feature moved, the seams because a package a
+    // document loaded could read a credential through one.
+    for (const moved of [
       "WORKSPACE_GIT_ADD",
       "WORKSPACE_GIT_SWITCH",
       "WORKSPACE_REPOSITORY",
       "WORKSPACE_WORKTREE",
-    ]) {
-      expect(reachable).toContain(constant);
-    }
-    for (const seam of [
       "denoRepositoryHost",
       "useRepositoryComposition",
       "useGitComposition",
       "denoGitAuthentication",
       "denoCredentialBroker",
+      "useRunComposition",
+      "useGitHubIssues",
+      "useGitHubPullRequests",
+      "Git",
+      "revParse",
+      "workflowInstallation",
     ]) {
-      expect(reachable).not.toContain(seam);
+      expect({ name: moved, reachable: reachable.includes(moved) }).toEqual({
+        name: moved,
+        reachable: false,
+      });
     }
     expect(COMPOSITION_IS_NOT_A_KEY).toBe(false);
+    expect(yield* until(Promise.resolve(true))).toBe(true);
+  });
+
+  it("publishes the three generic extension boundaries and no seam behind them", function* () {
+    const shared = Object.keys(root);
+    const deno = Object.keys(published);
+
+    // What a trusted host outside this package composes with: how it states
+    // what its own run is, how it performs one Workspace-coordinated durable
+    // mutation, how it reads the Workspace without performing one, and how it
+    // tells a failure it may journal from one that fails the run.
+    expect(shared).toContain("createWorkflowRunInstallation");
+    expect(deno).toContain("createWorkflowWorkspaceEffect");
+    expect(deno).toContain("readWorkflowWorkspace");
+    expect(deno).toContain("JournaledEffectFailure");
+    expect(deno).toContain("isJournalableWorkspaceFailure");
+
+    // And what it still cannot reach. A mutation receives its storage view from
+    // the transaction that owns it; a caller that could build one, open a
+    // private transaction, mint a transaction token, restore a root, or install
+    // the private provider would be holding the authority this boundary exists
+    // to keep.
+    for (const seam of [
+      "createWorkflowWorkspaceStorage",
+      "guardedWorkflowWorkspaceStorage",
+      "guardedWorkflowWorkspaceReadStorage",
+      "usePrivateWorkspace",
+      "withPrivateWorkspaceTransaction",
+      "transactWorkspaceRoots",
+      "workflowRunTransactionToken",
+      "validateWorkflowRunTransactionToken",
+      "useWorkspaceEffects",
+      "withWorkspaceEffects",
+      "createWorkflowRunConnections",
+      "restoreWorkspaceRoot",
+      "captureWorkspaceRoot",
+      "setCurrentWorkspaceRoot",
+      "savepoint",
+    ]) {
+      expect({ seam, reachable: deno.includes(seam) || shared.includes(seam) }).toEqual({
+        seam,
+        reachable: false,
+      });
+    }
     expect(yield* until(Promise.resolve(true))).toBe(true);
   });
 });
 
 /**
- * What the retained path is allowed to depend on.
+/**
+ * Where the Git feature is, and where it is not.
  *
- * A version-1 definition's Markdown lives in a repository, and #443's whole
- * point is that the modules which retain, recognize, resume, journal and seal a
- * run do not reach one themselves — a trusted host supplies that capability as
- * a direct closure instead. So this reads the source tree rather than the
- * module graph: an import is a fact about a file, and a test that only exercised
- * behaviour would pass right up until something imported Git and never used it.
+ * #443 held one module — `src/run.ts` — to a single named Git import, because
+ * everything else that retained, recognized, resumed or sealed a run already
+ * reached no repository. #822 finishes that: the feature is its own package, so
+ * the rule is no longer "one exception" but "none at all".
  *
- * One exception, and it is pinned rather than granted. `src/run.ts` holds the
- * public `workflowInstallation({ base })` convenience, which resolves a base
- * through `Git.revParse()`. What this permits is that one named import and its
- * one use inside the allocation path — not the file. A second Git operation
- * reaching `run.ts`, or `revParse()` moving out of `allocating()` and into the
- * retained path, fails here as surely as an import anywhere else would.
- * #822 moves that adapter into the bundled Git Plugin.
+ * These read the source tree rather than the module graph. An import is a fact
+ * about a file, and a test that only exercised behaviour would pass right up
+ * until something imported Git and never used it.
  */
-describe("workflow retained modules and the Git capability", () => {
-  /** The directories whose modules retain, recognize, resume or seal a run. */
-  const RETAINED = ["src/storage", "src/lifecycle", "src/deno/artifact", "src/deno/workspace"];
-
-  /** Single files on that same path, beside the directories above. */
-  const RETAINED_FILES = ["src/journal.ts", "src/fork.ts", "src/bundle.ts"];
-
-  /**
-   * The one module #822 has not moved yet.
-   *
-   * Named as a path rather than allowed by pattern: an exception that matched a
-   * shape would quietly cover the next file that happened to fit it.
-   */
-  const EXCEPTION = "src/run.ts";
-
-  /** The exact import that exception is, and the one operation it names. */
-  const EXCEPTION_IMPORT = "./git.ts";
-  const EXCEPTION_OPERATION = "revParse";
-
-  function packageFile(relative: string): string {
-    return fileURLToPath(new URL(`../${relative}`, import.meta.url));
+describe("the boundary between workflow and git", () => {
+  function packageFile(pkg: string, relative: string): string {
+    return fileURLToPath(new URL(`../../${pkg}/${relative}`, import.meta.url));
   }
 
   /**
@@ -224,23 +255,14 @@ describe("workflow retained modules and the Git capability", () => {
     return found;
   }
 
-  /** Whether a specifier names the local Git capability or its package. */
-  function namesGit(specifier: string): boolean {
-    return /(?:^|\/)git\.ts$/.test(specifier) || /^@executablemd\/git(?:\/|$)/.test(specifier);
-  }
-
-  function gitSpecifiers(source: string): string[] {
-    return specifiers(source).filter(namesGit);
-  }
-
-  /** Every `.ts` file under one directory of the package, recursively. */
-  function* moduleFiles(relative: string): Operation<string[]> {
+  /** Every `.ts` file under one directory of one package, recursively. */
+  function* moduleFiles(pkg: string, relative: string): Operation<string[]> {
     const found: string[] = [];
-    for (const name of yield* readdir(packageFile(relative))) {
+    for (const name of yield* readdir(packageFile(pkg, relative))) {
       const child = `${relative}/${name}`;
-      const stats = yield* stat(packageFile(child));
+      const stats = yield* stat(packageFile(pkg, child));
       if (stats.isDirectory()) {
-        found.push(...(yield* moduleFiles(child)));
+        found.push(...(yield* moduleFiles(pkg, child)));
       } else if (name.endsWith(".ts")) {
         found.push(child);
       }
@@ -248,33 +270,37 @@ describe("workflow retained modules and the Git capability", () => {
     return found;
   }
 
-  function* retainedModules(): Operation<string[]> {
-    const scanned: string[] = [...RETAINED_FILES];
-    for (const directory of RETAINED) {
-      scanned.push(...(yield* moduleFiles(directory)));
-    }
-    // The deno adapter's own modules, without the repository-composition
-    // subsystem: those implement `<Git.*>` and are a capability rather than
-    // part of what a run retains.
-    for (const name of yield* readdir(packageFile("src/deno"))) {
-      if (name.endsWith(".ts")) {
-        scanned.push(`src/deno/${name}`);
-      }
-    }
-    return scanned;
+  function* productionModules(pkg: string): Operation<string[]> {
+    return [...(yield* moduleFiles(pkg, "src")), "mod.ts", "deno.ts"];
   }
 
-  it("names Git in no retained module, in any import form", function* () {
-    const scanned = yield* retainedModules();
+  /** Whether a specifier names the Git package or the local Git capability. */
+  function namesGit(specifier: string): boolean {
+    return /(?:^|\/)git\.ts$/.test(specifier) || /^@executablemd\/git(?:\/|$)/.test(specifier);
+  }
+
+  /** Whether a specifier names the GitHub package. */
+  function namesGitHub(specifier: string): boolean {
+    return /^@executablemd\/github(?:\/|$)/.test(specifier);
+  }
+
+  /** Whether a specifier reaches into another package's source rather than its entrypoint. */
+  function reachesWorkflowSource(specifier: string): boolean {
+    return /(?:^|\/)workflow\/(src|tests)\//.test(specifier);
+  }
+
+  it("names Git in no workflow production module, in any import form", function* () {
+    const scanned = yield* productionModules("workflow");
 
     // The scan has to be looking at something: a glob that matched nothing
     // would pass this case every time.
     expect(scanned.length).toBeGreaterThan(40);
+    expect(scanned).toContain("src/run.ts");
     expect(scanned).toContain("src/deno/transitions.ts");
     expect(scanned).toContain("src/storage/source-bundle.ts");
-    expect(scanned).toContain("src/lifecycle/source.ts");
-    expect(scanned).toContain("src/deno/definition-source.ts");
-    expect(scanned).not.toContain(EXCEPTION);
+    expect(scanned).toContain("src/lifecycle/forkability.ts");
+    expect(scanned).toContain("mod.ts");
+    expect(scanned).toContain("deno.ts");
 
     // And the matcher has to recognize what it is looking for. Each of these is
     // a way a module could reach Git without writing `from`.
@@ -284,51 +310,48 @@ describe("workflow retained modules and the Git capability", () => {
       'const git = await import("./git.ts");',
       'const git = require("@executablemd/git");',
       'export { revParse } from "../../git.ts";',
+      'export { gitPlugin } from "@executablemd/git";',
     ]) {
-      expect({ form, git: gitSpecifiers(form).length }).toEqual({ form, git: 1 });
+      expect({ form, git: specifiers(form).filter(namesGit).length }).toEqual({ form, git: 1 });
     }
-    expect(gitSpecifiers('import { reading } from "./reading.ts";')).toEqual([]);
+    expect(specifiers('import { reading } from "./reading.ts";').filter(namesGit)).toEqual([]);
 
     const importing: string[] = [];
     for (const relative of scanned) {
-      const source = yield* readTextFile(packageFile(relative));
-      if (gitSpecifiers(source).length > 0) {
+      const source = yield* readTextFile(packageFile("workflow", relative));
+      if (specifiers(source).some(namesGit) || specifiers(source).some(namesGitHub)) {
         importing.push(relative);
       }
     }
+    // No exception. #443's single `run.ts` allowance is gone with the feature.
     expect(importing).toEqual([]);
   });
 
-  it("permits one Git import in run.ts, used once inside the allocation path", function* () {
-    const source = yield* readTextFile(packageFile(EXCEPTION));
+  it("reaches workflow only through its entrypoints, and github not at all", function* () {
+    const scanned = yield* productionModules("git");
+    expect(scanned.length).toBeGreaterThan(40);
+    expect(scanned).toContain("mod.ts");
+    expect(scanned).toContain("deno.ts");
+    expect(scanned).toContain("src/plugin.ts");
 
-    // One specifier, and it is the local capability rather than the package.
-    expect(gitSpecifiers(source)).toEqual([EXCEPTION_IMPORT]);
-    // Named, so the import states which operation it is the exception for.
-    expect(source).toContain(`import { ${EXCEPTION_OPERATION} } from "${EXCEPTION_IMPORT}";`);
+    const sourceReaching: string[] = [];
+    const gitHubReaching: string[] = [];
+    for (const relative of scanned) {
+      const source = yield* readTextFile(packageFile("git", relative));
+      const named = specifiers(source);
+      if (named.some(reachesWorkflowSource)) {
+        sourceReaching.push(relative);
+      }
+      if (named.some(namesGitHub)) {
+        gitHubReaching.push(relative);
+      }
+    }
+    // Workflow is a dependency with two doors, and this package uses them.
+    expect(sourceReaching).toEqual([]);
+    expect(gitHubReaching).toEqual([]);
 
-    // Called once in the whole module. A bare identifier rather than any
-    // mention of the name: the module's own prose says `Git.revParse()`, and a
-    // sentence about the exception is not a second use of it.
-    const calls = [...source.matchAll(/(?<![.\w])revParse\s*\(/g)];
-    expect(calls).toHaveLength(1);
-
-    // And that one call is inside `allocating()` itself, which is what
-    // `workflowInstallation({ base })` uses. The retained installation beside it
-    // resolves nothing: a run it is given arrives whole.
-    //
-    // Bounded by that function's own closing brace rather than by whatever
-    // declaration happens to follow it — a helper slipped in between would
-    // otherwise count as the allocation path while being callable from the
-    // retained one.
-    const from = source.indexOf("function allocating(");
-    expect(from).toBeGreaterThan(-1);
-    const closes = source.indexOf("\n}\n", from);
-    expect(closes).toBeGreaterThan(from);
-    const allocation = source.slice(from, closes);
-    const call = /(?<![.\w])revParse\s*\(/;
-    expect(call.test(allocation)).toBe(true);
-    expect(call.test(source.slice(0, from))).toBe(false);
-    expect(call.test(source.slice(closes))).toBe(false);
+    // The matcher recognizes what it is looking for.
+    expect(reachesWorkflowSource("../../workflow/src/deno/workspace/host.ts")).toBe(true);
+    expect(reachesWorkflowSource("@executablemd/workflow/deno")).toBe(false);
   });
 });

@@ -18,13 +18,27 @@
  * outside Git, an untracked file, and a file edited since its last commit each
  * be one immutable definition the moment it is retained.
  *
+ * Starting a version-1 run means resolving a base, which is a Git capability
+ * this package does not own: `workflowInstallation({ base })` is exported by
+ * the `@executablemd/git` package instead. No module here names it in an
+ * import, which is the boundary rather than an accident of layout.
+ *
+ * What stays here is the retained half. `retainedWorkflowInstallation()`
+ * resolves no base and names no Git feature — but that is a statement about
+ * this package's imports, not about what a run needs. A version-1 definition
+ * retains no Markdown, so resuming, forking or exporting one still obtains its
+ * bytes through the host-supplied legacy source reader, which may well read a
+ * repository. Workflow authenticates the closure that reader returns against
+ * the retained descriptor, recomputing every blob identity from the bytes
+ * themselves. Only a source-bundle run needs no repository at any point.
+ *
  * ```ts
- * import { workflowInstallation } from "@executablemd/workflow";
+ * import { retainedWorkflowInstallation } from "@executablemd/workflow";
  * import { executeInstalled } from "@executablemd/core/host";
  *
  * const execution = yield* executeInstalled(
  *   { path: "./workflow.md", stream },
- *   [workflowInstallation({ base: "main" })],
+ *   [retainedWorkflowInstallation(run)],
  * );
  * ```
  *
@@ -33,272 +47,41 @@
  * `@executablemd/workflow/deno`; nothing here imports it, and nothing here
  * imports SQLite, Deno or any other host.
  *
- * ## Git-host effects
+ * ## What this package no longer owns
  *
- * A **Git host** is an external service that owns remote Git repositories and
- * associated collaboration objects such as branches, pull requests and issues.
- * GitHub is one Git-host adapter; a Git host is not the local Git capability
- * and not the trusted workflow host.
- *
- * A Git host owns state no local transaction can enclose, so pushing, opening a
- * pull request and filing an issue all face the same question after an
- * interruption: did the previous attempt already succeed?
- * `reconcileGitHostEffect()` answers it once, for all three. A live attempt
- * observes under an identity derived from the run and the expansion, then
- * adopts a proven compatible completion, performs a proven absence exactly
- * once, or refuses. Prompt is not one of these effects and keeps its Agent
- * provider contract.
- *
- * `withGitHostProvider()` installs the provider that answers those phases. A
- * provider need not implement every kind: a plain Git server may support
- * `git-push` and refuse pull requests and issues. Routing is one contextual
- * operation that settles no completion — middleware may inspect,
- * narrow or refuse a request, and nothing it can hold or combine can answer
- * one.
+ * Repository composition, the Git capability, issue and pull-request contracts
+ * and the Git-host reconciliation engine belong to `@executablemd/git`, which
+ * imports this package's public extension boundaries rather than the other way
+ * round. A run's history still holds their retained records, and this package
+ * still reads enough of one to decide whether a checkpoint can be forked — as
+ * compatibility data, named by the strings a released build wrote.
  */
 
-export {
-  Git,
-  gitObjectFormat,
-  GitObjectError,
-  GitRepositoryError,
-  GitRevisionError,
-  readGitObject,
-  repositoryRoot,
-  revParse,
-} from "./src/git.ts";
-export type { GitApi, GitObjectFormat } from "./src/git.ts";
-export { getWorkflowRun, retainedWorkflowInstallation, workflowInstallation } from "./src/run.ts";
+export { getWorkflowRun, retainedWorkflowInstallation } from "./src/run.ts";
+/**
+ * How a trusted host states what its own run is.
+ *
+ * The generic constructor behind both installations above: a host supplies the
+ * durable description, whether a successful record is required, how the run is
+ * allocated when nothing is recorded yet, and what a recorded run has to agree
+ * with. Everything the run is then held to stays in this package.
+ */
+export { createWorkflowRunInstallation } from "./src/run.ts";
+export type { WorkflowRunPreparation } from "./src/run.ts";
 export { workflowBundleInstallation, WorkflowBundleHistoryError } from "./src/bundle.ts";
 export type { WorkflowRun } from "./src/run.ts";
 export { isGitWorkflowRun, workflowRunValue } from "./src/journal.ts";
+/**
+ * The version-1 description and the two refusals a Git run is held to.
+ *
+ * Published because `@executablemd/git` states what a Git-defined run is, and
+ * this package still owns what that statement is compared against. The
+ * description names the exact retained identity released builds wrote; the two
+ * refusals are the exact words a disagreement travels in.
+ */
+export { baseMismatch, describeGitWorkflowRun, retainedRunMismatch } from "./src/journal.ts";
 export type { GitWorkflowRunV1, SourceBundleWorkflowRunV2 } from "./src/journal.ts";
 export { useWorkflowServiceDenial, WorkflowServiceDeniedError } from "./src/service-denial.ts";
-
-export { RepositoryComposition } from "./src/composition/api.ts";
-export type { RepositoryCompositionApi } from "./src/composition/api.ts";
-export { currentRepository, RepositoryContext } from "./src/composition/context.ts";
-export type { RepositoryContextApi } from "./src/composition/context.ts";
-export {
-  GitCompositionProviderError,
-  GitOperationError,
-  GitOperationProtocolError,
-  PullRequestAdmissionError,
-  RepositoryCompositionError,
-  RepositoryCompositionProtocolError,
-  RepositoryCompositionProviderError,
-  RepositoryStaleStateError,
-  WorktreeCompositionError,
-} from "./src/composition/errors.ts";
-export type {
-  GitFailureReason,
-  PullRequestAdmissionReason,
-  RepositoryFailureReason,
-  WorktreeFailureReason,
-} from "./src/composition/errors.ts";
-export {
-  parseRepositoryRecord,
-  parseWorktreeRecord,
-  repositoryRecordJson,
-  sameRepositoryRecord,
-  sameWorktreeRecord,
-  worktreeRecordJson,
-} from "./src/composition/records.ts";
-export type {
-  RepositoryCreationRequest,
-  RepositoryRecord,
-  WorktreeCreationRequest,
-  WorktreeRecord,
-} from "./src/composition/records.ts";
-export {
-  NoPullRequestProvider,
-  PULL_REQUEST_API,
-  PullRequestAPI,
-} from "./src/composition/pull-request-api.ts";
-export type {
-  PullRequestApi,
-  PullRequestInput,
-  PullRequestReadOptions,
-  PullRequestUpsertOptions,
-} from "./src/composition/pull-request-api.ts";
-export {
-  canonicalPullRequestUrl,
-  pullRequestProviderName,
-} from "./src/composition/pull-request-target.ts";
-export type { PullRequestTarget } from "./src/composition/pull-request-target.ts";
-export { GitComposition } from "./src/composition/git-api.ts";
-export type { GitCompositionApi } from "./src/composition/git-api.ts";
-export {
-  gitAddResultJson,
-  gitCommitResultJson,
-  gitSwitchResultJson,
-  parseGitAddResult,
-  parseGitCheckoutIdentity,
-  parseGitCheckoutState,
-  parseGitCommitMessageSource,
-  parseGitCommitResult,
-  parseGitSwitchResult,
-} from "./src/composition/git-records.ts";
-export type {
-  GitAddExpectation,
-  GitAddRequest,
-  GitAddResult,
-  GitCheckoutExpectation,
-  GitCheckoutIdentity,
-  GitCheckoutState,
-  GitCommitExpectation,
-  GitCommitMessageSource,
-  GitCommitRequest,
-  GitCommitResult,
-  GitSwitchExpectation,
-  GitSwitchRequest,
-  GitSwitchResult,
-} from "./src/composition/git-records.ts";
-export {
-  destinationRefFor,
-  GIT_PUSH,
-  gitPushInputsJson,
-  gitPushNaturalKeyJson,
-  gitPushObservationsJson,
-  gitPushPreStateJson,
-  gitPushResultJson,
-  parseGitPushInputs,
-  parseGitPushNaturalKey,
-  parseGitPushObservations,
-  parseGitPushPreState,
-  parseGitPushRecord,
-  parseGitPushResult,
-  PUSH_REMOTE,
-  pushExpectation,
-  refspecFor,
-} from "./src/composition/git-push-records.ts";
-export type {
-  GitPushExpectation,
-  GitPushInputs,
-  GitPushNaturalKey,
-  GitPushObservations,
-  GitPushOutcome,
-  GitPushPreState,
-  GitPushRequest,
-  GitPushResult,
-} from "./src/composition/git-push-records.ts";
-export {
-  OPEN,
-  parsePullRequestInputs,
-  parsePullRequestNaturalKey,
-  parsePullRequestObservations,
-  parsePullRequestPreState,
-  parsePullRequestRecord,
-  parsePullRequestResult,
-  parsePullRequestSnapshot,
-  PULL_REQUEST,
-  pullRequestAgrees,
-  pullRequestMode,
-  pullRequestInputsJson,
-  pullRequestNaturalKey,
-  pullRequestNaturalKeyJson,
-  pullRequestNumber,
-  pullRequestObservationsJson,
-  pullRequestPreStateJson,
-  pullRequestResultJson,
-  pullRequestResultOf,
-  pullRequestSnapshotJson,
-  sameNaturalKey,
-  samePullRequestIdentity,
-} from "./src/composition/pull-request-records.ts";
-export type {
-  PullRequestCreateKey,
-  PullRequestExpectation,
-  PullRequestInputs,
-  PullRequestMode,
-  PullRequestNaturalKey,
-  PullRequestObservations,
-  PullRequestOutcome,
-  PullRequestPreState,
-  PullRequestRequest,
-  PullRequestResult,
-  PullRequestSnapshot,
-  PullRequestUpdateKey,
-} from "./src/composition/pull-request-records.ts";
-export { admitPushEvidence } from "./src/composition/push-evidence.ts";
-export {
-  COMPOSITION_REGISTRATIONS,
-  compositionDocumentation,
-  useCompositionComponents,
-} from "./src/composition/installation.ts";
-
-export { ISSUE_API, IssueApi, NoIssueProvider } from "./src/issue/api.ts";
-export type {
-  IssueDetails,
-  IssueInput,
-  IssueOperation,
-  IssueReadOptions,
-  IssueReference,
-  IssueUpsertOptions,
-} from "./src/issue/api.ts";
-export {
-  ISSUE_TRACKER_CONTEXT,
-  IssueTrackerContext,
-  currentIssueTracker,
-} from "./src/issue/context.ts";
-export { ISSUE_EFFECT } from "./src/issue/effect-type.ts";
-export {
-  IssueAmbiguousError,
-  IssueConflictError,
-  IssueContentError,
-  IssueProtocolError,
-  IssueTrackerError,
-  IssueUnavailableError,
-} from "./src/issue/errors.ts";
-export type { IssueTrackerReason } from "./src/issue/errors.ts";
-export {
-  canonicalIssueTarget,
-  issueProviderName,
-  resolveIssueDestination,
-  withinIssueCeiling,
-} from "./src/issue/tracker.ts";
-export type { IssueDestination, IssueTracker } from "./src/issue/tracker.ts";
-
-export { GIT_HOST_API, GitHost } from "./src/git-host/api.ts";
-export type {
-  GitHostApi,
-  GitHostCall,
-  GitHostPhase,
-  GitHostPhaseDetails,
-  GitHostProvider,
-  GitHostRoutingRequest,
-} from "./src/git-host/api.ts";
-export {
-  GitHostAmbiguousError,
-  GitHostConflictError,
-  GitHostProtocolError,
-  GitHostProviderError,
-  GitHostUnavailableError,
-} from "./src/git-host/errors.ts";
-export {
-  completeGitHostEffectRequestJson,
-  gitHostReconciliationRecordJson,
-  parseCompleteGitHostEffectRequest,
-  parseGitHostCompletion,
-  parseGitHostEffectIdentity,
-  parseGitHostObservation,
-  parseGitHostReconciliationRecord,
-  sameGitHostEffectRequest,
-} from "./src/git-host/records.ts";
-export type {
-  CompleteGitHostEffectRequest,
-  GitHostCompletion,
-  GitHostDecision,
-  GitHostEffectIdentity,
-  GitHostEffectRequest,
-  GitHostObservation,
-  GitHostReconciliationRecord,
-} from "./src/git-host/records.ts";
-export {
-  GIT_HOST_EFFECT,
-  reconcileGitHostEffect,
-  withGitHostProvider,
-} from "./src/git-host/effect.ts";
 
 export { WorkspaceCoordination, WorkspaceCoordinationProviderError } from "./src/workspace/api.ts";
 export type { WorkspaceCoordinationApi } from "./src/workspace/api.ts";
@@ -404,6 +187,7 @@ export type {
   SourceBundleWorkflowDefinitionV2,
 } from "./src/storage/source-bundle.ts";
 
+export { parseJsonValue } from "./src/storage/members.ts";
 export { conflictingFields } from "./src/storage/compatibility.ts";
 export type {
   GitWorkflowRunComparisonV1,
@@ -469,13 +253,6 @@ export {
 } from "./src/suspension/api.ts";
 export type { WorkflowSuspensionApi, WorkflowSuspensionRequest } from "./src/suspension/api.ts";
 export { SUSPENSION_ANSWER } from "./src/suspension/answer.ts";
-export {
-  filteredRepositoryIdentity,
-  parseRepositoryIdentity,
-  repositoryIdentityJson,
-  sameRepositoryIdentity,
-} from "./src/composition/selection.ts";
-export type { RepositoryIdentity } from "./src/composition/selection.ts";
 export {
   WorkflowAnswerDeliveryError,
   WorkflowInputDelivery,

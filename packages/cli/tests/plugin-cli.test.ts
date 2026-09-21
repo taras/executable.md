@@ -53,6 +53,9 @@ function* useWorkspace<T>(
 
 const DOCUMENT = "document body\n";
 
+/** The Plugin every run profile begins with. */
+const GIT = "@executablemd/git";
+
 describe("PC1 — selected Plugins compose around the document, in the order written", () => {
   it("nests two wrappers with the first one written outermost", function* () {
     yield* useWorkspace({ "doc.md": DOCUMENT }, function* (dir) {
@@ -109,9 +112,10 @@ describe("PC1 — selected Plugins compose around the document, in the order wri
         ],
         { cwd: dir },
       ).expect();
-      // The written order is the whole order: XMD bundles nothing, so there is
-      // no prefix in front of what the caller selected.
-      expect(run.stdout).toContain("active: active, wrapper-one");
+      // The bundled Plugin first, then the written order. XMD ships one
+      // Plugin and activates it for every run, so what a caller selects
+      // follows it rather than beginning the list.
+      expect(run.stdout).toContain(`active: ${GIT}, active, wrapper-one`);
     });
   });
 
@@ -241,13 +245,16 @@ describe("PC3 — a selection that cannot be honored costs nothing", () => {
 });
 
 describe("PC4 — nothing is discovered, and nothing unselected runs", () => {
-  it("loads no Plugin at all when none was selected", function* () {
+  it("loads no external module when none was selected", function* () {
     yield* useWorkspace({ "doc.md": DOCUMENT }, function* (dir) {
       const run = yield* runCli(["run", "doc.md"], { cwd: dir }).expect();
       expect(run.stdout).toContain("document body");
       expect(run.stdout).not.toContain("one open");
       // The fixture directory holds a module that announces itself the moment
-      // anything loads it, and nothing did.
+      // anything loads it, and nothing did. The bundled Plugin is active here
+      // — every run carries it — but it is a statically imported value rather
+      // than something discovered, so nothing on this directory was read to
+      // find it.
       expect(run.stderr).not.toContain("inert-fixture");
     });
   });
@@ -361,10 +368,16 @@ describe("PC6 — every surface of one command sees one vocabulary", () => {
     });
   });
 
-  it("describes none of it where no Plugin was selected", function* () {
+  it("describes the bundled vocabulary, and no unselected Plugin's, by default", function* () {
     yield* useWorkspace({}, function* (dir) {
       const run = yield* runCli(["syntax"], { cwd: dir }).expect();
+      // Nothing an operator did not select.
       expect(run.stdout).not.toContain("Greeting");
+      // And everything the one bundled Plugin brings, because every syntax
+      // catalog is built from the profile the command runs with.
+      for (const name of ["Repository", "Worktree", "Dir", "PullRequest", "Issue"]) {
+        expect(`${name}: ${run.stdout.includes(name)}`).toBe(`${name}: true`);
+      }
     });
   });
 
@@ -432,7 +445,7 @@ describe("PC9 — the review graph arrives only when it is selected", () => {
         ["run", `--plugin=${PACKAGE}`, `--plugin=${fixture("active.mjs")}`, "doc.md"],
         { cwd: dir },
       ).expect();
-      expect(run.stdout).toContain(`active: ${REVIEW}, active`);
+      expect(run.stdout).toContain(`active: ${GIT}, ${REVIEW}, active`);
     });
   });
 });
@@ -501,7 +514,7 @@ describe("PC7 — a package is selected by name, from where the command runs", (
         expect(run.stderr).toContain("selected-package: installed for run");
         // A Plugin's name is its own. The package it came from is how an
         // operator found it, and nothing resolves one to the other.
-        expect(run.stdout).toContain("active: renamed-by-its-author, active");
+        expect(run.stdout).toContain(`active: ${GIT}, renamed-by-its-author, active`);
         // And the package installed beside it did nothing at all: presence is
         // not selection, and nothing here scans `node_modules`.
         expect(run.stderr).not.toContain("unselected-package");

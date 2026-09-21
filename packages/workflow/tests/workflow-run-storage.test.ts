@@ -46,7 +46,8 @@ import { createWorkflowRunConnections } from "../src/deno/connections.ts";
 import { WorkflowRunRecognition } from "../src/deno/provider.ts";
 import { holdRecoveryCoordination } from "../src/deno/recovery-coordination.ts";
 import { EXPECTED_SCHEMA, initializeSchema } from "../src/deno/schema.ts";
-import { readRepositories } from "../src/deno/workspace/repositories.ts";
+import { readRepositories } from "../../git/src/deno/repositories.ts";
+import { createWorkflowWorkspaceStorage } from "../src/deno/workspace/storage.ts";
 import {
   EMPTY_WORKSPACE_MANIFEST,
   EMPTY_WORKSPACE_ROOT_ID,
@@ -1719,16 +1720,20 @@ describe("Tier WS — version 1 amended in place", () => {
       const insert = database.prepare(
         `INSERT INTO workspace_repositories VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
       );
+      // This table was rebuilt outside any run, so there is no transaction to
+      // authorize against — the parser under test is what this case is about,
+      // and it is reached through the same storage view a mutation holds.
+      const storage = createWorkflowWorkspaceStorage(database, () => {});
       insert.run("project", "/remote.git", "f".repeat(64), null, "abc", "main", "md5", "/r/p");
-      expect(() => readRepositories(database)).toThrow(WorkflowRecordMalformedError);
+      expect(() => readRepositories(storage)).toThrow(WorkflowRecordMalformedError);
 
       database.exec("DELETE FROM workspace_repositories");
       insert.run("project", "/remote.git", "not-a-digest", null, "abc", "main", "sha1", "/r/p");
-      expect(() => readRepositories(database)).toThrow(WorkflowRecordMalformedError);
+      expect(() => readRepositories(storage)).toThrow(WorkflowRecordMalformedError);
 
       database.exec("DELETE FROM workspace_repositories");
       insert.run("project", "/remote.git", "f".repeat(64), null, "abc", "main", "sha1", "relative");
-      expect(() => readRepositories(database)).toThrow(WorkflowRecordMalformedError);
+      expect(() => readRepositories(storage)).toThrow(WorkflowRecordMalformedError);
     } finally {
       database.close();
     }

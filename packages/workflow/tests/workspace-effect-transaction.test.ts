@@ -37,10 +37,19 @@ import { useJournalRouting } from "../src/deno/journal-route.ts";
 import { SavepointObservation, type SavepointObserver } from "../src/deno/savepoints.ts";
 import { initializeSchema } from "../src/deno/schema.ts";
 import {
-  createWorkspaceEffect,
+  createWorkflowWorkspaceEffect,
   useWorkspaceEffects,
   withWorkspaceEffects,
+  type WorkflowWorkspaceMutation,
+  type WorkflowWorkspaceTransaction,
 } from "../src/deno/workspace/effect.ts";
+import { readWorkflowWorkspace } from "../src/deno/workspace/inspect.ts";
+import type { WorkflowWorkspaceSnapshot } from "../src/deno/workspace/inspect.ts";
+import type {
+  WorkflowWorkspaceParameter,
+  WorkflowWorkspaceStorage,
+} from "../src/deno/workspace/storage.ts";
+import { WorkflowTransactionError } from "../src/storage/errors.ts";
 import { definitionToJson } from "../src/storage/definition.ts";
 import { canonicalJson } from "../src/storage/record.ts";
 import { type DenoWorkspaceFilesystem } from "../src/deno/workspace/filesystem.ts";
@@ -132,7 +141,62 @@ function* workspaceStep(
   name: string,
   mutate: (filesystem: DenoWorkspaceFilesystem) => Operation<Json>,
 ): Workflow<void> {
-  yield createWorkspaceEffect(database, { type: "workspace-proof", name }, mutate);
+  yield createWorkflowWorkspaceEffect(
+    database,
+    { type: "workspace-proof", name },
+    ({ filesystem }) => mutate(filesystem),
+  );
+}
+
+/** The same effect, given the whole transaction rather than its filesystem. */
+function* workspaceTransactionStep(
+  database: WorkflowRunDatabase,
+  name: string,
+  mutate: WorkflowWorkspaceMutation<Json>,
+): Workflow<void> {
+  yield createWorkflowWorkspaceEffect(database, { type: "workspace-proof", name }, mutate);
+}
+
+/**
+ * A row this suite writes through the storage view, in the view's own terms.
+ *
+ * Raw SQL and bound parameters rather than a repository helper: what is being
+ * proven is the generic boundary, and a feature's own parser reaching it would
+ * make the case about that parser instead.
+ */
+const INSERT_PROOF_REPOSITORY = `INSERT INTO workspace_repositories
+  (name, locator, locator_fingerprint, requested_base,
+   creation_commit, primary_branch, object_format, checkout_path)
+  VALUES (?, ?, ?, ?, ?, ?, ?, ?)`;
+
+const PROOF_REPOSITORY = [
+  "proof",
+  "/remote.git",
+  "f".repeat(64),
+  null,
+  "abcdef0",
+  "main",
+  "sha1",
+  "/kept",
+] as const;
+
+function asText(value: unknown): string | undefined {
+  return typeof value === "string" ? value : undefined;
+}
+
+function retainedRepositoryNames(path: string): string[] {
+  const sqlite = new DatabaseSync(path);
+  try {
+    return sqlite
+      .prepare("SELECT name FROM workspace_repositories ORDER BY name")
+      .all()
+      .flatMap((row) => {
+        const name = asText(row["name"]);
+        return name === undefined ? [] : [name];
+      });
+  } finally {
+    sqlite.close();
+  }
 }
 
 function* inspectWorkspace(
@@ -1587,6 +1651,602 @@ describe("Tier WAC — atomic provider-level Workspace effects", () => {
       expect(yield* inspectWorkspace(database, "/minimum-failure.txt")).toEqual(baseline);
       expect(retainedRootCount(path)).toBe(roots);
       expect(yield* database.journal.readAll()).toEqual([]);
+    });
+  });
+
+  it("WAC24: a row written through the storage view commits with the effect's bytes", function* () {
+    const root = yield* useStorageRoot();
+    const runId = "atomic-storage-commit";
+
+    yield* withStorage(root, function* () {
+      const database = yield* createRun({ runId });
+      const path = runPath(root, runId);
+      const baseline = yield* inspectWorkspace(database, "/kept/marker.txt");
+      let readBackInside: string | undefined;
+
+      function* workflow(): Workflow<void> {
+        yield* workspaceTransactionStep(
+          database,
+          "retain",
+          function* ({ filesystem, storage }): Operation<Json> {
+            yield* filesystem.mkdir("/kept", { mode: 0o750 });
+            yield* filesystem.writeFile("/kept/marker.txt", "checkout bytes", 0o640);
+            storage.run(INSERT_PROOF_REPOSITORY, ...PROOF_REPOSITORY);
+            // Inside the same transaction and before any commit: the write is
+            // visible to the mutation that made it, which is what makes the
+            // two halves one fact rather than two.
+            readBackInside = asText(
+              storage.get("SELECT name FROM workspace_repositories WHERE name = ?", "proof")?.[
+                "name"
+              ],
+            );
+            return null;
+          },
+        );
+      }
+
+      yield* withWorkspaceEffects(database, durableRun(workflow, { stream: database.journal }));
+
+      expect(readBackInside).toBe("proof");
+      const committed = yield* inspectWorkspace(database, "/kept/marker.txt");
+      expect(committed.content).toBe("checkout bytes");
+      expect(committed.root).not.toBe(baseline.root);
+      // The row and the bytes are published together, against the same root the
+      // journal entry names.
+      expect(retainedRepositoryNames(path)).toEqual(["proof"]);
+      expect(journalRoot(path, "retain")).toBe(committed.root);
+    });
+  });
+
+  it("WAC25: a refused mutation takes its rows back with its bytes", function* () {
+    const root = yield* useStorageRoot();
+    const runId = "atomic-storage-rollback";
+
+    yield* withStorage(root, function* () {
+      const database = yield* createRun({ runId });
+      const path = runPath(root, runId);
+      const baseline = yield* inspectWorkspace(database, "/kept/marker.txt");
+      const roots = retainedRootCount(path);
+      let caught: unknown;
+
+      function* workflow(): Workflow<void> {
+        try {
+          yield* workspaceTransactionStep(
+            database,
+            "refused",
+            function* ({ filesystem, storage }): Operation<Json> {
+              yield* filesystem.mkdir("/kept", { mode: 0o750 });
+              yield* filesystem.writeFile("/kept/marker.txt", "must roll back", 0o640);
+              storage.run(INSERT_PROOF_REPOSITORY, ...PROOF_REPOSITORY);
+              // A known Workspace failure, which is this effect's *failed*
+              // durable outcome rather than infrastructure.
+              yield* filesystem.readTextFile("/missing.txt");
+              return null;
+            },
+          );
+        } catch (error) {
+          caught = error;
+        }
+      }
+
+      yield* withWorkspaceEffects(database, durableRun(workflow, { stream: database.journal }));
+
+      expect(caught).toBeInstanceOf(Error);
+      // Nothing the attempt wrote survives: not the bytes, not the row, and not
+      // a published root — and the failed Yield names the root it started from.
+      expect(yield* inspectWorkspace(database, "/kept/marker.txt")).toEqual(baseline);
+      expect(retainedRepositoryNames(path)).toEqual([]);
+      expect(retainedRootCount(path)).toBe(roots);
+      const events = workspaceYields(yield* database.journal.readAll());
+      expect(events).toHaveLength(1);
+      expect(events[0]?.result.status).toBe("err");
+      expect(journalRoot(path, "refused")).toBe(baseline.root);
+    });
+  });
+
+  /**
+   * The window a retained view would otherwise still be inside.
+   *
+   * Not after the run — by then the transaction has ended and its own
+   * authorization would refuse anyway, so a case that only looked there would
+   * pass with no fence at all. This reaches the view from `beforeCommit`, while
+   * the mutation has returned but the transaction that captured and published
+   * its root is still open, which is exactly where "for this callback" has to
+   * be a fact rather than a convention.
+   */
+  it("WAC26: every capability a mutation retained answers nothing once it returned", function* () {
+    const root = yield* useStorageRoot();
+    const runId = "atomic-storage-retained";
+    const path = join(root, `${runId}.sqlite`);
+    let selected: WorkflowRunDatabase | undefined;
+    let retained: WorkflowWorkspaceTransaction | undefined;
+    /**
+     * Operations built while the mutation was still valid.
+     *
+     * The hole a call-time check alone leaves open: a callback creates every
+     * operation it wants before returning, and yields them afterwards. So these
+     * are made inside the callback and executed from `beforeCommit`, where the
+     * mutation has returned and the transaction is still open.
+     */
+    let prepared: { name: string; operation: Operation<unknown> }[] = [];
+    let members: string[] = [];
+    let storageMembers: string[] = [];
+    let attempted = false;
+    const refusals: { name: string; message: string }[] = [];
+
+    yield* withDirectWorkspaceStorage(
+      root,
+      runId,
+      () => {},
+      function* (database) {
+        selected = database;
+
+        function* workflow(): Workflow<void> {
+          yield* workspaceTransactionStep(
+            database,
+            "retain-view",
+            // deno-lint-ignore require-yield
+            function* (transaction): Operation<Json> {
+              members = Object.keys(transaction).sort();
+              storageMembers = Object.keys(transaction.storage).sort();
+              retained = transaction;
+              prepared = [
+                {
+                  name: "readTextFile",
+                  operation: transaction.filesystem.readTextFile("/kept.txt"),
+                },
+                {
+                  name: "writeFile",
+                  operation: transaction.filesystem.writeFile("/escaped.txt", "escaped", 0o640),
+                },
+                { name: "mkdir", operation: transaction.filesystem.mkdir("/escaped") },
+                {
+                  name: "savepoint",
+                  operation: transaction.savepoint(
+                    // deno-lint-ignore require-yield
+                    (function* (): Operation<null> {
+                      throw new Error("the retained savepoint entered its body");
+                    })(),
+                  ),
+                },
+              ];
+              return null;
+            },
+          );
+        }
+
+        yield* withWorkspaceEffects(database, durableRun(workflow, { stream: database.journal }));
+
+        // Three members and no more: no connection, no lease, no journal route
+        // and no transaction token travel with the mutation.
+        expect(members).toEqual(["filesystem", "savepoint", "storage"]);
+        expect(storageMembers).toEqual(["all", "get", "run"]);
+
+        expect(attempted).toBe(true);
+        // Every retained capability, synchronous and deferred alike.
+        expect(refusals.map((refusal) => refusal.name).sort()).toEqual([
+          "all",
+          "get",
+          "mkdir",
+          "readTextFile",
+          "run",
+          "savepoint",
+          "writeFile",
+        ]);
+        for (const refusal of refusals) {
+          expect({
+            name: refusal.name,
+            held: refusal.message.includes(
+              "valid only while the callback that received it is running",
+            ),
+          }).toEqual({ name: refusal.name, held: true });
+        }
+        // And nothing any of them attempted reached the run.
+        expect(retainedRepositoryNames(path)).toEqual([]);
+        const settled = yield* inspectWorkspace(database, "/escaped.txt");
+        expect(settled.content).toBe(undefined);
+      },
+      {
+        *beforeCommit(candidate): Operation<void> {
+          const transaction = retained;
+          if (candidate !== selected || transaction === undefined || attempted) {
+            return;
+          }
+          attempted = true;
+
+          function record(name: string, reach: () => void): void {
+            try {
+              reach();
+            } catch (error) {
+              refusals.push({
+                name,
+                message: error instanceof WorkflowTransactionError ? error.message : "",
+              });
+            }
+          }
+
+          // The synchronous half: called after the callback returned.
+          record("run", () =>
+            transaction.storage.run(INSERT_PROOF_REPOSITORY, ...PROOF_REPOSITORY),
+          );
+          record("get", () => {
+            transaction.storage.get("SELECT name FROM workspace_repositories");
+          });
+          record("all", () => {
+            transaction.storage.all("SELECT name FROM workspace_repositories");
+          });
+
+          // The deferred half: operations built while the callback was valid,
+          // executed now. A wrapper that only checked at creation admits these.
+          for (const { name, operation } of prepared) {
+            try {
+              yield* operation;
+              refusals.push({ name, message: "" });
+            } catch (error) {
+              refusals.push({
+                name,
+                message: error instanceof WorkflowTransactionError ? error.message : "",
+              });
+            }
+          }
+        },
+      },
+    );
+  });
+});
+
+/**
+ * Tier WAR — reading the Workspace without performing an effect.
+ *
+ * The other half of the same authority. An inspection opens the run's own
+ * transaction, reads, and closes it; it journals nothing, publishes nothing,
+ * and has no writing surface at all. What these measure is that the narrowing
+ * is real — not a promise the callback is trusted to keep — and that reading a
+ * root the run has moved on from leaves the run exactly where it was.
+ */
+describe("Tier WAR — read-only Workspace inspection", () => {
+  /** One effect that writes a file and a row, so there is history to read back. */
+  function* retain(
+    database: WorkflowRunDatabase,
+    content: string,
+    row?: readonly WorkflowWorkspaceParameter[],
+  ): Operation<void> {
+    function* workflow(): Workflow<void> {
+      yield* workspaceTransactionStep(
+        database,
+        "retain",
+        function* ({ filesystem, storage }): Operation<Json> {
+          yield* filesystem.writeFile("/kept.txt", content, 0o640);
+          if (row !== undefined) {
+            storage.run(INSERT_PROOF_REPOSITORY, ...row);
+          }
+          return null;
+        },
+      );
+    }
+    yield* withWorkspaceEffects(database, durableRun(workflow, { stream: database.journal }));
+  }
+
+  /**
+   * Two effects in one run, and the root the first of them published.
+   *
+   * One `durableRun` rather than two: a second run over the same journal reads
+   * a recorded `Close` and replays its result without entering the body, so two
+   * calls would leave the Workspace holding only what the first one wrote.
+   */
+  function* retainTwice(database: WorkflowRunDatabase, path: string): Operation<string> {
+    function* workflow(): Workflow<void> {
+      yield* workspaceTransactionStep(
+        database,
+        "first",
+        function* ({ filesystem }): Operation<Json> {
+          yield* filesystem.writeFile("/kept.txt", "the earlier bytes", 0o640);
+          return null;
+        },
+      );
+      yield* workspaceTransactionStep(
+        database,
+        "second",
+        function* ({ filesystem }): Operation<Json> {
+          yield* filesystem.writeFile("/kept.txt", "the later bytes", 0o640);
+          return null;
+        },
+      );
+    }
+    yield* withWorkspaceEffects(database, durableRun(workflow, { stream: database.journal }));
+    const earlier = journalRoot(path, "first");
+    if (earlier === undefined) {
+      throw new Error("the first effect published no Workspace root");
+    }
+    return earlier;
+  }
+
+  it("WAR1: reads the current root's bytes and rows, and writes through neither", function* () {
+    const root = yield* useStorageRoot();
+    const runId = "inspect-current";
+
+    yield* withStorage(root, function* () {
+      const database = yield* createRun({ runId });
+      const path = runPath(root, runId);
+      yield* retain(database, "current bytes", PROOF_REPOSITORY);
+      const current = (yield* inspectWorkspace(database, "/kept.txt")).root;
+      const roots = retainedRootCount(path);
+
+      let members: string[] = [];
+      let storageMembers: string[] = [];
+      const read = yield* readWorkflowWorkspace(database, {}, function* (snapshot) {
+        members = Object.keys(snapshot).sort();
+        storageMembers = Object.keys(snapshot.storage).sort();
+        return {
+          content: yield* snapshot.filesystem.readTextFile("/kept.txt"),
+          names: snapshot.storage
+            .all("SELECT name FROM workspace_repositories ORDER BY name")
+            .flatMap((entry) => {
+              const name = asText(entry["name"]);
+              return name === undefined ? [] : [name];
+            }),
+        };
+      });
+      if (!read.ok) {
+        throw read.error;
+      }
+
+      expect(read.value).toEqual({ content: "current bytes", names: ["proof"] });
+      expect(members).toEqual(["filesystem", "storage"]);
+      // No `run`, and no write on the filesystem either: an inspection holds
+      // objects that have no writing member for a guard to be the only thing in
+      // front of.
+      expect(storageMembers).toEqual(["all", "get"]);
+      // Nothing moved: not the current root, and not the retained ones.
+      expect((yield* inspectWorkspace(database, "/kept.txt")).root).toBe(current);
+      expect(retainedRootCount(path)).toBe(roots);
+    });
+  });
+
+  it("WAR2: reads a retained root and leaves the run on the one it was on", function* () {
+    const root = yield* useStorageRoot();
+    const runId = "inspect-retained";
+
+    yield* withStorage(root, function* () {
+      const database = yield* createRun({ runId });
+      const path = runPath(root, runId);
+      const earlier = yield* retainTwice(database, path);
+      const current = yield* inspectWorkspace(database, "/kept.txt");
+      expect(current.content).toBe("the later bytes");
+      expect(current.root).not.toBe(earlier);
+      const roots = retainedRootCount(path);
+
+      const read = yield* readWorkflowWorkspace(database, { rootId: earlier }, (snapshot) =>
+        snapshot.filesystem.readTextFile("/kept.txt"),
+      );
+      if (!read.ok) {
+        throw read.error;
+      }
+
+      // The historical bytes, and the run still on the root it was on. The
+      // materialization that produced them is rolled back before anything else
+      // can observe the Workspace selected at the earlier root.
+      expect(read.value).toBe("the earlier bytes");
+      expect(yield* inspectWorkspace(database, "/kept.txt")).toEqual(current);
+      expect(retainedRootCount(path)).toBe(roots);
+    });
+  });
+
+  /**
+   * What takes the materialization back on these two paths, and what does not.
+   *
+   * WAR2 is the case that discriminates the rollback-only savepoint: there the
+   * inspection *succeeds*, the transaction commits, and only that savepoint
+   * stands between a historical read and a run left on a root it never
+   * published. Here the transaction itself ends without committing, so the
+   * rollback is over-determined — which is the point. The claim is the outcome
+   * the caller is owed on every exit, and the case also proves the run is still
+   * usable afterwards rather than poisoned by a materialization that was
+   * interrupted half way through.
+   */
+  it("WAR3: a failure and a cancellation each leave the run where they found it", function* () {
+    const root = yield* useStorageRoot();
+    const runId = "inspect-rollback";
+
+    yield* withStorage(root, function* () {
+      const database = yield* createRun({ runId });
+      const path = runPath(root, runId);
+      const earlier = yield* retainTwice(database, path);
+      const current = yield* inspectWorkspace(database, "/kept.txt");
+      const roots = retainedRootCount(path);
+
+      // A failure inside the callback, after the retained root materialized.
+      const raised = new Error("the inspection failed after materializing");
+      const failed = yield* readWorkflowWorkspace(
+        database,
+        { rootId: earlier },
+        // deno-lint-ignore require-yield
+        function* (snapshot): Operation<string> {
+          void snapshot;
+          throw raised;
+        },
+      );
+      expect(failed.ok).toBe(false);
+      expect(failed.ok ? undefined : failed.error).toBe(raised);
+      expect(yield* inspectWorkspace(database, "/kept.txt")).toEqual(current);
+      expect(retainedRootCount(path)).toBe(roots);
+
+      // And a cancellation, halted while the callback is suspended inside the
+      // materialized root.
+      const entered = withResolvers<void>();
+      yield* scoped(function* () {
+        const inspecting = yield* spawn(() =>
+          readWorkflowWorkspace(database, { rootId: earlier }, function* (snapshot) {
+            void snapshot;
+            entered.resolve();
+            yield* suspend();
+            return "unreachable";
+          }),
+        );
+        yield* entered.operation;
+        yield* inspecting.halt();
+      });
+
+      expect(yield* inspectWorkspace(database, "/kept.txt")).toEqual(current);
+      expect(retainedRootCount(path)).toBe(roots);
+
+      // And the connection is still usable: a later inspection opens the run's
+      // transaction again and reads the root the cancellation left it on,
+      // rather than finding a half-materialized Workspace or a poisoned handle.
+      const after = yield* readWorkflowWorkspace(database, {}, (snapshot) =>
+        snapshot.filesystem.readTextFile("/kept.txt"),
+      );
+      if (!after.ok) {
+        throw after.error;
+      }
+      expect(after.value).toBe(current.content);
+    });
+  });
+
+  it("WAR4: a retained snapshot answers nothing once its inspection returned", function* () {
+    const root = yield* useStorageRoot();
+    const runId = "inspect-retained-view";
+
+    yield* withStorage(root, function* () {
+      const database = yield* createRun({ runId });
+      yield* retain(database, "current bytes", PROOF_REPOSITORY);
+
+      let escaped: WorkflowWorkspaceSnapshot | undefined;
+      const read = yield* readWorkflowWorkspace(database, {}, function* (snapshot) {
+        escaped = snapshot;
+        return yield* snapshot.filesystem.readTextFile("/kept.txt");
+      });
+      if (!read.ok) {
+        throw read.error;
+      }
+      expect(read.value).toBe("current bytes");
+
+      const held = escaped;
+      if (held === undefined) {
+        throw new Error("the inspection was never given a snapshot");
+      }
+      expect(() => held.storage.all("SELECT name FROM workspace_repositories")).toThrow(
+        WorkflowTransactionError,
+      );
+      expect(() => held.storage.get("SELECT name FROM workspace_repositories")).toThrow(
+        WorkflowTransactionError,
+      );
+      // The filesystem half is revoked by the same gate, before the operation
+      // it would return is ever entered.
+      expect(() => held.filesystem.readTextFile("/kept.txt")).toThrow(WorkflowTransactionError);
+    });
+  });
+
+  it("WAR5: an operation built inside the inspection refuses when it is run after", function* () {
+    const root = yield* useStorageRoot();
+    const runId = "inspect-deferred";
+
+    yield* withStorage(root, function* () {
+      const database = yield* createRun({ runId });
+      const path = runPath(root, runId);
+      yield* retain(database, "current bytes", PROOF_REPOSITORY);
+      const current = yield* inspectWorkspace(database, "/kept.txt");
+      const roots = retainedRootCount(path);
+
+      // Built while the snapshot was valid, carried out of the callback, and
+      // yielded afterwards. A gate checked only when the member is called would
+      // let this one through.
+      let deferred: Operation<string> | undefined;
+      const read = yield* readWorkflowWorkspace(database, {}, function* (snapshot) {
+        deferred = snapshot.filesystem.readTextFile("/kept.txt");
+        return yield* snapshot.filesystem.readTextFile("/kept.txt");
+      });
+      if (!read.ok) {
+        throw read.error;
+      }
+      expect(read.value).toBe("current bytes");
+
+      const escaped = deferred;
+      if (escaped === undefined) {
+        throw new Error("the inspection built no deferred operation");
+      }
+      let refusal: unknown;
+      try {
+        yield* escaped;
+      } catch (error) {
+        refusal = error;
+      }
+      expect(refusal).toBeInstanceOf(WorkflowTransactionError);
+      expect(refusal instanceof Error ? refusal.message : "").toContain(
+        "valid only while the callback that received it is running",
+      );
+      expect(yield* inspectWorkspace(database, "/kept.txt")).toEqual(current);
+      expect(retainedRootCount(path)).toBe(roots);
+    });
+  });
+
+  /**
+   * Why removing `run` is not what makes a view read-only.
+   *
+   * `INSERT … RETURNING` is a statement that returns rows, and
+   * `StatementSync.all()` runs it and keeps the insertion. A view narrowed by
+   * its interface alone would therefore write through the member named `all`.
+   * So the refusal has to come from SQLite, before the statement executes.
+   */
+  it("WAR6: a write dressed as a read is refused before it executes", function* () {
+    const root = yield* useStorageRoot();
+    const runId = "inspect-write-as-read";
+
+    yield* withStorage(root, function* () {
+      const database = yield* createRun({ runId });
+      const path = runPath(root, runId);
+      yield* retain(database, "current bytes");
+      const current = yield* inspectWorkspace(database, "/kept.txt");
+      const roots = retainedRootCount(path);
+      expect(retainedRepositoryNames(path)).toEqual([]);
+
+      const attempts: { sql: string; refused: boolean }[] = [];
+      const read = yield* readWorkflowWorkspace(database, {}, function* (snapshot) {
+        const WRITES: readonly string[] = [
+          `INSERT INTO workspace_repositories
+             (name, locator, locator_fingerprint, requested_base,
+              creation_commit, primary_branch, object_format, checkout_path)
+             VALUES ('proof', '/remote.git', '${"f".repeat(64)}', NULL,
+                     'abcdef0', 'main', 'sha1', '/kept') RETURNING name`,
+          "UPDATE workspace_repositories SET locator = 'moved' RETURNING name",
+          "DELETE FROM workspace_repositories RETURNING name",
+          "CREATE TABLE smuggled (a TEXT)",
+          "DROP TABLE workspace_worktrees",
+          "PRAGMA user_version = 99",
+        ];
+        for (const sql of WRITES) {
+          try {
+            snapshot.storage.all(sql);
+            attempts.push({ sql, refused: false });
+          } catch {
+            attempts.push({ sql, refused: true });
+          }
+        }
+        // The same view still reads, so the refusal is about what the statement
+        // does rather than about the view being broken.
+        return snapshot.storage
+          .all("SELECT name FROM workspace_repositories ORDER BY name")
+          .flatMap((row) => {
+            const name = asText(row["name"]);
+            return name === undefined ? [] : [name];
+          });
+      });
+      if (!read.ok) {
+        throw read.error;
+      }
+
+      expect(attempts.every((attempt) => attempt.refused)).toBe(true);
+      expect(attempts).toHaveLength(6);
+      expect(read.value).toEqual([]);
+      // Nothing was written, nothing was dropped, and the run did not move.
+      expect(retainedRepositoryNames(path)).toEqual([]);
+      expect(retainedRootCount(path)).toBe(roots);
+
+      // And the connection is the one every other caller expects. This runs on
+      // the run's own handle and opens a private transaction whose verification
+      // reads the schema and its pragmas — all of which an authorizer left
+      // installed by the read above would refuse.
+      expect(yield* inspectWorkspace(database, "/kept.txt")).toEqual(current);
     });
   });
 });

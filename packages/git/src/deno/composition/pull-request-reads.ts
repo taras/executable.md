@@ -1,0 +1,364 @@
+/**
+ * GitHub's pull-request middleware: reads by URL.
+ *
+ * Ordinary middleware around `PullRequestAPI`, the way `useGitHubIssues` is
+ * ordinary middleware around `IssueApi`. It looks at the URL, handles the ones
+ * that are its own, and delegates the rest untouched. Once it matches, it owns
+ * the answer: its validation and its refusal are final, and no fallback catches
+ * them to try somewhere else.
+ *
+ * ## The URL is the identity
+ *
+ * A read needs no Repository in scope and no working directory. The repository
+ * and the number are parsed out of the URL this middleware was handed, the
+ * what is allowed is asked before a credential is read, and every response is held to
+ * the URL that was requested rather than to whatever it says about itself.
+ *
+ * ## Transport, and only transport
+ *
+ * Nothing here is retained. What a read *costs* — whether it is performed once
+ * and kept, or performed afresh every execution — is selected through
+ * `PullRequestReadExecution`, whose base performs the transport and around
+ * which a workflow run installs the policy that makes an admitted read durable.
+ * That is a different surface from `PullRequestOperations`, deliberately: this
+ * middleware reaches the execution boundary from *inside*, once it has admitted
+ * a request, while the operations seam sits above the transport entirely and
+ * cannot see what was admitted.
+ *
+ * The order is what that buys. Matching, the host ceiling and target validation
+ * are this middleware's own decisions and are made before any profile hears
+ * about the read, so a target this host never authorized leaves no record
+ * anywhere — not even a failed one. Everything after admission is the profile's.
+ *
+ * So there is one job here: recognize the URL, hold it to the ceiling, validate
+ * the target, then open a session and hand back the normalized evidence when
+ * the installed policy asks for it. Both profiles install this same middleware
+ * and neither changes it.
+ */
+
+import type { Operation } from "effection";
+import { GitOperationAdmissionError, PullRequestReadError } from "../../composition/errors.ts";
+import type {
+  PullRequestReadKind,
+  PullRequestReadResult,
+} from "../../composition/pull-request-read-records.ts";
+import { PullRequestAPI } from "../../composition/pull-request-api.ts";
+import { PullRequestReadExecution } from "../../composition/pull-request-read-execution.ts";
+import type { PullRequestReadOptions } from "../../composition/pull-request-api.ts";
+import type { RepositoryRecord } from "../../composition/records.ts";
+import type { SelectionRegistry } from "../selections.ts";
+import type { GitHubRepositoryName, GitHubSource } from "./github.ts";
+import { readPullRequestEvidence as readEvidence } from "./pull-request-evidence.ts";
+import { upsertPullRequest } from "./pull-request.ts";
+import { gitHubPullRequestsConfiguration } from "./pull-request-configuration.ts";
+import type { RepositoryHost } from "./host.ts";
+import { PULL_REQUEST_ELEMENT } from "../../composition/components/PullRequest.ts";
+import type { PullRequestResult } from "../../composition/pull-request-records.ts";
+
+/** How this middleware names itself when a document names it explicitly. */
+export const GITHUB = "github";
+
+/** Which element a refusal names, by the collection it was reading. */
+const ELEMENT: Readonly<Record<PullRequestReadKind, string>> = Object.freeze({
+  reviews: "<PullRequest.Reviews>",
+  comments: "<PullRequest.Comments>",
+  checks: "<PullRequest.Checks>",
+});
+
+/** One pull request on `github.com`, as a canonical URL names it. */
+export interface GitHubPullRequestName extends GitHubRepositoryName {
+  readonly number: number;
+}
+
+/**
+ * The pull request this URL names, in the shape this adapter speaks.
+ *
+ * `/{owner}/{repository}/pull/{number}`, on any host — the *shape* is what this
+ * parses, and which hosts are reachable is the ceiling's question and the
+ * selection's, not this function's. A credential in the URL, a query, a
+ * fragment, a missing segment and a number that is not one are each refused
+ * here, before a ceiling is consulted and long before anything is sent.
+ */
+export function parseGitHubPullRequestUrl(url: string): GitHubPullRequestName | undefined {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return undefined;
+  }
+  if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
+    return undefined;
+  }
+  if (parsed.username !== "" || parsed.password !== "") {
+    return undefined;
+  }
+  if (parsed.search !== "" || parsed.hash !== "") {
+    return undefined;
+  }
+  const segments = parsed.pathname.split("/").filter((segment) => segment !== "");
+  if (segments.length !== 4 || segments[2] !== "pull") {
+    return undefined;
+  }
+  const [owner, repository, , written] = segments;
+  if (owner === undefined || repository === undefined || written === undefined) {
+    return undefined;
+  }
+  if (!/^[1-9][0-9]*$/.test(written)) {
+    return undefined;
+  }
+  const number = Number(written);
+  return Number.isSafeInteger(number) ? { owner, repository, number } : undefined;
+}
+
+/**
+ * Whether this middleware recognizes the URL without being named.
+ *
+ * Public GitHub only. A self-hosted deployment wearing the same path shape is
+ * reachable by naming `provider="github"` explicitly — implicit selection must
+ * not claim a host nobody said was GitHub, because a search is how a document
+ * that named one service quietly reaches a different one.
+ */
+export function recognizesGitHubPullRequestUrl(url: string): boolean {
+  const parsed = parseGitHubPullRequestUrl(url);
+  if (parsed === undefined) {
+    return false;
+  }
+  try {
+    return new URL(url).host === "github.com";
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Whether this host allows the pull request this URL names.
+ *
+ * An entry is a prefix by whole path segments, so a host that allowed
+ * `https://github.com/octo` admits every pull request in every repository it
+ * owns, and one that allowed `https://github.com/octo/project` admits that
+ * repository alone. `https://github.com/octo/project-two` is *not* beneath
+ * `.../project`, which is what "whole path segments" buys. Nothing a document
+ * writes widens it.
+ */
+export function pullRequestAllowed(allowed: readonly string[], url: string): boolean {
+  return allowed.some((entry) => url === entry || url.startsWith(`${entry}/`));
+}
+
+export interface GitHubPullRequestsConfiguration {
+  /**
+   * The canonical containers whose pull requests this host may read.
+   *
+   * Absent authorizes no URL read at all — and disables only reads. An upsert
+   * names a branch this run published rather than a URL a document wrote, and
+   * carries its own Repository, Push evidence and reconciliation admission, so
+   * it is unaffected by what is or is not allowed here.
+   */
+  readonly allowed?: readonly string[];
+  /** The API base every request is built against, when not the default. */
+  readonly endpoint?: string;
+}
+
+/**
+ * What a host installs this adapter with.
+ *
+ * Nothing here is an operator's authorization. What is allowed and where the
+ * API lives are configuration, and configuration is read when an invoked
+ * operation needs it — so what a host supplies is only the substitutions a
+ * suite makes for the two things it cannot arrange.
+ */
+export interface GitHubPullRequestsOptions {
+  /** An injected transport, which outranks any configured endpoint. */
+  readonly access?: GitHubSource;
+  /**
+   * How a source is built when none is injected.
+   *
+   * Supplied by the host, never reached for: this implementation knows the
+   * protocol and not the platform, so the concrete transport and the
+   * credential behind it arrive from the adapter that owns them. A suite that
+   * injects `access` needs none of this.
+   */
+  readonly host?: (endpoint?: string) => GitHubSource;
+  /**
+   * Configuration stated directly, read instead of the environment.
+   *
+   * A suite says what an operator would have written rather than writing it
+   * into the process it is running in.
+   */
+  readonly configuration?: GitHubPullRequestsConfiguration;
+}
+
+/**
+ * The source this adapter reaches GitHub through.
+ *
+ * Credential-free, so holding one for a middleware's whole lifetime retains
+ * nothing. A session — which does have an identity — is opened per request,
+ * after that request is allowed.
+ *
+ * Precedence: an injected transport, then a configured endpoint, then the
+ * platform's own GitHub. A suite that supplies its own access is not asking for
+ * a different endpoint as well.
+ */
+function sourceOf(
+  options: GitHubPullRequestsOptions,
+  configuration: GitHubPullRequestsConfiguration,
+): GitHubSource {
+  const source = options.access ?? options.host?.(configuration.endpoint);
+  if (source === undefined) {
+    throw new PullRequestReadError(
+      "unavailable",
+      PULL_REQUEST_ELEMENT,
+      "no transport was installed for this Git host, so nothing could be asked of it.",
+    );
+  }
+  return source;
+}
+
+/**
+ * What this deployment authorized, read when an invoked request needs it.
+ *
+ * Memoized including its absence: an unset variable is an answer, and asking
+ * the environment again on the next request would be asking a question this
+ * adapter has already had answered. Matching a URL reads nothing outside the
+ * process, so a request that is not this adapter's never reaches here.
+ */
+function transports(
+  options: GitHubPullRequestsOptions,
+): (configuration: GitHubPullRequestsConfiguration) => GitHubSource {
+  let opened: GitHubSource | undefined;
+  return (configuration) => (opened ??= sourceOf(options, configuration));
+}
+
+/**
+ * The transport this adapter reaches GitHub through, resolved on first use.
+ *
+ * What the orchestration above asks for when it has a reconciliation to make.
+ * Configuration belongs to this set, so it is read here rather than passed in —
+ * and read only when something actually needs a session.
+ */
+export function gitHubPullRequestAccess(
+  options: GitHubPullRequestsOptions = {},
+): () => Operation<GitHubSource> {
+  const authorized = resolver(options);
+  const transport = transports(options);
+  return function* (): Operation<GitHubSource> {
+    return transport((yield* authorized()) ?? {});
+  };
+}
+
+function resolver(
+  options: GitHubPullRequestsOptions,
+): () => Operation<GitHubPullRequestsConfiguration | undefined> {
+  let settled: { readonly configuration: GitHubPullRequestsConfiguration | undefined } | undefined;
+  return function* (): Operation<GitHubPullRequestsConfiguration | undefined> {
+    settled ??= {
+      configuration: options.configuration ?? (yield* gitHubPullRequestsConfiguration()),
+    };
+    return settled.configuration;
+  };
+}
+
+/**
+ * Install GitHub pull-request reading for the current scope and below.
+ *
+ * Both profiles install exactly this. What a read *costs* — retained once, or
+ * performed afresh every execution — is decided above it, at
+ * `PullRequestOperations`; what is decided here is which URLs this host will
+ * read at all and what a credential may see.
+ *
+ * Installing a second adapter beside it needs no coordination between them, and
+ * installing none leaves `PullRequestAPI`'s own base error to report that
+ * nothing handled the request.
+ */
+export function* useGitHubPullRequestReads(
+  options: GitHubPullRequestsOptions = {},
+): Operation<void> {
+  const authorized = resolver(options);
+  const transport = transports(options);
+
+  yield* PullRequestAPI.around({
+    *read([url, read], next): Operation<PullRequestReadResult> {
+      // Matched by discriminator, or — with no discriminator — by URL. The
+      // match is decided from the request alone, so a URL that is not this
+      // adapter's reads no configuration on its way past.
+      const mine =
+        read.provider === undefined
+          ? recognizesGitHubPullRequestUrl(url)
+          : read.provider === GITHUB;
+      if (!mine) {
+        return yield* next(url, read);
+      }
+
+      // The URL is this adapter's, so now — and only now — what this deployment
+      // authorized is read. With nothing allowed there is no URL read this host
+      // performs, so the request passes to whatever else is installed and,
+      // finding nothing, reaches the surface's own base error. Upsert is
+      // untouched by this: it is handled below whether or not any URL is
+      // allowed.
+      const configuration = yield* authorized();
+      if (configuration?.allowed === undefined || configuration.allowed.length === 0) {
+        return yield* next(url, read);
+      }
+
+      const element = ELEMENT[read.kind];
+      // From here this middleware owns the answer, and what is allowed is asked
+      // before anything is built: a URL a document wrote is not a place this
+      // host authorized until the configuration says so.
+      if (!pullRequestAllowed(configuration.allowed, url)) {
+        throw new PullRequestReadError(
+          "unavailable",
+          element,
+          "this host has not authorized the pull request that URL names.",
+        );
+      }
+      const name = parseGitHubPullRequestUrl(url);
+      if (name === undefined) {
+        throw new PullRequestReadError(
+          "invalid-url",
+          element,
+          "that URL does not name a pull request this adapter can read.",
+        );
+      }
+
+      // Admitted. Everything above decided whether this host may answer at all,
+      // and none of it is retained: a target outside the ceiling, or one this
+      // adapter cannot name, leaves no record of a question that was never
+      // permitted.
+      //
+      // What happens from here is the profile's, not this adapter's. Both
+      // profiles install this same middleware, so it asks rather than decides:
+      // an ordinary run performs the transport afresh, and a workflow run wraps
+      // it in one durable effect. Neither a WorkflowRun nor an expansion is
+      // reachable from here, which is what keeps that true.
+      return yield* PullRequestReadExecution.operations.perform(
+        { url, kind: read.kind, provider: read.provider },
+        function* (): Operation<PullRequestReadResult> {
+          // After the ceiling, never before: a session opened first would be an
+          // identity established for a target this host had not authorized.
+          const access = yield* transport(configuration).open();
+          const reading = yield* readEvidence(access, name, name.number, read.kind);
+          if (reading.state === "unavailable") {
+            throw new PullRequestReadError(
+              "unavailable",
+              element,
+              "the Git host did not answer with the complete collection. None of what it did " +
+                "answer is evidence that there is nothing there.",
+            );
+          }
+          if (reading.state === "protocol-invalid") {
+            throw new PullRequestReadError(
+              "protocol",
+              element,
+              "the Git host answered about a different subject, or with an item outside the " +
+                "evidence contract. A well-formed answer to another question is still the wrong " +
+                "answer.",
+            );
+          }
+          return reading.result;
+        },
+      );
+    },
+  });
+}
+
+/** The options a read carries, re-exported for a host installing this. */
+export type { PullRequestReadOptions };

@@ -19,7 +19,8 @@ import type { DurableEvent } from "@executablemd/durable-streams";
 import { inlineSource, registerComponents, useTempFileCompiler } from "@executablemd/core";
 import type { Json } from "@executablemd/core";
 import { executeInstalled } from "@executablemd/core/host";
-import { Git, retainedWorkflowInstallation } from "@executablemd/workflow";
+import { retainedWorkflowInstallation } from "@executablemd/workflow";
+import { Git } from "@executablemd/git";
 import { installTestingComponents } from "@executablemd/testing";
 import type { TestResult } from "@executablemd/testing";
 

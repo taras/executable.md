@@ -19,11 +19,8 @@ import type { UpgradeAssembly } from "./upgrade.ts";
 import { useMachineSessions } from "./session-coordinator.ts";
 import { useDenoWorkflowHost } from "./deno-workflow.ts";
 import { denoRunRepositories } from "./deno-repositories.ts";
-import {
-  isCredentialHelperMode,
-  runCredentialHelper,
-} from "@executablemd/workflow/credential-helper";
-import type { HelperAssembly } from "@executablemd/workflow/credential-helper";
+import { isCredentialHelperMode, runCredentialHelper } from "@executablemd/git/credential-helper";
+import type { HelperAssembly } from "@executablemd/git/credential-helper";
 import { useDenoService } from "./deno-service.ts";
 
 const ENTRYPOINT = fileURLToPath(import.meta.url);

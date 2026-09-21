@@ -50,7 +50,8 @@ import {
   useWorkflowRunHost,
 } from "@executablemd/workflow/deno";
 import type { WorkflowExecutionTransitions } from "@executablemd/workflow/deno";
-import { Git, SUSPENSION_REQUEST, suspendFor, WorkflowLifecycle } from "@executablemd/workflow";
+import { SUSPENSION_REQUEST, suspendFor, WorkflowLifecycle } from "@executablemd/workflow";
+import { Git } from "@executablemd/git";
 import type { WorkflowRunDatabase } from "@executablemd/workflow";
 import { workflowRunPath } from "@executablemd/workflow/deno";
 import { withWorkflowWorkspace, WORKSPACE_FILE } from "@executablemd/workflow/deno";

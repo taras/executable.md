@@ -14,7 +14,8 @@
  */
 
 import { describe, it } from "@executablemd/test-support/bdd";
-import { executeInstalled } from "@executablemd/core/host";
+import { directoryEntry, executeInstalled } from "@executablemd/core/host";
+import type { FragmentEntry } from "@executablemd/core/host";
 import { expect } from "@executablemd/test-support/expect";
 import { scoped, spawn, suspend, withResolvers } from "effection";
 import type { Operation } from "effection";
@@ -126,7 +127,19 @@ function runDocument(
               // `<Evaluate>` is canonical core's. What this run states is the
               // ceiling, captured by canonical execution before any document
               // code exists.
-              [{ evaluation: yield* evaluationProfile(database, evaluation) }],
+              [
+                {
+                  evaluation: yield* evaluationProfile(database, {
+                    // A directory capability, stated by this host. This package
+                    // states none of its own — `<Dir>` belongs to
+                    // `@executablemd/git`, and a Workflow host that wants the
+                    // capability supplies an entry for it, exactly as WGAC16
+                    // shows a host doing explicitly.
+                    directory: HOST_DIRECTORY,
+                    ...evaluation,
+                  }),
+                },
+              ],
             ),
           );
         }),
@@ -902,6 +915,25 @@ describe("Tier WGAC — the registered Evaluate component", () => {
 });
 
 /**
+ * The directory entry this test host states.
+ *
+ * The identity released builds retained, written out here as this suite's own
+ * compatibility data — several rows below assert the table a run admits, and
+ * what they assert is exactly these strings.
+ *
+ * This package states no entry of its own any more: `<Dir>` belongs to
+ * `@executablemd/git`, and the XMD workflow profile supplies Git's. A test
+ * host standing in for that profile therefore states the same identity rather
+ * than importing it, which is what keeps this suite free of the package under
+ * it.
+ */
+const HOST_DIRECTORY: FragmentEntry = directoryEntry(
+  { origin: "@executablemd/workflow/composition", key: "Dir", revision: "3" },
+  "Dir",
+  ["@executablemd/workflow/composition/dir-v2#Dir"],
+);
+
+/**
  * Tier WGAC — the effect classes `<Evaluate>` selects between
  * (specs/workflow-workspace-spec.md §8.4).
  *
@@ -1037,6 +1069,98 @@ describe("Tier WGAC — the standard write table", () => {
           name: "File.Delete",
           identity: capability("@executablemd/core", "File.Delete", "2"),
           forms: ["self-closing"],
+        },
+      ]);
+    });
+  });
+
+  it("WGAC16: the directory entry a host captures is the one the run admits", function* () {
+    const root = yield* useStorageRoot();
+    yield* withStorage(root, function* () {
+      const database = yield* createRun();
+
+      // A host states the component behind `<Dir>`; this package states the
+      // rest of the ceiling. A host that states none is admitted under no
+      // directory entry at all, which is why every case here supplies one.
+      const attempt = yield* runDocument(database, evaluates(WRITES, ["write"]), {
+        directory: directoryEntry({ origin: "tier-wgac", key: "Dir", revision: "1" }, "Dir"),
+      });
+
+      expect(attempt.failure).toBe(undefined);
+      expect(yield* stored(database, "/nested/out.md")).toBe("the fragment wrote this");
+
+      // Same position in the same table: the captured entry replaces the one
+      // this package states rather than being appended beside it, so a
+      // continuation compares one directory grant and not two.
+      const policy = policyOf(admissions(attempt.events)[0]!);
+      expect(policy?.allowed).toEqual([
+        {
+          name: "Json",
+          identity: capability("@executablemd/core", "Json", "2"),
+          forms: ["self-closing"],
+        },
+        {
+          name: "File",
+          identity: capability("@executablemd/core", "File:write", "2"),
+          forms: ["paired"],
+        },
+        {
+          name: "Dir",
+          identity: capability("tier-wgac", "Dir", "1"),
+          forms: ["paired"],
+        },
+        {
+          name: "File.Delete",
+          identity: capability("@executablemd/core", "File.Delete", "2"),
+          forms: ["self-closing"],
+        },
+      ]);
+    });
+  });
+
+  it("WGAC17: a captured write is admitted beside the standard table, not instead of it", function* () {
+    const root = yield* useStorageRoot();
+    yield* withStorage(root, function* () {
+      const database = yield* createRun();
+
+      // `writes` is additive and stays additive: a host that states one of its
+      // own keeps core's write and delete and this package's directory entry,
+      // and its own entry follows them.
+      const attempt = yield* runDocument(database, evaluates(WRITES, ["write"]), {
+        writes: [directoryEntry({ origin: "tier-wgac", key: "Nested", revision: "1" }, "Nested")],
+      });
+
+      expect(attempt.failure).toBe(undefined);
+      expect(yield* stored(database, "/nested/out.md")).toBe("the fragment wrote this");
+
+      const policy = policyOf(admissions(attempt.events)[0]!);
+      expect(policy?.allowed).toEqual([
+        {
+          name: "Json",
+          identity: capability("@executablemd/core", "Json", "2"),
+          forms: ["self-closing"],
+        },
+        {
+          name: "File",
+          identity: capability("@executablemd/core", "File:write", "2"),
+          forms: ["paired"],
+        },
+        // The released entry, still in its own position and unmoved by the
+        // addition beside it.
+        {
+          name: "Dir",
+          identity: capability("@executablemd/workflow/composition", "Dir", "3"),
+          forms: ["paired"],
+        },
+        {
+          name: "File.Delete",
+          identity: capability("@executablemd/core", "File.Delete", "2"),
+          forms: ["self-closing"],
+        },
+        {
+          name: "Nested",
+          identity: capability("tier-wgac", "Nested", "1"),
+          forms: ["paired"],
         },
       ]);
     });

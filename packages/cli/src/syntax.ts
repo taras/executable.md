@@ -44,7 +44,6 @@ import type { SyntaxSymbols } from "@executablemd/core";
 import { useTestingComponents } from "@executablemd/testing";
 import { useWebComponents } from "@executablemd/web";
 import { useVerboseComponent } from "./verbose-component.ts";
-import { useCompositionComponents } from "@executablemd/workflow";
 import type { ExecutionDeclaration } from "@executablemd/core/host";
 import { NO_PLUGINS } from "./plugin-host.ts";
 import type { CommandPlugins } from "./plugin-host.ts";
@@ -146,12 +145,11 @@ export function* useCommandComponents(): Operation<void> {
   yield* useAgentComponents();
   yield* useTestingComponents();
   yield* useWebComponents();
-  // The repository-composition vocabulary.
-  yield* useCompositionComponents();
-  // No package-specific vocabulary is bootstrapped here. What a Plugin
-  // registers — the review graph's six reserved registrations among them — it
-  // registers in the command scope this one is entered inside, so a command
-  // that installed no Plugin describes exactly the engine's own language.
+  // No package-specific vocabulary is bootstrapped here — not the review
+  // graph's six reserved registrations, and not the repository-composition
+  // vocabulary either. What a Plugin registers it registers in the command
+  // scope this one is entered inside, so what a command describes is exactly
+  // the engine's own language plus whatever its profile installed.
 }
 
 /**

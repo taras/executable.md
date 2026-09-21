@@ -13,6 +13,7 @@
  * rather than restated here: a fixture a test rewrites is a fixture nobody runs.
  */
 
+import { gitDirectoryEntry } from "@executablemd/git";
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { scoped, spawn } from "effection";
@@ -262,7 +263,12 @@ function runFixture(
               [
                 {
                   components: [...agentIdentityComponents()],
-                  evaluation: yield* evaluationProfile(database, options.evaluation ?? {}),
+                  evaluation: yield* evaluationProfile(database, {
+                    // This harness stands in for the bundled XMD workflow
+                    // profile, which supplies Git's directory entry.
+                    directory: gitDirectoryEntry(),
+                    ...(options.evaluation ?? {}),
+                  }),
                 },
               ],
             ),

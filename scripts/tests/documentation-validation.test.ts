@@ -32,7 +32,7 @@ function* validate(): Operation<{ ok: boolean; stderr: string }> {
 }
 
 const CORE = "packages/core/src/components/components.md";
-const COMPOSITION = "packages/workflow/src/composition/components.md";
+const COMPOSITION = "packages/git/src/composition/components.md";
 
 describe("Tier SYN — the documentation build gate", () => {
   it("SYN41: passes on the shipped set", function* () {

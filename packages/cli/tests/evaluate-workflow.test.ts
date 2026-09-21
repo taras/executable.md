@@ -29,6 +29,7 @@ import type { Json } from "@executablemd/durable-streams";
 import { API, useHostFiles } from "@executablemd/runtime";
 import type { WorkflowRunDatabase } from "@executablemd/workflow";
 import { evaluationProfile, withWorkflowWorkspace } from "@executablemd/workflow/deno";
+import { gitDirectoryEntry } from "@executablemd/git";
 import { createRun, useStorageRoot, withStorage } from "./support/workflow-run.ts";
 
 /**
@@ -60,7 +61,12 @@ function runDocument(
         scoped(function* () {
           return yield* collect(
             yield* executeInstalled({ ...inlineSource(source), stream: database.journal }, [
-              { evaluation: yield* evaluationProfile(database) },
+              // The bundled XMD workflow profile: Git supplies `<Dir>`.
+              {
+                evaluation: yield* evaluationProfile(database, {
+                  directory: gitDirectoryEntry(),
+                }),
+              },
             ]),
           );
         }),
@@ -75,6 +81,51 @@ function runDocument(
 const NOTE = "the retained note";
 
 describe("Tier FE — the workflow host's profile", () => {
+  it("FE22: the directory capability is the host's, and Git is what supplies it", function* () {
+    // `<Dir>` belongs to `@executablemd/git`. Workflow states no entry for it
+    // at all now, so a generic Workflow host composing this profile has no
+    // directory capability — and the XMD workflow profile has one because Git
+    // hands it over, not because Workflow kept a copy.
+    const root = yield* useStorageRoot();
+    yield* withStorage(root, function* () {
+      const database = yield* createRun();
+
+      const generic = yield* evaluationProfile(database);
+      const names = (generic.write ?? []).map((entry) => entry.name);
+      // Non-empty, so "no Dir" is an absence among entries rather than an
+      // empty table that would satisfy the claim by containing nothing.
+      expect(names.length > 0).toBe(true);
+      expect(names).not.toContain("Dir");
+
+      // And the position is the contract: a retained continuation compares
+      // this table position by position, so the supplied entry sits exactly
+      // between the file write and the file delete.
+      const bundled = yield* evaluationProfile(database, { directory: gitDirectoryEntry() });
+      expect((bundled.write ?? []).map((entry) => entry.name)).toEqual([
+        "File",
+        "Dir",
+        "File.Delete",
+      ]);
+    });
+  });
+
+  it("FE23: Git's directory entry is the exact identity retained history holds", function* () {
+    // Written out here rather than compared against the implementation, so a
+    // change to either side is a change to this row. Every released journal
+    // holds these strings: the origin a released build recorded, the revision
+    // it recorded, and the version-1 alias whose grant this entry answers for.
+    const entry = gitDirectoryEntry();
+    expect(entry.name).toBe("Dir");
+    expect(entry.identity).toEqual({
+      origin: "@executablemd/workflow/composition",
+      key: "Dir",
+      revision: "3",
+    });
+    expect(Reflect.get(entry, "legacy")).toEqual(["@executablemd/workflow/composition/dir-v2#Dir"]);
+    // It is the directory capability, not some other entry wearing the name.
+    expect(Reflect.get(entry, "capability")).toBe("directory:ensure");
+  });
+
   it("FE19: `source` and `text` behave identically here, and neither warns", function* () {
     const root = yield* useStorageRoot();
     yield* withStorage(root, function* () {

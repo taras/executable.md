@@ -17,9 +17,9 @@
  *
  * - the read table is core's read-only `<File />`; `<Fetch />` joins it only
  *   where this host also states the exact requests it may perform;
- * - the write table is core's paired `<File>`, workflow's own lexical `<Dir>`
- *   built from the same definition the ordinary registration owns, and core's
- *   self-closing `<File.Delete />`;
+ * - the write table is core's paired `<File>`, the directory entry this host
+ *   captured — or the one released builds retained, when it captured none —
+ *   and core's self-closing `<File.Delete />`;
  * - any further read or write comes from the captured host option; and
  * - the Workspace basis is answered per invocation by the private operation
  *   below, because a run's own progress legitimately advances it: every
@@ -55,7 +55,6 @@ import type { Operation } from "effection";
 import {
   detachHeaders,
   detachStatus,
-  directoryEntry,
   fetchEntry,
   fileDeleteEntry,
   fileReadEntry,
@@ -71,7 +70,6 @@ import type {
   GeneratedRequest,
 } from "@executablemd/core/host";
 import type { WorkflowRunDatabase } from "../../storage/api.ts";
-import { COMPOSITION_ORIGIN } from "../../composition/definitions.ts";
 import { workflowFilesHandler } from "./files.ts";
 import { WORKSPACE_ROOT } from "./logical-path.ts";
 import { workspaceRootSelection } from "./effect.ts";
@@ -96,6 +94,21 @@ export interface GeneratedEvaluationOptions {
   readonly reads?: readonly FragmentEntry[];
   /** Further mutation components this host admits beside the standard profile's. */
   readonly writes?: readonly FragmentEntry[];
+  /**
+   * The directory component this host admits, between core's write and delete.
+   *
+   * Its own member rather than one of the additive entries above, because it is
+   * not an addition: it occupies the position the standard profile has always
+   * had a directory entry in, and a continuation compares that table position
+   * by position.
+   *
+   * Optional, and absence grants nothing. `<Dir>` belongs to
+   * `@executablemd/git`, and this package states no entry for it: a host that
+   * supplies none is a Workflow host without a directory capability, which is
+   * a thing a generic host is entitled to be. The XMD workflow profile supplies
+   * Git's.
+   */
+  readonly directory?: FragmentEntry;
 }
 
 /**
@@ -172,13 +185,6 @@ export function* evaluationProfile(
   // the workflow host installed, not whichever one a document later composes
   // around itself.
   const transport = yield* fetchAccess();
-  // Built from the same definition the ordinary registration owns, so the two
-  // cannot drift. Versioned in its revision because what the entry authorizes
-  // changed: the former `Dir` authorized placement that created nothing, and
-  // `<Dir>` now recursively creates the directory it names. A continuation
-  // granted under the earlier revision must not silently receive the wider
-  // permission, and the retained comparison refuses it before generated
-  // execution.
   const timeout = yield* timeoutFetch;
   return {
     read: [
@@ -188,22 +194,16 @@ export function* evaluationProfile(
     ],
     write: [
       fileWriteEntry(),
-      // Revision 3: the grant is the workflow's, so the identity names this
-      // package. What changed from revision 2 is the operation behind it — the
-      // body is now closed over the `ensureDirectory` this profile handed over
-      // rather than resolving a Files provider when it runs — so a continuation
-      // granted under the older, composable one is refused rather than
-      // re-granted.
+      // The directory capability is the host's to supply, and a host that
+      // supplies none grants none: `<Dir>` belongs to `@executablemd/git`, and
+      // a generic Workflow host composing this profile without it is not
+      // withholding a capability so much as never having had one.
       //
-      // The version-1 alias is the exact string released builds retained for
-      // this entry, written out rather than assembled: that is what those
-      // journals hold, and nothing derives it. The pre-`dir-v2` spelling is
-      // deliberately absent — it named the placement-only `<Dir>`, which
-      // created nothing, so answering for it here would hand a narrower grant
-      // the wider one.
-      directoryEntry({ origin: COMPOSITION_ORIGIN, key: "Dir", revision: "3" }, "Dir", [
-        "@executablemd/workflow/composition/dir-v2#Dir",
-      ]),
+      // Its position is the contract. A released journal holds this table
+      // position by position, so the entry a host does supply occupies the
+      // slot between the file write and the file delete, exactly where every
+      // retained continuation expects to find it.
+      ...(options.directory === undefined ? [] : [options.directory]),
       fileDeleteEntry(),
       ...(options.writes ?? []),
     ],

@@ -33,8 +33,8 @@ import {
 } from "@executablemd/core";
 import { useTempDirectory } from "@executablemd/test-support/temp";
 import { deriveSessionKey, sessionCandidates } from "../../acp/src/session-key.ts";
-import { useCompositionComponents } from "@executablemd/workflow";
-import { useRunComposition } from "@executablemd/workflow/deno";
+import { useCompositionComponents } from "@executablemd/git";
+import { useRunComposition } from "@executablemd/git/deno";
 import { FileStream } from "../src/file-stream.ts";
 
 /** Git, with an environment a caller's own configuration cannot reach into. */

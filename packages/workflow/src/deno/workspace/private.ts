@@ -4,7 +4,12 @@ import type { WorkflowRunDatabase, WorkflowRunTransaction } from "../../storage/
 import { WorkflowTransactionError } from "../../storage/errors.ts";
 import type { WorkflowRunConnections, WorkflowRunTransactionToken } from "../connections.ts";
 import { createDenoWorkspaceFilesystem, type DenoWorkspaceFilesystem } from "./filesystem.ts";
-import { createWorkspaceMetadata, type WorkspaceMetadata } from "./repositories.ts";
+import {
+  createWorkflowWorkspaceReadStorage,
+  createWorkflowWorkspaceStorage,
+  type WorkflowWorkspaceReadStorage,
+  type WorkflowWorkspaceStorage,
+} from "./storage.ts";
 import { createAgentSessions, type AgentSessions } from "./agent-sessions.ts";
 import { createAgentPromptCheckpoints, type AgentPromptCheckpoints } from "./agent-checkpoints.ts";
 import { type StoredWorkspaceRoot } from "./manifest.ts";
@@ -20,20 +25,34 @@ import { restoreWorkspaceRoot, type RestoreWorkspaceRootOptions } from "./restor
 export interface PrivateWorkspaceTransaction {
   readonly filesystem: DenoWorkspaceFilesystem;
   /**
-   * Retained Repository and Worktree identity, inside this same transaction.
+   * The run's own storage, inside this same transaction.
    *
    * Beside the filesystem rather than behind a second boundary, because a
    * checkout's bytes and the row that names it are one fact. Retaining either
    * without the other would leave a run whose history describes a Repository it
    * does not have, or holds one it never recorded.
+   *
+   * Generic on purpose. Which rows exist and what they mean belongs to the
+   * feature that writes them; what this transaction owns is the lease, the
+   * savepoint and the journal every one of those writes goes through.
    */
-  readonly metadata: WorkspaceMetadata;
+  readonly storage: WorkflowWorkspaceStorage;
+  /**
+   * The same rows, through a view SQLite refuses to let write.
+   *
+   * Beside the writing one rather than derived from it, because what makes a
+   * read a read is not which members an interface offers. `INSERT … RETURNING`
+   * is a statement that returns rows, so a view that merely lacked `run` would
+   * still write through `all()`; this one compiles every statement under an
+   * authorizer that refuses anything but reading.
+   */
+  readonly reads: WorkflowWorkspaceReadStorage;
   /**
    * The Agent sessions this run retains, inside this same transaction.
    *
-   * Beside the filesystem for the same reason the metadata is: a conversation
-   * and the row naming it are one fact, and a mapping that could commit while
-   * the run did not would describe a session this run never had.
+   * Beside the filesystem for the same reason the storage view is: a
+   * conversation and the row naming it are one fact, and a mapping that could
+   * commit while the run did not would describe a session this run never had.
    */
   readonly agentSessions: AgentSessions;
   /**
@@ -52,6 +71,16 @@ export interface PrivateWorkspaceTransaction {
    * position and calling it identity.
    */
   appendedEventIds(): readonly string[];
+  /**
+   * Run `body` inside a nested savepoint of *this* transaction.
+   *
+   * Bound to the transaction this object describes rather than resolved from
+   * the scope. The ambient `savepoint()` answers with whichever transaction's
+   * savepoint manager is installed where it is called, which is the right
+   * answer for code running inside one transaction and the wrong one for a
+   * closure a caller kept — so what is handed across a boundary is this.
+   */
+  savepoint<T>(body: Operation<T>): Operation<T>;
   currentRoot(): Operation<string>;
   capture(options?: CaptureWorkspaceRootOptions): Operation<StoredWorkspaceRoot>;
   publish(rootId: string): Operation<void>;
@@ -165,7 +194,9 @@ export function usePrivateWorkspace(
         const workspace: PrivateWorkspaceTransaction = {
           filesystem: decorate(createDenoWorkspaceFilesystem(connection, authorize)),
 
-          metadata: createWorkspaceMetadata(connection.database, authorize),
+          storage: createWorkflowWorkspaceStorage(connection.database, authorize),
+
+          reads: createWorkflowWorkspaceReadStorage(connection.database, authorize),
 
           agentSessions: createAgentSessions(connection.database, authorize),
 
@@ -174,6 +205,11 @@ export function usePrivateWorkspace(
           appendedEventIds(): readonly string[] {
             authorize();
             return [...active.appended];
+          },
+
+          savepoint<T>(body: Operation<T>): Operation<T> {
+            authorize();
+            return connection.savepoints.operation(active, body);
           },
 
           // deno-lint-ignore require-yield

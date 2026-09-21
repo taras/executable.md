@@ -43,11 +43,11 @@ import { useJournalRouting } from "../../src/deno/journal-route.ts";
 import { readTransaction } from "../../src/deno/reading.ts";
 import { verifySchema } from "../../src/deno/schema.ts";
 import {
-  createWorkspaceEffect,
+  createWorkflowWorkspaceEffect,
   useWorkspaceEffects,
   withWorkspaceEffects,
 } from "../../src/deno/workspace/effect.ts";
-import type { DenoWorkspaceFilesystem } from "../../src/deno/workspace/filesystem.ts";
+import { createDenoWorkspaceFilesystem } from "../../src/deno/workspace/filesystem.ts";
 import { currentWorkspaceRoot } from "../../src/deno/workspace/root.ts";
 import {
   setPrivateWorkspaceClock,
@@ -68,18 +68,31 @@ const CLOCK = 1_750_000_100_000;
 
 function* crash(root: string, runId: string): Operation<void> {
   const path = workflowRunPath(root, runId);
-  let filesystem: DenoWorkspaceFilesystem | undefined;
+  /**
+   * Whether the crash effect has run, so this hook knows which append is its.
+   *
+   * A flag rather than the mutation's filesystem. That projection is valid only
+   * while the mutation that received it runs, and what this hook needs is not
+   * the capability the mutation held but the fact that it has been here.
+   */
+  let crashing = false;
   let gateCalls = 0;
   let baselineExecutions = 0;
 
   const connections = createWorkflowRunConnections(() => {}, {
     *afterRoutedJournalAppend(_database, event): Operation<void> {
-      if (event.type !== "yield" || filesystem === undefined) {
+      if (event.type !== "yield" || !crashing) {
         return;
       }
       // Every read below is on the connection that opened the transaction, so
       // it sees that transaction's own uncommitted writes. Nothing else can.
       const sqlite = connection.database;
+      // Built here, from this harness's own connection, and read here. The
+      // point of the case is what this database holds at *this* moment, with
+      // the mutation returned and the root captured and published — so a value
+      // the mutation read earlier would answer a different question, and would
+      // still say `CRASH_CONTENT` if publication had since removed the file.
+      const live = createDenoWorkspaceFilesystem(connection, () => {});
       const currentRoot = currentWorkspaceRoot(sqlite, path);
       const journalRow = sqlite
         .prepare(
@@ -89,7 +102,7 @@ function* crash(root: string, runId: string): Operation<void> {
         .get(`%"name":"${CRASH_EFFECT}"%`);
       report({
         ready: true,
-        content: yield* filesystem.readTextFile(CRASH_PATH),
+        content: yield* live.readTextFile(CRASH_PATH),
         currentRoot,
         retainedRoots: count(
           sqlite.prepare("SELECT COUNT(*) AS count FROM workspace_roots").get()?.["count"],
@@ -146,7 +159,7 @@ function* crash(root: string, runId: string): Operation<void> {
     // The run this process resumes already holds this effect's result, so it
     // replays. Executing it would mean the crash effect below is not the
     // first live work of the process, and the count says which happened.
-    yield createWorkspaceEffect(
+    yield createWorkflowWorkspaceEffect(
       database,
       { type: "workspace-proof", name: BASELINE_EFFECT },
       // deno-lint-ignore require-yield
@@ -155,12 +168,12 @@ function* crash(root: string, runId: string): Operation<void> {
         return null;
       },
     );
-    yield createWorkspaceEffect(
+    yield createWorkflowWorkspaceEffect(
       database,
       { type: "workspace-proof", name: CRASH_EFFECT },
-      function* (selected) {
-        filesystem = selected;
-        yield* selected.writeFile(CRASH_PATH, CRASH_CONTENT, 0o640);
+      function* ({ filesystem }) {
+        crashing = true;
+        yield* filesystem.writeFile(CRASH_PATH, CRASH_CONTENT, 0o640);
         return null;
       },
     );

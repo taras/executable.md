@@ -74,7 +74,7 @@ import type {
 import type { EffectDescription, Json, Workflow } from "@executablemd/durable-streams";
 import type { WorkflowRunDatabase } from "../../storage/api.ts";
 import { savepoint } from "../transaction.ts";
-import { createWorkspaceEffect } from "./effect.ts";
+import { createWorkflowWorkspaceEffect } from "./effect.ts";
 import { journalableWorkspaceCode } from "./errors.ts";
 import type { DenoWorkspaceFilesystem, DenoWorkspaceStat } from "./filesystem.ts";
 import {
@@ -306,7 +306,9 @@ function* fileEffect<Phase extends string>(
   description: EffectDescription,
   perform: (filesystem: DenoWorkspaceFilesystem) => Operation<FileEffectOutcome<Phase>>,
 ): Workflow<unknown> {
-  return yield createWorkspaceEffect(database, description, (filesystem) => perform(filesystem));
+  return yield createWorkflowWorkspaceEffect(database, description, ({ filesystem }) =>
+    perform(filesystem),
+  );
 }
 
 /**

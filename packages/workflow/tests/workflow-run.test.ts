@@ -31,8 +31,10 @@ import { createApi } from "@effectionx/context-api";
 import type { Api } from "@effectionx/context-api";
 import { executeInstalled } from "@executablemd/core/host";
 import type { ExecutionInstallation } from "@executablemd/core/host";
-import { Git } from "../src/git.ts";
-import { getWorkflowRun, workflowInstallation } from "../src/run.ts";
+import { Git } from "../../git/src/git.ts";
+import { createWorkflowRunInstallation, getWorkflowRun } from "../src/run.ts";
+import { workflowInstallation } from "../../git/src/installation.ts";
+import { describeGitWorkflowRun } from "../src/journal.ts";
 import type { WorkflowRun } from "../src/run.ts";
 import { type GitWorkflowRunV1, isGitWorkflowRun } from "../mod.ts";
 
@@ -131,8 +133,8 @@ describe("Tier WR — workflow runs", () => {
 
     expect(seen).toHaveLength(1);
     expect(seen[0]).toEqual({ runId: expect.any(String), base: "main", pinnedCommit: COMMIT });
-    expect(before[0]).toContain("workflowInstallation");
-    expect(after[0]).toContain("workflowInstallation");
+    expect(before[0]).toContain("run installation");
+    expect(after[0]).toContain("run installation");
   });
 
   it("WR2: every read inside one execution answers with the same frozen value", function* () {
@@ -604,7 +606,7 @@ describe("Tier WR — workflow runs", () => {
     });
 
     expect(failures).toHaveLength(1);
-    expect(failures[0]).toContain("workflowInstallation");
+    expect(failures[0]).toContain("run installation");
   });
 
   it("WR11: a journal holding something else under the workflow name is refused", function* () {
@@ -1029,6 +1031,113 @@ describe("Tier WR — workflow runs", () => {
     });
 
     expect(seen.map((run) => gitRun(run).base).sort()).toEqual(["fast", "slow"]);
+  });
+
+  /**
+   * What a host outside this package supplies, and what it does not.
+   *
+   * `workflowInstallation({ base })` and `retainedWorkflowInstallation(run)` are
+   * both this constructor with a different preparation, so a host that resolves
+   * its own repository supplies the same four terms. What it never supplies is
+   * when the admission runs, what parses the record, or where the run is
+   * published — so this preparation reaches no Git at all, and the journal is
+   * still held to it before the document is imported.
+   */
+  it("WR21: a host preparation allocates the run, and this package records it", function* () {
+    const seen: WorkflowRun[] = [];
+    const stream = new InMemoryStream();
+    const allocations: string[] = [];
+
+    yield* scoped(function* () {
+      // Nothing about this preparation resolves a revision, and Git fails the
+      // test if the constructor reaches it on its own account.
+      yield* useForbiddenGit();
+      yield* useProbe(seen);
+      yield* collect(
+        yield* executeInstalled({ ...inlineSource("<Probe />\n"), stream }, [
+          createWorkflowRunInstallation({
+            description: describeGitWorkflowRun("host-base"),
+            required: false,
+            // deno-lint-ignore require-yield
+            *allocate(): Operation<WorkflowRun> {
+              allocations.push("allocated");
+              return { runId: "host-allocated", base: "host-base", pinnedCommit: COMMIT };
+            },
+            agree: (recorded) => recorded,
+          }),
+        ]),
+      );
+    });
+
+    expect(allocations).toEqual(["allocated"]);
+    expect(seen).toHaveLength(1);
+    expect(seen[0]).toEqual({
+      runId: "host-allocated",
+      base: "host-base",
+      pinnedCommit: COMMIT,
+    });
+    // Recorded under this package's canonical identity, from the host's own
+    // description — which is what makes it the record a later run is held to.
+    expect(recordedRun(stream)).toEqual({
+      runId: "host-allocated",
+      base: "host-base",
+      pinnedCommit: COMMIT,
+    });
+  });
+
+  it("WR22: a host preparation's agreement decides a retained history", function* () {
+    const stream = new InMemoryStream();
+    yield* stream.append({
+      type: "yield",
+      coroutineId: "root",
+      description: { type: "workflow_run", name: "workflow_run", base: "host-base" },
+      result: {
+        status: "ok",
+        value: { runId: "somebody-elses", base: "host-base", pinnedCommit: COMMIT },
+      },
+    });
+
+    const refusals: string[] = [];
+    let allocated = 0;
+    let expanded = 0;
+
+    const result = yield* scoped(function* () {
+      yield* useForbiddenGit();
+      yield* registerComponents([
+        {
+          name: "Probe",
+          origin: "tier-wr",
+          props: { type: "object", properties: {}, additionalProperties: false },
+          // deno-lint-ignore require-yield
+          *fn() {
+            expanded += 1;
+            return "";
+          },
+        },
+      ]);
+      return yield* yield* executeInstalled({ ...inlineSource("<Probe />\n"), stream }, [
+        createWorkflowRunInstallation({
+          description: describeGitWorkflowRun("host-base"),
+          required: false,
+          // deno-lint-ignore require-yield
+          *allocate(): Operation<WorkflowRun> {
+            allocated += 1;
+            return { runId: "host-allocated", base: "host-base", pinnedCommit: COMMIT };
+          },
+          agree(recorded): WorkflowRun {
+            refusals.push(gitRun(recorded).runId);
+            throw new Error("this journal records a run this host did not create");
+          },
+        }),
+      ]);
+    });
+
+    expect(result.ok).toBe(false);
+    // The host's agreement ran inside this package's own admission — before the
+    // document was imported and before anything could be allocated.
+    expect(refusals).toEqual(["somebody-elses"]);
+    expect(allocated).toBe(0);
+    expect(expanded).toBe(0);
   });
 });
 

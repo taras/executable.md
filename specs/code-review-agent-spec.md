@@ -236,8 +236,8 @@ test root does not.
 The workflow action is found by name among the tokens after `workflow`, so an
 option written before it — `--plugin` included — is never read as one.
 
-Nothing in the CLI names this package. XMD ships no Plugin, so the graph
-arrives only when an operator selects it — `--plugin @executablemd/code-review-agent`
+Nothing in the CLI names this package. XMD bundles only `@executablemd/git`,
+so this graph arrives only when an operator selects it — `--plugin @executablemd/code-review-agent`
 where the package is installed, or `--plugin ./packages/code-review-agent/mod.ts`
 by path — and a command that names none has none of the forty-one names.
 
@@ -1028,8 +1028,8 @@ normalization live in typed function components or package modules.
 The review workflow checks out the requested revision, installs the pinned
 Deno toolchain, runs `deno task setup`, and executes that checkout's
 `./dist/xmd` binary with `--plugin ./packages/code-review-agent/mod.ts`. The
-binary embeds none of this package: it ships no Plugin, so the graph arrives
-because the workflow selected it, and the package reads its own assets from the
+binary embeds none of this package: the only Plugin it ships is
+`@executablemd/git`, so this graph arrives because the workflow selected it, and the package reads its own assets from the
 checkout it was named in.
 
 It still passes no component include, which is the anti-shadowing claim and is

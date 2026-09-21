@@ -32,6 +32,13 @@ Locate the package that owns the behavior you are about to change:
   config — that every other package reaches the host through.
 - `packages/durable-streams/` — the journal protocol, replay and divergence.
 - `packages/workflow/` — workflow runs, run storage, and the Workspace.
+- `packages/git/` — repository collaboration: `<Repository>`, `<Worktree>`,
+  `<Dir>`, the `Git.*` operations, pull requests and issues, and the GitHub
+  adapter behind them. It is the one Plugin `xmd` bundles, active by default for
+  the run-profile commands — `run`, `plan`, `syntax`, and `workflow start`,
+  `resume` and `fork`. The `xmd test` root is deliberately not one of them, so a
+  test document may shadow these names; a nested `<Execution host="run">` child
+  assembles the profile for itself.
 - `packages/testing/` and `packages/test-agent/` — `<Test>` and the
   deterministic agent; `packages/test-support/` is the one BDD surface all three
   runtimes share.

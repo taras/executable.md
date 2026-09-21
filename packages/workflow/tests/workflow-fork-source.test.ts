@@ -42,6 +42,7 @@ import {
 } from "./support/storage.ts";
 import { DatabaseSync } from "node:sqlite";
 import { workflowForkStaging } from "../deno.ts";
+import { readRepositories, readWorktrees } from "../src/deno/fork-source.ts";
 
 /** One retained yield, as the journal holds it. */
 function retained(type: string, name = type, result: Json = null): DurableEvent {
@@ -295,6 +296,131 @@ describe("Tier WFK — a source-bundle fork", () => {
       const intact = yield* WorkflowLifecycle.operations.inspect("git-source");
       expect(intact.ok).toBe(true);
     });
+  });
+});
+
+/**
+ * Tier WFO — the checkout tables a fork and an export carry.
+ *
+ * These two tables are the physical shape a released database has, and this
+ * package copies them so a fork and an export of an existing run still open.
+ * What the columns *mean* is the checkout feature's, so nothing here parses a
+ * fingerprint, a locator, a branch or a commit: a row is well formed when it is
+ * text of the right kind, and its content travels through untouched.
+ *
+ * The case is what stops that from drifting back. A semantic parser added to
+ * this copy path would refuse these rows, and a column dropped or rewritten on
+ * the way through would come back different.
+ */
+describe("Tier WFO — retained checkout rows travel as stored", () => {
+  /** Values no Git parser would accept, in columns the physical schema allows. */
+  const REPOSITORY = Object.freeze({
+    name: "kept",
+    locator: "not://a locator anything resolves",
+    // The exact shape a fingerprint column holds. Its *value* is not asked
+    // about, and the copy path is not the place a digest is recomputed.
+    locator_fingerprint: "0".repeat(64),
+    requested_base: null,
+    creation_commit: "not-a-commit",
+    primary_branch: "refs/heads/anything at all",
+    object_format: "sha1",
+    checkout_path: "/kept",
+  });
+
+  const WORKTREE = Object.freeze({
+    repository_name: "kept",
+    name: "branchless",
+    requested_branch: "a branch name Git would refuse",
+    requested_base: null,
+    creation_commit: "also-not-a-commit",
+    checkout_path: "/kept-worktree",
+  });
+
+  function seeded(): DatabaseSync {
+    const database = new DatabaseSync(":memory:");
+    database.exec(`
+      CREATE TABLE workspace_repositories (
+        name TEXT PRIMARY KEY, locator TEXT NOT NULL, locator_fingerprint TEXT NOT NULL,
+        requested_base TEXT, creation_commit TEXT NOT NULL, primary_branch TEXT NOT NULL,
+        object_format TEXT NOT NULL, checkout_path TEXT NOT NULL
+      ) STRICT;
+      CREATE TABLE workspace_worktrees (
+        repository_name TEXT NOT NULL, name TEXT NOT NULL, requested_branch TEXT NOT NULL,
+        requested_base TEXT, creation_commit TEXT NOT NULL, checkout_path TEXT NOT NULL,
+        PRIMARY KEY (repository_name, name)
+      ) STRICT, WITHOUT ROWID;
+    `);
+    database
+      .prepare(`INSERT INTO workspace_repositories VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
+      .run(
+        REPOSITORY.name,
+        REPOSITORY.locator,
+        REPOSITORY.locator_fingerprint,
+        REPOSITORY.requested_base,
+        REPOSITORY.creation_commit,
+        REPOSITORY.primary_branch,
+        REPOSITORY.object_format,
+        REPOSITORY.checkout_path,
+      );
+    database
+      .prepare(`INSERT INTO workspace_worktrees VALUES (?, ?, ?, ?, ?, ?)`)
+      .run(
+        WORKTREE.repository_name,
+        WORKTREE.name,
+        WORKTREE.requested_branch,
+        WORKTREE.requested_base,
+        WORKTREE.creation_commit,
+        WORKTREE.checkout_path,
+      );
+    return database;
+  }
+
+  // deno-lint-ignore require-yield
+  it("WFO1: a row this package never interprets is read back exactly", function* () {
+    const database = seeded();
+    try {
+      const path = "/runs/opaque.sqlite";
+      expect(readRepositories(database, path)).toEqual([
+        {
+          name: REPOSITORY.name,
+          locator: REPOSITORY.locator,
+          locatorFingerprint: REPOSITORY.locator_fingerprint,
+          requestedBase: null,
+          creationCommit: REPOSITORY.creation_commit,
+          primaryBranch: REPOSITORY.primary_branch,
+          objectFormat: REPOSITORY.object_format,
+          checkoutPath: REPOSITORY.checkout_path,
+        },
+      ]);
+      expect(readWorktrees(database, path)).toEqual([
+        {
+          repositoryName: WORKTREE.repository_name,
+          name: WORKTREE.name,
+          requestedBranch: WORKTREE.requested_branch,
+          requestedBase: null,
+          creationCommit: WORKTREE.creation_commit,
+          checkoutPath: WORKTREE.checkout_path,
+        },
+      ]);
+    } finally {
+      database.close();
+    }
+  });
+
+  // deno-lint-ignore require-yield
+  it("WFO2: a fork's selection is by checkout path and by nothing else", function* () {
+    const database = seeded();
+    try {
+      const path = "/runs/opaque.sqlite";
+      // The root a fork starts from has the repository's directory and not the
+      // worktree's, so one row travels and the other does not — decided by the
+      // manifest rather than by anything read out of the rows themselves.
+      const selected = new Set([REPOSITORY.checkout_path]);
+      expect(readRepositories(database, path, selected).map((row) => row.name)).toEqual(["kept"]);
+      expect(readWorktrees(database, path, selected)).toEqual([]);
+    } finally {
+      database.close();
+    }
   });
 });
 

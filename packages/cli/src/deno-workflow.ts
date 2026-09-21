@@ -29,13 +29,12 @@ import {
   useWorkflowRunHost,
   withWorkflowWorkspace,
 } from "@executablemd/workflow/deno";
+import { gitWorkspaceAttachment } from "@executablemd/git/deno";
 import type { WorkflowExecutionTransitions } from "@executablemd/workflow/deno";
 import type { WorkflowRunDatabase } from "@executablemd/workflow";
-import type { HelperAssembly } from "@executablemd/workflow/credential-helper";
+import type { HelperAssembly } from "@executablemd/git/credential-helper";
 import { readLegacyDefinitionSource } from "./workflow-source.ts";
 import type { WorkflowHost } from "./workflow.ts";
-import { gitHubIssuesConfiguration } from "./github-issues-config.ts";
-import { gitHubPullRequestsConfiguration } from "./github-pull-requests-config.ts";
 import { useWorkflowAgentProfile } from "./workflow-agent.ts";
 
 /** Where a run lives when nothing says otherwise. */
@@ -48,13 +47,6 @@ export function* useDenoWorkflowHost(helper: HelperAssembly): Operation<Workflow
   const configured = yield* readEnv(RUN_STORAGE_ROOT_ENV);
   const root =
     configured === undefined || configured === "" ? DEFAULT_RUN_STORAGE_ROOT : configured;
-  // Read once, at host construction, so an operator who wrote something this
-  // host cannot use learns it before a document runs rather than in the middle
-  // of one. Absent installs no issue provider at all.
-  const gitHubIssues = yield* gitHubIssuesConfiguration();
-  // Read once, here, for the same reason: an operator who wrote something this
-  // host cannot use learns it before a document runs.
-  const gitHubPullRequests = yield* gitHubPullRequestsConfiguration();
   return {
     useRunHost(): Operation<WorkflowExecutionTransitions> {
       // The same reader the lifecycle installation captures. A version-1 run
@@ -74,9 +66,16 @@ export function* useDenoWorkflowHost(helper: HelperAssembly): Operation<Workflow
     },
     attach<T>(database: WorkflowRunDatabase, operation: Operation<T>): Operation<T> {
       return withWorkflowWorkspace(database, operation, {
-        ...(gitHubIssues === undefined ? {} : { gitHubIssues }),
-        ...(gitHubPullRequests === undefined ? {} : { gitHubPullRequests }),
-        helper,
+        // The Git vocabulary is a feature this host attaches, not something the
+        // run's own package installs: what `<Repository>` and `<Git.Push>` mean
+        // belongs to `@executablemd/git`, and the credential helper and the two
+        // GitHub ceilings are configuration for that feature rather than for
+        // the run.
+        attachments: [
+          gitWorkspaceAttachment({
+            helper,
+          }),
+        ],
         // Only a live or partial attachment reaches this, which is what keeps a
         // completed replay from starting an agent process to restore a turn it
         // already has the answer to.

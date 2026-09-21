@@ -62,6 +62,7 @@ import {
   workflowBundleInstallation,
   WorkflowLifecycle,
 } from "@executablemd/workflow";
+import type { ExecutionInstallation } from "@executablemd/core/host";
 import type { ForkSelection, WorkflowRun } from "@executablemd/workflow";
 import type { WorkflowRunDatabase } from "@executablemd/workflow";
 import type {

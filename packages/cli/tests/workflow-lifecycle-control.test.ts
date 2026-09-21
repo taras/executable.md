@@ -25,7 +25,8 @@ import {
   useWorkflowRunHost,
 } from "@executablemd/workflow/deno";
 import type { WorkflowExecutionTransitions } from "@executablemd/workflow/deno";
-import { Git, suspendFor, WorkflowLifecycle } from "@executablemd/workflow";
+import { suspendFor, WorkflowLifecycle } from "@executablemd/workflow";
+import { Git } from "@executablemd/git";
 import type { WorkflowRunDatabase } from "@executablemd/workflow";
 import { collect, inlineSource, registerComponents } from "@executablemd/core";
 import { executeInstalled } from "@executablemd/core/host";

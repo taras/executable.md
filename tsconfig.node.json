@@ -75,6 +75,7 @@
     "packages/code-review-agent/**/*.ts",
     "packages/core/**/*.ts",
     "packages/durable-streams/**/*.ts",
+    "packages/git/**/*.ts",
     "packages/runtime/**/*.ts",
     "packages/test-agent/**/*.ts",
     "packages/test-support/**/*.ts",

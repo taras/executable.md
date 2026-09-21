@@ -27,7 +27,8 @@ import {
   useWorkflowRunHost,
 } from "@executablemd/workflow/deno";
 import type { WorkflowExecutionTransitions } from "@executablemd/workflow/deno";
-import { Git, WorkflowLifecycle, WorkflowRunStorage } from "@executablemd/workflow";
+import { WorkflowLifecycle, WorkflowRunStorage } from "@executablemd/workflow";
+import { Git } from "@executablemd/git";
 import type { WorkflowRunDatabase, WorkflowRunStatus } from "@executablemd/workflow";
 import { runWorkflow } from "../src/workflow.ts";
 import type { WorkflowExecution, WorkflowHost, WorkflowRequest } from "../src/workflow.ts";
@@ -294,8 +295,9 @@ describe("Tier WFI — what a run hands to canonical core", () => {
     // them is a second execution: one `executeInstalled()`, not one per phase.
     // A run-contract installation carries its admission; a bundle carries its
     // own admission and no preparation; and the fragment-evaluation profile
-    // carries a ceiling and no admission at all, because stating what a
-    // generated fragment may do is not a claim about this run's history.
+    // carries a
+    // ceiling and no admission at all, because stating what a generated
+    // fragment may do is not a claim about this run's history.
     const profiles = (execution?.installations ?? []).filter(
       (candidate) => candidate.evaluation !== undefined,
     );
@@ -304,10 +306,27 @@ describe("Tier WFI — what a run hands to canonical core", () => {
         expect(candidate.admissions).toBe(undefined);
         expect(candidate.prepare).toBe(undefined);
         expect(candidate.components).toBe(undefined);
-        continue;
       }
-      expect(candidate.admissions?.length).toEqual(1);
     }
+    // The exact contribution, rather than a rule each one satisfies: this run
+    // installs no bundle, so what the *workflow command* hands core is the run
+    // contract's one admission and nothing else.
+    //
+    // The bundled Git Plugin's two admissions are not here, and their absence
+    // is the point. They arrive with the command's profile — assembled once by
+    // `assembleRunProfile()` and threaded into every execution — rather than
+    // being built a second time by the workflow command, which is what it used
+    // to do. This harness drives `runWorkflow()` directly, with no profile, so
+    // what it sees is the run's own contribution alone.
+    expect(
+      (execution?.installations ?? [])
+        .filter((candidate) => candidate.evaluation === undefined)
+        .map((candidate) => candidate.admissions?.length ?? 0)
+        // `sort`, not `toSorted`: the Node typecheck's lib is ES2022 and
+        // `toSorted` is ES2023. `map` already returned a fresh array, so
+        // sorting it in place mutates nothing shared.
+        .sort((left, right) => left - right),
+    ).toEqual([1]);
 
     // The ceiling is stated exactly once, and it is a real one: a run that
     // installed no profile, or an empty one, would leave `<Evaluate>` with

@@ -16,27 +16,26 @@
 
 import type { Operation } from "effection";
 import { cwd } from "@executablemd/runtime";
-import { useRunComposition } from "@executablemd/workflow/deno";
-import type { HelperAssembly } from "@executablemd/workflow/credential-helper";
-import { gitHubIssuesConfiguration } from "./github-issues-config.ts";
-import { gitHubPullRequestsConfiguration } from "./github-pull-requests-config.ts";
+import { useRunComposition } from "@executablemd/git/deno";
+import type { HelperAssembly } from "@executablemd/git/credential-helper";
 import { DEFAULT_REPOSITORY_ROOT } from "./run-repositories.ts";
 import type { RepositoryInstaller } from "./run-repositories.ts";
 
 /**
  * The live provider Deno and the compiled binary install.
  *
- * The two GitHub configurations are read once, when the installer runs, so an
- * operator who wrote something this host cannot use learns it before a document
- * expands rather than in the middle of one.
+ * It reads no configuration. The two GitHub variables belong to the adapter
+ * inside `@executablemd/git`, which reads them when an invoked GitHub-backed
+ * operation needs them — so a run that opens no pull request and files no issue
+ * reads neither, and an operator who wrote something unusable learns it from
+ * the operation that needed it rather than from a command that was only
+ * starting up.
  */
 export function denoRunRepositories(
   helper: HelperAssembly,
   root: string = DEFAULT_REPOSITORY_ROOT,
 ): RepositoryInstaller {
   return function* (): Operation<void> {
-    const gitHubIssues = yield* gitHubIssuesConfiguration();
-    const gitHubPullRequests = yield* gitHubPullRequestsConfiguration();
     yield* useRunComposition({
       root,
       // The directory this execution starts in, which is where the ambient
@@ -45,8 +44,6 @@ export function denoRunRepositories(
       // working directory is discovered from that one.
       cwd: yield* cwd(),
       helper,
-      ...(gitHubIssues === undefined ? {} : { gitHubIssues }),
-      ...(gitHubPullRequests === undefined ? {} : { gitHubPullRequests }),
     });
   };
 }

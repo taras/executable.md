@@ -70,6 +70,7 @@ import { field, object, cli } from "configliere";
 import { z } from "zod";
 import type { DurableEvent, DurableStream, Json } from "@executablemd/durable-streams";
 import { retainedSource, validateProps } from "@executablemd/core";
+import { gitDirectoryEntry } from "@executablemd/git";
 import type { PropsSchema } from "@executablemd/core";
 import type { RootDocumentSource } from "@executablemd/core";
 import {
@@ -1076,7 +1077,15 @@ export function runWorkflow(
         // about the component. Stated where the Workspace is attached — a
         // completed replay restores its retained output and expands nothing, so
         // it needs no ceiling of its own.
-        ...(completed || replay ? [] : [{ evaluation: yield* evaluationProfile(database) }]),
+        // `<Dir>`'s entry comes from the package that owns the component, so
+        // the write table names one identity rather than two copies of it.
+        ...(completed || replay
+          ? []
+          : [
+              {
+                evaluation: yield* evaluationProfile(database, { directory: gitDirectoryEntry() }),
+              },
+            ]),
       ],
       around<T>(operation: Operation<T>): Operation<T> {
         // A completed run replays its retained output and result. Attaching a

@@ -75,6 +75,15 @@ export {
   workflowRunPath,
 } from "./src/deno/path.ts";
 export { APPLICATION_ID, SCHEMA_VERSION } from "./src/deno/schema.ts";
+/**
+ * The advisory file lock this adapter coordinates run ownership through.
+ *
+ * Published because a feature that keeps its own checkouts beside a run needs
+ * the same mutual exclusion this package uses for executors, and two lock
+ * implementations over one directory would be two answers to who holds it.
+ */
+export { useAdvisoryLock } from "./src/deno/advisory-lock.ts";
+export type { AdvisoryLockFile } from "./src/deno/advisory-lock.ts";
 // The narrow one, under the name a host already knows. The function beside it
 // in `workspace/host.ts` accepts the leaf substitutions a suite needs — the Git
 // subprocess, the temporary directory, the Git-host transport — and a
@@ -82,15 +91,63 @@ export { APPLICATION_ID, SCHEMA_VERSION } from "./src/deno/schema.ts";
 // that could install one could read the credential this adapter is holding, so
 // none of that crosses this entrypoint; the suites that need it import from
 // source, inside the package.
-export {
-  GITHUB as GITHUB_PULL_REQUEST_PROVIDER,
-  parseGitHubPullRequestUrl,
-  pullRequestAllowed,
-  recognizesGitHubPullRequestUrl,
-  useGitHubPullRequests,
-} from "./src/deno/composition/pull-request-reads.ts";
-export type { GitHubPullRequestsOptions } from "./src/deno/composition/pull-request-reads.ts";
 export { withWorkflowWorkspace } from "./src/deno/workspace/published.ts";
+/**
+ * One durable effect inside this run's Workspace transaction.
+ *
+ * The boundary a feature outside this package performs a Workspace-coordinated
+ * mutation through. It receives the authoritative filesystem and a storage view
+ * valid only while it runs; the lease, the transaction and savepoint, the root
+ * capture and publication, the journal enlistment and the rollback are this
+ * package's and are not projected through it.
+ */
+export { createWorkflowWorkspaceEffect } from "./src/deno/workspace/effect.ts";
+export type {
+  WorkflowWorkspaceMutation,
+  WorkflowWorkspaceTransaction,
+} from "./src/deno/workspace/effect.ts";
+/**
+ * Reading the Workspace, at the current root or at one this run retains.
+ *
+ * The other half of the same boundary, for work that exports a checkout or
+ * proves a record still describes what is there. It journals nothing, publishes
+ * nothing, and can write neither bytes nor rows; a retained root is
+ * materialized inside a rollback-only savepoint this package owns and is always
+ * taken back.
+ */
+export { readWorkflowWorkspace } from "./src/deno/workspace/inspect.ts";
+export type {
+  WorkflowWorkspaceReadOptions,
+  WorkflowWorkspaceReads,
+  WorkflowWorkspaceSnapshot,
+} from "./src/deno/workspace/inspect.ts";
+export type {
+  WorkflowWorkspaceParameter,
+  WorkflowWorkspaceReadStorage,
+  WorkflowWorkspaceRow,
+  WorkflowWorkspaceStorage,
+} from "./src/deno/workspace/storage.ts";
+/**
+ * The Workspace filesystem a mutation writes through, under names a package
+ * outside this one can spell.
+ */
+export type {
+  DenoWorkspaceEntry as WorkflowWorkspaceEntry,
+  DenoWorkspaceFilesystem as WorkflowWorkspaceFilesystem,
+  DenoWorkspaceStat as WorkflowWorkspaceStat,
+} from "./src/deno/workspace/filesystem.ts";
+/**
+ * Whether a failure is the effect's own durable outcome or the run failing.
+ *
+ * The base class is what a feature extends to declare that its refusal is
+ * publishable; the predicate is how that feature tells a Workspace condition it
+ * may journal from infrastructure it may not. Both are generic: neither knows
+ * what any feature's refusal means.
+ */
+export {
+  JournaledEffectFailure,
+  isJournalableWorkspaceFailure,
+} from "./src/deno/workspace/errors.ts";
 /**
  * What a host declares to the execution so an authored workflow document has
  * `<Evaluate>`: its implementation names durable work after its own invocation,
@@ -99,7 +156,12 @@ export { withWorkflowWorkspace } from "./src/deno/workspace/published.ts";
 export { evaluationProfile } from "./src/deno/workspace/evaluate.ts";
 export type { GeneratedEvaluationOptions } from "./src/deno/workspace/evaluate.ts";
 export type { WorkflowWorkspaceOptions } from "./src/deno/workspace/published.ts";
-export type { WorkflowAgentAttachment, WorkflowAgentInstaller } from "./src/deno/workspace/host.ts";
+export type {
+  WorkflowAgentAttachment,
+  WorkflowAgentInstaller,
+  WorkflowWorkspaceAttachment,
+  WorkflowWorkspaceInstaller,
+} from "./src/deno/workspace/host.ts";
 export {
   providerSessionDirectory,
   removeProviderSessions,
@@ -131,19 +193,6 @@ export type {
   AgentPromptCheckpoints,
   AgentPromptCheckpointRecord,
 } from "./src/deno/workspace/agent-checkpoints.ts";
-export {
-  WORKSPACE_GIT_ADD,
-  WORKSPACE_GIT_SWITCH,
-  WORKSPACE_REPOSITORY,
-  WORKSPACE_WORKTREE,
-} from "./src/deno/composition/provider.ts";
-export {
-  GITHUB,
-  parseGitHubIssueTarget,
-  recognizesGitHubUrl,
-  useGitHubIssues,
-} from "./src/deno/issue/github.ts";
-export type { GitHubIssuesOptions } from "./src/deno/issue/github.ts";
 export { WORKSPACE_FILE } from "./src/deno/workspace/files.ts";
 export { WORKSPACE_ROOT } from "./src/deno/workspace/logical-path.ts";
 export { useWorkflowInputDelivery } from "./src/deno/delivery.ts";
@@ -154,14 +203,3 @@ export type {
   SuspensionControllerOptions,
   SuspensionNotice,
 } from "./src/deno/suspension.ts";
-/**
- * The ordinary run's repository provider.
- *
- * The installer alone, and the options a trusted entrypoint supplies to it.
- * What the provider holds — the leases, the credential assembly, the selection
- * registry, the live Push evidence and the metadata writer — stays inside it:
- * a package that could reach one of those could authorize a publication this
- * execution never made.
- */
-export { useRunComposition } from "./src/deno/run-composition/provider.ts";
-export type { RunCompositionOptions } from "./src/deno/run-composition/provider.ts";

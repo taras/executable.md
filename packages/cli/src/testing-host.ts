@@ -59,6 +59,7 @@ import type {
 } from "@executablemd/testing";
 import { installDocumentComponents } from "./cli.ts";
 import { installPlugins } from "./plugin-host.ts";
+import { nestedRunProfile } from "./run-profile.ts";
 import type { Plugin } from "@executablemd/core/api";
 import { ordinaryEvaluationProfile } from "./evaluation-profile.ts";
 import type { HostServiceInstaller } from "./cli.ts";
@@ -292,11 +293,16 @@ function* runProfileChild(
   const { testAgent, answers } = selectConfiguration(request);
 
   yield* installDocumentComponents({ testing: false }, false);
-  // The run profile's Plugins, installed in this child's own scope and told
-  // they are installing for a run. A child of `xmd test` therefore gains the
-  // vocabulary an ordinary run has, while the test root that launched it —
-  // a different profile — still has none of it.
-  const childPlugins = yield* installPlugins(settings.plugins, {
+  // The run profile, assembled in this child's own scope: the bundled Plugin
+  // first, then whatever the operator selected, and all of them told they are
+  // installing for a run. A child of `xmd test` therefore gains the vocabulary
+  // an ordinary run has — including the repository components — while the test
+  // root that launched it, a different profile, still has none of it.
+  //
+  // The bundled value is prefixed here rather than carried down from the root,
+  // because the root never had it: `xmd test` is not a run profile, and a child
+  // does not inherit what its parent declined.
+  const childPlugins = yield* installPlugins(nestedRunProfile(settings.plugins), {
     command: "run",
     args: settings.pluginArgs,
   });

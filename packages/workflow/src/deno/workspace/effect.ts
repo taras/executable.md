@@ -21,7 +21,8 @@ import { currentWorkspaceRoot, retainedWorkspaceRoots } from "./root.ts";
 import { savepoint } from "../transaction.ts";
 import { isJournaledEffectFailure } from "./errors.ts";
 import type { DenoWorkspaceFilesystem } from "./filesystem.ts";
-import type { WorkspaceMetadata } from "./repositories.ts";
+import { guardedWorkflowWorkspaceStorage, type WorkflowWorkspaceStorage } from "./storage.ts";
+import { gatedOperation, guardedWorkflowWorkspaceFilesystem, revocation } from "./guard.ts";
 import {
   type PrivateWorkspaceTransaction,
   withPrivateWorkspaceTransaction,
@@ -32,18 +33,46 @@ import {
  * What a Workspace mutation is given.
  *
  * The authoritative filesystem first, because most mutations are only about
- * bytes. Retained Repository and Worktree identity follows it, in the same
- * transaction, so a mutation that needs both commits both or neither.
+ * bytes. The run's own storage follows it, in the same transaction, so a
+ * mutation that needs both commits both or neither.
+ *
+ * Three members and no more. There is no database connection here, no lease, no
+ * journal route and no transaction token: what a feature owns is the meaning of
+ * the rows it writes, and everything that decides whether those rows may be
+ * written at all stays on Workflow's side of this call.
  */
-export type DenoWorkspaceMutation<T extends Json> = (
-  filesystem: DenoWorkspaceFilesystem,
-  metadata: WorkspaceMetadata,
+export interface WorkflowWorkspaceTransaction {
+  readonly filesystem: DenoWorkspaceFilesystem;
+  /**
+   * This run's storage, for as long as the mutation that received it is running.
+   *
+   * Revoked when the callback returns, before the root is captured and
+   * published. A view a mutation kept is therefore an object that answers
+   * nothing rather than a way into the transaction that is still open around it.
+   */
+  readonly storage: WorkflowWorkspaceStorage;
+  /**
+   * Run `body` inside a nested savepoint of this same transaction.
+   *
+   * What lets a mutation discard an attempt without discarding the effect. A
+   * failure rolls back everything the body wrote — bytes and rows together —
+   * and propagates, leaving this transaction open and still able to publish the
+   * failed result the attempt became. Bound to this transaction rather than
+   * resolved from the scope, so it is the mutation's own savepoint and ends
+   * with the mutation.
+   */
+  savepoint<T>(body: Operation<T>): Operation<T>;
+}
+
+/** What a feature performs inside one Workspace effect's transaction. */
+export type WorkflowWorkspaceMutation<T extends Json> = (
+  transaction: WorkflowWorkspaceTransaction,
 ) => Operation<T>;
 
 interface WorkspaceMutationApi {
   run<T extends Json>(
     database: WorkflowRunDatabase,
-    mutate: DenoWorkspaceMutation<T>,
+    mutate: WorkflowWorkspaceMutation<T>,
   ): Operation<T>;
 }
 
@@ -59,7 +88,7 @@ const WorkspaceMutation: Api<WorkspaceMutationApi> = createApi<WorkspaceMutation
     // deno-lint-ignore require-yield
     *run<T extends Json>(
       _database: WorkflowRunDatabase,
-      _mutate: DenoWorkspaceMutation<T>,
+      _mutate: WorkflowWorkspaceMutation<T>,
     ): Operation<T> {
       return unavailable();
     },
@@ -130,12 +159,31 @@ function* runMutation<T extends Json>(
       {
         *run<Candidate extends Json>([candidate, mutate]: [
           WorkflowRunDatabase,
-          DenoWorkspaceMutation<Candidate>,
+          WorkflowWorkspaceMutation<Candidate>,
         ]): Operation<Candidate> {
           if (candidate !== database) {
             return unavailable();
           }
-          return yield* mutate(workspace.filesystem, workspace.metadata);
+          // Ended on every path out, including a refusal that becomes this
+          // effect's failed durable outcome: the transaction stays open past
+          // this call to capture and publish a root, and a view that outlived
+          // the callback would still be inside it.
+          const gate = revocation();
+          try {
+            return yield* mutate({
+              // The filesystem is wrapped rather than handed over: it is the
+              // one capability here that writes, and a mutation that kept it
+              // would be holding a live writer inside a transaction that is
+              // still capturing and publishing a root.
+              filesystem: guardedWorkflowWorkspaceFilesystem(workspace.filesystem, gate.held),
+              storage: guardedWorkflowWorkspaceStorage(workspace.storage, gate.held),
+              savepoint<Nested>(body: Operation<Nested>): Operation<Nested> {
+                return gatedOperation(gate.held, () => workspace.savepoint(body));
+              },
+            });
+          } finally {
+            gate.revoke();
+          }
         },
       },
       { at: "min" },
@@ -260,10 +308,19 @@ export function* workspaceRootSelection(
   };
 }
 
-export function createWorkspaceEffect<T extends Json>(
+/**
+ * One durable effect performed inside this run's Workspace transaction.
+ *
+ * The trusted boundary a feature outside this package reaches: it states what
+ * the effect is and what to do, and Workflow supplies the authenticated lease,
+ * the transaction and savepoint, the Workspace capture and publication, the
+ * journal enlistment and the rollback. A mutation that refuses leaves the
+ * Workspace root exactly where it found it.
+ */
+export function createWorkflowWorkspaceEffect<T extends Json>(
   database: WorkflowRunDatabase,
   description: EffectDescription,
-  mutate: DenoWorkspaceMutation<T>,
+  mutate: WorkflowWorkspaceMutation<T>,
 ): DurableEffect<T> {
   const execute = () => WorkspaceMutation.operations.run(database, mutate);
   const executionIdentity = Object.freeze({});
