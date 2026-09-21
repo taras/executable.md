@@ -11,7 +11,8 @@
 import { beforeAll, describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { InMemoryStream } from "@executablemd/durable-streams";
-import { ensure, scoped } from "effection";
+import type { DurableEvent } from "@executablemd/durable-streams";
+import { createContext, ensure, scoped } from "effection";
 import type { Operation, Result, Stream } from "effection";
 import { ensureDir, rm, writeTextFile } from "@effectionx/fs";
 import { randomUUID } from "node:crypto";
@@ -20,12 +21,22 @@ import * as os from "node:os";
 import { execute } from "../src/execute.ts";
 import { useTempFileCompiler } from "../src/temp-file-compiler.ts";
 import { Agent } from "../src/agent/agent-api.ts";
-import type { AgentPromptEvent, PromptOptions, Session } from "../src/agent/agent-api.ts";
+import { isSessionUse, sessionOf } from "../src/agent/session-use.ts";
+import { isSessionRequest } from "../src/agent/session-request.ts";
+import type { ConfigureAgentSession } from "../src/agent/session-placement.ts";
+import type {
+  AgentPromptEvent,
+  PromptOptions,
+  Session,
+  SessionConfiguration,
+} from "../src/agent/agent-api.ts";
 import { AgentPromptError } from "../src/agent/errors.ts";
 import { executeInstalled } from "../host.ts";
 import { agentIdentityComponents } from "../src/agent/components.ts";
 import { installAgentComponents } from "../src/agent/components.ts";
+import { registerComponents } from "../src/components/registration.ts";
 import { AgentInternal } from "../src/agent/internal.ts";
+import { parsePromptRecord } from "../src/agent/journal.ts";
 import { installPromptFailurePolicy } from "../src/agent/permission.ts";
 import { inspectComponent } from "../src/inspect.ts";
 import type { AgentProviderFactory } from "../src/agent/provider-api.ts";
@@ -41,11 +52,50 @@ interface Trace {
   sessions?: Session[];
   /** What each prompt was given as its session, in prompt order. */
   promptSessions?: (string | Session | undefined)[];
+  /** The members each started event actually carried, in prompt order. */
+  startedKeys?: string[][];
+  /**
+   * What each registered session was asked to be configured with, in order.
+   *
+   * Asked through the coordinator the provider factory was handed directly, so
+   * an entry here is a question core put to this provider about one of its own
+   * sessions — never a value that travelled the public chain.
+   */
+  sessionConfigurations?: (SessionConfiguration | undefined)[];
+  /**
+   * How many arguments each session call actually carried, in order.
+   *
+   * The count, not the value: a call that routed `undefined` as its second
+   * argument reads identically to one that asked for nothing, and only the
+   * arity tells a handler which of the two it was handed.
+   */
+  sessionArgumentCounts?: number[];
 }
 
-function stubFactory(trace: Trace, fail?: boolean): AgentProviderFactory {
+function stubFactory(
+  trace: Trace,
+  fail?: boolean,
+  refuseBeforeStart?: boolean,
+): AgentProviderFactory {
   const issued = new Map<string, Session>();
-  return function* () {
+  // One operation per conversation, as a provider has: the owner that settles
+  // placements refuses a session registered two different ways, and two
+  // elements naming one conversation are two placements asking the same thing.
+  const applying = new Map<Session, ConfigureAgentSession>();
+  const applyFor = (session: Session): ConfigureAgentSession => {
+    const known = applying.get(session);
+    if (known !== undefined) {
+      return known;
+    }
+    // deno-lint-ignore require-yield
+    const configure: ConfigureAgentSession = function* (configuration) {
+      trace.sessionConfigurations = [...(trace.sessionConfigurations ?? []), configuration];
+      return configuration;
+    };
+    applying.set(session, configure);
+    return configure;
+  };
+  return function* (_options, launchCoordinator) {
     yield* Agent.around(
       {
         // deno-lint-ignore require-yield
@@ -53,8 +103,9 @@ function stubFactory(trace: Trace, fail?: boolean): AgentProviderFactory {
           trace.agentLookups.push(name);
           return name ?? "stub-agent";
         },
-        // deno-lint-ignore require-yield
-        *session([name]) {
+        *session(routed) {
+          const [name] = routed;
+          trace.sessionArgumentCounts = [...(trace.sessionArgumentCounts ?? []), routed.length];
           // One value per placement, kept — as a provider that pins a session
           // keeps the exact value it issued rather than minting a look-alike.
           const key = `stub:${typeof name === "string" ? name : "default"}`;
@@ -65,14 +116,38 @@ function stubFactory(trace: Trace, fail?: boolean): AgentProviderFactory {
           const session: Session = { sessionKey: key, cwd: "." };
           issued.set(key, session);
           trace.sessions = [...(trace.sessions ?? []), session];
-          return session;
+          // Settling the placement is where this provider says which kind of
+          // conversation it resolved. Everything this stub issues is
+          // established, so core applies the settings here and the use it
+          // hands back carries what this provider reports it verified.
+          if (!isSessionRequest(name)) {
+            return session;
+          }
+          return yield* launchCoordinator
+            .sessionPlacement(name)
+            .complete(session, { kind: "established", configure: applyFor(session) });
         },
         // deno-lint-ignore require-yield
         *prompt([content, options]) {
+          // What a provider does first with the value that names its
+          // conversation: ask the installation that issued it. A value that
+          // claims to be configured and was issued by nobody refuses here,
+          // before anything is recorded or sent.
+          launchCoordinator.sessionUse(options?.session);
           trace.prompts.push(content);
           trace.timeouts.push(options?.timeout);
           trace.promptSessions = [...(trace.promptSessions ?? []), options?.session];
-          return stubStream(content, options, fail);
+          if (refuseBeforeStart === true) {
+            return {
+              *[Symbol.iterator]() {
+                // What a provider that could not put the conversation under
+                // what was asked does: it refuses before the turn, so no
+                // `started` event is ever produced.
+                throw new Error('Unknown model "gpt-5.4" for agent "stub-agent".');
+              },
+            };
+          }
+          return stubStream(content, options, fail, trace);
         },
       },
       { at: "min" },
@@ -84,15 +159,27 @@ function stubStream(
   content: string,
   options: PromptOptions | undefined,
   fail?: boolean,
+  trace?: Trace,
 ): Stream<AgentPromptEvent, string> {
   return {
     *[Symbol.iterator]() {
+      // The value this turn ran in, as the caller named it: a configured use
+      // is the exact session and also the only thing that can say what it was
+      // put under, and the record is written from what the turn reports.
       const session: Session =
         typeof options?.session === "object"
           ? options.session
           : { sessionKey: `stub:${options?.session ?? "default"}`, cwd: "." };
+      const started: AgentPromptEvent = {
+        type: "started",
+        agent: options?.agent ?? "stub-agent",
+        session,
+      };
+      if (trace) {
+        trace.startedKeys = [...(trace.startedKeys ?? []), Object.keys(started)];
+      }
       const events: AgentPromptEvent[] = [
-        { type: "started", agent: options?.agent ?? "stub-agent", session },
+        started,
         { type: "text_delta", text: `[${content}]` },
         { type: "terminal", status: fail ? "failed" : "completed" },
       ];
@@ -122,12 +209,24 @@ interface RunOptions {
    * milliseconds — installed here the way that component installs it.
    */
   promptTimeout?: number;
+  /** Refuse the turn before it starts, as a failed configuration does. */
+  refuseBeforeStart?: boolean;
+  /**
+   * An ordinary public handler, installed around the whole execution.
+   *
+   * Installed exactly where a document's own middleware sits: at the default
+   * priority, outside every `at: "min"` handler core and the provider install.
+   * That is the position the substitutions below are written from, because it
+   * is the position that can see a routed session before core's own routing
+   * does anything with it.
+   */
+  handler?: () => Operation<void>;
 }
 
 function* runDoc(
   doc: string,
   options: RunOptions = {},
-): Operation<{ output: string; result: Result<Json>; trace: Trace }> {
+): Operation<{ output: string; result: Result<Json>; trace: Trace; events: DurableEvent[] }> {
   const trace: Trace = options.trace ?? { prompts: [], agentLookups: [], timeouts: [] };
   const dir = path.join(os.tmpdir(), `xmd-af-test-${randomUUID()}`);
   yield* ensureDir(dir);
@@ -145,20 +244,44 @@ function* runDoc(
     }
     yield* installAgentComponents({
       rootProvider: {
-        factory: stubFactory(trace, options.fail),
+        factory: stubFactory(trace, options.fail, options.refuseBeforeStart),
         options: { defaultAgent: "stub-agent", permissionMode: "deny-all" },
       },
     });
     if (options.policy) {
       yield* installPromptFailurePolicy(options.policy);
     }
+    if (options.handler) {
+      yield* options.handler();
+    }
+    yield* registerComponents([
+      {
+        name: "Probe",
+        origin: "test",
+        props: { type: "object", properties: {}, additionalProperties: false },
+        // A repository function component doing what one may do: sending a
+        // prompt with `Agent.operations.prompt()` and naming no session. There
+        // is no `<Prompt>` here to author anything, so what binds this call is
+        // whatever the enclosing element does on the same ledger.
+        *fn() {
+          const stream = yield* Agent.operations.prompt("probe", {});
+          const subscription = yield* stream;
+          let next = yield* subscription.next();
+          while (!next.done) {
+            next = yield* subscription.next();
+          }
+          return next.value;
+        },
+      },
+    ]);
 
     // `<Session>` names durable work after its own invocation, so the host
     // declares it to the execution rather than registering it.
+    const stream = new InMemoryStream();
     const execution = yield* executeInstalled(
       {
         path: docPath,
-        stream: new InMemoryStream(),
+        stream,
         includes: [dir],
       },
       [{ components: agentIdentityComponents() }],
@@ -168,7 +291,12 @@ function* runDoc(
     while (!next.done) {
       next = yield* subscription.next();
     }
-    return { output: next.value, result: yield* execution, trace };
+    return {
+      output: next.value,
+      result: yield* execution,
+      trace,
+      events: yield* stream.readAll(),
+    };
   });
 }
 
@@ -544,5 +672,513 @@ describe("Tier AF — prompt timeouts", () => {
     expect(result.ok).toBe(false);
     expect(result.ok === false && result.error.message).toContain("must be a duration");
     expect(trace.timeouts).toEqual([]);
+  });
+});
+
+/**
+ * Tier AF — the model and effort one `<Session>` configures (issue #828).
+ *
+ * Configuration belongs to the element that owns the conversation, so these
+ * rows are about two things: which element may carry it, and what a prompt
+ * beneath it retains. Applying it is the provider's, and the stub here stands
+ * in for one — what it reports back is what the document journals.
+ */
+function promptRecords(events: DurableEvent[]): {
+  description: Record<string, Json>;
+  value: Record<string, Json>;
+}[] {
+  return events.flatMap((event) => {
+    if (event.type !== "yield" || event.description.type !== "agent_prompt") {
+      return [];
+    }
+    if (event.result.status !== "ok" || typeof event.result.value !== "object") {
+      return [];
+    }
+    if (event.result.value === null || Array.isArray(event.result.value)) {
+      return [];
+    }
+    return [
+      {
+        description: event.description as unknown as Record<string, Json>,
+        value: event.result.value as Record<string, Json>,
+      },
+    ];
+  });
+}
+
+describe("Tier AF — Session configuration", () => {
+  beforeAll(() => useTempFileCompiler());
+
+  it("AF26: the exact configuration reaches the provider, and not through the route", function* () {
+    const trace: Trace = { prompts: [], agentLookups: [], timeouts: [] };
+    const { result } = yield* runDoc(
+      ['<Session name="review" model="gpt-5.4" effort="high" />', ""].join("\n"),
+      { trace },
+    );
+
+    expect(result.ok).toBe(true);
+    // Asked of the provider about its own session, through the coordinator it
+    // was handed directly — never routed, so no handler saw a settings object.
+    expect(trace.sessionConfigurations).toEqual([{ model: "gpt-5.4", effort: "high" }]);
+    expect(trace.sessionArgumentCounts).toEqual([1]);
+    // A configured self-closing Session still places and nothing more: no
+    // prompt is sent on its behalf.
+    expect(trace.prompts).toEqual([]);
+  });
+
+  it("AF27: an unconfigured Session asks the provider nothing at all", function* () {
+    const trace: Trace = { prompts: [], agentLookups: [], timeouts: [] };
+    const { result } = yield* runDoc('<Session name="review" />\n', { trace });
+
+    expect(result.ok).toBe(true);
+    // Nothing was asked: an element that configured nothing has nothing to ask
+    // about, and an empty configuration object would be a request to leave both
+    // settings alone — which a provider cannot tell from one to write two
+    // values it was never given.
+    expect(trace.sessionConfigurations).toBe(undefined);
+    expect(trace.sessionArgumentCounts).toEqual([1]);
+  });
+
+  it("AF28: a prompt retains the one configuration its Session runs under", function* () {
+    const trace: Trace = { prompts: [], agentLookups: [], timeouts: [] };
+    const { result, events } = yield* runDoc(
+      [
+        '<Session name="review" model="gpt-5.4" effort="high">',
+        '<Prompt text="hi" />',
+        "</Session>",
+        "",
+      ].join("\n"),
+      { trace },
+    );
+
+    expect(result.ok ? "" : result.error.message).toBe("");
+    // One member, naming what the conversation ran under, and no
+    // requested-versus-effective pair on the record or on the event.
+    const [prompt] = promptRecords(events);
+    expect(prompt?.value.configuration).toEqual({ model: "gpt-5.4", effort: "high" });
+    expect(Object.keys(prompt?.value ?? {}).filter((key) => key.startsWith("requested"))).toEqual(
+      [],
+    );
+    expect(trace.startedKeys).toEqual([["type", "agent", "session"]]);
+  });
+
+  it("AF29: a setting nobody authored is retained as nothing at all", function* () {
+    const { result, events } = yield* runDoc(
+      ['<Session name="review" model="gpt-5.4">', '<Prompt text="hi" />', "</Session>", ""].join(
+        "\n",
+      ),
+    );
+
+    expect(result.ok).toBe(true);
+    const [prompt] = promptRecords(events);
+    expect(prompt?.value.configuration).toEqual({ model: "gpt-5.4" });
+  });
+
+  it("AF30: a prompt under no configured Session retains neither member", function* () {
+    const trace: Trace = { prompts: [], agentLookups: [], timeouts: [] };
+    const { result, events } = yield* runDoc('<Prompt text="hi" />\n', { trace });
+
+    expect(result.ok).toBe(true);
+    const [prompt] = promptRecords(events);
+    expect(prompt?.value.configuration).toBe(undefined);
+  });
+
+  it("AF31: an inner Session does not inherit the outer element's request", function* () {
+    const trace: Trace = { prompts: [], agentLookups: [], timeouts: [] };
+    const { result, events } = yield* runDoc(
+      [
+        '<Session name="outer" model="gpt-5.4" effort="high">',
+        '<Session name="inner">',
+        '<Prompt text="hi" />',
+        "</Session>",
+        "</Session>",
+        "",
+      ].join("\n"),
+      { trace },
+    );
+
+    expect(result.ok).toBe(true);
+    // Only the outer element asked for anything, and it asked the provider
+    // about its own conversation rather than routing settings anywhere.
+    expect(trace.sessionConfigurations).toEqual([{ model: "gpt-5.4", effort: "high" }]);
+    // Both placements travel the same released one-argument route.
+    expect(trace.sessionArgumentCounts).toEqual([1, 1]);
+    // The conversation this prompt belongs to is the inner one, which asked for
+    // nothing — so the record says nothing about the outer element's settings.
+    const [prompt] = promptRecords(events);
+    expect(prompt?.value.configuration).toBe(undefined);
+  });
+
+  it("AF35: a prompt refused before its turn started records no configuration", function* () {
+    const { result, events } = yield* runDoc(
+      ['<Session name="review" model="gpt-5.4">', '<Prompt text="hi" />', "</Session>", ""].join(
+        "\n",
+      ),
+      { refuseBeforeStart: true },
+    );
+
+    // The turn never started, so the conversation was never under these
+    // settings — and a record naming them would say it ran under them.
+    expect(result.ok).toBe(false);
+    const [prompt] = promptRecords(events);
+    expect(prompt?.value.configuration).toBe(undefined);
+    expect(prompt?.value.status).toBe("failed");
+  });
+
+  it("AF36: a prompt that failed after starting retains what it ran under", function* () {
+    const { events } = yield* runDoc(
+      [
+        '<Session name="review" model="gpt-5.4" effort="high">',
+        '<Prompt text="hi" />',
+        "</Session>",
+        "",
+      ].join("\n"),
+      { fail: true },
+    );
+
+    // It started, so the provider had put the conversation under exactly these
+    // settings; what happened afterwards does not change what it ran under.
+    const [prompt] = promptRecords(events);
+    expect(prompt?.value.status).toBe("failed");
+    expect(prompt?.value.configuration).toEqual({ model: "gpt-5.4", effort: "high" });
+  });
+
+  it("AF32: a prompt record written before this feature still parses", function* () {
+    // The members are additions, so history that predates them is read as a
+    // prompt that asked for nothing — never refused, and never inferred.
+    const legacy = {
+      sequence: 0,
+      agent: "codex",
+      sessionKey: "xmd:v1:a",
+      status: "completed",
+      text: "hello",
+    };
+    const parsed = parsePromptRecord(legacy);
+    expect(parsed?.text).toBe("hello");
+    expect(parsed?.configuration).toBe(undefined);
+  });
+
+  it("AF33: a configuration member that names no choice refuses the record", function* () {
+    const complete = {
+      sequence: 0,
+      agent: "codex",
+      sessionKey: "xmd:v1:a",
+      status: "completed",
+      text: "hello",
+      configuration: { model: "gpt-5.4", effort: "high" },
+    };
+    expect(parsePromptRecord(complete)?.configuration).toEqual({
+      model: "gpt-5.4",
+      effort: "high",
+    });
+    for (const carried of [{}, { model: "" }, { model: 7 }, { effort: null }, { mode: "fast" }]) {
+      const described = JSON.stringify(carried);
+      expect([described, parsePromptRecord({ ...complete, configuration: carried })]).toEqual([
+        described,
+        undefined,
+      ]);
+    }
+  });
+
+  it("AF34: only <Session> admits model and effort", function* () {
+    for (const element of [
+      '<Agent name="stub-agent" model="gpt-5.4" />',
+      '<Prompt text="hi" effort="high" />',
+      '<Session.Launch model="gpt-5.4" />',
+    ]) {
+      const { result } = yield* runDoc(`${element}\n`);
+      expect([element, result.ok]).toEqual([element, false]);
+      expect([element, result.ok ? "" : result.error.message]).toEqual([
+        element,
+        expect.stringContaining("Prop validation failed"),
+      ]);
+    }
+  });
+});
+
+/** What a prompt record says went wrong, read out of the durable Json. */
+function recordedFailure(record: Record<string, Json> | undefined): string {
+  const error = record?.error;
+  if (typeof error !== "object" || error === null || Array.isArray(error)) {
+    return "";
+  }
+  return typeof error.message === "string" ? error.message : "";
+}
+
+/**
+ * Tier AF — what a public handler may do with a configured conversation.
+ *
+ * Middleware selects, reroutes and refuses whole conversations; that is what it
+ * is for, and model and effort never travel as a value it could edit. So the
+ * question these rows ask is not whether a handler may reroute — it may — but
+ * whether the provider and the journal both follow where it routed.
+ *
+ * The final routed session decides. An authentic use runs under its own
+ * settings; a raw session or no session at all is an ordinary unconfigured
+ * route that reads and writes nothing; and a value that claims to be configured
+ * and was issued by nobody refuses rather than being read as either.
+ */
+describe("Tier AF — the final routed Session decides", () => {
+  it("AF37: routing the raw session a use names runs unconfigured", function* () {
+    const trace: Trace = { prompts: [], agentLookups: [], timeouts: [] };
+    const { result, events } = yield* runDoc(
+      ['<Session name="review" model="gpt-5.4">', '<Prompt text="hi" />', "</Session>", ""].join(
+        "\n",
+      ),
+      {
+        trace,
+        handler: () =>
+          Agent.around({
+            *prompt([text, options], next) {
+              // The conversation, without what it was to run under. Nothing is
+              // forged: this is the exact session the provider issued.
+              return yield* next(text, { ...options, session: sessionOf(options?.session) });
+            },
+          }),
+      },
+    );
+
+    expect(result.ok).toBe(true);
+    expect(trace.prompts).toEqual(["hi"]);
+    // Nothing was asked of the provider about settings, and the record says so
+    // rather than repeating what the element held.
+    expect(trace.sessionConfigurations).toEqual([{ model: "gpt-5.4" }]);
+    const [prompt] = promptRecords(events);
+    expect(prompt?.value.configuration).toBe(undefined);
+  });
+
+  it("AF38: routing no session at all is an ordinary unconfigured route", function* () {
+    const trace: Trace = { prompts: [], agentLookups: [], timeouts: [] };
+    const { result, events } = yield* runDoc(
+      ['<Session name="review" effort="high">', '<Prompt text="hi" />', "</Session>", ""].join(
+        "\n",
+      ),
+      {
+        trace,
+        handler: () =>
+          Agent.around({
+            *prompt([text, options], next) {
+              return yield* next(text, { ...options, session: undefined });
+            },
+          }),
+      },
+    );
+
+    expect(result.ok).toBe(true);
+    expect(trace.prompts).toEqual(["hi"]);
+    const [prompt] = promptRecords(events);
+    expect(prompt?.value.configuration).toBe(undefined);
+  });
+
+  it("AF39: routing another authentic use runs under that use", function* () {
+    const trace: Trace = { prompts: [], agentLookups: [], timeouts: [] };
+    // Two elements, each owning one conversation. The handler sends the second
+    // element's prompt into the first's use, and what the turn runs under — and
+    // what the record says — is the first's settings, because that is the
+    // conversation it actually ran in.
+    let first: string | Session | undefined;
+    const { result, events } = yield* runDoc(
+      [
+        '<Session name="review" model="gpt-5.4">',
+        '<Prompt text="first" />',
+        "</Session>",
+        '<Session name="notes" effort="high">',
+        '<Prompt text="second" />',
+        "</Session>",
+        "",
+      ].join("\n"),
+      {
+        trace,
+        handler: () =>
+          Agent.around({
+            *prompt([text, options], next) {
+              if (first === undefined) {
+                first = options?.session;
+                return yield* next(text, options);
+              }
+              return yield* next(text, { ...options, session: first });
+            },
+          }),
+      },
+    );
+
+    expect(result.ok).toBe(true);
+    expect(trace.prompts).toEqual(["first", "second"]);
+    const [one, two] = promptRecords(events);
+    expect(one?.value.configuration).toEqual({ model: "gpt-5.4" });
+    // Not `{ effort: "high" }`: that element's settings never ran.
+    expect(two?.value.configuration).toEqual({ model: "gpt-5.4" });
+  });
+
+  it("AF40: a value that claims to be configured and was issued by nobody refuses", function* () {
+    const trace: Trace = { prompts: [], agentLookups: [], timeouts: [] };
+    const { result, events } = yield* runDoc(
+      ['<Session name="review" model="gpt-5.4">', '<Prompt text="hi" />', "</Session>", ""].join(
+        "\n",
+      ),
+      {
+        trace,
+        handler: () =>
+          Agent.around({
+            *prompt([text, options], next) {
+              // Everything a spread carries: the claim is copied, whatever
+              // makes the value authentic is not.
+              return yield* next(text, {
+                ...options,
+                session: { ...(options?.session as Session) },
+              });
+            },
+          }),
+      },
+    );
+
+    expect(result.ok).toBe(false);
+    // Refused rather than read as the ordinary session it resembles, which
+    // would run this conversation under nothing while saying nothing.
+    const [prompt] = promptRecords(events);
+    expect(prompt?.value.configuration).toBe(undefined);
+    expect(recordedFailure(prompt?.value)).toContain("not a configured session this run issued");
+  });
+
+  it("AF41: reading the use and delegating it is what a handler is for", function* () {
+    const trace: Trace = { prompts: [], agentLookups: [], timeouts: [] };
+    const seen: string[] = [];
+    const { result, events } = yield* runDoc(
+      [
+        '<Session name="review" model="gpt-5.4" effort="high">',
+        '<Prompt text="hi" />',
+        "</Session>",
+        "",
+      ].join("\n"),
+      {
+        trace,
+        handler: () =>
+          Agent.around({
+            *prompt([text, options], next) {
+              // Inspection is public: a handler may see that a value presents
+              // itself as configured, and what it says.
+              seen.push(isSessionUse(options?.session) ? "use" : "session");
+              return yield* next(text, options);
+            },
+          }),
+      },
+    );
+
+    expect(result.ok).toBe(true);
+    expect(seen).toEqual(["use"]);
+    const [prompt] = promptRecords(events);
+    expect(prompt?.value.configuration).toEqual({ model: "gpt-5.4", effort: "high" });
+  });
+
+  it("AF42: one configured Session hands the same use to every nested prompt", function* () {
+    const trace: Trace = { prompts: [], agentLookups: [], timeouts: [] };
+    const routed: (string | Session | undefined)[] = [];
+    const { result } = yield* runDoc(
+      [
+        '<Session name="review" model="gpt-5.4">',
+        '<Prompt text="first" />',
+        '<Prompt text="second" />',
+        "</Session>",
+        "",
+      ].join("\n"),
+      {
+        trace,
+        handler: () =>
+          Agent.around({
+            *prompt([text, options], next) {
+              routed.push(options?.session);
+              return yield* next(text, options);
+            },
+          }),
+      },
+    );
+
+    expect(result.ok).toBe(true);
+    // One use per lexical element, not one per operation: both prompts are
+    // handed the very same object, and it unwraps to the session the provider
+    // issued once.
+    expect(routed[0]).toBe(routed[1]);
+    expect(isSessionUse(routed[0])).toBe(true);
+    expect(sessionOf(routed[0])).toBe(trace.sessions?.[0]);
+    expect(trace.sessions).toHaveLength(1);
+  });
+
+  it("AF43: a programmatic prompt beneath the element runs in its conversation", function* () {
+    const trace: Trace = { prompts: [], agentLookups: [], timeouts: [] };
+    const seen: boolean[] = [];
+    const { result } = yield* runDoc(
+      ['<Session name="review" model="gpt-5.4">', "<Probe />", "</Session>", ""].join("\n"),
+      {
+        trace,
+        handler: () =>
+          Agent.around({
+            *prompt([text, options], next) {
+              // The programmatic call named nothing; the element supplies its
+              // own conversation after every ordinary handler has had it.
+              seen.push(options?.session === undefined);
+              return yield* next(text, options);
+            },
+          }),
+      },
+    );
+
+    expect(result.ok).toBe(true);
+    expect(seen).toEqual([true]);
+    expect(trace.prompts).toEqual(["probe"]);
+    expect(isSessionUse(trace.promptSessions?.[0])).toBe(true);
+    expect(sessionOf(trace.promptSessions?.[0])).toBe(trace.sessions?.[0]);
+  });
+
+  it("AF44: a programmatic prompt a handler reroutes follows that route", function* () {
+    const trace: Trace = { prompts: [], agentLookups: [], timeouts: [] };
+    const { result } = yield* runDoc(
+      ['<Session name="review" model="gpt-5.4">', "<Probe />", "</Session>", ""].join("\n"),
+      {
+        trace,
+        handler: () =>
+          Agent.around({
+            *prompt([text, options], next) {
+              // Naming a conversation for a call that named none is ordinary
+              // composition, and it is honoured rather than refused.
+              return yield* next(text, { ...options, session: "elsewhere" });
+            },
+          }),
+      },
+    );
+
+    expect(result.ok).toBe(true);
+    expect(trace.promptSessions).toEqual(["elsewhere"]);
+    // It ran somewhere else, so the element's settings were never asked for.
+    expect(trace.sessionConfigurations).toEqual([{ model: "gpt-5.4" }]);
+  });
+
+  it("AF45: a Session a handler answers with never went through placement", function* () {
+    const trace: Trace = { prompts: [], agentLookups: [], timeouts: [] };
+    const { result, events } = yield* runDoc(
+      ['<Session name="review" model="gpt-5.4">', '<Prompt text="hi" />', "</Session>", ""].join(
+        "\n",
+      ),
+      {
+        trace,
+        handler: () =>
+          Agent.around({
+            // deno-lint-ignore require-yield
+            *session(): Operation<Session> {
+              // A conversation of the handler's own making. The placement it
+              // was given is never settled, so nothing put this session under
+              // anything and no use was minted for it.
+              return { sessionKey: "handler:review", cwd: "." };
+            },
+          }),
+      },
+    );
+
+    expect(result.ok).toBe(true);
+    // The route the handler chose is the route that ran, unconfigured: the
+    // provider was never asked about settings and the record claims none.
+    expect(trace.sessionConfigurations).toBe(undefined);
+    expect(trace.prompts).toEqual(["hi"]);
+    const [prompt] = promptRecords(events);
+    expect(prompt?.value.configuration).toBe(undefined);
   });
 });

@@ -54,7 +54,7 @@ import { Git, SUSPENSION_REQUEST, suspendFor, WorkflowLifecycle } from "@executa
 import type { WorkflowRunDatabase } from "@executablemd/workflow";
 import { workflowRunPath } from "@executablemd/workflow/deno";
 import { withWorkflowWorkspace, WORKSPACE_FILE } from "@executablemd/workflow/deno";
-import { Agent, installAgentComponents } from "@executablemd/core";
+import { Agent, installAgentComponents, sessionOf } from "@executablemd/core";
 import type {
   AgentPromptEvent,
   Json as CoreJson,
@@ -853,8 +853,7 @@ function* useStubAgent(calls: AgentCalls): Operation<void> {
       // deno-lint-ignore require-yield
       *prompt([content, options]): Operation<Stream<AgentPromptEvent, string>> {
         calls.prompts.push(content);
-        const session: Session =
-          typeof options?.session === "object" ? options.session : { sessionKey: "s", cwd: "/" };
+        const session: Session = sessionOf(options?.session) ?? { sessionKey: "s", cwd: "/" };
         const events: AgentPromptEvent[] = [
           { type: "started", agent: options?.agent ?? "codex", session },
           { type: "text_delta", text: "ready" },

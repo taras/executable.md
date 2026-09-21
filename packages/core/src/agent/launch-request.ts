@@ -31,11 +31,19 @@ import type { Agent, LaunchOptions, PermissionMode, Session } from "./agent-api.
 export interface AgentLaunchRequest {
   readonly instructions: string;
   readonly agent: Agent;
+  /**
+   * Which conversation this launch is for.
+   *
+   * A name, or the exact `Session` a provider issued — which for a configured
+   * `<Session>` is one authentic use of that session. What the launch runs
+   * under is read from this value through the coordinator delivered to the
+   * installed provider, so there is no member here for a handler to change
+   * independently of the conversation it belongs to.
+   */
   readonly session?: string | Session;
   readonly cwd: string;
   readonly additionalDirectories: readonly string[];
   readonly permissionMode: PermissionMode;
-  readonly model?: string;
   /**
    * Derive a narrower request, superseding this one.
    *
@@ -119,7 +127,6 @@ export interface LaunchFacts {
   cwd: string;
   additionalDirectories: readonly string[];
   permissionMode: PermissionMode;
-  model?: string;
 }
 
 function build(facts: LaunchFacts, invocation: LaunchInvocation): AgentLaunchRequest {
@@ -130,7 +137,6 @@ function build(facts: LaunchFacts, invocation: LaunchInvocation): AgentLaunchReq
     cwd: facts.cwd,
     additionalDirectories: Object.freeze([...facts.additionalDirectories]),
     permissionMode: facts.permissionMode,
-    ...(facts.model === undefined ? {} : { model: facts.model }),
     with(changes: {
       instructions?: string;
       agent?: Agent;

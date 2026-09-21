@@ -16,7 +16,11 @@
  */
 
 import type { Operation } from "effection";
-import type { AgentPromptEvent, SessionLaunchResult } from "./agent-api.ts";
+import { sessionOf } from "./session-use.ts";
+import type { AgentPromptEvent, Session, SessionLaunchResult } from "./agent-api.ts";
+import { createSessionPlacementOwner } from "./session-placement.ts";
+import type { AgentSessionPlacement, SessionPlacementOwner } from "./session-placement.ts";
+import type { ReadSessionUse } from "./session-use.ts";
 import { associateCheckpoint } from "./checkpoint.ts";
 import { AgentLaunchProtocolError } from "./launch-request.ts";
 import type { AgentLaunchRequest, IssuedLaunch } from "./launch-request.ts";
@@ -84,7 +88,14 @@ export interface AgentLaunchCoordinator {
    * element that opened it and is read once, so a value kept from an earlier
    * `<Session>` or already read refuses here.
    */
-  sessionIdentity(request: AgentSessionRequest): string;
+  /**
+   * Accept the exact live final placement, once, and answer with its handle.
+   *
+   * The handle is where the engine identity is read and where the conversation
+   * the provider resolves is settled. It reaches the installed provider and
+   * nothing else, because this coordinator does.
+   */
+  sessionPlacement(request: AgentSessionRequest): AgentSessionPlacement;
   /**
    * Say which provider turn a successful Prompt completion was.
    *
@@ -100,6 +111,28 @@ export interface AgentLaunchCoordinator {
    * the Prompt publishes.
    */
   checkpoint(terminal: AgentPromptEvent, token: unknown): void;
+  /**
+   * The exact session a routed value names, and what it says that conversation
+   * runs under.
+   *
+   * Delivered rather than published, for the same reason `perform` is: a
+   * configuration read off the value itself would be one every handler could
+   * rewrite, and the operation would proceed under settings the document never
+   * authored. A name answers with nothing; an ordinary session answers with
+   * itself and no configuration; a use this installation issued answers with
+   * the value the provider issued and what it runs under; and a value that
+   * claims to be a configured use and is not one refuses.
+   */
+  sessionUse(routed: string | Session | undefined): ReadSessionUse | undefined;
+  /**
+   * Say how a session this provider just issued is configured.
+   *
+   * Delivered, not published: this coordinator reaches the provider through the
+   * continuation its factory captured, so the only thing that can register a
+   * session is the provider that issued it. Core uses the registration to
+   * refuse issuing a configured use around a session no provider registered,
+   * and to configure an established one in place.
+   */
 }
 
 /** How one launch retains its phases, supplied by the invocation that issued it. */
@@ -158,15 +191,12 @@ function crossCheck(request: AgentLaunchRequest, record: PreparedLaunchRecord): 
       return "additional directories";
     }
   }
-  if ((record.requestedModel ?? undefined) !== (request.model ?? undefined)) {
-    return "requested model";
-  }
-  const requested =
-    typeof request.session === "object" ? request.session.sessionKey : request.session;
+  const named = sessionOf(request.session);
+  const requested = named === undefined ? request.session : named.sessionKey;
   if (requested !== undefined && record.sessionKey !== requested && record.sessionKey.length > 0) {
     // A provider resolves a logical name to its own key, so only an explicit
     // `Session` value pins the key exactly.
-    if (typeof request.session === "object") {
+    if (named !== undefined) {
       return "session";
     }
   }
@@ -182,6 +212,7 @@ function crossCheck(request: AgentLaunchRequest, record: PreparedLaunchRecord): 
 export function createLaunchCoordinator(
   generation: object,
   live: () => readonly LiveLaunch[],
+  owner: SessionPlacementOwner = createSessionPlacementOwner(),
 ): AgentLaunchCoordinator {
   function locate(request: AgentLaunchRequest): LiveLaunch {
     const found = live().find((candidate) => candidate.issued.owns(request));
@@ -194,18 +225,24 @@ export function createLaunchCoordinator(
   }
 
   return {
-    // Resolved from the request itself, exactly as a launch is: the identity
-    // lives inside the value core issued, and a rebuilt or foreign look-alike
-    // reaches none of it. Nothing about it is retained here — a placement is a
-    // lookup, and the provider is the one that decides what to do with it.
-    sessionIdentity(request) {
-      return readPlacement(request).sessionIdentity;
+    // Resolved from the request itself, exactly as a launch is: what the
+    // placement carries lives inside the value core issued, and a rebuilt or
+    // foreign look-alike reaches none of it. The handle that comes back is the
+    // provider's alone, because this coordinator is.
+    sessionPlacement(request) {
+      return owner.placement(request);
     },
     // Nothing to locate: the completion names itself. Every refusal — a turn
     // that did not complete, a token that is not one, a second association —
     // belongs to the carrier, which is where the association actually lives.
     checkpoint(terminal, token) {
       associateCheckpoint(terminal, token);
+    },
+    // Through the owner, because the owner is what issued the use: a document
+    // with two providers has two authorities, and a conversation one of them
+    // configured is one only it can describe.
+    sessionUse(routed) {
+      return owner.read(routed);
     },
     *perform(request, phases) {
       const launch = locate(request);
@@ -222,6 +259,19 @@ export function createLaunchCoordinator(
       if (mismatch !== undefined) {
         throw new AgentLaunchProtocolError(
           `the provider prepared a session whose ${mismatch} is not what this launch asked for`,
+        );
+      }
+      // What the conversation was put under, compared against what this
+      // installation says the routed session runs under. A record naming other
+      // settings is describing a conversation nobody authored — and one naming
+      // settings for a launch that asked for none is describing another launch.
+      const asked = owner.read(request.session)?.configuration;
+      if (
+        (prepared.configuration?.model ?? undefined) !== (asked?.model ?? undefined) ||
+        (prepared.configuration?.effort ?? undefined) !== (asked?.effort ?? undefined)
+      ) {
+        throw new AgentLaunchProtocolError(
+          "the provider prepared a session whose configuration is not what this launch asked for",
         );
       }
       const plan = prepared.materialization;

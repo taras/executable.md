@@ -20,6 +20,7 @@ import { executeInstalled } from "../host.ts";
 import { agentIdentityComponents } from "../src/agent/components.ts";
 import { execute } from "../src/execute.ts";
 import { Agent } from "../src/agent/agent-api.ts";
+import { sessionOf } from "../src/agent/session-use.ts";
 import type { AgentPromptEvent, PromptOptions, Session } from "../src/agent/agent-api.ts";
 import { AgentPromptError } from "../src/agent/errors.ts";
 import { readCompletedPrompts } from "../src/agent/journal.ts";
@@ -95,13 +96,12 @@ function createStubStream(
   return {
     *[Symbol.iterator]() {
       const agent = options?.agent ?? defaultAgent;
-      const session: Session =
-        typeof options?.session === "object"
-          ? options.session
-          : {
-              sessionKey: `stub:${typeof options?.session === "string" ? options.session : "default"}`,
-              cwd: "/stub",
-            };
+      // The exact session, however it was routed: a use names one, and the
+      // conversation it names is what a started event reports.
+      const session: Session = sessionOf(options?.session) ?? {
+        sessionKey: `stub:${typeof options?.session === "string" ? options.session : "default"}`,
+        cwd: "/stub",
+      };
       const call: StubPromptCall = { content, agent, sessionKey: session.sessionKey };
       if (options?.timeout !== undefined) {
         call.timeout = options.timeout;

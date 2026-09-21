@@ -31,7 +31,7 @@
  * to that same provider session.
  */
 
-import type { PermissionMode } from "./agent-api.ts";
+import type { PermissionMode, SessionConfiguration } from "./agent-api.ts";
 import type { AgentPromptCheckpoint } from "./checkpoint.ts";
 
 export type LaunchPhase = "prepared" | "materialized" | "detached" | "launched" | "exited";
@@ -74,7 +74,8 @@ export type LaunchFailureClass =
   | "session-busy"
   | "session-recovery-required"
   | "executable-binding-refused"
-  | "materialization-failed";
+  | "materialization-failed"
+  | "configuration-refused";
 
 /**
  * `session-busy` is contention, not breakage: another XMD owner holds the
@@ -89,6 +90,13 @@ export type LaunchFailureClass =
  * executable-file validation, version parsing, digesting, schema recognition,
  * equality, and a session established before any build was recorded all end
  * here.
+ *
+ * `configuration-refused` is the model or effort question: the session could
+ * not be put into the configuration the `<Session>` asked for, or the attempt
+ * to put it back afterwards could not be verified. A route that has no way to
+ * configure a conversation before handing over its native UI refuses as
+ * `unsupported-capability` instead — it declined to try, rather than trying and
+ * being refused.
  *
  * `materialization-failed` is the one turn a launch may owe: the conversation
  * ACP created is not yet one the native UI can open, the exchange that would
@@ -299,8 +307,15 @@ export interface PreparedLaunchRecord {
   additionalDirectories: string[];
   permissionMode: PermissionMode;
   launcher: string;
-  requestedModel?: string;
-  model?: string;
+  /**
+   * What the conversation this launch prepared was put under.
+   *
+   * Present only on a preparation that succeeded: a refusal put the
+   * conversation under nothing, so a record carrying both this and a `failure`
+   * is describing two different launches and is refused. An unconfigured launch
+   * carries no member at all.
+   */
+  configuration?: SessionConfiguration;
   failure?: LaunchFailure;
 }
 

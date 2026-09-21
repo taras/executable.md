@@ -23,7 +23,17 @@
  * `with({ name })` derives a sibling sharing that one issuance rather than
  * opening another, which is exactly what "middleware may alter the descriptive
  * name" means.
+ *
+ * What a configured `<Session>` asks of its conversation travels the same way.
+ * It is sealed into the issuance before the request is routed, so a handler
+ * holding the request can transfer the whole route — which is what routing is
+ * for — and cannot read the settings, edit them, or attach them to a route of
+ * its own. A structural copy, a descriptor clone, an object built on this
+ * prototype and a request another loaded copy produced carry no issuance, so
+ * they carry no settings either.
  */
+
+import type { SessionConfiguration } from "./agent-api.ts";
 
 /** What public session middleware is handed. The name, and nothing else. */
 export interface AgentSessionRequest {
@@ -43,9 +53,16 @@ export class AgentSessionProtocolError extends Error {
 }
 
 /** What the engine settled about one `<Session>` element. */
-interface Placement {
-  /** The engine-derived expansion identity. Never authored, never routed. */
-  readonly sessionIdentity: string;
+export interface Placement {
+  /**
+   * The engine-derived expansion identity. Never authored, never routed.
+   *
+   * Absent for a placement core opened for a programmatic caller: there is no
+   * element, so there is nothing durable to name.
+   */
+  readonly sessionIdentity?: string;
+  /** What this placement asks its conversation to run under, when it asks. */
+  readonly configuration?: SessionConfiguration;
 }
 
 /**
@@ -56,8 +73,25 @@ interface Placement {
  * everything a handler holds it can read.
  */
 interface Issuance {
-  /** The engine-derived expansion identity. Never authored, never routed. */
-  readonly sessionIdentity: string;
+  /** The engine-derived expansion identity, when an element opened this. */
+  readonly sessionIdentity?: string;
+  /**
+   * What the caller asked this conversation to run under.
+   *
+   * Sealed before the request is routed and frozen, so the value a provider is
+   * eventually told is the value the document authored rather than one a
+   * handler replaced on the way.
+   */
+  configuration?: SessionConfiguration;
+  /**
+   * True once what this placement asks has been settled, however it settled.
+   *
+   * An element settles it before the request is routed — to a configuration, or
+   * to nothing at all — so by the time any handler holds the request there is
+   * nothing left to say. That is what makes the sealing one-way rather than
+   * merely first-come.
+   */
+  settled: boolean;
   /** False once the element it belongs to finished placing. */
   live: boolean;
   /** True once the coordinator read it; a second read refuses. */
@@ -132,6 +166,17 @@ class SessionPlacement implements AgentSessionRequest {
  */
 export interface SessionPlacementIssuance {
   readonly request: AgentSessionRequest;
+  /**
+   * Say what this placement asks its conversation to run under, or that it asks
+   * nothing.
+   *
+   * The opener's alone, and called before the request is routed. It settles the
+   * question either way and cannot be called again, so a handler that later
+   * holds the request has nothing left to overwrite and no unconfigured
+   * placement left to attach settings to. The value is copied and frozen, so
+   * whoever supplied it cannot edit what the provider is eventually told.
+   */
+  configure(configuration: SessionConfiguration | undefined): void;
   close(): void;
 }
 
@@ -142,16 +187,71 @@ export interface SessionPlacementIssuance {
  * component, which is the one channel a document cannot reach.
  */
 export function sessionPlacement(
-  sessionIdentity: string,
+  sessionIdentity: string | undefined,
   name: string | undefined,
 ): SessionPlacementIssuance {
-  const issuance: Issuance = { sessionIdentity, live: true, accepted: false };
+  const issuance: Issuance = {
+    ...(sessionIdentity === undefined ? {} : { sessionIdentity }),
+    settled: false,
+    live: true,
+    accepted: false,
+  };
   return {
     request: new SessionPlacement(issuance, name),
+    configure(configuration: SessionConfiguration | undefined): void {
+      settle(issuance, configuration);
+    },
     close(): void {
       issuance.live = false;
     },
   };
+}
+
+/**
+ * Seal `configuration` into the issuance `routed` belongs to.
+ *
+ * Core's own, for the element that already opened a placement and is only now
+ * saying what it asks of the conversation. A value that is not a live placement
+ * refuses rather than silently asking for nothing.
+ */
+export function configurePlacement(routed: unknown, configuration: SessionConfiguration): void {
+  const issuance = issuanceOf(routed);
+  if (issuance === undefined || !issuance.live) {
+    throw new AgentSessionProtocolError(
+      "this is not a live session placement, so there is nothing here to configure",
+    );
+  }
+  settle(issuance, configuration);
+}
+
+/**
+ * Settle what one placement asks, once.
+ *
+ * Whoever opened the placement says this before routing it, and nothing says it
+ * afterwards. A second attempt is refused rather than merged or ignored: a
+ * placement whose settings could still change after a handler saw it is a
+ * placement whose settings a handler can choose.
+ */
+function settle(issuance: Issuance, configuration: SessionConfiguration | undefined): void {
+  if (issuance.settled) {
+    throw new AgentSessionProtocolError(
+      "this session placement already says what it asks of its conversation — what a " +
+        "<Session> authored is settled before the placement is routed, so nothing that " +
+        "receives the placement afterwards can add to it or replace it",
+    );
+  }
+  issuance.settled = true;
+  if (configuration !== undefined) {
+    issuance.configuration = frozenConfiguration(configuration);
+  }
+}
+
+/** A copy of what was asked, frozen, carrying only the two settings. */
+function frozenConfiguration(configuration: SessionConfiguration): SessionConfiguration {
+  return Object.freeze({
+    ...(configuration.model === undefined ? {} : { model: configuration.model }),
+    ...(configuration.effort === undefined ? {} : { effort: configuration.effort }),
+  });
 }
 
 /** Whether `value` is a placement this module issued. */
@@ -186,5 +286,10 @@ export function readPlacement(routed: unknown): Placement {
     );
   }
   issuance.accepted = true;
-  return { sessionIdentity: issuance.sessionIdentity };
+  return {
+    ...(issuance.sessionIdentity === undefined
+      ? {}
+      : { sessionIdentity: issuance.sessionIdentity }),
+    ...(issuance.configuration === undefined ? {} : { configuration: issuance.configuration }),
+  };
 }

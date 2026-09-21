@@ -39,6 +39,7 @@ import type {
   PreparedLaunchRecord,
 } from "./launch.ts";
 import { AgentInternal } from "./internal.ts";
+import { readConfiguration, serializeConfiguration } from "./configuration-record.ts";
 import { readCheckpoint } from "./checkpoint.ts";
 import { persistPrompt } from "./journal.ts";
 import type { PromptRecord } from "./journal.ts";
@@ -53,8 +54,8 @@ const AGENT_SESSION_LAUNCH = "agent_session_launch";
  * preparation effect's description.
  *
  * The rendered instructions are the effect's `input`; the rest describes the
- * filesystem permissions, model request and permission configuration the request
- * was made under, so a reader of the journal can tell what the native session
+ * filesystem permissions and the permission configuration the request was made
+ * under, so a reader of the journal can tell what the native session
  * was prepared to be able to do.
  */
 export interface LaunchRequestDescription {
@@ -64,7 +65,6 @@ export interface LaunchRequestDescription {
   cwd: string;
   additionalDirectories: string[];
   permissionMode: PermissionMode;
-  model?: string;
 }
 
 export interface LaunchIdentity {
@@ -85,6 +85,7 @@ const FAILURE_CLASSES: readonly LaunchFailureClass[] = [
   "session-recovery-required",
   "executable-binding-refused",
   "materialization-failed",
+  "configuration-refused",
 ];
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -264,12 +265,7 @@ function serializePrepared(record: PreparedLaunchRecord): Json {
   if (record.materialization !== undefined) {
     payload.materialization = serializePlan(record.materialization);
   }
-  if (record.requestedModel !== undefined) {
-    payload.requestedModel = record.requestedModel;
-  }
-  if (record.model !== undefined) {
-    payload.model = record.model;
-  }
+  Object.assign(payload, serializeConfiguration(record.configuration));
   if (record.failure !== undefined) {
     payload.failure = serializeFailure(record.failure);
   }
@@ -299,8 +295,6 @@ export function parsePrepared(value: unknown): PreparedLaunchRecord | undefined 
     cwd,
     additionalDirectories,
     launcher,
-    requestedModel,
-    model,
     failure,
   } = value;
   if (typeof agent !== "string" || typeof sessionKey !== "string") {
@@ -376,15 +370,24 @@ export function parsePrepared(value: unknown): PreparedLaunchRecord | undefined 
   if (plan !== undefined) {
     record.materialization = plan;
   }
-  if (typeof requestedModel === "string") {
-    record.requestedModel = requestedModel;
+  // Refused rather than read past: a released observational model is validated
+  // and dropped, and a record carrying one beside a configuration says two
+  // different things about what this conversation ran under.
+  const configuration = readConfiguration(value);
+  if (!configuration.ok) {
+    return undefined;
   }
-  if (typeof model === "string") {
-    record.model = model;
+  if (configuration.value !== undefined) {
+    record.configuration = configuration.value;
   }
   if (failure !== undefined) {
     const parsed = parseFailure(failure);
     if (!parsed) {
+      return undefined;
+    }
+    // A refusal put this conversation under nothing, so a record that carries
+    // both is describing two different launches.
+    if (record.configuration !== undefined) {
       return undefined;
     }
     record.failure = parsed;
@@ -626,9 +629,6 @@ export function persistPreparation(
   };
   if (request.session !== undefined) {
     description.session = request.session;
-  }
-  if (request.model !== undefined) {
-    description.model = request.model;
   }
   return persistPhase(identity, "prepared", description, live, serializePrepared, parsePrepared);
 }

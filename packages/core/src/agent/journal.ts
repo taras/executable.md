@@ -1,12 +1,12 @@
 /**
  * Durable prompt records (specs/acp-client-spec.md §Journaling and replay).
  *
- * Each prompt is one durable operation. The description carries the
- * prompt's identity and input; the result record carries agent and session
- * identity, terminal status, stop reason, text (including partial text on
- * failure), and the structured failure. `sequence` records prompt
- * execution order explicitly, so restoration never depends on asynchronous
- * completion order.
+ * Each prompt is one durable operation. The description carries the prompt's
+ * identity and input; the result record carries agent and session identity,
+ * terminal status, stop reason, text (including partial text on failure), the
+ * structured failure, and — for a turn that started — the one configuration the
+ * conversation ran under. `sequence` records prompt execution order explicitly,
+ * so restoration never depends on asynchronous completion order.
  *
  * On a full replay (journal already holds the root Close), durableRun
  * returns the stored root result without re-expanding, so the failed
@@ -40,6 +40,8 @@ import type {
   Workflow,
 } from "@executablemd/durable-streams";
 import type { Operation } from "effection";
+import type { SessionConfiguration } from "./agent-api.ts";
+import { readConfiguration, serializeConfiguration } from "./configuration-record.ts";
 import { readCheckpoint } from "./checkpoint.ts";
 import type { AgentPromptCheckpoint } from "./checkpoint.ts";
 import { AgentPromptError, parsePromptFailure } from "./errors.ts";
@@ -61,6 +63,16 @@ export interface PromptRecord {
   stopReason?: string;
   text: string;
   error?: SerializedPromptFailure;
+  /**
+   * What the conversation this prompt ran in was running under.
+   *
+   * Present only once the provider said the turn started, because that is when
+   * the conversation was under these settings: a prompt that failed while they
+   * were still being applied ran under nothing, and one that started and then
+   * failed still ran under exactly them. A prompt beneath an unconfigured
+   * `<Session>` carries no member at all.
+   */
+  configuration?: SessionConfiguration;
   /**
    * True only for failed prompts thrown through `throwOnError`. Replay
    * uses the stored marker: a partial replay re-throws, and a full
@@ -256,6 +268,7 @@ function serializePromptRecord(record: PromptRecord): Json {
   if (record.error !== undefined) {
     payload.error = record.error;
   }
+  Object.assign(payload, serializeConfiguration(record.configuration));
   if (record.raised === true) {
     payload.raised = true;
   }
@@ -319,6 +332,15 @@ export function parsePromptRecord(value: unknown): PromptRecord | undefined {
       return undefined;
     }
     record.error = parsed;
+  }
+  // Refused rather than read past: a record whose configuration does not read
+  // back is not describing work this build can say anything about.
+  const configuration = readConfiguration(value);
+  if (!configuration.ok) {
+    return undefined;
+  }
+  if (configuration.value !== undefined) {
+    record.configuration = configuration.value;
   }
   if (raised === true && record.status !== "completed") {
     record.raised = true;

@@ -325,6 +325,10 @@ export type { AgentComponentsOptions } from "./src/agent/components.ts";
 export { Agent } from "./src/agent/agent-api.ts";
 export type {
   AgentApi,
+  AgentOption,
+  AgentOptions,
+  AgentOptionSet,
+  AgentOptionsRequest,
   AgentPromptEvent,
   LaunchOptions,
   PermissionMode,
@@ -333,9 +337,25 @@ export type {
   PermissionRequest,
   PromptOptions,
   Session,
+  SessionConfiguration,
   SessionLaunchResult,
 } from "./src/agent/agent-api.ts";
 export { AgentPromptError } from "./src/agent/errors.ts";
+// One authentic use of a conversation. Issuing one is `useConfiguredSession()`,
+// which is the only way one comes into being. These accessors read a value —
+// whether it claims to be a use, whether this build issued it, which session it
+// names and what it says — and refuse a claim nothing issued. Deciding whether
+// a use may act stays elsewhere: it belongs to the installation that issued it,
+// reached through the coordinator core delivers to the installed provider.
+export {
+  AgentSessionUseError,
+  claimsConfiguration,
+  configurationOf,
+  isSessionUse,
+  sessionOf,
+} from "./src/agent/session-use.ts";
+export type { AgentSessionUse } from "./src/agent/session-use.ts";
+export { useConfiguredSession } from "./src/agent/launch-install.ts";
 // Native session launch — the records one launch retains, and the request its
 // public route carries. What runs and retains a phase is not here
 // and is not anywhere: it is delivered to the selected provider.
@@ -358,6 +378,13 @@ export type {
 export { AgentLaunchProtocolError } from "./src/agent/launch-request.ts";
 export type { AgentLaunchRequest } from "./src/agent/launch-request.ts";
 export type { AgentLaunchPhases, AgentLaunchCoordinator } from "./src/agent/launch-coordinator.ts";
+// What settles one placement. A provider receives the handle through the
+// coordinator delivered to its factory; the types are here so it can name them.
+export type {
+  AgentSessionPlacement,
+  AgentSessionPlacementState,
+  ConfigureAgentSession,
+} from "./src/agent/session-placement.ts";
 // The checkpoint type, because the coordinator's signature names it. The carrier
 // itself is exported from nowhere: writing one is reachable only through a
 // delivered coordinator, and reading one only from the prompt core is running.

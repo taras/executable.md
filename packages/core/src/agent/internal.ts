@@ -2,7 +2,7 @@
  * Private agent-component state. Deliberately NOT exported from the
  * package: the per-execution prompt bookkeeping and the seeded provider
  * configuration are internal to the components — the public AgentApi
- * stays exactly the specified four operations.
+ * stays exactly the operations it specifies.
  *
  * The configuration values are seeded by `installAgentComponents()` and
  * read back by `<AgentProvider>`; this Api is the seeding mechanism, not
@@ -11,7 +11,7 @@
 
 import { type Api, createApi } from "@effectionx/context-api";
 import type { Operation } from "effection";
-import type { PermissionMode } from "./agent-api.ts";
+import type { PermissionMode, Session } from "./agent-api.ts";
 import type { AgentPromptPublisher } from "./publication.ts";
 import type { AgentPromptError } from "./errors.ts";
 import type { Expansion } from "../expansion.ts";
@@ -39,6 +39,16 @@ interface AgentInternalApi {
   defaultAgentName: string | undefined;
   /** Permission mode inherited by `<AgentProvider>`. */
   permissionMode: PermissionMode;
+  /**
+   * Which conversation the enclosing `<Session>` placed. Undefined outside one.
+   *
+   * For a configured element this is the authentic use that element was issued,
+   * which is that session and also the only value that can say what it runs
+   * under. It is not a configuration channel: nothing reads settings off it,
+   * and holding it proves nothing — the installation that issued it is what
+   * answers, through the coordinator delivered to the installed provider.
+   */
+  sessionUse: Session | undefined;
   /**
    * How long a prompt beneath an `<AgentProvider timeout>` may take, in
    * milliseconds; undefined when nothing declared one.
@@ -91,6 +101,7 @@ export const AgentInternal: Api<AgentInternalApi> = createApi<AgentInternalApi>(
   },
   defaultAgentName: undefined,
   permissionMode: "deny-all",
+  sessionUse: undefined,
   promptTimeout: undefined,
   promptPublisher: undefined,
   // deno-lint-ignore require-yield

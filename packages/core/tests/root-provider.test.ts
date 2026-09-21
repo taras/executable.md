@@ -18,6 +18,7 @@ import * as path from "node:path";
 import * as os from "node:os";
 import { execute } from "../src/execute.ts";
 import { Agent } from "../src/agent/agent-api.ts";
+import { sessionOf } from "../src/agent/session-use.ts";
 import type { AgentPromptEvent, PromptOptions, Session } from "../src/agent/agent-api.ts";
 import { AgentPromptError } from "../src/agent/errors.ts";
 import type { AgentProviderFactory, AgentProviderOptions } from "../src/agent/provider-api.ts";
@@ -94,10 +95,9 @@ function stubStream(
   return {
     *[Symbol.iterator]() {
       state.activeDuringPrompt = isActive();
-      const session: Session =
-        typeof options?.session === "object"
-          ? options.session
-          : { sessionKey: "s:default", cwd: "/" };
+      // The exact session, however it was routed: a use names one, and the
+      // conversation it names is what a started event reports.
+      const session: Session = sessionOf(options?.session) ?? { sessionKey: "s:default", cwd: "/" };
       const text = `[${content}]`;
       const terminal: AgentPromptEvent = fail
         ? { type: "terminal", status: "failed", stopReason: "refusal" }

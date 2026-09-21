@@ -24,6 +24,7 @@ import { type Api, createApi } from "@effectionx/context-api";
 import { ensure, type Operation } from "effection";
 import type { PermissionMode } from "./agent-api.ts";
 import type { AgentLaunchCoordinator } from "./launch-coordinator.ts";
+import type { AgentSessionPlacement } from "./session-placement.ts";
 
 export interface AgentProviderOptions {
   defaultAgent: string;
@@ -163,13 +164,19 @@ function deliveryOf(value: unknown): {
   }
   const perform = Reflect.get(launchCoordinator, "perform");
   const refuse = Reflect.get(launchCoordinator, "refuse");
-  const sessionIdentity = Reflect.get(launchCoordinator, "sessionIdentity");
+  const sessionPlacement = Reflect.get(launchCoordinator, "sessionPlacement");
   const checkpoint = Reflect.get(launchCoordinator, "checkpoint");
+  const sessionUse = Reflect.get(launchCoordinator, "sessionUse");
+  const registerSessionConfiguration = Reflect.get(
+    launchCoordinator,
+    "registerSessionConfiguration",
+  );
   if (
     typeof perform !== "function" ||
     typeof refuse !== "function" ||
-    typeof sessionIdentity !== "function" ||
-    typeof checkpoint !== "function"
+    typeof sessionPlacement !== "function" ||
+    typeof checkpoint !== "function" ||
+    typeof sessionUse !== "function"
   ) {
     throw new AgentProviderInstallError(
       "the live agent provider installation carried no launch coordination",
@@ -181,19 +188,39 @@ function deliveryOf(value: unknown): {
       perform: (request, phases) => Reflect.apply(perform, launchCoordinator, [request, phases]),
       refuse: (request, preparation) =>
         Reflect.apply(refuse, launchCoordinator, [request, preparation]),
-      sessionIdentity: (request) => {
-        const identity = Reflect.apply(sessionIdentity, launchCoordinator, [request]);
-        if (typeof identity !== "string" || identity === "") {
-          throw new AgentProviderInstallError(
-            "the live agent provider installation answered a session placement with no identity",
-          );
-        }
-        return identity;
-      },
+      sessionPlacement: (request) =>
+        placementOf(Reflect.apply(sessionPlacement, launchCoordinator, [request])),
       checkpoint: (terminal, token) => {
         Reflect.apply(checkpoint, launchCoordinator, [terminal, token]);
       },
+      sessionUse: (routed) => Reflect.apply(sessionUse, launchCoordinator, [routed]),
     },
+  };
+}
+
+/**
+ * What the terminal answered a placement with, read rather than believed.
+ *
+ * The handle settles one conversation, so a value that cannot do that is a
+ * value this side refuses rather than hands to a provider.
+ */
+function placementOf(value: unknown): AgentSessionPlacement {
+  if (typeof value !== "object" || value === null) {
+    throw new AgentProviderInstallError(
+      "the live agent provider installation answered a session placement with nothing that " +
+        "could settle it",
+    );
+  }
+  const complete = Reflect.get(value, "complete");
+  const sessionIdentity = Reflect.get(value, "sessionIdentity");
+  if (typeof complete !== "function") {
+    throw new AgentProviderInstallError(
+      "the live agent provider installation answered a session placement that settles nothing",
+    );
+  }
+  return {
+    ...(typeof sessionIdentity === "string" ? { sessionIdentity } : {}),
+    complete: (session, state) => Reflect.apply(complete, value, [session, state]),
   };
 }
 

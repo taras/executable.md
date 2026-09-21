@@ -27,8 +27,21 @@ import { cwd, flushOutput, parseDuration, reserveTerminal } from "@executablemd/
 import type { Json, PropsSchema } from "../types.ts";
 import type { Expansion } from "../expansion.ts";
 import { Agent } from "./agent-api.ts";
-import type { LaunchOptions, PromptOptions, Session, SessionLaunchResult } from "./agent-api.ts";
-import { launchAgentSession, useProviderInstallation } from "./launch-install.ts";
+import { sessionOf } from "./session-use.ts";
+import type {
+  LaunchOptions,
+  PromptOptions,
+  Session,
+  SessionConfiguration,
+  SessionLaunchResult,
+} from "./agent-api.ts";
+import {
+  launchAgentSession,
+  sessionUseConfiguration,
+  useConfiguredSession,
+  useProviderInstallation,
+} from "./launch-install.ts";
+import type { AgentSessionUse } from "./session-use.ts";
 import { AgentLaunchError } from "./launch.ts";
 import type {
   DetachedLaunchRecord,
@@ -72,7 +85,11 @@ export const AGENT_PROPS: PropsSchema = {
 
 export const SESSION_PROPS: PropsSchema = {
   type: "object",
-  properties: { name: { type: "string" } },
+  properties: {
+    name: { type: "string" },
+    model: { type: "string" },
+    effort: { type: "string" },
+  },
   additionalProperties: false,
 };
 
@@ -99,6 +116,26 @@ export const PROMPT_PROPS: PropsSchema = {
 
 function asString(value: Json | undefined): string | undefined {
   return typeof value === "string" ? value : undefined;
+}
+
+/**
+ * What a `<Session>` element authored, or nothing at all.
+ *
+ * Nothing is the released one-argument call: an element that configured nothing
+ * asks for nothing, and an empty configuration object would be a request to
+ * leave everything alone — which a provider cannot tell from a request to write
+ * two values it was never given.
+ */
+function sessionConfigurationOf(props: Record<string, Json>): SessionConfiguration | undefined {
+  const model = asString(props.model);
+  const effort = asString(props.effort);
+  if (model === undefined && effort === undefined) {
+    return undefined;
+  }
+  return {
+    ...(model === undefined ? {} : { model }),
+    ...(effort === undefined ? {} : { effort }),
+  };
 }
 
 /**
@@ -199,8 +236,19 @@ export function sessionComponent(claim: IdentityClaimant): FunctionComponent {
     // synchronous, so the guarantee holds however the call left.
     const identity = yield* claim(invocation);
     const issuance = sessionPlacement(identity, asString(props.name));
-    let session: Session;
+    // Read before the placement is routed, so one value describes this element
+    // for everything beneath it.
+    const configuration = sessionConfigurationOf(props);
+    // Settled here, before anything routes, and settled either way: an element
+    // that authored nothing says so, which is what leaves a handler holding
+    // this placement with nothing to add to it.
+    issuance.configure(configuration);
+    let session: Session | AgentSessionUse;
     try {
+      // One released one-argument call, configured or not: what a handler sees
+      // is this element's placement and nothing else, and what the element asks
+      // travels where the engine identity already travels — inside the value,
+      // reachable only by the installed provider's coordinator.
       session = yield* Agent.operations.session(issuance.request);
     } finally {
       issuance.close();
@@ -208,22 +256,29 @@ export function sessionComponent(claim: IdentityClaimant): FunctionComponent {
     if (!(yield* hasContent())) {
       return "";
     }
+    // The one value this element stands for. It is the session — a prompt or a
+    // launch beneath it is pinned to this exact object — and, where the element
+    // configured anything, it is the use that says what the conversation runs
+    // under. Installed whether or not anything was configured, because the
+    // innermost `<Session>` owns the conversation a nested prompt belongs to.
+    yield* AgentInternal.around({ sessionUse: () => session }, { at: "min" });
     yield* Agent.around(
       {
-        *session([name], next) {
+        *session(routed, next) {
+          const [name] = routed;
           if (name === undefined) {
             return session;
           }
-          return yield* next(name);
+          // Delegated exactly as it arrived, arity included: a nested Session
+          // that authored nothing stays a one-argument call on its way past.
+          return yield* next(...routed);
         },
         *prompt([text, options], next) {
+          // The conversation this element owns, for anything beneath it that
+          // named none. A prompt that named its own — or a handler that routed
+          // another — keeps what it has: the final routed session is what the
+          // provider acts on, and what it runs under travels on that value.
           return yield* next(text, { session, ...options });
-        },
-        *launch([request], next) {
-          // Pinned by deriving, which is the only way a handler may change what a
-          // launch asks for. An explicit `session` on the launch itself already
-          // named one, and lexical pinning does not override it.
-          return yield* next(request.session === undefined ? request.with({ session }) : request);
         },
       },
       { at: "min" },
@@ -247,6 +302,16 @@ export function* Prompt(props: Record<string, Json>): Operation<Json> {
   const sessionProp = asString(props.session);
   if (sessionProp !== undefined) {
     options.session = sessionProp;
+  } else {
+    // The conversation this prompt belongs to, named before anything routes.
+    // A handler is entitled to see which conversation a prompt is for and to
+    // send it somewhere else; naming it here is what makes that possible, and
+    // the provider acts on whatever the last handler left. A prompt that named
+    // its own session belongs to that one instead.
+    const enclosing = yield* AgentInternal.operations.sessionUse;
+    if (enclosing !== undefined) {
+      options.session = enclosing;
+    }
   }
   const timeoutProp = asString(props.timeout);
   const inherited = yield* AgentInternal.operations.promptTimeout;
@@ -263,7 +328,6 @@ export function* Prompt(props: Record<string, Json>): Operation<Json> {
   const location = formatLocation(expansion);
   const ordinal = yield* AgentInternal.operations.promptOrdinal(location);
   const sequence = yield* AgentInternal.operations.nextPromptSequence();
-
   // Held here rather than on the record: what the journal keeps about a prompt
   // is unchanged, and this is what a host may retain beside it.
   const carried: { association?: AgentPromptAssociation } = {};
@@ -296,6 +360,16 @@ interface ConsumedTurn {
   agent?: string;
   sessionKey?: string;
   agentSessionId?: string;
+  /** Whether the provider said this turn started. */
+  started?: true;
+  /**
+   * The exact session the provider said this turn ran in.
+   *
+   * Read off the `started` event rather than from the element, because a
+   * handler may reroute a whole conversation and the record has to describe
+   * the one that actually ran.
+   */
+  ranIn?: Session;
   status?: PromptRecord["status"];
   stopReason?: string;
   failure?: SerializedPromptFailure;
@@ -318,7 +392,9 @@ function* runPrompt(
   carried: { association?: AgentPromptAssociation },
 ): Operation<PromptRecord> {
   let consumed: ConsumedTurn = { text: "" };
-
+  // What this turn was authored to run under, and — once the provider has been
+  // reached — the exact value it was reached with. The record below is written
+  // from the second, so the journal describes the turn that actually ran.
   try {
     // The subscription is consumed inside its own scope: the subscribing scope
     // owns the turn, so the provider's per-turn cleanups (turn cancellation,
@@ -332,8 +408,13 @@ function* runPrompt(
       while (!next.done) {
         const event = next.value;
         if (event.type === "started") {
+          result.started = true;
           result.agent = event.agent;
           result.sessionKey = event.session.sessionKey;
+          // The value the provider named as the conversation this turn ran in.
+          // For a configured turn that is the authentic use it was verified
+          // under, which is what the record is written from.
+          result.ranIn = event.session;
           if (event.session.agentSessionId !== undefined) {
             result.agentSessionId = event.session.agentSessionId;
           }
@@ -376,14 +457,26 @@ function* runPrompt(
   const record: PromptRecord = {
     sequence,
     agent: consumed.agent ?? options.agent ?? "",
-    sessionKey:
-      consumed.sessionKey ??
-      (typeof options.session === "object" ? options.session.sessionKey : ""),
+    sessionKey: consumed.sessionKey ?? sessionOf(options.session)?.sessionKey ?? "",
     status,
     text: consumed.text,
   };
   if (consumed.agentSessionId !== undefined) {
     record.agentSessionId = consumed.agentSessionId;
+  }
+  // Read from the session the provider itself named as the one this turn ran
+  // in, never from what the element held. Middleware may reroute a whole
+  // conversation, and the record has to describe the one that actually ran: an
+  // authentic use answers with what it was verified under, and a raw session
+  // answers with nothing.
+  //
+  // Retained only once the provider said the turn started, because that is when
+  // the conversation was under these settings: a prompt that failed while they
+  // were still being applied ran under nothing, and one that started and then
+  // failed still ran under exactly them.
+  const configuration = yield* sessionUseConfiguration(consumed.ranIn);
+  if (configuration !== undefined && consumed.started === true) {
+    record.configuration = configuration;
   }
   if (consumed.stopReason !== undefined) {
     record.stopReason = consumed.stopReason;

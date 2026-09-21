@@ -15,13 +15,14 @@ import type { Operation } from "effection";
 import {
   ActivePlugins,
   activePlugins,
+  Agent,
   Document,
   document,
   Plugin,
   RootMetadata,
   rootMetadata,
 } from "../api.ts";
-import type { DocumentApi } from "../api.ts";
+import type { AgentOptions, DocumentApi, Session, SessionConfiguration } from "../api.ts";
 // The placeholder text is canonical core's own, not part of what a Plugin
 // imports: a wrapper receives it from `next()` rather than naming it.
 import { DOCUMENT_PLACEHOLDER } from "../src/plugin-apis.ts";
@@ -220,5 +221,63 @@ describe("PA3 — ActivePlugins is an ordered immutable snapshot", () => {
     });
     expect(Object.isFrozen(snapshot)).toBe(true);
     expect(snapshot).not.toBe(installed);
+  });
+});
+
+/**
+ * PA4 — the Agent Api a Plugin composes agent work through.
+ *
+ * A Plugin depends on `@executablemd/core/api` and nothing else, so what it can
+ * reach about a session is settled here: the Api itself, the choices an agent
+ * advertises, and the configuration a `<Session>` authored — all in Core's own
+ * vocabulary. Whatever protocol the installed provider speaks does not appear.
+ */
+describe("PA4 — the Agent Api composes from the Plugin entrypoint", () => {
+  it("wraps options() and a configured session() the ordinary way", function* () {
+    const seen: unknown[][] = [];
+    const choices: AgentOptions = {
+      agent: "codex",
+      model: {
+        selected: "gpt-5.4",
+        options: [
+          {
+            id: "gpt-5.4",
+            name: "GPT-5.4",
+            description: "the current one",
+            group: { id: "frontier", name: "Frontier" },
+          },
+        ],
+      },
+      effort: null,
+    };
+
+    const composed = yield* scoped(function* (): Operation<[Session, AgentOptions]> {
+      yield* Agent.around(
+        {
+          // deno-lint-ignore require-yield
+          *session(args): Operation<Session> {
+            seen.push([...args]);
+            return { sessionKey: "plugin:review", cwd: "/repo" };
+          },
+          // deno-lint-ignore require-yield
+          *options(): Operation<AgentOptions> {
+            return choices;
+          },
+        },
+        { at: "min" },
+      );
+      yield* Agent.around({
+        *session(args, next): Operation<Session> {
+          return yield* next(...args);
+        },
+      });
+      return [yield* Agent.operations.session("review"), yield* Agent.operations.options("codex")];
+    });
+
+    // The placement, and nothing else: no settings object travels this route.
+    expect(seen).toEqual([["review"]]);
+    expect(composed[0]).toEqual({ sessionKey: "plugin:review", cwd: "/repo" });
+    expect(composed[1].model?.options[0]?.group).toEqual({ id: "frontier", name: "Frontier" });
+    expect(composed[1].effort).toBe(null);
   });
 });

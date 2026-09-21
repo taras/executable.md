@@ -20,8 +20,12 @@ import { createHash, randomUUID } from "node:crypto";
 import * as path from "node:path";
 import * as os from "node:os";
 import { execute } from "../src/execute.ts";
+import { executeInstalled } from "../host.ts";
+import { agentIdentityComponents } from "../src/agent/components.ts";
 import { Agent } from "../src/agent/agent-api.ts";
-import type { Session, SessionLaunchResult } from "../src/agent/agent-api.ts";
+import { sessionOf } from "../src/agent/session-use.ts";
+import { isSessionRequest } from "../src/agent/session-request.ts";
+import type { Session, SessionConfiguration, SessionLaunchResult } from "../src/agent/agent-api.ts";
 import type {
   ExecutableBuildBindingV1,
   ExitedLaunchRecord,
@@ -57,6 +61,8 @@ interface LaunchStub {
   agentLookups: (string | undefined)[];
   /** Instructions each *live* preparation received, in order. */
   preparations: string[];
+  /** What each preparation was told its conversation runs under, in order. */
+  configurations: (SessionConfiguration | undefined)[];
   detaches: number;
   /** Live exit phases — one per native child this provider actually started. */
   exits: number;
@@ -82,6 +88,19 @@ interface LaunchStub {
   withholdMaterializedIdentity?: boolean;
   /** Assert an identity in a preparation that also plans a turn. */
   assertIdentityBeforeTurn?: boolean;
+  /**
+   * Retain a preparation naming a different effort than the launch runs under.
+   *
+   * A provider asserts the session facts, but what the conversation runs under
+   * is the document's — so a preparation that changed it describes a launch
+   * nobody authored.
+   */
+  misreportConfiguration?: boolean;
+  /**
+   * Refuse a configured launch at its preparation, as a provider that could
+   * not put the conversation under what was asked does.
+   */
+  configurationRefused?: string;
 }
 
 function digest(text: string): string {
@@ -92,6 +111,7 @@ function createLaunchStub(overrides: Partial<LaunchStub> = {}): LaunchStub {
   const stub: LaunchStub = {
     agentLookups: [],
     preparations: [],
+    configurations: [],
     detaches: 0,
     exits: 0,
     factoryActivations: 0,
@@ -112,15 +132,28 @@ function createLaunchStub(overrides: Partial<LaunchStub> = {}): LaunchStub {
           },
           // deno-lint-ignore require-yield
           *session([name]) {
-            const session: Session = { sessionKey: `stub:${name ?? "default"}`, cwd: "/repo" };
-            return session;
+            const session: Session = {
+              sessionKey: `stub:${typeof name === "string" ? name : "default"}`,
+              cwd: "/repo",
+            };
+            // Every session this stub issues is a fresh placement: there is no
+            // conversation yet, so nothing is applied here and the launch
+            // beneath it constructs and configures.
+            if (!isSessionRequest(name)) {
+              return session;
+            }
+            return yield* launchCoordinator
+              .sessionPlacement(name)
+              .complete(session, { kind: "fresh" });
           },
           *launch([request]) {
             const agent = request.agent;
+            const configuration = launchCoordinator.sessionUse(request.session)?.configuration;
+            const effort = stub.misreportConfiguration ? "low" : configuration?.effort;
+            const named = sessionOf(request.session);
             const sessionKey =
-              typeof request.session === "object"
-                ? request.session.sessionKey
-                : `stub:${request.session ?? "default"}`;
+              named?.sessionKey ??
+              `stub:${typeof request.session === "string" ? request.session : "default"}`;
 
             if (stub.fabricate) {
               // Structural data alone, from a handler that did no work. The
@@ -133,6 +166,7 @@ function createLaunchStub(overrides: Partial<LaunchStub> = {}): LaunchStub {
               // deno-lint-ignore require-yield
               *prepare(): Operation<PreparedLaunchRecord> {
                 stub.preparations.push(request.instructions);
+                stub.configurations.push(configuration);
                 prepared = {
                   phase: "prepared",
                   agent,
@@ -156,6 +190,21 @@ function createLaunchStub(overrides: Partial<LaunchStub> = {}): LaunchStub {
                   permissionMode: request.permissionMode,
                   launcher: "stub",
                 };
+                if (stub.configurationRefused !== undefined) {
+                  // A refusal names no settings: nothing was put into force, so
+                  // there is nothing for this record to say it ran under.
+                  prepared.failure = {
+                    class: "configuration-refused",
+                    message: stub.configurationRefused,
+                  };
+                } else if (configuration !== undefined) {
+                  // What this provider put the conversation under, retained as
+                  // the one thing a launch record says about its settings.
+                  prepared.configuration = {
+                    ...(configuration.model === undefined ? {} : { model: configuration.model }),
+                    ...(effort === undefined ? {} : { effort }),
+                  };
+                }
                 if (stub.executableBinding !== undefined) {
                   prepared.executableBinding = stub.executableBinding;
                 }
@@ -291,6 +340,13 @@ interface RunOptions {
     next: (request: AgentLaunchRequest) => Operation<unknown>,
   ) => Operation<unknown>;
   secretDetection?: boolean;
+  /**
+   * Declare `<Session>` to the execution, the way a host that supports it does.
+   *
+   * It names durable work after its own invocation, so a document that wraps a
+   * launch in one only has the element where a host declared it.
+   */
+  declareSession?: boolean;
 }
 
 interface Run {
@@ -377,14 +433,17 @@ function* runDoc(doc: string, options: RunOptions = {}): Operation<Run> {
       });
     }
 
-    const execution = yield* execute({
+    const executeOptions = {
       path: docPath,
       stream,
       includes: [dir],
       ...(options.secretDetection === undefined
         ? {}
         : { secretDetection: options.secretDetection }),
-    });
+    };
+    const execution = options.declareSession
+      ? yield* executeInstalled(executeOptions, [{ components: agentIdentityComponents() }])
+      : yield* execute(executeOptions);
     const subscription = yield* execution.output;
     let next = yield* subscription.next();
     while (!next.done) {
@@ -406,6 +465,7 @@ function* runInterrupted(
   stream: InMemoryStream,
   stub: LaunchStub,
   dir: string,
+  declareSession = false,
 ): Operation<LauncherLog> {
   const arrived = withResolvers<void>();
   const hold = withResolvers<void>();
@@ -440,7 +500,11 @@ function* runInterrupted(
           options: { defaultAgent: "stub-agent", permissionMode: "deny-all" },
         },
       });
-      const execution = yield* execute({ path: docPath, stream });
+      const execution = declareSession
+        ? yield* executeInstalled({ path: docPath, stream }, [
+            { components: agentIdentityComponents() },
+          ])
+        : yield* execute({ path: docPath, stream });
       yield* spawn(function* () {
         const subscription = yield* execution.output;
         let next = yield* subscription.next();
@@ -1670,5 +1734,305 @@ describe("Tier MJ — reading the materialization phase back", () => {
     for (const value of [undefined, null, "materialized", []]) {
       expect(parseMaterialized(value)).toBe(undefined);
     }
+  });
+});
+
+/**
+ * Tier SC — the configuration a launch carries and retains (issue #828).
+ *
+ * A `<Session>` says what its conversation runs under, and a launch beneath it
+ * hands that request to the provider and retains both what was asked and what
+ * the provider reported. The request is the document's: a preparation that
+ * changed it describes a launch nobody authored, and that is refused before the
+ * handoff rather than journaled as what happened.
+ */
+const CONFIGURED_LAUNCH = [
+  '<Session name="architect" model="gpt-5.4" effort="high">',
+  "<Session.Launch>",
+  "You are the implementor.",
+  "</Session.Launch>",
+  "</Session>",
+  "",
+].join("\n");
+
+describe("Tier SC — configured native launch", () => {
+  it("SC1: the routed use and the retained preparation carry the same two values", function* () {
+    const run = yield* runDoc(CONFIGURED_LAUNCH, { declareSession: true });
+
+    expect(run.result.ok ? "" : run.result.error.message).toBe("");
+    // It reaches the provider on the use this request names, together with the
+    // conversation it belongs to — one value, arriving with the operation.
+    expect(run.stub.configurations).toEqual([{ model: "gpt-5.4", effort: "high" }]);
+    const record = preparedRecord(run.events);
+    expect(record.configuration).toEqual({ model: "gpt-5.4", effort: "high" });
+    expect(run.launcher.requests.length).toBe(1);
+  });
+
+  it("SC2: a preparation that changed what was asked never reaches the handoff", function* () {
+    const run = yield* runDoc(CONFIGURED_LAUNCH, {
+      declareSession: true,
+      stub: createLaunchStub({ misreportConfiguration: true }),
+    });
+
+    expect(run.result.ok).toBe(false);
+    expect(run.result.ok ? "" : run.result.error.message).toContain(
+      "whose configuration is not what this launch asked for",
+    );
+    // The preparation was retained — it is what happened — and nothing after it
+    // was: no detach, and no native UI.
+    expect(retainedPhases(run.events)).toEqual(["prepared"]);
+    expect(run.stub.detaches).toBe(0);
+    expect(run.launcher.requests.length).toBe(0);
+  });
+
+  it("SC3: an unconfigured launch asks for nothing and retains nothing", function* () {
+    const run = yield* runDoc(LAUNCH);
+
+    expect(run.result.ok).toBe(true);
+    expect(preparedRecord(run.events).configuration).toBe(undefined);
+  });
+
+  it("SC4: a completed configured launch replays without entering the provider", function* () {
+    const stream = new InMemoryStream();
+    const dir = path.join(os.tmpdir(), `xmd-sc-${randomUUID()}`);
+    yield* ensureDir(dir);
+    yield* scoped(function* () {
+      yield* ensure(() => rm(dir, { recursive: true, force: true }));
+      const stub = createLaunchStub();
+      const first = yield* runDoc(CONFIGURED_LAUNCH, { declareSession: true, stream, stub, dir });
+      expect(first.result.ok ? "" : first.result.error.message).toBe("");
+
+      const second = yield* runDoc(CONFIGURED_LAUNCH, { declareSession: true, stream, stub, dir });
+      expect(second.result.ok).toBe(true);
+      // Nothing configured anything a second time, because nothing entered the
+      // provider at all.
+      expect(stub.factoryActivations).toBe(1);
+      expect(stub.preparations.length).toBe(1);
+      expect(second.launcher.requests.length).toBe(0);
+      expect(preparedRecord(second.events).configuration).toEqual({
+        model: "gpt-5.4",
+        effort: "high",
+      });
+    });
+  });
+});
+
+/**
+ * Tier SC — where a handler routes a launch is where it runs.
+ *
+ * A launch reaches the provider through the same public chain a prompt does,
+ * and a handler may narrow the request through `with()`. Narrowing the session
+ * routes the launch to another conversation, which is what middleware is for —
+ * so what these rows establish is that the provider and the journal both follow
+ * that route rather than the element the launch was written inside.
+ */
+describe("Tier SC — the final routed Session decides a launch", () => {
+  it("SC20: narrowing the request to the raw session runs unconfigured", function* () {
+    const run = yield* runDoc(CONFIGURED_LAUNCH, {
+      declareSession: true,
+      // The conversation, without what it was to run under.
+      intercept: (request, next) => next(request.with({ session: sessionOf(request.session) })),
+    });
+
+    expect(run.result.ok ? "" : run.result.error.message).toBe("");
+    // The launch happened, and nothing was configured or retained: a raw
+    // session carries no settings, and the record says only what ran.
+    expect(run.stub.configurations).toEqual([]);
+    expect(preparedRecord(run.events).configuration).toBe(undefined);
+    expect(run.launcher.requests.length).toBe(1);
+  });
+
+  it("SC21: narrowing to another authentic use runs under that use", function* () {
+    let first: string | Session | undefined;
+    const run = yield* runDoc(
+      [
+        '<Session name="architect" model="gpt-5.4">',
+        "<Session.Launch>",
+        "first",
+        "</Session.Launch>",
+        "</Session>",
+        '<Session name="reviewer" effort="high">',
+        "<Session.Launch>",
+        "second",
+        "</Session.Launch>",
+        "</Session>",
+        "",
+      ].join("\n"),
+      {
+        declareSession: true,
+        intercept: (request, next) => {
+          if (first === undefined) {
+            first = request.session;
+            return next(request);
+          }
+          return next(request.with({ session: first }));
+        },
+      },
+    );
+
+    expect(run.result.ok ? "" : run.result.error.message).toBe("");
+    // Both launches ran in the first element's conversation, so both ran under
+    // its settings — the second element's were never applied to anything.
+    expect(run.stub.configurations).toEqual([{ model: "gpt-5.4" }, { model: "gpt-5.4" }]);
+    expect(run.launcher.requests.length).toBe(2);
+  });
+
+  it("SC22: reading the use and delegating the request is unchanged", function* () {
+    const seen: (string | Session | undefined)[] = [];
+    const run = yield* runDoc(CONFIGURED_LAUNCH, {
+      declareSession: true,
+      intercept: (request, next) => {
+        seen.push(request.session);
+        return next(request.with({ instructions: request.instructions }));
+      },
+    });
+
+    expect(run.result.ok ? "" : run.result.error.message).toBe("");
+    expect(seen.length).toBe(1);
+    expect(run.stub.configurations).toEqual([{ model: "gpt-5.4", effort: "high" }]);
+    expect(run.launcher.requests.length).toBe(1);
+  });
+});
+
+/**
+ * Tier SJ — reading a configured preparation back.
+ *
+ * The four members are optional and each is exact: a record written before this
+ * feature existed still parses, and one whose member does not read back is
+ * refused rather than replayed as a launch that asked for nothing.
+ */
+describe("Tier SJ — configuration in a retained preparation", () => {
+  it("SJ1: a record without any of them parses as a launch that asked for nothing", function* () {
+    expect(parsePrepared(prepared())?.configuration).toBe(undefined);
+  });
+
+  it("SJ2: the one configuration round-trips unchanged", function* () {
+    const parsed = parsePrepared(prepared({ configuration: { model: "gpt-5.4", effort: "high" } }));
+    expect(parsed?.configuration).toEqual({ model: "gpt-5.4", effort: "high" });
+  });
+
+  it("SJ5: a released record's model and requestedModel are read and dropped", function* () {
+    // The shipped provider wrote `model` on every launch as observational
+    // evidence — the model it happened to be using, which nobody chose — and a
+    // third-party provider could have persisted `requestedModel` before core
+    // rejected the preparation. Reading either as a configuration would make a
+    // replay apply settings nobody asked for.
+    const readAndDropped: Record<string, Json>[] = [
+      { model: "gpt-5.4" },
+      { requestedModel: "gpt-5.4" },
+    ];
+    for (const released of readAndDropped) {
+      const described = JSON.stringify(released);
+      const parsed = parsePrepared(prepared(released));
+      expect([described, parsed?.configuration]).toEqual([described, undefined]);
+      expect([described, JSON.stringify(parsed)?.includes("gpt-5.4")]).toEqual([described, false]);
+    }
+    // Malformed is not read past: the record is describing something it cannot
+    // state.
+    const malformed: Record<string, Json>[] = [{ model: "" }, { requestedModel: 7 }];
+    for (const released of malformed) {
+      const described = JSON.stringify(released);
+      expect([described, parsePrepared(prepared(released))]).toEqual([described, undefined]);
+    }
+    // And a released member beside a canonical configuration is two accounts
+    // of one conversation, with nothing here to choose between them.
+    expect(
+      parsePrepared(prepared({ model: "gpt-5.4", configuration: { model: "gpt-5.4-mini" } })),
+    ).toBe(undefined);
+  });
+
+  it("SJ6: a refusal cannot also say what its conversation ran under", function* () {
+    // A preparation that failed put the conversation under nothing, so a record
+    // carrying both is describing two different launches.
+    expect(
+      parsePrepared(
+        prepared({
+          configuration: { model: "gpt-5.4" },
+          failure: { class: "configuration-refused", message: "why" },
+        }),
+      ),
+    ).toBe(undefined);
+  });
+
+  it("SJ3: a configuration that does not read back refuses the record", function* () {
+    // Exact members, and at least one: an empty object is not an unconfigured
+    // launch, it is a record that cannot say what its conversation ran under.
+    for (const carried of [{}, { model: "" }, { effort: 7 }, { model: "a", mode: "fast" }, "gpt"]) {
+      const described = JSON.stringify(carried);
+      expect([described, parsePrepared(prepared({ configuration: carried as Json }))]).toEqual([
+        described,
+        undefined,
+      ]);
+    }
+  });
+
+  it("SJ4: configuration-refused is a retained failure class", function* () {
+    const parsed = parsePrepared(
+      prepared({ failure: { class: "configuration-refused", message: "why" } }),
+    );
+    expect(parsed?.failure).toEqual({ class: "configuration-refused", message: "why" });
+  });
+});
+
+/**
+ * Tier SR — replaying a configured launch (issue #828).
+ *
+ * What a launch asked its conversation to run under is retained, so a resumed
+ * launch reads it rather than deciding again — and the phases it retained stay
+ * the phases that happened. Applying the configuration is the provider's; what
+ * these rows own is the durable sequence around it.
+ */
+describe("Tier SR — configured launch replay", () => {
+  it("SR1: a provider that cannot configure the conversation stops at the preparation", function* () {
+    const run = yield* runDoc(CONFIGURED_LAUNCH, {
+      declareSession: true,
+      stub: createLaunchStub({
+        configurationRefused: 'Unknown model "gpt-5.4" for agent "stub-agent".',
+      }),
+    });
+
+    expect(run.result.ok).toBe(false);
+    expect(run.result.ok ? "" : run.result.error.message).toContain("Unknown model");
+    // Retained as what happened, under the class an author can act on, and
+    // nothing after it was authored.
+    expect(preparedFailure(run.events)).toBe("configuration-refused");
+    expect(retainedPhases(run.events)).toEqual(["prepared"]);
+    expect(run.stub.detaches).toBe(0);
+    expect(run.launcher.requests.length).toBe(0);
+    // A refusal names no settings: this conversation was never put under any,
+    // and a record claiming otherwise would describe a launch that ran.
+    const record = preparedRecord(run.events);
+    expect(record.model).toBe(undefined);
+    expect(record.effort).toBe(undefined);
+  });
+
+  it("SR2: an interrupted configured launch replays its phases and appends no second detach", function* () {
+    const stream = new InMemoryStream();
+    const stub = createLaunchStub();
+    const dir = path.join(os.tmpdir(), `xmd-sr-${randomUUID()}`);
+    yield* ensure(() => rm(dir, { recursive: true, force: true }));
+
+    const interrupted = yield* runInterrupted(CONFIGURED_LAUNCH, stream, stub, dir, true);
+    expect(interrupted.requests.length).toBe(1);
+    expect(stub.preparations.length).toBe(1);
+    expect(stub.detaches).toBe(1);
+
+    const resumed = yield* runDoc(CONFIGURED_LAUNCH, {
+      declareSession: true,
+      stream,
+      stub,
+      dir,
+    });
+    expect(resumed.result.ok ? "" : resumed.result.error.message).toBe("");
+    // Neither phase ran again, and the journal still holds exactly one of each.
+    expect(stub.preparations.length).toBe(1);
+    expect(stub.detaches).toBe(1);
+    expect(retainedPhases(resumed.events).filter((phase) => phase === "detached").length).toBe(1);
+    // What it was prepared with survived the interruption, which is what a
+    // provider reapplies before it continues.
+    expect(preparedRecord(resumed.events).configuration).toEqual({
+      model: "gpt-5.4",
+      effort: "high",
+    });
   });
 });

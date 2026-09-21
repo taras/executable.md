@@ -11,8 +11,15 @@
  */
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
+import { scoped } from "effection";
+import type { Operation } from "effection";
 import { Agent } from "../src/agent/agent-api.ts";
-import type { PermissionRequest } from "../src/agent/agent-api.ts";
+import type {
+  AgentOptions,
+  PermissionRequest,
+  Session,
+  SessionConfiguration,
+} from "../src/agent/agent-api.ts";
 
 function assertNoProviderError(error: unknown): void {
   expect(error).toBeInstanceOf(Error);
@@ -89,5 +96,104 @@ describe("Tier AA — base Agent Api", () => {
       request([{ optionId: "ao", name: "Allow once", kind: "allow_once" }]),
     );
     expect(noRejection).toEqual({ outcome: "cancelled" });
+  });
+
+  it("AA5: options() without a provider throws the adapted no-provider error", function* () {
+    let caught: unknown;
+    try {
+      yield* Agent.operations.options("codex");
+    } catch (error) {
+      caught = error;
+    }
+    assertNoProviderError(caught);
+  });
+});
+
+describe("Tier AA — configuration and option discovery compose", () => {
+  const CHOICES: AgentOptions = {
+    agent: "codex",
+    model: {
+      selected: "gpt-5.4",
+      options: [
+        { id: "gpt-5.4", name: "GPT-5.4", description: null, group: null },
+        { id: "gpt-5.4-mini", name: "GPT-5.4 Mini", description: null, group: null },
+      ],
+    },
+    effort: {
+      selected: "medium",
+      options: [{ id: "medium", name: "Medium", description: null, group: null }],
+    },
+  };
+
+  it("AA6: a provider answers options() with provider-neutral choices", function* () {
+    const asked: [string | undefined, string | undefined][] = [];
+    const answered = yield* scoped(function* (): Operation<AgentOptions> {
+      yield* Agent.around(
+        {
+          // deno-lint-ignore require-yield
+          *options([agent, request]) {
+            asked.push([agent, request?.model]);
+            return CHOICES;
+          },
+        },
+        { at: "min" },
+      );
+      return yield* Agent.operations.options("codex", { model: "gpt-5.4" });
+    });
+
+    expect(asked).toEqual([["codex", "gpt-5.4"]]);
+    expect(answered).toEqual(CHOICES);
+  });
+
+  it("AA7: session middleware receives the placement and nothing else", function* () {
+    // Model and effort are settings a `<Session>` supplies, not inputs a
+    // handler composes. Routing them here would make them a value every
+    // handler could edit, and the conversation would run under the last thing
+    // anybody wrote — so the route carries a name, and what a conversation runs
+    // under travels on the value that names it.
+    const routed: unknown[][] = [];
+    yield* scoped(function* (): Operation<void> {
+      yield* Agent.around(
+        {
+          // deno-lint-ignore require-yield
+          *session(args): Operation<Session> {
+            routed.push([...args]);
+            return { sessionKey: "s", cwd: "/" };
+          },
+        },
+        { at: "min" },
+      );
+      yield* Agent.operations.session("review");
+      yield* Agent.operations.session();
+    });
+
+    // One argument when a name was given, and none when it was not: an absent
+    // name routed as an explicit undefined would read as an ask of its own.
+    expect(routed).toEqual([["review"], []]);
+  });
+
+  it("AA8: a wrapper that delegates hands the placement on unchanged", function* () {
+    const seen: unknown[][] = [];
+    yield* scoped(function* (): Operation<void> {
+      yield* Agent.around(
+        {
+          // deno-lint-ignore require-yield
+          *session(args): Operation<Session> {
+            seen.push([...args]);
+            return { sessionKey: "s", cwd: "/" };
+          },
+        },
+        { at: "min" },
+      );
+      yield* Agent.around({
+        *session(args, next): Operation<Session> {
+          return yield* next(...args);
+        },
+      });
+      yield* Agent.operations.session("review");
+      yield* Agent.operations.session();
+    });
+
+    expect(seen).toEqual([["review"], []]);
   });
 });

@@ -109,9 +109,11 @@ function collectingCoordinator(records: LaunchRecord[]): AgentLaunchCoordinator 
     // These suites route launches, never a `<Session>` placement. Throwing
     // rather than answering means a placement that did reach here fails
     // loudly instead of being handed an identity nobody derived.
-    sessionIdentity: () => {
+    sessionPlacement: () => {
       throw new Error("this stub coordinator routes no session placement");
     },
+    sessionUse: (routed) =>
+      typeof routed === "object" && routed !== null ? { session: routed } : undefined,
     // As with a placement, these suites name no provider turn. Throwing means a
     // checkpoint that did reach here fails loudly rather than being recorded by
     // a coordinator nothing is asserting against.
@@ -140,9 +142,11 @@ function collectingCoordinator(records: LaunchRecord[]): AgentLaunchCoordinator 
 function performingCoordinator(records: LaunchRecord[]): AgentLaunchCoordinator {
   return {
     // As above: these suites route launches, never a `<Session>` placement.
-    sessionIdentity: () => {
+    sessionPlacement: () => {
       throw new Error("this stub coordinator routes no session placement");
     },
+    sessionUse: (routed) =>
+      typeof routed === "object" && routed !== null ? { session: routed } : undefined,
     // As with a placement, these suites name no provider turn. Throwing means a
     // checkpoint that did reach here fails loudly rather than being recorded by
     // a coordinator nothing is asserting against.

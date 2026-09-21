@@ -187,7 +187,93 @@ export interface FakeRuntimeHarness {
    * one answer with a different conversation than the one it was told to open.
    */
   assertIdentity?: string;
+  /**
+   * The raw `configOptions` every `getStatus()` answers with, or nothing at
+   * all when this agent advertises no configuration.
+   *
+   * Raw on purpose: the provider reads what an adapter actually sends, so a
+   * malformed case has to be able to send something malformed. An accepted
+   * write edits `currentValue` on the matching selector in this very list,
+   * which is what makes a refresh show what the write did.
+   */
+  configOptions?: Record<string, unknown>[];
+  /**
+   * Every configuration call this runtime received, in order.
+   *
+   * `status` for a read and `set <key>=<value>` for a write, so one assertion
+   * can state the whole sequence a configured session went through — including
+   * that the refresh between two writes actually happened.
+   */
+  configCalls: string[];
+  /** Raised by every `getStatus()` while it is set. */
+  statusFailure?: Error;
+  /**
+   * What to wait on before the nth `getStatus()` answers, counting from one.
+   *
+   * A barrier rather than a delay: a case that cancels a configuration while a
+   * refresh is in flight has to hold that exact refresh open, and a duration
+   * long enough on one machine is a flake on another.
+   */
+  statusGate?: (call: number) => Operation<void> | undefined;
+  /** Raised by a write to this key instead of applying it. */
+  writeFailures?: Record<string, Error>;
+  /** Keys whose write answers successfully and changes nothing. */
+  ignoredWrites?: string[];
+  /**
+   * What to wait on before the nth write lands, counting from one.
+   *
+   * The wait is in front of the value changing, not in front of the call being
+   * recorded, because the case this exists for is a write that is still in
+   * flight when its caller is cancelled: what it proves is where that write
+   * lands relative to whatever the cancellation does next.
+   */
+  writeGate?: (write: { key: string; value: string }, call: number) => Operation<void> | undefined;
+  /** Run after an accepted write, so a case can change what is advertised. */
+  afterWrite?: (write: { key: string; value: string }) => void;
+  /** Build runtimes that cannot report or change configuration at all. */
+  omitConfiguration?: boolean;
+  /**
+   * Every runtime call, as it happens, for a caller keeping one ordered log.
+   *
+   * `ensure`, `status`, `set <key>=<value>`, `turn` and `close`. A launch
+   * interleaves provider work with a native handoff, and the order of the two
+   * is the contract — so a case that owns both logs can state the whole
+   * sequence in one assertion instead of two that cannot see each other.
+   */
+  activity?: (event: string) => void;
   script(turn: ScriptedTurn): void;
+}
+
+/** One `select` selector, in the shape an ACP adapter advertises it. */
+export function selector(
+  id: string,
+  category: string,
+  currentValue: string,
+  options: unknown[],
+): Record<string, unknown> {
+  return { id, name: id, type: "select", category, currentValue, options };
+}
+
+/** One direct choice. */
+export function choice(
+  value: string,
+  name?: string,
+  description?: string,
+): Record<string, unknown> {
+  return {
+    value,
+    name: name ?? value,
+    ...(description === undefined ? {} : { description }),
+  };
+}
+
+/** One group of choices, repeated onto each member by the normalizer. */
+export function group(
+  id: string,
+  name: string,
+  options: Record<string, unknown>[],
+): Record<string, unknown> {
+  return { group: id, name, options };
 }
 
 /** One controlled build, as an observer would report it. */
@@ -298,6 +384,7 @@ export function createFakeRuntime(): FakeRuntimeHarness {
     closeInputs: [],
     closeRuntimes: [],
     closeRuntimeIndexes: [],
+    configCalls: [],
     script(turn) {
       scripted.push(turn);
     },
@@ -317,6 +404,7 @@ export function createFakeRuntime(): FakeRuntimeHarness {
           if (harness.ensureFailure) {
             return Promise.reject(harness.ensureFailure);
           }
+          harness.activity?.("ensure");
           harness.ensureCalls.push(input);
           const handleId = `${input.sessionKey}#${harness.handleIds.length}`;
           harness.handleIds.push(handleId);
@@ -369,6 +457,7 @@ export function createFakeRuntime(): FakeRuntimeHarness {
           return gate ? run(() => gate).then(answer) : Promise.resolve(answer());
         },
         startTurn(input) {
+          harness.activity?.("turn");
           const script = scripted.shift() ?? {};
           const recordId = input.handle.acpxRecordId ?? input.handle.sessionKey;
           const awaiting = withheld.has(recordId);
@@ -505,10 +594,56 @@ export function createFakeRuntime(): FakeRuntimeHarness {
         runTurn(input) {
           return this.startTurn(input).events;
         },
+        ...(harness.omitConfiguration
+          ? {}
+          : {
+              getStatus() {
+                harness.activity?.("status");
+                harness.configCalls.push("status");
+                if (harness.statusFailure) {
+                  return Promise.reject(harness.statusFailure);
+                }
+                const answer = () =>
+                  harness.configOptions === undefined
+                    ? {}
+                    : { details: { configOptions: harness.configOptions } };
+                const gate = harness.statusGate?.(
+                  harness.configCalls.filter((call) => call === "status").length,
+                );
+                // The gate runs on Effection and `run` bridges it to the acpx
+                // Promise boundary, exactly as a manual turn's release does.
+                return gate ? run(() => gate).then(answer) : Promise.resolve(answer());
+              },
+              setConfigOption(input: { handle: AcpRuntimeHandle; key: string; value: string }) {
+                harness.activity?.(`set ${input.key}=${input.value}`);
+                harness.configCalls.push(`set ${input.key}=${input.value}`);
+                const failure = harness.writeFailures?.[input.key];
+                if (failure) {
+                  return Promise.reject(failure);
+                }
+                const write = { key: input.key, value: input.value };
+                const land = (): void => {
+                  if (harness.ignoredWrites?.includes(input.key)) {
+                    return;
+                  }
+                  const target = harness.configOptions?.find((entry) => entry.id === input.key);
+                  if (target) {
+                    target.currentValue = input.value;
+                  }
+                  harness.afterWrite?.(write);
+                };
+                const gate = harness.writeGate?.(
+                  write,
+                  harness.configCalls.filter((call) => call.startsWith("set ")).length,
+                );
+                return gate ? run(() => gate).then(land) : Promise.resolve(land());
+              },
+            }),
         cancel() {
           return Promise.resolve();
         },
         close(input) {
+          harness.activity?.("close");
           harness.closeRuntimes.push(options.agentProcessEnv?.CLAUDE_CODE_EXECUTABLE);
           harness.closeRuntimeIndexes.push(runtimeIndex);
           harness.closeCalls.push(input.handle);

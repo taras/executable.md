@@ -20,10 +20,13 @@ import { cwd, flushOutput, reserveTerminal } from "@executablemd/runtime";
 import { Agent, AGENT_API } from "./agent-api.ts";
 import type {
   AgentApi,
+  AgentOptions,
+  AgentOptionsRequest,
   AgentPromptEvent,
   LaunchOptions,
   PermissionRequest,
   Session,
+  SessionConfiguration,
   SessionLaunchResult,
 } from "./agent-api.ts";
 import { AgentInternal, formatLocation } from "./internal.ts";
@@ -36,6 +39,7 @@ import type {
 } from "./launch.ts";
 import { AgentLaunchProtocolError, issueLaunch } from "./launch-request.ts";
 import type { AgentLaunchRequest } from "./launch-request.ts";
+import type { AgentSessionRequest } from "./session-request.ts";
 import type { LiveLaunch } from "./launch-coordinator.ts";
 import {
   persistDetach,
@@ -126,6 +130,7 @@ function parseFailureClass(value: string): AgentLaunchError["failureClass"] {
     case "session-recovery-required":
     case "executable-binding-refused":
     case "materialization-failed":
+    case "configuration-refused":
       return value;
     default:
       return "unsupported-capability";
@@ -187,11 +192,19 @@ export function launchSession(
     const agent = yield* Agent.operations.agent(options?.agent);
 
     const sessionProp = typeof options?.session === "string" ? options.session : undefined;
+    // Which conversation this launch opens, named here rather than pinned by
+    // the enclosing element further down the chain. A launch that named its own
+    // session belongs to that one; otherwise it belongs to the `<Session>` it
+    // is written inside. Naming it before anything routes is what lets core
+    // bind the launch to this exact value: a pin applied after every ordinary
+    // handler could only re-supply what one had just replaced, and would hide
+    // that it did.
+    const authored = options?.session ?? (yield* AgentInternal.operations.sessionUse);
     const issued = issueLaunch(
       {
         instructions,
         agent,
-        ...(options?.session === undefined ? {} : { session: options.session }),
+        ...(authored === undefined ? {} : { session: authored }),
         cwd: site.cwd,
         additionalDirectories: site.additionalDirectories,
         permissionMode: site.permissionMode,
@@ -317,8 +330,11 @@ function terminalHandlers(request: AgentLaunchRequest): AgentApi {
     *agent(name?: string) {
       return yield* Agent.operations.agent(name);
     },
-    *session(name?: string): Operation<Session> {
+    *session(name?: string | AgentSessionRequest): Operation<Session> {
       return yield* Agent.operations.session(name);
+    },
+    *options(...routed: [string?, AgentOptionsRequest?]): Operation<AgentOptions> {
+      return yield* Agent.operations.options(...routed);
     },
     *prompt(
       content: string,

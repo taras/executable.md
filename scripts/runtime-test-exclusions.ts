@@ -174,6 +174,18 @@ const DENO_ONLY_TOOLING: RuntimeExclusion[] = [
     issue: DERIVED_SCOPE,
   },
   {
+    path: "packages/acp/tests/loaded-copy.test.ts",
+    reason:
+      "builds the second copy of core's placement machinery with `deno bundle`, which is Deno's, and drives the real ACP provider against it; the classification it proves — a resolved Session is recognized by its public data and everything else is handed to the delivered coordinator — is runtime-neutral and the same dispatch is exercised on every runtime by packages/acp/tests/provider.test.ts",
+    issue: DERIVED_SCOPE,
+  },
+  {
+    path: "packages/core/tests/agent-session-use-loaded-copy.test.ts",
+    reason:
+      "builds the second copy of the Session-use module with `deno bundle`, which is Deno's; the refusal it proves — a claim without this copy's authority answers nothing — is runtime-neutral and is also covered for rebuilt, copied and foreign-installation values by agent-session-use.test.ts under all three",
+    issue: DERIVED_SCOPE,
+  },
+  {
     path: "packages/core/tests/loaded-copy-files.test.ts",
     reason:
       "builds the second copy of the runtime's Files module with `deno bundle`, which is Deno's; the structural recognition it proves is runtime-neutral and is also covered by fatal-cause.test.ts under all three",
