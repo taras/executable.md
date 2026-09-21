@@ -394,7 +394,9 @@ describe("the three halves of @executablemd/git", () => {
       const declaredSubpaths = subpaths(declared);
       expect(`${manifest}: ${declaredSubpaths !== undefined}`).toBe(`${manifest}: true`);
       const names = declaredSubpaths ?? [];
-      expect(`${manifest}: ${names.toSorted().join(" ")}`).toBe(
+      // Copied before sorting: `toSorted` is ES2023 and the Node typecheck's
+      // lib is ES2022, and `names` is read again below.
+      expect(`${manifest}: ${[...names].sort().join(" ")}`).toBe(
         `${manifest}: . ./credential-helper ./deno`,
       );
       // And no subpath names GitHub: the implementation ships inside this

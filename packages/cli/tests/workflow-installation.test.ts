@@ -322,7 +322,10 @@ describe("Tier WFI — what a run hands to canonical core", () => {
       (execution?.installations ?? [])
         .filter((candidate) => candidate.evaluation === undefined)
         .map((candidate) => candidate.admissions?.length ?? 0)
-        .toSorted((left, right) => left - right),
+        // `sort`, not `toSorted`: the Node typecheck's lib is ES2022 and
+        // `toSorted` is ES2023. `map` already returned a fresh array, so
+        // sorting it in place mutates nothing shared.
+        .sort((left, right) => left - right),
     ).toEqual([1]);
 
     // The ceiling is stated exactly once, and it is a real one: a run that
