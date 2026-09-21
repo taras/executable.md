@@ -452,28 +452,37 @@ describe("the sharded runtime jobs", () => {
     // more thing that can quietly be wrong.
     const parsed = ts.parseConfigFileTextToJson("tsconfig.node.json", text);
     expect(parsed.error).toBeUndefined();
-    const include: unknown = (parsed.config as { include?: unknown } | undefined)?.include;
-    expect(Array.isArray(include)).toBe(true);
-    const globs = include as string[];
+    const config = object(parsed.config, "tsconfig.node.json");
+    const globs = strings(config.include, "tsconfig.node.json include");
 
     // Every workspace package on disk, which is the thing that grows.
+    //
+    // Both manifests, because a member declares whichever it needs:
+    // `test-support` is internal and ships only `package.json`, while the
+    // published packages carry `deno.json` too. Looking for one of them would
+    // leave the other kind of member permanently unexamined — the same shape
+    // of blind spot this case exists to close.
     const manifests = yield* glob({
       root: fileURLToPath(ROOT),
-      patterns: ["packages/*/deno.json"],
+      patterns: ["packages/*/deno.json", "packages/*/package.json"],
     });
-    const members = manifests
-      .map((entry) => /packages[/\\]([^/\\]+)[/\\]deno\.json$/.exec(entry.path)?.[1])
-      .filter((name): name is string => name !== undefined)
-      .sort();
+    const members = [
+      ...new Set(
+        manifests
+          .map((entry) => /packages[/\\]([^/\\]+)[/\\][^/\\]+$/.exec(entry.path)?.[1])
+          .filter((name): name is string => name !== undefined),
+      ),
+    ].sort();
 
     // The scan has to be looking at something. An empty members list, or an
     // empty include, would satisfy the comparison below every time.
     expect(globs.length).toBeGreaterThan(5);
     expect(members.length).toBeGreaterThan(5);
-    // And it has to be looking at the right thing: these two are the packages
-    // the extraction split, and the pair the omission was found between.
+    // And it has to be looking at the right things: the two packages the
+    // extraction split, and the member that only `package.json` finds.
     expect(members).toContain("git");
     expect(members).toContain("workflow");
+    expect(members).toContain("test-support");
 
     const missing = members.filter((name) => !globs.includes(`packages/${name}/**/*.ts`));
     expect(missing).toEqual([]);
