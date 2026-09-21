@@ -1955,7 +1955,8 @@ run but are absent from the diagnostic trace.
 | `packages/workflow/src/deno/workspace/host.ts` | `withWorkflowWorkspace()` — the run's effect coordinator, logical cwd `/`, and Files provider installed together inside one execution |
 | `packages/workflow/src/generated-observations.ts` | `evaluateGeneratedFragment()` — the workflow policy adapter over `evaluateGeneratedXmd()`, returning its rendered text directly as `Operation<string>`; `GeneratedObservation` remains the read-table entry type, not an output envelope |
 | `packages/workflow/src/journal.ts` | the `workflow_run` record, canonical-record recognition, and the refusals that name differing fields without their values |
-| `packages/workflow/src/run.ts` | `workflowInstallation()` / `retainedWorkflowInstallation()` — the `ExecutionInstallation` values a trusted host passes to `executeInstalled()`, each contributing a mandatory run-identity admission and the `prepare` hook that creates or restores the run inside the durable root |
+| `packages/workflow/src/run.ts` | `retainedWorkflowInstallation()` and `getWorkflowRun()` — associating one execution with a run already created, as the `ExecutionInstallation` a trusted host passes to `executeInstalled()`, contributing a mandatory run-identity admission and the `prepare` hook that reopens the run inside the durable root. The association resolves no revision and imports no Git feature, which is why it stays here; obtaining a version-1 run's Markdown afterwards is a separate step that reaches the host-supplied legacy reader |
+| `packages/git/src/installation.ts` | `workflowInstallation()` — the matching `ExecutionInstallation` that *creates* a version-1 run, resolving the supplied base to a pinned commit. Creating one is the single lifecycle step that needs a Git capability, so it is stated by the package that owns one rather than by Workflow |
 | `packages/workflow/src/bundle.ts` | `workflowBundleInstallation()` — the `ExecutionInstallation` that closes one execution over a workflow's component bundle, carrying the pinned execution view and the admission that holds every retained component import to it |
 | `packages/cli/src/file-stream.ts` | `FileStream` — JSONL-backed `DurableStream` implementation |
 
@@ -2766,10 +2767,10 @@ matter, so two bootstraps that build fresh objects and list the same names in
 different orders have contributed the same value.
 
 **A repetition of the same value adds nothing and succeeds.** One package's
-declarative vocabulary is deliberately entered at more than one layer — the
-repository-composition set by an ordinary run's bootstrap and again inside a
-workflow attachment, because either may be the only one, and a nested run or
-evaluation host the same way — and the inner scope descends from the outer, so
+declarative vocabulary is deliberately entered at more than one layer — a
+nested run installs the same bundled Plugin again in its own scope, and an
+evaluation host the same way, because the inner scope may be the only one a
+document sees — and the inner scope descends from the outer, so
 both wrappers sit in one chain. One bootstrap and two identical bootstraps
 produce exactly the same captured documentation, and the repeated bootstrap
 keeps both its registrations and one documentation value.
@@ -2895,8 +2896,11 @@ ordinary registered defaults in tier 5. A repository-local Markdown or
 TypeScript component of any of those names is chosen ahead of them, exactly as
 it is ahead of any other package's default, and for its own scope alone.
 
-They are one array with several consumers: an ordinary document execution, a
-workflow attachment, `xmd syntax`, and `xmd plan`'s validation and generation.
+They are one array declared by the bundled Git Plugin and read wherever its
+profile is assembled: an ordinary document execution, `xmd syntax`, `xmd plan`'s
+validation and generation, and a workflow action that executes a document. A
+Workspace attachment installs that run's providers and durable state and
+declares none of them.
 Registering them installs no provider, discovers no repository, acquires no
 lock, spawns no Git and reads no credential — describing an environment mints
 nothing. What each name *does* is decided by whichever repository provider the
@@ -5259,7 +5263,7 @@ Neither this operation nor the method on the invocation selects an effect. A
 component whose forms do different things declares them, and canonical
 invocation-form dispatch (§5.6) enters the one the scan recorded — `<File>`
 (§6.13) is dual-form, `<File.Delete>` (§6.13.1) is self-closing only, and the
-workflow package's `<Dir>` is paired only. A component that reads this
+bundled Git Plugin's `<Dir>` is paired only. A component that reads this
 contextual operation has no authored-form guarantee at all: what it receives is
 whatever the chain answered for that call.
 
@@ -9443,18 +9447,25 @@ imported. There are two, and they differ in lifetime and permission rather than
 in what an author writes.
 
 The **ordinary provider** is what the Deno source entrypoint and the compiled
-binary install for `xmd run`. Constructing
-it mints a fresh opaque invocation identity and empty state, both private to
-that one execution:
+binary install for `xmd run`. Constructing it acquires nothing at all: no
+managed root, no lease, no Git session, no invocation identity, no commit
+identity and no ambient discovery. Each of those is obtained by the first
+invoked operation that needs it, once — a second ask, including one arriving
+while the first is still in flight, shares that acquisition rather than starting
+another — and is kept for the rest of the execution, held by the scope the
+provider was installed in rather than by whichever element happened to ask
+first. A document that writes no repository component performs none of it and
+leaves no managed root behind:
 
-- **Ambient discovery** happens once, before root expansion, from the
+- **Ambient discovery** happens on the first ambient request, from the
   invocation's starting directory: the canonical checkout root, the canonical
   common Git directory, the object format, the current HEAD and branch, the
   locally recorded admitted `origin` when there is one, and the recorded default
   branch. Being outside a Git checkout is not a startup failure — only an
   element that needs a repository refuses, and it names how to run inside one.
 - **The Git identity** an ordinary commit records is the invoking user's own,
-  read once from the trusted host's environment and configuration. It is used
+  read from the trusted host's environment and configuration by the first
+  `<Git.Commit>` that needs it — a run that commits nothing asks nothing. It is used
   for `<Git.Commit>` alone and is not otherwise observable; a host that can name
   no identity refuses that one component and leaves every other one usable.
   Nothing else crosses from the caller's environment: hooks, file-system
@@ -9736,10 +9747,18 @@ and no later policy replaces it.
 ### Plugins
 
 A **Plugin** is trusted code an operator selects, and it is installed before an
-execution imports a root document. The CLI accepts a repeatable
-`--plugin <specifier>` or `--plugin=<specifier>`, and those occurrences in the
-order they were written are the complete list: XMD ships no Plugin and installs
-none for a command that named none.
+execution imports a root document. XMD bundles exactly one —
+`@executablemd/git` — and activates it for the run-profile commands: `run`,
+`plan`, `syntax`, and the `workflow` actions that execute a document, namely
+`start`, `resume` and `fork`. Every other command carries none, including
+`xmd test`, which executes a document but is a harness rather than a run
+profile: its root must not claim names its children are entitled to shadow, and
+a nested `<Execution host="run">` child assembles the profile for itself. The
+CLI accepts a repeatable `--plugin <specifier>` or
+`--plugin=<specifier>`, and those occurrences in the order they were written
+follow the bundled value. `git` is a reserved host selector naming that value
+rather than a module: it resolves without loading anything and repeating it
+changes nothing.
 
 A Plugin is a plain structural value:
 
@@ -13254,12 +13273,12 @@ Plugin is the run it always was.
 | PL2a | Admission returns the value | What comes back is the admitted object itself: members outside the contract survive, `install` is the same function the module exported, and calling it through admission gives it the receiver its own module gave it |
 | PL3 | The flag grammar | Both spellings are read in occurrence order, only those tokens are removed, the scan stops at `--`, the original argv is retained frozen, and a missing or option-shaped value refuses before anything loads |
 | PL4 | The command a Plugin is told | Each public command reports its own name and the shorthand document form reports `run`; help, `--version` and the internal worker mode install no Plugin and load no module |
-| PL5 | Order composes | The repeated `--plugin` occurrences in written order are the complete order, with no prefix in front of them; the first selected Plugin is the outermost `Document` wrapper, and reversing the selection reverses the composition |
+| PL5 | Order composes | The bundled Plugin comes first where the command's profile carries it, then the repeated `--plugin` occurrences in written order; the first Plugin installed is the outermost `Document` wrapper, and reversing the selection reverses the composition behind the prefix |
 | PL6 | One name, one Plugin | Two selections claiming one Plugin name refuse before the first `install()` runs, whichever modules they came from |
-| PL7 | The active list | Every Plugin, including the first, reads the complete frozen list, and a snapshot is not the installed array |
+| PL7 | The active list | Every Plugin, including the first, reads the complete frozen list — bundled value first where the profile carries it — and a snapshot is not the installed array |
 | PL8 | Declarative contribution | `components`, `structural` and `admissions` cross as one `ExecutionInstallation`; returning `undefined` contributes none; two Plugins declaring one component name refuse at admission |
 | PL8a | The pair is the Plugin's | A Plugin that declares structural syntax and supplies no `expand`, or supplies one and declares none, is refused where the assembly is built — before `xmd syntax` describes the construct, before Plan validation accepts it and before a run expands it; the Plugins installed before it are unwound and the one after it never installs |
-| PL9 | Nothing is discovered | A module beside a selected one, and an installed package nobody named, are never loaded; a command that selected none loads none |
+| PL9 | Nothing is discovered | A module beside a selected one, and an installed package nobody named, are never loaded; a command that selected none loads no module at all — the bundled value is statically imported rather than resolved |
 | PL10 | Explicit paths and no remote | An explicit path inside the current repository loads; a remote specifier refuses without fetching |
 | PL10a | A path is not a scheme | A Windows drive path classifies as a filesystem path on every host, not as a remote URL; relative paths, POSIX absolute paths, UNC shares, `file:` URLs, bare packages and real remote schemes each keep the answer they had |
 | PL11 | Lifetime | A Plugin that fails to install unwinds the Plugins before it, reads no root, starts no document, and leaves nothing a document would have written |
@@ -13268,7 +13287,10 @@ Plugin is the run it always was.
 | PL14 | The key, not the name | An Api built under the bare names `Document`, `RootMetadata` or `ActivePlugins` composes nothing and observes nothing; one built under the published key composes, including from a second loaded copy inside the compiled binary |
 | PL15 | Selection by package | A bare specifier resolves in the invocation directory's package environment, and the Plugin's own name is what identifies it — not the package or module it came from |
 | PL16 | Cancellation | A command halted while a Plugin is still installing releases what the Plugins before it acquired, installs nothing after it, and stays a cancellation; a scope whose body and teardown both fail reports exactly what it reported before Plugins existed |
-| PL17 | Nothing by default | A command that names no `--plugin` installs none, under every command; the review graph is absent from the symbols and from a run until it is selected, and present in both once it is |
+| PL17 | One bundled Plugin, and nothing else by default | A command that names no `--plugin` installs exactly the bundled `@executablemd/git` where its profile carries it — `run`, `plan`, `syntax` and workflow `start`/`resume`/`fork` — and nothing at all for `xmd test`, `upgrade` and a workflow management action; an unselected Plugin such as the review graph is absent from the symbols and from a run until it is named, and present in both once it is |
+| PL19 | The reserved selector | `--plugin git` names the bundled value rather than a module: it loads nothing, and writing it once or repeatedly leaves one `@executablemd/git` first in the active list. It cannot give a command a profile it does not have — `--plugin git` before a workflow management action or `xmd test` still installs none |
+| PL20 | The selector is not the name | `--plugin @executablemd/git` is an ordinary specifier: it loads, and a module claiming the bundled Plugin's name is refused as a duplicate like any other collision. Identity-based idempotence belongs to the host's own selector for its own value, and a nested run child prefixing the bundled value drops it by identity so an impostor still collides |
+| PL21 | Test isolation | The outer `xmd test` root carries no bundled Plugin and resolves none of its names; a nested `<Execution host="run">` child assembles the run profile in its own scope and resolves all of them, and does not inherit what its parent declined |
 | PL18 | Both arms, every consumer | A Plugin declaring structural syntax and no Markdown component has its construct and region described by `xmd syntax` with the pair reported, accepted by Plan structural validation, and expanded by a run under the same installation; the same candidate is refused where nothing declared it |
 
 ### Tier RC — Root composition (§5.4, §7 Plugins)

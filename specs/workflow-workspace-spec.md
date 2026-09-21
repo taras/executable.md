@@ -65,7 +65,8 @@ compiled binary. The ordinary provider gives a document the same thirteen
 components a workflow run has, over the caller's own filesystem:
 
 - The **ambient Repository** is the Git checkout the command was run in,
-  discovered once before root expansion. Its identity is the canonical common
+  discovered when the first element asks for one — never at installation — and
+  remembered for the rest of the execution, including when there is none. Its identity is the canonical common
   Git directory and its selected checkout is the canonical checkout root, so a
   command started in a linked worktree names the same repository as one started
   in the primary checkout while Git operations act on the worktree. A document
@@ -80,8 +81,9 @@ components a workflow run has, over the caller's own filesystem:
   document execution by an exclusive non-blocking advisory lock.
 - Local Git operations happen directly against the selected checkout. There is
   no transaction, no rollback and no replay, and none is claimed. A commit is
-  made under the invoking user's own effective Git identity, captured once from
-  the trusted host before the document expands; a host where Git can name no
+  made under the invoking user's own effective Git identity, captured from the
+  trusted host by the first commit that needs it — a run that commits nothing
+  asks the host nothing about who it is; a host where Git can name no
   identity refuses `<Git.Commit>` and names the two commands that fix it, and
   every other component stays usable. Nothing else is borrowed from the caller's
   environment: hooks, file-system monitors, signing programs and
@@ -2996,8 +2998,11 @@ discriminator stays in the normalized record, and the adopted-or-performed
 decision stays journal evidence. Provider state and later edits are separate
 reads.
 
-**The host.** The Deno workflow host installs GitHub Issue middleware when it is
-configured to, and installs none otherwise. Configuration names the ceiling and
+**The adapter.** The GitHub Issue middleware lives in `@executablemd/git` and is
+installed with the rest of the Plugin. It reads its configuration when an
+invoked issue operation turns out to be its own; a deployment that authorized
+no tracker handles no destination, and `<Issue>` reaches `IssueApi`'s own base
+error exactly as it did when absence installed no middleware at all. Configuration names the ceiling and
 optionally an endpoint; it is refused rather than narrowed when it cannot be
 used. With no configuration there is no Issue provider, so every request reaches
 `NoIssueProvider` — absence of configuration is fail-closed, never an open
@@ -3274,7 +3279,9 @@ checkouts live under `~/.xmd/repositories`, in `repositories/<digest>/` and
 outside the slot they protect. Every authored string — a name, a locator — is
 present only as a digest, so no name a document writes decides a path. It uses
 the same host authentication and the same `XMD_WORKFLOW_GITHUB_ISSUES` and
-`XMD_WORKFLOW_GITHUB_PULL_REQUESTS` configurations this host already reads.
+`XMD_WORKFLOW_GITHUB_PULL_REQUESTS` configurations, which belong to the GitHub
+adapter inside `@executablemd/git` and are read when an invoked GitHub-backed
+operation needs one.
 
 The local lifecycle adapter owns a non-blocking exclusive advisory lock on one
 deterministic sidecar per run. The open file belongs to the workflow executor's
@@ -3526,7 +3533,7 @@ fetch operation requires its own language and durability contract.
 | provider-backed retained Workspace | document filesystem built by #366 and repository composition by #293; document deletion (§10.1) built by #567 for both providers; mandatory directory ensure is specified by #643 for both providers; process capabilities unbuilt (#218) |
 | `xmd workflow start` / `resume` | built by #366, Deno entrypoints only; both acquire #367's executor lock |
 | `<Repository>`, `<Worktree>` and `<Dir>` composition under a workflow run | Repository and Worktree built by #293, Deno provider only; `<Dir>`'s mandatory `API.Files.ensureDirectory` is specified by #643 as one transactional `workspace_file` mutation followed by lexical cwd installation |
-| the same thirteen declarations under every runtime | built by #643: one shadowable array consumed by the workflow attachment, `xmd syntax`, `xmd plan` and an ordinary document execution |
+| the same thirteen declarations under every runtime | built by #643: one shadowable array declared by the bundled Git Plugin and consumed wherever its profile is assembled — `xmd syntax`, `xmd plan`, an ordinary document execution and a workflow action that executes a document |
 | `<Repository>`, `<Worktree>` and the ambient Repository under an ordinary run | built by #643, Deno and compiled only: managed checkouts under `~/.xmd/repositories` with version 1 sidecars and execution-owned non-blocking locks, and the checkout the command was run in as the default Repository. Node and Bun install no operational provider |
 | local Git operations and `Git.Push` evidence under an ordinary run | built by #643, Deno and compiled only: the same authored transitions with no transaction and no replay, commits recorded under the invoking user's own captured Git identity with an actionable refusal when the host can name none, and a private per-execution Push evidence entry that authorizes `<PullRequest>` and crosses no run |
 | `<Issue>` and pull-request reads under an ordinary run | built by #643, Deno and compiled only: the same transports and ceilings with no durable envelope, keyed by this execution's own invocation identity |

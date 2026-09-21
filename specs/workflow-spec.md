@@ -31,7 +31,8 @@ direct dependency (§7.1).
 
 ```ts
 import { executeInstalled } from "@executablemd/core/host";
-import { workflowInstallation, getWorkflowRun } from "@executablemd/workflow";
+import { getWorkflowRun } from "@executablemd/workflow";
+import { workflowInstallation } from "@executablemd/git";
 
 const execution = yield* executeInstalled(
   { path: "./workflow.md", stream },
@@ -39,18 +40,35 @@ const execution = yield* executeInstalled(
 );
 ```
 
-The package owns `WorkflowRun`, `workflowInstallation()`, `getWorkflowRun()`,
-the source-bundle identity primitives and the Git capability. It depends on
-`@executablemd/core`, `@executablemd/durable-streams` and
-`@executablemd/runtime`, whose contextual `exec()` and `cwd()` the Git provider
-invokes. Core never imports workflow or Git, so ordinary `execute()` and
-`xmd run` stay Git-independent.
+`workflowInstallation()` is imported from `@executablemd/git` because resolving
+a base is a Git capability: creating a version-1 run is the lifecycle path that
+reaches Git through the contextual `Git.revParse` capability, so it is stated by
+the package that owns one. It is not the only path that needs repository
+bytes — a version-1 run retains no Markdown, so resuming, forking and exporting
+one obtain their source through the legacy reader instead (§7.1).
 
-`workflowInstallation({ base })` is the one place this package still reaches Git
-to establish a run. Every retained path — recognition, resume, fork, journal and
-export — reaches none. Issue #822 moves that adapter into the bundled Git Plugin
-and removes the final package-level dependency; until it does, the exception is
-exactly that one entrypoint.
+The package owns `WorkflowRun`, `retainedWorkflowInstallation()`,
+`getWorkflowRun()` and the source-bundle identity primitives. It depends on
+`@executablemd/core`, `@executablemd/durable-streams` and
+`@executablemd/runtime`. Core never imports workflow, and workflow never imports
+Git.
+
+**It owns no Git capability.** `GitApi`, `revParse` and
+`workflowInstallation({ base })` live in `@executablemd/git`, which imports the
+extension boundaries this package publishes rather than the other way round. No
+module here names a Git feature in an import, in any form.
+
+That is a boundary about imports, not about repositories. Recognition, the
+journal and every source-bundle path reach repository bytes not at all, but
+version-1 retained execution — resume, fork and export — obtains its Markdown
+through the direct legacy reader of §7.1. The host supplies that capability and
+may back it with Git; this package neither imports it nor chooses it, and
+authenticates whatever it returns.
+
+Ordinary `execute()` stays Git-independent. `xmd run` is a different matter: the
+CLI bundles the Git Plugin and activates it by default, so a document run there
+has the repository vocabulary available without an operator naming it. That is
+the host's profile, not this package's dependency.
 
 ## 2. What a run is
 
@@ -271,7 +289,7 @@ The journal decides which middleware does the work.
 
 | State | What runs | What happens |
 | --- | --- | --- |
-| **live** — no record | the admission, then `prepare` | the admission finds nothing to hold the run to; preparation allocates the run id, resolves the base through `Git.revParse()`, records one immutable value, and only then is the root imported |
+| **live** — no record | the admission, then `prepare` | the admission finds nothing to hold the run to; preparation allocates the run id, resolves the base through the Git Plugin's `Git.revParse()`, records one immutable value, and only then is the root imported |
 | **truncated** — record present, root not closed | the admission, then `prepare` | the admission restores the recorded value; preparation re-enters and its durable operation restores what it already recorded, so neither the identifier nor Git is reached again and the journal cursor still advances past its own entry |
 | **completed** — root `Close` recorded | the admission only | canonical core returns the recorded result without entering the durable body, so preparation never runs and the admission is the only place the run is restored — or a disagreeing one refused |
 
@@ -316,7 +334,13 @@ not re-enter preparation, does not run document policy, imports no root, expands
 nothing, and appends nothing. The workflow installation raises no objection to
 it (§3.2).
 
-## 7. The Git capability
+## 7. The Git capability — moved
+
+This section described `GitApi` and `revParse` while they were this package's.
+They are `@executablemd/git`'s now, together with the version-1 establishment
+adapter that calls them, and are specified in
+[the Workspace spec](./workflow-workspace-spec.md). What remains here is the
+shape a reader of an older journal may still meet:
 
 ```ts
 interface GitApi {
@@ -346,7 +370,8 @@ a nested replacement wins rather than being shadowed by an outer handler.
 
 `workflowInstallation({ base })` calls it with `${base}^{commit}`, which is what
 makes "does not resolve to a commit" an error rather than a tag object id. That
-entrypoint is the only caller in this package (§1).
+entrypoint is the only caller in the `@executablemd/git` package, which is where
+both it and `revParse` live (§1).
 
 ### 7.1 The legacy source reader
 

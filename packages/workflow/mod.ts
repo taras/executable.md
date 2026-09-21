@@ -18,13 +18,27 @@
  * outside Git, an untracked file, and a file edited since its last commit each
  * be one immutable definition the moment it is retained.
  *
+ * Starting a version-1 run means resolving a base, which is a Git capability
+ * this package does not own: `workflowInstallation({ base })` is exported by
+ * the `@executablemd/git` package instead. No module here names it in an
+ * import, which is the boundary rather than an accident of layout.
+ *
+ * What stays here is the retained half. `retainedWorkflowInstallation()`
+ * resolves no base and names no Git feature — but that is a statement about
+ * this package's imports, not about what a run needs. A version-1 definition
+ * retains no Markdown, so resuming, forking or exporting one still obtains its
+ * bytes through the host-supplied legacy source reader, which may well read a
+ * repository. Workflow authenticates the closure that reader returns against
+ * the retained descriptor, recomputing every blob identity from the bytes
+ * themselves. Only a source-bundle run needs no repository at any point.
+ *
  * ```ts
- * import { workflowInstallation } from "@executablemd/workflow";
+ * import { retainedWorkflowInstallation } from "@executablemd/workflow";
  * import { executeInstalled } from "@executablemd/core/host";
  *
  * const execution = yield* executeInstalled(
  *   { path: "./workflow.md", stream },
- *   [workflowInstallation({ base: "main" })],
+ *   [retainedWorkflowInstallation(run)],
  * );
  * ```
  *
@@ -33,28 +47,14 @@
  * `@executablemd/workflow/deno`; nothing here imports it, and nothing here
  * imports SQLite, Deno or any other host.
  *
- * ## Git-host effects
+ * ## What this package no longer owns
  *
- * A **Git host** is an external service that owns remote Git repositories and
- * associated collaboration objects such as branches, pull requests and issues.
- * GitHub is one Git-host adapter; a Git host is not the local Git capability
- * and not the trusted workflow host.
- *
- * A Git host owns state no local transaction can enclose, so pushing, opening a
- * pull request and filing an issue all face the same question after an
- * interruption: did the previous attempt already succeed?
- * `reconcileGitHostEffect()` answers it once, for all three. A live attempt
- * observes under an identity derived from the run and the expansion, then
- * adopts a proven compatible completion, performs a proven absence exactly
- * once, or refuses. Prompt is not one of these effects and keeps its Agent
- * provider contract.
- *
- * `withGitHostProvider()` installs the provider that answers those phases. A
- * provider need not implement every kind: a plain Git server may support
- * `git-push` and refuse pull requests and issues. Routing is one contextual
- * operation that settles no completion — middleware may inspect,
- * narrow or refuse a request, and nothing it can hold or combine can answer
- * one.
+ * Repository composition, the Git capability, issue and pull-request contracts
+ * and the Git-host reconciliation engine belong to `@executablemd/git`, which
+ * imports this package's public extension boundaries rather than the other way
+ * round. A run's history still holds their retained records, and this package
+ * still reads enough of one to decide whether a checkpoint can be forked — as
+ * compatibility data, named by the strings a released build wrote.
  */
 
 export { getWorkflowRun, retainedWorkflowInstallation } from "./src/run.ts";

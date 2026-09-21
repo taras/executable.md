@@ -680,9 +680,12 @@ the flags, and every embedded asset, in three lists that differ in how they are
 maintained:
 
 - `EMBEDDED_PACKAGES` — a whole package the binary executes Markdown out of.
-  **Empty**, because XMD ships no Plugin: the binary contains the program `xmd`
-  is, and a Plugin is not part of it. An entry here is for a package the binary
-  *imports*; naming one nothing imports would embed bytes no code can reach.
+  **Empty**, and not because no Plugin ships. `@executablemd/git` is bundled,
+  but it is *statically imported*, so its module graph is already part of the
+  program the binary contains and its documentation asset travels through
+  `PACKAGED_DOCUMENTATION` below. An entry here is for a package the binary
+  executes Markdown out of without importing; naming one nothing imports would
+  embed bytes no code can reach.
 - `UNEMBEDDED_PACKAGES` — the packages whose assets the binary deliberately does
   not carry, so the discovery sweep below does not demand them. The code-review
   package is the one: it is selected with `--plugin` and reads its own assets

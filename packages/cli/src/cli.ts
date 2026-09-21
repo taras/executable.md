@@ -2980,8 +2980,8 @@ export function* runXmd(
  * version, and the internal worker mode.
  *
  * What a command runs with is the profile `assembleRunProfile()` builds: the
- * one Plugin XMD bundles, for the commands that execute or describe a
- * document, and then whatever the operator selected in the order they wrote
+ * one Plugin XMD bundles, for the run-profile commands the Plugin itself
+ * declares for, and then whatever the operator selected in the order they wrote
  * it. A package that happens to be installed stays inert until it is named,
  * and a command outside that profile — `xmd test`, `upgrade`, a workflow
  * management action — carries no Plugin it did not ask for.

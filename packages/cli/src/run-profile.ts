@@ -3,7 +3,8 @@
  * operator named.
  *
  * XMD ships exactly one Plugin — `@executablemd/git` — and activates it for
- * every command that executes or describes a document. It is statically
+ * the run-profile commands, which are not simply the ones that execute a
+ * document: `xmd test` executes one and carries none. It is statically
  * imported rather than loaded, so the distribution carries it whole and no
  * resolution can substitute it. Explicit `--plugin` selections follow it in the
  * order they were written, which fixes how middleware composes: the bundled
