@@ -150,7 +150,7 @@ describe("what the ordinary repository provider acquires, and when", () => {
 /** Whether an ambient repository was found, asked through the public Api. */
 function* ambient(): Operation<boolean> {
   try {
-    yield* RepositoryComposition.operations.ambientRepository();
+    yield* RepositoryComposition.operations.repository();
     return true;
   } catch {
     return false;

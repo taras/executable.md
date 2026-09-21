@@ -20,7 +20,7 @@
  * import { Git, RepositoryComposition } from "@executablemd/git/api";
  *
  * // Call one.
- * const repository = yield* RepositoryComposition.operations.ambientRepository();
+ * const ambient = yield* RepositoryComposition.operations.repository();
  *
  * // Or answer it. Providers install at `min` so a nested replacement wins
  * // rather than being shadowed by an outer handler.
