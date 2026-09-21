@@ -8,8 +8,8 @@
  * default export is the Plugin itself; everything beside it is the surface a
  * provider adapter composes against.
  *
- * **The contextual Apis are not here.** `Git`, `RepositoryComposition`,
- * `RepositoryContext`, `GitComposition`, `PullRequestAPI`, `IssueApi`,
+ * **The contextual Apis are not here.** `Repository`, `RepositoryContext`,
+ * `Git`, `GitQuery`, `PullRequestAPI`, `IssueApi`,
  * `IssueTrackerContext` and `GitHost` — with their interfaces, identities,
  * direct operations and the types those interfaces are written in — publish
  * from `@executablemd/git/api`. A seam a consumer can answer is a different

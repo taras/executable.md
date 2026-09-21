@@ -36,7 +36,7 @@ import {
 } from "@executablemd/core";
 import { executeInstalled } from "@executablemd/core/host";
 import type { ExecutionRequest } from "@executablemd/core";
-import { Git } from "@executablemd/git/api";
+import { GitQuery } from "@executablemd/git/api";
 import { getWorkflowRun, retainedWorkflowInstallation } from "../src/run.ts";
 import type { WorkflowRun } from "../src/run.ts";
 
@@ -51,10 +51,10 @@ const RETAINED: WorkflowRun = Object.freeze({
 
 /** A Git that fails the test if anything consults it. */
 function useForbiddenGit(): Operation<void> {
-  return Git.around(
+  return GitQuery.around(
     {
       // deno-lint-ignore require-yield
-      *revParse([revision]) {
+      *resolve([revision]) {
         throw new Error(`Git was consulted for "${revision}"`);
       },
     },

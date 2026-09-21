@@ -15,7 +15,9 @@
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { runShell, shellQuote } from "@executablemd/test-support/launch";
-import { ensure, until } from "effection";
+import { ensure, scoped, until } from "effection";
+import { createApi } from "@effectionx/context-api";
+import * as sourceGitApi from "@executablemd/git/api";
 import { exists, readTextFile, rm, writeTextFile } from "@effectionx/fs";
 import { createHash } from "node:crypto";
 import { mkdtemp } from "node:fs/promises";
@@ -26,7 +28,7 @@ import type { ProcessResult } from "@effectionx/process";
 import { timebox } from "@effectionx/timebox";
 import { removeNpmOutput } from "./npm-output.ts";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const ROOT = fileURLToPath(new URL("../../", import.meta.url));
 const PKG_DIR = "packages/cli";
@@ -38,6 +40,99 @@ const SMOKE = path.join(ROOT, "smoke-test/plan-information/README.md");
 
 /** npm install and a full dnt type-check dominate this; the run itself is quick. */
 const TIMEOUT = 600_000;
+
+/**
+ * Every contextual Api `@executablemd/git` publishes, the exact stable name it
+ * was minted under, and one operation that reaches that name.
+ *
+ * The identity is the half of a rename that a source-only assertion cannot
+ * see. A value renamed without its `createApi()` name still exports, still
+ * typechecks, and silently stops meeting the copy an npm consumer loaded — so
+ * the string is asserted by composing through it rather than by reading it.
+ */
+const GIT_APIS: readonly (readonly [name: string, identity: string, operation: string])[] = [
+  ["Git", "executablemd.git", "push"],
+  ["GitHost", "executablemd.git.host", "route"],
+  ["GitQuery", "executablemd.git.query", "root"],
+  ["IssueApi", "executablemd.git.issue", "read"],
+  ["IssueTrackerContext", "executablemd.git.issue-tracker.current", "current"],
+  ["PullRequestAPI", "executablemd.git.pull-request", "read"],
+  ["Repository", "executablemd.git.repository", "ambient"],
+  ["RepositoryContext", "executablemd.git.repository.current", "current"],
+];
+
+/** The identity `GitComposition` carried before #835, used as a negative control. */
+const FORMER_GIT_IDENTITY = "executablemd.workflow.composition.git";
+
+function isCallable(value: unknown): value is (...args: unknown[]) => unknown {
+  return typeof value === "function";
+}
+
+function isOperation(value: unknown): value is Operation<unknown> {
+  return typeof value === "object" && value !== null && Symbol.iterator in value;
+}
+
+/** The operation names one published Api answers to, sorted. */
+function operationNames(api: unknown): string[] {
+  const operations: unknown = Reflect.get(Object(api), "operations");
+  if (typeof operations !== "object" || operations === null) {
+    return [];
+  }
+  return Object.keys(operations).sort();
+}
+
+/**
+ * Call one operation by name, whatever shape it has.
+ *
+ * A function member is invoked with no arguments and a value member is the
+ * Operation itself. Every call below runs under middleware that answers
+ * without delegating, so the arguments a real caller would pass take no part.
+ */
+function* asked(api: unknown, operation: string): Operation<unknown> {
+  const operations: unknown = Reflect.get(Object(api), "operations");
+  const member: unknown = Reflect.get(Object(operations), operation);
+  const invoked: unknown = isCallable(member) ? member() : member;
+  if (!isOperation(invoked)) {
+    throw new Error(`${operation} is not an operation of this Api`);
+  }
+  return yield* invoked;
+}
+
+/** Answer one operation of one Api with `token`, without delegating. */
+function* answering(api: unknown, operation: string, token: string): Operation<void> {
+  const around: unknown = Reflect.get(Object(api), "around");
+  if (!isCallable(around)) {
+    throw new Error("this value is not a contextual Api");
+  }
+  const installed: unknown = around({
+    [operation]: function* (): Operation<string> {
+      return token;
+    },
+  });
+  if (!isOperation(installed)) {
+    throw new Error("around() did not answer with an operation");
+  }
+  yield* installed;
+}
+
+/** The name of the error one operation raised, or `""` when it answered instead. */
+function* raisedName(api: unknown, operation: string): Operation<string> {
+  try {
+    yield* asked(api, operation);
+    return "";
+  } catch (error) {
+    return error instanceof Error ? error.name : String(error);
+  }
+}
+
+/** A third copy of one Api, minted here under the exact name #835 fixed. */
+function witness(identity: string, operation: string): unknown {
+  return createApi<Record<string, () => Operation<string>>>(identity, {
+    [operation]: function* (): Operation<string> {
+      return "unanswered";
+    },
+  });
+}
 
 interface Manifest {
   version?: string;
@@ -204,6 +299,96 @@ describe("npm CLI package", { sanitizeOps: false, sanitizeResources: false }, ()
     expect(run.stderr).toContain("external-fixture: loaded");
     expect(run.stderr).toContain("external-fixture: installed for run");
     expect(run.stdout).toContain("document body");
+
+    // `@executablemd/git`'s contextual Apis, in the artifact an npm consumer
+    // installs. The same build, because a second dnt run would cost minutes to
+    // answer a question this one already has the bytes for.
+    const gitOut = path.join(ROOT, "packages/git/npm");
+    const gitManifest: Manifest & { exports?: Record<string, unknown> } = JSON.parse(
+      yield* readTextFile(path.join(gitOut, "package.json")),
+    );
+    const apiEntry = JSON.stringify(gitManifest.exports?.["./api"] ?? null);
+    const declared = [...apiEntry.matchAll(/\.\/[\w./-]+/g)].map((match) => match[0]);
+    const emittedModule = declared.find((file) => file.endsWith(".js")) ?? "";
+    const emittedTypes = declared.find((file) => file.endsWith(".d.ts")) ?? "";
+    // Both halves, because each can be lost on its own: a manifest without the
+    // subpath makes `/api` unresolvable, and a manifest naming a module dnt
+    // never emitted makes it resolvable and empty.
+    expect({ module: emittedModule, types: emittedTypes !== "" }).toEqual({
+      module: "./esm/api.js",
+      types: true,
+    });
+    const modulePath = path.join(gitOut, emittedModule);
+    const typesPath = path.join(gitOut, emittedTypes);
+    expect([yield* exists(modulePath), yield* exists(typesPath)]).toEqual([true, true]);
+
+    const emittedApi: unknown = yield* until(import(pathToFileURL(modulePath).href));
+    // The positive control: an import that failed, or a namespace with nothing
+    // in it, would satisfy every comparison below by having nothing to differ.
+    expect(Object.keys(Object(emittedApi)).length > 0).toBe(true);
+    expect(Object.keys(Object(emittedApi)).sort()).toEqual(Object.keys(sourceGitApi).sort());
+
+    const declarations = yield* readTextFile(typesPath);
+    for (const published of ["RepositoryApi", "GitApi", "GitQueryApi", "RepositoryContextApi"]) {
+      expect([published, declarations.includes(published)]).toEqual([published, true]);
+    }
+    // Absent from the artifact, not merely from source: an alias left in one
+    // entrypoint would publish the old vocabulary to every npm consumer.
+    for (const removed of ["RepositoryCompositionApi", "GitCompositionApi"]) {
+      expect([removed, declarations.includes(removed)]).toEqual([removed, false]);
+    }
+
+    // The four identities that travel as exported constants, read from the
+    // emitted module rather than from source.
+    expect([
+      Reflect.get(Object(emittedApi), "GIT_HOST_API"),
+      Reflect.get(Object(emittedApi), "ISSUE_API"),
+      Reflect.get(Object(emittedApi), "ISSUE_TRACKER_CONTEXT"),
+      Reflect.get(Object(emittedApi), "PULL_REQUEST_API"),
+    ]).toEqual([
+      "executablemd.git.host",
+      "executablemd.git.issue",
+      "executablemd.git.issue-tracker.current",
+      "executablemd.git.pull-request",
+    ]);
+
+    for (const [name, identity, operation] of GIT_APIS) {
+      const source: unknown = Reflect.get(sourceGitApi, name);
+      const emitted: unknown = Reflect.get(Object(emittedApi), name);
+      // Two physical copies, or the composition below proves nothing about
+      // loaded copies at all.
+      expect([name, emitted === source]).toEqual([name, false]);
+      expect([name, operationNames(emitted)]).toEqual([name, operationNames(source)]);
+
+      // The exact identity: a third copy minted here under the string #835
+      // fixed answers for both of the other two.
+      yield* scoped(function* () {
+        yield* answering(witness(identity, operation), operation, `witness:${identity}`);
+        expect([name, yield* asked(source, operation)]).toEqual([name, `witness:${identity}`]);
+        expect([name, yield* asked(emitted, operation)]).toEqual([name, `witness:${identity}`]);
+      });
+
+      // And both directions, which is what a consumer actually does: install
+      // through the copy it imported, and be reached by the one the run holds.
+      yield* scoped(function* () {
+        yield* answering(source, operation, "answered by source");
+        expect([name, yield* asked(emitted, operation)]).toEqual([name, "answered by source"]);
+      });
+      yield* scoped(function* () {
+        yield* answering(emitted, operation, "answered by npm");
+        expect([name, yield* asked(source, operation)]).toEqual([name, "answered by npm"]);
+      });
+    }
+
+    // The negative control. `Git` was `GitComposition` under another name, and
+    // a provider still installed under it intercepts nothing: the emitted copy
+    // reaches its own base refusal instead. The loop above is what shows a
+    // witness can intercept at all, so this is absence rather than silence.
+    yield* scoped(function* () {
+      yield* answering(witness(FORMER_GIT_IDENTITY, "push"), "push", "answered by the old name");
+      const reached = yield* raisedName(Reflect.get(Object(emittedApi), "Git"), "push");
+      expect(reached).toBe("GitCompositionProviderError");
+    });
   });
 
   /**

@@ -31,7 +31,7 @@ import { createApi } from "@effectionx/context-api";
 import type { Api } from "@effectionx/context-api";
 import { executeInstalled } from "@executablemd/core/host";
 import type { ExecutionInstallation } from "@executablemd/core/host";
-import { Git } from "@executablemd/git/api";
+import { GitQuery } from "@executablemd/git/api";
 import { createWorkflowRunInstallation, getWorkflowRun } from "../src/run.ts";
 import { workflowInstallation } from "../../git/src/installation.ts";
 import { describeGitWorkflowRun } from "../src/journal.ts";
@@ -43,10 +43,10 @@ const OTHER_COMMIT = "1111111111111111111111111111111111111111";
 
 /** Resolve every revision to `commit`, and count the times Git was asked. */
 function useGit(commit: string, asked: string[]): Operation<void> {
-  return Git.around(
+  return GitQuery.around(
     {
       // deno-lint-ignore require-yield
-      *revParse([revision]) {
+      *resolve([revision]) {
         asked.push(revision);
         return commit;
       },
@@ -57,10 +57,10 @@ function useGit(commit: string, asked: string[]): Operation<void> {
 
 /** A Git that fails the test if anything consults it. */
 function useForbiddenGit(): Operation<void> {
-  return Git.around(
+  return GitQuery.around(
     {
       // deno-lint-ignore require-yield
-      *revParse([revision]) {
+      *resolve([revision]) {
         throw new Error(`Git was consulted for "${revision}"`);
       },
     },
@@ -400,10 +400,10 @@ describe("Tier WR — workflow runs", () => {
     const expanded: WorkflowRun[] = [];
 
     const result = yield* scoped(function* () {
-      yield* Git.around(
+      yield* GitQuery.around(
         {
           // deno-lint-ignore require-yield
-          *revParse() {
+          *resolve() {
             throw new Error("fatal: not a git repository");
           },
         },
@@ -434,10 +434,10 @@ describe("Tier WR — workflow runs", () => {
     const stream = new InMemoryStream();
 
     const first = yield* scoped(function* () {
-      yield* Git.around(
+      yield* GitQuery.around(
         {
           // deno-lint-ignore require-yield
-          *revParse() {
+          *resolve() {
             throw new Error("fatal: not a git repository");
           },
         },
@@ -473,10 +473,10 @@ describe("Tier WR — workflow runs", () => {
     const expanded: WorkflowRun[] = [];
 
     const live = yield* scoped(function* () {
-      yield* Git.around(
+      yield* GitQuery.around(
         {
           // deno-lint-ignore require-yield
-          *revParse() {
+          *resolve() {
             throw new Error("fatal: not a git repository");
           },
         },
@@ -999,9 +999,9 @@ describe("Tier WR — workflow runs", () => {
       yield* useProbe(seen);
       const slow = yield* spawn(() =>
         scoped(function* () {
-          yield* Git.around(
+          yield* GitQuery.around(
             {
-              *revParse() {
+              *resolve() {
                 yield* sleep(30);
                 return COMMIT;
               },

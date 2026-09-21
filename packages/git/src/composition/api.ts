@@ -55,7 +55,7 @@ export interface WorktreeRequest {
   readonly base: string | undefined;
 }
 
-export interface RepositoryCompositionApi {
+export interface RepositoryApi {
   /**
    * Select the Repository this lexical invocation names, creating it when the
    * provider has none.
@@ -67,10 +67,10 @@ export interface RepositoryCompositionApi {
    * retained state is still there — and a live provider acquires a lease,
    * revalidates a compatible reuse and hands back the same directory.
    */
-  selectRepository(request: RepositoryRequest): Operation<RepositorySelection>;
+  select(request: RepositoryRequest): Operation<RepositorySelection>;
 
   /** Select a named linked checkout of an already-selected Repository. */
-  selectWorktree(
+  worktree(
     repository: RepositorySelection,
     request: WorktreeRequest,
   ): Operation<RepositorySelection>;
@@ -86,24 +86,26 @@ export interface RepositoryCompositionApi {
    * has no such thing at all — a workflow document names its repositories, and
    * the component's own refusal is what says so.
    */
-  repository(): Operation<RepositorySelection | undefined>;
+  ambient(): Operation<RepositorySelection | undefined>;
 }
 
-export const RepositoryComposition: Api<RepositoryCompositionApi> =
-  createApi<RepositoryCompositionApi>("executablemd.workflow.composition.repository", {
+export const Repository: Api<RepositoryApi> = createApi<RepositoryApi>(
+  "executablemd.git.repository",
+  {
     // deno-lint-ignore require-yield
-    *selectRepository(_request: RepositoryRequest): Operation<RepositorySelection> {
+    *select(_request: RepositoryRequest): Operation<RepositorySelection> {
       throw new RepositoryCompositionProviderError("<Repository>");
     },
     // deno-lint-ignore require-yield
-    *selectWorktree(
+    *worktree(
       _repository: RepositorySelection,
       _request: WorktreeRequest,
     ): Operation<RepositorySelection> {
       throw new RepositoryCompositionProviderError("<Worktree>");
     },
     // deno-lint-ignore require-yield
-    *repository(): Operation<RepositorySelection | undefined> {
+    *ambient(): Operation<RepositorySelection | undefined> {
       throw new RepositoryCompositionProviderError("an element written outside a <Repository>");
     },
-  });
+  },
+);

@@ -38,7 +38,7 @@ import { hasContent } from "@executablemd/core";
 import type { PropsSchema } from "@executablemd/core";
 import type { Operation } from "effection";
 import type { Json } from "@executablemd/durable-streams";
-import { GitComposition } from "../git-api.ts";
+import { Git } from "../git-api.ts";
 import { selectedRepository } from "../context.ts";
 import { GitOperationAdmissionError, GitOperationError } from "../errors.ts";
 import { wellFormedText } from "../parse.ts";
@@ -141,7 +141,7 @@ export default function* GitAdd(props: Record<string, Json>): Operation<string> 
     );
   }
 
-  yield* GitComposition.operations.addPaths({
+  yield* Git.operations.add({
     repository,
     workingDirectory: yield* cwd(),
     paths,

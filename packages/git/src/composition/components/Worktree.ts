@@ -46,7 +46,7 @@ import { API } from "@executablemd/runtime";
 import { content, hasContent } from "@executablemd/core";
 import type { Operation } from "effection";
 import type { Json } from "@executablemd/durable-streams";
-import { RepositoryComposition } from "../api.ts";
+import { Repository } from "../api.ts";
 import { selectedRepository } from "../context.ts";
 import { WorktreeCompositionError } from "../errors.ts";
 
@@ -88,7 +88,7 @@ export default function* Worktree(props: Record<string, Json>): Operation<string
     );
   }
 
-  const selection = yield* RepositoryComposition.operations.selectWorktree(repository, {
+  const selection = yield* Repository.operations.worktree(repository, {
     name,
     branch,
     base,

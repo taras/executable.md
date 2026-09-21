@@ -51,7 +51,7 @@ import {
 } from "@executablemd/workflow/deno";
 import type { WorkflowExecutionTransitions } from "@executablemd/workflow/deno";
 import { SUSPENSION_REQUEST, suspendFor, WorkflowLifecycle } from "@executablemd/workflow";
-import { Git } from "@executablemd/git/api";
+import { GitQuery } from "@executablemd/git/api";
 import type { WorkflowRunDatabase } from "@executablemd/workflow";
 import { workflowRunPath } from "@executablemd/workflow/deno";
 import { withWorkflowWorkspace, WORKSPACE_FILE } from "@executablemd/workflow/deno";
@@ -161,22 +161,22 @@ function useFixture(): Operation<Fixture> {
 }
 
 function useGit(fixture: Fixture): Operation<void> {
-  return Git.around(
+  return GitQuery.around(
     {
       // deno-lint-ignore require-yield
-      *repositoryRoot(): Operation<string> {
+      *root(): Operation<string> {
         return fixture.repository;
       },
       // deno-lint-ignore require-yield
-      *revParse(): Operation<string> {
+      *resolve(): Operation<string> {
         return fixture.objectId;
       },
       // deno-lint-ignore require-yield
-      *readObject(): Operation<string> {
+      *read(): Operation<string> {
         return fixture.contents;
       },
       // deno-lint-ignore require-yield
-      *objectFormat(): Operation<"sha1" | "sha256"> {
+      *format(): Operation<"sha1" | "sha256"> {
         return "sha1";
       },
     },
@@ -949,13 +949,13 @@ function useCheckpointFixture(
  * which is what the production capability does from the run's own directory.
  */
 function useRepositoryGit(repository: string): Operation<void> {
-  return Git.around(
+  return GitQuery.around(
     {
       // deno-lint-ignore require-yield
-      *repositoryRoot(): Operation<string> {
+      *root(): Operation<string> {
         return repository;
       },
-      *revParse([revision]): Operation<string> {
+      *resolve([revision]): Operation<string> {
         return (yield* git(repository, [
           "rev-parse",
           "--verify",
@@ -963,11 +963,11 @@ function useRepositoryGit(repository: string): Operation<void> {
           revision,
         ])).trim();
       },
-      *readObject([commit, path]): Operation<string> {
+      *read([commit, path]): Operation<string> {
         return yield* git(repository, ["cat-file", "blob", `${commit}:${path}`]);
       },
       // deno-lint-ignore require-yield
-      *objectFormat(): Operation<"sha1" | "sha256"> {
+      *format(): Operation<"sha1" | "sha256"> {
         return "sha1";
       },
     },

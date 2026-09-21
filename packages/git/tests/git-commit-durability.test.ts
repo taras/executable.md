@@ -26,7 +26,7 @@ import {
   GitOperationProtocolError,
 } from "../src/composition/errors.ts";
 import { currentRepository } from "@executablemd/git/api";
-import { GitComposition } from "@executablemd/git/api";
+import { Git } from "@executablemd/git/api";
 import type { RepositoryRecord } from "../src/composition/records.ts";
 import { WORKSPACE_GIT_COMMIT } from "../src/deno/composition/provider.ts";
 import { denoRepositoryHost } from "../src/deno/composition/host.ts";
@@ -505,7 +505,7 @@ describe("workflow Git.Commit composition routing", () => {
     const root = yield* useStorageRoot();
     const remote = yield* useBareRemote(REMOTE);
     const copy = yield* physicalGitApiCopy();
-    expect(copy.GitComposition).not.toBe(GitComposition);
+    expect(copy.Git).not.toBe(Git);
 
     const staged = [
       `<Repository name="project" url="${remote.locator}">`,
@@ -581,7 +581,7 @@ function probe(
       if (repository === undefined) {
         throw new Error("the probe was written outside a Repository");
       }
-      yield* copy.GitComposition.operations.commitIndex({
+      yield* copy.Git.operations.commit({
         repository: observe(repository),
         workingDirectory: yield* cwd(),
         message: "through a loaded copy\n",

@@ -204,17 +204,17 @@ Base resolution — for a version-1 run only — goes through the contextual Git
 capability:
 
 ```ts
-interface GitApi {
-  revParse(revision: string): Operation<string>;
+interface GitQueryApi {
+  resolve(revision: string): Operation<string>;
 }
 ```
 
-`Git.revParse(revision)` has the semantics of
+`GitQuery.resolve(revision)` has the semantics of
 `git rev-parse --verify --end-of-options <revision>` in the contextual working
 directory. Its default provider invokes the Git CLI; another provider may
-replace it lexically. `workflowInstallation({ base })` calls it with
-`${base}^{commit}`, which verifies that the result is a commit and returns its
-full object ID. It lives in `@executablemd/git` with the rest of the
+replace it lexically. `workflowInstallation({ base })` calls it — through the
+`resolveGitRevision()` direct operation — with `${base}^{commit}`, which
+verifies that the result is a commit and returns its full object ID. It lives in `@executablemd/git` with the rest of the
 capability; the workflow package calls none of it. Starting such a run fails
 before root expansion when Git cannot be invoked, the working directory is not
 a Git repository, or the base does not resolve to a commit. Ordinary
@@ -268,20 +268,51 @@ the repository vocabulary is available there without an operator naming it.
 
 Git publishes on three subpaths, and which one a consumer imports from says
 what kind of thing it is reaching for. `@executablemd/git/api` is the only
-route to the contextual Apis — `Git`, `RepositoryComposition`,
-`RepositoryContext`, `GitComposition`, `PullRequestAPI`, `IssueApi`,
-`IssueTrackerContext` and `GitHost` — together with their named interfaces,
-the identity each was minted under, the base refusal each falls back to, the
-direct operations and accessors consumers call, and the types those interfaces
-are written in. Those are the seams: a consumer reaches one to call an
-operation and replaces one to answer it. The root publishes the Plugin and its
-profile predicate, the component registrations and definitions, the workflow
-installation, the durable effect identifiers, the errors and the record
-parsers — what was said, rather than who answers. `@executablemd/git/deno`
-publishes the host adapters that implement the seams, and
-`@executablemd/git/credential-helper` is the standalone program Git spawns as
-itself. An Api is published from exactly one of these, not re-exported from
-the others, because a seam reachable two ways is two contracts.
+route to the contextual Apis — `Repository`, `RepositoryContext`, `Git`,
+`GitQuery`, `PullRequestAPI`, `IssueApi`, `IssueTrackerContext` and `GitHost`
+— together with their named interfaces, the identity each was minted under,
+the base refusal each falls back to, the direct operations and accessors
+consumers call, and the types those interfaces are written in. Those are the
+seams: a consumer reaches one to call an operation and replaces one to answer
+it. The root publishes the Plugin and its profile predicate, the component
+registrations and definitions, the workflow installation, the durable effect
+identifiers, the errors and the record parsers — what was said, rather than
+who answers. `@executablemd/git/deno` publishes the host adapters that
+implement the seams, and `@executablemd/git/credential-helper` is the
+standalone program Git spawns as itself. An Api is published from exactly one
+of these, not re-exported from the others, because a seam reachable two ways
+is two contracts.
+
+**Each Api is named for the operations it answers, and every identity is under
+one `executablemd.git` prefix.** A consumer writes the vocabulary of the thing
+it is doing rather than of the machinery behind it:
+
+| Api | Identity | Operations |
+| --- | --- | --- |
+| `Repository` | `executablemd.git.repository` | `select`, `worktree`, `ambient` |
+| `RepositoryContext` | `executablemd.git.repository.current` | `current` |
+| `Git` | `executablemd.git` | `switch`, `add`, `commit`, `push` |
+| `GitQuery` | `executablemd.git.query` | `resolve`, `root`, `format`, `read` |
+| `PullRequestAPI` | `executablemd.git.pull-request` | `read`, `upsert` |
+| `IssueApi` | `executablemd.git.issue` | `read`, `upsert` |
+| `IssueTrackerContext` | `executablemd.git.issue-tracker.current` | `current` |
+| `GitHost` | `executablemd.git.host` | `route` |
+
+`Git` and `GitQuery` are two seams and never one. `Git` performs the four
+authored durable transitions a document writes as `<Git.Switch>`,
+`<Git.Add>`, `<Git.Commit>` and `<Git.Push>`, and what lifecycle they have is
+the installed provider's. `GitQuery` asks read-only questions of the checkout
+containing the contextual working directory and mutates nothing, so replacing
+it answers questions rather than becoming a route to a transition.
+
+These names and identities are a break from `@executablemd/workflow@0.12.1`,
+taken deliberately and without compatibility aliases. A provider compiled
+against an old identity intercepts nothing, and an import of an old name does
+not resolve: two vocabularies for one seam is the outcome an alias would
+guarantee, and a silent miss is what an old identity would produce. The
+package-internal names that still read `Composition` — the provider
+installers, the error classes and the serialized refusal names retained
+history holds — are not this layer and did not move.
 
 ## Workflow run storage
 
@@ -1497,7 +1528,7 @@ has none of it, and none of it is missing.
 An Issue provider does not necessarily own a Git repository — Atlassian issue
 tracking owns none — so an Atlassian issue could not truthfully execute or
 persist as a Git-host effect. `<Issue>` therefore reaches its own stable
-contextual operation, `executablemd.workflow.issue`, whose members are
+contextual operation, `executablemd.git.issue`, whose members are
 `read(url, options)` and `upsert(issue, options)`, and journals its own durable
 effect type, `issue_effect`. What is Issue-owned, and therefore an Issue
 compatibility boundary, is that API name, the two normalized requests, the
@@ -5215,7 +5246,7 @@ Status is measured against main.
 | `workflowInstallation()` | creates a version-1 run and associates one document execution with it, through an `ExecutionInstallation` the trusted host passes to `executeInstalled()`. It resolves the supplied base, so it belongs to `@executablemd/git` rather than to the workflow package | built on the #366 stack |
 | `getWorkflowRun()` | reads the run the current execution is associated with | built on the #366 stack |
 | `retainedWorkflowInstallation()` | associates one document execution with a run storage already created, requiring exact journal agreement. The association itself resolves no revision and names no Git feature, so this half stays in the workflow package; it is not a claim that the run needs no repository, because a version-1 definition retains no Markdown and obtaining its source is a later step through the host-supplied legacy reader | built on the #366 stack |
-| `Git.revParse()` | verifies and resolves one Git revision expression contextually | built on main |
+| `GitQuery.resolve()` | verifies and resolves one Git revision expression contextually | built on main |
 | workflow run storage | creates or compatibly finds one run by public run ID, retains its identity, state, document executions and filtered journal, and validates immutable Workspace roots through one provider-owned connection entry | built on the #365 stack; the CLI lifecycle reaches it on the #366 stack |
 | caller-owned storage transaction | publishes several changes, including journal events, in one transaction nothing else enlists in | built on main |
 | live durable-operation coordinator | explicitly coordinates structured live execution with existing Yield publication while leaving replay and callback effects unchanged | built on the #365 stack |
@@ -5252,7 +5283,7 @@ Status is measured against main.
 | `<PullRequest>` and its evidence reads under an ordinary run | share the URL matching, host ceiling, response normalization and low-level GitHub reconciliation, and differ in lifecycle and admission. A read is performed afresh every execution and retained nowhere. An upsert authenticates the Repository selection and the contextual checkout, reads the current named branch and commit, and requires the exact matching entry this provider instance already holds — a Push for another checkout, Repository, origin, destination, branch or commit is irrelevant, a later Push of the same destination supersedes the earlier entry, and missing or conflicting evidence is a local refusal before a credential is opened. Nothing crosses executions: a new run and a new `--journal` run each start with a new invocation identity and empty evidence, and copying a Context value, a component result or a previous trace file grants nothing. Within one invocation the attempt happens at most once; across a process interruption there is no exactly-once claim | built on the #643 stack, Deno and compiled only |
 | `<Issue>` under an ordinary run | reaches the same configured transport under the same host ceiling, with no durable envelope: identity is this execution's own opaque invocation identity together with the engine's expansion identity, so an upsert presents an idempotency key a provider can carry and a second run is a new request rather than a resumption. Absent or out-of-ceiling configuration installs no matching provider and sends no credential and no request | built on the #643 stack, Deno and compiled only |
 | ordinary repository provider assembly | the Deno source entrypoint and the compiled binary install the live provider for `xmd run`, parameterized by the same credential-helper assembly the workflow host uses. It reads no configuration: `XMD_WORKFLOW_GITHUB_ISSUES` and `XMD_WORKFLOW_GITHUB_PULL_REQUESTS` belong to the GitHub adapter inside `@executablemd/git`, which reads and validates one when an invoked GitHub-backed operation needs it, so a run that opens no pull request and files no issue reads neither. Installing the provider acquires nothing at all — no managed root, no lease, no Git session, no identity, no ambient discovery; each of those is acquired by the first operation that needs it and kept for the rest of the execution. A nested `<Execution host="run">` child receives a fresh instance — its own invocation identity, leases and Push evidence — so nothing it publishes authorizes its parent or a sibling. The outer `xmd test` command installs none — it is not a run profile, and a nested `<Execution host="run">` child assembles one for itself rather than inheriting what its parent declined. Node and Bun register the vocabulary and install no operational provider, so every repository operation reports an absent provider before a lock, a credential, a subprocess or a request exists | built on the #643 stack |
-| `<Issue>` under a workflow run | asks one of two questions, decided by its own shape, through a boundary of its own rather than the Git host's. Self-closing with `url` reads that issue and binds `{ url, title, description, tags, assignee }`; paired with `title` upserts and binds exactly `{ url }`, its rendered content being the description. There is no `description` prop. Props are exactly `url`, `title`, optional `tags`, optional `assignee` and — on a read only — optional `provider`; no repository/token/label/milestone/project/comment/close or approval prop. Both forms render nothing. The form is decided before the tracker is read, before any provider is asked and before an `issue_effect` record exists, and that is where a mixed `url`+`title`, a read carrying content or `tags`/`assignee`, an upsert with no content, an upsert naming a `provider`, and an element that is neither are all refused. A read needs no tracker — its URL is the identity; an upsert requires the nearest lexical `<IssueTracker>` and takes its discriminator only from there. The tracker carries a credential-free `url` and an optional `provider`; the URL is canonicalized — a credential, a query and a fragment are refused rather than stripped — and a nested tracker replaces the whole value for its descendants, never merging members, with the enclosing one restored on leaving. It is composition data, not permission: the provider holds an adapter-private ceiling beside its credentials, admitted before it connects, so a target outside it sends nothing. One stable contextual operation, `executablemd.workflow.issue`, with `read(url, options)` and `upsert(issue, options)`; a provider is ordinary middleware around it, matching its own URLs without a discriminator and only its own name with one, independently per member, with no host-side resolution. Once middleware matches it owns the answer — it never delegates afterwards, and nothing catches its refusal to try somebody else — and a request everyone delegated reaches `NoIssueProvider` unchanged. `issue_effect` records an operation discriminator with the normalized request and result; both forms replay without reaching `IssueApi` and therefore without network access; only an upsert derives an idempotency key, from the operation, the canonical target and the run's own effect identity. Retention excludes credentials, endpoints, payloads, provider identities, origin markers and host paths. Observing, adopting, creating once and recovering an interrupted creation are the provider's, because they are knowledge about what a service can prove; title is never identity, and tags are a code-point-sorted set. The bundled Git Plugin installs the GitHub adapter itself rather than a decision about it: installing reads no variable, obtains no credential and opens no socket, and configuration is read only when a matching invoked operation recognizes a GitHub target. Absence is therefore not an uninstalled provider but an adapter that delegates, and the request reaches the boundary's own `NoIssueProvider` refusal unchanged — fail-closed either way, and without making startup depend on what a run turns out to do | built on the #296 stack; GitHub middleware, Deno host |
+| `<Issue>` under a workflow run | asks one of two questions, decided by its own shape, through a boundary of its own rather than the Git host's. Self-closing with `url` reads that issue and binds `{ url, title, description, tags, assignee }`; paired with `title` upserts and binds exactly `{ url }`, its rendered content being the description. There is no `description` prop. Props are exactly `url`, `title`, optional `tags`, optional `assignee` and — on a read only — optional `provider`; no repository/token/label/milestone/project/comment/close or approval prop. Both forms render nothing. The form is decided before the tracker is read, before any provider is asked and before an `issue_effect` record exists, and that is where a mixed `url`+`title`, a read carrying content or `tags`/`assignee`, an upsert with no content, an upsert naming a `provider`, and an element that is neither are all refused. A read needs no tracker — its URL is the identity; an upsert requires the nearest lexical `<IssueTracker>` and takes its discriminator only from there. The tracker carries a credential-free `url` and an optional `provider`; the URL is canonicalized — a credential, a query and a fragment are refused rather than stripped — and a nested tracker replaces the whole value for its descendants, never merging members, with the enclosing one restored on leaving. It is composition data, not permission: the provider holds an adapter-private ceiling beside its credentials, admitted before it connects, so a target outside it sends nothing. One stable contextual operation, `executablemd.git.issue`, with `read(url, options)` and `upsert(issue, options)`; a provider is ordinary middleware around it, matching its own URLs without a discriminator and only its own name with one, independently per member, with no host-side resolution. Once middleware matches it owns the answer — it never delegates afterwards, and nothing catches its refusal to try somebody else — and a request everyone delegated reaches `NoIssueProvider` unchanged. `issue_effect` records an operation discriminator with the normalized request and result; both forms replay without reaching `IssueApi` and therefore without network access; only an upsert derives an idempotency key, from the operation, the canonical target and the run's own effect identity. Retention excludes credentials, endpoints, payloads, provider identities, origin markers and host paths. Observing, adopting, creating once and recovering an interrupted creation are the provider's, because they are knowledge about what a service can prove; title is never identity, and tags are a code-point-sorted set. The bundled Git Plugin installs the GitHub adapter itself rather than a decision about it: installing reads no variable, obtains no credential and opens no socket, and configuration is read only when a matching invoked operation recognizes a GitHub target. Absence is therefore not an uninstalled provider but an adapter that delegates, and the request reaches the boundary's own `NoIssueProvider` refusal unchanged — fail-closed either way, and without making startup depend on what a run turns out to do | built on the #296 stack; GitHub middleware, Deno host |
 | workflow lifecycle inspection and control | reads status/list/history without advancing a run, recovering a private copy when a crashed source needs rollback; enforces the executor lock, refuses live cancellation, cancels non-live runs under that lock and deletes retained state | direct read-only inspection and control built on the #367 stack; coordinated recovered inspection built on the #513 stack, Deno provider only |
 | XMD artifact export, inspection and fork source | seals one run's committed retained state, Workspace roots and workflow definition source closure into one immutable `.xmd` evidence file; opens that file read-only for status/history and admits continuation only by creating a new history fork whose lineage names the artifact identity. The physical container stays at schema version 1 while the semantic format follows the run: format 1 carries a Git closure, format 2 carries a source bundle as one entry/content pair per logical path under its own manifest version and `xmd-artifact\0v2\0` identity domain, and the reader selects the closed inventory and verifier from the header rather than reading either as the other | specified by `specs/xmd-artifact-spec.md`; the sealed container, its total read-only verifier, both semantic formats, `xmd workflow export` and artifact `status`/`history` are built, Deno provider only — the artifact-source fork remains unbuilt. Inspection is two sibling lifecycle operations, `inspectArtifact()` and `historyArtifact()`, taking a path rather than a run id: a run id names live lifecycle ownership and a path names immutable evidence, so neither is a mode of the other. They reach no run store, lock, Workspace, definition reader or external provider, and the artifact path never enters the structural answer |
 | Agent session portability evidence in an XMD artifact | classifies every logical Agent session that contributed a retained Prompt as portable — with ordered provider checkpoint tokens and an opaque Agent session bundle — or as explicitly unavailable, as two content kinds inside the existing version-1 manifest and identity | specified by `specs/xmd-artifact-spec.md` §2.5; the closed union, both content kinds and the complete post-identity profile verifier are built on the #621 stack, Deno provider only. Provider bundle capture, Agent-aware export, intrinsic Agent-aware inspection and artifact-backed fork are unbuilt |

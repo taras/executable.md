@@ -16,15 +16,21 @@
  * consumers actually call, and every type those interfaces are spelled in. A
  * name here is something you can implement.
  *
+ * Each name says what its operations do. `Repository` selects a checkout,
+ * `Git` performs the four authored durable transitions behind `<Git.*>`, and
+ * `GitQuery` asks read-only questions of the checkout the contextual working
+ * directory is in. The last two are never the same seam: replacing `GitQuery`
+ * answers questions and moves no branch.
+ *
  * ```ts
- * import { Git, RepositoryComposition } from "@executablemd/git/api";
+ * import { GitQuery, Repository } from "@executablemd/git/api";
  *
  * // Call one.
- * const ambient = yield* RepositoryComposition.operations.repository();
+ * const ambient = yield* Repository.operations.ambient();
  *
  * // Or answer it. Providers install at `min` so a nested replacement wins
  * // rather than being shadowed by an outer handler.
- * yield* Git.around({ *revParse(revision) { … } }, { at: "min" });
+ * yield* GitQuery.around({ *resolve(revision) { … } }, { at: "min" });
  * ```
  *
  * The types travel with the Apis because an interface you cannot spell is one
@@ -42,19 +48,21 @@
  * question from what the question is.
  */
 
-// The Git capability, and the four operations pre-bound for callers who want
-// the operation rather than the seam.
-export { Git, gitObjectFormat, readGitObject, repositoryRoot, revParse } from "./src/git.ts";
-export type { GitApi, GitObjectFormat } from "./src/git.ts";
+// The read-only Git questions, and the four operations pre-bound for callers
+// who want the operation rather than the seam.
+export {
+  gitObjectFormat,
+  GitQuery,
+  gitRoot,
+  readGitObject,
+  resolveGitRevision,
+} from "./src/git.ts";
+export type { GitObjectFormat, GitQueryApi } from "./src/git.ts";
 
-// Repository composition: what a `<Repository>` or `<Worktree>` selects, and
-// the credential-free selection it hands back.
-export { RepositoryComposition } from "./src/composition/api.ts";
-export type {
-  RepositoryCompositionApi,
-  RepositoryRequest,
-  WorktreeRequest,
-} from "./src/composition/api.ts";
+// Repository selection: what a `<Repository>` or `<Worktree>` selects, and the
+// credential-free selection it hands back.
+export { Repository } from "./src/composition/api.ts";
+export type { RepositoryApi, RepositoryRequest, WorktreeRequest } from "./src/composition/api.ts";
 export type { RepositorySelection } from "./src/composition/selection.ts";
 
 // Which repository is lexically in scope, and the accessor that reads it.
@@ -63,11 +71,11 @@ export type { RepositoryContextApi } from "./src/composition/context.ts";
 
 // The authored local Git transitions — switch, add, commit, push — with the
 // places they are invoked at and the results they record.
-export { GitComposition } from "./src/composition/git-api.ts";
+export { Git } from "./src/composition/git-api.ts";
 export type {
   GitAddInvocation,
+  GitApi,
   GitCommitInvocation,
-  GitCompositionApi,
   GitInvocationPlace,
   GitPushInvocation,
   GitSwitchInvocation,

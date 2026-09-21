@@ -31,7 +31,7 @@ import {
   GitOperationInfrastructureError,
 } from "../src/composition/errors.ts";
 import { currentRepository, RepositoryContext } from "@executablemd/git/api";
-import { GitComposition } from "@executablemd/git/api";
+import { Git } from "@executablemd/git/api";
 import { parseGitSwitchResult } from "../src/composition/git-records.ts";
 import type { GitSwitchExpectation } from "../src/composition/git-records.ts";
 import { useCompositionComponents } from "../src/composition/installation.ts";
@@ -932,7 +932,7 @@ describe("workflow Git composition routing", () => {
     const root = yield* useStorageRoot();
     const remote = yield* useBareRemote(REMOTE);
     const copy = yield* physicalGitApiCopy();
-    expect(copy.GitComposition).not.toBe(GitComposition);
+    expect(copy.Git).not.toBe(Git);
 
     yield* withStorage(root, function* () {
       const database = yield* createRun();
@@ -1010,7 +1010,7 @@ function probe(
       if (repository === undefined) {
         throw new Error("the probe was written outside a Repository");
       }
-      yield* copy.GitComposition.operations.switchBranch({
+      yield* copy.Git.operations.switch({
         repository: observe(repository),
         workingDirectory: yield* cwd(),
         branch: "release",
@@ -1034,7 +1034,7 @@ interface MutableSwitchRequest {
 /**
  * Admission takes a snapshot, and the snapshot is what runs.
  *
- * A caller's request is the caller's object: `switchBranch()` is public, a
+ * A caller's request is the caller's object: `Git.switch()` is public, a
  * mutable object satisfies a readonly interface, and the record inside it is
  * mutable too. Between naming itself and spawning Git this operation suspends
  * several times, so a step that read that object again instead of what
@@ -1073,7 +1073,7 @@ describe("workflow Git.Switch request ownership", () => {
         };
         caller = request;
         armed = true;
-        yield* GitComposition.operations.switchBranch(request);
+        yield* Git.operations.switch(request);
         return "";
       },
     };

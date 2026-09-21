@@ -40,7 +40,7 @@ import { content, hasContent } from "@executablemd/core";
 import type { PropsSchema, ReturnsSchema } from "@executablemd/core";
 import type { Operation } from "effection";
 import type { Json } from "@executablemd/durable-streams";
-import { GitComposition } from "../git-api.ts";
+import { Git } from "../git-api.ts";
 import { selectedRepository } from "../context.ts";
 import { GitOperationAdmissionError, GitOperationError } from "../errors.ts";
 import { wellFormedText } from "../parse.ts";
@@ -197,7 +197,7 @@ export default function* GitCommit(props: Record<string, Json>): Operation<strin
     );
   }
 
-  const result = yield* GitComposition.operations.commitIndex({
+  const result = yield* Git.operations.commit({
     repository,
     workingDirectory: yield* cwd(),
     message: composed.message,

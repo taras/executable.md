@@ -39,7 +39,7 @@ import { type Api, createApi } from "@effectionx/context-api";
 import type { Operation } from "effection";
 
 /** The stable name every loaded copy composes through. */
-export const ISSUE_API = "executablemd.workflow.issue";
+export const ISSUE_API = "executablemd.git.issue";
 
 /** What a document asked for, normalized. */
 export interface IssueInput {

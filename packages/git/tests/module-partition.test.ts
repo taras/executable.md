@@ -494,7 +494,8 @@ describe("the three halves of @executablemd/git", () => {
     expect(root.length > 0).toBe(true);
     expect(exclusive).toContain("Git");
     expect(exclusive).toContain("GitHost");
-    expect(exclusive).toContain("RepositoryComposition");
+    expect(exclusive).toContain("GitQuery");
+    expect(exclusive).toContain("Repository");
     // And the additive branch has something to catch: these are published by
     // `/api` *and* by the root, so they are legal from the root and forbidden
     // from a source module. A set holding only exclusive names would make the

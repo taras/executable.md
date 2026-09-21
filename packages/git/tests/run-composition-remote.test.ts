@@ -16,7 +16,7 @@ import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { type Operation } from "effection";
 import { admitLivePushEvidence } from "../src/deno/run-composition/operations.ts";
-import { GitComposition } from "@executablemd/git/api";
+import { Git, Repository } from "@executablemd/git/api";
 import type { GitPushOutcome } from "@executablemd/git/api";
 import { LivePushEvidenceError } from "../src/deno/run-composition/errors.ts";
 import { git, remoteBranch, remoteRefs, useBareRemote } from "./support/git-remotes.ts";
@@ -365,8 +365,8 @@ describe("ORC15 — evidence cannot cross runs", () => {
         root,
         cwd: checkout.root,
         around: function* () {
-          yield* GitComposition.around({
-            *pushCurrentBranch([invocation], next): Operation<GitPushOutcome> {
+          yield* Git.around({
+            *push([invocation], next): Operation<GitPushOutcome> {
               published = yield* next(invocation);
               return published;
             },
@@ -399,9 +399,9 @@ describe("ORC15 — evidence cannot cross runs", () => {
         root,
         cwd: checkout.root,
         around: function* () {
-          yield* GitComposition.around({
+          yield* Git.around({
             // deno-lint-ignore require-yield
-            *pushCurrentBranch([_invocation], _next): Operation<GitPushOutcome> {
+            *push([_invocation], _next): Operation<GitPushOutcome> {
               delegated += 1;
               if (published === undefined) {
                 throw new Error("the suite captured no publication to hand back");
@@ -943,5 +943,89 @@ describe("checkout admission is the whole repository identity", () => {
     expect(git(["log", "-1", "--pretty=%s", "side"], alphaPath, here.home)).toBe("In the worktree");
     expect(git(["rev-parse", "HEAD"], alphaPath, here.home)).toBe(head);
     expect(git(["rev-parse", "--abbrev-ref", "HEAD"], alphaPath, here.home)).toBe(branch);
+  });
+});
+
+/**
+ * ORC18 — the authored vocabulary reaches the seams a consumer replaces.
+ *
+ * `<Repository>`, `<Worktree>` and the four `<Git.*>` elements are the whole
+ * authored surface of this package, and every one of them asks `Repository` or
+ * `Git` to do the work. Middleware that observes and delegates is what proves
+ * it: a component still routed through an operation the installed provider no
+ * longer answers would refuse instead of arriving here, and one routed through
+ * a second identity would perform the work without this middleware ever seeing
+ * it. Delegating rather than answering keeps the run real, so the publication
+ * at the end is the ordinary provider's own.
+ */
+describe("ORC18 — the authored Git vocabulary", () => {
+  it("reaches Repository and Git middleware, and still publishes", function* () {
+    const remote = yield* useBareRemote(REMOTE);
+    const root = yield* useManagedRoot();
+    const here = yield* useHostCheckout(remote.locator);
+
+    const selections: string[] = [];
+    const transitions: string[] = [];
+
+    yield* runOrdinaryDocument(
+      [
+        `<Repository name="project" url="${remote.locator}">`,
+        `<Worktree name="release" branch="release">`,
+        `<Git.Switch branch="vocabulary" />`,
+        `<File path="vocabulary.md">every element</File>`,
+        `<Git.Add paths="vocabulary.md" />`,
+        `<Git.Commit message="Write the vocabulary" as="commit" />`,
+        "<Git.Push />",
+        "</Worktree>",
+        "</Repository>",
+      ].join("\n"),
+      {
+        root,
+        cwd: here.root,
+        around: function* () {
+          yield* Repository.around({
+            *select([request], next) {
+              selections.push(`select:${request.name}`);
+              return yield* next(request);
+            },
+            *worktree([repository, request], next) {
+              selections.push(`worktree:${request.name}`);
+              return yield* next(repository, request);
+            },
+          });
+          yield* Git.around({
+            *switch([invocation], next) {
+              transitions.push(`switch:${invocation.branch}`);
+              return yield* next(invocation);
+            },
+            *add([invocation], next) {
+              transitions.push(`add:${invocation.paths.join(",")}`);
+              return yield* next(invocation);
+            },
+            *commit([invocation], next) {
+              transitions.push("commit");
+              return yield* next(invocation);
+            },
+            *push([invocation], next) {
+              transitions.push("push");
+              return yield* next(invocation);
+            },
+          });
+        },
+      },
+    );
+
+    expect(selections).toEqual(["select:project", "worktree:release"]);
+    expect(transitions).toEqual(["switch:vocabulary", "add:vocabulary.md", "commit", "push"]);
+
+    // Delegation means the work really happened: the branch the document
+    // switched to is at the remote, holding the commit the document made.
+    // Read at the remote rather than in `here`: the document worked in a
+    // managed Worktree of its own, and the ambient checkout never saw it.
+    const published = remoteBranch(remote, "vocabulary");
+    expect(published).toBeDefined();
+    expect(
+      git(["log", "-1", "--pretty=%s", String(published)], remote.locator, remote.locator),
+    ).toBe("Write the vocabulary");
   });
 });

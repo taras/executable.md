@@ -53,7 +53,7 @@ import { hasContent } from "@executablemd/core";
 import type { PropsSchema } from "@executablemd/core";
 import type { Operation } from "effection";
 import type { Json } from "@executablemd/durable-streams";
-import { GitComposition } from "../git-api.ts";
+import { Git } from "../git-api.ts";
 import { selectedRepository } from "../context.ts";
 import { GitOperationAdmissionError, GitOperationError } from "../errors.ts";
 
@@ -84,7 +84,7 @@ export default function* GitPush(_props: Record<string, Json>): Operation<string
     );
   }
 
-  yield* GitComposition.operations.pushCurrentBranch({
+  yield* Git.operations.push({
     repository,
     workingDirectory: yield* cwd(),
   });

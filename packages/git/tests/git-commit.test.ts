@@ -27,7 +27,7 @@ import {
   GitOperationInfrastructureError,
 } from "../src/composition/errors.ts";
 import { currentRepository, RepositoryContext } from "@executablemd/git/api";
-import { GitComposition } from "@executablemd/git/api";
+import { Git } from "@executablemd/git/api";
 import { parseGitCommitResult } from "../src/composition/git-records.ts";
 import type { GitCommitExpectation } from "../src/composition/git-records.ts";
 import type { GitCommitMessageSource } from "@executablemd/git/api";
@@ -1168,7 +1168,7 @@ describe("workflow Git.Commit request ownership", () => {
                   };
                   caller = request;
                   armed = true;
-                  yield* GitComposition.operations.commitIndex(request);
+                  yield* Git.operations.commit(request);
                   return "";
                 },
               },

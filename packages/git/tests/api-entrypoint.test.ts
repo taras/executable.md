@@ -8,6 +8,12 @@
  * arrive from exactly one place. A seam reachable two ways is two contracts,
  * and the second one is whichever the author happened to import.
  *
+ * The names are the contract too. `Repository` selects a checkout, `Git`
+ * performs the four authored durable transitions, and `GitQuery` asks the
+ * read-only questions; each operation is named for what it does. So this file
+ * holds the exact operation set of every Api as well as the exact set of Apis,
+ * because a renamed method is a consumer that can no longer answer the seam.
+ *
  * Portable on purpose. The Deno-only companion in `public-entrypoint.test.ts`
  * reads `@executablemd/git/deno`, which reaches Workflow's storage adapter and
  * so `node:sqlite`; nothing here does, so all three runtimes can ask the
@@ -38,7 +44,6 @@ import type {
   GitCommitInvocation,
   GitCommitMessageSource,
   GitCommitResult,
-  GitCompositionApi,
   GitHostApi,
   GitHostCall,
   GitHostCompletion,
@@ -51,6 +56,7 @@ import type {
   GitObjectFormat,
   GitPushInvocation,
   GitPushOutcome,
+  GitQueryApi,
   GitSwitchInvocation,
   GitSwitchResult,
   IssueDetails,
@@ -69,12 +75,27 @@ import type {
   PullRequestReadResult,
   PullRequestResult,
   PullRequestUpsertOptions,
-  RepositoryCompositionApi,
+  RepositoryApi,
   RepositoryContextApi,
   RepositoryRequest,
   RepositorySelection,
   WorktreeRequest,
 } from "@executablemd/git/api";
+
+import type * as GitApiEntrypoint from "@executablemd/git/api";
+
+/**
+ * The two interfaces #835 removed, asserted by expecting the error.
+ *
+ * A removed interface leaves no runtime trace, so absence cannot be read from
+ * the namespace the way a removed value can. `@ts-expect-error` is the
+ * assertion instead: republishing either name — as an alias or otherwise —
+ * makes the suppression unused, and this file stops typechecking.
+ */
+// @ts-expect-error `RepositoryCompositionApi` is `RepositoryApi` now, with no alias.
+type RemovedRepositoryCompositionApi = GitApiEntrypoint.RepositoryCompositionApi;
+// @ts-expect-error `GitCompositionApi` is `GitApi` now, with no alias.
+type RemovedGitCompositionApi = GitApiEntrypoint.GitCompositionApi;
 
 /**
  * The eight contextual Apis, by the name a consumer imports.
@@ -85,13 +106,31 @@ import type {
  */
 const CONTEXTUAL_APIS: readonly string[] = [
   "Git",
-  "GitComposition",
   "GitHost",
+  "GitQuery",
   "IssueApi",
   "IssueTrackerContext",
   "PullRequestAPI",
-  "RepositoryComposition",
+  "Repository",
   "RepositoryContext",
+];
+
+/**
+ * The exact operations each seam publishes, sorted.
+ *
+ * A provider answers by name, so this is the half of the contract a renamed
+ * method breaks silently: the value still arrives, still looks like an Api,
+ * and no longer has the operation the consumer replaces.
+ */
+const OPERATIONS: readonly (readonly [string, readonly string[]])[] = [
+  ["Git", ["add", "commit", "push", "switch"]],
+  ["GitHost", ["route"]],
+  ["GitQuery", ["format", "read", "resolve", "root"]],
+  ["IssueApi", ["read", "upsert"]],
+  ["IssueTrackerContext", ["current"]],
+  ["PullRequestAPI", ["read", "upsert"]],
+  ["Repository", ["ambient", "select", "worktree"]],
+  ["RepositoryContext", ["current"]],
 ];
 
 /**
@@ -109,11 +148,25 @@ const COMPANIONS: readonly string[] = [
   "currentIssueTracker",
   "currentRepository",
   "gitObjectFormat",
+  "gitRoot",
   "readGitObject",
   "reconcileGitHostEffect",
+  "resolveGitRevision",
+  "withGitHostProvider",
+];
+
+/**
+ * The value exports #835 removed, with no alias and no deprecation.
+ *
+ * Renaming the seams was an intentional break; an alias kept "for
+ * compatibility" would make the old vocabulary the one half the ecosystem
+ * keeps writing, which is the outcome the rename exists to prevent.
+ */
+const REMOVED: readonly string[] = [
+  "GitComposition",
+  "RepositoryComposition",
   "repositoryRoot",
   "revParse",
-  "withGitHostProvider",
 ];
 
 /**
@@ -154,6 +207,23 @@ function* seams(specifier: string): Operation<string[]> {
     .sort();
 }
 
+/** The operation names one published Api answers to, sorted. */
+function* operationsOf(specifier: string, name: string): Operation<string[]> {
+  const namespace: unknown = yield* until(import(specifier));
+  if (typeof namespace !== "object" || namespace === null) {
+    return [];
+  }
+  const api: unknown = Reflect.get(namespace, name);
+  if (typeof api !== "object" || api === null) {
+    return [];
+  }
+  const operations: unknown = Reflect.get(api, "operations");
+  if (typeof operations !== "object" || operations === null) {
+    return [];
+  }
+  return Object.keys(operations).sort();
+}
+
 describe("the @executablemd/git/api entrypoint", () => {
   it("resolves through the package export map", function* () {
     // The positive control for everything below: an import that failed, or a
@@ -172,9 +242,24 @@ describe("the @executablemd/git/api entrypoint", () => {
     expect(CONTEXTUAL_APIS.filter((name) => !recognized.includes(name))).toEqual([]);
   });
 
+  it("publishes the exact operations of each contextual Api", function* () {
+    for (const [name, expected] of OPERATIONS) {
+      const answered = yield* operationsOf("@executablemd/git/api", name);
+      expect(`${name}: ${answered.join(",")}`).toBe(`${name}: ${expected.join(",")}`);
+    }
+  });
+
   it("publishes the identities, refusals and operations that travel with them", function* () {
     const names = yield* published("@executablemd/git/api");
     expect(COMPANIONS.filter((name) => !names.includes(name))).toEqual([]);
+  });
+
+  it("publishes none of the names the rename removed", function* () {
+    const names = yield* published("@executablemd/git/api");
+    expect(REMOVED.filter((name) => names.includes(name))).toEqual([]);
+    // The package root is not a second home for them either.
+    const rootNames = yield* published("@executablemd/git");
+    expect(REMOVED.filter((name) => rootNames.includes(name))).toEqual([]);
   });
 
   /**
@@ -217,10 +302,10 @@ describe("the @executablemd/git/api entrypoint", () => {
     // exist. `undefined` is a legal value for each binding, so nothing here
     // constructs a shape this file would have to keep in step with.
     const contract: {
-      git?: GitApi;
-      repository?: RepositoryCompositionApi;
+      query?: GitQueryApi;
+      repository?: RepositoryApi;
       repositoryContext?: RepositoryContextApi;
-      composition?: GitCompositionApi;
+      git?: GitApi;
       pull?: PullRequestApi;
       tracker?: IssueTrackerContextApi;
       host?: GitHostApi;
@@ -255,6 +340,8 @@ describe("the @executablemd/git/api entrypoint", () => {
       complete?: CompleteGitHostEffectRequest;
       observation?: GitHostObservation;
       completion?: GitHostCompletion;
+      removedRepositoryComposition?: RemovedRepositoryCompositionApi;
+      removedGitComposition?: RemovedGitCompositionApi;
     } = {};
 
     expect(Object.keys(contract)).toEqual([]);

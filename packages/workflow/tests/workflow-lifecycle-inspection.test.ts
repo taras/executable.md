@@ -27,7 +27,7 @@ import { exec } from "@effectionx/process";
 import { when } from "@effectionx/converge";
 import type { Close, DurableEvent, Yield } from "@executablemd/durable-streams";
 import { SOURCE_POSITION_FIELD } from "@executablemd/core";
-import { Git } from "@executablemd/git/api";
+import { GitQuery } from "@executablemd/git/api";
 import {
   isGitWorkflowRunRecord,
   WorkflowDatabaseFormatError,
@@ -490,21 +490,21 @@ describe("Tier WLI — immutable lifecycle inspection", () => {
           throw new Error("inspection opened a writable database");
         },
       });
-      yield* Git.around({
-        *revParse() {
-          reached.push("git.revParse");
+      yield* GitQuery.around({
+        *resolve() {
+          reached.push("git.resolve");
           throw new Error("inspection consulted Git");
         },
-        *repositoryRoot() {
-          reached.push("git.repositoryRoot");
+        *root() {
+          reached.push("git.root");
           throw new Error("inspection consulted Git");
         },
-        *objectFormat() {
-          reached.push("git.objectFormat");
+        *format() {
+          reached.push("git.format");
           throw new Error("inspection consulted Git");
         },
-        *readObject() {
-          reached.push("git.readObject");
+        *read() {
+          reached.push("git.read");
           throw new Error("inspection consulted Git");
         },
       });
@@ -544,21 +544,21 @@ describe("Tier WLI — immutable lifecycle inspection", () => {
           throw new Error("inspection opened a writable database");
         },
       });
-      yield* Git.around({
-        *revParse() {
-          reached.push("git.revParse");
+      yield* GitQuery.around({
+        *resolve() {
+          reached.push("git.resolve");
           throw new Error("inspection consulted Git");
         },
-        *repositoryRoot() {
-          reached.push("git.repositoryRoot");
+        *root() {
+          reached.push("git.root");
           throw new Error("inspection consulted Git");
         },
-        *objectFormat() {
-          reached.push("git.objectFormat");
+        *format() {
+          reached.push("git.format");
           throw new Error("inspection consulted Git");
         },
-        *readObject() {
-          reached.push("git.readObject");
+        *read() {
+          reached.push("git.read");
           throw new Error("inspection consulted Git");
         },
       });
@@ -1486,21 +1486,21 @@ describe("Tier WLI — inspecting a crashed run", () => {
           throw new Error("recovered inspection opened a writable database");
         },
       });
-      yield* Git.around({
-        *revParse() {
-          reached.push("git.revParse");
+      yield* GitQuery.around({
+        *resolve() {
+          reached.push("git.resolve");
           throw new Error("recovered inspection consulted Git");
         },
-        *repositoryRoot() {
-          reached.push("git.repositoryRoot");
+        *root() {
+          reached.push("git.root");
           throw new Error("recovered inspection consulted Git");
         },
-        *objectFormat() {
-          reached.push("git.objectFormat");
+        *format() {
+          reached.push("git.format");
           throw new Error("recovered inspection consulted Git");
         },
-        *readObject() {
-          reached.push("git.readObject");
+        *read() {
+          reached.push("git.read");
           throw new Error("recovered inspection consulted Git");
         },
       });

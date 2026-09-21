@@ -8829,7 +8829,7 @@ something only the host has. `<PullRequest.Reviews>`, `<PullRequest.Comments>`
 and `<PullRequest.Checks>` are the other shape, and the difference is worth
 naming. They are ordinary registered defaults: they name a pull request by
 canonical URL and ask a public contextual Api,
-`executablemd.workflow.pull-request`. What the host installs is *middleware* on
+`executablemd.git.pull-request`. What the host installs is *middleware* on
 that Api — a provider that recognizes the URLs it can act on, delegates the rest
 untouched, and once it matches, owns the answer. The component closes over
 nothing; the decision is in the middleware and in the operator configuration
@@ -11920,16 +11920,21 @@ Provider-neutral, and portable across every runtime. Defined in
 | WFD10 | Names the engine owns | Structural syntax and core's components cannot be claimed |
 | WFD11/WFD12 | Grammar | A key that is not a component name is refused without being printed; a dotted name is accepted |
 
-### Tier GT — The Git capability
+### Tier GT — The read-only Git query capability
 
-Defined in [Workflow runs](./workflow-spec.md) §7.
+Defined in [Workflow runs](./workflow-spec.md) §7. `GitQuery` asks; the
+separate `Git` Api performs the authored durable transitions, and a
+replacement installed here never becomes a route to one.
 
 | # | Test | Verify |
 |---|------|--------|
 | GT1 | The command | `git rev-parse --verify --end-of-options <revision>` in the contextual working directory |
 | GT2 | A non-zero exit | Fails, reporting what Git said |
 | GT3 | A clean exit naming nothing | Fails rather than pinning a run to an empty object id |
-| GT4 | Replacement | A nested provider reaches `revParse()` rather than being shadowed by an outer handler |
+| GT4 | Replacement | A nested provider reaches `resolve()` rather than being shadowed by an outer handler |
+| GT5 | The whole interface | A replacement answering `resolve`, `root`, `format` and `read` is reached through all four direct operations, and invokes no Git |
+| GT6 | The shipped default | Against a real checkout, and with nothing replaced, all four direct operations answer from Git: the committed object id, the working tree root asked from a directory inside it, the repository's own object format, and the bytes the commit holds rather than the ones the working tree holds now |
+| GT7 | Outside a working tree | The default refuses, naming what it could not answer, rather than reporting a root |
 
 ### Tier WR — Workflow runs
 

@@ -81,8 +81,8 @@ const PUBLISHED: readonly string[] = [
 const API_PUBLISHED: readonly string[] = [
   "GIT_HOST_API",
   "Git",
-  "GitComposition",
   "GitHost",
+  "GitQuery",
   "ISSUE_API",
   "ISSUE_TRACKER_CONTEXT",
   "IssueApi",
@@ -91,14 +91,14 @@ const API_PUBLISHED: readonly string[] = [
   "NoPullRequestProvider",
   "PULL_REQUEST_API",
   "PullRequestAPI",
-  "RepositoryComposition",
+  "Repository",
   "RepositoryContext",
   "currentIssueTracker",
   "currentRepository",
   "gitObjectFormat",
+  "gitRoot",
   "readGitObject",
-  "repositoryRoot",
-  "revParse",
+  "resolveGitRevision",
 ];
 
 /**

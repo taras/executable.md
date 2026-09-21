@@ -46,7 +46,7 @@ import { API } from "@executablemd/runtime";
 import { content, hasContent } from "@executablemd/core";
 import type { Operation } from "effection";
 import type { Json } from "@executablemd/durable-streams";
-import { RepositoryComposition } from "../api.ts";
+import { Repository as RepositoryApi } from "../api.ts";
 import type { RepositoryRequest } from "../api.ts";
 import { RepositoryContext } from "../context.ts";
 import { RepositoryCompositionError } from "../errors.ts";
@@ -88,9 +88,7 @@ export function parseRepositoryProps(props: Record<string, Json>): RepositoryReq
 }
 
 export default function* Repository(props: Record<string, Json>): Operation<string> {
-  const selection = yield* RepositoryComposition.operations.selectRepository(
-    parseRepositoryProps(props),
-  );
+  const selection = yield* RepositoryApi.operations.select(parseRepositoryProps(props));
 
   if (!(yield* hasContent())) {
     return selection.checkoutPath;

@@ -160,7 +160,8 @@ describe("workflow published Deno entrypoint", () => {
       "useGitHubIssues",
       "useGitHubPullRequests",
       "Git",
-      "revParse",
+      "GitQuery",
+      "resolveGitRevision",
       "workflowInstallation",
     ]) {
       expect({ name: moved, reachable: reachable.includes(moved) }).toEqual({
@@ -305,11 +306,11 @@ describe("the boundary between workflow and git", () => {
     // And the matcher has to recognize what it is looking for. Each of these is
     // a way a module could reach Git without writing `from`.
     for (const form of [
-      'import { revParse } from "./git.ts";',
+      'import { resolveGitRevision } from "./git.ts";',
       'import "../git.ts";',
       'const git = await import("./git.ts");',
       'const git = require("@executablemd/git");',
-      'export { revParse } from "../../git.ts";',
+      'export { resolveGitRevision } from "../../git.ts";',
       'export { gitPlugin } from "@executablemd/git";',
     ]) {
       expect({ form, git: specifiers(form).filter(namesGit).length }).toEqual({ form, git: 1 });
