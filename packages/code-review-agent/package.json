@@ -1,6 +1,6 @@
 {
   "name": "@executablemd/code-review-agent",
-  "version": "0.12.1",
+  "version": "0.13.0",
   "description": "The review component graph and the parsers behind it, for executable.md reviews.",
   "type": "module",
   "exports": {
