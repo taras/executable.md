@@ -37,7 +37,7 @@ sequenceDiagram
     M->>GH: publish the draft → tag vX.Y.Z from main
     GH->>R: push: tags v*
     GH->>PP: push: tags v*
-    R->>R: validate tag matches packages/cli/deno.json
+    R->>R: validate tag matches every manifest
     R->>GH: compile and attest xmd per target,<br/>attach binaries + checksums to the release
     PP->>PP: validate tag matches every manifest,<br/>wait for release.yml to succeed
     PP->>PO: one call per package,<br/>needs-ordered (deps first)
@@ -48,18 +48,40 @@ sequenceDiagram
 
 ## 2. Version lockstep
 
-Every publishable package (`packages/core`, `packages/cli`,
-`packages/durable-streams`, `packages/runtime`, `packages/testing`,
-`packages/code-review-agent`, `packages/test-agent`, `packages/acp`,
-`packages/web`, `packages/workflow`) declares the same version in its `deno.json` and
-`package.json`. A member marked `"private": true` is outside the lockstep
-because it never publishes — `packages/test-support` is the one, and it stays
-at `0.0.0`. `packages/cli/src/cli.ts`
-imports `packages/cli/deno.json` and reads `version`
+**A workspace member is publishable when its `deno.json` declares a `name`
+under `@executablemd`, its `package.json` does not declare `"private": true`,
+and both manifests are present.** That is the whole definition, and everything
+that selects release members uses it: the publish-workflow generator, the npm
+builder, `deno task bump`, both tag-time gates and the pull-request check.
+Membership is therefore the workspace and not a list — a new package joins by
+existing. `packages/test-support` is the one private member, and it stays at
+`0.0.0`.
+
+Identity comes from `deno.json` because that is the name the packages actually
+publish under. Nothing requires the two manifests to agree about it, so a
+selector reading `package.json`'s name instead would admit a different set, and
+a set the gates disagree about is a tag that publishes one half of a release.
+Both manifests must be present for the same reason: no `deno.json` is no JSR
+entry, and no `package.json` is no npm package.
+
+Every publishable member declares the same version in both its manifests.
+`packages/cli/src/cli.ts` imports `packages/cli/deno.json` and reads `version`
 from it, so the compiled binary reports the manifest version — the manifests
-are the single source. The npm version derives from the tag, and both
-workflows refuse a tag the manifests do not declare, so the two cannot
-diverge.
+are the single source.
+
+Three checks hold that. `scripts/lib/version-lockstep.ts` answers it for a pull
+request, where the drift is introduced and where it is still cheap: it reports
+every manifest that declares a different version from its siblings, and every
+`bun.lock` workspace entry that has gone stale or missing. The other two are the
+tag-time gates — `release.yml` before the binaries, `publish-packages.yml`
+before the packages — and each refuses a tag every publishable manifest does not
+declare, so the tag and the manifests cannot diverge.
+
+A gate that reads fewer manifests than the other is the failure this
+arrangement exists to prevent. `v0.13.0` published its binaries and none of its
+packages because `release.yml` read `packages/cli/deno.json` alone: the release
+branch had been bumped before `packages/git` existed, cli matched the tag, and
+only the package gate noticed that git did not.
 
 To cut a release: run `deno task bump <version>` (stamps every manifest),
 restamp the workspace versions in `bun.lock`, merge to `main`, then publish the
@@ -68,8 +90,10 @@ draft release — its tag follows the manifests (§3).
 `bun.lock` records a `version` for every workspace member, and the bump task
 does not touch it — `bun install` will not restamp those entries either, since
 they already satisfy the lockfile. Left alone they keep the previous release's
-number. Only the members whose `name` is an `@executablemd` package change; an
-unrelated dependency that happens to share the old version number must not.
+number, which the lockstep check reports, so restamping them is part of cutting
+the release rather than a tidying step afterwards. Only the members whose `name`
+is an `@executablemd` package change; an unrelated dependency that happens to
+share the old version number must not.
 
 The bump touches nothing else. PR Review and Repo Analysis prepare and build
 the checked-out revision with `deno task setup` and `deno task build`, then run
@@ -87,7 +111,8 @@ documents at the revision it checks.
   the manifests need bumping; once bumped, the banner clears and the draft's
   tag and title default to the guard-passing `v<version>`.
 - **`release.yml`** (`push: tags v*`): a preflight job validates the tag
-  against `packages/cli/deno.json`; on mismatch it flags the just-published release on
+  against both manifests of every publishable member (§2); on mismatch it flags
+  the just-published release on
   the Releases page — caution note in the notes, a failed title, and the
   prerelease marker — so a forgotten bump is visible where the release was
   made, then refuses to build. On a valid tag it compiles
@@ -121,17 +146,15 @@ documents at the revision it checks.
 - **`publish-packages.yml`** (`push: tags v*`): GENERATED by
   `scripts/gen-publish-workflow.md` — an executable markdown document that
   expands the root `workspace` entries (including one-level globs such as
-  `packages/*`) and derives the jobs from the member manifests it finds, a
-  member without a `deno.json` naming an `@executablemd` package being skipped
-  — never edited by hand. A member whose `package.json` declares
-  `"private": true` is also skipped and appears in no npm job, so a package can
-  land its foundation on `main` before it is ready to publish; clearing the flag
-  adds it back on the next regeneration. Such a member also declares no
-  `deno.json` `name` and no `exports`, so `deno install` warns about neither an
-  unpublishable name nor a missing `exports`, and `deno publish` finds no JSR
-  entry to publish either; both fields land in the same PR that clears the
-  private flag. The two conditions are independent rules, and no repository
-  member reaches the second one on its own, so
+  `packages/*`) and derives one job per publishable member (§2) — never edited
+  by hand. A member held back by `"private": true` appears in no npm job, so a
+  package can land its foundation on `main` before it is ready to publish;
+  clearing the flag adds it back on the next regeneration. Such a member also
+  declares no `deno.json` `name` and no `exports`, so `deno install` warns about
+  neither an unpublishable name nor a missing `exports`, and `deno publish`
+  finds no JSR entry to publish either; both fields land in the same PR that
+  clears the private flag. The two conditions are independent rules, and no
+  repository member reaches the second one on its own, so
   `scripts/tests/publish-workflow-generator.test.ts` runs the generator over a
   fixture member that holds a full JSR identity and declares `"private": true`.
   Run

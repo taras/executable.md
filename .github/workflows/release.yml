@@ -10,22 +10,48 @@ permissions:
   attestations: write
 
 jobs:
-  # Refuse a tag the manifests do not declare (spec §2) — the binary's
-  # --version comes from packages/cli/deno.json. On failure, the mistake is made
-  # visible on the release itself, not just in this log.
+  # Refuse a tag the manifests do not declare (spec §2). Every publishable
+  # manifest, not only the one the binary reads its --version from: v0.13.0
+  # published binaries and no packages because this gate read
+  # packages/cli/deno.json alone and passed, while publish-packages.yml read all
+  # of them and refused. The weaker gate was the one standing in front of the
+  # irreversible half. On failure, the mistake is made visible on the release
+  # itself, not just in this log.
   preflight:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
 
-      - name: Tag matches the manifest version
+      # Membership is deno.json's name and package.json's private, which is the
+      # pair scripts/gen-publish-workflow.md selects the publish jobs on. Read
+      # from package.json's name instead and this gate admits a different set
+      # than the one that publishes, which is the same partial release by
+      # another route. Walked rather than listed, so a new package joins by
+      # existing — which is how packages/git came to be absent from it.
+      - name: Tag matches every publishable manifest
         run: |
           TAG="${{ github.ref_name }}"
-          declared="$(jq -r .version packages/cli/deno.json)"
-          if [ "v$declared" != "$TAG" ]; then
-            echo "::error::packages/cli/deno.json declares $declared but the tag is $TAG — bump the manifests first"
-            exit 1
-          fi
+          mismatched=0
+          for manifest in packages/*/deno.json; do
+            member="$(dirname "$manifest")"
+            [ -f "$member/package.json" ] || continue
+            name="$(jq -r '.name // ""' "$manifest")"
+            case "$name" in
+              @executablemd/*) ;;
+              *) continue ;;
+            esac
+            if [ "$(jq -r '.private // false' "$member/package.json")" = "true" ]; then
+              continue
+            fi
+            for declared_in in "$manifest" "$member/package.json"; do
+              declared="$(jq -r '.version // ""' "$declared_in")"
+              if [ "v$declared" != "$TAG" ]; then
+                echo "::error::$declared_in declares $declared but the tag is $TAG — bump the manifests first"
+                mismatched=1
+              fi
+            done
+          done
+          [ "$mismatched" -eq 0 ]
 
       - name: Flag the release when the tag cannot build
         if: failure()
