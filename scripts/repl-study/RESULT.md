@@ -21,6 +21,7 @@ needed an adaptation the study does not describe, named below.
 | rendered and captured | 64 × 18 | too-small |
 | a real pseudo-terminal, interactively, macOS `script` | 80 × 24 | narrow |
 | a real pseudo-terminal, animating with no input | 80 × 24 | narrow |
+| a real pseudo-terminal, the whole story with no input | 80 × 24 | narrow |
 
 The interactive run opened, showed the `nested` fixture, accepted `4`, `Tab` and
 `q` as keystrokes, and left the terminal in the modes it found. Every other
@@ -28,7 +29,11 @@ dimension was exercised through the captures and the suite.
 
 ## Animation
 
-The renderer animates, and the frame loop that drives it is small.
+The renderer animates, and the frame loop that drives it is small. `--play` runs
+the whole approved story — empty, nested, generated, drawer, paused, settled —
+holding each moment for between 1.2 and 2.6 seconds and animating every
+transition, about sixteen seconds end to end with nobody at the keyboard. When it
+arrives at the settled entry the clock stops and that is what stays on screen.
 
 - **A declared transition is interpolated by the renderer.** Giving the
   contextual band `transition: { duration: 0.26, easing: "easeInOut", properties:
@@ -62,6 +67,20 @@ The renderer animates, and the frame loop that drives it is small.
   and halted as soon as both settle — an idle REPL schedules nothing at all. An
   interruption mid-transition halted it with the session: the trace ends at the
   frame the signal arrived on, and the terminal's modes were restored after it.
+- **A long run exhausts the renderer, and the answer is a new one.** Clay keeps
+  a cache of measured words — 16 384 by default — and one `Term` rendering this
+  interface at 200 × 50 fills it after **86 frames**, reporting
+  `TEXT_MEASUREMENT_CAPACITY_EXCEEDED` and rendering nothing. The same journey at
+  80 × 24 completed 207 frames without reaching the limit, so it is a function of
+  how much text each frame measures rather than of time. The harness now catches
+  that one error, builds a fresh `Term` and repaints; a viewer sees a frame, not
+  a fault. Any production REPL will meet this, and a `Term` that lives for a
+  session needs the same recovery or a raised cache.
+- **One wake-up at a time beats a loop that schedules itself.** The clock is
+  armed by the frame loop after each frame, because only the loop knows whether
+  the next wait is a frame or the rest of a hold. A timer deciding that for
+  itself read state the loop had not finished updating, and jumped whole
+  segments of the story.
 - **Application-timed motion stays a pure function of elapsed time.** The head's
   travel along the track and the transcript's arrival are computed from
   milliseconds, so the same instant renders identically from a test, a capture

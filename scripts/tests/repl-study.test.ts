@@ -28,6 +28,7 @@ import { fileURLToPath } from "node:url";
 import {
   captureAll,
   captureText,
+  journeyFrames,
   playFrames,
   PROFILE_SIZES,
   renderFrame,
@@ -37,10 +38,18 @@ import {
 } from "../repl-study/capture.ts";
 import type { Size } from "../repl-study/capture.ts";
 import { fixture, fixtures } from "../repl-study/fixtures.ts";
+import { FIXTURE_NAMES } from "../repl-study/model.ts";
 import { terminalModes } from "../repl-study/host.ts";
-import type { TraceEntry } from "../repl-study/host.ts";
 import type { HarnessState } from "../repl-study/host.ts";
-import { motionAt, playbackBetween } from "../repl-study/playback.ts";
+import {
+  JOURNEY,
+  journeyDurationMs,
+  journeyPlan,
+  motionAt,
+  playbackBetween,
+  segmentDurationMs,
+  segmentLabel,
+} from "../repl-study/playback.ts";
 import { FRAME_SECONDS } from "../repl-study/host.ts";
 import { intersects, layoutFor, MINIMUM, PANE_MINIMUMS, profileFor } from "../repl-study/layout.ts";
 import type { Profile } from "../repl-study/layout.ts";
@@ -142,7 +151,7 @@ function ptyArguments(command: string): string[] {
   throw new Error(`this evidence needs a pseudo-terminal, and ${Deno.build.os} has no script(1)`);
 }
 
-function* readTrace(path: string): Operation<TraceEntry[]> {
+function* readTrace(path: string): Operation<TracedFrame[]> {
   const text = yield* readTextFile(path);
   return text
     .split("\n")
@@ -158,7 +167,38 @@ const TRACE_ENTRY = z.object({
   animating: z.boolean(),
   motionDone: z.boolean().nullable(),
   bytes: z.number(),
+  segment: z.string(),
+  fixture: z.string(),
 });
+
+/** A trace line, parsed. The fixture name is narrowed where the harness reads it. */
+type TracedFrame = z.infer<typeof TRACE_ENTRY>;
+
+/** The order a run visited its moments in, with repeats collapsed. */
+function visited<T extends { readonly segment: string }>(entries: readonly T[]): string[] {
+  const order: string[] = [];
+  for (const entry of entries) {
+    if (order[order.length - 1] !== entry.segment) {
+      order.push(entry.segment);
+    }
+  }
+  return order;
+}
+
+/** What the whole demonstration is supposed to visit, in order. */
+const JOURNEY_SEGMENTS = [
+  "hold:empty",
+  "play:empty→nested",
+  "hold:nested",
+  "play:nested→generated",
+  "hold:generated",
+  "play:generated→drawer",
+  "hold:drawer",
+  "play:drawer→paused",
+  "hold:paused",
+  "play:paused→settled",
+  "hold:settled",
+];
 
 describe("fixture rendering", () => {
   it("renders every committed capture exactly", function* () {
@@ -945,6 +985,133 @@ describe("animation in a real terminal", () => {
     // frame was drawn after it: the clock went down with the session.
     expect(drawn.length).toBe(4);
     expect(drawn[drawn.length - 1].motionDone).toBe(false);
+    expect(result.stdout.endsWith(new TextDecoder().decode(terminalModes().revert))).toBe(true);
+  });
+});
+
+describe("the whole demonstration", () => {
+  it("visits every moment of the approved story, in order", function* () {
+    const planned = journeyPlan();
+    expect(visited(planned.map((frame) => ({ segment: frame.label })))).toEqual(JOURNEY_SEGMENTS);
+
+    // Every fixture appears, in the order the study tells them.
+    const moments: string[] = [];
+    for (const frame of planned) {
+      if (moments[moments.length - 1] !== frame.fixture) {
+        moments.push(frame.fixture);
+      }
+    }
+    expect(moments).toEqual([...FIXTURE_NAMES]);
+  });
+
+  it("holds each moment long enough to read it", function* () {
+    for (const segment of JOURNEY) {
+      // Nothing is on screen for less than a second unless it is moving.
+      const duration = segmentDurationMs(segment);
+      if (segment.kind === "hold") {
+        expect({ segment: segmentLabel(segment), long: duration >= 1000 }).toEqual({
+          segment: segmentLabel(segment),
+          long: true,
+        });
+      }
+    }
+    // Long enough to watch, short enough to sit through.
+    expect(journeyDurationMs()).toBeGreaterThan(10_000);
+    expect(journeyDurationMs()).toBeLessThan(30_000);
+  });
+
+  it("animates both ways along the way, and ends on the settled entry", function* () {
+    const { frames } = yield* journeyFrames(PROFILE_SIZES.wide);
+
+    // The renderer's own interpolation happened.
+    expect(frames.some((frame) => frame.animating)).toBe(true);
+    // And the application's: a transition frame carrying unfinished motion.
+    expect(frames.some((frame) => frame.label.startsWith("play:"))).toBe(true);
+
+    const settled = yield* readTextFile(join(GOLDENS, "settled.wide.txt"));
+    const last = frames[frames.length - 1];
+    expect(last.label).toBe("hold:settled");
+    expect(last.animating).toBe(false);
+    // What remains is the fixture, exactly — no trace of the journey that
+    // arrived at it.
+    expect(settled).toContain(last.text.replace(/\n+$/, ""));
+  });
+
+  it("keeps the journey out of everything that outlives it", function* () {
+    // The journey is derived, not stored. No fixture carries a key belonging to
+    // it, so there is nothing for a journal to restore halfway through one.
+    const forbidden = ["segment", "playback", "motion", "progress", "durationMs", "reveal"];
+    const walk = (value: unknown, path: string) => {
+      if (Array.isArray(value)) {
+        value.forEach((item, index) => walk(item, `${path}[${index}]`));
+        return;
+      }
+      if (typeof value !== "object" || value === null) {
+        return;
+      }
+      for (const [key, nested] of Object.entries(value)) {
+        expect({ at: `${path}.${key}`, journeyState: forbidden.includes(key) }).toEqual({
+          at: `${path}.${key}`,
+          journeyState: false,
+        });
+        walk(nested, `${path}.${key}`);
+      }
+    };
+    for (const subject of fixtures()) {
+      walk(subject, subject.name);
+    }
+  });
+
+  it("rebuilds the renderer when it runs out of room to measure text", function* () {
+    // Clay caches measured words, and a wide terminal running the whole story
+    // exhausts that cache part way through. The demonstration has to survive it,
+    // so this asserts both that it happens and that the run still finishes.
+    const { frames, rebuilds } = yield* journeyFrames(PROFILE_SIZES.wide);
+    expect(rebuilds).toBeGreaterThan(0);
+    expect(frames.length).toBe(journeyPlan().length);
+    expect(frames[frames.length - 1].label).toBe("hold:settled");
+  });
+});
+
+describe("the whole demonstration, in a real terminal", () => {
+  it("plays start to finish with nobody at the keyboard", function* () {
+    const directory = yield* useTempDirectory("repl-study-journey");
+    const trace = join(directory, "journey.jsonl");
+    const budget = 600;
+    const command = `${MAIN} --play --frames ${budget} --trace ${trace}`;
+    yield* exec(ptyCommand(command), { cwd: ROOT, arguments: ptyArguments(command) }).join();
+
+    const drawn = yield* readTrace(trace);
+    expect(visited(drawn)).toEqual([...JOURNEY_SEGMENTS, "settled"]);
+    expect(drawn.some((entry) => entry.animating)).toBe(true);
+    expect(
+      drawn.some((entry) => entry.segment.startsWith("play:") && entry.motionDone === false),
+    ).toBe(true);
+
+    // It stopped because the story ended, not because it ran out of budget —
+    // which is what it means for the clock to stop after the settled state.
+    expect(drawn.length).toBeLessThan(budget);
+    const last = drawn[drawn.length - 1];
+    expect(last.segment).toBe("settled");
+    expect(last.fixture).toBe("settled");
+  });
+
+  it("cancels the whole journey when interrupted part way through", function* () {
+    const directory = yield* useTempDirectory("repl-study-journey-interrupt");
+    const trace = join(directory, "interrupted.jsonl");
+    const command = `${MAIN} --play --frames 600 --interrupt-after-frames 45 --trace ${trace}`;
+    const result = yield* exec(ptyCommand(command), {
+      cwd: ROOT,
+      arguments: ptyArguments(command),
+    }).join();
+
+    const drawn = yield* readTrace(trace);
+    expect(drawn.length).toBe(45);
+    // It was interrupted in the middle of the story, and nothing was drawn
+    // afterwards: the clock went down with the session.
+    const last = drawn[drawn.length - 1];
+    expect(last.segment).not.toBe("settled");
+    expect(JOURNEY_SEGMENTS).toContain(last.segment);
     expect(result.stdout.endsWith(new TextDecoder().decode(terminalModes().revert))).toBe(true);
   });
 });

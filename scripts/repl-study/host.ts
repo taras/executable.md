@@ -26,10 +26,18 @@ import { renderScreen } from "./render.ts";
 import { transcriptLines } from "./render.ts";
 import { initialView, moveSurface, returnToHead, scrollBy, scrubBy, toggleDrawer } from "./view.ts";
 import type { View } from "./view.ts";
-import { renderInto, useTerm } from "./capture.ts";
+import { RendererCapacityError, useTerm } from "./capture.ts";
+import { renderInto } from "./capture.ts";
 import type { Mutation } from "./mutations.ts";
-import { motionAt, playbackFrom } from "./playback.ts";
-import type { Motion, Playback } from "./playback.ts";
+import {
+  JOURNEY,
+  motionAt,
+  playbackFrom,
+  segmentDurationMs,
+  segmentFixture,
+  segmentLabel,
+} from "./playback.ts";
+import type { Motion, Playback, Segment } from "./playback.ts";
 
 /** The modes the harness changes, as one reversible pair. */
 export function terminalModes(): Setting {
@@ -138,7 +146,7 @@ export function measureTerminal(): { cols: number; rows: number } {
 export type HarnessEvent =
   | { readonly kind: "key"; readonly event: InputEvent }
   | { readonly kind: "resize" }
-  | { readonly kind: "tick" }
+  | { readonly kind: "tick"; readonly advanceMs: number }
   | { readonly kind: "quit" };
 
 export interface HarnessState {
@@ -263,17 +271,19 @@ export const FRAME_MS = 16;
 export const FRAME_SECONDS = FRAME_MS / 1000;
 
 /**
- * The clock that keeps an animation moving when nothing else is happening.
+ * One wake-up, armed by the frame loop after each frame it draws.
  *
- * It is spawned as a child of the terminal session and halted the moment
- * nothing is moving, so an idle REPL costs nothing and a cancelled session
- * cannot leave a timer drawing into a terminal that has already been restored.
+ * It is a child of the terminal session, so a cancelled session takes it with
+ * it and no timer is left drawing into a terminal that has been restored. It is
+ * armed one frame at a time rather than looping on its own, because only the
+ * loop knows how long the next wait should be — sixteen milliseconds while a
+ * transition runs, and the remainder of a hold while a moment is being read.
+ * A timer that decided that for itself would be deciding it from state the loop
+ * had not finished updating.
  */
-function* ticker(events: Signal<HarnessEvent, never>): Operation<void> {
-  while (true) {
-    yield* sleep(FRAME_MS);
-    events.send({ kind: "tick" });
-  }
+function* ticker(events: Signal<HarnessEvent, never>, delayMs: number): Operation<void> {
+  yield* sleep(delayMs);
+  events.send({ kind: "tick", advanceMs: delayMs });
 }
 
 /** One line of what the frame loop did, for evidence that cannot watch a screen. */
@@ -285,6 +295,10 @@ export interface TraceEntry {
   readonly animating: boolean;
   readonly motionDone: boolean | null;
   readonly bytes: number;
+  /** `hold:nested`, `play:nested→generated`, or `settled` once it is over. */
+  readonly segment: string;
+  /** The moment this frame is showing, which is always one of the fixtures. */
+  readonly fixture: FixtureName;
 }
 
 export interface InteractiveOptions {
@@ -292,6 +306,8 @@ export interface InteractiveOptions {
   readonly mutation?: Mutation;
   /** Start this playback immediately, rather than waiting for `p`. */
   readonly play?: Playback;
+  /** Play the whole approved story, holds and all, with no keystrokes. */
+  readonly journey?: readonly Segment[];
   /** Leave after this many frames, so a run can end without a keystroke. */
   readonly maxFrames?: number;
   /** Raise SIGINT at this harness once this many frames have been drawn. */
@@ -325,7 +341,7 @@ export function* runInteractive(options: InteractiveOptions): Operation<void> {
     quit: false,
   };
 
-  const term = yield* useTerm({ cols: state.cols, rows: state.rows });
+  let term = yield* useTerm({ cols: state.cols, rows: state.rows });
   const input: Input = yield* until(createInput({}));
 
   yield* useTerminalModes(write, options.mutation);
@@ -353,17 +369,87 @@ export function* runInteractive(options: InteractiveOptions): Operation<void> {
     }
   });
 
+  // Everything about where the demonstration has got to lives here, in this
+  // invocation, and is gone when it returns. No fixture knows about it, nothing
+  // durable records it, and reconstruction lands on a fixture rather than on a
+  // moment between two of them.
+  const journey = options.journey;
+  let segmentIndex = 0;
   let playback = options.play;
   let elapsed = 0;
   let frames = 0;
   let clock: Task<void> | undefined;
   let interrupted = false;
   let settled = false;
+  let held: string | undefined;
+  let lastPainted = false;
 
-  if (playback !== undefined) {
-    const target = fixture(playback.to);
+  const currentSegment = (): Segment | undefined =>
+    journey === undefined ? undefined : journey[segmentIndex];
+
+  const show = (name: FixtureName) => {
+    const target = fixture(name);
     state = { ...state, fixture: target, view: initialView(target) };
+  };
+
+  if (journey !== undefined) {
+    const first = journey[0];
+    show(segmentFixture(first));
+    if (first.kind === "play") {
+      playback = first.playback;
+    }
+  } else if (playback !== undefined) {
+    show(playback.to);
   }
+
+  /**
+   * How long the clock should wait before the next frame.
+   *
+   * A transition wants one every sixteen milliseconds. A held moment wants
+   * exactly one, when the hold is over.
+   */
+  const nextDelayMs = (): number => {
+    const segment = currentSegment();
+    if (segment?.kind === "hold") {
+      return Math.max(1, segment.durationMs - elapsed);
+    }
+    return FRAME_MS;
+  };
+
+  /**
+   * Move the journey on by the time that just passed.
+   *
+   * A wake-up can cross a segment boundary — the end of a hold is exactly such
+   * a wake-up — so this consumes segments until the elapsed time fits inside
+   * the current one, and reports when the story has run out.
+   */
+  const advance = (byMs: number): "running" | "finished" => {
+    if (journey === undefined) {
+      elapsed += byMs;
+      return "running";
+    }
+    elapsed += byMs;
+    while (segmentIndex < journey.length) {
+      const segment = journey[segmentIndex];
+      const duration = segmentDurationMs(segment);
+      if (elapsed < duration) {
+        break;
+      }
+      elapsed -= duration;
+      segmentIndex += 1;
+      const entered = journey[segmentIndex];
+      if (entered === undefined) {
+        // The last hold ended. What is on screen is the settled entry, and it
+        // stays there until the person leaves.
+        show(segmentFixture(segment));
+        playback = undefined;
+        return "finished";
+      }
+      show(segmentFixture(entered));
+      playback = entered.kind === "play" ? entered.playback : undefined;
+    }
+    return "running";
+  };
 
   /**
    * Draw one frame, then decide whether anything is still moving.
@@ -372,33 +458,68 @@ export function* runInteractive(options: InteractiveOptions): Operation<void> {
    * application's own transition has not finished, and halted as soon as both
    * have settled — so an idle REPL schedules nothing at all.
    */
-  const paint = function* (deltaMs: number): Operation<void> {
+  const paint = function* (deltaMs: number, finished = false): Operation<void> {
+    const segment = currentSegment();
     const motion = playback === undefined ? undefined : motionAt(playback, elapsed);
-    const painted = draw(term, state, write, options.mutation, motion, deltaMs);
-    frames += 1;
-    options.trace?.push({
-      frame: frames,
-      elapsedMs: elapsed,
-      deltaSeconds: deltaMs / 1000,
-      animating: painted.animating,
-      motionDone: motion === undefined ? null : motion.done,
-      bytes: painted.bytes,
-    });
+    const label =
+      finished || segment === undefined
+        ? journey === undefined
+          ? "focused"
+          : "settled"
+        : segmentLabel(segment);
 
-    const moving = painted.animating || (motion !== undefined && !motion.done);
-    const active = options.mutation === "never-tick" ? false : moving;
-    if (active && clock === undefined) {
-      clock = yield* spawn(() => ticker(events));
+    // A held moment is one picture. Drawing it again on the way past would cost
+    // a render and change nothing, so the hold is drawn once and then waited
+    // out.
+    const repeated = journey !== undefined && segment?.kind === "hold" && held === label;
+    if (!repeated) {
+      let painted: Painted;
+      try {
+        painted = draw(term, state, write, options.mutation, motion, deltaMs);
+      } catch (error) {
+        if (!(error instanceof RendererCapacityError)) {
+          throw error;
+        }
+        // The renderer ran out of room to measure text, which a long run in a
+        // wide terminal will do. A new one starts that cache again and repaints
+        // the whole screen, so the person watching sees nothing but a frame.
+        term = yield* useTerm({ cols: state.cols, rows: state.rows });
+        painted = draw(term, state, write, options.mutation, motion, 0);
+      }
+      frames += 1;
+      options.trace?.push({
+        frame: frames,
+        elapsedMs: elapsed,
+        deltaSeconds: deltaMs / 1000,
+        animating: painted.animating,
+        motionDone: motion === undefined ? null : motion.done,
+        bytes: painted.bytes,
+        segment: label,
+        fixture: state.fixture.name,
+      });
+      lastPainted = painted.animating;
     }
-    if (!active && clock !== undefined) {
+    held = segment?.kind === "hold" ? label : undefined;
+
+    const journeyRunning = journey !== undefined && !finished;
+    const moving = lastPainted || (motion !== undefined && !motion.done) || journeyRunning;
+    const active = options.mutation === "never-tick" ? false : moving;
+    if (clock !== undefined) {
       const running = clock;
       clock = undefined;
       yield* running.halt();
     }
-    if (motion !== undefined && motion.done && !painted.animating) {
+    if (active) {
+      const delay = Math.max(1, Math.round(nextDelayMs()));
+      clock = yield* spawn(() => ticker(events, delay));
+    }
+    if (journey === undefined && motion !== undefined && motion.done && !lastPainted) {
       // The transition has arrived. What remains is the fixture itself, which
       // is what a journal or a URL would restore.
       playback = undefined;
+      settled = true;
+    }
+    if (finished) {
       settled = true;
     }
     if (options.maxFrames !== undefined && !active) {
@@ -433,8 +554,10 @@ export function* runInteractive(options: InteractiveOptions): Operation<void> {
     }
 
     if (next.value.kind === "tick") {
-      elapsed += FRAME_MS;
-      yield* paint(FRAME_MS);
+      // The one-shot has fired and finished; the frame it produces arms the next.
+      clock = undefined;
+      const advanced = advance(next.value.advanceMs);
+      yield* paint(next.value.advanceMs, advanced === "finished");
       continue;
     }
 

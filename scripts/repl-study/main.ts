@@ -1,7 +1,8 @@
 /**
  * The documented command.
  *
- *   deno task repl:study                      the harness, in this terminal
+ *   deno task repl:study --play               the whole story, start to finish
+ *   deno task repl:study                      one moment, in this terminal
  *   deno task repl:study --capture <dir>      every fixture at every profile
  *   deno task repl:study --print nested wide  one frame, as text
  *   deno task repl:study --replay             the lifecycle, with no terminal
@@ -16,7 +17,7 @@ import { captureAll, PROFILE_SIZES, renderFrame, writeCaptures } from "./capture
 import { fixture } from "./fixtures.ts";
 import { runInteractive, runReplay } from "./host.ts";
 import type { TraceEntry } from "./host.ts";
-import { playbackBetween } from "./playback.ts";
+import { JOURNEY, playbackBetween } from "./playback.ts";
 import type { Playback } from "./playback.ts";
 import { writeTextFile } from "@effectionx/fs";
 import { isFixtureName } from "./model.ts";
@@ -29,7 +30,9 @@ import { initialView } from "./view.ts";
 const USAGE = [
   "usage:",
   "  repl-study [--fixture <name>] [--mutation <name>]",
-  "  repl-study --play <from> <to> [--frames <n>] [--interrupt-after-frames <n>] [--trace <file>]",
+  "  repl-study --play                       the whole story, start to finish",
+  "  repl-study --play <from> <to>           one transition, as a diagnostic",
+  "      [--frames <n>] [--interrupt-after-frames <n>] [--trace <file>]",
   "  repl-study --capture <directory> [--mutation <name>]",
   "  repl-study --print <fixture> <profile> [--mutation <name>]",
   "  repl-study --replay [--interrupt-after <n>] [--fail-after <n>] [--mutation <name>]",
@@ -44,6 +47,7 @@ type Mode =
       readonly kind: "interactive";
       readonly fixture: FixtureName;
       readonly play?: Playback;
+      readonly journey?: boolean;
       readonly maxFrames?: number;
       readonly interruptAfterFrames?: number;
       readonly trace?: string;
@@ -77,6 +81,7 @@ export function parse(argv: readonly string[]): Invocation | string {
   let fixtureName: FixtureName = "nested";
   let mode: Mode | undefined;
   let play: Playback | undefined;
+  let journey = false;
   let maxFrames: number | undefined;
   let interruptAfterFrames: number | undefined;
   let trace: string | undefined;
@@ -118,16 +123,27 @@ export function parse(argv: readonly string[]): Invocation | string {
       }
       mode = { kind: "print", fixture: name, profile };
     } else if (argument === "--play") {
-      const from = value();
-      const to = value();
-      if (from === undefined || !isFixtureName(from) || to === undefined || !isFixtureName(to)) {
-        return `--play needs two fixture names, not ${JSON.stringify([from, to])}`;
+      // Bare `--play` is the demonstration: the whole story, in order, with
+      // nobody at the keyboard. Two fixture names narrow it to one transition,
+      // which is a diagnostic rather than the thing to show somebody.
+      const from = argv[at + 1];
+      const to = argv[at + 2];
+      if (from === undefined || from.startsWith("--")) {
+        journey = true;
+      } else {
+        at += 2;
+        if (!isFixtureName(from) || to === undefined || !isFixtureName(to)) {
+          return `--play takes no arguments, or two fixture names — not ${JSON.stringify([
+            from,
+            to,
+          ])}`;
+        }
+        const found = playbackBetween(from, to);
+        if (found === undefined) {
+          return `there is no playback from ${from} to ${to}`;
+        }
+        play = found;
       }
-      const found = playbackBetween(from, to);
-      if (found === undefined) {
-        return `there is no playback from ${from} to ${to}`;
-      }
-      play = found;
     } else if (argument === "--frames") {
       const count = value();
       if (!isFrameCount(count)) {
@@ -169,8 +185,9 @@ export function parse(argv: readonly string[]): Invocation | string {
   return {
     mode: mode ?? {
       kind: "interactive",
-      fixture: fixtureName,
+      fixture: journey ? "empty" : fixtureName,
       play,
+      journey,
       maxFrames,
       interruptAfterFrames,
       trace,
@@ -232,6 +249,7 @@ function* run(invocation: Invocation): Operation<void> {
     fixture: mode.fixture,
     mutation,
     play: mode.play,
+    journey: mode.journey === true ? JOURNEY : undefined,
     maxFrames: mode.maxFrames,
     interruptAfterFrames: mode.interruptAfterFrames,
     trace: tracePath === undefined ? undefined : trace,

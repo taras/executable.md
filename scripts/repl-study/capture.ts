@@ -15,7 +15,7 @@ import { ensureDir, writeTextFile } from "@effectionx/fs";
 import { join } from "node:path";
 
 import { fixture, fixtures } from "./fixtures.ts";
-import { motionAt, PLAYBACKS } from "./playback.ts";
+import { JOURNEY, journeyPlan, motionAt, PLAYBACKS } from "./playback.ts";
 import type { Motion, Playback } from "./playback.ts";
 import type { Fixture } from "./model.ts";
 import type { Profile, SurfaceName } from "./layout.ts";
@@ -93,6 +93,20 @@ export function* renderFrame(request: FrameRequest): Operation<Frame> {
   return renderInto(term, request);
 }
 
+/**
+ * The renderer ran out of room to measure text.
+ *
+ * Clay keeps a cache of measured words — 16 384 of them — and a long-lived Term
+ * rendering an interface this wordy exhausts it. It is not a failure of the
+ * frame: the answer is a new Term, which starts the cache again.
+ */
+export class RendererCapacityError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "RendererCapacityError";
+  }
+}
+
 export function renderInto(term: Term, request: FrameRequest): Frame {
   const { view, size, mutation } = request;
   // A frame drawn from state the harness has already left behind. The renderer
@@ -120,6 +134,12 @@ export function renderInto(term: Term, request: FrameRequest): Frame {
     request.deltaSeconds === undefined ? {} : { deltaTime: request.deltaSeconds },
   );
   if (result.errors.length > 0) {
+    const capacity = result.errors.find(
+      (error) => error.type === "TEXT_MEASUREMENT_CAPACITY_EXCEEDED",
+    );
+    if (capacity !== undefined) {
+      throw new RendererCapacityError(capacity.message);
+    }
     throw new Error(`the renderer reported ${JSON.stringify(result.errors)}`);
   }
   const ansi = Uint8Array.from(result.output);
@@ -173,6 +193,66 @@ export function* playFrames(
     elapsed += frameMs;
   }
   return frames;
+}
+
+/**
+ * Every frame of the whole demonstration, rendered deterministically.
+ *
+ * The screen carries across frames the way a terminal's does, so what comes
+ * back is what a person would have seen at each moment rather than the handful
+ * of cells that changed.
+ */
+export interface JourneyFrame extends Frame {
+  readonly label: string;
+  readonly fixture: string;
+}
+
+export interface JourneyRun {
+  readonly frames: JourneyFrame[];
+  /** How many times the renderer had to be rebuilt to get to the end. */
+  readonly rebuilds: number;
+}
+
+export function* journeyFrames(
+  size: Size,
+  options: { readonly frameMs?: number } = {},
+): Operation<JourneyRun> {
+  const frameMs = options.frameMs ?? 16;
+  let term = yield* useTerm(size);
+  let rebuilds = 0;
+  const screen = createGrid(size.cols, size.rows);
+  const frames: JourneyFrame[] = [];
+  for (const planned of journeyPlan(JOURNEY, frameMs)) {
+    const subject = fixture(planned.fixture);
+    const request: FrameRequest = {
+      fixture: subject,
+      view: initialView(subject),
+      size,
+      motion: planned.motion,
+      deltaSeconds: planned.deltaMs / 1000,
+    };
+    let frame: Frame;
+    try {
+      frame = renderInto(term, request);
+    } catch (error) {
+      if (!(error instanceof RendererCapacityError)) {
+        throw error;
+      }
+      // A fresh Term starts with an empty measurement cache and repaints
+      // everything, so the screen this frame lands on is complete.
+      term = yield* useTerm(size);
+      rebuilds += 1;
+      frame = renderInto(term, { ...request, deltaSeconds: 0 });
+    }
+    applyAnsi(screen, frame.ansi);
+    frames.push({
+      ...frame,
+      text: gridText(screen),
+      label: planned.label,
+      fixture: planned.fixture,
+    });
+  }
+  return { frames, rebuilds };
 }
 
 export function captureName(fixtureName: string, profile: Profile): string {
