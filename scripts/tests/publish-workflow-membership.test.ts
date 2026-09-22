@@ -4,6 +4,7 @@ import type { Operation } from "effection";
 import { readdir, readTextFile } from "@effectionx/fs";
 
 import { compileArguments, COMPILE_ENTRYPOINT } from "../lib/compile.ts";
+import { publishableMembers } from "../lib/publishable-members.ts";
 import { RELEASE_TARGET } from "../lib/release-targets.ts";
 import { listWorkspacePaths } from "../lib/workspace.ts";
 
@@ -200,13 +201,13 @@ describe("release.yml binary compilation", () => {
 
 describe("publish-packages.yml membership", () => {
   it("publishes every non-private member to npm", function* () {
-    const all = yield* members();
+    const publishable = yield* publishableMembers(repoRoot);
     const generated = yield* workflow();
 
     // Non-vacuous: the workspace always has publishable members.
-    expect(all.filter((member) => !member.isPrivate).length).toBeGreaterThan(0);
+    expect(publishable.length).toBeGreaterThan(0);
 
-    for (const member of all.filter((member) => !member.isPrivate)) {
+    for (const member of publishable) {
       expect(generated).toContain(`package: ${member.dir}`);
     }
   });
@@ -247,7 +248,7 @@ describe("publish-packages.yml membership", () => {
 describe("tag-time version gates", () => {
   it("reads every publishable manifest before publishing packages", function* () {
     const generated = yield* workflow();
-    const publishable = (yield* members()).filter((member) => !member.isPrivate);
+    const publishable = yield* publishableMembers(repoRoot);
 
     // Non-vacuous: a sweep over no members would find nothing missing.
     expect(publishable.length).toBeGreaterThan(0);
@@ -267,12 +268,11 @@ describe("tag-time version gates", () => {
       .split("\n")
       .filter((line) => !line.trim().startsWith("#"))
       .join("\n");
-    const named = (yield* members())
-      .filter((member) => !member.isPrivate)
+    const named = (yield* publishableMembers(repoRoot))
       .filter((member) => commands.includes(`${member.dir}/deno.json`))
       .map((member) => member.dir);
 
-    expect(commands).toContain("for manifest in packages/*/package.json");
+    expect(commands).toContain("for manifest in packages/*/deno.json");
     expect(named).toEqual([]);
   });
 });

@@ -22,23 +22,28 @@ jobs:
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
 
+      # Membership is deno.json's name and package.json's private, which is the
+      # pair scripts/gen-publish-workflow.md selects the publish jobs on. Read
+      # from package.json's name instead and this gate admits a different set
+      # than the one that publishes, which is the same partial release by
+      # another route. Walked rather than listed, so a new package joins by
+      # existing — which is how packages/git came to be absent from it.
       - name: Tag matches every publishable manifest
         run: |
           TAG="${{ github.ref_name }}"
           mismatched=0
-          # Walked rather than listed, so a new package joins this gate by
-          # existing — which is how packages/git came to be absent from it.
-          for manifest in packages/*/package.json; do
+          for manifest in packages/*/deno.json; do
             member="$(dirname "$manifest")"
+            [ -f "$member/package.json" ] || continue
             name="$(jq -r '.name // ""' "$manifest")"
             case "$name" in
               @executablemd/*) ;;
               *) continue ;;
             esac
-            if [ "$(jq -r '.private // false' "$manifest")" = "true" ]; then
+            if [ "$(jq -r '.private // false' "$member/package.json")" = "true" ]; then
               continue
             fi
-            for declared_in in "$manifest" "$member/deno.json"; do
+            for declared_in in "$manifest" "$member/package.json"; do
               declared="$(jq -r '.version // ""' "$declared_in")"
               if [ "v$declared" != "$TAG" ]; then
                 echo "::error::$declared_in declares $declared but the tag is $TAG — bump the manifests first"

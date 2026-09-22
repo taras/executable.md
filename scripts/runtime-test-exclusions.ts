@@ -84,6 +84,12 @@ const DENO_ONLY_TOOLING: RuntimeExclusion[] = [
     issue: DERIVED_SCOPE,
   },
   {
+    path: "scripts/tests/publishable-membership-agreement.test.ts",
+    reason:
+      "runs the publish-workflow generator over a fixture workspace by spawning the CLI through Deno.execPath(), which is the only way to exercise an eval block's selection rule (#237); the rule itself is asserted portably by publishedName's cases in version-lockstep.test.ts, and what this adds — that the generator and the release preflight reach that same rule — is Deno's own release tooling",
+    issue: DERIVED_SCOPE,
+  },
+  {
     path: "scripts/tests/prepared-state.test.ts",
     reason:
       "fingerprints a prepared tree and a Deno cache through Deno.readDirSync/lstatSync and asks `deno info` where the caches are — Deno-only",
