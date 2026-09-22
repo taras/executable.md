@@ -1,6 +1,6 @@
 {
   "name": "@executablemd/git",
-  "version": "0.13.0",
+  "version": "0.13.1",
   "description": "The Git Plugin for executable.md: repositories, worktrees, Git operations, pull requests and issues, retained in a workflow run's Workspace.",
   "type": "module",
   "exports": {
