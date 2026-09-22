@@ -7,16 +7,23 @@
  * those is a fact about the program that is running, so only the binary shows
  * they survived `deno compile`.
  *
- * Four claims, each observed from outside the process:
+ * Five claims, each observed from outside the process:
  *
  * 1. a root-level `<Worktree>` belongs to the repository the binary was run in,
  *    and a command inside it runs there;
  * 2. that checkout is a real linked worktree — `.git` is a file — and it is
  *    still on disk after the process exits;
  * 3. a second binary, run while the first still holds the slot, is refused
- *    without waiting and changes nothing; and
+ *    without waiting and changes nothing;
  * 4. once the first exits, the slot is taken by the next one, which finds the
- *    same checkout.
+ *    same checkout; and
+ * 5. the whole authored vocabulary — `<Repository>`, `<Worktree>` and the four
+ *    `<Git.*>` elements — runs in the compiled graph and reaches a real origin.
+ *
+ * The fifth is what says the compiled binary's own provider still answers the
+ * operations the components ask for. Nothing in the document changed for
+ * #835; the descriptors under it did, and a component left on a name the
+ * compiled provider no longer installs would refuse rather than publish.
  *
  * The managed root is a temporary directory named through the same environment
  * a person's would be reached through, so nothing here touches
@@ -74,12 +81,13 @@ function git(args: readonly string[], cwd: string, home: string): string {
  * the one whose output nothing is reading.
  */
 function binary(
+  document: string,
   cwd: string,
   env: Record<string, string>,
   streams: "piped" | "null" = "piped",
 ): Deno.Command {
   return new Deno.Command(BINARY, {
-    args: ["run", "smoke.md", "--raw"],
+    args: ["run", document, "--raw"],
     cwd,
     env,
     clearEnv: true,
@@ -153,7 +161,7 @@ await main(function* () {
     ].join("\n"),
   );
 
-  const holding = binary(checkout, environment(home, managed), "null").spawn();
+  const holding = binary("smoke.md", checkout, environment(home, managed), "null").spawn();
 
   // Observed while the child is still waiting for a file this script has not
   // written yet, so the slot is genuinely held when the second binary asks for
@@ -166,7 +174,7 @@ await main(function* () {
   }
 
   // 3. A second binary, while the first still holds the slot.
-  const contended = yield* until(binary(checkout, environment(home, managed)).output());
+  const contended = yield* until(binary("smoke.md", checkout, environment(home, managed)).output());
   const reported = decode(contended.stdout) + decode(contended.stderr);
   if (contended.success) {
     fail("a second process was allowed into a slot the first was holding");
@@ -208,7 +216,7 @@ await main(function* () {
   //    marker is removed first, so what it holds afterwards is that run's own
   //    answer rather than the first one's.
   yield* rm(marker);
-  const later = yield* until(binary(checkout, environment(home, managed)).output());
+  const later = yield* until(binary("smoke.md", checkout, environment(home, managed)).output());
   if (!later.success) {
     fail(`the slot was not released for a later run: ${decode(later.stderr)}`);
   }
@@ -217,6 +225,71 @@ await main(function* () {
   }
   if (!(yield* exists(slot))) {
     fail("the managed worktree did not survive the later run");
+  }
+
+  // 5. The authored vocabulary, end to end, against a bare origin on this
+  //    machine. A named `<Repository>` rather than the ambient one, so the
+  //    journey is the one a document writes anywhere: clone, linked checkout,
+  //    branch, staged file, commit, publish.
+  const origin = path.join(workspace, "origin.git");
+  git(["init", "--bare", "--initial-branch=main", origin], workspace, home);
+  git(["push", origin, "main:main"], checkout, home);
+
+  yield* writeTextFile(
+    path.join(workspace, "vocabulary.md"),
+    [
+      "# The authored Git vocabulary",
+      "",
+      `<Repository name="vocabulary" url="${origin}">`,
+      "",
+      '<Worktree name="release" branch="release">',
+      "",
+      '<Git.Switch branch="published" />',
+      "",
+      '<File path="published.md">',
+      "published by the compiled binary",
+      "</File>",
+      "",
+      '<Git.Add paths="published.md" />',
+      "",
+      '<Git.Commit message="Publish from the compiled binary" as="commit" />',
+      "",
+      "<Git.Push />",
+      "",
+      "</Worktree>",
+      "",
+      "</Repository>",
+      "",
+    ].join("\n"),
+  );
+
+  const vocabulary = yield* until(
+    binary("vocabulary.md", workspace, environment(home, managed)).output(),
+  );
+  if (!vocabulary.success) {
+    fail(
+      `the authored Git vocabulary did not run in the compiled binary: ${
+        decode(vocabulary.stdout) + decode(vocabulary.stderr)
+      }`,
+    );
+  }
+
+  // Read at the origin, which is the only place outside the process where all
+  // three answers live: the ref the Push created, the commit it published, and
+  // the bytes `<File>` wrote and `<Git.Add>` staged. A ref the run never
+  // created fails inside `git()` at the first of these.
+  const publishedRef = git(["rev-parse", "--verify", "refs/heads/published"], origin, home);
+  if (
+    git(["log", "-1", "--pretty=%s", publishedRef], origin, home) !==
+    "Publish from the compiled binary"
+  ) {
+    fail("the published branch does not hold the commit the document made");
+  }
+  if (
+    git(["show", `${publishedRef}:published.md`], origin, home) !==
+    "published by the compiled binary"
+  ) {
+    fail("the published commit does not hold the content the document wrote");
   }
 
   console.log("run-composition smoke: ok");

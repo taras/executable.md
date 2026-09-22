@@ -1,5 +1,5 @@
 /**
- * The Git capability.
+ * The read-only Git query capability.
  *
  * Workflow infrastructure asks a small, fixed set of questions of the
  * repository, and asks them through a contextual Api, so a host or a test
@@ -11,6 +11,10 @@
  * contextual working directory — and none of them mutates it. Together they are
  * what an immutable workflow definition is made of: which repository, which
  * commit, in which object format, and what the root document held in it.
+ *
+ * Asking is all this Api does. The authored transitions a document writes —
+ * `<Git.Switch>`, `<Git.Add>`, `<Git.Commit>`, `<Git.Push>` — are the separate
+ * `Git` Api, and a replacement installed here never becomes a route to one.
  */
 
 import { type Api, createApi, type Operations } from "@effectionx/context-api";
@@ -42,14 +46,14 @@ interface ExecResult {
 /** The hash algorithm a repository names its objects with. */
 export type GitObjectFormat = "sha1" | "sha256";
 
-export interface GitApi {
+export interface GitQueryApi {
   /**
    * Verify one revision expression and answer with the full object id it names.
    *
    * The semantics of `git rev-parse --verify --end-of-options <revision>` in the
    * contextual working directory.
    */
-  revParse(revision: string): Operation<string>;
+  resolve(revision: string): Operation<string>;
 
   /**
    * The absolute path of the working tree containing the contextual working
@@ -58,7 +62,7 @@ export interface GitApi {
    * The semantics of `git rev-parse --show-toplevel`. A directory that is not
    * inside a working tree is an error rather than an empty answer.
    */
-  repositoryRoot(): Operation<string>;
+  root(): Operation<string>;
 
   /**
    * The repository's object format.
@@ -67,7 +71,7 @@ export interface GitApi {
    * definition's identity: two hosts that agree about a commit only agree about
    * the run if they agree about which algorithm named it.
    */
-  objectFormat(): Operation<GitObjectFormat>;
+  format(): Operation<GitObjectFormat>;
 
   /**
    * The bytes one path held in one commit, as text.
@@ -76,7 +80,7 @@ export interface GitApi {
    * pinned object rather than whatever the working tree holds now, which is what
    * lets a run claim a commit as its identity and mean it.
    */
-  readObject(commit: string, path: string): Operation<string>;
+  read(commit: string, path: string): Operation<string>;
 }
 
 /** Git could not answer for this revision. Carries what Git reported, not a guess. */
@@ -122,8 +126,8 @@ function objectFormat(value: string): GitObjectFormat | undefined {
   return value === "sha1" || value === "sha256" ? value : undefined;
 }
 
-export const Git: Api<GitApi> = createApi<GitApi>("Git", {
-  *revParse(revision: string): Operation<string> {
+export const GitQuery: Api<GitQueryApi> = createApi<GitQueryApi>("executablemd.git.query", {
+  *resolve(revision: string): Operation<string> {
     // `--verify` makes an unresolvable revision an error rather than an echo,
     // and `--end-of-options` stops a revision that looks like a flag from being
     // read as one. The command is an array, so nothing is ever parsed by a shell.
@@ -141,7 +145,7 @@ export const Git: Api<GitApi> = createApi<GitApi>("Git", {
     return objectId;
   },
 
-  *repositoryRoot(): Operation<string> {
+  *root(): Operation<string> {
     const result = yield* asked(["git", "rev-parse", "--show-toplevel"], yield* cwd());
     const root = result.stdout.trim();
     if (result.exitCode !== 0 || root === "") {
@@ -150,7 +154,7 @@ export const Git: Api<GitApi> = createApi<GitApi>("Git", {
     return root;
   },
 
-  *objectFormat(): Operation<GitObjectFormat> {
+  *format(): Operation<GitObjectFormat> {
     const result = yield* asked(["git", "rev-parse", "--show-object-format"], yield* cwd());
     const format = objectFormat(result.stdout.trim());
     if (result.exitCode !== 0 || format === undefined) {
@@ -159,7 +163,7 @@ export const Git: Api<GitApi> = createApi<GitApi>("Git", {
     return format;
   },
 
-  *readObject(commit: string, path: string): Operation<string> {
+  *read(commit: string, path: string): Operation<string> {
     // `cat-file blob` rather than `show`: it refuses a tree or a commit instead
     // of rendering one, so a root document path that names a directory fails
     // here rather than executing as whatever `show` chose to print.
@@ -171,7 +175,7 @@ export const Git: Api<GitApi> = createApi<GitApi>("Git", {
   },
 });
 
-export const revParse: Operations<GitApi>["revParse"] = Git.operations.revParse;
-export const repositoryRoot: Operations<GitApi>["repositoryRoot"] = Git.operations.repositoryRoot;
-export const gitObjectFormat: Operations<GitApi>["objectFormat"] = Git.operations.objectFormat;
-export const readGitObject: Operations<GitApi>["readObject"] = Git.operations.readObject;
+export const resolveGitRevision: Operations<GitQueryApi>["resolve"] = GitQuery.operations.resolve;
+export const gitRoot: Operations<GitQueryApi>["root"] = GitQuery.operations.root;
+export const gitObjectFormat: Operations<GitQueryApi>["format"] = GitQuery.operations.format;
+export const readGitObject: Operations<GitQueryApi>["read"] = GitQuery.operations.read;

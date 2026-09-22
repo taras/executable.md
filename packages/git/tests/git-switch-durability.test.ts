@@ -27,8 +27,8 @@ import {
   GitOperationProtocolError,
 } from "../src/composition/errors.ts";
 import { DivergenceError } from "@executablemd/durable-streams";
-import { RepositoryComposition } from "@executablemd/git/api";
-import { GitComposition } from "@executablemd/git/api";
+import { Repository } from "@executablemd/git/api";
+import { Git } from "@executablemd/git/api";
 import type { RepositorySelection } from "@executablemd/git/api";
 import { gitOperationFingerprint } from "../src/deno/composition/operations.ts";
 import { gitWorkspaceAttachment } from "../src/deno/attachment.ts";
@@ -200,12 +200,12 @@ function observedComponent(
     origin: "test",
     props: { type: "object", additionalProperties: false },
     *fn(): Operation<string> {
-      const selection = yield* RepositoryComposition.operations.selectRepository({
+      const selection = yield* Repository.operations.select({
         name: "project",
         locator,
         base: undefined,
       });
-      yield* GitComposition.operations.switchBranch({
+      yield* Git.operations.switch({
         repository: observe(selection),
         workingDirectory: yield* cwd(),
         branch: "release",

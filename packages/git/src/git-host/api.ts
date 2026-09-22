@@ -38,7 +38,7 @@ import type {
 } from "./records.ts";
 
 /** The stable name every loaded copy composes through. */
-export const GIT_HOST_API = "executablemd.workflow.git-host";
+export const GIT_HOST_API = "executablemd.git.host";
 
 /** Which half of one reconciliation attempt is running. */
 export type GitHostPhase = "observe" | "perform";

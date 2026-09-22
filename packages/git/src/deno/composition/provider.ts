@@ -37,9 +37,9 @@
  */
 
 import { type Operation } from "effection";
-import { RepositoryComposition } from "../../composition/api.ts";
+import { Repository } from "../../composition/api.ts";
 import type { RepositoryRequest, WorktreeRequest } from "../../composition/api.ts";
-import { GitComposition } from "../../composition/git-api.ts";
+import { Git } from "../../composition/git-api.ts";
 import type {
   GitAddInvocation,
   GitCommitInvocation,
@@ -226,9 +226,9 @@ export function useRepositoryComposition(
   const observe = options.observe ?? {};
   const selections = options.selections ?? workflowSelections();
 
-  return RepositoryComposition.around(
+  return Repository.around(
     {
-      *selectRepository([request]: [RepositoryRequest]): Operation<RepositorySelection> {
+      *select([request]: [RepositoryRequest]): Operation<RepositorySelection> {
         observe.effect?.("repository", request.name);
         const record = yield* createRepository(database, host, {
           name: request.name,
@@ -259,7 +259,7 @@ export function useRepositoryComposition(
         );
       },
 
-      *selectWorktree([repository, request]: [
+      *worktree([repository, request]: [
         RepositorySelection,
         WorktreeRequest,
       ]): Operation<RepositorySelection> {
@@ -308,7 +308,7 @@ export function useRepositoryComposition(
       // `undefined` rather than a refusal: which component was written, and
       // what it needed a repository for, is the component's own sentence.
       // deno-lint-ignore require-yield
-      *repository(): Operation<RepositorySelection | undefined> {
+      *ambient(): Operation<RepositorySelection | undefined> {
         return undefined;
       },
     },
@@ -333,9 +333,9 @@ export function useGitComposition(
   const observe = options.observe ?? {};
   const selections = options.selections ?? workflowSelections();
 
-  return GitComposition.around(
+  return Git.around(
     {
-      *switchBranch([invocation]: [GitSwitchInvocation]): Operation<GitSwitchResult> {
+      *switch([invocation]: [GitSwitchInvocation]): Operation<GitSwitchResult> {
         observe.effect?.("git", "switch");
         return yield* createGitSwitch(database, host, {
           repository: selections.authenticate(invocation.repository, () =>
@@ -347,7 +347,7 @@ export function useGitComposition(
         });
       },
 
-      *addPaths([invocation]: [GitAddInvocation]): Operation<GitAddResult> {
+      *add([invocation]: [GitAddInvocation]): Operation<GitAddResult> {
         observe.effect?.("git", "add");
         return yield* createGitAdd(database, host, {
           repository: selections.authenticate(invocation.repository, () => unselected("<Git.Add>")),
@@ -356,7 +356,7 @@ export function useGitComposition(
         });
       },
 
-      *commitIndex([invocation]: [GitCommitInvocation]): Operation<GitCommitResult> {
+      *commit([invocation]: [GitCommitInvocation]): Operation<GitCommitResult> {
         observe.effect?.("git", "commit");
         return yield* createGitCommit(database, host, {
           repository: selections.authenticate(invocation.repository, () =>
@@ -368,7 +368,7 @@ export function useGitComposition(
         });
       },
 
-      *pushCurrentBranch([invocation]: [GitPushInvocation]): Operation<GitPushOutcome> {
+      *push([invocation]: [GitPushInvocation]): Operation<GitPushOutcome> {
         observe.effect?.("git", "push");
         return yield* createGitPush(database, host, {
           repository: selections.authenticate(invocation.repository, () =>

@@ -1678,7 +1678,7 @@ answer indistinguishable from a complete one.
 
 **One surface, two operations.** Reads and upserts are both asked of
 `PullRequestApi`, reached under the contextual name
-`executablemd.workflow.pull-request` — the shape `<Issue>` already has:
+`executablemd.git.pull-request` — the shape `<Issue>` already has:
 
 ```ts
 read(url: string, options: PullRequestReadOptions): Operation<PullRequestReadResult>
@@ -2644,7 +2644,7 @@ fixed local failure, rebuilt from its closed name rather than recognized across
 loaded copies.
 
 **Routing.** There is exactly one contextual operation,
-`executablemd.workflow.git-host`, and it routes. It is request-only: public
+`executablemd.git.host`, and it routes. It is request-only: public
 middleware receives one frozen, one-use routing request describing the complete
 detached request, may read it, refuse by throwing, install narrower policy, or
 delegate that exact request, and the value it returns is ignored. It receives no
@@ -2835,7 +2835,7 @@ interface IssueTracker {
 ```
 
 It is shared across loaded copies under the stable namespaced name
-`executablemd.workflow.issue-tracker`. It is replaceable composition data, not
+`executablemd.git.issue-tracker.current`. It is replaceable composition data, not
 permission: installing or replacing it requests a target for lexical descendants
 and grants no network access, credential, provider or permission to mutate that
 target.
@@ -2894,7 +2894,7 @@ provider payloads are not context values and stay in the matched provider's
 per-invocation closure.
 
 **One operation, two members.** Both forms are reached through exactly one
-stable contextual operation, `executablemd.workflow.issue`:
+stable contextual operation, `executablemd.git.issue`:
 
 ```ts
 interface IssueApi {

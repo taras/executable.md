@@ -28,7 +28,7 @@ import {
 } from "@executablemd/workflow/deno";
 import type { WorkflowExecutionTransitions } from "@executablemd/workflow/deno";
 import { WorkflowLifecycle, WorkflowRunStorage } from "@executablemd/workflow";
-import { Git } from "@executablemd/git/api";
+import { GitQuery } from "@executablemd/git/api";
 import type { WorkflowRunDatabase, WorkflowRunStatus } from "@executablemd/workflow";
 import { runWorkflow } from "../src/workflow.ts";
 import type { WorkflowExecution, WorkflowHost, WorkflowRequest } from "../src/workflow.ts";
@@ -47,21 +47,21 @@ function useGit(
   contents: string,
   asked: string[] = [],
 ): Operation<void> {
-  return Git.around(
+  return GitQuery.around(
     {
       // deno-lint-ignore require-yield
-      *repositoryRoot(): Operation<string> {
-        asked.push("repositoryRoot");
+      *root(): Operation<string> {
+        asked.push("root");
         return repository;
       },
       // deno-lint-ignore require-yield
-      *objectFormat(): Operation<"sha1" | "sha256"> {
-        asked.push("objectFormat");
+      *format(): Operation<"sha1" | "sha256"> {
+        asked.push("format");
         return "sha1";
       },
       // deno-lint-ignore require-yield
-      *readObject([commit, path]): Operation<string> {
-        asked.push(`readObject:${commit}:${path}`);
+      *read([commit, path]): Operation<string> {
+        asked.push(`read:${commit}:${path}`);
         if (commit !== objectId) {
           throw new Error(`unexpected commit ${commit}`);
         }
@@ -71,8 +71,8 @@ function useGit(
         return contents;
       },
       // deno-lint-ignore require-yield
-      *revParse([revision]): Operation<string> {
-        asked.push(`revParse:${revision}`);
+      *resolve([revision]): Operation<string> {
+        asked.push(`resolve:${revision}`);
         return objectId;
       },
     },
@@ -434,8 +434,8 @@ describe("Tier WFI — what a run hands to canonical core", () => {
       // contract fixes: every version-1 source check happens before recovery
       // and before admission, so an unobtainable source wins over any lifecycle
       // decision that would otherwise have been reached.
-      expect(asked).toContain("repositoryRoot");
-      expect(asked.some((call) => call.startsWith("readObject:"))).toBe(true);
+      expect(asked).toContain("root");
+      expect(asked.some((call) => call.startsWith("read:"))).toBe(true);
       // And nothing past it happened. The run was refused for what it is, with
       // no Workspace attached, no document executed and no lifecycle state
       // moved — which is what the refusal has to leave behind whether or not a

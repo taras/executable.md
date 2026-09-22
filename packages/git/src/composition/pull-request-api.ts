@@ -52,7 +52,7 @@ import type { PullRequestResult } from "./pull-request-records.ts";
 import type { RepositorySelection } from "./selection.ts";
 
 /** The stable name every loaded copy composes through. */
-export const PULL_REQUEST_API = "executablemd.workflow.pull-request";
+export const PULL_REQUEST_API = "executablemd.git.pull-request";
 
 /** Which collection a read wants, and where it may be sent. */
 export interface PullRequestReadOptions {

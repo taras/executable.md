@@ -44,9 +44,9 @@ import type { Operation, Scope } from "effection";
 
 import { randomUUID } from "node:crypto";
 import { getExpansion } from "@executablemd/core";
-import { RepositoryComposition } from "../../composition/api.ts";
+import { Repository } from "../../composition/api.ts";
 import type { RepositoryRequest, WorktreeRequest } from "../../composition/api.ts";
-import { GitComposition } from "../../composition/git-api.ts";
+import { Git } from "../../composition/git-api.ts";
 import type {
   GitAddInvocation,
   GitCommitInvocation,
@@ -289,9 +289,9 @@ export function* useRunComposition(options: RunCompositionOptions): Operation<vo
     };
   });
 
-  yield* RepositoryComposition.around(
+  yield* Repository.around(
     {
-      *selectRepository([request]: [RepositoryRequest]): Operation<RepositorySelection> {
+      *select([request]: [RepositoryRequest]): Operation<RepositorySelection> {
         const slot = repositorySlot(yield* useRoot(), request.locator, request.name);
         yield* (yield* useSlots()).hold(
           "repository",
@@ -322,7 +322,7 @@ export function* useRunComposition(options: RunCompositionOptions): Operation<vo
         });
       },
 
-      *selectWorktree([repository, request]: [
+      *worktree([repository, request]: [
         RepositorySelection,
         WorktreeRequest,
       ]): Operation<RepositorySelection> {
@@ -362,7 +362,7 @@ export function* useRunComposition(options: RunCompositionOptions): Operation<vo
       },
 
       // deno-lint-ignore require-yield
-      *repository(): Operation<RepositorySelection | undefined> {
+      *ambient(): Operation<RepositorySelection | undefined> {
         const { selection: ambientSelection } = yield* useAmbient();
         if (ambientSelection === undefined) {
           // This profile *has* ambient repositories; this invocation is not in
@@ -402,9 +402,9 @@ export function* useRunComposition(options: RunCompositionOptions): Operation<vo
     );
   }
 
-  yield* GitComposition.around(
+  yield* Git.around(
     {
-      *switchBranch([invocation_]: [GitSwitchInvocation]): Operation<GitSwitchResult> {
+      *switch([invocation_]: [GitSwitchInvocation]): Operation<GitSwitchResult> {
         const checkout = yield* place(
           invocation_.repository,
           invocation_.workingDirectory,
@@ -417,7 +417,7 @@ export function* useRunComposition(options: RunCompositionOptions): Operation<vo
         );
       },
 
-      *addPaths([invocation_]: [GitAddInvocation]): Operation<GitAddResult> {
+      *add([invocation_]: [GitAddInvocation]): Operation<GitAddResult> {
         const checkout = yield* place(
           invocation_.repository,
           invocation_.workingDirectory,
@@ -432,7 +432,7 @@ export function* useRunComposition(options: RunCompositionOptions): Operation<vo
         );
       },
 
-      *commitIndex([invocation_]: [GitCommitInvocation]): Operation<GitCommitResult> {
+      *commit([invocation_]: [GitCommitInvocation]): Operation<GitCommitResult> {
         const checkout = yield* place(
           invocation_.repository,
           invocation_.workingDirectory,
@@ -448,7 +448,7 @@ export function* useRunComposition(options: RunCompositionOptions): Operation<vo
         );
       },
 
-      *pushCurrentBranch([invocation_]: [GitPushInvocation]): Operation<GitPushOutcome> {
+      *push([invocation_]: [GitPushInvocation]): Operation<GitPushOutcome> {
         const checkout = yield* place(
           invocation_.repository,
           invocation_.workingDirectory,

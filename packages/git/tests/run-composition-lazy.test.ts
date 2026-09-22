@@ -26,7 +26,7 @@ import { InMemoryStream } from "@executablemd/durable-streams";
 import { useHostFiles } from "@executablemd/runtime";
 import { useRunComposition } from "../src/deno/run-composition/provider.ts";
 import { useCompositionComponents } from "../src/composition/installation.ts";
-import { RepositoryComposition } from "@executablemd/git/api";
+import { Repository } from "@executablemd/git/api";
 import type { RepositoryHost, GitInvocation, GitOutcome } from "../src/deno/composition/host.ts";
 
 /** Every acquisition this provider can make, counted where it happens. */
@@ -150,7 +150,7 @@ describe("what the ordinary repository provider acquires, and when", () => {
 /** Whether an ambient repository was found, asked through the public Api. */
 function* ambient(): Operation<boolean> {
   try {
-    yield* RepositoryComposition.operations.repository();
+    yield* Repository.operations.ambient();
     return true;
   } catch {
     return false;

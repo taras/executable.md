@@ -57,9 +57,9 @@ export interface GitCommitInvocation extends GitInvocationPlace {
 
 export type GitPushInvocation = GitInvocationPlace;
 
-export interface GitCompositionApi {
+export interface GitApi {
   /** Put the selected checkout on a named branch. */
-  switchBranch(invocation: GitSwitchInvocation): Operation<GitSwitchResult>;
+  switch(invocation: GitSwitchInvocation): Operation<GitSwitchResult>;
 
   /**
    * Stage exactly the pathspecs this invocation names.
@@ -68,7 +68,7 @@ export interface GitCompositionApi {
    * a pathspec matches, and a per-entry loop would be several transitions where
    * the document wrote one.
    */
-  addPaths(invocation: GitAddInvocation): Operation<GitAddResult>;
+  add(invocation: GitAddInvocation): Operation<GitAddResult>;
 
   /**
    * Record exactly what the index holds.
@@ -77,7 +77,7 @@ export interface GitCompositionApi {
    * what a commit is made from, and an index that already matches HEAD is
    * refused rather than committed empty.
    */
-  commitIndex(invocation: GitCommitInvocation): Operation<GitCommitResult>;
+  commit(invocation: GitCommitInvocation): Operation<GitCommitResult>;
 
   /**
    * Publish the selected checkout's current branch to its origin.
@@ -93,27 +93,24 @@ export interface GitCompositionApi {
    * all this carries — the provider still authenticates the selection, the
    * directory and the objects it publishes.
    */
-  pushCurrentBranch(invocation: GitPushInvocation): Operation<GitPushOutcome>;
+  push(invocation: GitPushInvocation): Operation<GitPushOutcome>;
 }
 
-export const GitComposition: Api<GitCompositionApi> = createApi<GitCompositionApi>(
-  "executablemd.workflow.composition.git",
-  {
-    // deno-lint-ignore require-yield
-    *switchBranch(_invocation: GitSwitchInvocation): Operation<GitSwitchResult> {
-      throw new GitCompositionProviderError("<Git.Switch>");
-    },
-    // deno-lint-ignore require-yield
-    *addPaths(_invocation: GitAddInvocation): Operation<GitAddResult> {
-      throw new GitCompositionProviderError("<Git.Add>");
-    },
-    // deno-lint-ignore require-yield
-    *commitIndex(_invocation: GitCommitInvocation): Operation<GitCommitResult> {
-      throw new GitCompositionProviderError("<Git.Commit>");
-    },
-    // deno-lint-ignore require-yield
-    *pushCurrentBranch(_invocation: GitPushInvocation): Operation<GitPushOutcome> {
-      throw new GitCompositionProviderError("<Git.Push>");
-    },
+export const Git: Api<GitApi> = createApi<GitApi>("executablemd.git", {
+  // deno-lint-ignore require-yield
+  *switch(_invocation: GitSwitchInvocation): Operation<GitSwitchResult> {
+    throw new GitCompositionProviderError("<Git.Switch>");
   },
-);
+  // deno-lint-ignore require-yield
+  *add(_invocation: GitAddInvocation): Operation<GitAddResult> {
+    throw new GitCompositionProviderError("<Git.Add>");
+  },
+  // deno-lint-ignore require-yield
+  *commit(_invocation: GitCommitInvocation): Operation<GitCommitResult> {
+    throw new GitCompositionProviderError("<Git.Commit>");
+  },
+  // deno-lint-ignore require-yield
+  *push(_invocation: GitPushInvocation): Operation<GitPushOutcome> {
+    throw new GitCompositionProviderError("<Git.Push>");
+  },
+});

@@ -46,7 +46,7 @@ import {
 } from "@executablemd/core";
 import type { WorkflowBundleComponent } from "@executablemd/core/host";
 import { decodeSourceText, sourceContentHash } from "@executablemd/workflow";
-import { readGitObject, revParse } from "@executablemd/git/api";
+import { readGitObject, resolveGitRevision } from "@executablemd/git/api";
 import type { WorkflowComponentEntry } from "@executablemd/workflow";
 import type { GitObjectFormat } from "@executablemd/git/api";
 import type { EstablishedComponent } from "./workflow-definition.ts";
@@ -409,7 +409,7 @@ function* readGitBundle(
       // `cat-file blob` first: it refuses a tree, so a declaration that names a
       // directory fails before its object id is taken as a component's identity.
       content = yield* readGitObject(pinnedCommit, path);
-      sourceHash = (yield* revParse(`${pinnedCommit}:${path}`)).toLowerCase();
+      sourceHash = (yield* resolveGitRevision(`${pinnedCommit}:${path}`)).toLowerCase();
     } catch (error) {
       return Err(
         unavailable(

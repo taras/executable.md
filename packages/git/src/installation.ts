@@ -25,7 +25,7 @@ import {
   retainedRunMismatch,
 } from "@executablemd/workflow";
 import type { WorkflowRun, WorkflowRunPreparation } from "@executablemd/workflow";
-import { revParse } from "./git.ts";
+import { resolveGitRevision } from "./git.ts";
 
 function allocating(base: string): WorkflowRunPreparation {
   return {
@@ -35,7 +35,7 @@ function allocating(base: string): WorkflowRunPreparation {
     // successful one would retry Git instead of replaying what happened.
     required: false,
     *allocate(): Operation<WorkflowRun> {
-      const pinnedCommit = yield* revParse(`${base}^{commit}`);
+      const pinnedCommit = yield* resolveGitRevision(`${base}^{commit}`);
       // Web Crypto rather than `node:crypto`: a run id is allocated in shared
       // code, which names no host.
       return { runId: crypto.randomUUID(), base, pinnedCommit };

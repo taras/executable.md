@@ -29,7 +29,7 @@ import {
   GitOperationError,
 } from "../src/composition/errors.ts";
 import { currentRepository, RepositoryContext } from "@executablemd/git/api";
-import { GitComposition } from "@executablemd/git/api";
+import { Git } from "@executablemd/git/api";
 import { parseGitAddResult } from "../src/composition/git-records.ts";
 import type { GitAddExpectation } from "../src/composition/git-records.ts";
 import { useCompositionComponents } from "../src/composition/installation.ts";
@@ -862,7 +862,7 @@ describe("workflow Git.Add pathspec text", () => {
                     throw new Error("the probe was written outside a Repository");
                   }
                   refused = yield* raised(
-                    GitComposition.operations.addPaths({
+                    Git.operations.add({
                       repository,
                       workingDirectory: yield* cwd(),
                       paths: ["\ud800"],
@@ -966,7 +966,7 @@ describe("workflow Git.Add request ownership", () => {
                   if (repository === undefined) {
                     throw new Error("the probe was written outside a Repository");
                   }
-                  yield* GitComposition.operations.addPaths({
+                  yield* Git.operations.add({
                     repository,
                     workingDirectory: yield* cwd(),
                     paths: mutable,

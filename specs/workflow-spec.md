@@ -42,7 +42,7 @@ const execution = yield* executeInstalled(
 
 `workflowInstallation()` is imported from `@executablemd/git` because resolving
 a base is a Git capability: creating a version-1 run is the lifecycle path that
-reaches Git through the contextual `Git.revParse` capability, so it is stated by
+reaches Git through the contextual `GitQuery.resolve` capability, so it is stated by
 the package that owns one. It is not the only path that needs repository
 bytes — a version-1 run retains no Markdown, so resuming, forking and exporting
 one obtain their source through the legacy reader instead (§7.1).
@@ -53,7 +53,7 @@ The package owns `WorkflowRun`, `retainedWorkflowInstallation()`,
 `@executablemd/runtime`. Core never imports workflow, and workflow never imports
 Git.
 
-**It owns no Git capability.** `GitApi`, `revParse` and
+**It owns no Git capability.** `GitQueryApi`, `resolveGitRevision` and
 `workflowInstallation({ base })` live in `@executablemd/git`, which imports the
 extension boundaries this package publishes rather than the other way round. No
 module here names a Git feature in an import, in any form.
@@ -168,7 +168,7 @@ yield* executeInstalled(options, [retainedWorkflowInstallation(run)]);
 This installs the same middleware in the same place and records through the same
 `workflow_run` durable operation. What differs is both ends of it. The live path
 writes exactly the value it was given: no identifier is generated and
-`Git.revParse()` is never called, whichever version it is. And every journal
+`GitQuery.resolve()` is never called, whichever version it is. And every journal
 state holds the record to that value in full — run id, base and pinned commit
 for version 1; run id, bundle hash and exact target for version 2 — rather than
 to the base alone.
@@ -289,7 +289,7 @@ The journal decides which middleware does the work.
 
 | State | What runs | What happens |
 | --- | --- | --- |
-| **live** — no record | the admission, then `prepare` | the admission finds nothing to hold the run to; preparation allocates the run id, resolves the base through the Git Plugin's `Git.revParse()`, records one immutable value, and only then is the root imported |
+| **live** — no record | the admission, then `prepare` | the admission finds nothing to hold the run to; preparation allocates the run id, resolves the base through the Git Plugin's `GitQuery.resolve()`, records one immutable value, and only then is the root imported |
 | **truncated** — record present, root not closed | the admission, then `prepare` | the admission restores the recorded value; preparation re-enters and its durable operation restores what it already recorded, so neither the identifier nor Git is reached again and the journal cursor still advances past its own entry |
 | **completed** — root `Close` recorded | the admission only | canonical core returns the recorded result without entering the durable body, so preparation never runs and the admission is the only place the run is restored — or a disagreeing one refused |
 
@@ -297,7 +297,7 @@ The admission runs before the recorded root result is returned. That ordering is
 what lets a completed journal refuse a supplied base that disagrees with the
 recorded one, rather than handing back a result the caller did not ask for.
 
-Replay invokes neither run-id allocation nor `Git.revParse()`. The current value
+Replay invokes neither run-id allocation nor `GitQuery.resolve()`. The current value
 of a moving branch is never consulted.
 
 ## 5. Refusals
@@ -336,19 +336,20 @@ it (§3.2).
 
 ## 7. The Git capability — moved
 
-This section described `GitApi` and `revParse` while they were this package's.
+This section described the read-only Git query capability while it was this
+package's.
 They are `@executablemd/git`'s now, together with the version-1 establishment
 adapter that calls them, and are specified in
 [the Workspace spec](./workflow-workspace-spec.md). What remains here is the
 shape a reader of an older journal may still meet:
 
 ```ts
-interface GitApi {
-  revParse(revision: string): Operation<string>;
+interface GitQueryApi {
+  resolve(revision: string): Operation<string>;
 }
 ```
 
-`Git.revParse(revision)` has the semantics of
+`GitQuery.resolve(revision)` has the semantics of
 
 ```sh
 git rev-parse --verify --end-of-options <revision>
@@ -365,13 +366,15 @@ exit naming nothing fails too, because an empty object id would pin a run to no
 repository state at all.
 
 Another provider replaces it lexically with
-`Git.around({ *revParse(…) {…} }, { at: "min" })`. Providers install at `min` so
-a nested replacement wins rather than being shadowed by an outer handler.
+`GitQuery.around({ *resolve(…) {…} }, { at: "min" })`. Providers install at
+`min` so a nested replacement wins rather than being shadowed by an outer
+handler.
 
-`workflowInstallation({ base })` calls it with `${base}^{commit}`, which is what
-makes "does not resolve to a commit" an error rather than a tag object id. That
-entrypoint is the only caller in the `@executablemd/git` package, which is where
-both it and `revParse` live (§1).
+`workflowInstallation({ base })` calls it — through the `resolveGitRevision()`
+direct operation — with `${base}^{commit}`, which is what makes "does not
+resolve to a commit" an error rather than a tag object id. That entrypoint is
+the only caller in the `@executablemd/git` package, which is where both it and
+`GitQuery` live (§1).
 
 ### 7.1 The legacy source reader
 

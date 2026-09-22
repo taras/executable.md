@@ -21,7 +21,7 @@ import { type Api, createApi } from "@effectionx/context-api";
 import type { Operation } from "effection";
 import type { IssueTracker } from "./tracker.ts";
 
-export const ISSUE_TRACKER_CONTEXT = "executablemd.workflow.issue-tracker";
+export const ISSUE_TRACKER_CONTEXT = "executablemd.git.issue-tracker.current";
 
 /**
  * What the nearest enclosing `<IssueTracker>` states, or nothing.

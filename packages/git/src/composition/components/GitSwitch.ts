@@ -43,7 +43,7 @@ import { cwd } from "@executablemd/runtime";
 import { hasContent } from "@executablemd/core";
 import type { Operation } from "effection";
 import type { Json } from "@executablemd/durable-streams";
-import { GitComposition } from "../git-api.ts";
+import { Git } from "../git-api.ts";
 import { selectedRepository } from "../context.ts";
 import { GitOperationAdmissionError, GitOperationError } from "../errors.ts";
 
@@ -97,7 +97,7 @@ export default function* GitSwitch(props: Record<string, Json>): Operation<strin
     );
   }
 
-  yield* GitComposition.operations.switchBranch({
+  yield* Git.operations.switch({
     repository,
     workingDirectory: yield* cwd(),
     branch,

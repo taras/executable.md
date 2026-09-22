@@ -49,7 +49,7 @@ import {
   sourceBundleHash,
   sourceContentHash,
 } from "@executablemd/workflow";
-import { gitObjectFormat, readGitObject, repositoryRoot, revParse } from "@executablemd/git/api";
+import { gitObjectFormat, gitRoot, readGitObject, resolveGitRevision } from "@executablemd/git/api";
 import type {
   GitWorkflowDefinitionV1,
   SourceBundleEntryV2,
@@ -423,9 +423,9 @@ function compareUtf8(left: string, right: string): number {
 function* provenance(directory: string): Operation<Json | undefined> {
   try {
     return yield* inDirectory(directory, function* (): Operation<Json | undefined> {
-      const checkout = yield* repositoryRoot();
+      const checkout = yield* gitRoot();
       const objectFormat = yield* gitObjectFormat();
-      const commit = yield* revParse("HEAD^{commit}");
+      const commit = yield* resolveGitRevision("HEAD^{commit}");
       return {
         version: 1,
         kind: RETRIEVAL_KIND,
@@ -496,7 +496,7 @@ export function* loadRetainedDefinition(
 
   try {
     return yield* inDirectory(checkout.value, function* (): Operation<Result<RetainedSources>> {
-      const root = yield* repositoryRoot();
+      const root = yield* gitRoot();
       if (resolve(root) !== resolve(checkout.value)) {
         return Err(
           unavailable(

@@ -36,7 +36,8 @@ import {
   type GitPushInputs,
 } from "../src/composition/git-push-records.ts";
 import { GIT_HOST_EFFECT } from "../src/git-host/effect.ts";
-import { GitComposition } from "@executablemd/git/api";
+import { Git, Repository } from "@executablemd/git/api";
+import type { Json } from "@executablemd/durable-streams";
 import type { RepositoryRecord } from "../src/composition/records.ts";
 import { denoRepositoryHost } from "../src/deno/composition/host.ts";
 import type { GitInvocation, GitOutcome } from "../src/deno/composition/host.ts";
@@ -64,6 +65,7 @@ import {
   physicalGitApiCopy,
   raised,
   retainedRepositories,
+  retainedWorktrees,
   runWorkflowDocument,
   subcommands,
   survivingRoots,
@@ -794,7 +796,7 @@ describe("workflow Git.Push durability", () => {
           const observed: Record<string, unknown> = { ...selected };
           const request = { repository: observed, workingDirectory: selected.checkoutPath };
           const task = yield* spawn(() =>
-            GitComposition.operations.pushCurrentBranch(
+            Git.operations.push(
               request as unknown as { repository: RepositorySelection; workingDirectory: string },
             ),
           );
@@ -861,7 +863,7 @@ describe("workflow Git.Push durability", () => {
           // A second physical module holding the same Api name. Sharing the
           // name is how composition works; it is deliberately not how admission
           // works, so this still reaches the one installed provider.
-          yield* loaded.GitComposition.operations.pushCurrentBranch({
+          yield* loaded.Git.operations.push({
             repository: selected,
             workingDirectory: selected.checkoutPath,
           });
@@ -994,6 +996,124 @@ describe("workflow Git.Push durability", () => {
       expect(subcommands(counting.counters)).not.toContain("push");
       expect(yield* gitHostEvents(database)).toHaveLength(0);
       expect(remoteRefs(remote).has(DESTINATION)).toBe(false);
+    });
+  });
+});
+
+/**
+ * The whole authored vocabulary, retained, and replayed cold.
+ *
+ * `<Repository>`, `<Worktree>` and the four `<Git.*>` elements reach their
+ * provider through `Repository` and `Git`, and a consumer replaces those two
+ * names. Middleware that observes and delegates is what shows the components
+ * arrive there: an element still routed through an operation the retained
+ * provider no longer answers would refuse rather than be seen, and one routed
+ * through a second identity would perform the work unobserved.
+ *
+ * Then the same document again, against a remote that no longer exists. A
+ * completed run restores from its journal: no Git command, no durable effect,
+ * no attachment, and no component call for the middleware to see at all.
+ */
+const FULL_BRANCH = "publish/full";
+
+function fullVocabulary(locator: string): string {
+  return [
+    `<Repository name="project" url="${locator}">`,
+    `<Worktree name="release" branch="release">`,
+    `<Git.Switch branch="${FULL_BRANCH}" />`,
+    `<File path="release.md">`,
+    "every element",
+    "</File>",
+    `<Git.Add paths="release.md" />`,
+    `<Git.Commit message="Write the vocabulary" as="commit" />`,
+    `<Git.Push />`,
+    "</Worktree>",
+    "</Repository>",
+    "",
+    "commit {commit}",
+  ].join("\n");
+}
+
+describe("the authored Git vocabulary under a workflow run", () => {
+  it("reaches Repository and Git middleware, retains it, and replays cold", function* () {
+    const root = yield* useStorageRoot();
+    const remote = yield* useBareRemote(REMOTE);
+
+    yield* withStorage(root, function* () {
+      const database = yield* createRun();
+
+      const selections: string[] = [];
+      const transitions: string[] = [];
+      const observing = function* (execute: () => Operation<Json>): Operation<Json> {
+        yield* Repository.around({
+          *select([request], next) {
+            selections.push(`select:${request.name}`);
+            return yield* next(request);
+          },
+          *worktree([repository, request], next) {
+            selections.push(`worktree:${request.name}`);
+            return yield* next(repository, request);
+          },
+        });
+        yield* Git.around({
+          *switch([invocation], next) {
+            transitions.push(`switch:${invocation.branch}`);
+            return yield* next(invocation);
+          },
+          *add([invocation], next) {
+            transitions.push(`add:${invocation.paths.join(",")}`);
+            return yield* next(invocation);
+          },
+          *commit([invocation], next) {
+            transitions.push("commit");
+            return yield* next(invocation);
+          },
+          *push([invocation], next) {
+            transitions.push("push");
+            return yield* next(invocation);
+          },
+        });
+        return yield* execute();
+      };
+
+      const live = String(
+        yield* runWorkflowDocument(database, fullVocabulary(remote.locator), {}, observing),
+      );
+
+      expect(selections).toEqual(["select:project", "worktree:release"]);
+      expect(transitions).toEqual([`switch:${FULL_BRANCH}`, "add:release.md", "commit", "push"]);
+
+      // The normalized results are unchanged: `<Git.Commit>` still renders the
+      // commit it made, and that commit is what the branch holds at the remote.
+      const [worktree] = yield* retainedWorktrees(database, "project");
+      const head = yield* headCommit(database, worktree?.checkoutPath ?? "");
+      expect(live).toContain(`commit ${head.commit}`);
+      expect(remoteBranch(remote, FULL_BRANCH)).toBe(head.commit);
+      expect(yield* gitHostOutcomes(database)).toHaveLength(1);
+
+      // Deleted, so a replay that reached for it would fail rather than pass
+      // quietly.
+      yield* remote.remove();
+
+      selections.length = 0;
+      transitions.length = 0;
+      const counting = countingHost();
+      const replayed = String(
+        yield* runWorkflowDocument(
+          database,
+          fullVocabulary(remote.locator),
+          countingOptions(counting),
+          observing,
+        ),
+      );
+
+      expect(replayed).toBe(live);
+      expect(counting.counters.commands).toEqual([]);
+      expect(counting.counters.roots).toEqual([]);
+      expect(counting.counters.effects).toEqual([]);
+      expect(counting.counters.attachments).toEqual([]);
+      expect(selections).toEqual([]);
+      expect(transitions).toEqual([]);
     });
   });
 });

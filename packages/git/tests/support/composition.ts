@@ -14,7 +14,7 @@ import { lstat, readTextFile, writeTextFile } from "@effectionx/fs";
 import { pathToFileURL } from "node:url";
 import { until } from "effection";
 import { useTempDirectory } from "@executablemd/test-support/temp";
-import { GitComposition } from "../../src/composition/git-api.ts";
+import { Git } from "../../src/composition/git-api.ts";
 import { collect, execute, INLINE_SOURCE_PATH, inlineSource } from "@executablemd/core";
 import { executeInstalled } from "@executablemd/core/host";
 import type { ExecutionInstallation } from "@executablemd/core/host";
@@ -624,14 +624,12 @@ export function* headCommit(
 }
 
 export interface LoadedGitApi {
-  GitComposition: typeof GitComposition;
+  Git: typeof Git;
 }
 
 function loadedGitApi(value: unknown): value is LoadedGitApi {
   return (
-    typeof value === "object" &&
-    value !== null &&
-    typeof Reflect.get(value, "GitComposition") === "object"
+    typeof value === "object" && value !== null && typeof Reflect.get(value, "Git") === "object"
   );
 }
 

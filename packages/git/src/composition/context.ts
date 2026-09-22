@@ -22,7 +22,7 @@
 
 import { type Api, createApi } from "@effectionx/context-api";
 import type { Operation } from "effection";
-import { RepositoryComposition } from "./api.ts";
+import { Repository } from "./api.ts";
 import type { RepositorySelection } from "./selection.ts";
 
 export interface RepositoryContextApi {
@@ -30,7 +30,7 @@ export interface RepositoryContextApi {
 }
 
 export const RepositoryContext: Api<RepositoryContextApi> = createApi<RepositoryContextApi>(
-  "executablemd.workflow.composition.context",
+  "executablemd.git.repository.current",
   { current: undefined },
 );
 
@@ -52,5 +52,5 @@ export function* selectedRepository(): Operation<RepositorySelection | undefined
   if (lexical !== undefined) {
     return lexical;
   }
-  return yield* RepositoryComposition.operations.repository();
+  return yield* Repository.operations.ambient();
 }

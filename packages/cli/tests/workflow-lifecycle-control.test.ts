@@ -26,7 +26,7 @@ import {
 } from "@executablemd/workflow/deno";
 import type { WorkflowExecutionTransitions } from "@executablemd/workflow/deno";
 import { suspendFor, WorkflowLifecycle } from "@executablemd/workflow";
-import { Git } from "@executablemd/git/api";
+import { GitQuery } from "@executablemd/git/api";
 import type { WorkflowRunDatabase } from "@executablemd/workflow";
 import { collect, inlineSource, registerComponents } from "@executablemd/core";
 import { executeInstalled } from "@executablemd/core/host";
@@ -224,22 +224,22 @@ function* definitionObject(fixture: Fixture): Operation<string> {
 
 /** The definition, answered at the Git boundary the retained run reads across. */
 function useDefinitionGit(fixture: Fixture, objectId: string): Operation<void> {
-  return Git.around(
+  return GitQuery.around(
     {
       // deno-lint-ignore require-yield
-      *repositoryRoot(): Operation<string> {
+      *root(): Operation<string> {
         return fixture.repository;
       },
       // deno-lint-ignore require-yield
-      *revParse(): Operation<string> {
+      *resolve(): Operation<string> {
         return objectId;
       },
       // deno-lint-ignore require-yield
-      *readObject(): Operation<string> {
+      *read(): Operation<string> {
         return RELEASE;
       },
       // deno-lint-ignore require-yield
-      *objectFormat(): Operation<"sha1" | "sha256"> {
+      *format(): Operation<"sha1" | "sha256"> {
         return "sha1";
       },
     },

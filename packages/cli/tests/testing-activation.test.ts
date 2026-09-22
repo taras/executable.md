@@ -20,7 +20,7 @@ import { inlineSource, registerComponents, useTempFileCompiler } from "@executab
 import type { Json } from "@executablemd/core";
 import { executeInstalled } from "@executablemd/core/host";
 import { retainedWorkflowInstallation } from "@executablemd/workflow";
-import { Git } from "@executablemd/git/api";
+import { GitQuery } from "@executablemd/git/api";
 import { installTestingComponents } from "@executablemd/testing";
 import type { TestResult } from "@executablemd/testing";
 
@@ -32,10 +32,10 @@ const RUN = Object.freeze({
 
 /** A Git that fails the run if the retained installation consults it. */
 function useForbiddenGit(): Operation<void> {
-  return Git.around(
+  return GitQuery.around(
     {
       // deno-lint-ignore require-yield
-      *revParse([revision]) {
+      *resolve([revision]) {
         throw new Error(`Git was consulted for "${revision}"`);
       },
     },
