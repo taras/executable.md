@@ -37,7 +37,7 @@ sequenceDiagram
     M->>GH: publish the draft → tag vX.Y.Z from main
     GH->>R: push: tags v*
     GH->>PP: push: tags v*
-    R->>R: validate tag matches packages/cli/deno.json
+    R->>R: validate tag matches every manifest
     R->>GH: compile and attest xmd per target,<br/>attach binaries + checksums to the release
     PP->>PP: validate tag matches every manifest,<br/>wait for release.yml to succeed
     PP->>PO: one call per package,<br/>needs-ordered (deps first)
@@ -48,18 +48,30 @@ sequenceDiagram
 
 ## 2. Version lockstep
 
-Every publishable package (`packages/core`, `packages/cli`,
-`packages/durable-streams`, `packages/runtime`, `packages/testing`,
-`packages/code-review-agent`, `packages/test-agent`, `packages/acp`,
-`packages/web`, `packages/workflow`) declares the same version in its `deno.json` and
-`package.json`. A member marked `"private": true` is outside the lockstep
-because it never publishes — `packages/test-support` is the one, and it stays
-at `0.0.0`. `packages/cli/src/cli.ts`
+Every publishable package declares the same version in its `deno.json` and
+`package.json`. Membership is the workspace, not a list: a `packages/*` member
+whose `package.json` `name` is under `@executablemd` is publishable, so a new
+package joins the lockstep by existing. A member marked `"private": true` is
+outside it because it never publishes — `packages/test-support` is the one, and
+it stays at `0.0.0`. `packages/cli/src/cli.ts`
 imports `packages/cli/deno.json` and reads `version`
 from it, so the compiled binary reports the manifest version — the manifests
-are the single source. The npm version derives from the tag, and both
-workflows refuse a tag the manifests do not declare, so the two cannot
-diverge.
+are the single source.
+
+Three checks hold that, and they read the same set. `scripts/lib/version-lockstep.ts`
+answers it for a pull request, where drift is introduced and where it is still
+cheap: it walks the workspace and reports every manifest that declares a
+different version from its siblings, and every `bun.lock` workspace entry that
+has gone stale or missing. The other two are the tag-time gates — `release.yml`
+before the binaries, `publish-packages.yml` before the packages — and each
+refuses a tag every publishable manifest does not declare, so the tag and the
+manifests cannot diverge.
+
+A gate that reads fewer manifests than the other is the failure this
+arrangement exists to prevent. `v0.13.0` published its binaries and none of its
+packages because `release.yml` read `packages/cli/deno.json` alone: the release
+branch had been bumped before `packages/git` existed, cli matched the tag, and
+only the package gate noticed that git did not.
 
 To cut a release: run `deno task bump <version>` (stamps every manifest),
 restamp the workspace versions in `bun.lock`, merge to `main`, then publish the
@@ -68,8 +80,10 @@ draft release — its tag follows the manifests (§3).
 `bun.lock` records a `version` for every workspace member, and the bump task
 does not touch it — `bun install` will not restamp those entries either, since
 they already satisfy the lockfile. Left alone they keep the previous release's
-number. Only the members whose `name` is an `@executablemd` package change; an
-unrelated dependency that happens to share the old version number must not.
+number, which the lockstep check reports, so restamping them is part of cutting
+the release rather than a tidying step afterwards. Only the members whose `name`
+is an `@executablemd` package change; an unrelated dependency that happens to
+share the old version number must not.
 
 The bump touches nothing else. PR Review and Repo Analysis prepare and build
 the checked-out revision with `deno task setup` and `deno task build`, then run
@@ -87,7 +101,8 @@ documents at the revision it checks.
   the manifests need bumping; once bumped, the banner clears and the draft's
   tag and title default to the guard-passing `v<version>`.
 - **`release.yml`** (`push: tags v*`): a preflight job validates the tag
-  against `packages/cli/deno.json`; on mismatch it flags the just-published release on
+  against every publishable manifest, walked from `packages/*` so a new package
+  joins by existing; on mismatch it flags the just-published release on
   the Releases page — caution note in the notes, a failed title, and the
   prerelease marker — so a forgotten bump is visible where the release was
   made, then refuses to build. On a valid tag it compiles

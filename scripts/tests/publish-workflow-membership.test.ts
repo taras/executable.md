@@ -236,3 +236,43 @@ describe("publish-packages.yml membership", () => {
     }
   });
 });
+
+/**
+ * Both workflows refuse a tag the manifests do not declare, and they have to
+ * refuse it for the same set of manifests. v0.13.0 is what it costs when they
+ * disagree: `release.yml` read `packages/cli/deno.json` alone, passed, and
+ * published binaries that no package release would ever join, while
+ * `publish-packages.yml` read all eleven and refused on `packages/git`.
+ */
+describe("tag-time version gates", () => {
+  it("reads every publishable manifest before publishing packages", function* () {
+    const generated = yield* workflow();
+    const publishable = (yield* members()).filter((member) => !member.isPrivate);
+
+    // Non-vacuous: a sweep over no members would find nothing missing.
+    expect(publishable.length).toBeGreaterThan(0);
+
+    for (const member of publishable) {
+      expect(generated).toContain(`${member.dir}/deno.json`);
+    }
+  });
+
+  /**
+   * The binary gate reaches the same set by walking the workspace, so a package
+   * added after it was written joins it by existing. Naming one member is the
+   * shape that failed, and it is what this refuses.
+   */
+  it("reaches the same set by walking the workspace before publishing binaries", function* () {
+    const commands = (yield* readTextFile(RELEASE_WORKFLOW))
+      .split("\n")
+      .filter((line) => !line.trim().startsWith("#"))
+      .join("\n");
+    const named = (yield* members())
+      .filter((member) => !member.isPrivate)
+      .filter((member) => commands.includes(`${member.dir}/deno.json`))
+      .map((member) => member.dir);
+
+    expect(commands).toContain("for manifest in packages/*/package.json");
+    expect(named).toEqual([]);
+  });
+});
