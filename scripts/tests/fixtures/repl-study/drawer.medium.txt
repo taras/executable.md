@@ -18,7 +18,6 @@ drawer.medium · 140 × 38
                                   │                                                                              │
                                   │                                                                              │
                                   │                                                                              │
-                                  │                                                                              │
                                   │ INPUT REQUIRED
                                   │ suspended at <Elicit as="project"> · document scope · validated against the Elicit schema
                                   │
@@ -33,7 +32,8 @@ drawer.medium · 140 × 38
                                   │
                                   │
                                   │
- EXECUTION HISTORY                                                                                               │ LIVE     LIVE  [ Pause ]
- recorded · 00:49      │                                                                                         │ 00:49
- Entry 1           ────◆─────●────────────◇───────────·────────────────────·─·────────≈───────────·──────────●───┃
-                                                                                        4.9s agent wait · compressed
+ EXECUTION HISTORY     │                                                                                         ┃ LIVE     LIVE  [ Pause ]
+ recorded · 00:49      │     │                                                                               │   ┃ 00:49
+ Entry 1               │     │            │                                                                  │   ┃
+                   ────◆─────●────────────●───────────●────────────────────●─·────────≈───────────●──────────●───┃
+                                                                                      4.9s agent wait · compressed

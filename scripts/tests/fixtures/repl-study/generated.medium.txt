@@ -27,13 +27,13 @@ generated.medium · 140 × 38
                                   │ │ Create a project README                                                    │
                                   │ │ Provide the project name and a one-sentence description.                   │
                                   │ │ ▶ <Elicit as="project" schema={projectSchema}>                    ENTER    │
-                                  │ │ │ Enter the project details.                                               │
-                                  │ ▸ 1 more lines · ↑↓ PgUp PgDn                                                │
+                                  │ ▸ 2 more lines · ↑↓ PgUp PgDn                                                │
                                   │ DRAFT · ENTRY 2   Run unavailable while Entry 1 is active                                  [ Run ]
                                   │
                                   │
                                   │
- EXECUTION HISTORY                                                                                               │ LIVE     LIVE  [ Pause ]
- recorded · 00:48      │                                                                                         │ 00:48
- Entry 1           ────◆─────●─────────────◇──────────·─────────────────────·─·─────────≈──────────·───────────●─┃
-                                                                                          4.9s agent wait · compressed
+ EXECUTION HISTORY     │                                                                                         ┃ LIVE     LIVE  [ Pause ]
+ recorded · 00:48      │     │                                                                                 │ ┃ 00:48
+ Entry 1               │     │             │                                                                   │ ┃
+                   ────◆─────●─────────────●──────────●─────────────────────●─·─────────≈──────────●───────────●─┃
+                                                                                        4.9s agent wait · compressed

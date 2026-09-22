@@ -26,4 +26,3 @@ empty.narrow · 90 × 28
 
  REPL INPUT        ⇧⏎ newline                                                [ Run ⌘⏎ ]
  Enter XMD or invoke a document…
-

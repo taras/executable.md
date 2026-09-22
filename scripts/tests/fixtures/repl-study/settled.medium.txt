@@ -28,12 +28,12 @@ settled.medium · 140 × 38
                                   │                                                                              │
                                   │                                                                              │
                                   │                                                                              │
-                                  │                                                                              │
                                   │ REPL INPUT        ready for Entry 2                                                        [ Run ⌘⏎ ]
                                   │ Enter XMD or invoke a document…
                                   │
                                   │
- EXECUTION HISTORY                                                                                        │ SETTLED         IDLE  [ Pause ]
- recorded · 01:01     │                                                                                   │ 01:01
- Entry 1           ───◆───●─────────◇────────·──────────────·─·──────≈───────·────────●──●───●─●────●────●┃
-                                                                       4.9s agent wait · compressed
+ EXECUTION HISTORY    │                                                                                   ┃ SETTLED         IDLE  [ Pause ]
+ recorded · 01:01     │   │                                                           │  │   │ │    │    │┃ 01:01
+ Entry 1              │   │         │                                                 │  │   │ │    │    │┃
+                   ───◆───●─────────●────────●──────────────●─·──────≈───────●────────●──●───●─●────●────●┃
+                                                                     4.9s agent wait · compressed

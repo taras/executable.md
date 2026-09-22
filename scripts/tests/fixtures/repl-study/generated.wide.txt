@@ -40,12 +40,12 @@ generated.wide · 200 × 50
                                                 │                                                                                                                      │
                                                 │                                                                                                                      │
                                                 │                                                                                                                      │
-                                                │                                                                                                                      │
                                                 │ DRAFT · ENTRY 2   Run unavailable while Entry 1 is active                                                                                [ Run ]
                                                 │
                                                 │
                                                 │
- EXECUTION HISTORY                                                                                                                                                           │ LIVE     LIVE  [ Pause ]
- recorded · 00:48              │                                                                                                                                             │ 00:48
- Entry 1                 ──────◆────────●─────────────────────◇──────────────────·────────────────────────────────·───·──────────────≈─────────────────·──────────────────●──┃
-                                                                                                                                       4.9s agent wait · compressed
+ EXECUTION HISTORY             │                                                                                                                                             ┃ LIVE     LIVE  [ Pause ]
+ recorded · 00:48              │        │                                                                                                                                 │  ┃ 00:48
+ Entry 1                       │        │                     │                                                                                                           │  ┃
+                         ──────◆────────●─────────────────────●──────────────────●────────────────────────────────●───·──────────────≈─────────────────●──────────────────●──┃
+                                                                                                                                     4.9s agent wait · compressed

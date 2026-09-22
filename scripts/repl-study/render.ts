@@ -20,6 +20,7 @@ import type { Layout, Rect } from "./layout.ts";
 import { MINIMUM } from "./layout.ts";
 import type { View } from "./view.ts";
 import type { Mutation } from "./mutations.ts";
+import type { Motion } from "./playback.ts";
 
 const C = {
   src: rgba(0xc8, 0xd2, 0xd9),
@@ -143,6 +144,18 @@ function lineOps(id: string, width: number, line: VisualLine): Op[] {
 interface RegionOptions {
   readonly bg?: number;
   readonly padding?: { readonly left?: number; readonly right?: number; readonly top?: number };
+  /**
+   * A transition the renderer owns.
+   *
+   * Declaring it makes `@bomb.sh/tty` interpolate this region between the
+   * geometry of one frame and the next, and report `animating` until it
+   * settles. The harness supplies the time; it does not do the interpolation.
+   */
+  readonly transition?: {
+    readonly duration: number;
+    readonly easing?: "linear" | "easeIn" | "easeOut" | "easeInOut";
+    readonly properties: readonly ("x" | "y" | "position" | "width" | "height" | "size" | "bg")[];
+  };
 }
 
 function region(
@@ -167,6 +180,15 @@ function region(
       floating: { x: rect.x, y: rect.y, attachTo: "root" },
       bg: options.bg ?? BG.app,
       clip: { horizontal: true, vertical: true },
+      ...(options.transition === undefined
+        ? {}
+        : {
+            transition: {
+              duration: options.transition.duration,
+              easing: options.transition.easing,
+              properties: [...options.transition.properties],
+            },
+          }),
     }),
   ];
   lines.slice(0, capacity).forEach((line, index) => {
@@ -195,6 +217,20 @@ function rule(id: string, rect: Rect, glyph: string): Op[] {
   ops.push(close());
   return ops;
 }
+
+/**
+ * The drawer's own movement, which the renderer performs.
+ *
+ * The contextual band is four rows as an input and fourteen as a drawer, and it
+ * is bottom-anchored, so both its height and its top edge change when a
+ * suspension opens. Declaring the transition is all the harness does; Clay
+ * interpolates the geometry and reports `animating` until it arrives.
+ */
+const DRAWER_TRANSITION = {
+  duration: 260,
+  easing: "easeInOut",
+  properties: ["height", "y"],
+} as const;
 
 function blank(): VisualLine {
   return { segments: [{ text: "" }] };
@@ -334,7 +370,13 @@ function entryHeader(entry: Entry): VisualLine {
   };
 }
 
-function transcriptRegion(fixture: Fixture, view: View, rect: Rect, mutation?: Mutation): Op[] {
+function transcriptRegion(
+  fixture: Fixture,
+  view: View,
+  rect: Rect,
+  mutation?: Mutation,
+  motion?: Motion,
+): Op[] {
   const width = Math.max(0, rect.width - 2);
   const lines: VisualLine[] = [];
   if (!fixture.entry) {
@@ -355,6 +397,18 @@ function transcriptRegion(fixture: Fixture, view: View, rect: Rect, mutation?: M
     mutation === "clip-long-transcript"
       ? body
       : body.slice(view.anchor, view.anchor + Math.max(0, capacity - 1));
+
+  // While a playback runs, the target's transcript arrives a few rows at a
+  // time. This is the application's own interpolation: the renderer is not
+  // animating anything here, and when the motion settles every row is present.
+  const arriving = motion !== undefined && !motion.done;
+  if (arriving) {
+    const shown = Math.max(1, Math.ceil(motion.reveal * windowed.length));
+    lines.push(...windowed.slice(0, shown));
+    lines.push(plain("…", C.dim));
+    return region("transcript", rect, lines, { bg: BG.center });
+  }
+
   lines.push(...windowed);
   if (mutation !== "clip-long-transcript") {
     const remaining = body.length - view.anchor - windowed.length;
@@ -566,7 +620,7 @@ function contextualRegion(fixture: Fixture, view: View, layout: Layout, rect: Re
       });
       lines.push(plain(drawer.hint, C.dim));
     }
-    return region("contextual", rect, lines, { bg: BG.drawer });
+    return region("contextual", rect, lines, { bg: BG.drawer, transition: DRAWER_TRANSITION });
   }
 
   const input = fixture.input;
@@ -584,7 +638,7 @@ function contextualRegion(fixture: Fixture, view: View, layout: Layout, rect: Re
     },
     plain(input.placeholder ?? "", C.settledText),
   ];
-  return region("contextual", rect, lines, { bg: BG.input });
+  return region("contextual", rect, lines, { bg: BG.input, transition: DRAWER_TRANSITION });
 }
 
 function clock(seconds: number): string {
@@ -715,14 +769,39 @@ export function bandGeometry(fixture: Fixture, layout: Layout, rect: Rect): Band
 }
 
 /**
+ * How tall the notch for one scope depth is.
+ *
+ * Height carries depth and nothing else: the shallowest scope gets the whole
+ * band and each level in takes one row less. Four depths are what four rows can
+ * spell, so anything deeper shares the shortest notch and says so with a glyph.
+ */
+export function notchHeightForDepth(depth: number): number {
+  return Math.max(1, 4 - Math.min(depth, 3));
+}
+
+/** The band's rows: four a notch can reach, and the label row below them. */
+export const BAND_ROWS = [0, 1, 2, 3, 4] as const;
+
+/** Where the track runs, and where a notch of depth 3 sits. */
+export const TRACK_ROW = 3;
+
+/** The row the selection's label owns, which no notch reaches. */
+export const NOTE_ROW = 4;
+
+/** True where a depth is deeper than the band has heights for. */
+export function isDeeperThanBand(depth: number): boolean {
+  return depth > 3;
+}
+
+/**
  * The Execution History band.
  *
- * Four extents distinguish what sits on the track, which is the study's own
- * vocabulary read into cells: a minor checkpoint takes the track row, an entry
- * boundary rises one row above it, the head takes three rows and carries its
- * label, and a historical selection takes the whole band. Depth is a glyph tier
- * rather than a fifth height — the band has four rows and cannot spend one per
- * nesting level.
+ * A notch's height is its scope depth — depth 0 fills all four rows, depth 3
+ * takes the track row alone — because that is the settled meaning of notch
+ * height. Everything else about a marker is said some other way: the playhead is
+ * its own full-height stem with a label, a selection is gold with a caret under
+ * it, an entry boundary is `◆` where an ordinary event is `●`, and a column
+ * holding several checkpoints shows how many.
  */
 function footerRegion(
   fixture: Fixture,
@@ -730,8 +809,12 @@ function footerRegion(
   layout: Layout,
   rect: Rect,
   mutation?: Mutation,
+  motion?: Motion,
 ): Op[] {
   const history = fixture.history;
+  // While a playback runs, the head is where the application says it is; the
+  // recorded head is where it will be when the motion settles.
+  const headAt = motion !== undefined && !motion.done ? motion.headAt : history.headAt;
   const flat = mutation === "flatten-notches";
   const { transport, right, inner, labelWidth, trackLeft, trackWidth } = bandGeometry(
     fixture,
@@ -739,70 +822,16 @@ function footerRegion(
     rect,
   );
 
-  const grid: string[][] = [0, 1, 2, 3].map(() => Array.from({ length: inner }, () => " "));
-  const colors: number[][] = [0, 1, 2, 3].map(() => Array.from({ length: inner }, () => C.dim));
+  const grid: string[][] = BAND_ROWS.map(() => Array.from({ length: inner }, () => " "));
+  const colors: number[][] = BAND_ROWS.map(() => Array.from({ length: inner }, () => C.dim));
 
   const put = (row: number, column: number, glyph: string, color: number) => {
-    if (row < 0 || row > 3 || column < 0 || column >= inner) {
+    if (row < 0 || row >= BAND_ROWS.length || column < 0 || column >= inner) {
       return;
     }
     grid[row][column] = glyph;
     colors[row][column] = color;
   };
-
-  const hasHistory = history.checkpoints.length > 0;
-  if (hasHistory) {
-    const headColumn = columnFor(history.headAt, history, trackLeft, trackWidth);
-    for (let column = trackLeft; column <= headColumn && column < inner; column += 1) {
-      put(2, column, "─", C.rule);
-    }
-
-    const selected = history.checkpoints[view.checkpoint];
-    const notches = notchLayout(history, trackLeft, trackWidth, mutation);
-
-    for (const notch of notches) {
-      const boundary = notch.checkpoints.some((checkpoint) => checkpoint.kind === "entry");
-      const deepest = Math.max(...notch.checkpoints.map((checkpoint) => checkpoint.depth));
-      const later =
-        selected !== undefined &&
-        notch.checkpoints.every((checkpoint) => checkpoint.at > selected.at);
-      const color = later ? C.dim : boundary ? C.out : C.active;
-      const coalesced = notch.checkpoints.length > 1;
-      const glyph = coalesced
-        ? notch.checkpoints.length < 10
-          ? String(notch.checkpoints.length)
-          : "+"
-        : boundary
-          ? "◆"
-          : deepest <= 1
-            ? "●"
-            : deepest === 2
-              ? "◇"
-              : "·";
-      put(2, notch.column, glyph, color);
-      if (boundary && !flat) {
-        put(1, notch.column, "│", color);
-      }
-    }
-
-    if (history.compressed) {
-      put(2, columnFor(history.compressed.at, history, trackLeft, trackWidth), "≈", C.hold);
-    }
-
-    const headColor = history.transport === "live" ? C.active : C.dim;
-    put(2, headColumn, "┃", headColor);
-    if (!flat) {
-      put(1, headColumn, "│", headColor);
-      put(0, headColumn, "│", headColor);
-    }
-
-    if (selected !== undefined) {
-      const column = columnFor(selected.at, history, trackLeft, trackWidth);
-      for (const row of flat ? [2] : [0, 1, 2, 3]) {
-        put(row, column, "┃", C.gold);
-      }
-    }
-  }
 
   const putText = (row: number, column: number, value: string, color: number) => {
     [...value].forEach((glyph, offset) => {
@@ -810,11 +839,11 @@ function footerRegion(
     });
   };
 
-  const selected = history.checkpoints[view.checkpoint];
+  const hasHistory = history.checkpoints.length > 0;
+  const selectedCheckpoint = history.checkpoints[view.checkpoint];
 
-  // A narrow band has no room for the study's full left labels, and truncating
-  // them to "EXECUTION HI…" says less than a shorter word that fits. The
-  // surface bar above already names the surface there.
+  // Text goes down before the markers do, so a notch or a caret always wins the
+  // column it belongs in rather than being written over by a label.
   const compact = labelWidth < 18;
   putText(0, 0, fit(compact ? "HISTORY" : "EXECUTION HISTORY", labelWidth - 1), C.label);
   putText(
@@ -834,37 +863,96 @@ function footerRegion(
   putText(0, Math.max(0, inner - [...right].length), right, transport.color);
 
   if (hasHistory) {
-    const headColumn = columnFor(history.headAt, history, trackLeft, trackWidth);
+    const headColumn = columnFor(headAt, history, trackLeft, trackWidth);
+    const note =
+      selectedCheckpoint !== undefined
+        ? `▲ ${clock(selectedCheckpoint.at)} · snapped · ${(
+            history.headAt - selectedCheckpoint.at
+          ).toFixed(1)}s before head`
+        : history.compressed
+          ? history.compressed.note
+          : "notch height is scope depth · digits mark coalesced checkpoints";
+    const anchor =
+      selectedCheckpoint !== undefined
+        ? columnFor(selectedCheckpoint.at, history, trackLeft, trackWidth)
+        : history.compressed
+          ? columnFor(history.compressed.at, history, trackLeft, trackWidth)
+          : trackLeft;
+    // The label row is the band's fifth, which no notch reaches, so the note
+    // can sit under the marker it describes without shortening it.
+    const noteColumn = Math.max(0, Math.min(anchor, inner - [...note].length));
+    putText(NOTE_ROW, noteColumn, note, selectedCheckpoint !== undefined ? C.gold : C.dim);
+  }
+
+  if (hasHistory) {
+    const headColumn = columnFor(headAt, history, trackLeft, trackWidth);
+    for (let column = trackLeft; column <= headColumn && column < inner; column += 1) {
+      put(TRACK_ROW, column, "─", C.rule);
+    }
+
+    const selected = selectedCheckpoint;
+    const notches = notchLayout(history, trackLeft, trackWidth, mutation);
+
+    for (const notch of notches) {
+      const boundary = notch.checkpoints.some((checkpoint) => checkpoint.kind === "entry");
+      const deepest = Math.max(...notch.checkpoints.map((checkpoint) => checkpoint.depth));
+      const later =
+        selected !== undefined &&
+        notch.checkpoints.every((checkpoint) => checkpoint.at > selected.at);
+      const color = later ? C.dim : boundary ? C.out : C.active;
+      const coalesced = notch.checkpoints.length > 1;
+      // The shallowest scope in the column owns the notch's height, so a
+      // coalesced column never hides the outermost thing that happened there.
+      const shallowest = Math.min(...notch.checkpoints.map((checkpoint) => checkpoint.depth));
+      const chosen =
+        selected !== undefined &&
+        notch.checkpoints.some((checkpoint) => checkpoint.at === selected.at);
+      const glyph = coalesced
+        ? notch.checkpoints.length < 10
+          ? String(notch.checkpoints.length)
+          : "+"
+        : boundary
+          ? "◆"
+          : isDeeperThanBand(deepest)
+            ? "·"
+            : "●";
+      const notchColor = chosen ? C.gold : color;
+      put(TRACK_ROW, notch.column, glyph, notchColor);
+      // The notch rises from the track row, one row per level out, so its
+      // height is the depth and nothing else about it is.
+      const height = flat ? 1 : notchHeightForDepth(shallowest);
+      for (let row = TRACK_ROW - 1; row > TRACK_ROW - height; row -= 1) {
+        put(row, notch.column, "│", notchColor);
+      }
+    }
+
+    if (history.compressed) {
+      put(TRACK_ROW, columnFor(history.compressed.at, history, trackLeft, trackWidth), "≈", C.hold);
+    }
+
+    // The playhead is not a notch and does not borrow a notch's meaning: it is
+    // a heavier stem over the notch rows, and it carries its own label.
+    const headColor = history.transport === "live" ? C.active : C.dim;
+    for (const row of flat ? [TRACK_ROW] : [0, 1, 2, 3]) {
+      put(row, headColumn, "┃", headColor);
+    }
+
+    // The head's label goes down last. A moving head passes over notches, and
+    // what a person needs to read there is where the head is, not the stem of
+    // a marker it happens to be beside.
     const headLabel =
       history.transport === "live"
         ? "LIVE"
         : history.transport === "idle"
           ? "SETTLED"
           : "PAUSED HEAD";
-    const headColor = history.transport === "live" ? C.active : C.dim;
     if (headColumn + 2 + headLabel.length < inner - [...right].length) {
       putText(0, headColumn + 2, headLabel, headColor);
-      putText(1, headColumn + 2, clock(history.headAt), C.dim);
+      putText(1, headColumn + 2, clock(headAt), C.dim);
     }
-    const note =
-      selected !== undefined
-        ? `${clock(selected.at)} · snapped · ${(history.headAt - selected.at).toFixed(1)}s before head`
-        : history.compressed
-          ? history.compressed.note
-          : "digits mark coalesced checkpoints · ←/→ visits each";
-    const anchor =
-      selected !== undefined
-        ? columnFor(selected.at, history, trackLeft, trackWidth)
-        : history.compressed
-          ? columnFor(history.compressed.at, history, trackLeft, trackWidth)
-          : trackLeft;
-    // Two columns clear of the marker it describes, so the note never writes
-    // over the notch and shortens it.
-    const noteColumn = Math.max(0, Math.min(anchor + 2, inner - [...note].length));
-    putText(3, noteColumn, note, selected !== undefined ? C.gold : C.dim);
   }
 
-  const lines: VisualLine[] = [0, 1, 2, 3].map((row) => ({
+  const lines: VisualLine[] = BAND_ROWS.map((row) => ({
     segments: runsOf(grid[row], colors[row]),
   }));
 
@@ -881,8 +969,7 @@ function footerRegion(
         segments: [
           { text: clock(point.at), color: on ? C.gold : C.dim, width: 6 },
           {
-            text:
-              point.kind === "entry" ? "◆" : point.depth <= 1 ? "●" : point.depth === 2 ? "◇" : "·",
+            text: point.kind === "entry" ? "◆" : isDeeperThanBand(point.depth) ? "·" : "●",
             color: on ? C.gold : C.active,
             width: 2,
           },
@@ -982,10 +1069,12 @@ export interface ScreenRequest {
   readonly view: View;
   readonly layout: Layout;
   readonly mutation?: Mutation;
+  /** Present only while a playback is running between two fixtures. */
+  readonly motion?: Motion;
 }
 
 export function renderScreen(request: ScreenRequest): Op[] {
-  const { fixture, view, layout, mutation } = request;
+  const { fixture, view, layout, mutation, motion } = request;
   const ops: Op[] = [
     open("root", { layout: { width: grow(), height: grow(), direction: "ttb" }, bg: BG.app }),
   ];
@@ -1005,7 +1094,7 @@ export function renderScreen(request: ScreenRequest): Op[] {
     ops.push(...sidebarRegion(fixture, view, layout, layout.sidebar));
   }
   if (layout.transcript) {
-    ops.push(...transcriptRegion(fixture, view, layout.transcript, mutation));
+    ops.push(...transcriptRegion(fixture, view, layout.transcript, mutation, motion));
   }
   if (layout.bindings) {
     ops.push(...bindingsRegion(fixture, layout, layout.bindings));
@@ -1016,7 +1105,7 @@ export function renderScreen(request: ScreenRequest): Op[] {
     ops.push(...contextualRegion(fixture, view, layout, layout.contextual));
   }
   if (layout.footer) {
-    ops.push(...footerRegion(fixture, view, layout, layout.footer, mutation));
+    ops.push(...footerRegion(fixture, view, layout, layout.footer, mutation, motion));
   }
   if (layout.contextual && covering) {
     // Drawn last, so it lands on top of the band the study says is never

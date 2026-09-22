@@ -9,12 +9,16 @@
  * `scripts/repl-study/README.md` explains the keys and what each mode is for.
  */
 
-import { exit, main } from "effection";
+import { ensure, exit, main } from "effection";
 import type { Operation } from "effection";
 
 import { captureAll, PROFILE_SIZES, renderFrame, writeCaptures } from "./capture.ts";
 import { fixture } from "./fixtures.ts";
 import { runInteractive, runReplay } from "./host.ts";
+import type { TraceEntry } from "./host.ts";
+import { playbackBetween } from "./playback.ts";
+import type { Playback } from "./playback.ts";
+import { writeTextFile } from "@effectionx/fs";
 import { isFixtureName } from "./model.ts";
 import type { FixtureName } from "./model.ts";
 import type { Profile } from "./layout.ts";
@@ -25,16 +29,25 @@ import { initialView } from "./view.ts";
 const USAGE = [
   "usage:",
   "  repl-study [--fixture <name>] [--mutation <name>]",
+  "  repl-study --play <from> <to> [--frames <n>] [--interrupt-after-frames <n>] [--trace <file>]",
   "  repl-study --capture <directory> [--mutation <name>]",
   "  repl-study --print <fixture> <profile> [--mutation <name>]",
   "  repl-study --replay [--interrupt-after <n>] [--fail-after <n>] [--mutation <name>]",
   "",
   "fixtures: empty, nested, generated, drawer, paused, settled",
   "profiles: wide, medium, narrow, too-small",
+  "playbacks: empty→nested, nested→generated, generated→drawer, drawer→paused, paused→settled",
 ].join("\n");
 
 type Mode =
-  | { readonly kind: "interactive"; readonly fixture: FixtureName }
+  | {
+      readonly kind: "interactive";
+      readonly fixture: FixtureName;
+      readonly play?: Playback;
+      readonly maxFrames?: number;
+      readonly interruptAfterFrames?: number;
+      readonly trace?: string;
+    }
   | { readonly kind: "capture"; readonly directory: string }
   | { readonly kind: "print"; readonly fixture: FixtureName; readonly profile: Profile }
   | { readonly kind: "replay"; readonly interruptAfter?: number; readonly failAfter?: number };
@@ -42,6 +55,10 @@ type Mode =
 interface Invocation {
   readonly mode: Mode;
   readonly mutation?: Mutation;
+}
+
+function isFrameCount(value: string | undefined): value is string {
+  return value !== undefined && Number.isInteger(Number(value)) && Number(value) >= 1;
 }
 
 function isProfile(value: string): value is Profile {
@@ -59,6 +76,10 @@ export function parse(argv: readonly string[]): Invocation | string {
   let mutation: Mutation | undefined;
   let fixtureName: FixtureName = "nested";
   let mode: Mode | undefined;
+  let play: Playback | undefined;
+  let maxFrames: number | undefined;
+  let interruptAfterFrames: number | undefined;
+  let trace: string | undefined;
   let at = 0;
 
   const value = (): string | undefined => {
@@ -96,6 +117,35 @@ export function parse(argv: readonly string[]): Invocation | string {
         return `--print needs a profile, not ${JSON.stringify(profile)}`;
       }
       mode = { kind: "print", fixture: name, profile };
+    } else if (argument === "--play") {
+      const from = value();
+      const to = value();
+      if (from === undefined || !isFixtureName(from) || to === undefined || !isFixtureName(to)) {
+        return `--play needs two fixture names, not ${JSON.stringify([from, to])}`;
+      }
+      const found = playbackBetween(from, to);
+      if (found === undefined) {
+        return `there is no playback from ${from} to ${to}`;
+      }
+      play = found;
+    } else if (argument === "--frames") {
+      const count = value();
+      if (!isFrameCount(count)) {
+        return "--frames needs a frame count";
+      }
+      maxFrames = Number(count);
+    } else if (argument === "--interrupt-after-frames") {
+      const count = value();
+      if (!isFrameCount(count)) {
+        return "--interrupt-after-frames needs a frame count";
+      }
+      interruptAfterFrames = Number(count);
+    } else if (argument === "--trace") {
+      const path = value();
+      if (path === undefined) {
+        return "--trace needs a file to write";
+      }
+      trace = path;
     } else if (argument === "--replay") {
       mode = { kind: "replay" };
     } else if (argument === "--interrupt-after" || argument === "--fail-after") {
@@ -116,7 +166,17 @@ export function parse(argv: readonly string[]): Invocation | string {
     at += 1;
   }
 
-  return { mode: mode ?? { kind: "interactive", fixture: fixtureName }, mutation };
+  return {
+    mode: mode ?? {
+      kind: "interactive",
+      fixture: fixtureName,
+      play,
+      maxFrames,
+      interruptAfterFrames,
+      trace,
+    },
+    mutation,
+  };
 }
 
 function* run(invocation: Invocation): Operation<void> {
@@ -154,7 +214,28 @@ function* run(invocation: Invocation): Operation<void> {
     return;
   }
 
-  yield* runInteractive({ fixture: mode.fixture, mutation });
+  const trace: TraceEntry[] = [];
+  const tracePath = mode.trace;
+  if (tracePath !== undefined) {
+    // Written from teardown, not after the loop: an interruption ends this run
+    // through the same shutdown that restores the terminal, and a trace that
+    // only survived an ordinary exit could not testify about an interrupted
+    // one. Registered before the harness starts, so it runs after it stops.
+    yield* ensure(function* () {
+      yield* writeTextFile(
+        tracePath,
+        trace.map((entry) => JSON.stringify(entry)).join("\n") + "\n",
+      );
+    });
+  }
+  yield* runInteractive({
+    fixture: mode.fixture,
+    mutation,
+    play: mode.play,
+    maxFrames: mode.maxFrames,
+    interruptAfterFrames: mode.interruptAfterFrames,
+    trace: tracePath === undefined ? undefined : trace,
+  });
 }
 
 if (import.meta.main) {

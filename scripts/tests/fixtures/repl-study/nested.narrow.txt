@@ -25,5 +25,3 @@ nested.narrow · 90 × 28
  │ │   │ ✓ <Syntax as="syntax" />                                                SETTLED
  ▸ 5 more lines · ↑↓ PgUp PgDn
  DRAFT · ENTRY 2   Run unavailable while Entry 1 is active                   [ Run ]
-
-

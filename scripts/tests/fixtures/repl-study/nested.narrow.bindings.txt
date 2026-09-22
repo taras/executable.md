@@ -21,9 +21,3 @@ nested.narrow.bindings · 90 × 28
  draft
  # Create a project README
  <Elicit as="project" schema={…}>
-
-
-
-
-
-

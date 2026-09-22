@@ -40,12 +40,12 @@ nested.wide · 200 × 50
                                                 │                                                                                                                      │
                                                 │                                                                                                                      │
                                                 │                                                                                                                      │
-                                                │                                                                                                                      │
                                                 │ DRAFT · ENTRY 2   Run unavailable while Entry 1 is active                                                                                [ Run ]
                                                 │
                                                 │
                                                 │
- EXECUTION HISTORY                                                                                                                                                           │ LIVE     LIVE  [ Pause ]
- recorded · 00:31                  │                                                                                                                                         │ 00:31
- Entry 1                 ──────────◆─────────────●────────────────────────────────◇────────────────────────────·───────────────────────────────────────────────────·────·────┃
-                           digits mark coalesced checkpoints · ←/→ visits each
+ EXECUTION HISTORY                 │                                                                                                                                         ┃ LIVE     LIVE  [ Pause ]
+ recorded · 00:31                  │             │                                                                                                                           ┃ 00:31
+ Entry 1                           │             │                                │                                                                                          ┃
+                         ──────────◆─────────────●────────────────────────────────●────────────────────────────●───────────────────────────────────────────────────●────·────┃
+                         notch height is scope depth · digits mark coalesced checkpoints

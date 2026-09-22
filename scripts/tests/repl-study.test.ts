@@ -17,12 +17,16 @@ import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { useTempDirectory } from "@executablemd/test-support/temp";
 import { exec } from "@effectionx/process";
+import type { Operation } from "effection";
+import { z } from "zod";
 import { exists, readdir, readTextFile } from "@effectionx/fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import {
   captureAll,
+  captureText,
+  playFrames,
   PROFILE_SIZES,
   renderFrame,
   renderInto,
@@ -32,11 +36,22 @@ import {
 import type { Size } from "../repl-study/capture.ts";
 import { fixture, fixtures } from "../repl-study/fixtures.ts";
 import { terminalModes } from "../repl-study/host.ts";
+import type { TraceEntry } from "../repl-study/host.ts";
 import type { HarnessState } from "../repl-study/host.ts";
+import { motionAt, playbackBetween } from "../repl-study/playback.ts";
 import { intersects, layoutFor, MINIMUM, PANE_MINIMUMS, profileFor } from "../repl-study/layout.ts";
 import type { Profile } from "../repl-study/layout.ts";
 import { MUTATIONS } from "../repl-study/mutations.ts";
-import { bandGeometry, columnFor, notchLayout, transcriptLines } from "../repl-study/render.ts";
+import {
+  bandGeometry,
+  BAND_ROWS,
+  columnFor,
+  NOTE_ROW,
+  TRACK_ROW,
+  notchHeightForDepth,
+  notchLayout,
+  transcriptLines,
+} from "../repl-study/render.ts";
 import {
   applyAnsi,
   createGrid,
@@ -53,20 +68,93 @@ const MAIN = "scripts/repl-study/main.ts";
 /** The band rows of a rendered frame, as a grid of glyphs. */
 function bandRows(text: string, size: Size): string[] {
   const rows = text.split("\n");
-  return [0, 1, 2, 3].map((offset) => rows[size.rows - 4 + offset] ?? "");
+  return BAND_ROWS.map((offset) => rows[size.rows - BAND_ROWS.length + offset] ?? "");
 }
 
 function glyphAt(row: string, column: number): string {
   return [...row][column] ?? " ";
 }
 
-/** How many band rows carry something at this column. */
+/**
+ * How tall the notch in this column is.
+ *
+ * Only the rows a notch can reach are counted: the label row below the track
+ * belongs to the selection's note, and counting it would make a described
+ * marker look one level shallower than it is.
+ */
 function notchHeight(rows: readonly string[], column: number): number {
-  return rows.filter((row) => {
+  return rows.slice(0, NOTE_ROW).filter((row) => {
     const glyph = glyphAt(row, column);
     return glyph !== " " && glyph !== "─";
   }).length;
 }
+
+function clockOf(seconds: number): string {
+  const minutes = String(Math.floor(seconds / 60)).padStart(2, "0");
+  return `${minutes}:${String(seconds % 60).padStart(2, "0")}`;
+}
+
+/**
+ * One column per depth, taken only from notches that are not sharing.
+ *
+ * A coalesced column takes its height from the shallowest scope in it, so
+ * measuring what a depth looks like needs a marker that has a column to itself.
+ */
+function soleNotchColumns(
+  subject: ReturnType<typeof fixture>,
+  geometry: { readonly trackLeft: number; readonly trackWidth: number },
+): Map<number, number> {
+  const byDepth = new Map<number, number>();
+  for (const notch of notchLayout(subject.history, geometry.trackLeft, geometry.trackWidth)) {
+    if (notch.checkpoints.length !== 1) {
+      continue;
+    }
+    const [point] = notch.checkpoints;
+    if (!byDepth.has(point.depth)) {
+      byDepth.set(point.depth, notch.column);
+    }
+  }
+  return byDepth;
+}
+
+/**
+ * Run a command with a pseudo-terminal attached.
+ *
+ * `script` is the one pty allocator both a developer's macOS machine and a
+ * Linux runner have, and its two dialects disagree about argument order.
+ */
+function ptyCommand(_command: string): string {
+  return "script";
+}
+
+function ptyArguments(command: string): string[] {
+  const full = `deno run --allow-all ${command}`;
+  if (Deno.build.os === "darwin") {
+    return ["-q", "/dev/null", ...full.split(" ")];
+  }
+  if (Deno.build.os === "linux") {
+    return ["-qec", full, "/dev/null"];
+  }
+  throw new Error(`this evidence needs a pseudo-terminal, and ${Deno.build.os} has no script(1)`);
+}
+
+function* readTrace(path: string): Operation<TraceEntry[]> {
+  const text = yield* readTextFile(path);
+  return text
+    .split("\n")
+    .filter((line) => line.trim() !== "")
+    .map((line) => TRACE_ENTRY.parse(JSON.parse(line)));
+}
+
+/** Parsed rather than cast, so a malformed trace fails here and not later. */
+const TRACE_ENTRY = z.object({
+  frame: z.number(),
+  elapsedMs: z.number(),
+  deltaTime: z.number(),
+  animating: z.boolean(),
+  motionDone: z.boolean().nullable(),
+  bytes: z.number(),
+});
 
 describe("fixture rendering", () => {
   it("renders every committed capture exactly", function* () {
@@ -74,8 +162,7 @@ describe("fixture rendering", () => {
     expect(captures.length).toBeGreaterThan(0);
     for (const capture of captures) {
       const golden = yield* readTextFile(join(GOLDENS, `${capture.name}.txt`));
-      const header = `${capture.name} · ${capture.size.cols} × ${capture.size.rows}\n`;
-      expect(`${header}${capture.frame.text}\n`).toBe(golden);
+      expect(captureText(capture)).toBe(golden);
     }
   });
 
@@ -112,8 +199,7 @@ describe("fixture rendering", () => {
       mutation: "stale-frame",
     });
     const golden = yield* readTextFile(join(GOLDENS, "settled.wide.txt"));
-    const header = `settled.wide · ${PROFILE_SIZES.wide.cols} × ${PROFILE_SIZES.wide.rows}\n`;
-    expect(`${header}${stale.text}\n`).not.toBe(golden);
+    expect(golden).not.toContain(stale.text.replace(/\n+$/, ""));
     expect(stale.text).not.toContain("Entry 1  ✓ completed");
   });
 });
@@ -198,7 +284,7 @@ describe("the history footer", () => {
         surface: "transcript",
       });
       expect(layout.footer).toBeDefined();
-      expect(layout.footer?.y).toBe(size.rows - 4);
+      expect(layout.footer?.y).toBe(size.rows - BAND_ROWS.length);
       expect(layout.footer?.width).toBe(size.cols);
       expect(layout.contextual).toBeDefined();
       expect(intersects(layout.contextual!, layout.footer!)).toBe(false);
@@ -209,7 +295,7 @@ describe("the history footer", () => {
       // transport at the right, and the track with the head on it between them.
       expect(rows[0]).toContain("EXECUTION HISTORY");
       expect(rows[0]).toContain("[ Pause ]");
-      expect(rows[2]).toContain("┃");
+      expect(rows[TRACK_ROW]).toContain("┃");
     }
   });
 
@@ -236,13 +322,12 @@ describe("the history footer", () => {
     });
     const rows = bandRows(frame.text, size);
     expect(rows[0]).not.toContain("[ Pause ]");
-    expect(rows[2]).not.toContain("┃");
+    expect(rows[TRACK_ROW]).not.toContain("┃");
   });
 
-  it("gives four distinguishable notch heights", function* () {
+  it("makes a notch's height its scope depth", function* () {
     const size = PROFILE_SIZES.wide;
-    const subject = fixture("paused");
-    const view = initialView(subject);
+    const subject = fixture("settled");
     const layout = layoutFor({
       cols: size.cols,
       rows: size.rows,
@@ -250,34 +335,73 @@ describe("the history footer", () => {
       surface: "transcript",
     });
     const geometry = bandGeometry(subject, layout, layout.footer!);
-    const frame = yield* renderFrame({ fixture: subject, view, size });
+    const frame = yield* renderFrame({ fixture: subject, view: initialView(subject), size });
     const rows = bandRows(frame.text, size);
-    const offset = 1;
+    const byDepth = soleNotchColumns(subject, geometry);
 
+    // The four heights four rows can spell, one for each depth.
+    for (const depth of [0, 1, 2, 3]) {
+      const column = byDepth.get(depth);
+      expect({
+        depth,
+        height: column === undefined ? "no notch of its own" : notchHeight(rows, 1 + column),
+      }).toEqual({ depth, height: notchHeightForDepth(depth) });
+    }
+
+    // Anything deeper shares the shortest notch rather than inventing a height.
+    const deeper = byDepth.get(4);
+    if (deeper !== undefined) {
+      expect(notchHeight(rows, 1 + deeper)).toBe(notchHeightForDepth(3));
+    }
+  });
+
+  it("says selection, the head and entry status some way other than height", function* () {
+    const size = PROFILE_SIZES.wide;
+    const subject = fixture("paused");
     const history = subject.history;
-    const selected = history.checkpoints[view.checkpoint];
-    const boundary = history.checkpoints.find((point) => point.kind === "entry")!;
-    const minor = history.checkpoints.find(
+    const layout = layoutFor({
+      cols: size.cols,
+      rows: size.rows,
+      drawer: false,
+      surface: "transcript",
+    });
+    const geometry = bandGeometry(subject, layout, layout.footer!);
+    const byDepth = soleNotchColumns(subject, geometry);
+    const deepColumn = byDepth.get(3) ?? byDepth.get(2)!;
+    const deepPoint = history.checkpoints.find(
       (point) =>
-        point.kind === "event" &&
-        notchLayout(history, geometry.trackLeft, geometry.trackWidth).find(
-          (notch) =>
-            notch.column === columnFor(point.at, history, geometry.trackLeft, geometry.trackWidth),
-        )!.checkpoints.length === 1,
+        columnFor(point.at, history, geometry.trackLeft, geometry.trackWidth) === deepColumn,
     )!;
 
-    const column = (at: number) =>
-      offset + columnFor(at, history, geometry.trackLeft, geometry.trackWidth);
-    expect(notchHeight(rows, column(selected.at))).toBe(4);
-    expect(notchHeight(rows, column(history.headAt))).toBe(3);
-    expect(notchHeight(rows, column(boundary.at))).toBe(2);
-    expect(notchHeight(rows, column(minor.at))).toBe(1);
+    const unselected = yield* renderFrame({
+      fixture: subject,
+      view: { ...initialView(subject), checkpoint: -1 },
+      size,
+    });
+    const selected = yield* renderFrame({
+      fixture: subject,
+      view: { ...initialView(subject), checkpoint: history.checkpoints.indexOf(deepPoint) },
+      size,
+    });
+
+    // Selecting a checkpoint must not make its notch taller. Height belongs to
+    // depth; selection is said with the caret and the label instead.
+    expect(notchHeight(bandRows(selected.text, size), 1 + deepColumn)).toBe(
+      notchHeight(bandRows(unselected.text, size), 1 + deepColumn),
+    );
+    expect(selected.text).toContain("▲");
+    expect(selected.text).toContain(`${clockOf(deepPoint.at)} · snapped`);
+
+    // An entry boundary is a glyph, and the playhead is its own stem and label.
+    const boundary = history.checkpoints.find((point) => point.kind === "entry")!;
+    const boundaryColumn = columnFor(boundary.at, history, geometry.trackLeft, geometry.trackWidth);
+    expect(glyphAt(bandRows(unselected.text, size)[TRACK_ROW], 1 + boundaryColumn)).toBe("◆");
+    expect(bandRows(unselected.text, size)[0]).toContain("PAUSED HEAD");
   });
 
-  it("rejects one notch height for every marker", function* () {
+  it("rejects one notch height for every depth", function* () {
     const size = PROFILE_SIZES.wide;
-    const subject = fixture("paused");
-    const view = initialView(subject);
+    const subject = fixture("settled");
     const layout = layoutFor({
       cols: size.cols,
       rows: size.rows,
@@ -285,12 +409,20 @@ describe("the history footer", () => {
       surface: "transcript",
     });
     const geometry = bandGeometry(subject, layout, layout.footer!);
-    const frame = yield* renderFrame({ fixture: subject, view, size, mutation: "flatten-notches" });
+    const frame = yield* renderFrame({
+      fixture: subject,
+      view: initialView(subject),
+      size,
+      mutation: "flatten-notches",
+    });
     const rows = bandRows(frame.text, size);
-    const selected = subject.history.checkpoints[view.checkpoint];
-    const column =
-      1 + columnFor(selected.at, subject.history, geometry.trackLeft, geometry.trackWidth);
-    expect(notchHeight(rows, column)).toBe(1);
+    const byDepth = soleNotchColumns(subject, geometry);
+    for (const depth of [0, 1, 2]) {
+      const column = byDepth.get(depth);
+      if (column !== undefined) {
+        expect(notchHeight(rows, 1 + column)).toBe(1);
+      }
+    }
   });
 });
 
@@ -602,11 +734,15 @@ describe("the boundary this experiment keeps", () => {
     }
   });
 
-  it("declares every control the evidence uses", function* () {
+  it("uses every control it declares", function* () {
+    // A control nobody passes is a claim nobody is checking, so the suite's own
+    // source has to mention each one.
+    const source = yield* readTextFile(
+      fileURLToPath(new URL("./repl-study.test.ts", import.meta.url)),
+    );
     for (const mutation of MUTATIONS) {
-      expect(typeof mutation).toBe("string");
+      expect({ mutation, used: source.includes(mutation) }).toEqual({ mutation, used: true });
     }
-    expect(MUTATIONS.length).toBe(8);
   });
 
   it("writes its captures where the goldens live", function* () {
@@ -615,5 +751,146 @@ describe("the boundary this experiment keeps", () => {
     yield* writeCaptures(directory, captures);
     const written = yield* readdir(directory);
     expect(written.filter((name) => name.endsWith(".txt")).length).toBe(captures.length);
+  });
+});
+
+describe("animation", () => {
+  const PLAYBACK = playbackBetween("generated", "drawer")!;
+
+  it("interpolates the drawer itself and reports that it is still moving", function* () {
+    const frames = yield* playFrames(PLAYBACK, PROFILE_SIZES.wide);
+    expect(frames.length).toBeGreaterThan(3);
+
+    // The renderer owns this one: the harness declared a transition and then
+    // only supplied time.
+    expect(frames.some((frame) => frame.animating)).toBe(true);
+    expect(frames[frames.length - 1].animating).toBe(false);
+
+    const heights = frames.map((frame) => frame.bounds.contextual?.height ?? 0);
+    const first = heights[0];
+    const last = heights[heights.length - 1];
+    expect(last).toBeGreaterThan(first);
+    // It arrives by passing through, rather than by jumping.
+    expect(heights.some((height) => height > first && height < last)).toBe(true);
+    for (const [index, height] of heights.entries()) {
+      if (index > 0) {
+        expect(height).toBeGreaterThanOrEqual(heights[index - 1]);
+      }
+    }
+  });
+
+  it("never lets the drawer's movement cover the history footer", function* () {
+    const frames = yield* playFrames(PLAYBACK, PROFILE_SIZES.wide);
+    for (const frame of frames) {
+      const footer = frame.bounds.footer;
+      const contextual = frame.bounds.contextual;
+      expect(footer?.y).toBe(PROFILE_SIZES.wide.rows - BAND_ROWS.length);
+      if (contextual !== undefined && footer !== undefined) {
+        expect(contextual.y + contextual.height).toBeLessThanOrEqual(footer.y + 1);
+      }
+    }
+  });
+
+  it("moves the head and reveals the transcript on the application's own clock", function* () {
+    const start = motionAt(PLAYBACK, 0);
+    const middle = motionAt(PLAYBACK, PLAYBACK.durationMs / 2);
+    const end = motionAt(PLAYBACK, PLAYBACK.durationMs);
+
+    expect(start.progress).toBe(0);
+    expect(end.done).toBe(true);
+    expect(middle.headAt).toBeGreaterThan(start.headAt);
+    expect(end.headAt).toBeGreaterThan(middle.headAt);
+    expect(end.headAt).toBe(fixture(PLAYBACK.to).history.headAt);
+
+    // Time in, frame out: the same instant renders identically every time.
+    const once = yield* renderFrame({
+      fixture: fixture(PLAYBACK.to),
+      view: initialView(fixture(PLAYBACK.to)),
+      size: PROFILE_SIZES.wide,
+      motion: middle,
+    });
+    const twice = yield* renderFrame({
+      fixture: fixture(PLAYBACK.to),
+      view: initialView(fixture(PLAYBACK.to)),
+      size: PROFILE_SIZES.wide,
+      motion: middle,
+    });
+    expect(once.text).toBe(twice.text);
+  });
+
+  it("captures a start, a midpoint and a settled frame that differ", function* () {
+    const start = yield* readTextFile(
+      join(GOLDENS, `play.${PLAYBACK.from}-${PLAYBACK.to}.start.txt`),
+    );
+    const midpoint = yield* readTextFile(
+      join(GOLDENS, `play.${PLAYBACK.from}-${PLAYBACK.to}.midpoint.txt`),
+    );
+    const settled = yield* readTextFile(
+      join(GOLDENS, `play.${PLAYBACK.from}-${PLAYBACK.to}.settled.txt`),
+    );
+    expect(start).not.toBe(midpoint);
+    expect(midpoint).not.toBe(settled);
+    expect(settled).toContain("INPUT REQUIRED");
+    expect(settled).toContain("EXECUTION HISTORY");
+  });
+
+  it("draws one frame and stops when nothing schedules the next", function* () {
+    const directory = yield* useTempDirectory("repl-study-stalled");
+    const trace = join(directory, "stalled.jsonl");
+    const command = `${MAIN} --play generated drawer --frames 30 --trace ${trace} --mutation never-tick`;
+    yield* exec(ptyCommand(command), { cwd: ROOT, arguments: ptyArguments(command) }).join();
+    const drawn = yield* readTrace(trace);
+    expect(drawn.length).toBe(1);
+    expect(drawn[0].motionDone).toBe(false);
+  });
+
+  it("rejects a reconstruction that lands halfway through a transition", function* () {
+    const subject = fixture("settled");
+    const halfway = yield* renderFrame({
+      fixture: subject,
+      view: initialView(subject),
+      size: PROFILE_SIZES.wide,
+      mutation: "restore-mid-animation",
+    });
+    const golden = yield* readTextFile(join(GOLDENS, "settled.wide.txt"));
+    expect(golden).not.toContain(halfway.text.replace(/\n+$/, ""));
+  });
+});
+
+describe("animation in a real terminal", () => {
+  it("keeps drawing without a keystroke", function* () {
+    const directory = yield* useTempDirectory("repl-study-pty");
+    const trace = join(directory, "pty.jsonl");
+    yield* exec(ptyCommand(`${MAIN} --play generated drawer --frames 80 --trace ${trace}`), {
+      cwd: ROOT,
+      arguments: ptyArguments(`${MAIN} --play generated drawer --frames 80 --trace ${trace}`),
+    }).join();
+
+    const drawn = yield* readTrace(trace);
+    // Nothing was typed at it, and it went on drawing anyway.
+    expect(drawn.length).toBeGreaterThan(10);
+    expect(
+      drawn.every((entry, index) => index === 0 || entry.elapsedMs > drawn[index - 1].elapsedMs),
+    ).toBe(true);
+    expect(drawn.some((entry) => entry.animating)).toBe(true);
+    expect(drawn[drawn.length - 1].motionDone).toBe(true);
+    expect(drawn.filter((entry) => entry.bytes > 0).length).toBeGreaterThan(3);
+  });
+
+  it("stops the clock and restores the terminal when interrupted mid-animation", function* () {
+    const directory = yield* useTempDirectory("repl-study-interrupt");
+    const trace = join(directory, "interrupted.jsonl");
+    const command = `${MAIN} --play generated drawer --frames 200 --interrupt-after-frames 4 --trace ${trace}`;
+    const result = yield* exec(ptyCommand(command), {
+      cwd: ROOT,
+      arguments: ptyArguments(command),
+    }).join();
+
+    const drawn = yield* readTrace(trace);
+    // The interruption arrived while the transition was still running, and no
+    // frame was drawn after it: the clock went down with the session.
+    expect(drawn.length).toBe(4);
+    expect(drawn[drawn.length - 1].motionDone).toBe(false);
+    expect(result.stdout.endsWith(new TextDecoder().decode(terminalModes().revert))).toBe(true);
   });
 });

@@ -26,4 +26,3 @@ settled.narrow · 90 × 28
 
  REPL INPUT        ready for Entry 2                                         [ Run ⌘⏎ ]
  Enter XMD or invoke a document…
-

@@ -15,8 +15,8 @@
 
 import { alternateBuffer, createInput, cursor, settings } from "@bomb.sh/tty";
 import type { Input, InputEvent, Setting, Term } from "@bomb.sh/tty";
-import { createSignal, ensure, resource, spawn, until } from "effection";
-import type { Operation } from "effection";
+import { createSignal, ensure, resource, sleep, spawn, until } from "effection";
+import type { Operation, Signal, Task } from "effection";
 
 import { fixture, fixtures } from "./fixtures.ts";
 import { FIXTURE_NAMES } from "./model.ts";
@@ -26,8 +26,10 @@ import { renderScreen } from "./render.ts";
 import { transcriptLines } from "./render.ts";
 import { initialView, moveSurface, returnToHead, scrollBy, scrubBy, toggleDrawer } from "./view.ts";
 import type { View } from "./view.ts";
-import { useTerm } from "./capture.ts";
+import { renderInto, useTerm } from "./capture.ts";
 import type { Mutation } from "./mutations.ts";
+import { motionAt, playbackFrom } from "./playback.ts";
+import type { Motion, Playback } from "./playback.ts";
 
 /** The modes the harness changes, as one reversible pair. */
 export function terminalModes(): Setting {
@@ -136,6 +138,7 @@ export function measureTerminal(): { cols: number; rows: number } {
 export type HarnessEvent =
   | { readonly kind: "key"; readonly event: InputEvent }
   | { readonly kind: "resize" }
+  | { readonly kind: "tick" }
   | { readonly kind: "quit" };
 
 export interface HarnessState {
@@ -163,6 +166,11 @@ export function reduce(state: HarnessState, event: HarnessEvent): HarnessState {
   if (event.kind === "resize") {
     const size = measureTerminal();
     return { ...state, cols: size.cols, rows: size.rows };
+  }
+  if (event.kind === "tick") {
+    // A frame passing changes what is drawn, never what is shown: the motion is
+    // a function of elapsed time, which the frame loop owns.
+    return state;
   }
   const key = event.event;
   if (key.type !== "keydown") {
@@ -218,28 +226,71 @@ export function reduce(state: HarnessState, event: HarnessEvent): HarnessState {
   return state;
 }
 
+/** One frame drawn, and whether the renderer is still moving. */
+interface Painted {
+  readonly animating: boolean;
+  readonly bytes: number;
+}
+
 function draw(
   term: Term,
   state: HarnessState,
   write: (bytes: Uint8Array) => void,
   mutation?: Mutation,
-): void {
-  const layout = layoutFor({
-    cols: state.cols,
-    rows: state.rows,
-    drawer: state.fixture.drawer !== undefined && state.view.drawerOpen,
-    surface: state.view.surface,
+  motion?: Motion,
+  deltaTime = 0,
+): Painted {
+  // One render path for the harness and for the captures, so what a person sees
+  // in a terminal and what a golden records cannot drift apart.
+  const frame = renderInto(term, {
+    fixture: state.fixture,
+    view: state.view,
+    size: { cols: state.cols, rows: state.rows },
     mutation,
+    motion,
+    deltaTime,
   });
-  const result = term.render(
-    renderScreen({ fixture: state.fixture, view: state.view, layout, mutation }),
-  );
-  write(Uint8Array.from(result.output));
+  write(frame.ansi);
+  return { animating: frame.animating, bytes: frame.ansi.length };
+}
+
+/** A frame every sixteen milliseconds, which is the rate the study was made at. */
+export const FRAME_MS = 16;
+
+/**
+ * The clock that keeps an animation moving when nothing else is happening.
+ *
+ * It is spawned as a child of the terminal session and halted the moment
+ * nothing is moving, so an idle REPL costs nothing and a cancelled session
+ * cannot leave a timer drawing into a terminal that has already been restored.
+ */
+function* ticker(events: Signal<HarnessEvent, never>): Operation<void> {
+  while (true) {
+    yield* sleep(FRAME_MS);
+    events.send({ kind: "tick" });
+  }
+}
+
+/** One line of what the frame loop did, for evidence that cannot watch a screen. */
+export interface TraceEntry {
+  readonly frame: number;
+  readonly elapsedMs: number;
+  readonly deltaTime: number;
+  readonly animating: boolean;
+  readonly motionDone: boolean | null;
+  readonly bytes: number;
 }
 
 export interface InteractiveOptions {
   readonly fixture: FixtureName;
   readonly mutation?: Mutation;
+  /** Start this playback immediately, rather than waiting for `p`. */
+  readonly play?: Playback;
+  /** Leave after this many frames, so a run can end without a keystroke. */
+  readonly maxFrames?: number;
+  /** Raise SIGINT at this harness once this many frames have been drawn. */
+  readonly interruptAfterFrames?: number;
+  readonly trace?: TraceEntry[];
 }
 
 /**
@@ -296,13 +347,110 @@ export function* runInteractive(options: InteractiveOptions): Operation<void> {
     }
   });
 
-  draw(term, state, write, options.mutation);
+  let playback = options.play;
+  let elapsed = 0;
+  let frames = 0;
+  let clock: Task<void> | undefined;
+  let interrupted = false;
+  let settled = false;
+
+  if (playback !== undefined) {
+    const target = fixture(playback.to);
+    state = { ...state, fixture: target, view: initialView(target) };
+  }
+
+  /**
+   * Draw one frame, then decide whether anything is still moving.
+   *
+   * The clock is started only when the renderer says it is animating or the
+   * application's own transition has not finished, and halted as soon as both
+   * have settled — so an idle REPL schedules nothing at all.
+   */
+  const paint = function* (deltaTime: number): Operation<void> {
+    const motion = playback === undefined ? undefined : motionAt(playback, elapsed);
+    const painted = draw(term, state, write, options.mutation, motion, deltaTime);
+    frames += 1;
+    options.trace?.push({
+      frame: frames,
+      elapsedMs: elapsed,
+      deltaTime,
+      animating: painted.animating,
+      motionDone: motion === undefined ? null : motion.done,
+      bytes: painted.bytes,
+    });
+
+    const moving = painted.animating || (motion !== undefined && !motion.done);
+    const active = options.mutation === "never-tick" ? false : moving;
+    if (active && clock === undefined) {
+      clock = yield* spawn(() => ticker(events));
+    }
+    if (!active && clock !== undefined) {
+      const running = clock;
+      clock = undefined;
+      yield* running.halt();
+    }
+    if (motion !== undefined && motion.done && !painted.animating) {
+      // The transition has arrived. What remains is the fixture itself, which
+      // is what a journal or a URL would restore.
+      playback = undefined;
+      settled = true;
+    }
+    if (options.maxFrames !== undefined && !active) {
+      // A run with a frame budget has nobody at the keyboard, so when nothing
+      // is moving there is nothing left for it to do. A harness that scheduled
+      // no frame at all ends here too, after exactly one.
+      settled = true;
+    }
+  };
+
+  yield* paint(0);
 
   while (true) {
+    // `--frames` is a ceiling for a run nobody is watching: it leaves when the
+    // playback has settled, or when that many frames have been drawn, whichever
+    // comes first. Without it the harness waits for a keystroke, as it should.
+    if (options.maxFrames !== undefined && (settled || frames >= options.maxFrames)) {
+      return;
+    }
+    if (
+      options.interruptAfterFrames !== undefined &&
+      frames >= options.interruptAfterFrames &&
+      !interrupted
+    ) {
+      interrupted = true;
+      Deno.kill(Deno.pid, "SIGINT");
+    }
+
     const next = yield* subscription.next();
     if (next.done) {
       return;
     }
+
+    if (next.value.kind === "tick") {
+      elapsed += FRAME_MS;
+      yield* paint(FRAME_MS);
+      continue;
+    }
+
+    // A keystroke or a resize is not time passing, so the renderer is told no
+    // time has passed: a transition in flight keeps its own pace instead of
+    // jumping forward because somebody typed.
+    const pressed = next.value.kind === "key" ? next.value.event : undefined;
+    if (pressed !== undefined && pressed.type === "keydown") {
+      const code = pressed.code;
+      if (code === "p") {
+        const starting = playbackFrom(state.fixture.name);
+        if (starting !== undefined) {
+          playback = starting;
+          elapsed = 0;
+          const target = fixture(starting.to);
+          state = { ...state, fixture: target, view: initialView(target) };
+          yield* paint(0);
+          continue;
+        }
+      }
+    }
+
     const before = { cols: state.cols, rows: state.rows };
     // Ignoring a resize means ignoring it completely — the renderer keeps the
     // dimensions it had, and goes on addressing cells the terminal no longer
@@ -317,7 +465,7 @@ export function* runInteractive(options: InteractiveOptions): Operation<void> {
     if (state.cols !== before.cols || state.rows !== before.rows) {
       term.update({ width: state.cols, height: state.rows });
     }
-    draw(term, state, write, options.mutation);
+    yield* paint(0);
   }
 }
 

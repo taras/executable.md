@@ -11,19 +11,3 @@ drawer.narrow · 90 × 28
  ┃ A lightweight workspace for coordinating coding agents.
 
  both fields valid   Submit  ⌘↵
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-

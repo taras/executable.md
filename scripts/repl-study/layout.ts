@@ -36,7 +36,15 @@ export const MINIMUM = { cols: 72, rows: 20 } as const;
 export const PANE_MINIMUMS = { sidebar: 28, bindings: 26, transcript: 40 } as const;
 
 /** Rows the study's 92px bands become. */
-const FOOTER_ROWS = 4;
+/**
+ * The Execution History band is five rows, not the study's four.
+ *
+ * Notch height carries scope depth, and four depths need four rows of their
+ * own. The selection's label needs a row the notches are not using, or a
+ * depth-0 notch and the label fight for the same cell — so the band takes one
+ * more row than the study's 92 pixels divide into.
+ */
+const FOOTER_ROWS = 5;
 const INPUT_ROWS = 4;
 const HEADER_ROWS = 2;
 

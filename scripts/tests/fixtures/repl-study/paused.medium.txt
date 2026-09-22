@@ -28,12 +28,12 @@ paused.medium · 140 × 38
                                   │                                                                              │
                                   │                                                                              │
                                   │                                                                              │
-                                  │                                                                              │
                                   │ DRAFT · ENTRY 2   suspended · inspecting recorded history                                  [ Run ]
                                   │
                                   │
                                   │
- EXECUTION HISTORY              ┃                                            │ PAUSED HEAD     INSPECTING  [ Continue ] [ Return ] [ Fork ]
- recorded · 00:53    │          ┃                                            │ 00:53
- Entry 1           ──◆──●───────┃──────·───────────··────≈──────·─────●──●──●┃
-                                ┃ 00:12 · snapped · 41.0s before head
+ EXECUTION HISTORY   │                                                       ┃ PAUSED HEAD     INSPECTING  [ Continue ] [ Return ] [ Fork ]
+ recorded · 00:53    │  │                                             │  │  │┃ 00:53
+ Entry 1             │  │       │                                     │  │  │┃
+                   ──◆──●───────●──────●───────────●·────≈──────●─────●──●──●┃
+                                ▲ 00:12 · snapped · 41.0s before head

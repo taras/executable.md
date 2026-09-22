@@ -4,12 +4,12 @@ Issue [#838](https://github.com/taras/executable.md/issues/838) asked whether
 `@bomb.sh/tty` can render the approved `XMD REPL Terminal Interface` study in a
 real terminal, and what the design owes a terminal that is not 2560 × 1440.
 
-**Decision: retain the harness, and revise three design states.** The renderer
-carried every fixture at every profile without a single renderer error, the
-terminal survived exit, interruption and failure, and the seam between semantic
-fixtures, layout, rendering and the terminal host held. Three states needed an
-adaptation the study does not describe, each named below, and those belong to
-whoever takes the design further.
+**Decision: retain the harness, and revise two design states.** The renderer
+carried every fixture at every profile without a single renderer error, animated
+both its own transitions and the application's, and gave the terminal back after
+an ordinary exit, an interruption mid-animation and a failure. The seam between
+semantic fixtures, layout, rendering and the terminal host held. Two states
+needed an adaptation the study does not describe, named below.
 
 ## Dimensions tested
 
@@ -20,10 +20,43 @@ whoever takes the design further.
 | rendered and captured | 90 × 28 | narrow |
 | rendered and captured | 64 × 18 | too-small |
 | a real pseudo-terminal, interactively, macOS `script` | 80 × 24 | narrow |
+| a real pseudo-terminal, animating with no input | 80 × 24 | narrow |
 
 The interactive run opened, showed the `nested` fixture, accepted `4`, `Tab` and
 `q` as keystrokes, and left the terminal in the modes it found. Every other
 dimension was exercised through the captures and the suite.
+
+## Animation
+
+The renderer animates, and the frame loop that drives it is small.
+
+- **A declared transition is interpolated by the renderer.** Giving the
+  contextual band `transition: { duration: 260, easing: "easeInOut", properties:
+  ["height", "y"] }` is the whole of what the harness does about the drawer's
+  movement: `render()` then reports `animating: true` and reports interpolated
+  cell bounds until it arrives. In one measured playback, seventeen of forty-one
+  frames were still interpolating.
+- **`deltaTime` is milliseconds, and the renderer never measures time itself.**
+  A frame given `deltaTime: 0` — which is what a keystroke or a resize gets —
+  advances no transition, so typing during a transition does not skip it forward.
+- **Some interpolated frames emit nothing.** Sub-cell movement changes no cell,
+  so a loop that stopped when a frame produced zero bytes would freeze halfway.
+  `animating` is the condition to schedule on, never the byte count.
+- **The clock belongs to the session.** It is a child task running `sleep(16)`,
+  spawned when either the renderer or the application's own transition is moving,
+  and halted as soon as both settle — an idle REPL schedules nothing at all. An
+  interruption mid-transition halted it with the session: the trace ends at the
+  frame the signal arrived on, and the terminal's modes were restored after it.
+- **Application-timed motion stays a pure function of elapsed time.** The head's
+  travel along the track and the transcript's arrival are computed from
+  milliseconds, so the same instant renders identically from a test, a capture
+  and the live loop — which is what makes a midpoint capture possible at all.
+
+What a playback never becomes is state. The six fixtures remain the
+reconstructable moments; a playback's phase and elapsed time live in the frame
+loop and are gone when it settles. Reconstruction lands on a fixture, and a
+control that makes it land halfway through a transition is rejected by the
+goldens.
 
 ## What the renderer gave us
 
@@ -64,16 +97,17 @@ dimension was exercised through the captures and the suite.
 5. **The output view expires.** `render().output` must be copied immediately —
    `Uint8Array.from(...)` — or the next frame invalidates it.
 
-## The three design states that required adaptation
+## The two design states that required adaptation
 
-1. **Nesting depth has no height left to use.** The band is four rows, and the
-   study's four extents already spend them: a minor checkpoint takes the track
-   row, an entry boundary rises one row above it, the head takes three rows and
-   carries its label, and a historical selection takes the whole band. Depth is
-   therefore a glyph tier — `●` for the entry's own scope, `◇` one level in, `·`
-   deeper — and past three tiers the band stops distinguishing. The scope path
-   is exact in the journal list beside it, so nothing is lost, but the band
-   alone cannot answer "how deep is this".
+1. **The band is five rows, not the study's four.** Notch height carries scope
+   depth, which is the settled meaning, and four depths need four rows of their
+   own: depth 0 fills them, depth 3 takes the track row alone, and anything
+   deeper shares the shortest notch and says so with `·`. The selection's label
+   then has nowhere to go — a depth-0 notch and the label want the same cell — so
+   the band takes one more row than the study's 92 pixels divide into. Everything
+   else about a marker is said some way that is not height: the playhead is its
+   own heavier stem with its own label, a selection is gold with `▲` and a label,
+   and an entry boundary is `◆` where an ordinary event is `●`.
 2. **A narrow track is mostly transport.** The study's rule that the track
    yields room to the visible controls is faithful and expensive: at 90 columns
    while inspecting history, `INSPECTING  [ Continue ] [ Return ] [ Fork ]`
@@ -82,17 +116,21 @@ dimension was exercised through the captures and the suite.
    steps through every checkpoint behind it, and the full-screen history surface
    lists them all. A design that wants the track legible at narrow widths has to
    decide what the transport gives up first.
-3. **The band's own labels do not fit narrow.** `EXECUTION HISTORY` and
-   `recorded · 00:53` cost eighteen columns that the track needs more, so the
-   narrow band says `HISTORY` and `00:53` and lets the surface bar above it
-   carry the name. The same pressure drops the transcript's eight-column phase
-   word below 56 columns, and drops session notes, binding notes and the
-   drawer's schema column at medium.
+   The band's own labels feel the same squeeze: `EXECUTION HISTORY` and
+   `recorded · 00:53` cost eighteen columns the track needs more, so the narrow
+   band says `HISTORY` and `00:53` and lets the surface bar above it carry the
+   name. The same pressure drops the transcript's eight-column phase word below
+   56 columns, and drops session notes, binding notes and the drawer's schema
+   column at medium.
 
 ## What was not answered
 
 - Focus, the ring, the drawer's trap and where focus returns after a suspension
   are #839's, and nothing here establishes them.
+- Only one native transition is exercised — the drawer's opening. A drawer
+  *closing* would need the moment being left to stay renderable through the
+  transition, which is a question about what a playback holds, and #842's
+  journal reconstruction is the place to answer it.
 - No reusable component boundary is proposed; #840 owns that, and the region
   functions in `render.ts` are deliberately private.
 - Restoration is proved at the byte boundary and by construction — cleanup

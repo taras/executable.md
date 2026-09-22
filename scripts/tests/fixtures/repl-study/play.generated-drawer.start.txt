@@ -1,13 +1,20 @@
-empty.wide · 200 × 50
- XMD REPL                                       │ REPL
+play.generated-drawer.start · 200 × 50
+ XMD REPL                                       │ REPL › Entry 1 › document · suspended
                                                 │
  SESSION   JOURNAL   STATE                      │───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
-                                                │ TRANSCRIPT                                                                                                           │ BINDINGS
- No sessions yet                                │                                                                                                                      │ REPL scope
-                                                │ No executions yet.                                                                                                   │
- Agent sessions appear here as executions open  │                                                                                                                      │ No REPL bindings yet
- them.                                          │ Submitted blocks append here as immutable entries. Each entry keeps its source, its rendered output, and the         │ Values named with as appear
- They persist after an entry settles.           │ bindings it published.                                                                                               │ here for the active scope.
+                                                │ Entry 1  ● running · 48.9s       ↳ document scope suspended                                                          │ BINDINGS
+ SESSIONS · 3                                   │                                                                                                                      │ document scope
+ chronological · selection follows you, not ac… │ ← opened from Entry 1 · live execution projection, not an editor                                                     │
+                                                │ …                                                                                                                    │ readme
+ │ plan-a91f7c                                  │                                                                                                                      │ markdown · 3 lines
+   ✓ completed   planner · turn 1 · returned 5… │                                                                                                                      │ # Northstar
+                                                │                                                                                                                      │
+   review-b72e1d                                │                                                                                                                      │
+   ● responding  reviewer · turn 1 · streaming  │                                                                                                                      │
+   streaming · background update · selection u… │                                                                                                                      │
+                                                │                                                                                                                      │
+   implement-c31d2e                             │                                                                                                                      │
+   · queued      implementer · no turn yet      │                                                                                                                      │
                                                 │                                                                                                                      │
                                                 │                                                                                                                      │
                                                 │                                                                                                                      │
@@ -33,16 +40,12 @@ empty.wide · 200 × 50
                                                 │                                                                                                                      │
                                                 │                                                                                                                      │
                                                 │                                                                                                                      │
-                                                │                                                                                                                      │
-                                                │                                                                                                                      │
-                                                │                                                                                                                      │
-                                                │                                                                                                                      │
-                                                │                                                                                                                      │
-                                                │                                                                                                                      │
-                                                │                                                                                                                      │
-                                                │ REPL INPUT        ⇧⏎ newline                                                                                                             [ Run ⌘⏎ ]
-                                                │ Enter XMD or invoke a document…
+                                                │ INPUT REQUIRED
+                                                │ suspended at <Elicit as="project"> · document scope · validated against the Elicit schema
                                                 │
-                                                │
- EXECUTION HISTORY                                                                                                                                                                      IDLE  [ Pause ]
- No recorded execution …
+                                                │ Enter the project details.
+ EXECUTION HISTORY             │                                                                                                                                          ┃ LIVE        LIVE  [ Pause ]
+ recorded · 00:49              │        │                                                                                                                              │  ┃ 00:48
+ Entry 1                       │        │                    │                                                                                                         │  ┃  │
+                         ──────◆────────●────────────────────●─────────────────●─────────────────────────────────●──·──────────────≈─────────────────●─────────────────●──┃  ●
+                                                                                                                                   4.9s agent wait · compressed

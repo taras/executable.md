@@ -8,13 +8,15 @@
  */
 
 import { createTerm } from "@bomb.sh/tty";
-import type { Term } from "@bomb.sh/tty";
+import type { BoundingBox, Term } from "@bomb.sh/tty";
 import { until } from "effection";
 import type { Operation } from "effection";
 import { ensureDir, writeTextFile } from "@effectionx/fs";
 import { join } from "node:path";
 
 import { fixture, fixtures } from "./fixtures.ts";
+import { motionAt, PLAYBACKS } from "./playback.ts";
+import type { Motion, Playback } from "./playback.ts";
 import type { Fixture } from "./model.ts";
 import type { Profile, SurfaceName } from "./layout.ts";
 import { layoutFor } from "./layout.ts";
@@ -45,7 +47,24 @@ export const PROFILE_SIZES: Record<Profile, Size> = {
 export interface Frame {
   readonly ansi: Uint8Array;
   readonly text: string;
+  /** True while the renderer is still interpolating a declared transition. */
+  readonly animating: boolean;
+  /** Where each region landed, in cells, as the renderer reports it. */
+  readonly bounds: Readonly<Record<string, BoundingBox | undefined>>;
 }
+
+/** The regions whose geometry the evidence asks about. */
+const MEASURED = [
+  "root",
+  "header",
+  "sidebar",
+  "transcript",
+  "bindings",
+  "contextual",
+  "footer",
+  "surface-bar",
+  "too-small",
+];
 
 export interface FrameRequest {
   readonly fixture: Fixture;
@@ -53,6 +72,10 @@ export interface FrameRequest {
   readonly size: Size;
   readonly mutation?: Mutation;
   readonly surface?: SurfaceName;
+  /** Present only while a playback is running between two fixtures. */
+  readonly motion?: Motion;
+  /** Milliseconds since the previous frame, which native transitions consume. */
+  readonly deltaTime?: number;
 }
 
 export function* useTerm(size: Size): Operation<Term> {
@@ -70,20 +93,80 @@ export function renderInto(term: Term, request: FrameRequest): Frame {
   // A frame drawn from state the harness has already left behind. The renderer
   // cannot tell the difference — only a reader, or a golden, can.
   const subject = mutation === "stale-frame" ? fixture("empty") : request.fixture;
+  const motion =
+    mutation === "restore-mid-animation" && request.motion === undefined
+      ? // Reconstruction must land on a state, never halfway through a transition.
+        // This control makes it land halfway.
+        { progress: 0.5, headAt: subject.history.headAt / 2, reveal: 0.5, done: false }
+      : request.motion;
+  // A playback's first frame still shows the moment it is leaving, so a drawer
+  // about to open is not open yet: that is what gives the renderer two
+  // geometries to interpolate between rather than one it has already arrived at.
+  const opening = motion === undefined || motion.progress > 0;
   const layout = layoutFor({
     cols: size.cols,
     rows: size.rows,
-    drawer: subject.drawer !== undefined && view.drawerOpen,
+    drawer: subject.drawer !== undefined && view.drawerOpen && opening,
     surface: request.surface ?? view.surface,
     mutation,
   });
-  const result = term.render(renderScreen({ fixture: subject, view, layout, mutation }));
+  const result = term.render(renderScreen({ fixture: subject, view, layout, mutation, motion }), {
+    deltaTime: request.deltaTime ?? 0,
+  });
   if (result.errors.length > 0) {
     throw new Error(`the renderer reported ${JSON.stringify(result.errors)}`);
   }
   const ansi = Uint8Array.from(result.output);
   const grid = applyAnsi(createGrid(size.cols, size.rows), ansi);
-  return { ansi, text: gridText(grid) };
+  const bounds: Record<string, BoundingBox | undefined> = {};
+  for (const id of MEASURED) {
+    bounds[id] = result.info.get(id)?.bounds;
+  }
+  return { ansi, text: gridText(grid), animating: result.animating, bounds };
+}
+
+/**
+ * One playback, rendered frame by frame with an explicit delta.
+ *
+ * Nothing here waits: time is supplied rather than measured, so the same
+ * sequence comes out of a test, a capture and a review identically. The run
+ * ends when the application's motion has finished *and* the renderer has
+ * stopped interpolating, which is the same condition the frame loop uses to
+ * stop scheduling.
+ */
+export function* playFrames(
+  playback: Playback,
+  size: Size,
+  options: { readonly frameMs?: number; readonly limit?: number } = {},
+): Operation<Frame[]> {
+  const frameMs = options.frameMs ?? 16;
+  const limit = options.limit ?? 200;
+  const subject = fixture(playback.to);
+  const view = initialView(subject);
+  const term = yield* useTerm(size);
+  const frames: Frame[] = [];
+  // A frame in the middle of a transition is a handful of changed cells, not a
+  // screen. The screen is what those changes have added up to, so the grid
+  // carries across frames exactly as a terminal's does.
+  const screen = createGrid(size.cols, size.rows);
+  let elapsed = 0;
+  for (let index = 0; index < limit; index += 1) {
+    const motion = motionAt(playback, elapsed);
+    const frame = renderInto(term, {
+      fixture: subject,
+      view,
+      size,
+      motion,
+      deltaTime: index === 0 ? 0 : frameMs,
+    });
+    applyAnsi(screen, frame.ansi);
+    frames.push({ ...frame, text: gridText(screen) });
+    if (motion.done && !frame.animating) {
+      return frames;
+    }
+    elapsed += frameMs;
+  }
+  return frames;
 }
 
 export function captureName(fixtureName: string, profile: Profile): string {
@@ -144,17 +227,44 @@ export function* captureAll(): Operation<Capture[]> {
       frame,
     });
   }
+  // Three moments of one playback, so a reader can see a transition without
+  // running it: where it starts, where it is halfway, and where it settles.
+  const playback = PLAYBACKS.find((one) => one.from === "generated" && one.to === "drawer")!;
+  const frames = yield* playFrames(playback, PROFILE_SIZES.wide);
+  const moments: readonly { readonly label: string; readonly at: number }[] = [
+    { label: "start", at: 0 },
+    { label: "midpoint", at: Math.floor((frames.length - 1) / 2) },
+    { label: "settled", at: frames.length - 1 },
+  ];
+  for (const moment of moments) {
+    captures.push({
+      name: `play.${playback.from}-${playback.to}.${moment.label}`,
+      profile: "wide",
+      size: PROFILE_SIZES.wide,
+      frame: frames[moment.at],
+    });
+  }
+
   return captures;
+}
+
+/**
+ * One capture as a file: what it is, how big the terminal was, and the screen.
+ *
+ * Trailing blank rows are dropped, because the header already says how tall the
+ * terminal was and a file that ends in empty lines is a file git complains
+ * about. Both the writer and the evidence read the screen through here, so a
+ * golden cannot disagree with what `--capture` writes.
+ */
+export function captureText(capture: Capture): string {
+  const header = `${capture.name} · ${capture.size.cols} × ${capture.size.rows}`;
+  return `${header}\n${capture.frame.text.replace(/\n+$/, "")}\n`;
 }
 
 export function* writeCaptures(directory: string, captures: readonly Capture[]): Operation<void> {
   yield* ensureDir(directory);
   for (const capture of captures) {
-    const header = `${capture.name} · ${capture.size.cols} × ${capture.size.rows}\n`;
-    yield* writeTextFile(
-      join(directory, `${capture.name}.txt`),
-      `${header}${capture.frame.text}\n`,
-    );
+    yield* writeTextFile(join(directory, `${capture.name}.txt`), captureText(capture));
     yield* writeTextFile(
       join(directory, `${capture.name}.ansi`),
       new TextDecoder().decode(capture.frame.ansi),

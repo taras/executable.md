@@ -24,6 +24,10 @@ export const MUTATIONS = [
   "leak-terminal-modes",
   /** Render one notch height for every kind of marker. */
   "flatten-notches",
+  /** Never schedule a frame, so an animation renders once and stops. */
+  "never-tick",
+  /** Reconstruct a moment as a half-finished animation rather than a state. */
+  "restore-mid-animation",
 ] as const;
 
 export type Mutation = (typeof MUTATIONS)[number];

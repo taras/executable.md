@@ -40,12 +40,12 @@ paused.wide · 200 × 50
                                                 │                                                                                                                      │
                                                 │                                                                                                                      │
                                                 │                                                                                                                      │
-                                                │                                                                                                                      │
                                                 │ DRAFT · ENTRY 2   suspended · inspecting recorded history                                                                                [ Run ]
                                                 │
                                                 │
                                                 │
- EXECUTION HISTORY                         ┃                                                            │ PAUSED HEAD     INSPECTING HISTORY  [ Continue ] [ Return to paused head ] [ Fork from here ]
- recorded · 00:53           │              ┃                                                            │ 00:53
- Entry 1                 ───◆───●──────────┃────────·───────────────·─·──────≈────────·────────●──●────●┃
-                                           ┃ 00:12 · snapped · 41.0s before head
+ EXECUTION HISTORY          │                                                                           ┃ PAUSED HEAD     INSPECTING HISTORY  [ Continue ] [ Return to paused head ] [ Fork from here ]
+ recorded · 00:53           │   │                                                              │  │    │┃ 00:53
+ Entry 1                    │   │          │                                                   │  │    │┃
+                         ───◆───●──────────●────────●───────────────●─·──────≈────────●────────●──●────●┃
+                                           ▲ 00:12 · snapped · 41.0s before head

@@ -1,4 +1,4 @@
-drawer.wide · 200 × 50
+play.generated-drawer.settled · 200 × 50
  XMD REPL                                       │ REPL › Entry 1 › document · suspended
                                                 │
  SESSION   JOURNAL   STATE                      │───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────

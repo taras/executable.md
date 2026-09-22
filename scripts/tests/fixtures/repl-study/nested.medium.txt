@@ -27,13 +27,13 @@ nested.medium · 140 × 38
                                   │ │ │   │ admitted. Nothing it returns runs until this scope admits it.        │
                                   │ │ │   │ ✓ <Syntax as="syntax" />                                    SETTLED  │
                                   │ │ │   │ ✓ <PlanInputs session={props.session} as="inputs" />        SETTLED  │
-                                  │ │ │   ● </Agent.Ask>                                                WAITING  │
-                                  │ ▸ 3 more lines · ↑↓ PgUp PgDn                                                │
+                                  │ ▸ 4 more lines · ↑↓ PgUp PgDn                                                │
                                   │ DRAFT · ENTRY 2   Run unavailable while Entry 1 is active                                  [ Run ]
                                   │
                                   │
                                   │
- EXECUTION HISTORY                                                                                               │ LIVE     LIVE  [ Pause ]
- recorded · 00:31        │                                                                                       │ 00:31
- Entry 1           ──────◆────────●────────────────────◇──────────────────·────────────────────────────────·──·──┃
-                     digits mark coalesced checkpoints · ←/→ visits each
+ EXECUTION HISTORY       │                                                                                       ┃ LIVE     LIVE  [ Pause ]
+ recorded · 00:31        │        │                                                                              ┃ 00:31
+ Entry 1                 │        │                    │                                                         ┃
+                   ──────◆────────●────────────────────●──────────────────●────────────────────────────────●──·──┃
+                   notch height is scope depth · digits mark coalesced checkpoints
