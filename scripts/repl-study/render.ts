@@ -219,6 +219,16 @@ function rule(id: string, rect: Rect, glyph: string): Op[] {
 }
 
 /**
+ * How long the drawer takes to arrive, in the renderer's own unit.
+ *
+ * `@bomb.sh/tty` measures transitions in **seconds** — both this duration and
+ * the `deltaTime` a frame is advanced by. The harness thinks in milliseconds
+ * everywhere else, because that is what `sleep()` and the playback clock speak,
+ * and converts once at the renderer's boundary.
+ */
+export const DRAWER_TRANSITION_SECONDS = 0.26;
+
+/**
  * The drawer's own movement, which the renderer performs.
  *
  * The contextual band is four rows as an input and fourteen as a drawer, and it
@@ -227,7 +237,7 @@ function rule(id: string, rect: Rect, glyph: string): Op[] {
  * interpolates the geometry and reports `animating` until it arrives.
  */
 const DRAWER_TRANSITION = {
-  duration: 260,
+  duration: DRAWER_TRANSITION_SECONDS,
   easing: "easeInOut",
   properties: ["height", "y"],
 } as const;

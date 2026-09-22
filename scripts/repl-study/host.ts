@@ -238,7 +238,7 @@ function draw(
   write: (bytes: Uint8Array) => void,
   mutation?: Mutation,
   motion?: Motion,
-  deltaTime = 0,
+  deltaMs = 0,
 ): Painted {
   // One render path for the harness and for the captures, so what a person sees
   // in a terminal and what a golden records cannot drift apart.
@@ -248,7 +248,9 @@ function draw(
     size: { cols: state.cols, rows: state.rows },
     mutation,
     motion,
-    deltaTime,
+    // The harness counts in milliseconds and the renderer in seconds. The
+    // conversion happens here, once, at the only place the two meet.
+    deltaSeconds: deltaMs / 1000,
   });
   write(frame.ansi);
   return { animating: frame.animating, bytes: frame.ansi.length };
@@ -256,6 +258,9 @@ function draw(
 
 /** A frame every sixteen milliseconds, which is the rate the study was made at. */
 export const FRAME_MS = 16;
+
+/** The same frame, in the seconds the renderer measures transitions in. */
+export const FRAME_SECONDS = FRAME_MS / 1000;
 
 /**
  * The clock that keeps an animation moving when nothing else is happening.
@@ -275,7 +280,8 @@ function* ticker(events: Signal<HarnessEvent, never>): Operation<void> {
 export interface TraceEntry {
   readonly frame: number;
   readonly elapsedMs: number;
-  readonly deltaTime: number;
+  /** What the renderer was advanced by, in its own unit: seconds. */
+  readonly deltaSeconds: number;
   readonly animating: boolean;
   readonly motionDone: boolean | null;
   readonly bytes: number;
@@ -366,14 +372,14 @@ export function* runInteractive(options: InteractiveOptions): Operation<void> {
    * application's own transition has not finished, and halted as soon as both
    * have settled — so an idle REPL schedules nothing at all.
    */
-  const paint = function* (deltaTime: number): Operation<void> {
+  const paint = function* (deltaMs: number): Operation<void> {
     const motion = playback === undefined ? undefined : motionAt(playback, elapsed);
-    const painted = draw(term, state, write, options.mutation, motion, deltaTime);
+    const painted = draw(term, state, write, options.mutation, motion, deltaMs);
     frames += 1;
     options.trace?.push({
       frame: frames,
       elapsedMs: elapsed,
-      deltaTime,
+      deltaSeconds: deltaMs / 1000,
       animating: painted.animating,
       motionDone: motion === undefined ? null : motion.done,
       bytes: painted.bytes,

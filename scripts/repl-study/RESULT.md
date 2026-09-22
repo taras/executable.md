@@ -31,14 +31,29 @@ dimension was exercised through the captures and the suite.
 The renderer animates, and the frame loop that drives it is small.
 
 - **A declared transition is interpolated by the renderer.** Giving the
-  contextual band `transition: { duration: 260, easing: "easeInOut", properties:
+  contextual band `transition: { duration: 0.26, easing: "easeInOut", properties:
   ["height", "y"] }` is the whole of what the harness does about the drawer's
-  movement: `render()` then reports `animating: true` and reports interpolated
-  cell bounds until it arrives. In one measured playback, seventeen of forty-one
+  movement: `render()` then reports `animating: true` and interpolated cell
+  bounds until it arrives. In one measured playback, seventeen of forty-one
   frames were still interpolating.
-- **`deltaTime` is milliseconds, and the renderer never measures time itself.**
-  A frame given `deltaTime: 0` — which is what a keystroke or a resize gets —
-  advances no transition, so typing during a transition does not skip it forward.
+- **The renderer's unit is seconds, for both `duration` and `deltaTime`.** This
+  harness counts milliseconds everywhere else, because that is what `sleep()`
+  and the playback clock speak, and converts once at the boundary. Getting this
+  wrong is quiet: scaling both sides by the same thousand produces the same
+  frame count and the same picture, so the mistake survives every test that only
+  compares the harness with itself. What catches it is the library's own
+  arithmetic — a 0.2 transition is halfway after 0.1 — and a case asserting that
+  one frame of seconds does *not* finish one.
+- **The renderer times itself unless you tell it not to.** With no `deltaTime`
+  option it advances by the monotonic time since the previous render, and it
+  passes 0 after a frame that reported `animating: false`. This harness always
+  supplies the value: ticks get their own elapsed, and a keystroke or a resize
+  gets `0`, so typing during a transition does not skip it forward — and a
+  capture of a transition is reproducible rather than a race with the clock.
+- **A transition's flag clears one frame after it arrives.** The library's own
+  test spends 0.3 seconds on a 0.2-second transition for this reason. A loop
+  that stopped at the first frame reporting the final geometry would leave the
+  last frame undrawn.
 - **Some interpolated frames emit nothing.** Sub-cell movement changes no cell,
   so a loop that stopped when a frame produced zero bytes would freeze halfway.
   `animating` is the condition to schedule on, never the byte count.

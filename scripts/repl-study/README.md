@@ -46,8 +46,10 @@ fixture. Two kinds of motion run during one:
 
 - **the renderer's own.** The contextual band declares a transition, so when a
   suspension opens the drawer `@bomb.sh/tty` interpolates its height and top edge
-  and reports `animating` until it arrives. The harness supplies time and nothing
-  else.
+  and reports `animating` until it arrives. The harness supplies the time and
+  nothing else — in seconds, which is the unit the renderer measures transitions
+  in, converted once at that boundary from the milliseconds everything else here
+  counts in.
 - **the application's own.** The recorded head travels along the track and the
   target's transcript arrives a few rows at a time, both interpolated here from
   elapsed milliseconds.
@@ -61,9 +63,9 @@ that has already been restored.
 Three flags exist for running a playback without a person watching:
 `--frames <n>` leaves once the playback settles or that many frames have been
 drawn, `--interrupt-after-frames <n>` raises a real `SIGINT` at the harness mid
-transition, and `--trace <file>` records what every frame did — elapsed time, the
-delta it was given, whether the renderer was animating, and how many bytes it
-emitted.
+transition, and `--trace <file>` records what every frame did — elapsed
+milliseconds, the seconds it advanced the renderer by, whether the renderer was
+animating, and how many bytes it emitted.
 
 ## What it shows
 

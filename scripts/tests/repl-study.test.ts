@@ -17,6 +17,8 @@ import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { useTempDirectory } from "@executablemd/test-support/temp";
 import { exec } from "@effectionx/process";
+import { close, fixed, grow, open, rgba, text } from "@bomb.sh/tty";
+import type { Op } from "@bomb.sh/tty";
 import type { Operation } from "effection";
 import { z } from "zod";
 import { exists, readdir, readTextFile } from "@effectionx/fs";
@@ -39,12 +41,14 @@ import { terminalModes } from "../repl-study/host.ts";
 import type { TraceEntry } from "../repl-study/host.ts";
 import type { HarnessState } from "../repl-study/host.ts";
 import { motionAt, playbackBetween } from "../repl-study/playback.ts";
+import { FRAME_SECONDS } from "../repl-study/host.ts";
 import { intersects, layoutFor, MINIMUM, PANE_MINIMUMS, profileFor } from "../repl-study/layout.ts";
 import type { Profile } from "../repl-study/layout.ts";
 import { MUTATIONS } from "../repl-study/mutations.ts";
 import {
   bandGeometry,
   BAND_ROWS,
+  DRAWER_TRANSITION_SECONDS,
   columnFor,
   NOTE_ROW,
   TRACK_ROW,
@@ -150,7 +154,7 @@ function* readTrace(path: string): Operation<TraceEntry[]> {
 const TRACE_ENTRY = z.object({
   frame: z.number(),
   elapsedMs: z.number(),
-  deltaTime: z.number(),
+  deltaSeconds: z.number(),
   animating: z.boolean(),
   motionDone: z.boolean().nullable(),
   bytes: z.number(),
@@ -777,6 +781,56 @@ describe("animation", () => {
         expect(height).toBeGreaterThanOrEqual(heights[index - 1]);
       }
     }
+  });
+
+  it("declares and advances transitions in the renderer's unit, which is seconds", function* () {
+    // Scaling both sides by the same thousand is invisible: milliseconds of
+    // delta against a duration also written in milliseconds produces the same
+    // frame count and the same picture. So this pins the unit against the
+    // library's own documented arithmetic — a 0.2 transition is halfway after
+    // 0.1 and finished after 0.2 — which a millisecond reading cannot satisfy.
+    const term = yield* useTerm({ cols: 20, rows: 8 });
+    const box = (color: number): Op[] => [
+      open("root", { layout: { width: grow(), height: grow(), direction: "ttb" } }),
+      open("box", {
+        layout: { width: grow(), height: fixed(4) },
+        bg: color,
+        transition: { duration: 0.2, easing: "linear", properties: ["bg"] },
+      }),
+      text("box"),
+      close(),
+      close(),
+    ];
+
+    term.render(box(rgba(255, 0, 0)), { deltaTime: 0 });
+    term.render(box(rgba(0, 0, 255)), { deltaTime: 0 });
+    expect(term.render(box(rgba(0, 0, 255)), { deltaTime: 0.1 }).animating).toBe(true);
+    term.render(box(rgba(0, 0, 255)), { deltaTime: 0.15 });
+    // A frame of lag: the flag clears on the render after the one that arrives,
+    // which is why the library's own test spends 0.3 on a 0.2 transition.
+    expect(term.render(box(rgba(0, 0, 255)), { deltaTime: 0.05 }).animating).toBe(false);
+
+    // And the reading that would make this harness's own numbers wrong: one
+    // frame's worth of seconds must not finish a transition declared in them.
+    const other = yield* useTerm({ cols: 20, rows: 8 });
+    other.render(box(rgba(255, 0, 0)), { deltaTime: 0 });
+    other.render(box(rgba(0, 0, 255)), { deltaTime: 0 });
+    expect(other.render(box(rgba(0, 0, 255)), { deltaTime: FRAME_SECONDS }).animating).toBe(true);
+  });
+
+  it("keeps the harness's own transition in that unit", function* () {
+    // A duration meant as milliseconds would read as several minutes here.
+    expect(DRAWER_TRANSITION_SECONDS).toBeLessThan(2);
+    expect(DRAWER_TRANSITION_SECONDS).toBeGreaterThan(0);
+  });
+
+  it("supplies every captured frame its own delta, in seconds", function* () {
+    const frames = yield* playFrames(PLAYBACK, PROFILE_SIZES.wide);
+    const animating = frames.filter((frame) => frame.animating).length;
+    // Sixteen milliseconds is 0.016 of the renderer's seconds, so a 0.26s
+    // transition takes about seventeen of them.
+    expect(animating).toBeGreaterThan(DRAWER_TRANSITION_SECONDS / FRAME_SECONDS - 4);
+    expect(animating).toBeLessThan(DRAWER_TRANSITION_SECONDS / FRAME_SECONDS + 4);
   });
 
   it("never lets the drawer's movement cover the history footer", function* () {

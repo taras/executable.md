@@ -74,8 +74,13 @@ export interface FrameRequest {
   readonly surface?: SurfaceName;
   /** Present only while a playback is running between two fixtures. */
   readonly motion?: Motion;
-  /** Milliseconds since the previous frame, which native transitions consume. */
-  readonly deltaTime?: number;
+  /**
+   * Seconds since the previous frame, which is the unit the renderer measures
+   * transitions in. Leaving it out hands the renderer its own monotonic clock;
+   * supplying it — including `0` — overrides that, which is what makes a
+   * captured transition reproducible.
+   */
+  readonly deltaSeconds?: number;
 }
 
 export function* useTerm(size: Size): Operation<Term> {
@@ -110,9 +115,10 @@ export function renderInto(term: Term, request: FrameRequest): Frame {
     surface: request.surface ?? view.surface,
     mutation,
   });
-  const result = term.render(renderScreen({ fixture: subject, view, layout, mutation, motion }), {
-    deltaTime: request.deltaTime ?? 0,
-  });
+  const result = term.render(
+    renderScreen({ fixture: subject, view, layout, mutation, motion }),
+    request.deltaSeconds === undefined ? {} : { deltaTime: request.deltaSeconds },
+  );
   if (result.errors.length > 0) {
     throw new Error(`the renderer reported ${JSON.stringify(result.errors)}`);
   }
@@ -157,7 +163,7 @@ export function* playFrames(
       view,
       size,
       motion,
-      deltaTime: index === 0 ? 0 : frameMs,
+      deltaSeconds: index === 0 ? 0 : frameMs / 1000,
     });
     applyAnsi(screen, frame.ansi);
     frames.push({ ...frame, text: gridText(screen) });
