@@ -1,6 +1,6 @@
 {
   "name": "@executablemd/testing",
-  "version": "0.13.0",
+  "version": "0.13.1",
   "exports": {
     ".": "./mod.ts"
   }
