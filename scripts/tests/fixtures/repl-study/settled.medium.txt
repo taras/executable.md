@@ -1,0 +1,39 @@
+settled.medium · 140 × 38
+ SESSION   JOURNAL   STATE        │ REPL · Entry 1 settled
+                                  │
+ SESSIONS · 3                     │─────────────────────────────────────────────────────────────────────────────────────────────────────────
+                                  │ Entry 1  ✓ completed · 41.2s     ▸ source · 8 lines                          │ BINDINGS
+ │ plan-a91f7c                    │                                                                              │ REPL scope
+   ✓ completed   planner          │ Create a project README                                                      │
+                                  │ Provide the project name and a one-sentence description.                     │ Entry 1 published none
+   review-b72e1d                  │ │ MARKDOWN                                                                   │ Values named with as
+   ● responding  reviewer         │ │ # Northstar                                                                │ appear here for the
+                                  │ │                                                                            │ active scope.
+   implement-c31d2e               │ │ A lightweight workspace for coordinating coding agents.                    │
+   · queued      implementer      │ │ README.md · 63 bytes · +3 lines                                            │
+                                  │ README.md was created for Northstar.                                         │
+                                  │ no REPL bindings published · 1 file written                                  │
+                                  │                                                                              │
+                                  │                                                                              │
+                                  │                                                                              │
+                                  │                                                                              │
+                                  │                                                                              │
+                                  │                                                                              │
+                                  │                                                                              │
+                                  │                                                                              │
+                                  │                                                                              │
+                                  │                                                                              │
+                                  │                                                                              │
+                                  │                                                                              │
+                                  │                                                                              │
+                                  │                                                                              │
+                                  │                                                                              │
+                                  │                                                                              │
+                                  │ REPL INPUT        ready for Entry 2                                                        [ Run ⌘⏎ ]
+                                  │ Enter XMD or invoke a document…
+                                  │
+                                  │
+ EXECUTION HISTORY                                                                                        │ SETTLED         IDLE  [ Pause ]
+ recorded · 01:01     │                                                                                   │ 01:01
+ Entry 1           ───◆───●─────────◇────────·──────────────·─·──────≈───────·────────●──●───●─●────●────●┃
+                                                                       4.9s agent wait · compressed

@@ -1,0 +1,39 @@
+nested.medium · 140 × 38
+ SESSION   JOURNAL   STATE        │ REPL › Entry 1 › document › Plan · active
+                                  │
+ SESSIONS · 1                     │─────────────────────────────────────────────────────────────────────────────────────────────────────────
+                                  │ Entry 1  ● running · 31.4s       ↳ Plan scope open                           │ BINDINGS
+ │ plan-a91f7c                    │                                                                              │ Plan scope
+   ✓ completed   planner          │ ← opened from Entry 1 · live execution projection, not an editor             │
+                                  │ document                                                                     │ prompt
+                                  │ repl:entry-1 · submitted source is immutable while running                   │ "Create an XMD program …
+                                  │ ▶ <Evaluate allow={["write"]}>                                      ENTER    │ project name and a desc…
+                                  │ │ Create a project README                                                    │
+                                  │ │ Provide the project name and a one-sentence description. The Plan          │ syntax
+                                  │ │ component drafts the program that asks for them, reviews its own draft,    │ XMD catalog · 47 symbols
+                                  │ │ and returns it for admission into this document scope.                     │ component, control, age…
+                                  │ │ ● <Plan as="draft" session={planner}>                             ACTIVE   │
+                                  │ │ │ ✓ Read the Prompt · prompt                                               │ inputs
+                                  │ │ │ ✓ Prepare the planning inputs · syntax, inputs                           │ {
+                                  │ │ │ ✓ Create the first draft · draft                                         │   surface: "component",
+                                  │ │ │ ▾ Check the draft                                                        │   session: "plan-a91f7c…
+                                  │ │ │   ● <Let as="check">                                            ACTIVE   │   budget: 3
+                                  │ │ │   │ ✓ <Classify value={draft} schema={checkSchema} />           SETTLED  │ }
+                                  │ │ │   ● <Agent.Ask session={reviewer} as="review">                  WAITING  │
+                                  │ │ │   │ Review the generated Plan and choose Approve, Request changes or     │ draft
+                                  │ │ │   │ Stop.                                                                │ # Create a project READ…
+                                  │ │ │   │ The reviewer has the draft, the schema it was checked against, and   │ <Elicit as="project" sc…
+                                  │ │ │   │ the capabilities the document would be granted if the Plan is        │
+                                  │ │ │   │ admitted. Nothing it returns runs until this scope admits it.        │
+                                  │ │ │   │ ✓ <Syntax as="syntax" />                                    SETTLED  │
+                                  │ │ │   │ ✓ <PlanInputs session={props.session} as="inputs" />        SETTLED  │
+                                  │ │ │   ● </Agent.Ask>                                                WAITING  │
+                                  │ ▸ 3 more lines · ↑↓ PgUp PgDn                                                │
+                                  │ DRAFT · ENTRY 2   Run unavailable while Entry 1 is active                                  [ Run ]
+                                  │
+                                  │
+                                  │
+ EXECUTION HISTORY                                                                                               │ LIVE     LIVE  [ Pause ]
+ recorded · 00:31        │                                                                                       │ 00:31
+ Entry 1           ──────◆────────●────────────────────◇──────────────────·────────────────────────────────·──·──┃
+                     digits mark coalesced checkpoints · ←/→ visits each

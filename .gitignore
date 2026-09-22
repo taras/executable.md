@@ -26,3 +26,7 @@ packages/web/generated/
 # it. The concurrent verifier runs site:build and site:check together, so a lint
 # that walked one would report on a file nobody wrote.
 site/*.timestamp-*.mjs
+
+# The harness in scripts/repl-study writes raw ANSI beside its committed
+# captures; only the readable .txt frames are reviewed and kept.
+scripts/tests/fixtures/repl-study/*.ansi

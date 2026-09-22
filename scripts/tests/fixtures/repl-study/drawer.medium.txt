@@ -1,0 +1,39 @@
+drawer.medium · 140 × 38
+ SESSION   JOURNAL   STATE        │ REPL › Entry 1 › document · suspended
+                                  │
+ SESSIONS · 3                     │─────────────────────────────────────────────────────────────────────────────────────────────────────────
+                                  │ Entry 1  ● running · 48.9s       ↳ document scope suspended                  │ BINDINGS
+ │ plan-a91f7c                    │                                                                              │ document scope
+   ✓ completed   planner          │ ← opened from Entry 1 · live execution projection, not an editor             │
+                                  │ document                                                                     │ readme
+   review-b72e1d                  │ ▶ <Evaluate allow={["write"]}>                                      ENTER    │ # Northstar
+   ● responding  reviewer         │ │ ▾ Ask for the project details                                              │
+                                  │ │ ● <Elicit as="project" schema={projectSchema}>                    WAITING  │
+   implement-c31d2e               │ │ │ Enter the project details.                                               │
+   · queued      implementer      │ │ ● </Elicit>                                                       WAITING  │
+                                  │ │ ▲ suspended · answer in the drawer below                                   │
+                                  │                                                                              │
+                                  │                                                                              │
+                                  │                                                                              │
+                                  │                                                                              │
+                                  │                                                                              │
+                                  │                                                                              │
+                                  │                                                                              │
+                                  │ INPUT REQUIRED
+                                  │ suspended at <Elicit as="project"> · document scope · validated against the Elicit schema
+                                  │
+                                  │ Enter the project details.
+                                  │
+                                  │ Project name
+                                  │ ┃ Northstar
+                                  │ Description
+                                  │ ┃ A lightweight workspace for coordinating coding agents.
+                                  │
+                                  │ both fields valid   Submit  ⌘↵
+                                  │
+                                  │
+                                  │
+ EXECUTION HISTORY                                                                                               │ LIVE     LIVE  [ Pause ]
+ recorded · 00:49      │                                                                                         │ 00:49
+ Entry 1           ────◆─────●────────────◇───────────·────────────────────·─·────────≈───────────·──────────●───┃
+                                                                                        4.9s agent wait · compressed

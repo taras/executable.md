@@ -1,0 +1,29 @@
+empty.narrow · 90 × 28
+ TRANSCRIPT · 2 / 4         REPL                                                  Tab ▸
+ TRANSCRIPT
+
+ No executions yet.
+
+ Submitted blocks append here as immutable entries. Each entry keeps its source, its
+ rendered output, and the bindings it published.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ REPL INPUT        ⇧⏎ newline                                                [ Run ⌘⏎ ]
+ Enter XMD or invoke a document…
+

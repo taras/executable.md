@@ -36,6 +36,12 @@ const DERIVED_SCOPE = "https://github.com/taras/executable.md/issues/144";
 
 const DENO_ONLY_TOOLING: RuntimeExclusion[] = [
   {
+    path: "scripts/tests/repl-study.test.ts",
+    reason:
+      "its subject is the Deno terminal harness in scripts/repl-study: the host reads Deno.consoleSize(), sets Deno.stdin raw mode, installs Deno signal listeners, and the restoration cases run `deno run` as a child. A Node or Bun shard has no `deno` on PATH and no equivalent of the host it is testing",
+    issue: "https://github.com/taras/executable.md/issues/838",
+  },
+  {
     path: "scripts/tests/build-npm.test.ts",
     reason:
       "subject is scripts/build-npm.ts, a dnt build that only runs under Deno; the test calls Deno.execPath()",

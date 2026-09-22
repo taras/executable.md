@@ -1,0 +1,29 @@
+drawer.narrow.sessions · 90 × 28
+ SESSIONS · 1 / 4           REPL › Entry 1 › document · suspended                 Tab ▸
+ SESSION   JOURNAL   STATE
+
+ SESSIONS · 3
+
+ │ plan-a91f7c
+   ✓ completed   planner
+
+   review-b72e1d
+   ● responding  reviewer
+
+   implement-c31d2e
+   · queued      implementer
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

@@ -1,0 +1,39 @@
+paused.medium · 140 × 38
+ SESSION   JOURNAL   STATE        │ REPL › Entry 1 › document › Plan                                   RECONSTRUCTED AT 00:12 · READ-ONLY
+                                  │
+ ENTRY 1 · CREATE PROJECT README  │─────────────────────────────────────────────────────────────────────────────────────────────────────────
+                                  │ Entry 1  ● running · 53.0s       ↳ reconstructed · read-only                 │ BINDINGS
+ 00:02 ◆ Entry 1 submitted        │                                                                              │ Plan scope · as recorded
+ 00:05 ● document scope entered   │ reconstructed from the journal · no live action is possible here             │
+ 00:12 ● Plan entered             │ Plan                                                                         │ prompt
+ 00:18 ● planning inputs prepared │ ● <Plan as="draft" session={planner}>                               ACTIVE   │ "Create an XMD program …
+ 00:29 ● planning Agent response… │ │ ✓ Read the Prompt · prompt                                                 │
+ 00:30 ● draft checked            │ │ ▾ Prepare the planning inputs                                              │
+ 00:41 ● review returned Approve  │ │   ✓ <Syntax as="syntax" />                                        SETTLED  │
+ 00:47 ● Plan replaced by return… │ │   ● <PlanInputs session={props.session} as="inputs" />            ACTIVE   │
+ 00:49 ● project Elicit requested │ │   XMD catalog · 47 symbols · component, control, agent, io                 │
+ 00:52 ● project Elicit answered  │                                                                              │
+ 00:53 ● confirmation Elicit req… │                                                                              │
+                                  │                                                                              │
+ ▸ 26 internal records            │                                                                              │
+                                  │                                                                              │
+ SELECTED CHECKPOINT              │                                                                              │
+ Plan entered                     │                                                                              │
+ 00:12 elapsed · Entry 1 › docum… │                                                                              │
+ · scope.enter Plan               │                                                                              │
+ · inputs.bound content           │                                                                              │
+ · component.resolved Plan.md     │                                                                              │
+                                  │                                                                              │
+                                  │                                                                              │
+                                  │                                                                              │
+                                  │                                                                              │
+                                  │                                                                              │
+                                  │                                                                              │
+                                  │ DRAFT · ENTRY 2   suspended · inspecting recorded history                                  [ Run ]
+                                  │
+                                  │
+                                  │
+ EXECUTION HISTORY              ┃                                            │ PAUSED HEAD     INSPECTING  [ Continue ] [ Return ] [ Fork ]
+ recorded · 00:53    │          ┃                                            │ 00:53
+ Entry 1           ──◆──●───────┃──────·───────────··────≈──────·─────●──●──●┃
+                                ┃ 00:12 · snapped · 41.0s before head

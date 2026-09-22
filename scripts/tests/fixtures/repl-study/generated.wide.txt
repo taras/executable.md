@@ -1,0 +1,51 @@
+generated.wide · 200 × 50
+ XMD REPL                                       │ REPL › Entry 1 › document · active
+                                                │
+ SESSION   JOURNAL   STATE                      │───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+                                                │ Entry 1  ● running · 48.1s       ↳ document scope open                                                               │ BINDINGS
+ SESSIONS · 2                                   │                                                                                                                      │ document scope
+ chronological · selection follows you, not ac… │ ← opened from Entry 1 · live execution projection, not an editor                                                     │
+                                                │ document                                                                                                             │ admitted
+ │ plan-a91f7c                                  │ ▶ <Evaluate allow={["write"]}>                                                                              ENTER    │ XMD source · 59 lines · sealed
+   ✓ completed   planner · turn 1 · returned 5… │ │ Create a project README                                                                                            │ # Create a project README
+                                                │ │ ◀ <Plan as="draft" session={planner}>                                                                     EXIT     │
+   review-b72e1d                                │ │ │ ✓ Admit the approved Plan · admitted                                                                             │
+   ● responding  reviewer · turn 1 · streaming  │ │ ◀ </Plan>                                                                                                 EXIT     │
+   streaming · background update · selection u… │ │ │ XMD                                                                                                              │
+                                                │ │ │ # Create a project README                                                                                        │
+                                                │ │ │                                                                                                                  │
+                                                │ │ │ Provide the project name and a one-sentence description.                                                         │
+                                                │ │ │                                                                                                                  │
+                                                │ │ │ <Elicit as="project" schema={projectSchema}>                                                                     │
+                                                │ │ │   Enter the project details.                                                                                     │
+                                                │ │ │ </Elicit>                                                                                                        │
+                                                │ │ │                                                                                                                  │
+                                                │ │ │ This is the README that will be created:                                                                         │
+                                                │ │ │                                                                                                                  │
+                                                │ │ │ <CodeBlock value={readme} language="markdown" />                                                                 │
+                                                │ │ │ returned program · 59 lines · replaces the Plan expression, then evaluates here                                  │
+                                                │ │ Create a project README                                                                                            │
+                                                │ │ Provide the project name and a one-sentence description.                                                           │
+                                                │ │ ▶ <Elicit as="project" schema={projectSchema}>                                                            ENTER    │
+                                                │ │ │ Enter the project details.                                                                                       │
+                                                │ │ ▶ </Elicit>                                                                                               ENTER    │
+                                                │                                                                                                                      │
+                                                │                                                                                                                      │
+                                                │                                                                                                                      │
+                                                │                                                                                                                      │
+                                                │                                                                                                                      │
+                                                │                                                                                                                      │
+                                                │                                                                                                                      │
+                                                │                                                                                                                      │
+                                                │                                                                                                                      │
+                                                │                                                                                                                      │
+                                                │                                                                                                                      │
+                                                │                                                                                                                      │
+                                                │ DRAFT · ENTRY 2   Run unavailable while Entry 1 is active                                                                                [ Run ]
+                                                │
+                                                │
+                                                │
+ EXECUTION HISTORY                                                                                                                                                           │ LIVE     LIVE  [ Pause ]
+ recorded · 00:48              │                                                                                                                                             │ 00:48
+ Entry 1                 ──────◆────────●─────────────────────◇──────────────────·────────────────────────────────·───·──────────────≈─────────────────·──────────────────●──┃
+                                                                                                                                       4.9s agent wait · compressed

@@ -1,0 +1,39 @@
+empty.medium · 140 × 38
+ SESSION   JOURNAL   STATE        │ REPL
+                                  │
+ No sessions yet                  │─────────────────────────────────────────────────────────────────────────────────────────────────────────
+                                  │ TRANSCRIPT                                                                   │ BINDINGS
+ Agent sessions appear here as    │                                                                              │ REPL scope
+ executions open them.            │ No executions yet.                                                           │
+ They persist after an entry      │                                                                              │ No REPL bindings yet
+ settles.                         │ Submitted blocks append here as immutable entries. Each entry keeps its      │ Values named with as
+                                  │ source, its rendered output, and the bindings it published.                  │ appear here for the
+                                  │                                                                              │ active scope.
+                                  │                                                                              │
+                                  │                                                                              │
+                                  │                                                                              │
+                                  │                                                                              │
+                                  │                                                                              │
+                                  │                                                                              │
+                                  │                                                                              │
+                                  │                                                                              │
+                                  │                                                                              │
+                                  │                                                                              │
+                                  │                                                                              │
+                                  │                                                                              │
+                                  │                                                                              │
+                                  │                                                                              │
+                                  │                                                                              │
+                                  │                                                                              │
+                                  │                                                                              │
+                                  │                                                                              │
+                                  │                                                                              │
+                                  │                                                                              │
+                                  │ REPL INPUT        ⇧⏎ newline                                                               [ Run ⌘⏎ ]
+                                  │ Enter XMD or invoke a document…
+                                  │
+                                  │
+ EXECUTION HISTORY                                                                                                          IDLE  [ Pause ]
+ No recorded exec…
+
+

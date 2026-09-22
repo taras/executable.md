@@ -1,0 +1,29 @@
+paused.narrow · 90 × 28
+ TRANSCRIPT · 2 / 4         RECONSTRUCTED AT 00:12 · READ-ONLY                    Tab ▸
+ Entry 1  ● running · 53.0s       ↳ reconstructed · read-only
+
+ reconstructed from the journal · no live action is possible here
+ Plan
+ ● <Plan as="draft" session={planner}>                                           ACTIVE
+ │ ✓ Read the Prompt · prompt
+ │ ▾ Prepare the planning inputs
+ │   ✓ <Syntax as="syntax" />                                                    SETTLED
+ │   ● <PlanInputs session={props.session} as="inputs" />                        ACTIVE
+ │   XMD catalog · 47 symbols · component, control, agent, io
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ DRAFT · ENTRY 2   suspended · inspecting recorded history                   [ Run ]
+
+
