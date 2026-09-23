@@ -13,7 +13,7 @@
  * checkpoints of the Journal Time Travel animation.
  */
 
-import type { Checkpoint, Fixture, Session, TranscriptRow } from "./model.ts";
+import type { Checkpoint, Drawer, Fixture, Session, TranscriptRow } from "./model.ts";
 import { FIXTURE_NAMES } from "./model.ts";
 
 const RETURNED_PROGRAM = [
@@ -434,6 +434,68 @@ const SETTLED_ROWS: readonly TranscriptRow[] = [
   { kind: "prose", text: "no REPL bindings published · 1 file written", depth: 0, emphasis: "dim" },
 ];
 
+/** The three suspensions the approved story opens. */
+export const DRAWER_KINDS = ["project", "review", "confirm"] as const;
+
+export type DrawerKind = (typeof DRAWER_KINDS)[number];
+
+export function isDrawerKind(value: string): value is DrawerKind {
+  return (DRAWER_KINDS as readonly string[]).includes(value);
+}
+
+/**
+ * The three drawers, keyed by the name a route opens them with.
+ *
+ * `model.ts` has carried all three shapes since #838, but only the project form
+ * had content. Study frames 08 and 09 are the other two, and a drawer a route
+ * can name has to be a drawer the harness can draw.
+ */
+const DRAWERS: Record<DrawerKind, Drawer> = {
+  project: {
+    kind: "project",
+    heading: "INPUT REQUIRED",
+    origin:
+      'suspended at <Elicit as="project"> \u00b7 document scope \u00b7 validated against the Elicit schema',
+    prompt: "Enter the project details.",
+    fields: [
+      { label: "Project name", value: "Northstar" },
+      { label: "Description", value: "A lightweight workspace for coordinating coding agents." },
+    ],
+    schema: ["{", "  name: string (required),", "  description: string (required)", "}"],
+    validation: "both fields valid",
+    submit: "Submit  \u2318\u21b5",
+  },
+  review: {
+    kind: "review",
+    heading: "REVIEW REQUIRED",
+    origin: 'suspended at <Elicit as="review"> \u00b7 Plan scope \u00b7 59 lines returned',
+    plan: RETURNED_PROGRAM.slice(0, 6),
+    more: "\u25b8 53 more lines \u00b7 \u2325\u2193 scrolls the Plan",
+    decisions: [
+      { label: "Approve", chosen: true },
+      { label: "Request changes", chosen: false, note: "adds a required feedback field" },
+      { label: "Stop", chosen: false },
+    ],
+    submit: "Submit  \u2318\u21b5",
+  },
+  confirm: {
+    kind: "confirm",
+    heading: "CONFIRMATION REQUIRED",
+    origin: 'suspended at <Elicit as="confirmation"> \u00b7 document scope',
+    prompt: "Create README.md with the content shown above?",
+    preview: README,
+    actions: [
+      { label: "Approve", primary: true },
+      { label: "Decline", primary: false },
+    ],
+    hint: "\u2318\u21b5 approves \u00b7 Esc closes the drawer without answering it",
+  },
+};
+
+export function drawerOf(kind: DrawerKind): Drawer {
+  return DRAWERS[kind];
+}
+
 const FIXTURES: Record<string, Fixture> = {
   empty: {
     name: "empty",
@@ -587,20 +649,7 @@ const FIXTURES: Record<string, Fixture> = {
       scopeName: "document scope",
       bindings: [{ name: "readme", note: "markdown · 3 lines", lines: ["# Northstar"] }],
     },
-    drawer: {
-      kind: "project",
-      heading: "INPUT REQUIRED",
-      origin:
-        'suspended at <Elicit as="project"> · document scope · validated against the Elicit schema',
-      prompt: "Enter the project details.",
-      fields: [
-        { label: "Project name", value: "Northstar" },
-        { label: "Description", value: "A lightweight workspace for coordinating coding agents." },
-      ],
-      schema: ["{", "  name: string (required),", "  description: string (required)", "}"],
-      validation: "both fields valid",
-      submit: "Submit  ⌘↵",
-    },
+    drawer: DRAWERS.project,
     input: {
       label: "DRAFT · ENTRY 2",
       hint: "Run unavailable while Entry 1 is active",

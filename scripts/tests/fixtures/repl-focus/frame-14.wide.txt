@@ -1,0 +1,51 @@
+frame-14.wide · 200 × 50
+ XMD REPL                                       │ REPL · Entry 1 settled
+                                                │                                                                                                                     FOCUS MAP · F1
+ SESSION   JOURNAL   STATE                      │────────────────────────────────────────────────────────────────────────────────────────────────────────────────────   1  Sessions · 3                ─
+                                                │ Entry 1  ✓ completed · 41.2s     ▸ source · 8 lines                                                                   2  Transcript
+ SESSIONS · 3                                   │                                                                                                                       3  Bindings
+ persist after settling                         │ Create a project README                                                                                             ▸ 4  REPL input
+                                                │ Provide the project name and a one-sentence description.                                                              5  Execution History
+ │ plan-a91f7c                                  │ │ MARKDOWN                                                                                                            6  Run
+   ✓ completed   planner · turn 1 · returned 5… │ │ # Northstar
+                                                │ │                                                                                                                    │
+   review-b72e1d                                │ │ A lightweight workspace for coordinating coding agents.                                                            │
+   ● responding  reviewer · turn 1 · streaming  │ │ README.md · 63 bytes · +3 lines                                                                                    │
+   streaming · background update · selection u… │ README.md was created for Northstar.                                                                                 │
+                                                │ no REPL bindings published · 1 file written                                                                          │
+   implement-c31d2e                             │                                                                                                                      │
+   · queued      implementer · no turn yet      │                                                                                                                      │
+                                                │                                                                                                                      │
+                                                │                                                                                                                      │
+                                                │                                                                                                                      │
+                                                │                                                                                                                      │
+                                                │                                                                                                                      │
+                                                │                                                                                                                      │
+                                                │                                                                                                                      │
+                                                │                                                                                                                      │
+                                                │                                                                                                                      │
+                                                │                                                                                                                      │
+                                                │                                                                                                                      │
+                                                │                                                                                                                      │
+                                                │                                                                                                                      │
+                                                │                                                                                                                      │
+                                                │                                                                                                                      │
+                                                │                                                                                                                      │
+                                                │                                                                                                                      │
+                                                │                                                                                                                      │
+                                                │                                                                                                                      │
+                                                │                                                                                                                      │
+                                                │                                                                                                                      │
+                                                │                                                                                                                      │
+                                                │                                                                                                                      │
+                                                │                                                                                                                      │
+                                                │                                                                                                                      │
+                                                │▌REPL INPUT        ready for Entry 2                                                                                                      [ Run ⌘⏎ ]
+                                                │ Enter XMD or invoke a document…
+                                                │
+                                                │
+ EXECUTION HISTORY            │                                                                                                                                       ┃ SETTLED         IDLE  [ Pause ]
+ recorded · 01:01             │      │                                                                                                │   │      │  │        │      │ ┃ 01:01
+ Entry 1                      │      │               │                                                                                │   │      │  │        │      │ ┃
+                         ─────◆──────●───────────────●─────────────●────────────────────────●─·───────────≈─────────────●─────────────●───●──────●──●────────●──────●─┃
+                                                                                                          4.9s agent wait · compressed

@@ -18,8 +18,10 @@ import type { Op } from "@bomb.sh/tty";
 import type { Checkpoint, Entry, Fixture, Phase, TranscriptRow } from "./model.ts";
 import type { Layout, Rect } from "./layout.ts";
 import { MINIMUM } from "./layout.ts";
-import type { View } from "./view.ts";
+import type { View } from "./store.ts";
 import type { Mutation } from "./mutations.ts";
+import type { FocusTarget } from "./focus.ts";
+import { mapOrder, numbering } from "./focus.ts";
 import type { Motion } from "./playback.ts";
 
 const C = {
@@ -37,6 +39,7 @@ const C = {
   gold: rgba(0xc9, 0xa8, 0x6a),
   fail: rgba(0xd2, 0x4b, 0x3f),
   rule: rgba(0x16, 0x1c, 0x21),
+  focus: rgba(0x9a, 0xe0, 0xa8),
 };
 
 const BG = {
@@ -241,6 +244,102 @@ const DRAWER_TRANSITION = {
   easing: "easeInOut",
   properties: ["height", "y"],
 } as const;
+
+/**
+ * What the renderer is told about focus.
+ *
+ * It is handed the answer rather than asked to work one out: `focus.ts` derives
+ * the registry and the map every frame, and drawing is not a place where a
+ * second opinion about where focus is may be formed.
+ */
+export interface FocusView {
+  /** The identity focus resolved to. */
+  readonly here: string;
+  /** Every visible target, enabled or not, which is what the overlay numbers. */
+  readonly map: readonly FocusTarget[];
+  readonly overlay: boolean;
+}
+
+/** The glyph a focused region wears, so focus survives a monochrome terminal. */
+const FOCUS_GLYPH = "\u258c";
+
+/** The glyph beside a focused control or field. */
+const FOCUS_MARK = "\u25b8";
+
+/** Where the region carrying one identity was composed, if it is on screen. */
+function regionRect(layout: Layout, identity: string): Rect | undefined {
+  if (identity === "region:sessions") {
+    return layout.sidebar;
+  }
+  if (identity === "region:transcript") {
+    return layout.transcript;
+  }
+  if (identity === "region:bindings") {
+    return layout.bindings;
+  }
+  if (identity === "region:input") {
+    return layout.contextual;
+  }
+  if (identity === "region:history") {
+    return layout.footer;
+  }
+  return undefined;
+}
+
+function focusMarkerOps(layout: Layout, focus: FocusView | undefined): Op[] {
+  if (focus === undefined) {
+    return [];
+  }
+  const rect = regionRect(layout, focus.here);
+  if (rect === undefined) {
+    return [];
+  }
+  return [
+    open("focus-marker", {
+      layout: { width: fixed(1), height: fixed(1) },
+      floating: { x: rect.x, y: rect.y, attachTo: "root" },
+    }),
+    text(FOCUS_GLYPH, { color: C.focus }),
+    close(),
+  ];
+}
+
+/** The word the footer draws for a transport control, keyed by its identity. */
+const TRANSPORT_WORDS: Record<string, readonly string[]> = {
+  "control:transport.pause": ["Pause"],
+  "control:transport.continue": ["Continue"],
+  "control:transport.return-head": ["Return to paused head", "Return"],
+  "control:transport.fork": ["Fork from here", "Fork"],
+};
+
+/**
+ * The numbered focus map, as a legend rather than as floating callouts.
+ *
+ * The study numbers its targets on top of the interface, which a browser can do
+ * because it measured them. In cells the honest equivalent is a legend: the
+ * same numbers, in the same order, with a disabled target dimmed and present —
+ * study frame 12 numbers a dimmed `Continue` and says Tab skips it, so the map
+ * has to show what the ring does not.
+ */
+function focusMapRegion(layout: Layout, focus: FocusView): Op[] {
+  const ordered = mapOrder(focus.map);
+  const numbers = numbering(focus.map);
+  const width = Math.min(34, Math.max(18, Math.round(layout.cols * 0.24)));
+  const height = Math.min(layout.rows, ordered.length + 2);
+  const rect = { x: Math.max(0, layout.cols - width - 1), y: 1, width, height };
+  const lines: VisualLine[] = [label("FOCUS MAP · F1")];
+  for (const target of ordered) {
+    const on = target.id === focus.here;
+    lines.push({
+      segments: [
+        { text: on ? `${FOCUS_MARK} ` : "  ", color: C.focus, width: 2 },
+        { text: `${numbers.get(target.id) ?? 0}`, color: target.enabled ? C.out : C.dim, width: 3 },
+        { text: target.label, color: target.enabled ? C.src : C.dim },
+      ],
+    });
+  }
+  return region("focus-map", rect, lines, { bg: BG.drawer });
+}
 
 function blank(): VisualLine {
   return { segments: [{ text: "" }] };
@@ -552,8 +651,18 @@ function bindingsRegion(fixture: Fixture, layout: Layout, rect: Rect): Op[] {
   return region("bindings", rect, lines, { bg: BG.bind });
 }
 
-function contextualRegion(fixture: Fixture, view: View, layout: Layout, rect: Rect): Op[] {
+function contextualRegion(
+  fixture: Fixture,
+  view: View,
+  layout: Layout,
+  rect: Rect,
+  focus?: FocusView,
+): Op[] {
   const width = Math.max(0, rect.width - 2);
+  // With nothing to say about focus the drawer is drawn exactly as #838 drew
+  // it, which is what keeps a frame that is not about focus byte-identical.
+  const mark = (id: string): string =>
+    focus === undefined ? "" : focus.here === id ? `${FOCUS_MARK} ` : "  ";
   if (fixture.drawer && view.drawerOpen) {
     const drawer = fixture.drawer;
     const lines: VisualLine[] = [plain(drawer.heading, C.hold)];
@@ -569,7 +678,8 @@ function contextualRegion(fixture: Fixture, view: View, layout: Layout, rect: Re
       }
       lines.push(blank());
       for (const field of drawer.fields) {
-        lines.push(label(field.label));
+        const id = `field:drawer.project.${field.label === "Project name" ? "name" : "description"}`;
+        lines.push(label(`${mark(id)}${field.label}`));
         lines.push({
           segments: [
             { text: "┃ ", color: C.rule, width: 2 },
@@ -580,22 +690,24 @@ function contextualRegion(fixture: Fixture, view: View, layout: Layout, rect: Re
       lines.push(blank(), {
         segments: [
           { text: drawer.validation, color: C.dim, width: Math.min(width, 20) },
-          { text: drawer.submit, color: C.tick },
+          { text: `${mark("control:drawer.project.submit")}${drawer.submit}`, color: C.tick },
         ],
       });
       if (!layout.dense) {
-        lines.push(blank(), label("schema"));
+        lines.push(blank(), label(`${mark("control:drawer.project.schema")}schema`));
         for (const schema of drawer.schema) {
           lines.push(plain(schema, C.settledText));
         }
       }
     }
     if (drawer.kind === "review") {
-      for (const planLine of drawer.plan) {
+      lines.push(plain(`${mark("control:drawer.review.scroll")}${drawer.plan[0] ?? ""}`, C.src));
+      for (const planLine of drawer.plan.slice(1)) {
         lines.push(plain(planLine, C.src));
       }
       lines.push(plain(drawer.more, C.dim), blank());
-      for (const decision of drawer.decisions) {
+      const decided = ["approve", "request", "stop"];
+      drawer.decisions.forEach((decision, index) => {
         lines.push({
           segments: [
             {
@@ -603,29 +715,35 @@ function contextualRegion(fixture: Fixture, view: View, layout: Layout, rect: Re
               color: decision.chosen ? C.tick : C.label,
               width: 4,
             },
-            { text: decision.label, color: decision.chosen ? C.out : C.src },
+            {
+              text: `${mark(`control:drawer.review.${decided[index] ?? index}`)}${decision.label}`,
+              color: decision.chosen ? C.out : C.src,
+            },
           ],
         });
-      }
-      lines.push(blank(), plain(drawer.submit, C.tick));
+      });
+      lines.push(blank(), plain(`${mark("control:drawer.review.submit")}${drawer.submit}`, C.tick));
     }
     if (drawer.kind === "confirm") {
       for (const wrapped of wrapText(drawer.prompt, width)) {
         lines.push(plain(wrapped, C.src));
       }
-      for (const preview of drawer.preview) {
+      drawer.preview.forEach((preview, index) => {
         lines.push({
           segments: [
             { text: "│ ", color: C.rule, width: 2 },
-            { text: preview, color: C.src },
+            {
+              text: index === 0 ? `${mark("control:drawer.confirm.preview")}${preview}` : preview,
+              color: C.src,
+            },
           ],
         });
-      }
+      });
       lines.push(blank(), {
         segments: drawer.actions.map((action) => ({
-          text: `[ ${action.label} ]`,
+          text: `[ ${mark(`control:drawer.confirm.${action.label.toLowerCase()}`)}${action.label} ]`,
           color: action.primary ? C.tick : C.label,
-          width: action.label.length + 6,
+          width: action.label.length + 6 + (focus === undefined ? 0 : 2),
         })),
       });
       lines.push(plain(drawer.hint, C.dim));
@@ -820,17 +938,19 @@ function footerRegion(
   rect: Rect,
   mutation?: Mutation,
   motion?: Motion,
+  focus?: FocusView,
 ): Op[] {
   const history = fixture.history;
   // While a playback runs, the head is where the application says it is; the
   // recorded head is where it will be when the motion settles.
   const headAt = motion !== undefined && !motion.done ? motion.headAt : history.headAt;
   const flat = mutation === "flatten-notches";
-  const { transport, right, inner, labelWidth, trackLeft, trackWidth } = bandGeometry(
-    fixture,
-    layout,
-    rect,
-  );
+  const geometry = bandGeometry(fixture, layout, rect);
+  const { transport, inner, labelWidth, trackLeft, trackWidth } = geometry;
+  // The marker replaces the space inside the bracket rather than widening it:
+  // the track's room is computed from this string, and a focused control that
+  // shortened the track would make focus a layout decision.
+  const right = markTransport(geometry.right, focus);
 
   const grid: string[][] = BAND_ROWS.map(() => Array.from({ length: inner }, () => " "));
   const colors: number[][] = BAND_ROWS.map(() => Array.from({ length: inner }, () => C.dim));
@@ -997,6 +1117,20 @@ function footerRegion(
   return region("footer", rect, lines, { bg: BG.footer, padding: { left: 1, right: 1 } });
 }
 
+/** `[ Continue ]` becomes `[▸Continue ]` — the same width, one glyph louder. */
+function markTransport(right: string, focus: FocusView | undefined): string {
+  if (focus === undefined) {
+    return right;
+  }
+  for (const word of TRANSPORT_WORDS[focus.here] ?? []) {
+    const bracketed = `[ ${word} ]`;
+    if (right.includes(bracketed)) {
+      return right.replace(bracketed, `[${FOCUS_MARK}${word} ]`);
+    }
+  }
+  return right;
+}
+
 /** Keep each cell's colour when a grid row becomes segments. */
 function runsOf(glyphs: readonly string[], colors: readonly number[]): Segment[] {
   const segments: Segment[] = [];
@@ -1081,10 +1215,12 @@ export interface ScreenRequest {
   readonly mutation?: Mutation;
   /** Present only while a playback is running between two fixtures. */
   readonly motion?: Motion;
+  /** Where focus is, and what the overlay would number. */
+  readonly focus?: FocusView;
 }
 
 export function renderScreen(request: ScreenRequest): Op[] {
-  const { fixture, view, layout, mutation, motion } = request;
+  const { fixture, view, layout, mutation, motion, focus } = request;
   const ops: Op[] = [
     open("root", { layout: { width: grow(), height: grow(), direction: "ttb" }, bg: BG.app }),
   ];
@@ -1112,23 +1248,32 @@ export function renderScreen(request: ScreenRequest): Op[] {
   const covering =
     mutation === "drawer-covers-footer" && layout.footer !== undefined && view.drawerOpen;
   if (layout.contextual && !covering) {
-    ops.push(...contextualRegion(fixture, view, layout, layout.contextual));
+    ops.push(...contextualRegion(fixture, view, layout, layout.contextual, focus));
   }
   if (layout.footer) {
-    ops.push(...footerRegion(fixture, view, layout, layout.footer, mutation, motion));
+    ops.push(...footerRegion(fixture, view, layout, layout.footer, mutation, motion, focus));
   }
   if (layout.contextual && covering) {
     // Drawn last, so it lands on top of the band the study says is never
     // covered — which is the point of this control.
     ops.push(
-      ...contextualRegion(fixture, view, layout, {
-        ...layout.contextual,
-        height: layout.contextual.height + layout.footer!.height,
-      }),
+      ...contextualRegion(
+        fixture,
+        view,
+        layout,
+        { ...layout.contextual, height: layout.contextual.height + layout.footer!.height },
+        focus,
+      ),
     );
   }
   for (const [index, separator] of layout.separators.entries()) {
     ops.push(...rule(`rule.${index}`, separator, separator.width === 1 ? "│" : "─"));
+  }
+  // Focus is drawn last, over the regions it describes, because a marker under
+  // the thing it marks is a marker nobody sees.
+  ops.push(...focusMarkerOps(layout, focus));
+  if (focus?.overlay === true) {
+    ops.push(...focusMapRegion(layout, focus));
   }
   ops.push(close());
   return ops;

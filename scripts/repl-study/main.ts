@@ -3,6 +3,9 @@
  *
  *   deno task repl:study --play               the whole story, start to finish
  *   deno task repl:study                      one moment, in this terminal
+ *   deno task repl:study --frame 07           one frame of the focus study
+ *   deno task repl:study --route <url>        any location, said as a URL
+ *   deno task repl:study --focus-map          open with the numbered overlay on
  *   deno task repl:study --capture <dir>      every fixture at every profile
  *   deno task repl:study --print nested wide  one frame, as text
  *   deno task repl:study --replay             the lifecycle, with no terminal
@@ -13,7 +16,9 @@
 import { ensure, exit, main } from "effection";
 import type { Operation } from "effection";
 
-import { captureAll, PROFILE_SIZES, renderFrame, writeCaptures } from "./capture.ts";
+import { captureAll, captureFocus, PROFILE_SIZES, renderFrame, writeCaptures } from "./capture.ts";
+import { frame as studyFrame, FRAMES } from "./frames.ts";
+import { parseRoute } from "./route.ts";
 import { fixture } from "./fixtures.ts";
 import { runInteractive, runReplay } from "./host.ts";
 import type { TraceEntry } from "./host.ts";
@@ -25,7 +30,7 @@ import type { FixtureName } from "./model.ts";
 import type { Profile } from "./layout.ts";
 import { isMutation } from "./mutations.ts";
 import type { Mutation } from "./mutations.ts";
-import { initialView } from "./view.ts";
+import { initialView } from "./store.ts";
 
 const USAGE = [
   "usage:",
@@ -33,13 +38,18 @@ const USAGE = [
   "  repl-study --play                       the whole story, start to finish",
   "  repl-study --play <from> <to>           one transition, as a diagnostic",
   "      [--frames <n>] [--interrupt-after-frames <n>] [--trace <file>]",
+  "  repl-study --frame <id>                 one frame of the approved focus study",
+  "  repl-study --route <url>                one location, said as a URL",
+  "  repl-study [--frame <id>] --focus-map   with the numbered focus map drawn",
   "  repl-study --capture <directory> [--mutation <name>]",
+  "  repl-study --capture-focus <directory>  the focus study's frames, as text",
   "  repl-study --print <fixture> <profile> [--mutation <name>]",
   "  repl-study --replay [--interrupt-after <n>] [--fail-after <n>] [--mutation <name>]",
   "",
   "fixtures: empty, nested, generated, drawer, paused, settled",
   "profiles: wide, medium, narrow, too-small",
   "playbacks: empty→nested, nested→generated, generated→drawer, drawer→paused, paused→settled",
+  `frames: ${FRAMES.map((one) => one.id).join(", ")}`,
 ].join("\n");
 
 type Mode =
@@ -51,8 +61,11 @@ type Mode =
       readonly maxFrames?: number;
       readonly interruptAfterFrames?: number;
       readonly trace?: string;
+      readonly route?: string;
+      readonly head?: string;
+      readonly focusMap?: boolean;
     }
-  | { readonly kind: "capture"; readonly directory: string }
+  | { readonly kind: "capture"; readonly directory: string; readonly focus?: boolean }
   | { readonly kind: "print"; readonly fixture: FixtureName; readonly profile: Profile }
   | { readonly kind: "replay"; readonly interruptAfter?: number; readonly failAfter?: number };
 
@@ -85,6 +98,9 @@ export function parse(argv: readonly string[]): Invocation | string {
   let maxFrames: number | undefined;
   let interruptAfterFrames: number | undefined;
   let trace: string | undefined;
+  let route: string | undefined;
+  let head: string | undefined;
+  let focusMap = false;
   let at = 0;
 
   const value = (): string | undefined => {
@@ -162,6 +178,33 @@ export function parse(argv: readonly string[]): Invocation | string {
         return "--trace needs a file to write";
       }
       trace = path;
+    } else if (argument === "--frame") {
+      const id = value();
+      const found = id === undefined ? undefined : studyFrame(id);
+      if (found === undefined) {
+        return `--frame needs one of ${FRAMES.map((one) => one.id).join(", ")}, not ${JSON.stringify(id)}`;
+      }
+      route = found.url;
+      head = found.head;
+      fixtureName = found.fixture;
+    } else if (argument === "--route") {
+      const url = value();
+      const parsed = url === undefined ? undefined : parseRoute(url);
+      if (parsed === undefined) {
+        return "--route needs a REPL URL";
+      }
+      if (!parsed.ok) {
+        return parsed.error.message;
+      }
+      route = url;
+    } else if (argument === "--focus-map") {
+      focusMap = true;
+    } else if (argument === "--capture-focus") {
+      const directory = value();
+      if (directory === undefined) {
+        return "--capture-focus needs a directory to write into";
+      }
+      mode = { kind: "capture", directory, focus: true };
     } else if (argument === "--replay") {
       mode = { kind: "replay" };
     } else if (argument === "--interrupt-after" || argument === "--fail-after") {
@@ -191,6 +234,9 @@ export function parse(argv: readonly string[]): Invocation | string {
       maxFrames,
       interruptAfterFrames,
       trace,
+      route,
+      head,
+      focusMap,
     },
     mutation,
   };
@@ -200,7 +246,7 @@ function* run(invocation: Invocation): Operation<void> {
   const { mode, mutation } = invocation;
 
   if (mode.kind === "capture") {
-    const captures = yield* captureAll();
+    const captures = mode.focus === true ? yield* captureFocus() : yield* captureAll();
     yield* writeCaptures(mode.directory, captures);
     console.log(`wrote ${captures.length} captures to ${mode.directory}`);
     return;
@@ -247,6 +293,9 @@ function* run(invocation: Invocation): Operation<void> {
   }
   yield* runInteractive({
     fixture: mode.fixture,
+    route: mode.route,
+    head: mode.head,
+    focusMap: mode.focusMap,
     mutation,
     play: mode.play,
     journey: mode.journey === true ? JOURNEY : undefined,

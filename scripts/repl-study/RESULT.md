@@ -160,7 +160,16 @@ goldens.
 ## What was not answered
 
 - Focus, the ring, the drawer's trap and where focus returns after a suspension
-  are #839's, and nothing here establishes them.
+  are #839's, and nothing here establishes them. They are answered now, in
+  [`RESULT-focus.md`](./RESULT-focus.md).
+
+**One correction this experiment owes.** #838 documented `Esc` as "return to the
+head" and its suite exercised that path by handing the reducer a synthetic
+`{ code: "Escape" }`. No terminal ever produced one: the decoder buffers a lone
+`ESC` and asks to be re-scanned, and this harness read `scanned.events` and
+dropped `scanned.pending`, so pressing Escape did nothing at all. Shift+Tab was
+the same shape of mistake — a real one arrives as `Backtab` carrying no shift
+flag. #839 found both by driving bytes rather than events, and repaired them.
 - Only one native transition is exercised — the drawer's opening. A drawer
   *closing* would need the moment being left to stay renderable through the
   transition, which is a question about what a playback holds, and #842's

@@ -1,0 +1,13 @@
+frame-07.narrow · 90 × 28
+ INPUT REQUIRED
+ suspended at <Elicit as="project"> · document scope · validated ag FOCUS MAP · F1
+ schema                                                             ▸ 1  Project name
+                                                                      2  Description
+ Enter the project details.                                           3  Schema disclos…
+                                                                      4  Submit
+ ▸ Project name                                                       5  Execution Hist…
+ ┃ Northstar
+   Description
+ ┃ A lightweight workspace for coordinating coding agents.
+
+ both fields valid     Submit  ⌘↵

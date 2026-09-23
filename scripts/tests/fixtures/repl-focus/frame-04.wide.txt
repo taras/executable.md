@@ -1,0 +1,48 @@
+frame-04.wide · 200 × 50
+ XMD REPL                                       │ REPL
+                                                │                                                                                                                     FOCUS MAP · F1
+ SESSION   JOURNAL   STATE                      │────────────────────────────────────────────────────────────────────────────────────────────────────────────────────   1  Sessions · 0                ─
+                                                │ TRANSCRIPT                                                                                                            2  Transcript
+ No sessions yet                                │                                                                                                                     ▸ 3  Bindings
+                                                │ No executions yet.                                                                                                    4  REPL input
+ Agent sessions appear here as executions open  │                                                                                                                       5  Execution History
+ them.                                          │ Submitted blocks append here as immutable entries. Each entry keeps its source, its rendered output, and the
+ They persist after an entry settles.           │ bindings it published.                                                                                               │ here for the active scope.
+                                                │                                                                                                                      │
+                                                │                                                                                                                      │
+                                                │                                                                                                                      │
+                                                │                                                                                                                      │
+                                                │                                                                                                                      │
+                                                │                                                                                                                      │
+                                                │                                                                                                                      │
+                                                │                                                                                                                      │
+                                                │                                                                                                                      │
+                                                │                                                                                                                      │
+                                                │                                                                                                                      │
+                                                │                                                                                                                      │
+                                                │                                                                                                                      │
+                                                │                                                                                                                      │
+                                                │                                                                                                                      │
+                                                │                                                                                                                      │
+                                                │                                                                                                                      │
+                                                │                                                                                                                      │
+                                                │                                                                                                                      │
+                                                │                                                                                                                      │
+                                                │                                                                                                                      │
+                                                │                                                                                                                      │
+                                                │                                                                                                                      │
+                                                │                                                                                                                      │
+                                                │                                                                                                                      │
+                                                │                                                                                                                      │
+                                                │                                                                                                                      │
+                                                │                                                                                                                      │
+                                                │                                                                                                                      │
+                                                │                                                                                                                      │
+                                                │                                                                                                                      │
+                                                │                                                                                                                      │
+                                                │ REPL INPUT        ⇧⏎ newline                                                                                                             [ Run ⌘⏎ ]
+                                                │ Enter XMD or invoke a document…
+                                                │
+                                                │
+ EXECUTION HISTORY                                                                                                                                                                      IDLE  [ Pause ]
+ No recorded execution …

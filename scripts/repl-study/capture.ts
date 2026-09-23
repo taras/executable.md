@@ -21,9 +21,12 @@ import type { Fixture } from "./model.ts";
 import type { Profile, SurfaceName } from "./layout.ts";
 import { layoutFor } from "./layout.ts";
 import { renderScreen } from "./render.ts";
+import type { FocusView } from "./render.ts";
 import { applyAnsi, createGrid, gridText } from "./screen.ts";
-import { initialView } from "./view.ts";
-import type { View } from "./view.ts";
+import { initialView } from "./store.ts";
+import type { View } from "./store.ts";
+import { focusIn, mapOf, fixtureFor, viewOf } from "./store.ts";
+import { FRAMES, stateFor } from "./frames.ts";
 import type { Mutation } from "./mutations.ts";
 
 export interface Size {
@@ -74,6 +77,8 @@ export interface FrameRequest {
   readonly surface?: SurfaceName;
   /** Present only while a playback is running between two fixtures. */
   readonly motion?: Motion;
+  /** Where focus is. Left out, the frame says nothing about focus at all. */
+  readonly focus?: FocusView;
   /**
    * Seconds since the previous frame, which is the unit the renderer measures
    * transitions in. Leaving it out hands the renderer its own monotonic clock;
@@ -130,7 +135,7 @@ export function renderInto(term: Term, request: FrameRequest): Frame {
     mutation,
   });
   const result = term.render(
-    renderScreen({ fixture: subject, view, layout, mutation, motion }),
+    renderScreen({ fixture: subject, view, layout, mutation, motion, focus: request.focus }),
     request.deltaSeconds === undefined ? {} : { deltaTime: request.deltaSeconds },
   );
   if (result.errors.length > 0) {
@@ -356,4 +361,38 @@ export function* writeCaptures(directory: string, captures: readonly Capture[]):
       new TextDecoder().decode(capture.frame.ansi),
     );
   }
+}
+
+/**
+ * The study's frames, at the profiles a reader can check them at.
+ *
+ * Every frame is drawn with the numbered overlay on, because the study states
+ * its frames as numbered targets: numbering them on screen is what makes a
+ * capture legible as evidence against the frame it reproduces. The narrow set
+ * is representative rather than exhaustive — the suite checks all fourteen at
+ * both profiles, and a golden's job here is to be read.
+ */
+const NARROW_FRAMES = ["01", "05", "07", "12", "14"];
+
+export function* captureFocus(): Operation<Capture[]> {
+  const captures: Capture[] = [];
+  for (const subject of FRAMES) {
+    const state = stateFor(subject);
+    const profiles: Profile[] = NARROW_FRAMES.includes(subject.id) ? ["wide", "narrow"] : ["wide"];
+    for (const profile of profiles) {
+      const size = PROFILE_SIZES[profile];
+      const frame = yield* renderFrame({
+        fixture: fixtureFor(state),
+        view: viewOf(state),
+        size,
+        focus: {
+          here: focusIn(state, size),
+          map: mapOf(state, size),
+          overlay: true,
+        },
+      });
+      captures.push({ name: `frame-${subject.id}.${profile}`, profile, size, frame });
+    }
+  }
+  return captures;
 }

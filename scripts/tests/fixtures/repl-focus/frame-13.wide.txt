@@ -1,0 +1,51 @@
+frame-13.wide · 200 × 50
+ XMD REPL                                       │ REPL › Entry 1 › document · suspended
+                                                │                                                                                                                     FOCUS MAP · F1
+ SESSION   JOURNAL   STATE                      │────────────────────────────────────────────────────────────────────────────────────────────────────────────────────   1  Sessions · 3                ─
+                                                │ Entry 1  ● running · 48.9s       ↳ document scope suspended                                                           2  Transcript
+ SESSIONS · 3                                   │                                                                                                                       3  Bindings
+ chronological · selection follows you, not ac… │ ← opened from Entry 1 · live execution projection, not an editor                                                      4  REPL input · Run disabled
+                                                │ document                                                                                                              5  Execution History
+ │ plan-a91f7c                                  │ ▶ <Evaluate allow={["write"]}>                                                                              ENTER   ▸ 6  Pause
+   ✓ completed   planner · turn 1 · returned 5… │ │ ▾ Ask for the project details
+                                                │ │ ● <Elicit as="project" schema={projectSchema}>                                                            WAITING  │
+   review-b72e1d                                │ │ │ Enter the project details.                                                                                       │
+   ● responding  reviewer · turn 1 · streaming  │ │ ● </Elicit>                                                                                               WAITING  │
+   streaming · background update · selection u… │ │ ▲ suspended · answer in the drawer below                                                                           │
+                                                │                                                                                                                      │
+   implement-c31d2e                             │                                                                                                                      │
+   · queued      implementer · no turn yet      │                                                                                                                      │
+                                                │                                                                                                                      │
+                                                │                                                                                                                      │
+                                                │                                                                                                                      │
+                                                │                                                                                                                      │
+                                                │                                                                                                                      │
+                                                │                                                                                                                      │
+                                                │                                                                                                                      │
+                                                │                                                                                                                      │
+                                                │                                                                                                                      │
+                                                │                                                                                                                      │
+                                                │                                                                                                                      │
+                                                │                                                                                                                      │
+                                                │                                                                                                                      │
+                                                │                                                                                                                      │
+                                                │                                                                                                                      │
+                                                │                                                                                                                      │
+                                                │                                                                                                                      │
+                                                │                                                                                                                      │
+                                                │                                                                                                                      │
+                                                │                                                                                                                      │
+                                                │                                                                                                                      │
+                                                │                                                                                                                      │
+                                                │                                                                                                                      │
+                                                │                                                                                                                      │
+                                                │                                                                                                                      │
+                                                │ DRAFT · ENTRY 2   Run unavailable while Entry 1 is active                                                                                [ Run ]
+                                                │
+                                                │
+                                                │
+ EXECUTION HISTORY             │                                                                                                                                             ┃ LIVE     LIVE  [▸Pause ]
+ recorded · 00:49              │        │                                                                                                                              │     ┃ 00:49
+ Entry 1                       │        │                    │                                                                                                         │     ┃
+                         ──────◆────────●────────────────────●─────────────────●─────────────────────────────────●──·──────────────≈─────────────────●─────────────────●─────┃
+                                                                                                                                   4.9s agent wait · compressed

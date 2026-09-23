@@ -72,7 +72,7 @@ import {
   gridText,
   viewport,
 } from "../repl-study/screen.ts";
-import { initialView, scrollBy } from "../repl-study/view.ts";
+import { initialView, scrollBy } from "../repl-study/store.ts";
 
 const ROOT = fileURLToPath(new URL("../../", import.meta.url));
 const GOLDENS = fileURLToPath(new URL("./fixtures/repl-study/", import.meta.url));
@@ -779,13 +779,18 @@ describe("the boundary this experiment keeps", () => {
   });
 
   it("uses every control it declares", function* () {
-    // A control nobody passes is a claim nobody is checking, so the suite's own
-    // source has to mention each one.
-    const source = yield* readTextFile(
-      fileURLToPath(new URL("./repl-study.test.ts", import.meta.url)),
-    );
+    // A control nobody passes is a claim nobody is checking, so the evidence's
+    // own source has to mention each one. #838's controls are exercised here
+    // and #839's next door; the declaration is one list, so the check reads
+    // both suites rather than letting either half go unclaimed.
+    const suites = ["./repl-study.test.ts", "./repl-focus.test.ts"];
+    const sources: string[] = [];
+    for (const suite of suites) {
+      sources.push(yield* readTextFile(fileURLToPath(new URL(suite, import.meta.url))));
+    }
     for (const mutation of MUTATIONS) {
-      expect({ mutation, used: source.includes(mutation) }).toEqual({ mutation, used: true });
+      const used = sources.some((source) => source.includes(mutation));
+      expect({ mutation, used }).toEqual({ mutation, used: true });
     }
   });
 

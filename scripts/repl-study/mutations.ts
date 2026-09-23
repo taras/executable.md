@@ -28,6 +28,24 @@ export const MUTATIONS = [
   "never-tick",
   /** Reconstruct a moment as a half-finished animation rather than a state. */
   "restore-mid-animation",
+  /** Move focus when a background update arrives. */
+  "steal-focus-on-background",
+  /** Let Tab escape an open drawer into the panes behind it. */
+  "leak-drawer-trap",
+  /** Admit a target the map shows but the registry excludes. */
+  "focus-hidden-target",
+  /** Push a navigation entry for every keystroke in the draft. */
+  "push-draft-edits",
+  /** Rebuild the route from the profile instead of preserving it. */
+  "drop-route-on-resize",
+  /** Leave focus where it was when a drawer closes. */
+  "forget-drawer-invoker",
+  /** Permit a mutation while a recorded moment is under inspection. */
+  "mutate-while-inspecting",
+  /** Drop `ScanResult.pending`, so a lone Escape is never delivered. */
+  "swallow-pending-escape",
+  /** Accept only a synthetic Tab+shift as reverse traversal. */
+  "ignore-backtab",
 ] as const;
 
 export type Mutation = (typeof MUTATIONS)[number];

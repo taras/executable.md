@@ -14,23 +14,24 @@
  */
 
 import { alternateBuffer, createInput, cursor, settings } from "@bomb.sh/tty";
-import type { Input, InputEvent, Setting, Term } from "@bomb.sh/tty";
+import type { Input, InputEvent, ScanResult, Setting, Term } from "@bomb.sh/tty";
 import { createSignal, ensure, resource, sleep, spawn, until } from "effection";
 import type { Operation, Signal, Task } from "effection";
 
 import { fixture, fixtures } from "./fixtures.ts";
-import { FIXTURE_NAMES } from "./model.ts";
 import type { Fixture, FixtureName } from "./model.ts";
-import { layoutFor, SURFACES } from "./layout.ts";
-import { renderScreen } from "./render.ts";
+import { SURFACES } from "./layout.ts";
 import { transcriptLines } from "./render.ts";
-import { initialView, moveSurface, returnToHead, scrollBy, scrubBy, toggleDrawer } from "./view.ts";
-import type { View } from "./view.ts";
+import type { FocusView } from "./render.ts";
+import { initialView } from "./store.ts";
+import { asKey, fixtureFor, focusIn, hydrate, mapOf, reduce, viewOf } from "./store.ts";
+import type { HarnessEvent, ReplState, View } from "./store.ts";
+import { journalThrough, markerShowing } from "./journal.ts";
+import { formatRoute } from "./route.ts";
 import { RendererCapacityError, useTerm } from "./capture.ts";
 import { renderInto } from "./capture.ts";
 import type { Mutation } from "./mutations.ts";
 import {
-  JOURNEY,
   motionAt,
   playbackFrom,
   segmentDurationMs,
@@ -143,11 +144,7 @@ export function measureTerminal(): { cols: number; rows: number } {
   return { cols: ASSUMED_SIZE.cols, rows: ASSUMED_SIZE.rows };
 }
 
-export type HarnessEvent =
-  | { readonly kind: "key"; readonly event: InputEvent }
-  | { readonly kind: "resize" }
-  | { readonly kind: "tick"; readonly advanceMs: number }
-  | { readonly kind: "quit" };
+export type { HarnessEvent };
 
 export interface HarnessState {
   readonly view: View;
@@ -157,81 +154,42 @@ export interface HarnessState {
   readonly quit: boolean;
 }
 
-function fixtureAt(index: number): FixtureName {
-  return FIXTURE_NAMES[Math.max(0, Math.min(FIXTURE_NAMES.length - 1, index))];
-}
-
 /**
- * How one event changes what is shown.
+ * One chunk of raw keystrokes, decoded completely.
  *
- * Pure, so the same transitions the interactive harness performs can be
- * replayed without a terminal.
+ * A lone `ESC` is ambiguous until the terminal has had its say, so the decoder
+ * buffers it and asks to be re-scanned with an empty buffer after its own
+ * latency. A harness that reads `scanned.events` and drops `scanned.pending`
+ * swallows every Escape the user presses — the key is documented, the reducer
+ * handles it, and pressing it does nothing. Honouring `pending` here is what
+ * makes Escape arrive at all.
+ *
+ * The flush is bounded: the decoder reports `pending` again when re-scanned
+ * before its latency has elapsed, and a loop that trusted it without a ceiling
+ * would spin on a terminal whose clock disagreed.
  */
-export function reduce(state: HarnessState, event: HarnessEvent): HarnessState {
-  if (event.kind === "quit") {
-    return { ...state, quit: true };
-  }
-  if (event.kind === "resize") {
-    const size = measureTerminal();
-    return { ...state, cols: size.cols, rows: size.rows };
-  }
-  if (event.kind === "tick") {
-    // A frame passing changes what is drawn, never what is shown: the motion is
-    // a function of elapsed time, which the frame loop owns.
-    return state;
-  }
-  const key = event.event;
-  if (key.type !== "keydown") {
-    return state;
-  }
-  if (key.code === "q" || (key.ctrl === true && key.code === "c")) {
-    return { ...state, quit: true };
-  }
-  const digit = Number(key.code);
-  if (!Number.isNaN(digit) && digit >= 1 && digit <= FIXTURE_NAMES.length) {
-    const next = fixture(fixtureAt(digit - 1));
-    return { ...state, fixture: next, view: initialView(next) };
-  }
-  const layout = layoutFor({
-    cols: state.cols,
-    rows: state.rows,
-    drawer: state.fixture.drawer !== undefined && state.view.drawerOpen,
-    surface: state.view.surface,
-  });
-  const width = Math.max(1, (layout.transcript?.width ?? state.cols) - 2);
-  const height = layout.transcript?.height ?? state.rows;
-  const total = state.fixture.entry ? transcriptLines(state.fixture.entry, width).length : 0;
-  const limit = Math.max(0, total - Math.max(1, height - 3));
-  const checkpoints = state.fixture.history.checkpoints.length;
+const FLUSH_ATTEMPTS = 4;
 
-  if (key.code === "ArrowUp") {
-    return { ...state, view: scrollBy(state.view, -1, limit) };
+export function* scanKeys(
+  input: Input,
+  chunk: Uint8Array | undefined,
+  deliver: (event: InputEvent) => void,
+  mutation?: Mutation,
+): Operation<void> {
+  const dispatch = (scanned: ScanResult): ScanResult["pending"] => {
+    for (const event of scanned.events) {
+      deliver(event);
+    }
+    return scanned.pending;
+  };
+  let pending = dispatch(input.scan(chunk));
+  for (let attempt = 0; attempt < FLUSH_ATTEMPTS; attempt += 1) {
+    if (pending === undefined || mutation === "swallow-pending-escape") {
+      return;
+    }
+    yield* sleep(pending.delay);
+    pending = dispatch(input.scan());
   }
-  if (key.code === "ArrowDown") {
-    return { ...state, view: scrollBy(state.view, 1, limit) };
-  }
-  if (key.code === "PageUp") {
-    return { ...state, view: scrollBy(state.view, -Math.max(1, height - 4), limit) };
-  }
-  if (key.code === "PageDown") {
-    return { ...state, view: scrollBy(state.view, Math.max(1, height - 4), limit) };
-  }
-  if (key.code === "ArrowLeft") {
-    return { ...state, view: scrubBy(state.view, -1, checkpoints) };
-  }
-  if (key.code === "ArrowRight") {
-    return { ...state, view: scrubBy(state.view, 1, checkpoints) };
-  }
-  if (key.code === "Escape") {
-    return { ...state, view: returnToHead(state.view) };
-  }
-  if (key.code === "Tab") {
-    return { ...state, view: moveSurface(state.view, key.shift === true ? -1 : 1) };
-  }
-  if (key.code === "d") {
-    return { ...state, view: toggleDrawer(state.view) };
-  }
-  return state;
 }
 
 /** One frame drawn, and whether the renderer is still moving. */
@@ -247,6 +205,7 @@ function draw(
   mutation?: Mutation,
   motion?: Motion,
   deltaMs = 0,
+  focus?: FocusView,
 ): Painted {
   // One render path for the harness and for the captures, so what a person sees
   // in a terminal and what a golden records cannot drift apart.
@@ -256,6 +215,7 @@ function draw(
     size: { cols: state.cols, rows: state.rows },
     mutation,
     motion,
+    focus,
     // The harness counts in milliseconds and the renderer in seconds. The
     // conversion happens here, once, at the only place the two meet.
     deltaSeconds: deltaMs / 1000,
@@ -301,9 +261,51 @@ export interface TraceEntry {
   readonly fixture: FixtureName;
 }
 
+/**
+ * The state a run opens at.
+ *
+ * `--route` says it outright. A fixture name says it indirectly: the journal
+ * knows which marker reconstructs that moment, and a moment with a suspension
+ * waiting opens the drawer that is waiting, because that is what an execution
+ * suspending does.
+ */
+export function openingState(options: {
+  readonly fixture: FixtureName;
+  readonly route?: string;
+  readonly head?: string;
+  readonly focusMap?: boolean;
+}): ReplState {
+  const head = options.head ?? markerShowing(options.fixture);
+  const journal = journalThrough(head);
+  if (options.route !== undefined) {
+    const opened = hydrate(options.route, journal);
+    return { ...opened, overlay: options.focusMap === true };
+  }
+  const start = {
+    execution: "e1",
+    surface: "transcript" as const,
+    scopes: [],
+    drawers: [],
+    draft: "",
+  };
+  const opened = hydrate(formatRoute(start), journal);
+  const waiting = opened.moment.suspension;
+  const routed =
+    waiting === undefined
+      ? opened
+      : hydrate(formatRoute({ ...start, drawers: [waiting] }), journal);
+  return { ...routed, overlay: options.focusMap === true };
+}
+
 export interface InteractiveOptions {
   readonly fixture: FixtureName;
   readonly mutation?: Mutation;
+  /** Open at this URL instead of at a fixture's own moment. */
+  readonly route?: string;
+  /** How far the execution has recorded, which a URL never carries. */
+  readonly head?: string;
+  /** Start with the numbered focus map drawn. */
+  readonly focusMap?: boolean;
   /** Start this playback immediately, rather than waiting for `p`. */
   readonly play?: Playback;
   /** Play the whole approved story, holds and all, with no keystrokes. */
@@ -333,9 +335,13 @@ export function* runInteractive(options: InteractiveOptions): Operation<void> {
     Deno.stdout.writeSync(bytes);
   };
   const size = measureTerminal();
+  // One owner for where the person is. The journey below is a projector rather
+  // than a place: while it runs it supplies the moment on screen, and the store
+  // is what every keystroke acts on.
+  let repl = openingState(options);
   let state: HarnessState = {
-    view: initialView(fixture(options.fixture)),
-    fixture: fixture(options.fixture),
+    view: viewOf(repl),
+    fixture: fixtureFor(repl),
     cols: size.cols,
     rows: size.rows,
     quit: false,
@@ -350,7 +356,7 @@ export function* runInteractive(options: InteractiveOptions): Operation<void> {
   const events = createSignal<HarnessEvent, never>();
   const subscription = yield* events;
 
-  yield* useSignalListener("SIGWINCH", () => events.send({ kind: "resize" }));
+  yield* useSignalListener("SIGWINCH", () => events.send({ kind: "resize", ...measureTerminal() }));
   yield* useSignalListener("SIGINT", () => events.send({ kind: "quit" }));
   yield* useSignalListener("SIGTERM", () => events.send({ kind: "quit" }));
 
@@ -362,10 +368,14 @@ export function* runInteractive(options: InteractiveOptions): Operation<void> {
         events.send({ kind: "quit" });
         return;
       }
-      const scanned = input.scan(chunk.value);
-      for (const event of scanned.events) {
-        events.send({ kind: "key", event });
-      }
+      // The flush runs inside the reader task, so a cancelled session takes it
+      // along and nothing re-scans into a terminal that has been restored.
+      yield* scanKeys(
+        input,
+        chunk.value,
+        (event) => events.send({ kind: "key", event }),
+        options.mutation,
+      );
     }
   });
 
@@ -390,6 +400,11 @@ export function* runInteractive(options: InteractiveOptions): Operation<void> {
   const show = (name: FixtureName) => {
     const target = fixture(name);
     state = { ...state, fixture: target, view: initialView(target) };
+  };
+
+  /** Where the store says we are, once the projector is not overriding it. */
+  const follow = () => {
+    state = { ...state, fixture: fixtureFor(repl), view: viewOf(repl), quit: repl.quit };
   };
 
   if (journey !== undefined) {
@@ -473,9 +488,15 @@ export function* runInteractive(options: InteractiveOptions): Operation<void> {
     // out.
     const repeated = journey !== undefined && segment?.kind === "hold" && held === label;
     if (!repeated) {
+      const measured = { cols: state.cols, rows: state.rows };
+      const focus: FocusView = {
+        here: focusIn(repl, measured, options.mutation),
+        map: mapOf(repl, measured, options.mutation),
+        overlay: repl.overlay,
+      };
       let painted: Painted;
       try {
-        painted = draw(term, state, write, options.mutation, motion, deltaMs);
+        painted = draw(term, state, write, options.mutation, motion, deltaMs, focus);
       } catch (error) {
         if (!(error instanceof RendererCapacityError)) {
           throw error;
@@ -483,8 +504,8 @@ export function* runInteractive(options: InteractiveOptions): Operation<void> {
         // The renderer ran out of room to measure text, which a long run in a
         // wide terminal will do. A new one starts that cache again and repaints
         // the whole screen, so the person watching sees nothing but a frame.
-        term = yield* useTerm({ cols: state.cols, rows: state.rows });
-        painted = draw(term, state, write, options.mutation, motion, 0);
+        term = yield* useTerm(measured);
+        painted = draw(term, state, write, options.mutation, motion, 0, focus);
       }
       frames += 1;
       options.trace?.push({
@@ -564,7 +585,7 @@ export function* runInteractive(options: InteractiveOptions): Operation<void> {
     // A keystroke or a resize is not time passing, so the renderer is told no
     // time has passed: a transition in flight keeps its own pace instead of
     // jumping forward because somebody typed.
-    const pressed = next.value.kind === "key" ? next.value.event : undefined;
+    const pressed = next.value.kind === "key" ? asKey(next.value.event) : undefined;
     if (pressed !== undefined && pressed.type === "keydown") {
       const code = pressed.code;
       if (code === "p") {
@@ -584,10 +605,34 @@ export function* runInteractive(options: InteractiveOptions): Operation<void> {
     // Ignoring a resize means ignoring it completely — the renderer keeps the
     // dimensions it had, and goes on addressing cells the terminal no longer
     // has.
-    state =
-      next.value.kind === "resize" && options.mutation === "skip-resize-update"
-        ? state
-        : reduce(state, next.value);
+    if (next.value.kind === "resize") {
+      if (options.mutation !== "skip-resize-update") {
+        const measured = { cols: next.value.cols, rows: next.value.rows };
+        state = { ...state, cols: measured.cols, rows: measured.rows };
+        repl = reduce(repl, next.value, {
+          size: measured,
+          mutation: options.mutation,
+          scrollLimit: 0,
+        });
+        if (journey === undefined && playback === undefined) {
+          follow();
+        }
+      }
+    } else {
+      const lines = state.fixture.entry
+        ? transcriptLines(state.fixture.entry, Math.max(1, state.cols - 2)).length
+        : 0;
+      repl = reduce(repl, next.value, {
+        size: { cols: state.cols, rows: state.rows },
+        mutation: options.mutation,
+        scrollLimit: Math.max(0, lines - Math.max(1, state.rows - 8)),
+      });
+      if (journey === undefined && playback === undefined) {
+        follow();
+      } else {
+        state = { ...state, quit: repl.quit };
+      }
+    }
     if (state.quit) {
       return;
     }
