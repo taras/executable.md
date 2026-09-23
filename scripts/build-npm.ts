@@ -11,14 +11,27 @@
  * Everything published is derived from the member's own deno.json (name,
  * exports) and package.json (dependencies, description, bin) — those manifests
  * are the single source of truth. Internal @executablemd siblings are declared
- * as external npm dependencies (resolved to the sibling's own version), never
- * inlined, so each published package resolves them from npm.
+ * as external npm dependencies, never inlined.
  *
- * `DNT_LOCAL_SIBLINGS=1` builds each internal sibling first and depends on those
- * artifacts by path instead of by published version, so a branch can build and
- * type-check against its own workspace sources. The resulting package.json names
- * local directories and is therefore unpublishable; release workflows never set
- * the variable.
+ * A build happens in two phases, and the split is what keeps a release off the
+ * registry's clock.
+ *
+ * **Phase 1 builds the local closure.** The requested package's internal
+ * dependencies are built first, depth-first, each at most once, and handed to
+ * dnt as absolute `file:` ranges pointing at the artifacts this same invocation
+ * produced. Nothing asks npm for a package from the same release.
+ *
+ * **Phase 2 finalizes every manifest together**, once the last dnt call has
+ * returned, replacing each internal `file:` range with the sibling's
+ * `^<version>`. It has to be every manifest at once: in a chain A → B → C,
+ * rewriting B the moment its own dnt call returns puts C's registry version
+ * back in front of A's install, which is the race one level down. No install or
+ * typecheck runs after finalization begins, and a surviving local reference
+ * fails the build rather than reaching `npm publish`.
+ *
+ * `DNT_SKIP_INSTALL=1` still skips the install and typecheck for a leaf package
+ * that declares no `workspace:*` dependency, for exercising the tooling. It
+ * refuses anything else, and release workflows never set it.
  */
 
 import { ensure, exit, main, scoped, until } from "effection";
@@ -126,36 +139,69 @@ interface WorkspaceMember {
   version: string;
 }
 
+/**
+ * What one invocation reports as it runs. Diagnostic observation only: an
+ * observer chooses no build, no dependency resolution and no finalization
+ * policy, which is what keeps the regression watching the real path instead of
+ * a second one.
+ */
+export type BuildEvent =
+  | {
+      readonly type: "package-build-started";
+      readonly package: string;
+      /** Exactly what dnt was handed, so a test can see the local ranges. */
+      readonly dependencies: Readonly<Record<string, string>>;
+    }
+  | { readonly type: "package-build-completed"; readonly package: string }
+  | { readonly type: "closure-finalization-started" }
+  | { readonly type: "package-manifest-finalized"; readonly package: string };
+
+export interface BuildNpmOptions {
+  /** The workspace root the closure is built from. */
+  repoRoot: URL;
+  /** The requested member's directory, e.g. `packages/cli`. */
+  package: string;
+  /** The npm version for the requested artifact; siblings use their own. */
+  version: string;
+  observe?: (event: BuildEvent) => Operation<void>;
+}
+
+/** One package this invocation built, awaiting closure-wide finalization. */
+interface BuiltArtifact {
+  name: string;
+  dir: string;
+  /** Internal dependency name -> the workspace version to finalize it to. */
+  internal: Record<string, string>;
+}
+
 interface BuildContext {
   repoRoot: URL;
   rootDeno: z.infer<typeof RootDenoSchema>;
   members: Record<string, WorkspaceMember>;
-  /** Depend on locally built sibling artifacts instead of published versions. */
-  localSiblings: boolean;
   skipInstall: boolean;
-  /** Package names already built in this process, so a diamond builds once. */
-  built: Set<string>;
+  /** Artifacts already built in this process, so a diamond builds once. */
+  built: Map<string, BuiltArtifact>;
+  observe: (event: BuildEvent) => Operation<void>;
 }
 
-await main(function* (args) {
-  const pkgArg = args[0];
-  const version = args[1] ?? "0.0.0-dev";
+/**
+ * npm resolves a relative `file:` against the dependent's own location, which
+ * differs for a sibling installed under another package's node_modules, so the
+ * range this invocation hands dnt is absolute.
+ */
+function localRange(repoRoot: URL, dir: string): string {
+  return `file:${fromFileUrl(new URL(`${dir}/npm`, repoRoot))}`;
+}
 
-  if (!pkgArg) {
-    console.error("usage: build-npm.ts <package-dir> [version]");
-    yield* exit(1);
-    return;
-  }
+function* observeNothing(): Operation<void> {}
 
-  // Before anything is emitted. Copying the documentation assets is not the
-  // same as validating them: a package built from a set that has drifted from
-  // the components it documents would install cleanly and refuse the first time
-  // somebody asked it for documentation. The same assembly the run profile uses
-  // runs here, so a missing, unknown or duplicated section fails the build for
-  // exactly the reason it would fail a run.
-  yield* validateDocumentation();
-
-  const repoRoot = new URL("../", import.meta.url);
+/**
+ * Build `options.package` and its internal closure, and leave every generated
+ * manifest publishable. This is the whole builder; the command below is an
+ * adapter over it, so the regression exercises the release path itself.
+ */
+export function* buildNpmPackage(options: BuildNpmOptions): Operation<void> {
+  const { repoRoot } = options;
 
   const rootDeno = RootDenoSchema.parse(
     JSON.parse(yield* readTextFile(new URL("deno.json", repoRoot))),
@@ -175,15 +221,18 @@ await main(function* (args) {
     }
   }
 
-  yield* buildPackage(pkgArg, version, {
+  const ctx: BuildContext = {
     repoRoot,
     rootDeno,
     members,
-    localSiblings: Deno.env.get("DNT_LOCAL_SIBLINGS") === "1",
     skipInstall: Deno.env.get("DNT_SKIP_INSTALL") === "1",
-    built: new Set(),
-  });
-});
+    built: new Map(),
+    observe: options.observe ?? observeNothing,
+  };
+
+  yield* buildPackage(options.package, options.version, ctx);
+  yield* finalizeClosure(ctx);
+}
 
 function* buildPackage(pkgArg: string, version: string, ctx: BuildContext): Operation<void> {
   const { repoRoot, rootDeno, skipInstall } = ctx;
@@ -200,9 +249,10 @@ function* buildPackage(pkgArg: string, version: string, ctx: BuildContext): Oper
   );
 
   // Dependencies come from package.json verbatim, except internal siblings
-  // (workspace:* protocol) which resolve to the sibling's own version range —
-  // or, with local siblings, to the artifact this process just built for it.
+  // (workspace:* protocol), which are built first and named by the artifact
+  // this invocation just produced. Phase 2 turns those into version ranges.
   const dependencies: Record<string, string> = {};
+  const internal: Record<string, string> = {};
   for (const [name, range] of Object.entries(packageJson.dependencies ?? {})) {
     if (!name.startsWith(INTERNAL_SCOPE)) {
       dependencies[name] = range;
@@ -210,19 +260,17 @@ function* buildPackage(pkgArg: string, version: string, ctx: BuildContext): Oper
     }
     const member = ctx.members[name];
     if (!member) {
-      throw new Error(`no workspace version found for internal dependency "${name}"`);
-    }
-    if (!ctx.localSiblings) {
-      dependencies[name] = `^${member.version}`;
-      continue;
+      // No registry fallback: reaching npm for an unmapped internal name is how
+      // a misspelled or removed member would silently restore the release race.
+      throw new Error(
+        `"${denoJson.name}" depends on internal package "${name}", which is not a workspace member`,
+      );
     }
     if (!ctx.built.has(name)) {
       yield* buildPackage(member.dir, member.version, ctx);
     }
-    // An absolute path: npm resolves a relative `file:` against the dependent's
-    // own location, which differs for a sibling installed under another
-    // package's node_modules.
-    dependencies[name] = `file:${fromFileUrl(new URL(`${member.dir}/npm`, repoRoot))}`;
+    internal[name] = member.version;
+    dependencies[name] = localRange(repoRoot, member.dir);
   }
 
   // Library entry points come from deno.json exports. An executable comes from
@@ -311,6 +359,8 @@ function* buildPackage(pkgArg: string, version: string, ctx: BuildContext): Oper
     ),
   );
 
+  yield* ctx.observe({ type: "package-build-started", package: denoJson.name, dependencies });
+
   // The build tree is removed when this scope closes, before the finished
   // package is completed below.
   yield* scoped(function* () {
@@ -323,10 +373,10 @@ function* buildPackage(pkgArg: string, version: string, ctx: BuildContext): Oper
         importMap: join(srcCopy, "deno.json"),
         shims: { deno: false },
         test: false,
-        // Internal @executablemd deps are published tier-by-tier, so a downstream
-        // package's siblings are already on npm when it builds in CI. For local
-        // builds (before siblings are published) set DNT_SKIP_INSTALL=1 to skip
-        // the npm install + type check that would otherwise 404 on them.
+        // The install resolves internal siblings from the artifacts phase 1
+        // already built, so it never reaches npm for a package from this
+        // release. DNT_SKIP_INSTALL=1 drops the install and typecheck entirely,
+        // which only a leaf package may ask for (refused above).
         skipNpmInstall: skipInstall,
         typeCheck: skipInstall ? false : "single",
         declaration: "separate",
@@ -383,8 +433,153 @@ function* buildPackage(pkgArg: string, version: string, ctx: BuildContext): Oper
     yield* copyFile(new URL(asset, pkgDir), target);
   }
 
-  ctx.built.add(denoJson.name);
-  const provenance =
-    ctx.localSiblings && workspaceDeps.length > 0 ? " (local siblings — not publishable)" : "";
-  console.log(`built ${denoJson.name}@${version} -> ${pkgArg}/npm${provenance}`);
+  ctx.built.set(denoJson.name, { name: denoJson.name, dir: pkgArg, internal });
+  yield* ctx.observe({ type: "package-build-completed", package: denoJson.name });
+  console.log(`built ${denoJson.name}@${version} -> ${pkgArg}/npm`);
+}
+
+/** The dependency maps npm reads, so validation misses none of them. */
+const DEPENDENCY_FIELDS = [
+  "dependencies",
+  "devDependencies",
+  "peerDependencies",
+  "optionalDependencies",
+];
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/** Every string anywhere in `value`, so a workspace path cannot hide in a field nobody checks. */
+function* strings(value: unknown): Generator<string> {
+  if (typeof value === "string") {
+    yield value;
+    return;
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      yield* strings(item);
+    }
+    return;
+  }
+  if (isRecord(value)) {
+    for (const item of Object.values(value)) {
+      yield* strings(item);
+    }
+  }
+}
+
+/**
+ * Why `manifest` cannot be published, or `undefined` when it can.
+ *
+ * A release gate rather than cleanup. A known internal local range is rewritten
+ * by the caller before this runs; anything local still standing is an
+ * unexpected dependency, and normalizing it away would be the one edit that
+ * makes an unpublishable artifact look fine.
+ */
+function unpublishable(manifest: unknown, repoRoot: URL): string | undefined {
+  if (!isRecord(manifest)) {
+    return "it is not an object";
+  }
+
+  for (const field of DEPENDENCY_FIELDS) {
+    const map = manifest[field];
+    if (!isRecord(map)) {
+      continue;
+    }
+    for (const [name, range] of Object.entries(map)) {
+      if (
+        typeof range === "string" &&
+        (range.startsWith("workspace:") || range.startsWith("file:"))
+      ) {
+        return `${field}["${name}"] is the local range ${range}`;
+      }
+    }
+  }
+
+  const nativeRoot = fromFileUrl(repoRoot).replace(new RegExp(`${sep}$`), "");
+  const urlRoot = repoRoot.href.replace(/\/$/, "");
+  for (const value of strings(manifest)) {
+    if (value.includes(nativeRoot)) {
+      return `it names the workspace path ${nativeRoot}`;
+    }
+    if (value.includes(urlRoot)) {
+      return `it names the workspace URL ${urlRoot}`;
+    }
+  }
+
+  return undefined;
+}
+
+/**
+ * Phase 2. Every artifact this invocation produced becomes publishable at once,
+ * after the last dnt call returned — see the two-phase note at the top of this
+ * file for why it cannot happen package by package.
+ */
+function* finalizeClosure(ctx: BuildContext): Operation<void> {
+  yield* ctx.observe({ type: "closure-finalization-started" });
+
+  const candidates: Array<{ name: string; url: URL; manifest: Record<string, unknown> }> = [];
+
+  for (const artifact of ctx.built.values()) {
+    const url = new URL(`${artifact.dir}/npm/package.json`, ctx.repoRoot);
+    const manifest: unknown = JSON.parse(yield* readTextFile(url));
+    if (!isRecord(manifest)) {
+      throw new Error(`${artifact.name}'s generated package.json is not an object`);
+    }
+    for (const field of DEPENDENCY_FIELDS) {
+      const map = manifest[field];
+      if (!isRecord(map)) {
+        continue;
+      }
+      for (const [name, version] of Object.entries(artifact.internal)) {
+        const member = ctx.members[name];
+        if (member && map[name] === localRange(ctx.repoRoot, member.dir)) {
+          map[name] = `^${version}`;
+        }
+      }
+    }
+    candidates.push({ name: artifact.name, url, manifest });
+  }
+
+  // Every manifest is judged before any is written, so a closure that cannot be
+  // published in full is never half-published.
+  for (const candidate of candidates) {
+    const refusal = unpublishable(candidate.manifest, ctx.repoRoot);
+    if (refusal !== undefined) {
+      throw new Error(`${candidate.name} cannot be published: ${refusal}`);
+    }
+  }
+
+  for (const candidate of candidates) {
+    yield* writeTextFile(candidate.url, `${JSON.stringify(candidate.manifest, null, 2)}\n`);
+    yield* ctx.observe({ type: "package-manifest-finalized", package: candidate.name });
+  }
+}
+
+if (import.meta.main) {
+  await main(function* (args) {
+    const pkgArg = args[0];
+    const version = args[1] ?? "0.0.0-dev";
+
+    if (!pkgArg) {
+      console.error("usage: build-npm.ts <package-dir> [version]");
+      yield* exit(1);
+      return;
+    }
+
+    // Before anything is emitted. Copying the documentation assets is not the
+    // same as validating them: a package built from a set that has drifted from
+    // the components it documents would install cleanly and refuse the first
+    // time somebody asked it for documentation. The same assembly the run
+    // profile uses runs here, so a missing, unknown or duplicated section fails
+    // the build for exactly the reason it would fail a run.
+    yield* validateDocumentation();
+
+    yield* buildNpmPackage({
+      repoRoot: new URL("../", import.meta.url),
+      package: pkgArg,
+      version,
+    });
+  });
 }

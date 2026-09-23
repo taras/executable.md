@@ -239,6 +239,34 @@ describe("publish-packages.yml membership", () => {
 });
 
 /**
+ * The reusable publish job builds once. Four attempts with sleeps between them
+ * were how this repository tolerated npm indexing a sibling the previous job
+ * had just published; they bounded the race rather than removing it, and three
+ * consecutive releases lost to it anyway (#843). The builder now constructs the
+ * closure from the checkout, so a retry here would only be timing-based
+ * recovery for a wait that no longer exists.
+ */
+describe("publish-one.yml build step", () => {
+  it("invokes the builder once, with no propagation retry", function* () {
+    const commands = (yield* readTextFile(PUBLISH_ONE_WORKFLOW))
+      .split("\n")
+      .filter((line) => !line.trim().startsWith("#"))
+      .join("\n");
+
+    const invocations = commands.split("scripts/build-npm.ts").length - 1;
+    expect(invocations).toBe(1);
+
+    for (const timing of ["sleep", "for attempt", "attempts"]) {
+      expect({ timing, present: commands.includes(timing) }).toEqual({ timing, present: false });
+    }
+
+    // The guard that makes a tag rerun idempotent is a different mechanism and
+    // stays: removing the retry must not remove it.
+    expect(commands).toContain("is already on npm — skipping");
+  });
+});
+
+/**
  * Both workflows refuse a tag the manifests do not declare, and they have to
  * refuse it for the same set of manifests. v0.13.0 is what it costs when they
  * disagree: `release.yml` read `packages/cli/deno.json` alone, passed, and

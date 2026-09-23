@@ -165,9 +165,17 @@ documents at the revision it checks.
   if the binary build fails. It then fans out one `publish-one.yml` call per
   package, ordered with `needs:` so dependencies publish before dependents
   (leaves run in parallel), plus one `jsr` job for the whole workspace.
+
+  That ordering is a publication guarantee, not a build one. Each job builds its
+  own closure from the tag's checkout, so no job waits for another's artifact to
+  reach npm. What the edges still buy is that a failed upstream publish
+  withholds every dependent: whatever npm ends up holding is dependency-closed,
+  and never a dependent whose dependency never published.
 - **`publish-one.yml`** (`workflow_call`, inputs `package`/`version`): builds
   one package with dnt (`scripts/build-npm.ts`) and publishes it to npm. Runs in
-  the `npm-publish` environment. npm publishing is idempotent: it skips an
+  the `npm-publish` environment. The build is one attempt: it constructs its own
+  closure from the checkout, so there is no registry propagation left for a
+  retry to wait out. npm publishing is idempotent: it skips an
   already-published version. Library entry points come from the member's
   `deno.json` `exports`; an executable comes from its `package.json` `bin`, so
   the npm CLI ships `packages/cli/src/node.ts` while JSR gets the Deno
@@ -180,28 +188,45 @@ something a package cannot ship, because npm strips `.npmrc` from published
 tarballs. Verify it on the emitted manifest: after a `scripts/build-npm.ts` run,
 `packages/<name>/npm/package.json` declares no `@jsr/*` dependency.
 
-### Local builds
+### Building a package
 
-A normal build installs the package's dependencies from npm and resolves its
-siblings to their published versions. That is the path `publish-one.yml` runs.
+One build serves both purposes, and it runs in two phases.
 
-`DNT_SKIP_INSTALL=1` skips that install and the type check, for exercising the
-tooling before a version reaches npm. It covers only packages that declare no
-`workspace:*` dependencies. dnt emits through TypeScript, which resolves from
-the output directory, so the install is what supplies a sibling's declarations;
-without it a sibling resolves to its workspace source and lands in the package.
-The builder therefore refuses a package that declares one, naming the
-dependencies and leaving the output directory empty. Release workflows never set
-the variable.
+**Phase 1 builds the local closure.** The requested package's internal
+dependencies are built first — depth-first over the `workspace:*` dependencies,
+each at most once, so a diamond shares one artifact — and are handed to dnt as
+absolute `file:<package-dir>/npm` ranges naming the artifacts this same
+invocation produced. The install and the type check therefore resolve every
+sibling from the working tree, which is what a branch changing a shared API
+needs, and no build asks npm for a package from its own release.
 
-`DNT_LOCAL_SIBLINGS=1` builds each internal sibling first — depth-first over the
-`workspace:*` dependencies, once per package — and depends on those artifacts by
-absolute path (`file:<package-dir>/npm`) instead of by published version. The
-build therefore type-checks against the sources in the working tree, which is
-what a branch changing a shared API needs and what the `packages/cli` npm suite
-runs. The emitted package.json names local directories, so an artifact built this
-way is a verification artifact, never a publishable one. Release workflows never
-set the variable.
+**Phase 2 finalizes every manifest together**, once the last dnt call has
+returned. Each internal `file:` range becomes the sibling's `^<version>`, taken
+from the workspace manifests rather than from the version on the command line.
+It is the whole closure at once and not each package as its own build finishes:
+in a chain A → B → C, rewriting B early puts C's registry version back in front
+of A's install. No install or type check runs after finalization begins.
+
+**The result is publishable, or the build fails.** Before reporting success the
+builder inspects every generated manifest and refuses a dependency range
+beginning with `workspace:` or `file:`, and any string naming the checkout's
+path or `file:` URL. A known internal range is rewritten; anything else local is
+an unexpected dependency, and normalizing it away is exactly the edit that would
+make an unpublishable artifact look fine. An internal dependency that no
+workspace member declares is refused by name before its dependent is built —
+there is no registry fallback, because falling back is how a misspelled member
+would quietly restore the wait this design removes.
+
+There is no separate verification mode: the artifact a developer builds is the
+artifact a release publishes.
+
+`DNT_SKIP_INSTALL=1` skips the install and the type check, for exercising the
+tooling. It covers only packages that declare no `workspace:*` dependencies. dnt
+emits through TypeScript, which resolves from the output directory, so the
+install is what supplies a sibling's declarations; without it a sibling resolves
+to its workspace source and lands in the package. The builder therefore refuses
+a package that declares one, naming the dependencies and leaving the output
+directory empty. Release workflows never set the variable.
 
 ### JSR publishing
 
@@ -284,14 +309,17 @@ publish was never established, so nothing here relies on it.
 GitHub Actions as the package's trusted publisher with the values in §4's table.
 It never publishes `latest` — the first tagged release does that.
 
-The reservation is empty because the real artifact cannot be the record that
-makes publishing possible. A package declaring `workspace:*` dependencies
-resolves its siblings from the registry at build time, so its first artifact
-cannot be built until those siblings are published — and they cannot be
-published to a package that does not exist. An artifact with no dependencies at
-all has no such cycle, which is what lets a package declaring siblings —
-`@executablemd/acp` and `@executablemd/test-agent` among them — be bootstrapped
-at all.
+The reservation is empty because nothing about it needs to be otherwise. It
+exists to make the name resolvable so `npm trust` can be configured against it,
+and an empty artifact carries no dependency, no entry point and no claim about
+the package's contents for `latest` to inherit by accident.
+
+It is not a workaround for a build that cannot run. A package declaring
+`workspace:*` dependencies builds its siblings from the same checkout (§3), so
+its first artifact can be built before any of them is published. That was not
+true when this procedure was written, and the belief that it was is what made
+the reservation look forced rather than chosen; #152 records the version of this
+step that assumed it.
 
 `0.0.0-bootstrap.0` is never a release version, so `publish-one.yml`'s
 already-published guard never matches it: the first tagged release publishes its

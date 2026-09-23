@@ -5,12 +5,11 @@
  * `@executablemd/cli@0.5.0` off npm compiles fine under Deno and fails only
  * here.
  *
- * The build runs with `DNT_LOCAL_SIBLINGS=1`, so packages/cli and every
- * @executablemd sibling it depends on are built from this branch's sources. A
- * release build resolves those siblings from npm instead, which type-checks the
- * branch against the *previous* release — green until a branch changes a shared
- * API, then red for a reason the branch cannot fix. This is also the only
- * coverage of the local-sibling build mode.
+ * The build is the ordinary one a release runs, so packages/cli and every
+ * @executablemd sibling it depends on are built from this branch's sources and
+ * consumed as artifacts. Nothing here resolves a sibling from npm, which is
+ * what used to type-check a branch against the *previous* release — green until
+ * a branch changed a shared API, then red for a reason the branch could not fix.
  */
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
@@ -159,9 +158,6 @@ function* buildCliPackage(version: string): Operation<ProcessResult> {
       // match against the pinned 4.x prerelease — the same allowance
       // publish-one.yml makes.
       NPM_CONFIG_LEGACY_PEER_DEPS: "true",
-      // Build the siblings from this branch rather than resolving the last
-      // published versions of them.
-      DNT_LOCAL_SIBLINGS: "1",
     },
   }).join();
 }
@@ -450,6 +446,48 @@ describe("npm CLI package", { sanitizeOps: false, sanitizeResources: false }, ()
    * Run from a directory that is not the package, because the lookup must be
    * beside the module and never beside the caller.
    */
+  /**
+   * N6. The bin above ran against the closure this build produced, and the same
+   * closure has to be publishable afterwards — not a verification artifact that
+   * works locally and names directories npm would reject.
+   */
+  it("leaves every manifest in the closure publishable", function* () {
+    yield* ensure(removeNpmOutput);
+    const { version } = yield* readManifest(PKG_DIR, "deno.json");
+    const built = yield* buildCliPackage(version ?? "0.0.0-dev");
+    if (built.code !== 0) {
+      throw new Error(`build-npm.ts exited ${built.code}\n${built.stderr}`);
+    }
+
+    const source = yield* readManifest(PKG_DIR, "package.json");
+    const internal = Object.keys(source.dependencies ?? {}).filter((name) =>
+      name.startsWith("@executablemd/"),
+    );
+    // Non-vacuous: the CLI is the deepest closure in the workspace.
+    expect(internal.length).toBeGreaterThan(1);
+
+    const emitted = yield* readEmittedManifest();
+    for (const name of internal) {
+      expect({ name, range: emitted.dependencies?.[name] }).toEqual({
+        name,
+        range: `^${version}`,
+      });
+    }
+
+    // Every sibling the closure built, not only the root that was requested.
+    for (const name of internal) {
+      const dir = path.join("packages", name.slice("@executablemd/".length));
+      const sibling = yield* readManifest(dir, "npm", "package.json");
+      for (const [dependency, range] of Object.entries(sibling.dependencies ?? {})) {
+        expect({ sibling: name, dependency, local: range.startsWith("file:") }).toEqual({
+          sibling: name,
+          dependency,
+          local: false,
+        });
+      }
+    }
+  });
+
   it("reports the same <Plan> Component identity the source tree ships", function* () {
     yield* ensure(removeNpmOutput);
     const { version } = yield* readManifest(PKG_DIR, "deno.json");
