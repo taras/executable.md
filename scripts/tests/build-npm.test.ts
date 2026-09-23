@@ -194,6 +194,51 @@ function localRange(root: URL, name: string): string {
 }
 
 /**
+ * npm's supported packed-dependency layout, for the length of one case.
+ *
+ * By default npm symlinks a directory `file:` dependency, so a dependent can
+ * reach whatever the sibling's own build left in its `node_modules` — which
+ * hides what a finalized sibling would actually cost. `install-links=true`
+ * packs and installs it as an ordinary dependency instead, so the sibling's own
+ * manifest is the only thing that says where its dependencies come from.
+ *
+ * The cache and registry are invocation-private, and the registry is
+ * unreachable, so a range that has to be resolved fails here rather than
+ * depending on what npmjs.org happens to answer. The environment is restored
+ * however the case ends: every other build in this file is the ordinary one.
+ */
+function* usePackedLocalDependencies(): Operation<void> {
+  const cache = yield* useTempDirectory("npm-cache-");
+  const scopedEnvironment: Record<string, string> = {
+    NPM_CONFIG_INSTALL_LINKS: "true",
+    NPM_CONFIG_CACHE: cache,
+    NPM_CONFIG_REGISTRY: "http://127.0.0.1:1/",
+    NPM_CONFIG_AUDIT: "false",
+    NPM_CONFIG_FUND: "false",
+    // The unreachable registry is the expected outcome here, not a flake worth
+    // waiting out; npm's default retries would spend minutes proving it.
+    NPM_CONFIG_FETCH_RETRIES: "0",
+  };
+
+  const restore = new Map<string, string | undefined>(
+    Object.keys(scopedEnvironment).map((key) => [key, Deno.env.get(key)]),
+  );
+  // Registered before anything is set, so a halt between the two still restores.
+  yield* ensure(() => {
+    for (const [key, value] of restore) {
+      if (value === undefined) {
+        Deno.env.delete(key);
+      } else {
+        Deno.env.set(key, value);
+      }
+    }
+  });
+  for (const [key, value] of Object.entries(scopedEnvironment)) {
+    Deno.env.set(key, value);
+  }
+}
+
+/**
  * The builder's own two phases, observed on a closure npm has never published.
  *
  * The repository's own members cannot tell a local closure apart from a
@@ -233,8 +278,10 @@ describe("build-npm local closure", () => {
       *observe(event) {
         events.push(event);
         if (event.type === "package-build-started" && event.package === scoped("a")) {
-          // b is built by now; it must still be naming c locally, or a's own
-          // install would be resolving c from the registry.
+          // b is built by now, and must still name c locally. Once b
+          // describes c by a registry range, whether a's install survives
+          // depends on npm's layout and on b's own build residue — which is
+          // exactly what this contract refuses to rest on.
           atStartOfA.push(yield* manifestOf(root, "b"));
         }
       },
@@ -266,6 +313,54 @@ describe("build-npm local closure", () => {
         { name, leaked: false },
       );
     }
+  });
+
+  /**
+   * N4. What an early-finalized `b` costs, once `b` is installed the way a
+   * published `b` would be.
+   *
+   * The positive control comes first: packed local artifacts have to work
+   * before a failure afterwards means anything.
+   */
+  it("N4: a child finalized before its dependent builds fails that build", function* () {
+    yield* usePackedLocalDependencies();
+
+    const sound = yield* closureWorkspace();
+    yield* buildNpmPackage({ repoRoot: sound, package: "packages/a", version: FIXTURE_VERSION });
+    expect(yield* manifestOf(sound, "b")).toEqual({ [scoped("c")]: `^${FIXTURE_VERSION}` });
+
+    const broken = yield* closureWorkspace();
+    const events: BuildEvent[] = [];
+    let caught: unknown;
+
+    try {
+      yield* buildNpmPackage({
+        repoRoot: broken,
+        package: "packages/a",
+        version: FIXTURE_VERSION,
+        *observe(event) {
+          events.push(event);
+          if (event.type === "package-build-completed" && event.package === scoped("b")) {
+            const manifest = new URL("packages/b/npm/package.json", broken);
+            const parsed = JSON.parse(yield* readTextFile(manifest));
+            parsed.dependencies[scoped("c")] = `^${FIXTURE_VERSION}`;
+            yield* writeTextFile(manifest, `${JSON.stringify(parsed, null, 2)}\n`);
+          }
+        },
+      });
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught).toBeInstanceOf(Error);
+    // Before `a` completed and before anything was finalized: the closure never
+    // reaches a state where a half-rewritten set could be mistaken for output.
+    expect(events.map((event) => event.type)).not.toContain("closure-finalization-started");
+    expect(
+      events
+        .filter((event) => event.type === "package-build-completed")
+        .map((event) => event.package),
+    ).toEqual([scoped("c"), scoped("b")]);
   });
 
   it("N5: refuses an internal dependency no workspace member declares", function* () {

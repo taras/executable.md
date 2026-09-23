@@ -203,9 +203,14 @@ needs, and no build asks npm for a package from its own release.
 **Phase 2 finalizes every manifest together**, once the last dnt call has
 returned. Each internal `file:` range becomes the sibling's `^<version>`, taken
 from the workspace manifests rather than from the version on the command line.
-It is the whole closure at once and not each package as its own build finishes:
-in a chain A → B → C, rewriting B early puts C's registry version back in front
-of A's install. No install or type check runs after finalization begins.
+It is the whole closure at once and not each package as its own build
+finishes. A sibling rewritten early describes a dependency only the registry
+could supply, and whether the rest of the closure survives that depends on how
+npm installs a local directory and on what that sibling's own build left in its
+`node_modules`: nothing goes wrong under the default symlink layout, while under
+`install-links=true` the dependent's install fails. Finalizing at the end is
+what makes the build independent of both. No install or type check runs after
+finalization begins.
 
 **The result is publishable, or the build fails.** Before reporting success the
 builder inspects every generated manifest and refuses a dependency range

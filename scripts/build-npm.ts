@@ -23,11 +23,14 @@
  *
  * **Phase 2 finalizes every manifest together**, once the last dnt call has
  * returned, replacing each internal `file:` range with the sibling's
- * `^<version>`. It has to be every manifest at once: in a chain A → B → C,
- * rewriting B the moment its own dnt call returns puts C's registry version
- * back in front of A's install, which is the race one level down. No install or
- * typecheck runs after finalization begins, and a surviving local reference
- * fails the build rather than reaching `npm publish`.
+ * `^<version>`. It has to be every manifest at once: rewriting B when its own
+ * dnt call returns leaves it describing a dependency only the registry could
+ * supply, and whether A survives that then rests on how npm installs a local
+ * directory and on what B's own build left in its `node_modules` — no cost
+ * under the default symlink layout, a failed install under
+ * `install-links=true`. Finalizing the closure at the end depends on neither.
+ * No install or typecheck runs after finalization begins, and a surviving local
+ * reference fails the build rather than reaching `npm publish`.
  *
  * `DNT_SKIP_INSTALL=1` still skips the install and typecheck for a leaf package
  * that declares no `workspace:*` dependency, for exercising the tooling. It
