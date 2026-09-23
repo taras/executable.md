@@ -286,6 +286,7 @@ export function openingState(options: {
     surface: "transcript" as const,
     scopes: [],
     drawers: [],
+    inspect: false,
     draft: "",
   };
   const opened = hydrate(formatRoute(start), journal);

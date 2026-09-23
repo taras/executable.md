@@ -46,6 +46,14 @@ export const MUTATIONS = [
   "swallow-pending-escape",
   /** Accept only a synthetic Tab+shift as reverse traversal. */
   "ignore-backtab",
+  /** Move focus across a region boundary without moving the URL's surface. */
+  "keep-route-on-focus",
+  /** Forget the selected marker when a state is rebuilt from its URL. */
+  "drop-selection-on-hydrate",
+  /** Exit on Ctrl+C while a paused entry is still active. */
+  "exit-on-paused-interrupt",
+  /** Leave the sibling arrows inert, as if the locus had no siblings. */
+  "inert-sibling-arrows",
 ] as const;
 
 export type Mutation = (typeof MUTATIONS)[number];

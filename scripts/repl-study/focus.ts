@@ -120,11 +120,11 @@ function withinHistory(identity: string): boolean {
 
 function regionLabel(state: ReplState, region: (typeof REGIONS)[number]): string {
   if (region === "sessions") {
-    const journal = state.route.at !== undefined || state.selection >= 0;
+    const journal = state.selection >= 0;
     return journal ? "Journal · checkpoint list" : `Sessions · ${state.moment.sessions}`;
   }
   if (region === "transcript") {
-    return state.route.at === undefined ? "Transcript" : "Transcript · read-only";
+    return state.route.inspect ? "Transcript · read-only" : "Transcript";
   }
   if (region === "bindings") {
     return "Bindings";

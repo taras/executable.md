@@ -17,7 +17,7 @@
 
 import { fixture, drawerOf, isDrawerKind } from "./fixtures.ts";
 import type { DrawerKind } from "./fixtures.ts";
-import { fold, JOURNAL, journalThrough } from "./journal.ts";
+import { fold, JOURNAL, journalThrough, siblingsOf } from "./journal.ts";
 import type { JournalFixture, JournalRecord, Moment } from "./journal.ts";
 import { layoutFor, SURFACES } from "./layout.ts";
 import type { Layout, SurfaceName } from "./layout.ts";
@@ -25,7 +25,7 @@ import { focusMap, registry, resolve, step } from "./focus.ts";
 import type { FocusTarget } from "./focus.ts";
 import type { FixtureName, Fixture, TransportMode } from "./model.ts";
 import type { Mutation } from "./mutations.ts";
-import { formatRoute, navigationFor, parseRoute, topDrawer } from "./route.ts";
+import { formatRoute, navigationFor, parseRoute, surfaceFor, topDrawer } from "./route.ts";
 import type { Route, RouteChange, RouteSurface } from "./route.ts";
 
 /**
@@ -95,7 +95,12 @@ export interface ReplState {
   readonly focus: string;
   /** Disposable: the transcript window. */
   readonly anchor: number;
-  /** Disposable: which recorded marker the scrubber is on, or -1 for none. */
+  /**
+   * Which recorded marker the scrubber is on, or -1 for none.
+   *
+   * Derived from `route.at`, never set on its own. A selection that lived only
+   * in memory would render a state the URL could not reopen.
+   */
   readonly selection: number;
   /** Disposable: whether the F1 focus map is drawn. */
   readonly overlay: boolean;
@@ -111,31 +116,46 @@ export interface ReplState {
 function mint(
   route: Route,
   journal: JournalFixture,
-  rest: Omit<ReplState, "route" | "journal" | "moment">,
+  rest: Omit<ReplState, "route" | "journal" | "moment" | "selection">,
 ): ReplState {
-  return { route, journal, moment: fold(journal, route.at), ...rest };
+  return {
+    route,
+    journal,
+    // Selecting a marker and reconstructing it are different things: the fold
+    // follows the head until `inspect` says the reconstruction is open.
+    moment: fold(journal, route.inspect ? route.at : undefined),
+    selection:
+      route.at === undefined ? -1 : journal.findIndex((record) => record.marker === route.at),
+    ...rest,
+  };
 }
 
 /** Rebuild everything durable from a URL and a journal, with nothing else. */
-export function hydrate(url: string, journal: JournalFixture): ReplState {
+export function hydrate(url: string, journal: JournalFixture, mutation?: Mutation): ReplState {
   const parsed = parseRoute(url);
   if (!parsed.ok) {
     throw parsed.error;
   }
-  return hydrateRoute(parsed.value, journal);
+  return hydrateRoute(parsed.value, journal, mutation);
 }
 
-export function hydrateRoute(route: Route, journal: JournalFixture): ReplState {
-  return mint(route, journal, {
+export function hydrateRoute(
+  route: Route,
+  journal: JournalFixture,
+  mutation?: Mutation,
+): ReplState {
+  const rebuilt = mint(route, journal, {
     focus: `region:${route.surface}`,
     anchor: 0,
-    selection: -1,
     overlay: false,
     invokers: {},
     history: [],
     interrupts: 0,
     quit: false,
   });
+  // The control throws the selection away on the way back in, which is what a
+  // selection kept outside the URL would have done on every cold start.
+  return mutation === "drop-selection-on-hydrate" ? { ...rebuilt, selection: -1 } : rebuilt;
 }
 
 /** The semantic projection two states are compared by. Nothing disposable is in it. */
@@ -145,6 +165,7 @@ export interface Projection {
   readonly scopes: readonly string[];
   readonly drawers: readonly string[];
   readonly at?: string;
+  readonly inspect: boolean;
   readonly draft: string;
   readonly head?: string;
   readonly transport: TransportMode;
@@ -152,15 +173,25 @@ export interface Projection {
   readonly published: readonly string[];
   readonly suspension?: DrawerKind;
   readonly entry: Moment["entry"];
+  /** The marker the scrubber has selected, and what was true there. */
+  readonly selected?: string;
+  readonly selectedScope?: string;
+  readonly selectedPublished?: readonly string[];
 }
 
 export function projection(state: ReplState): Projection {
+  // The selected marker is folded for itself, so the projection carries the
+  // scope and the bindings a cold start has to come back with — not just the
+  // marker's name.
+  const selected =
+    state.selection < 0 ? undefined : fold(state.journal, state.journal[state.selection].marker);
   return {
     url: formatRoute(state.route),
     surface: state.route.surface,
     scopes: state.route.scopes,
     drawers: state.route.drawers,
     at: state.route.at,
+    inspect: state.route.inspect,
     draft: state.route.draft,
     head: state.journal[state.journal.length - 1]?.marker,
     transport: state.moment.transport,
@@ -168,6 +199,9 @@ export function projection(state: ReplState): Projection {
     published: state.moment.published,
     suspension: state.moment.suspension,
     entry: state.moment.entry,
+    selected: selected?.marker,
+    selectedScope: selected?.scope,
+    selectedPublished: selected?.published,
   };
 }
 
@@ -197,7 +231,7 @@ export function fixtureFor(state: ReplState): Fixture {
   const base = fixture(state.moment.shows);
   const top = topDrawer(state.route);
   const drawer = top !== undefined && isDrawerKind(top) ? drawerOf(top) : undefined;
-  const inspecting = state.route.at !== undefined;
+  const inspecting = state.route.inspect;
   const selected = state.journal[state.selection]?.at;
   return {
     ...base,
@@ -207,7 +241,9 @@ export function fixtureFor(state: ReplState): Fixture {
     history: {
       ...base.history,
       transport: state.moment.transport,
-      selectedAt: inspecting ? state.moment.at : selected,
+      // Selecting a marker marks the band; reconstructing it also reads
+      // read-only and carries the badge. Both show the same marker.
+      selectedAt: selected,
     },
   };
 }
@@ -255,7 +291,6 @@ function go(state: ReplState, route: Route, change: RouteChange, mutation?: Muta
   return mint(route, state.journal, {
     focus: state.focus,
     anchor: state.anchor,
-    selection: state.selection,
     overlay: state.overlay,
     invokers: state.invokers,
     history: navigation === "push" ? [...state.history, formatRoute(state.route)] : state.history,
@@ -268,7 +303,6 @@ function withJournal(state: ReplState, journal: JournalFixture): ReplState {
   return mint(state.route, journal, {
     focus: state.focus,
     anchor: state.anchor,
-    selection: state.selection,
     overlay: state.overlay,
     invokers: state.invokers,
     history: state.history,
@@ -285,6 +319,32 @@ function extendTo(state: ReplState, kind: JournalRecord["kind"]): ReplState {
     return state;
   }
   return withJournal(state, journalThrough(next.marker));
+}
+
+/**
+ * Put focus on one identity, and take the route with it.
+ *
+ * The surface segment says which region owns focus, so a focus move across a
+ * region boundary *is* a move. Leaving the URL behind would let a cold start
+ * come back to the region somebody had already tabbed away from, and would let
+ * a narrow terminal go on rendering one surface full-screen while focus named
+ * another.
+ */
+function focusTo(
+  state: ReplState,
+  identity: string,
+  change: RouteChange,
+  mutation?: Mutation,
+): ReplState {
+  const surface = surfaceFor(identity);
+  if (
+    surface === undefined ||
+    surface === state.route.surface ||
+    mutation === "keep-route-on-focus"
+  ) {
+    return { ...state, focus: identity };
+  }
+  return { ...go(state, { ...state.route, surface }, change, mutation), focus: identity };
 }
 
 export type HarnessEvent =
@@ -350,7 +410,7 @@ function reverseTab(key: Key, mutation?: Mutation): boolean {
 
 /** A recorded moment is read-only, so nothing that changes the run may happen in one. */
 function frozen(state: ReplState, mutation?: Mutation): boolean {
-  return state.route.at !== undefined && mutation !== "mutate-while-inspecting";
+  return state.route.inspect && mutation !== "mutate-while-inspecting";
 }
 
 /**
@@ -377,6 +437,7 @@ export function reduce(state: ReplState, event: HarnessEvent, context: ReduceCon
           surface: "transcript",
           scopes: [],
           drawers: [],
+          inspect: false,
           draft: "",
         },
         state.journal,
@@ -404,7 +465,11 @@ export function reduce(state: ReplState, event: HarnessEvent, context: ReduceCon
     return { ...state, quit: true };
   }
   if (key.ctrl === true && key.code === "c") {
-    if (state.moment.entry === "running" && state.moment.transport === "live") {
+    // An entry that is paused, or being looked at through a reconstruction, is
+    // still running. Exiting instead of interrupting it would hand its
+    // lifecycle to whoever closed the terminal.
+    const active = state.moment.entry === "running" && mutation !== "exit-on-paused-interrupt";
+    if (active) {
       return { ...state, interrupts: state.interrupts + 1 };
     }
     if (state.route.draft !== "") {
@@ -416,7 +481,7 @@ export function reduce(state: ReplState, event: HarnessEvent, context: ReduceCon
     return { ...state, overlay: !state.overlay };
   }
   if (key.code === "Tab" || key.code === "Backtab") {
-    return { ...state, focus: step(here, live, reverseTab(key, mutation) ? -1 : 1) };
+    return focusTo(state, step(here, live, reverseTab(key, mutation) ? -1 : 1), "focus", mutation);
   }
   if (key.code === "Escape") {
     return back(state, here, live, context.size, mutation);
@@ -430,13 +495,17 @@ export function reduce(state: ReplState, event: HarnessEvent, context: ReduceCon
     const surface = (["sessions", "transcript", "bindings", "input", "history"] as const)[
       digit - 1
     ];
-    return {
-      ...go(state, { ...state.route, surface }, "surface", mutation),
-      focus: `region:${surface}`,
-    };
+    return focusTo(state, `region:${surface}`, "surface", mutation);
   }
 
-  if (key.ctrl === true && key.code !== undefined && key.code.startsWith("Arrow")) {
+  if (
+    key.ctrl === true &&
+    key.code !== undefined &&
+    key.code.startsWith("Arrow") &&
+    // Structural navigation acts only outside an editable target, so a
+    // modified arrow is never stolen out of a draft somebody is typing.
+    !editable(here)
+  ) {
     return structural(state, key.code, mutation);
   }
 
@@ -488,13 +557,13 @@ function back(
       return closed;
     }
     const invoker = state.invokers[top] ?? "region:transcript";
-    return { ...closed, focus: resolve(invoker, targets(closed, size, mutation)) };
+    return focusTo(closed, resolve(invoker, targets(closed, size, mutation)), "focus", mutation);
   }
-  if (state.route.at !== undefined) {
-    return go(state, { ...state.route, at: undefined }, "inspection", mutation);
+  if (state.route.inspect) {
+    return go(state, { ...state.route, inspect: false }, "inspection", mutation);
   }
   if (!here.startsWith("region:")) {
-    return { ...state, focus: resolve(ownerRegion(here), live) };
+    return focusTo(state, resolve(ownerRegion(here), live), "focus", mutation);
   }
   const previous = state.history[state.history.length - 1];
   if (previous === undefined) {
@@ -507,7 +576,6 @@ function back(
   return mint(parsed.value, state.journal, {
     focus: state.focus,
     anchor: state.anchor,
-    selection: state.selection,
     overlay: state.overlay,
     invokers: state.invokers,
     history: state.history.slice(0, -1),
@@ -535,17 +603,16 @@ function activate(state: ReplState, here: string, mutation?: Mutation): ReplStat
     return frozen(state, mutation) ? state : extendTo(state, "resumed");
   }
   if (here === "control:transport.return-head") {
-    return go(state, { ...state.route, at: undefined }, "inspection", mutation);
+    // Closing the reconstruction leaves the selection where it was: returning
+    // to the head is not the same act as deselecting a marker.
+    return go(state, { ...state.route, inspect: false }, "inspection", mutation);
   }
-  if (here === "region:history" && state.selection >= 0) {
-    const marker = state.journal[state.selection]?.marker;
-    if (marker !== undefined) {
-      // A reconstruction has no live suspension, so the drawer stack does not
-      // survive into one. That is what makes study frame 12's focus walk real:
-      // the trapped controls leave the sequence and focus has to resolve to the
-      // nearest owner that did survive.
-      return go(state, { ...state.route, at: marker, drawers: [] }, "inspection", mutation);
-    }
+  if (here === "region:history" && state.selection >= 0 && !state.route.inspect) {
+    // A reconstruction has no live suspension, so the drawer stack does not
+    // survive into one. That is what makes study frame 12's focus walk real:
+    // the trapped controls leave the sequence and focus has to resolve to the
+    // nearest owner that did survive.
+    return go(state, { ...state.route, inspect: true, drawers: [] }, "inspection", mutation);
   }
   return state;
 }
@@ -565,12 +632,10 @@ function scrub(state: ReplState, delta: number, mutation?: Mutation): ReplState 
   }
   const from = state.selection === -1 ? count : state.selection;
   const selection = Math.max(0, Math.min(count - 1, from + delta));
-  const moved = { ...state, selection };
-  if (state.route.at === undefined) {
-    return moved;
-  }
-  const marker = state.journal[selection].marker;
-  return { ...go(moved, { ...state.route, at: marker }, "scrub", mutation), selection };
+  // The selection is canonical, so it moves in the URL whether or not the
+  // reconstruction is open — and it replaces, so Back from a marker returns to
+  // where you came from rather than walking every marker the scrubber passed.
+  return go(state, { ...state.route, at: state.journal[selection].marker }, "scrub", mutation);
 }
 
 /**
@@ -588,10 +653,28 @@ function structural(state: ReplState, code: string, mutation?: Mutation): ReplSt
       : go(state, { ...state.route, scopes: scopes.slice(0, -1) }, "locus", mutation);
   }
   if (code === "ArrowDown") {
-    const child = state.moment.scope.replace(/ scope$/, "");
-    return scopes[scopes.length - 1] === child
+    // The entry is the first segment; the journal's scope stack starts below it.
+    const children = siblingsOf(state.journal, scopes.slice(1));
+    const first = children[0];
+    return first === undefined
       ? state
-      : go(state, { ...state.route, scopes: [...scopes, child] }, "locus", mutation);
+      : go(state, { ...state.route, scopes: [...scopes, first] }, "locus", mutation);
+  }
+  if ((code === "ArrowLeft" || code === "ArrowRight") && mutation !== "inert-sibling-arrows") {
+    const current = scopes[scopes.length - 1];
+    if (scopes.length < 2 || current === undefined) {
+      return state;
+    }
+    const siblings = siblingsOf(state.journal, scopes.slice(1, -1));
+    const at = siblings.indexOf(current);
+    if (at === -1 || siblings.length === 0) {
+      return state;
+    }
+    const delta = code === "ArrowLeft" ? -1 : 1;
+    const next = siblings[(at + delta + siblings.length) % siblings.length];
+    return next === current
+      ? state
+      : go(state, { ...state.route, scopes: [...scopes.slice(0, -1), next] }, "locus", mutation);
   }
   return state;
 }

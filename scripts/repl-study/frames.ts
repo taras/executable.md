@@ -39,8 +39,6 @@ export interface StudyFrame {
   readonly fixture: FixtureName;
   /** Whether the study drew the numbered overlay in this frame. */
   readonly overlay: boolean;
-  /** Where the scrubber was, for the one frame that had moved it. */
-  readonly selection?: string;
   readonly targets: readonly StudyTarget[];
   /** The identity Tab lands on, and the study's own wording for it. */
   readonly tab: string;
@@ -152,7 +150,7 @@ export const FRAMES: readonly StudyFrame[] = [
     title: "Three Agent sessions · background activity does not steal focus",
     key: "no keypress — reviewer session starts streaming",
     url: "xmd://repl/e1/transcript/entry-1/document",
-    head: "cp-11",
+    head: "cp-13",
     focus: "region:transcript",
     fixture: "drawer",
     overlay: true,
@@ -166,7 +164,7 @@ export const FRAMES: readonly StudyFrame[] = [
     title: "Project-details Elicit · focus trapped in the drawer",
     key: 'execution suspends at <Elicit as="project">',
     url: "xmd://repl/e1/transcript/entry-1/document/+project",
-    head: "cp-12",
+    head: "cp-14",
     focus: "field:drawer.project.name",
     fixture: "drawer",
     overlay: true,
@@ -226,7 +224,7 @@ export const FRAMES: readonly StudyFrame[] = [
     title: "README-confirmation Elicit · Approve and Decline",
     key: "Tab ×1 from the preview region",
     url: "xmd://repl/e1/transcript/entry-1/document/+confirm",
-    head: "cp-14",
+    head: "cp-16",
     focus: "control:drawer.confirm.approve",
     fixture: "drawer",
     overlay: true,
@@ -250,7 +248,7 @@ export const FRAMES: readonly StudyFrame[] = [
     title: "Paused at the live head",
     key: "Enter on Pause, from frame 05",
     url: "xmd://repl/e1/history/entry-1/document",
-    head: "cp-16",
+    head: "cp-18",
     focus: "control:transport.continue",
     fixture: "paused",
     overlay: true,
@@ -263,12 +261,11 @@ export const FRAMES: readonly StudyFrame[] = [
     id: "11",
     title: "Execution History navigation · checkpoint selected",
     key: "← ← · step back two checkpoints",
-    url: "xmd://repl/e1/history/entry-1/document",
-    head: "cp-16",
+    url: "xmd://repl/e1/history/entry-1/document?at=cp-16",
+    head: "cp-18",
     focus: "region:history",
     fixture: "paused",
     overlay: true,
-    selection: "cp-14",
     targets: [...REGIONS, CONTINUE, RETURN_HEAD],
     tab: "control:transport.continue",
     shift: "region:input",
@@ -278,8 +275,8 @@ export const FRAMES: readonly StudyFrame[] = [
     id: "12",
     title: "Historical inspection · reconstructed, read-only",
     key: "Enter on the selected checkpoint",
-    url: "xmd://repl/e1/history/entry-1/document/plan?at=cp-04",
-    head: "cp-16",
+    url: "xmd://repl/e1/history/entry-1/document/plan?at=cp-04&inspect",
+    head: "cp-18",
     focus: "control:transport.fork",
     fixture: "paused",
     overlay: true,
@@ -303,7 +300,7 @@ export const FRAMES: readonly StudyFrame[] = [
     title: "Return to live execution",
     key: "Enter on Return to paused head, then Continue",
     url: "xmd://repl/e1/history/entry-1/document",
-    head: "cp-17",
+    head: "cp-19",
     focus: "control:transport.pause",
     fixture: "drawer",
     overlay: true,
@@ -317,7 +314,7 @@ export const FRAMES: readonly StudyFrame[] = [
     title: "Settled entry · REPL input ready for Entry 2",
     key: "no keypress — Entry 1 completes",
     url: "xmd://repl/e1/input?draft=%3CPlan%3E",
-    head: "cp-19",
+    head: "cp-22",
     focus: "region:input",
     fixture: "settled",
     overlay: true,
@@ -344,11 +341,6 @@ export function frame(id: string): StudyFrame | undefined {
  * still a live target in the state the URL rebuilt.
  */
 export function stateFor(subject: StudyFrame): ReplState {
-  const journal = journalThrough(subject.head);
-  const state = hydrate(subject.url, journal);
-  const selection =
-    subject.selection === undefined
-      ? -1
-      : journal.findIndex((record) => record.marker === subject.selection);
-  return { ...state, focus: subject.focus, selection, overlay: subject.overlay };
+  const state = hydrate(subject.url, journalThrough(subject.head));
+  return { ...state, focus: subject.focus, overlay: subject.overlay };
 }

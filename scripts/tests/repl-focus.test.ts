@@ -38,8 +38,14 @@ import {
   step,
 } from "../repl-study/focus.ts";
 import { scanKeys } from "../repl-study/host.ts";
-import { fold, JOURNAL, journalThrough, markers } from "../repl-study/journal.ts";
-import { formatRoute, navigationFor, parseRoute, ROUTE_SURFACES } from "../repl-study/route.ts";
+import { fold, JOURNAL, journalThrough, markers, siblingsOf } from "../repl-study/journal.ts";
+import {
+  formatRoute,
+  navigationFor,
+  parseRoute,
+  ROUTE_SURFACES,
+  surfaceFor,
+} from "../repl-study/route.ts";
 import type { Route } from "../repl-study/route.ts";
 import {
   fixtureFor,
@@ -114,7 +120,7 @@ describe("the URL that says where you are", () => {
 
   it("parses every part of the schema, and refuses what is not in it", function* () {
     const parsed = parseRoute(
-      "xmd://repl/e1/transcript/entry-1/plan/+project?at=cp-07&draft=%3CPlan%3E",
+      "xmd://repl/e1/transcript/entry-1/plan/+project?at=cp-07&inspect&draft=%3CPlan%3E",
     );
     expect(parsed.ok).toBe(true);
     if (!parsed.ok) {
@@ -126,6 +132,7 @@ describe("the URL that says where you are", () => {
       scopes: ["entry-1", "plan"],
       drawers: ["project"],
       at: "cp-07",
+      inspect: true,
       draft: "<Plan>",
     });
 
@@ -136,6 +143,10 @@ describe("the URL that says where you are", () => {
       "xmd://repl/e1/transcript/+project/plan",
       "xmd://repl/e1/transcript?zoom=2",
       "xmd://repl/e1/transcript?at=",
+      // `inspect` reconstructs a marker, so it cannot arrive without one, and
+      // it has exactly one spelling.
+      "xmd://repl/e1/transcript?inspect",
+      "xmd://repl/e1/transcript?at=cp-04&inspect=yes",
     ];
     for (const url of refusals) {
       const result = parseRoute(url);
@@ -146,11 +157,24 @@ describe("the URL that says where you are", () => {
   it("spells the live head exactly one way", function* () {
     // There is no `at=head` sentinel, so two URLs cannot render the same state
     // and hydrate differently.
-    const following = hydrate("xmd://repl/e1/history", journalThrough("cp-16"));
+    const following = hydrate("xmd://repl/e1/history", journalThrough("cp-18"));
     expect(following.route.at).toBeUndefined();
     expect(following.moment.transport).toBe("paused");
-    const inspecting = hydrate("xmd://repl/e1/history?at=cp-04", journalThrough("cp-16"));
-    expect(inspecting.moment.transport).toBe("inspecting");
+  });
+
+  it("says selecting a marker and reconstructing it separately", function* () {
+    // The scrubber's selection is canonical location; whether the
+    // reconstruction is open is a different question about the same marker.
+    const selected = hydrate("xmd://repl/e1/history?at=cp-04", journalThrough("cp-18"));
+    expect(selected.selection).toBeGreaterThanOrEqual(0);
+    expect(selected.moment.transport).toBe("paused");
+
+    const reconstructed = hydrate(
+      "xmd://repl/e1/history?at=cp-04&inspect",
+      journalThrough("cp-18"),
+    );
+    expect(reconstructed.selection).toBe(selected.selection);
+    expect(reconstructed.moment.transport).toBe("inspecting");
   });
 
   it("keeps a drawer from being mistaken for a scope of the same name", function* () {
@@ -221,6 +245,52 @@ describe("every frame of the approved focus study", () => {
     }
   });
 
+  it("drives the real reducer to where the study says it goes", function* () {
+    // The transition, not two destinations built independently. A reducer that
+    // only changed focus would still satisfy a check that constructed each
+    // frame from its own URL.
+    for (const subject of FRAMES) {
+      const state = stateFor(subject);
+      const forward = press(state, "Tab");
+      expect({ frame: subject.id, tab: focusIn(forward, WIDE) }).toEqual({
+        frame: subject.id,
+        tab: subject.tab,
+      });
+      const reverse = press(state, "Backtab");
+      expect({ frame: subject.id, shift: focusIn(reverse, WIDE) }).toEqual({
+        frame: subject.id,
+        shift: subject.shift,
+      });
+    }
+  });
+
+  it("takes the URL with it whenever focus changes region", function* () {
+    for (const subject of FRAMES) {
+      const state = stateFor(subject);
+      for (const [name, moved] of [
+        ["tab", press(state, "Tab")],
+        ["shift", press(state, "Backtab")],
+      ] as const) {
+        const landed = focusIn(moved, WIDE);
+        const expected = surfaceFor(landed);
+        expect({ frame: subject.id, key: name, surface: moved.route.surface }).toEqual({
+          frame: subject.id,
+          key: name,
+          surface: expected ?? moved.route.surface,
+        });
+      }
+    }
+  });
+
+  it("leaves the URL behind when focus is allowed to move without it", function* () {
+    const state = stateFor(frame("02")!);
+    const moved = press(state, "Tab", WIDE, "keep-route-on-focus");
+    expect(focusIn(moved, WIDE)).toBe("region:history");
+    expect(moved.route.surface).toBe("input");
+    // Which is exactly the divergence: a cold start comes back somewhere else.
+    expect(hydrate(formatRoute(moved.route), moved.journal).focus).toBe("region:input");
+  });
+
   it("walks the whole ring in both directions and comes back to the start", function* () {
     for (const subject of FRAMES) {
       const live = targets(stateFor(subject), WIDE);
@@ -284,7 +354,7 @@ describe("restoring focus when a target disappears", () => {
     // trapped controls left the sequence.
     const suspended = stateFor(frame("07")!);
     const reconstructed = hydrate(
-      "xmd://repl/e1/history/entry-1/document/plan?at=cp-04",
+      "xmd://repl/e1/history/entry-1/document/plan?at=cp-04&inspect",
       suspended.journal,
     );
     expect(resolve("field:drawer.project.name", targets(reconstructed, WIDE))).toBe(
@@ -313,7 +383,7 @@ describe("restoring focus when a target disappears", () => {
 
 describe("drawers, their trap and what they restore", () => {
   const opened = (): ReplState => {
-    const base = hydrate("xmd://repl/e1/transcript/entry-1/document", journalThrough("cp-12"));
+    const base = hydrate("xmd://repl/e1/transcript/entry-1/document", journalThrough("cp-14"));
     return openDrawer(base, "project", "region:transcript", WIDE);
   };
 
@@ -362,10 +432,13 @@ describe("drawers, their trap and what they restore", () => {
 
 describe("inspecting a recorded moment", () => {
   const paused = (): ReplState =>
-    hydrate("xmd://repl/e1/history/entry-1/document", journalThrough("cp-16"));
+    hydrate("xmd://repl/e1/history/entry-1/document", journalThrough("cp-18"));
 
   const inspecting = (): ReplState =>
-    hydrate("xmd://repl/e1/history/entry-1/document/plan?at=cp-04", journalThrough("cp-16"));
+    hydrate(
+      "xmd://repl/e1/history/entry-1/document/plan?at=cp-04&inspect",
+      journalThrough("cp-18"),
+    );
 
   it("refuses a mutation while a reconstruction is open", function* () {
     const state = { ...inspecting(), focus: "region:input" };
@@ -389,7 +462,9 @@ describe("inspecting a recorded moment", () => {
   it("withholds Continue until the paused head is regained", function* () {
     expect(ring(inspecting())).not.toContain("control:transport.continue");
     const returned = press({ ...inspecting(), focus: "control:transport.return-head" }, "Enter");
-    expect(returned.route.at).toBeUndefined();
+    expect(returned.route.inspect).toBe(false);
+    // Closing the reconstruction is not deselecting the marker.
+    expect(returned.route.at).toBe("cp-04");
     expect(ring({ ...returned, focus: "region:history" })).toContain("control:transport.continue");
   });
 
@@ -403,9 +478,106 @@ describe("inspecting a recorded moment", () => {
   });
 });
 
+describe("the selected marker is location", () => {
+  const paused = (): ReplState =>
+    hydrate("xmd://repl/e1/history/entry-1/document", journalThrough("cp-18"));
+
+  it("writes the scrubber's selection into the URL, by replacing", function* () {
+    const state = { ...paused(), focus: "region:history" };
+    const scrubbed = press(state, "ArrowLeft");
+    expect(scrubbed.route.at).toBeDefined();
+    expect(scrubbed.route.inspect).toBe(false);
+    expect(scrubbed.history.length).toBe(state.history.length);
+  });
+
+  it("comes back to the same marker, scope and bindings from the URL alone", function* () {
+    // Study frame 11: a marker is selected and the reconstruction is not open.
+    const selected = stateFor(frame("11")!);
+    expect(selected.selection).toBeGreaterThanOrEqual(0);
+    const rebuilt = hydrate(formatRoute(selected.route), selected.journal);
+    expect(rebuilt.selection).toBe(selected.selection);
+    const rebuiltProjection = projection(rebuilt);
+    expect(rebuiltProjection.selected).toBe("cp-16");
+    expect(rebuiltProjection.selectedScope).toBe(projection(selected).selectedScope);
+    expect(rebuiltProjection.selectedPublished).toEqual(projection(selected).selectedPublished);
+    expect(rebuiltProjection).toEqual(projection(selected));
+  });
+
+  it("loses the selection when it is kept outside the URL", function* () {
+    const selected = stateFor(frame("11")!);
+    const rebuilt = hydrate(
+      formatRoute(selected.route),
+      selected.journal,
+      "drop-selection-on-hydrate",
+    );
+    expect(rebuilt.selection).toBe(-1);
+    expect(rebuilt.selection).not.toBe(selected.selection);
+  });
+
+  it("selects without reconstructing, and reconstructs on Enter", function* () {
+    const scrubbed = press({ ...paused(), focus: "region:history" }, "ArrowLeft");
+    expect(scrubbed.moment.transport).toBe("paused");
+    const inspected = press(scrubbed, "Enter");
+    expect(inspected.route.inspect).toBe(true);
+    expect(inspected.route.at).toBe(scrubbed.route.at);
+    expect(inspected.moment.transport).toBe("inspecting");
+  });
+});
+
+describe("structural navigation across siblings", () => {
+  const settled = (): ReplState =>
+    hydrate("xmd://repl/e1/transcript/entry-1/document/plan", journalThrough("cp-22"));
+
+  it("reads the sibling list out of the journal, in source order", function* () {
+    expect(siblingsOf(JOURNAL, ["document"])).toEqual(["plan", "preview", "write"]);
+    expect(siblingsOf(JOURNAL, [])).toEqual(["document"]);
+  });
+
+  it("moves to the next and previous sibling, and takes the URL with it", function* () {
+    const state = settled();
+    const next = reduce(state, key("ArrowRight", { ctrl: true }), context(WIDE));
+    expect(next.route.scopes).toEqual(["entry-1", "document", "preview"]);
+    const after = reduce(next, key("ArrowRight", { ctrl: true }), context(WIDE));
+    expect(after.route.scopes).toEqual(["entry-1", "document", "write"]);
+    const back = reduce(after, key("ArrowLeft", { ctrl: true }), context(WIDE));
+    expect(back.route.scopes).toEqual(["entry-1", "document", "preview"]);
+    // Each is a place you went, so each is a place Back returns from.
+    expect(after.history.length).toBe(state.history.length + 2);
+  });
+
+  it("wraps at both ends of the sibling list", function* () {
+    const first = settled();
+    const wrapped = reduce(first, key("ArrowLeft", { ctrl: true }), context(WIDE));
+    expect(wrapped.route.scopes).toEqual(["entry-1", "document", "write"]);
+  });
+
+  it("moves out to the parent and in to the first child", function* () {
+    const out = reduce(settled(), key("ArrowUp", { ctrl: true }), context(WIDE));
+    expect(out.route.scopes).toEqual(["entry-1", "document"]);
+    const back = reduce(out, key("ArrowDown", { ctrl: true }), context(WIDE));
+    expect(back.route.scopes).toEqual(["entry-1", "document", "plan"]);
+  });
+
+  it("never intercepts a modified arrow out of a draft somebody is typing", function* () {
+    const typing = { ...settled(), focus: "region:input" };
+    const moved = reduce(typing, key("ArrowRight", { ctrl: true }), context(WIDE));
+    expect(moved.route.scopes).toEqual(typing.route.scopes);
+  });
+
+  it("leaves the arrows inert when the sibling list is ignored", function* () {
+    const state = settled();
+    const moved = reduce(
+      state,
+      key("ArrowRight", { ctrl: true }),
+      context(WIDE, "inert-sibling-arrows"),
+    );
+    expect(moved.route.scopes).toEqual(state.route.scopes);
+  });
+});
+
 describe("push versus replace", () => {
   const start = (): ReplState =>
-    hydrate("xmd://repl/e1/transcript/entry-1/document", journalThrough("cp-12"));
+    hydrate("xmd://repl/e1/transcript/entry-1/document", journalThrough("cp-14"));
 
   it("replaces the URL while a draft is typed", function* () {
     let state: ReplState = { ...start(), focus: "region:input" };
@@ -439,7 +611,7 @@ describe("push versus replace", () => {
     expect(state.history.length).toBe(entered);
     expect(navigationFor("scrub")).toBe("replace");
     const back = press(state, "Escape");
-    expect(back.route.at).toBeUndefined();
+    expect(back.route.inspect).toBe(false);
   });
 
   it("fills the navigation stack when every keystroke pushes", function* () {
@@ -487,7 +659,7 @@ describe("background updates", () => {
 describe("rebuilding from the URL and the journal alone", () => {
   /** A long interaction: typing, traversal, a drawer, inspection and back. */
   function journey(): ReplState {
-    let state = hydrate("xmd://repl/e1/transcript/entry-1/document", journalThrough("cp-12"));
+    let state = hydrate("xmd://repl/e1/transcript/entry-1/document", journalThrough("cp-14"));
     state = press(state, "4");
     for (const glyph of ["<", "P", "l", "a", "n", ">"]) {
       state = press(state, glyph);
@@ -522,17 +694,21 @@ describe("rebuilding from the URL and the journal alone", () => {
   });
 
   it("throws away the disposable half rather than pretending to restore it", function* () {
-    const rebuilt = hydrate(formatRoute(journey().route), journey().journal);
+    const original = journey();
+    const rebuilt = hydrate(formatRoute(original.route), original.journal);
     expect(rebuilt.anchor).toBe(0);
-    expect(rebuilt.selection).toBe(-1);
     expect(rebuilt.history).toEqual([]);
+    expect(rebuilt.overlay).toBe(false);
+    // The selection is not in that half. It is location, so it comes back.
+    expect(rebuilt.selection).toBe(original.selection);
+    expect(rebuilt.selection).toBeGreaterThanOrEqual(0);
   });
 
   it("folds the journal rather than reading the fixtures", function* () {
     // The journal is authored by hand from the study. A journal derived from
     // `fixtures.ts` would make this comparison the fixtures against themselves.
     const moment = fold(journalThrough("cp-08"));
-    expect(moment.scope).toBe("Plan scope");
+    expect(moment.scope).toBe("plan");
     expect(moment.published).toEqual(["inputs", "draft"]);
     expect(moment.suspension).toBe("review");
     expect(moment.sessions).toBe(2);
@@ -622,7 +798,7 @@ describe("through a real decoder", () => {
     const input: Input = yield* until(createInput({}));
     const events = yield* decoded(input, bytes(ESC));
     let state = openDrawer(
-      hydrate("xmd://repl/e1/transcript/entry-1/document", journalThrough("cp-12")),
+      hydrate("xmd://repl/e1/transcript/entry-1/document", journalThrough("cp-14")),
       "project",
       "region:transcript",
       WIDE,
@@ -688,15 +864,40 @@ describe("Ctrl+C, three ways", () => {
     expect(control.interrupts).toBe(1);
   });
 
+  it("interrupts a paused entry, and one being read through a reconstruction", function* () {
+    // A paused entry is still an entry. Exiting instead of interrupting it
+    // hands its lifecycle to whoever closed the terminal.
+    for (const id of ["10", "12"]) {
+      const state = stateFor(frame(id)!);
+      const control = reduce(state, key("c", { ctrl: true }), context(WIDE));
+      expect({ frame: id, quit: control.quit, interrupts: control.interrupts }).toEqual({
+        frame: id,
+        quit: false,
+        interrupts: 1,
+      });
+    }
+  });
+
+  it("exits from a paused entry when only a live one counts as active", function* () {
+    const state = stateFor(frame("10")!);
+    const control = reduce(
+      state,
+      key("c", { ctrl: true }),
+      context(WIDE, "exit-on-paused-interrupt"),
+    );
+    expect(control.quit).toBe(true);
+    expect(control.interrupts).toBe(0);
+  });
+
   it("clears a draft when nothing is running", function* () {
-    const settled = hydrate("xmd://repl/e1/input?draft=%3CPlan%3E", journalThrough("cp-19"));
+    const settled = hydrate("xmd://repl/e1/input?draft=%3CPlan%3E", journalThrough("cp-22"));
     const cleared = reduce(settled, key("c", { ctrl: true }), context(WIDE));
     expect(cleared.route.draft).toBe("");
     expect(cleared.quit).toBe(false);
   });
 
   it("leaves when the draft is empty and nothing is running", function* () {
-    const settled = hydrate("xmd://repl/e1/input", journalThrough("cp-19"));
+    const settled = hydrate("xmd://repl/e1/input", journalThrough("cp-22"));
     expect(reduce(settled, key("c", { ctrl: true }), context(WIDE)).quit).toBe(true);
   });
 });

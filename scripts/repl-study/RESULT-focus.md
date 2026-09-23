@@ -42,7 +42,7 @@ scan has not finished reading the scan.
 ## What location turned out to be
 
 ```text
-xmd://repl/<execution>/<surface>[/<scope>]*[/+<drawer>]*[?at=<marker>][&draft=<text>]
+xmd://repl/<execution>/<surface>[/<scope>]*[/+<drawer>]*[?at=<marker>][&inspect][&draft=<text>]
 ```
 
 The REPL has exactly three kinds of state, and telling them apart is what made
@@ -53,10 +53,15 @@ every acceptance criterion reachable:
    none of that is location, and none of it is in the URL. This experiment folds
    a hand-authored journal fixture; #842 owns the real one.
 2. **Location** is the URL, and nothing else is location.
-3. **Everything else is disposable** — the scroll anchor, the scrubber's
-   position, whether the overlay is drawn, which target is focused right now.
+3. **Everything else is disposable** — the scroll anchor, whether the overlay is
+   drawn, which target is focused within a region.
 
-Three decisions inside the schema earned their keep:
+The scrubber's selected marker is **not** in that third group, and putting it
+there was this experiment's first real mistake. A selection that lived only in
+memory rendered a state its own URL could not reopen: the band showed a marker,
+and a cold start came back with none. It is location, so it is in the URL.
+
+Four decisions inside the schema earned their keep:
 
 - **A drawer segment wears `+`.** Drawers are nested routes, and a path is how
   nesting is said; the prefix is what stops `.../project/+project` being
@@ -66,12 +71,27 @@ Three decisions inside the schema earned their keep:
   execution it names would be able to describe pausing a finished run.
 - **`at` absent is the live head.** There is no `at=head` sentinel, so two URLs
   cannot render the same screen and hydrate into different states.
+- **Selecting a marker and reconstructing it are two parts, not one.** `at` is
+  the marker the scrubber has selected; `inspect` says the reconstruction at it
+  is open. They are genuinely different states — study frame 11 has a marker
+  selected with the run merely paused, and frame 12 has the reconstruction open
+  at another — and one field could not tell them apart. `inspect` is valueless
+  and refused without `at`, so each state has exactly one spelling.
 
 **Scrubbing replaces and entering inspection pushes**, and that has a visible
 consequence the study does not state: Back from an inspected marker returns to
 the head, not back through every marker the scrubber passed. Draft editing
 replaces for the same reason — both are continuous adjustments rather than
-places somebody went.
+places somebody went. Closing a reconstruction is not the same act as
+deselecting a marker, so returning to the head leaves `at` where it was.
+
+**Moving focus across a region boundary is moving the route.** The surface
+segment says which region owns focus, so the two cannot be updated in different
+transitions — a reducer that changed only focus left the URL describing the
+region somebody had already tabbed away from, and at narrow widths would have
+gone on rendering one surface full-screen while focus named another. A control
+belongs to the surface of the region that owns it, which is why focusing `Pause`
+reads as `history` and focusing `Run` reads as `input`.
 
 ## What focus turned out to be
 
@@ -158,6 +178,27 @@ because `layout.ts` already renders it inside the transcript. It is still
 somewhere focus can be, so it is a route surface and not a layout surface, and
 the one line of reconciliation lives in `store.ts`. No #838 golden moved.
 
+## Structural navigation, and where the sibling list comes from
+
+`Ctrl+↑` moves the locus out to the parent scope, `Ctrl+↓` in to the first
+child, and `Ctrl+←`/`Ctrl+→` along the siblings, wrapping at both ends. All four
+push, because each is a place somebody went, and all four act only outside an
+editable target so a modified arrow is never stolen out of a draft.
+
+**The sibling list is derived from the journal, never declared.** Siblings are a
+fact about what the execution actually opened, which is why a scope that has not
+been entered yet is not one. The fixture journal opens `plan`, `preview` and
+`write` inside `document`, in that source order, so the arrows have something
+real to walk.
+
+## Ctrl+C, and what counts as active
+
+An entry that is paused, or that is being read through a reconstruction, is
+still running. Ctrl+C interrupts it and the REPL stays open; only an idle REPL
+clears its draft or leaves. Treating a live transport as the test for "active"
+exited from a paused entry instead of interrupting it, which hands that entry's
+lifecycle to whoever closed the terminal.
+
 ## Scoped limits
 
 - **Three regions expose no controls.** `sessions`, `transcript` and `bindings`
@@ -172,9 +213,6 @@ the one line of reconciliation lives in `store.ts`. No #838 golden moved.
   not synthesise content the fixture set does not have: there is no "paused at
   the live head" transcript distinct from the reconstruction's, and a frame that
   wants three sessions borrows the fixture that has three.
-- **Structural navigation is two of the four arrows.** `Ctrl+↑` and `Ctrl+↓` move
-  the locus out and in. Sibling movement needs a sibling list, which is a
-  question about the execution tree that the journal fixture does not answer.
 - **The journey is a projector.** While `--play` runs it supplies the moment on
   screen; the store still reduces every keystroke, and the two meet again the
   moment the journey ends.
@@ -183,8 +221,13 @@ the one line of reconciliation lives in `store.ts`. No #838 golden moved.
 
 ## What the evidence rests on
 
-Nineteen controls, nine of them new, each breaking exactly one claim and each
-rejected by name by the same oracle that admits the honest run. The two that
-matter most are the two that reproduce the defects above, because they are the
-only reason to believe the byte-driven cases would notice if the repair were
-undone.
+Twenty-three controls, thirteen of them new, each breaking exactly one claim and
+each rejected by name by the same oracle that admits the honest run. The two
+that matter most are the two that reproduce the decoder defects, because they
+are the only reason to believe the byte-driven cases would notice if the repair
+were undone.
+
+**Transitions are driven through the reducer**, forward and in reverse, from
+each of the fourteen frames. An earlier round proved them only by constructing
+each destination from its own URL, which is a check a reducer that moved focus
+and left the route behind passes without trouble — and did.

@@ -36,17 +36,18 @@ plus how far the execution had recorded when it was taken. `--route` takes any
 location at all:
 
 ```text
-xmd://repl/<execution>/<surface>[/<scope>]*[/+<drawer>]*[?at=<marker>][&draft=<text>]
+xmd://repl/<execution>/<surface>[/<scope>]*[/+<drawer>]*[?at=<marker>][&inspect][&draft=<text>]
 ```
 
-The surface is one of `sessions`, `transcript`, `bindings`, `input`, `history`.
-A `+` marks a drawer, so a drawer is never mistaken for a scope of the same
-name, and the last drawer in the path is the top — the only one that is visible
-and interactive. `at` names the recorded marker under inspection, and leaving it
-out is the one spelling of "following the live head". Everything else — where
-the transcript is scrolled to, which marker the scrubber is on, whether the
-overlay is drawn, which target is focused right now — is disposable and
-deliberately not in the URL.
+The surface is one of `sessions`, `transcript`, `bindings`, `input`, `history`,
+and it says which region owns focus — so moving focus across a region boundary
+moves the URL with it. A `+` marks a drawer, so a drawer is never mistaken for a
+scope of the same name, and the last drawer in the path is the top, the only one
+that is visible and interactive. `at` names the recorded marker the scrubber has
+selected; `inspect` says the reconstruction at it is open, takes no value, and
+is refused without a marker. Everything else — where the transcript is scrolled
+to, whether the overlay is drawn, which target inside a region is focused right
+now — is disposable and deliberately not in the URL.
 
 **`--play` is the demonstration.** It begins at the empty REPL and goes all the
 way to the settled entry — empty → nested → generated → drawer → paused →
@@ -66,10 +67,11 @@ Keys, while it is running:
 | `↑` `↓` `PgUp` `PgDn` | move the transcript window |
 | `←` `→` | move the selected marker, one at a time |
 | `Ctrl+↑` / `Ctrl+↓` | move the locus out to the parent scope, or in to the first child |
+| `Ctrl+←` / `Ctrl+→` | move to the previous or next sibling scope, wrapping |
 | `d` | open or close the suspension that is waiting |
 | `p` | play the transition out of this moment into the next |
 | `q` | leave, restoring the terminal |
-| `Ctrl+C` | interrupt a running entry; else clear the draft; else leave |
+| `Ctrl+C` | interrupt the entry if one is running, paused or reconstructed; else clear the draft; else leave |
 
 **The ring is five regions with each region's own controls inlined after it** —
 Sessions, Transcript, Bindings, REPL input, Execution History — and it wraps.
@@ -171,7 +173,7 @@ makes a capture legible as evidence against the frame it reproduces.
 | `screen.ts` | a terminal's cells, reconstructed from the bytes, so a frame can be read back |
 | `host.ts` | the only module that touches the terminal: modes, raw input, signals, restoration |
 | `capture.ts` | one frame, away from a terminal, in bytes and in cells |
-| `mutations.ts` | the nineteen ways the evidence breaks this on purpose |
+| `mutations.ts` | the twenty-three ways the evidence breaks this on purpose |
 | `main.ts` | the documented command |
 
 `--replay` runs the same lifecycle with no terminal attached, writing its byte
