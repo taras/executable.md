@@ -124,12 +124,7 @@ export function renderCatalog(subject: CatalogEntry, profile: Profile): Operatio
       yield* enterRoute(tree, state);
       const term = yield* useTerm(size);
       const result = term.render(
-        paint({
-          root: tree.root.node,
-          view: project(state),
-          layout: layoutOf(state, size),
-          anchor: 0,
-        }).ops,
+        paint({ tree, view: project(state), layout: layoutOf(state, size) }).ops,
         { deltaTime: 0 },
       );
       if (result.errors.length > 0) {

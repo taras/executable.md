@@ -25,6 +25,7 @@ import { paint } from "./paint.ts";
 import { projectFixture } from "./view.ts";
 import type { ReplView } from "./view.ts";
 import { useReplTree } from "./tree.ts";
+import type { ReplTree } from "./tree.ts";
 import { enterRoute } from "./drive.ts";
 import { hydrate } from "./store.ts";
 import { journalThrough, markerShowing } from "./journal.ts";
@@ -86,17 +87,34 @@ const MEASURED = [
  * is also what makes a transition a change to a tree rather than a new one.
  */
 export interface Composition {
+  /** The one mounted tree this frame is rendered by. */
+  readonly tree: ReplTree;
   readonly root: Node;
   readonly view: ReplView;
 }
 
-export function useComposition(
+/**
+ * Compose a moment **into an already mounted tree**.
+ *
+ * The root is supplied rather than created. One mounted tree answers rendering,
+ * focus, scoped input and the overlay; a second tree mounted for rendering
+ * alone would be the parallel hierarchy this architecture exists to remove, and
+ * nothing would notice because both would look right on their own.
+ */
+export function composeInto(
+  tree: ReplTree,
   subject: Fixture,
   view: View,
   surface: SurfaceName = view.surface,
+  mutation?: Mutation,
 ): Operation<Composition> {
   return {
     *[Symbol.iterator]() {
+      if (mutation === "second-tree") {
+        // The control: render from a tree of its own. Each tree looks right on
+        // its own, which is exactly why nothing notices without this check.
+        return yield* useComposition(subject, view, surface);
+      }
       const open = subject.drawer !== undefined && view.drawerOpen;
       const url = formatRoute({
         execution: "e1",
@@ -107,9 +125,12 @@ export function useComposition(
         draft: "",
       });
       const state = hydrate(url, journalThrough(markerShowing(subject.name)));
-      const tree = yield* useReplTree(state);
+      // The tree is brought to this moment rather than replaced by one that
+      // already describes it.
+      yield* tree.sync(state);
       yield* enterRoute(tree, state);
       return {
+        tree,
         root: tree.root.node,
         view: projectFixture(subject, {
           execution: "e1",
@@ -213,13 +234,11 @@ export function renderInto(term: Term, request: FrameRequest): Frame {
         })
       : request.composition.view;
   const painted = paint({
-    root: request.composition.root,
+    tree: request.composition.tree,
     view: shown,
     layout,
     anchor: view.anchor,
-    focus: request.focus,
-    mutation,
-    motion,
+    options: { focus: request.focus, mutation, motion },
   });
   const result = term.render(
     painted.ops,
@@ -491,4 +510,38 @@ export function* captureFocus(): Operation<Capture[]> {
     }
   }
   return captures;
+}
+
+/**
+ * A moment, with a tree of its own.
+ *
+ * For a caller that owns the whole composition — a capture, a playback — where
+ * mounting one tree is exactly right. A caller that already has a tree uses
+ * `composeInto` so that one tree keeps answering everything.
+ */
+export function useComposition(
+  subject: Fixture,
+  view: View,
+  surface: SurfaceName = view.surface,
+): Operation<Composition> {
+  return {
+    *[Symbol.iterator]() {
+      const state = hydrate(
+        formatRoute({
+          execution: "e1",
+          surface,
+          scopes: [],
+          drawers:
+            subject.drawer !== undefined && view.drawerOpen && subject.drawer !== undefined
+              ? [subject.drawer.kind]
+              : [],
+          inspect: false,
+          draft: "",
+        }),
+        journalThrough(markerShowing(subject.name)),
+      );
+      const tree = yield* useReplTree(state);
+      return yield* composeInto(tree, subject, view, surface);
+    },
+  };
 }

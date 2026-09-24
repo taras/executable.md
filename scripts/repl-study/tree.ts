@@ -37,6 +37,28 @@ import type { Node, PopFocus, Root } from "./vendor/freedom/upstream/index.ts";
 
 import { drawerTargets, labelFor } from "./surfaces.ts";
 import { recordPath } from "./keys.ts";
+import { attach, placementOf } from "./component.ts";
+import type { Placement } from "./component.ts";
+import {
+  bindingsBody,
+  drawerBody,
+  focusMapBody,
+  focusMarkerBody,
+  headerBody,
+  historyBody,
+  inputBody,
+  outletBody,
+  refusalBody,
+  rootBody,
+  rulesBody,
+  sessionsBody,
+  surfaceBarBody,
+  transcriptBody,
+} from "./components.ts";
+import type { FocusView } from "./render.ts";
+import type { Motion } from "./playback.ts";
+import type { ReplView } from "./view.ts";
+import type { Layout, Rect } from "./layout.ts";
 import { isDrawerKind } from "./fixtures.ts";
 import type { ReplState } from "./store.ts";
 import { isRouteSurface, ROUTE_SURFACES, topDrawer } from "./route.ts";
@@ -89,6 +111,15 @@ export interface ReplTree {
   readonly root: Root;
   /** Bring the interface into line with a state, mounting and removing branches. */
   sync(state: ReplState, mutation?: Mutation): Operation<void>;
+  /**
+   * Hand every direct child its own view subtree and its placement.
+   *
+   * The root is a parent, so this is the root doing what every parent does. It
+   * reaches its *own* children and no further: a drawer presents its own
+   * contents, and no node's data is chosen by something walking the whole tree
+   * from outside.
+   */
+  present(view: ReplView, layout: Layout, options?: PresentOptions): void;
   /** Where focus is, asked of the tree. */
   focused(): Node;
   advance(): void;
@@ -97,6 +128,13 @@ export interface ReplTree {
   map(): Node[];
   /** The focus chain: visible, enabled, and in tree order. */
   chain(): Node[];
+}
+
+export interface PresentOptions {
+  readonly anchor?: number;
+  readonly mutation?: Mutation;
+  readonly motion?: Motion;
+  readonly focus?: FocusView;
 }
 
 interface Mounted {
@@ -347,6 +385,21 @@ export function useReplTree(state: ReplState): Operation<ReplTree> {
             advance(root.node);
           }
         },
+        present(view, layout, options = {}) {
+          const place = (rect: Rect | undefined): Placement => placementOf(layout, rect);
+          attach(root.node, rootBody, undefined, place(layout.screen));
+          if (layout.profile === "too-small") {
+            // Below the minimum the interface is refused rather than shrunk, so
+            // the panes are not presented at all.
+            for (const child of root.node.children) {
+              attach(child, refusalBody, layout, place(layout.screen));
+              return;
+            }
+          }
+          for (const child of root.node.children) {
+            presentChild(child, view, layout, place, options);
+          }
+        },
         focused: () => current(root.node),
         advance: () => advance(root.node),
         retreat: () => retreat(root.node),
@@ -454,4 +507,110 @@ export function overlayOf(tree: ReplTree, mutation?: Mutation): readonly Overlay
     enabled: isFocusable(node),
     number: at + 1,
   }));
+}
+
+/**
+ * One direct child of the root, given the data it owns.
+ *
+ * Each branch below this presents its own contents: the drawer draws its form
+ * from its own `DrawerView`, and nothing here reaches past a child to choose
+ * what a grandchild renders.
+ */
+function presentChild(
+  child: Node,
+  view: ReplView,
+  layout: Layout,
+  place: (rect: Rect | undefined) => Placement,
+  options: PresentOptions,
+): void {
+  const name = child.name;
+  if (name === "region:sessions") {
+    attach(child, sessionsBody, view.sessions, place(layout.sidebar));
+    return;
+  }
+  if (name === "region:transcript") {
+    attach(
+      child,
+      transcriptBody,
+      {
+        view: view.transcript,
+        anchor: options.anchor ?? 0,
+        mutation: options.mutation,
+        motion: options.motion,
+      },
+      place(layout.transcript),
+    );
+    return;
+  }
+  if (name === "region:bindings") {
+    attach(child, bindingsBody, view.bindings, place(layout.bindings));
+    return;
+  }
+  if (name === "region:input") {
+    // An open drawer owns the contextual band; the input keeps its node and
+    // simply has nowhere to draw.
+    const taken = view.contextual.drawers.length > 0;
+    attach(child, inputBody, view.contextual.input, place(taken ? undefined : layout.contextual));
+    return;
+  }
+  if (name === "region:history") {
+    attach(
+      child,
+      historyBody,
+      {
+        view: view.history,
+        mutation: options.mutation,
+        motion: options.motion,
+        focus: options.focus,
+      },
+      place(layout.footer),
+    );
+    return;
+  }
+  if (name.startsWith("drawer:")) {
+    const kind = name.slice("drawer:".length);
+    const drawer = view.contextual.drawers.find((candidate) => candidate.kind === kind);
+    if (drawer !== undefined) {
+      const covering =
+        options.mutation === "drawer-covers-footer" &&
+        layout.contextual !== undefined &&
+        layout.footer !== undefined;
+      const rect =
+        covering && layout.contextual !== undefined && layout.footer !== undefined
+          ? { ...layout.contextual, height: layout.contextual.height + layout.footer.height }
+          : layout.contextual;
+      attach(child, drawerBody, { view: drawer, focus: options.focus }, place(rect));
+      return;
+    }
+  }
+  if (name === "chrome:surface-bar") {
+    attach(
+      child,
+      surfaceBarBody,
+      {
+        crumb: view.crumb,
+        badge: view.badge,
+        surface: view.surface === "input" ? "transcript" : view.surface,
+      },
+      place(layout.surfaceBar),
+    );
+    return;
+  }
+  if (name === "chrome:header") {
+    attach(child, headerBody, { crumb: view.crumb, badge: view.badge }, place(layout.header));
+    return;
+  }
+  if (name === "chrome:rules") {
+    attach(child, rulesBody, layout.separators, place(layout.screen));
+    return;
+  }
+  if (name === "chrome:focus-marker") {
+    attach(child, focusMarkerBody, { layout, focus: options.focus }, place(layout.screen));
+    return;
+  }
+  if (name === "chrome:focus-map") {
+    attach(child, focusMapBody, { layout, focus: options.focus }, place(layout.screen));
+    return;
+  }
+  attach(child, outletBody, undefined, place(undefined));
 }

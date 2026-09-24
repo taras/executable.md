@@ -30,7 +30,7 @@ import { drive, enterRoute } from "./drive.ts";
 import type { HarnessEvent, ReplState, View } from "./store.ts";
 import { journalThrough, markerShowing } from "./journal.ts";
 import { formatRoute } from "./route.ts";
-import { RendererCapacityError, useComposition, useTerm } from "./capture.ts";
+import { composeInto, RendererCapacityError, useComposition, useTerm } from "./capture.ts";
 import type { Composition } from "./capture.ts";
 import { renderInto } from "./capture.ts";
 import type { Mutation } from "./mutations.ts";
@@ -410,7 +410,6 @@ export function* runInteractive(options: InteractiveOptions): Operation<void> {
   let settled = false;
   let held: string | undefined;
   let lastPainted = false;
-  const compositions = new Map<string, Composition>();
 
   const currentSegment = (): Segment | undefined =>
     journey === undefined ? undefined : journey[segmentIndex];
@@ -512,13 +511,11 @@ export function* runInteractive(options: InteractiveOptions): Operation<void> {
         map: overlayOf(tree),
         overlay: repl.overlay,
       };
-      // The moment on screen has its own mounted composition, kept for as long
-      // as that moment is shown.
-      let composition = compositions.get(state.fixture.name);
-      if (composition === undefined) {
-        composition = yield* useComposition(state.fixture, state.view);
-        compositions.set(state.fixture.name, composition);
-      }
+      // The moment on screen is composed **into the harness's one tree**, so
+      // rendering, focus, scoped input and the overlay all come off the same
+      // mounted object. A second tree for rendering would look right on its own
+      // and be a parallel hierarchy.
+      const composition = yield* composeInto(tree, state.fixture, state.view);
       let painted: Painted;
       try {
         painted = draw(term, state, composition, write, options.mutation, motion, deltaMs, focus);
@@ -730,6 +727,8 @@ export function* runReplay(options: ReplayOptions): Operation<void> {
     if (options.mutation !== "skip-resize-update") {
       term.update({ width: state.cols, height: state.rows });
     }
+    // The replay owns its whole composition, so mounting one tree here is
+    // exactly right — there is no other tree for it to be a second of.
     const composition = yield* useComposition(state.fixture, state.view);
     draw(term, state, composition, write, options.mutation);
     drawn += 1;

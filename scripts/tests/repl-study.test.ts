@@ -802,10 +802,11 @@ describe("the boundary this experiment keeps", () => {
 
   it("uses every control it declares", function* () {
     // A control nobody passes is a claim nobody is checking, so the evidence's
-    // own source has to mention each one. #838's controls are exercised here
-    // and #839's next door; the declaration is one list, so the check reads
-    // both suites rather than letting either half go unclaimed.
-    const suites = ["./repl-study.test.ts", "./repl-focus.test.ts"];
+    // own source has to mention each one. #838's controls are exercised here,
+    // #839's next door and #840's beside them; the declaration is one list, so
+    // the check reads every suite rather than letting any of them go
+    // unclaimed.
+    const suites = ["./repl-study.test.ts", "./repl-focus.test.ts", "./repl-components.test.ts"];
     const sources: string[] = [];
     for (const suite of suites) {
       sources.push(yield* readTextFile(fileURLToPath(new URL(suite, import.meta.url))));

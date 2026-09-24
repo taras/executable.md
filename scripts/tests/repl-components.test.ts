@@ -18,11 +18,14 @@ import { readTextFile } from "@effectionx/fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { attach, walk } from "../repl-study/component.ts";
-import { hydrate, layoutOf } from "../repl-study/store.ts";
+import type { Node } from "../repl-study/vendor/freedom/upstream/index.ts";
+import { hydrate, initialView, layoutOf } from "../repl-study/store.ts";
+import { composeInto } from "../repl-study/capture.ts";
+import { fixture } from "../repl-study/fixtures.ts";
 import { journalThrough } from "../repl-study/journal.ts";
 import { paint } from "../repl-study/paint.ts";
 import { applyAnsi, createGrid, gridText } from "../repl-study/screen.ts";
-import { useReplTree } from "../repl-study/tree.ts";
+import { overlayOf, useReplTree } from "../repl-study/tree.ts";
 import { enterRoute } from "../repl-study/drive.ts";
 import { sendKey } from "../repl-study/keys.ts";
 import { indexOf, project } from "../repl-study/view.ts";
@@ -42,10 +45,9 @@ function* mounted(
   const tree = yield* useReplTree(state);
   const view = project(state);
   const term = yield* useTerm(WIDE);
-  const result = term.render(
-    paint({ root: tree.root.node, view, layout: layoutOf(state, WIDE), anchor: 0 }).ops,
-    { deltaTime: 0 },
-  );
+  const result = term.render(paint({ tree, view, layout: layoutOf(state, WIDE) }).ops, {
+    deltaTime: 0,
+  });
   expect(result.errors).toEqual([]);
   const grid = applyAnsi(createGrid(WIDE.cols, WIDE.rows), Uint8Array.from(result.output));
   return { view, screen: gridText(grid), chain: tree.chain().map((node) => node.name) };
@@ -166,8 +168,8 @@ describe("a component is a body on a node", () => {
     const before = node.id;
     const view = project(state);
     const layout = layoutOf(state, WIDE);
-    paint({ root: tree.root.node, view, layout, anchor: 0 });
-    paint({ root: tree.root.node, view, layout, anchor: 12 });
+    paint({ tree, view, layout, anchor: 0 });
+    paint({ tree, view, layout, anchor: 12 });
     const after = tree.chain().find((candidate) => candidate.name === "region:transcript")!;
     expect(after.id).toBe(before);
     expect(after).toBe(node);
@@ -307,3 +309,92 @@ describe("a recorded drawer keeps its presentation and loses its actionability",
     expect(tree.chain()).toContain(tree.focused());
   });
 });
+
+describe("one mounted tree answers everything", () => {
+  function* harness() {
+    const state = hydrate("xmd://repl/e1/transcript/entry-1/document", journalThrough("cp-14"));
+    const tree = yield* useReplTree(state);
+    yield* enterRoute(tree, state);
+    const subject = fixture("nested");
+    const composition = yield* composeInto(tree, subject, initialView(subject));
+    return { tree, composition };
+  }
+
+  it("renders, focuses, targets input and numbers the overlay from one root", function* () {
+    const { tree, composition } = yield* harness();
+    // Object identity, not equality: two trees would each be internally
+    // consistent and both would look right on their own.
+    expect(composition.tree).toBe(tree);
+    expect(composition.root).toBe(tree.root.node);
+
+    const rootOf = (node: { parent?: unknown }) => {
+      let at = node;
+      while (at.parent) {
+        at = at.parent as { parent?: unknown };
+      }
+      return at;
+    };
+    expect(rootOf(tree.focused())).toBe(tree.root.node);
+    for (const target of tree.chain()) {
+      expect(rootOf(target)).toBe(tree.root.node);
+    }
+    const delivery = sendKey(tree.root.node, tree.focused(), { type: "keydown", code: "x" });
+    expect(delivery.target).toBe(tree.focused().name);
+    // The overlay is the same tree walked, so every entry names a node in it.
+    const names = new Set(walkNames(tree.root.node));
+    for (const entry of overlayOf(tree)) {
+      expect({ id: entry.id, inTree: names.has(entry.id) }).toEqual({ id: entry.id, inTree: true });
+    }
+  });
+
+  it("is rejected when rendering uses a tree of its own", function* () {
+    const state = hydrate("xmd://repl/e1/transcript/entry-1/document", journalThrough("cp-14"));
+    const tree = yield* useReplTree(state);
+    const subject = fixture("nested");
+    const split = yield* composeInto(tree, subject, initialView(subject), undefined, "second-tree");
+    expect(split.root).not.toBe(tree.root.node);
+    expect(split.tree).not.toBe(tree);
+  });
+
+  it("keeps unchanged children when a parent reconciles", function* () {
+    const { tree } = yield* harness();
+    const before = new Map(tree.chain().map((node) => [node.name, node] as const));
+    const next = hydrate("xmd://repl/e1/bindings/entry-1/document", journalThrough("cp-14"));
+    yield* tree.sync(next);
+    for (const [name, node] of before) {
+      const after = tree.chain().find((candidate) => candidate.name === name);
+      if (after !== undefined) {
+        expect({ name, same: after === node }).toEqual({ name, same: true });
+      }
+    }
+  });
+
+  it("hands a render body no node and no root view", function* () {
+    const { tree } = yield* harness();
+    const node = tree.root.node.createChild("probe:body");
+    let seen: Record<string, unknown> = {};
+    attach(
+      node,
+      (context) => {
+        seen = { ...context };
+        return [];
+      },
+      { only: "mine" },
+      {
+        rect: { x: 0, y: 0, width: 1, height: 1 },
+        dense: false,
+        profile: "wide",
+      },
+    );
+    walk(node);
+    expect(Object.keys(seen).toSorted()).toEqual(["children", "data", "placement", "self"]);
+    // Its own data, not the projection every other component was built from.
+    expect(seen.data).toEqual({ only: "mine" });
+    expect(Object.keys(seen.self as object).toSorted()).toEqual(["id", "name"]);
+  });
+});
+
+/** Every node's name, for checking the overlay against the tree it came from. */
+function walkNames(node: Node): string[] {
+  return [node.name, ...[...node.children].flatMap(walkNames)];
+}
