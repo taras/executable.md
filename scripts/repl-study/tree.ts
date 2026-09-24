@@ -102,6 +102,8 @@ export interface ReplTree {
 interface Mounted {
   readonly node: Node;
   readonly pop?: PopFocus;
+  /** True while this drawer was mounted as a recorded, read-only one. */
+  readonly historical: boolean;
 }
 
 /**
@@ -262,6 +264,16 @@ export function useReplTree(state: ReplState): Operation<ReplTree> {
         ) {
           kept += 1;
         }
+        // A drawer that changed between live and recorded is a different
+        // drawer: `focusable()` is one-way, so a mounted node cannot stop being
+        // focusable. Unwinding to it lets it be rebuilt without actionability.
+        const historical = next.route.inspect;
+        for (let at = 0; at < Math.min(kept, drawers.length); at += 1) {
+          if (drawers[at].historical !== historical) {
+            kept = at;
+            break;
+          }
+        }
         while (drawers.length > kept) {
           const top = drawers.pop()!;
           // Pop the focus root first, so the invoking focus is restored while
@@ -290,14 +302,21 @@ export function useReplTree(state: ReplState): Operation<ReplTree> {
           recordPath(body, body.name);
           for (const target of drawerTargets(kind)) {
             const child = body.createChild(target.id);
-            focusable(child);
+            // A recorded drawer keeps its complete presentation and offers
+            // nothing to act on: its fields and controls are mounted so the
+            // components can render them, and never made focusable, so none of
+            // them enters the ring or receives a key.
+            if (!historical) {
+              focusable(child);
+            }
           }
           // The footer stays reachable through a suspension, so it is inside
-          // the pushed root rather than outside it.
+          // the pushed root rather than outside it — and it is the navigation
+          // that stays valid while a recorded moment is open.
           const footer = node.createChild("region:history");
           focusable(footer);
           const pop = mutation === "leak-drawer-trap" ? undefined : focusPush(node);
-          drawers.push({ node, pop });
+          drawers.push({ node, pop, historical });
         }
       };
 

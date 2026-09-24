@@ -23,6 +23,8 @@ import { journalThrough } from "../repl-study/journal.ts";
 import { paint } from "../repl-study/paint.ts";
 import { applyAnsi, createGrid, gridText } from "../repl-study/screen.ts";
 import { useReplTree } from "../repl-study/tree.ts";
+import { enterRoute } from "../repl-study/drive.ts";
+import { sendKey } from "../repl-study/keys.ts";
 import { indexOf, project } from "../repl-study/view.ts";
 import type { ReplView } from "../repl-study/view.ts";
 
@@ -229,5 +231,77 @@ describe("the component catalog", () => {
         drew: true,
       });
     }
+  });
+});
+
+describe("a recorded drawer keeps its presentation and loses its actionability", () => {
+  const LIVE = "xmd://repl/e1/transcript/entry-1/document/+project";
+  const RECORDED = "xmd://repl/e1/transcript/entry-1/document/+project?at=cp-04&inspect";
+
+  function* open(url: string, head: string) {
+    const state = hydrate(url, journalThrough(head));
+    const tree = yield* useReplTree(state);
+    yield* enterRoute(tree, state);
+    return { state, tree };
+  }
+
+  it("exposes a live drawer's controls in tree order", function* () {
+    const { tree } = yield* open(LIVE, "cp-14");
+    expect(tree.chain().map((node) => node.name)).toEqual([
+      "field:drawer.project.name",
+      "field:drawer.project.description",
+      "control:drawer.project.schema",
+      "control:drawer.project.submit",
+      "region:history",
+    ]);
+    const delivery = sendKey(tree.root.node, tree.focused(), { type: "keydown", code: "x" });
+    expect(delivery.target).toBe("field:drawer.project.name");
+  });
+
+  it("renders the recorded controls while none of them is focusable", function* () {
+    // Cold: the URL and the journal alone, with nothing carried over.
+    const { tree } = yield* open(RECORDED, "cp-18");
+    const frame = yield* renderCatalog(
+      CATALOG.find((one) => one.id === "drawer-historical")!,
+      "wide",
+    );
+    // The complete recorded presentation is still drawn…
+    for (const control of ["Project name", "Description", "Schema disclosure", "Submit"]) {
+      expect(frame.text).toContain(control);
+    }
+    expect(frame.text).toContain("recorded · read-only");
+    // …and none of it is in the ring, so none of it can be focused.
+    const chain = tree.chain().map((node) => node.name);
+    expect(chain).toEqual(["region:history"]);
+    for (const control of [
+      "field:drawer.project.name",
+      "field:drawer.project.description",
+      "control:drawer.project.schema",
+      "control:drawer.project.submit",
+    ]) {
+      expect({ control, focusable: chain.includes(control) }).toEqual({
+        control,
+        focusable: false,
+      });
+    }
+  });
+
+  it("keeps only the navigation that stays valid while inspecting", function* () {
+    const { tree } = yield* open(RECORDED, "cp-18");
+    expect(tree.focused().name).toBe("region:history");
+    const delivery = sendKey(tree.root.node, tree.focused(), { type: "keydown", code: "x" });
+    // A key reaches the history path and nothing recorded.
+    expect(delivery.target).toBe("region:history");
+    expect(delivery.path).not.toContain("panel:project.body");
+  });
+
+  it("removes actionability when a mounted drawer becomes recorded", function* () {
+    // `focusable()` is one-way, so reconciliation has to rebuild the branch
+    // rather than quietly leave a focusable node describing a recorded one.
+    const { tree } = yield* open(LIVE, "cp-14");
+    expect(tree.chain().length).toBe(5);
+    yield* tree.sync(hydrate(RECORDED, journalThrough("cp-18")));
+    expect(tree.chain().map((node) => node.name)).toEqual(["region:history"]);
+    expect(tree.chain()).toContain(tree.focused());
   });
 });
