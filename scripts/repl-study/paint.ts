@@ -83,7 +83,7 @@ function dress(node: Node, view: ReplView, layout: Layout, anchor: number): void
     if (drawer !== undefined) {
       // A drawer takes the contextual band; the input keeps its own node and
       // simply has nowhere to draw while one is open.
-      attach(node, drawerBody, drawer, placed(layout.contextual, layout));
+      attach(node, drawerBody, { view: drawer }, placed(layout.contextual, layout));
       return;
     }
   }

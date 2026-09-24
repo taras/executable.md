@@ -38,12 +38,12 @@ drawer-review.wide · 200 × 50 · The plan-review Elicit drawer
                                                   Provide the project name and a one-sentence description.
 
                                                   <Elicit as="project" schema={projectSchema}>
-                                                  Enter the project details.
+                                                    Enter the project details.
                                                   ▸ 53 more lines · ⌥↓ scrolls the Plan
 
-                                                    Plan review · scroll region
-                                                    Approve
-                                                    Request changes
+                                                  (•) Approve
+                                                  ( ) Request changes
+                                                  ( ) Stop
  EXECUTION HISTORY                 │                                                                                                                                         ┃ LIVE     LIVE  [ Pause ]
  recorded · 00:31                  │             │                                                                                                                           ┃ 00:31
  Entry 1                           │             │                                │                                                                                          ┃

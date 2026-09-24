@@ -3,10 +3,9 @@ drawer-confirm.narrow · 90 × 28 · The README confirmation drawer
  suspended at <Elicit as="confirmation"> · document scope
 
  Create README.md with the content shown above?
- # Northstar
+ │ # Northstar
+ │
+ │ A lightweight workspace for coordinating coding agents.
 
- A lightweight workspace for coordinating coding agents.
-
-   README preview · scroll region
-   Approve
-   Decline
+ [ Approve ]  [ Decline ]
+ ⌘↵ approves · Esc closes the drawer without answering it

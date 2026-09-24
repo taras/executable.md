@@ -214,9 +214,8 @@ describe("the component catalog", () => {
       "wide",
     );
     expect(frame.text).toContain("recorded · read-only");
-    // A disabled control is shown as recorded state rather than as an
-    // affordance that would do nothing.
-    expect(frame.text).toContain("· Submit");
+    // Shown as the state it recorded, never as an affordance that would do
+    // nothing when pressed.
     expect(frame.text).not.toContain("[ Submit ]");
   });
 
@@ -267,9 +266,10 @@ describe("a recorded drawer keeps its presentation and loses its actionability",
       CATALOG.find((one) => one.id === "drawer-historical")!,
       "wide",
     );
-    // The complete recorded presentation is still drawn…
-    for (const control of ["Project name", "Description", "Schema disclosure", "Submit"]) {
-      expect(frame.text).toContain(control);
+    // The complete recorded presentation is still drawn — the study's own form,
+    // with its labelled fields, its validation line and its schema.
+    for (const shown of ["Project name", "Northstar", "Description", "schema", "Submit"]) {
+      expect(frame.text).toContain(shown);
     }
     expect(frame.text).toContain("recorded · read-only");
     // …and none of it is in the ring, so none of it can be focused.

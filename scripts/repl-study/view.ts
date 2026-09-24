@@ -102,15 +102,46 @@ export interface ControlView {
   readonly enabled: boolean;
 }
 
-export interface DrawerView {
-  readonly kind: DrawerKind;
+/**
+ * One suspension's drawer, as content rather than as a form.
+ *
+ * The shape follows the study's three drawers. `historical` says the drawer is
+ * a recording: every control is disabled and the components render what was
+ * recorded rather than an affordance that would do nothing.
+ */
+export type DrawerView = {
   readonly heading: string;
   readonly origin: string;
-  readonly lines: readonly string[];
   readonly controls: readonly ControlView[];
-  /** A recorded drawer renders its state and offers nothing to act on. */
   readonly historical: boolean;
-}
+} & (
+  | {
+      readonly kind: "project";
+      readonly prompt: string;
+      readonly fields: readonly { readonly label: string; readonly value: string }[];
+      readonly schema: readonly string[];
+      readonly validation: string;
+      readonly submit: string;
+    }
+  | {
+      readonly kind: "review";
+      readonly plan: readonly string[];
+      readonly more: string;
+      readonly decisions: readonly {
+        readonly label: string;
+        readonly chosen: boolean;
+        readonly note?: string;
+      }[];
+      readonly submit: string;
+    }
+  | {
+      readonly kind: "confirm";
+      readonly prompt: string;
+      readonly preview: readonly string[];
+      readonly actions: readonly { readonly label: string; readonly primary: boolean }[];
+      readonly hint: string;
+    }
+);
 
 export interface InputView {
   readonly label: string;
@@ -320,7 +351,7 @@ export function project(state: ReplState): ReplView {
     if (drawer === undefined || drawer.kind !== kind) {
       return [];
     }
-    return [drawerViewOf(drawer, route.inspect)];
+    return [drawerViewFrom(drawer, route.inspect)];
   });
   return {
     execution: route.execution,
@@ -383,63 +414,61 @@ export function project(state: ReplState): ReplView {
   };
 }
 
-function drawerViewOf(
+export function drawerViewFrom(
   drawer: NonNullable<ReturnType<typeof fixtureFor>["drawer"]>,
   historical: boolean,
 ): DrawerView {
+  const shared = { heading: drawer.heading, origin: drawer.origin, historical };
+  const control = (id: string, label: string): ControlView => ({
+    id,
+    label,
+    enabled: !historical,
+  });
   if (drawer.kind === "project") {
     return {
+      ...shared,
       kind: "project",
-      heading: drawer.heading,
-      origin: drawer.origin,
-      lines: [drawer.prompt, ...drawer.fields.map((f) => `${f.label}: ${f.value}`)],
+      prompt: drawer.prompt,
+      fields: drawer.fields,
+      schema: drawer.schema,
+      validation: drawer.validation,
+      submit: drawer.submit,
       controls: [
-        { id: "field:drawer.project.name", label: "Project name", enabled: !historical },
-        { id: "field:drawer.project.description", label: "Description", enabled: !historical },
-        {
-          id: "control:drawer.project.schema",
-          label: "Schema disclosure · ⌥S",
-          enabled: !historical,
-        },
-        { id: "control:drawer.project.submit", label: "Submit", enabled: !historical },
+        control("field:drawer.project.name", "Project name"),
+        control("field:drawer.project.description", "Description"),
+        control("control:drawer.project.schema", "Schema disclosure · ⌥S"),
+        control("control:drawer.project.submit", "Submit"),
       ],
-      historical,
     };
   }
   if (drawer.kind === "review") {
     return {
+      ...shared,
       kind: "review",
-      heading: drawer.heading,
-      origin: drawer.origin,
-      lines: [...drawer.plan, drawer.more],
+      plan: drawer.plan,
+      more: drawer.more,
+      decisions: drawer.decisions,
+      submit: drawer.submit,
       controls: [
-        {
-          id: "control:drawer.review.scroll",
-          label: "Plan review · scroll region",
-          enabled: !historical,
-        },
-        { id: "control:drawer.review.approve", label: "Approve", enabled: !historical },
-        { id: "control:drawer.review.request", label: "Request changes", enabled: !historical },
-        { id: "control:drawer.review.stop", label: "Stop", enabled: !historical },
-        { id: "control:drawer.review.submit", label: "Submit", enabled: !historical },
+        control("control:drawer.review.scroll", "Plan review · scroll region"),
+        control("control:drawer.review.approve", "Approve"),
+        control("control:drawer.review.request", "Request changes"),
+        control("control:drawer.review.stop", "Stop"),
+        control("control:drawer.review.submit", "Submit"),
       ],
-      historical,
     };
   }
   return {
+    ...shared,
     kind: "confirm",
-    heading: drawer.heading,
-    origin: drawer.origin,
-    lines: [drawer.prompt, ...drawer.preview],
+    prompt: drawer.prompt,
+    preview: drawer.preview,
+    actions: drawer.actions,
+    hint: drawer.hint,
     controls: [
-      {
-        id: "control:drawer.confirm.preview",
-        label: "README preview · scroll region",
-        enabled: !historical,
-      },
-      { id: "control:drawer.confirm.approve", label: "Approve", enabled: !historical },
-      { id: "control:drawer.confirm.decline", label: "Decline", enabled: !historical },
+      control("control:drawer.confirm.preview", "README preview · scroll region"),
+      control("control:drawer.confirm.approve", "Approve"),
+      control("control:drawer.confirm.decline", "Decline"),
     ],
-    historical,
   };
 }

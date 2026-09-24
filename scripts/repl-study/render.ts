@@ -16,8 +16,8 @@ import { close, grow, fixed, open, rgba, text } from "@bomb.sh/tty";
 import type { Op } from "@bomb.sh/tty";
 
 import type { Checkpoint, Entry, Fixture, Phase, TranscriptRow, TransportMode } from "./model.ts";
-import type { HistoryView, MarkerView } from "./view.ts";
-import { historyViewFrom } from "./view.ts";
+import type { DrawerView, HistoryView, InputView, MarkerView } from "./view.ts";
+import { drawerViewFrom, historyViewFrom } from "./view.ts";
 import type { Layout, Rect } from "./layout.ts";
 import type { Placement } from "./component.ts";
 import { placementOf } from "./component.ts";
@@ -661,25 +661,37 @@ function bindingsRegion(fixture: Fixture, layout: Layout, rect: Rect): Op[] {
   return region("bindings", rect, lines, { bg: BG.bind });
 }
 
-function contextualRegion(
-  fixture: Fixture,
-  view: View,
-  layout: Layout,
-  rect: Rect,
+/**
+ * One suspension's drawer.
+ *
+ * The drawing is the study's. What changed is that it takes a `DrawerView` and
+ * the box its parent gives it, so the same body serves the component tree and
+ * the rectangle path while both exist.
+ */
+export function drawerRegion(
+  id: string,
+  drawer: DrawerView,
+  placement: Placement,
   focus?: FocusView,
 ): Op[] {
+  const rect = placement.rect;
   const width = Math.max(0, rect.width - 2);
   // With nothing to say about focus the drawer is drawn exactly as #838 drew
   // it, which is what keeps a frame that is not about focus byte-identical.
   const mark = (id: string): string =>
     focus === undefined ? "" : focus.here === id ? `${FOCUS_MARK} ` : "  ";
-  if (fixture.drawer && view.drawerOpen) {
-    const drawer = fixture.drawer;
+  {
     const lines: VisualLine[] = [plain(drawer.heading, C.hold)];
     // Which suspended request this is answering is never dropped: a drawer
     // without its origin is a form with no idea what it belongs to.
     for (const wrapped of wrapText(drawer.origin, width)) {
       lines.push(plain(wrapped, C.dim));
+    }
+    if (drawer.historical) {
+      // What this is comes before what it says: a recording offers nothing to
+      // act on, and a reader should know that before reading the form. It also
+      // has to survive a band that clips — appended last, it did not.
+      lines.push(plain("recorded · read-only", C.gold));
     }
     lines.push(blank());
     if (drawer.kind === "project") {
@@ -703,7 +715,7 @@ function contextualRegion(
           { text: `${mark("control:drawer.project.submit")}${drawer.submit}`, color: C.tick },
         ],
       });
-      if (!layout.dense) {
+      if (!placement.dense) {
         lines.push(blank(), label(`${mark("control:drawer.project.schema")}schema`));
         for (const schema of drawer.schema) {
           lines.push(plain(schema, C.settledText));
@@ -758,25 +770,66 @@ function contextualRegion(
       });
       lines.push(plain(drawer.hint, C.dim));
     }
-    return region("contextual", rect, lines, { bg: BG.drawer, transition: DRAWER_TRANSITION });
+    return region(id, rect, lines, { bg: BG.drawer, transition: DRAWER_TRANSITION });
   }
+}
 
-  const input = fixture.input;
+/** The REPL input band, which the drawer takes over while one is open. */
+export function inputRegion(id: string, input: InputView, placement: Placement): Op[] {
+  const rect = placement.rect;
+  const width = Math.max(0, rect.width - 2);
   const lines: VisualLine[] = [
     {
       segments: [
         { text: input.label, color: C.label, width: Math.min(width, 18) },
-        { text: input.hint, color: input.runEnabled ? C.dim : C.hold },
+        { text: input.hint, color: input.run !== undefined ? C.dim : C.hold },
         {
-          text: input.runEnabled ? "[ Run ⌘⏎ ]" : "[ Run ]",
-          color: input.runEnabled ? C.tick : C.dim,
+          text: input.run !== undefined ? "[ Run ⌘⏎ ]" : "[ Run ]",
+          color: input.run !== undefined ? C.tick : C.dim,
           width: 12,
         },
       ],
     },
-    plain(input.placeholder ?? "", C.settledText),
+    plain(input.draft === "" ? input.placeholder : input.draft, C.settledText),
   ];
-  return region("contextual", rect, lines, { bg: BG.input, transition: DRAWER_TRANSITION });
+  return region(id, rect, lines, { bg: BG.input, transition: DRAWER_TRANSITION });
+}
+
+/**
+ * The contextual band as the rectangle path still asks for it.
+ *
+ * A shim over the two view-driven regions, so both paths draw the same band
+ * while both exist. It goes when the rectangle path does.
+ */
+function contextualRegion(
+  fixture: Fixture,
+  view: View,
+  layout: Layout,
+  rect: Rect,
+  focus?: FocusView,
+): Op[] {
+  const placement = placementOf(layout, rect);
+  if (fixture.drawer && view.drawerOpen) {
+    return drawerRegion(
+      "contextual",
+      drawerViewFrom(fixture.drawer, fixture.readOnly === true),
+      placement,
+      focus,
+    );
+  }
+  return inputRegion(
+    "contextual",
+    {
+      label: fixture.input.label,
+      hint: fixture.input.hint,
+      placeholder: fixture.input.placeholder ?? "",
+      draft: "",
+      run: fixture.input.runEnabled
+        ? { id: "control:input.run", label: "Run", enabled: true }
+        : undefined,
+    },
+    placement,
+  );
 }
 
 export function clock(seconds: number): string {

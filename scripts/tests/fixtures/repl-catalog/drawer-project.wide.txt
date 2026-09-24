@@ -34,16 +34,16 @@ drawer-project.wide · 200 × 50 · The project Elicit drawer
                                                   suspended at <Elicit as="project"> · document scope · validated against the Elicit schema
 
                                                   Enter the project details.
-                                                  Project name: Northstar
-                                                  Description: A lightweight workspace for coordinating coding agents.
 
-                                                    Project name
-                                                    Description
-                                                    Schema disclosure · ⌥S
-                                                    Submit
+                                                  Project name
+                                                  ┃ Northstar
+                                                  Description
+                                                  ┃ A lightweight workspace for coordinating coding agents.
 
+                                                  both fields valid   Submit  ⌘↵
 
-
+                                                  schema
+                                                  {
  EXECUTION HISTORY             │                                                                                                                                             ┃ LIVE     LIVE  [ Pause ]
  recorded · 00:49              │        │                                                                                                                              │     ┃ 00:49
  Entry 1                       │        │                    │                                                                                                         │     ┃

@@ -19,6 +19,8 @@ import type { Body } from "./component.ts";
 import {
   bandRegion,
   BG,
+  drawerRegion,
+  inputRegion,
   blank,
   C,
   clock,
@@ -234,24 +236,10 @@ export const bindingsBody: Body<BindingsView> = ({ self, data, placement, childr
   return region(self.id, placement.rect, lines, { bg: BG.bind, children });
 };
 
-export const inputBody: Body<ContextualView["input"]> = ({ self, data, placement, children }) => {
-  const width = Math.max(0, placement.rect.width - 2);
-  const lines: VisualLine[] = [
-    {
-      segments: [
-        { text: data.label, color: C.label, width: Math.min(width, 18) },
-        { text: data.hint, color: data.run === undefined ? C.hold : C.dim },
-        {
-          text: data.run === undefined ? "[ Run ]" : "[ Run ⌘⏎ ]",
-          color: data.run === undefined ? C.dim : C.tick,
-          width: 12,
-        },
-      ],
-    },
-    plain(data.draft === "" ? data.placeholder : data.draft, C.settledText),
-  ];
-  return region(self.id, placement.rect, lines, { bg: BG.input, children });
-};
+export const inputBody: Body<ContextualView["input"]> = ({ self, data, placement, children }) => [
+  ...inputRegion(self.id, data, placement),
+  ...children,
+];
 
 /**
  * The Execution History band.
@@ -273,38 +261,20 @@ export interface HistoryData {
 }
 
 /**
- * One suspension's drawer.
+ * One suspension's drawer, drawn by the shared region.
  *
- * A recorded drawer renders the state it recorded and offers nothing to act on:
- * `historical` disables every control, and the body says so rather than drawing
- * affordances that would do nothing.
+ * A recorded drawer keeps its complete presentation and says so; nothing about
+ * it is actionable, and the tree does not offer its controls for focus.
  */
-export const drawerBody: Body<DrawerView> = ({ self, data, placement, children }) => {
-  const width = Math.max(0, placement.rect.width - 2);
-  const lines: VisualLine[] = [plain(data.heading, C.hold)];
-  for (const wrapped of wrapText(data.origin, width)) {
-    lines.push(plain(wrapped, C.dim));
-  }
-  lines.push(blank());
-  for (const line of data.lines) {
-    for (const wrapped of wrapText(line, width)) {
-      lines.push(plain(wrapped, C.src));
-    }
-  }
-  lines.push(blank());
-  for (const control of data.controls) {
-    lines.push({
-      segments: [
-        { text: control.enabled ? "  " : "· ", color: C.dim, width: 2 },
-        { text: control.label, color: control.enabled ? C.src : C.dim },
-      ],
-    });
-  }
-  if (data.historical) {
-    lines.push(blank(), plain("recorded · read-only", C.gold));
-  }
-  return region(self.id, placement.rect, lines, { bg: BG.drawer, children });
-};
+export const drawerBody: Body<DrawerData> = ({ self, data, placement, children }) => [
+  ...drawerRegion(self.id, data.view, placement, data.focus),
+  ...children,
+];
+
+export interface DrawerData {
+  readonly view: DrawerView;
+  readonly focus?: FocusView;
+}
 
 /** A structural outlet: it draws nothing and contributes its children unchanged. */
 export const outletBody: Body<undefined> = ({ children }) => [...children];
