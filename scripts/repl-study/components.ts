@@ -20,7 +20,12 @@ import {
   bandRegion,
   BG,
   drawerRegion,
+  focusMapRegion,
+  focusMarkerOps,
   inputRegion,
+  rule,
+  surfaceBarRegion,
+  tooSmallRegion,
   blank,
   C,
   clock,
@@ -32,6 +37,7 @@ import {
   wrapText,
 } from "./render.ts";
 import type { FocusView, VisualLine } from "./render.ts";
+import type { Layout, Rect, SurfaceName } from "./layout.ts";
 import type { Mutation } from "./mutations.ts";
 import type { Motion } from "./playback.ts";
 import type {
@@ -275,6 +281,44 @@ export interface DrawerData {
   readonly view: DrawerView;
   readonly focus?: FocusView;
 }
+
+/** Narrow only: the one row naming the surface you are on. */
+export const surfaceBarBody: Body<{
+  readonly crumb: string;
+  readonly badge?: string;
+  readonly surface: SurfaceName;
+}> = ({ self, data, placement, children }) => [
+  ...surfaceBarRegion(self.id, data.crumb, data.badge, data.surface, placement.rect),
+  ...children,
+];
+
+/** The separators between the composed panes. */
+export const rulesBody: Body<readonly Rect[]> = ({ self, data, children }) => [
+  ...data.flatMap((separator, at) =>
+    rule(`${self.id}.${at}`, separator, separator.width === 1 ? "│" : "─"),
+  ),
+  ...children,
+];
+
+/** Where focus is, as a glyph that survives a monochrome terminal. */
+export const focusMarkerBody: Body<{ readonly layout: Layout; readonly focus?: FocusView }> = ({
+  self,
+  data,
+  children,
+}) => [...focusMarkerOps(self.id, data.layout, data.focus), ...children];
+
+/** The numbered focus map, when it is asked for. */
+export const focusMapBody: Body<{ readonly layout: Layout; readonly focus?: FocusView }> = ({
+  self,
+  data,
+  children,
+}) => [
+  ...(data.focus?.overlay === true ? focusMapRegion(self.id, data.layout, data.focus) : []),
+  ...children,
+];
+
+/** The refusal a terminal below the supported minimum gets instead of a screen. */
+export const refusalBody: Body<Layout> = ({ self, data }) => tooSmallRegion(self.id, data);
 
 /** A structural outlet: it draws nothing and contributes its children unchanged. */
 export const outletBody: Body<undefined> = ({ children }) => [...children];

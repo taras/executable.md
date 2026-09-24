@@ -20,6 +20,11 @@ import type { Placement } from "./component.ts";
 import {
   bindingsBody,
   drawerBody,
+  focusMapBody,
+  focusMarkerBody,
+  refusalBody,
+  rulesBody,
+  surfaceBarBody,
   headerBody,
   historyBody,
   inputBody,
@@ -31,6 +36,8 @@ import {
 import type { Layout, Rect } from "./layout.ts";
 import type { Node } from "./vendor/freedom/upstream/index.ts";
 import type { ReplView } from "./view.ts";
+import type { FocusView } from "./render.ts";
+import type { SurfaceName } from "./layout.ts";
 
 /** A node that is mounted but not composed at this profile draws nothing. */
 const NOWHERE: Rect = { x: 0, y: 0, width: 0, height: 0 };
@@ -46,8 +53,43 @@ function placed(rect: Rect | undefined, layout: Layout): Placement {
  * alternative — attaching once and mutating a captured reference — would make
  * "the data a component rendered" a thing two places could answer.
  */
-function dress(node: Node, view: ReplView, layout: Layout, anchor: number): void {
+function dress(node: Node, request: PaintRequest): void {
+  const { view, layout, anchor } = request;
   const name = node.name;
+  if (name === "chrome:surface-bar") {
+    attach(
+      node,
+      surfaceBarBody,
+      {
+        crumb: view.crumb,
+        badge: view.badge,
+        surface: surfaceOf(view),
+      },
+      placed(layout.surfaceBar, layout),
+    );
+    return;
+  }
+  if (name === "chrome:rules") {
+    attach(node, rulesBody, layout.separators, placed(layout.screen, layout));
+    return;
+  }
+  if (name === "chrome:focus-marker") {
+    attach(node, focusMarkerBody, { layout, focus: request.focus }, placed(layout.screen, layout));
+    return;
+  }
+  if (name === "chrome:focus-map") {
+    attach(node, focusMapBody, { layout, focus: request.focus }, placed(layout.screen, layout));
+    return;
+  }
+  if (name === "chrome:header") {
+    attach(
+      node,
+      headerBody,
+      { crumb: view.crumb, badge: view.badge },
+      placed(layout.header, layout),
+    );
+    return;
+  }
   if (name === "region:sessions") {
     attach(node, sessionsBody, view.sessions, placed(layout.sidebar, layout));
     return;
@@ -116,15 +158,29 @@ export interface PaintRequest {
   readonly layout: Layout;
   /** The transcript window, which the renderer clips rather than scrolls. */
   readonly anchor: number;
+  readonly focus?: FocusView;
+}
+
+/** Which of the four routed surfaces the narrow bar names. */
+function surfaceOf(view: ReplView): SurfaceName {
+  return view.surface === "input" ? "transcript" : view.surface;
 }
 
 /** Hand every mounted node its data, then render the tree. */
 export function paint(request: PaintRequest): Op[] {
-  const { root, view, layout, anchor } = request;
+  const { root, layout } = request;
   attach(root, rootBody, undefined, placementOf(layout, layout.screen));
+  if (layout.profile === "too-small") {
+    // Below the minimum the interface is refused rather than shrunk, so the
+    // panes are not dressed at all — there is nothing for them to be inside.
+    for (const child of root.children) {
+      attach(child, refusalBody, layout, placementOf(layout, layout.screen));
+      return walk(child);
+    }
+  }
   const visit = (node: Node): void => {
     for (const child of node.children) {
-      dress(child, view, layout, anchor);
+      dress(child, request);
       visit(child);
     }
   };

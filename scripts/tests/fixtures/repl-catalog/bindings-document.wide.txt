@@ -1,49 +1,49 @@
 bindings-document.wide · 200 × 50 · Bindings at the document scope
- XMD REPL
-
- SESSION   JOURNAL   STATE
-                                                  Entry 1  ● running · 48.9s       ↳ document scope suspended                                                            BINDINGS
- SESSIONS · 3                                                                                                                                                            document scope
- chronological · selection follows you, not ac…   ← opened from Entry 1 · live execution projection, not an editor
-                                                  document                                                                                                               readme
- │ plan-a91f7c                                    ▶ <Evaluate allow={["write"]}>                                                                              ENTER      markdown · 3 lines
-   ✓ completed   planner · turn 1 · returned 5…   │ ▾ Ask for the project details                                                                                        # Northstar
-                                                  │ ● <Elicit as="project" schema={projectSchema}>                                                            WAITING
-   review-b72e1d                                  │ │ Enter the project details.
-   ● responding  reviewer · turn 1 · streaming    │ ● </Elicit>                                                                                               WAITING
-   streaming · background update · selection u…   │ ▲ suspended · answer in the drawer below
-
-   implement-c31d2e
-   · queued      implementer · no turn yet
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-                                                  DRAFT · ENTRY 2   Run unavailable while Entry 1 is active                                                                                [ Run ]
-
-
-
+ XMD REPL                                       │ REPL › Entry 1 › document · suspended
+                                                │
+ SESSION   JOURNAL   STATE                      │───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+                                                │ Entry 1  ● running · 48.9s       ↳ document scope suspended                                                          │ BINDINGS
+ SESSIONS · 3                                   │                                                                                                                      │ document scope
+ chronological · selection follows you, not ac… │ ← opened from Entry 1 · live execution projection, not an editor                                                     │
+                                                │ document                                                                                                             │ readme
+ │ plan-a91f7c                                  │ ▶ <Evaluate allow={["write"]}>                                                                              ENTER    │ markdown · 3 lines
+   ✓ completed   planner · turn 1 · returned 5… │ │ ▾ Ask for the project details                                                                                      │ # Northstar
+                                                │ │ ● <Elicit as="project" schema={projectSchema}>                                                            WAITING  │
+   review-b72e1d                                │ │ │ Enter the project details.                                                                                       │
+   ● responding  reviewer · turn 1 · streaming  │ │ ● </Elicit>                                                                                               WAITING  │
+   streaming · background update · selection u… │ │ ▲ suspended · answer in the drawer below                                                                           │
+                                                │                                                                                                                      │
+   implement-c31d2e                             │                                                                                                                      │
+   · queued      implementer · no turn yet      │                                                                                                                      │
+                                                │                                                                                                                      │
+                                                │                                                                                                                      │
+                                                │                                                                                                                      │
+                                                │                                                                                                                      │
+                                                │                                                                                                                      │
+                                                │                                                                                                                      │
+                                                │                                                                                                                      │
+                                                │                                                                                                                      │
+                                                │                                                                                                                      │
+                                                │                                                                                                                      │
+                                                │                                                                                                                      │
+                                                │                                                                                                                      │
+                                                │                                                                                                                      │
+                                                │                                                                                                                      │
+                                                │                                                                                                                      │
+                                                │                                                                                                                      │
+                                                │                                                                                                                      │
+                                                │                                                                                                                      │
+                                                │                                                                                                                      │
+                                                │                                                                                                                      │
+                                                │                                                                                                                      │
+                                                │                                                                                                                      │
+                                                │                                                                                                                      │
+                                                │                                                                                                                      │
+                                                │                                                                                                                      │
+                                                │ DRAFT · ENTRY 2   Run unavailable while Entry 1 is active                                                                                [ Run ]
+                                                │
+                                                │
+                                                │
  EXECUTION HISTORY             │                                                                                                                                             ┃ LIVE     LIVE  [ Pause ]
  recorded · 00:49              │        │                                                                                                                              │     ┃ 00:49
  Entry 1                       │        │                    │                                                                                                         │     ┃

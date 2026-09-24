@@ -1,5 +1,5 @@
 sessions.narrow · 90 × 28 · Three concurrent Agent sessions
-
+ SESSIONS · 1 / 4           REPL › Entry 1 › document · suspended                 Tab ▸
  SESSION   JOURNAL   STATE
 
  SESSIONS · 3

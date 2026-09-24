@@ -117,12 +117,22 @@ export function useReplTree(state: ReplState): Operation<ReplTree> {
   return {
     *[Symbol.iterator]() {
       const root = yield* useRoot();
+      // Chrome the composition draws around the panes. These are nodes so that
+      // rendering order is the tree's, not a sequence written out in one
+      // function — but they take no focus, so the ring is unchanged.
+      for (const name of ["chrome:surface-bar", "chrome:header"]) {
+        root.node.createChild(name).set("container", true);
+      }
       const regions = new Map<string, Node>();
       for (const region of ROUTE_SURFACES) {
         const node = root.node.createChild(`region:${region}`);
         focusable(node);
         recordPath(node, node.name);
         regions.set(region, node);
+      }
+      // Drawn after the panes, so they land on top of what they describe.
+      for (const name of ["chrome:rules", "chrome:focus-marker", "chrome:focus-map"]) {
+        root.node.createChild(name).set("container", true);
       }
       useFocus(root.node);
 
@@ -291,7 +301,8 @@ export function useReplTree(state: ReplState): Operation<ReplTree> {
           if (!isDrawerKind(kind)) {
             continue;
           }
-          const node = root.node.createChild(`drawer:${kind}`);
+          const before = [...root.node.children].find((child) => child.name === "chrome:rules");
+          const node = root.node.createChild(`drawer:${kind}`, before ? { before } : undefined);
           node.set("container", true);
           recordPath(node, node.name);
           // The drawer's controls live in a body panel, so a key bound for one

@@ -18,7 +18,7 @@ import type { Op } from "@bomb.sh/tty";
 import type { Checkpoint, Entry, Fixture, Phase, TranscriptRow, TransportMode } from "./model.ts";
 import type { DrawerView, HistoryView, InputView, MarkerView } from "./view.ts";
 import { drawerViewFrom, historyViewFrom } from "./view.ts";
-import type { Layout, Rect } from "./layout.ts";
+import type { Layout, Rect, SurfaceName } from "./layout.ts";
 import type { Placement } from "./component.ts";
 import { placementOf } from "./component.ts";
 import { MINIMUM } from "./layout.ts";
@@ -297,7 +297,7 @@ function regionRect(layout: Layout, identity: string): Rect | undefined {
   return undefined;
 }
 
-function focusMarkerOps(layout: Layout, focus: FocusView | undefined): Op[] {
+export function focusMarkerOps(id: string, layout: Layout, focus: FocusView | undefined): Op[] {
   if (focus === undefined) {
     return [];
   }
@@ -306,7 +306,7 @@ function focusMarkerOps(layout: Layout, focus: FocusView | undefined): Op[] {
     return [];
   }
   return [
-    open("focus-marker", {
+    open(id, {
       layout: { width: fixed(1), height: fixed(1) },
       floating: { x: rect.x, y: rect.y, attachTo: "root" },
     }),
@@ -332,7 +332,7 @@ const TRANSPORT_WORDS: Record<string, readonly string[]> = {
  * study frame 12 numbers a dimmed `Continue` and says Tab skips it, so the map
  * has to show what the ring does not.
  */
-function focusMapRegion(layout: Layout, focus: FocusView): Op[] {
+export function focusMapRegion(id: string, layout: Layout, focus: FocusView): Op[] {
   const ordered = focus.map;
   const width = Math.min(34, Math.max(18, Math.round(layout.cols * 0.24)));
   const height = Math.min(layout.rows, ordered.length + 2);
@@ -348,7 +348,7 @@ function focusMapRegion(layout: Layout, focus: FocusView): Op[] {
       ],
     });
   }
-  return region("focus-map", rect, lines, { bg: BG.drawer });
+  return region(id, rect, lines, { bg: BG.drawer });
 }
 
 export function blank(): VisualLine {
@@ -1237,25 +1237,28 @@ function headerRegion(fixture: Fixture, rect: Rect): Op[] {
   return region("header", rect, lines, { bg: BG.center });
 }
 
-function surfaceBarRegion(fixture: Fixture, view: View, rect: Rect): Op[] {
+export function surfaceBarRegion(
+  id: string,
+  crumb: string,
+  badge: string | undefined,
+  surface: SurfaceName,
+  rect: Rect,
+): Op[] {
   const names = {
     sessions: "SESSIONS",
     transcript: "TRANSCRIPT",
     bindings: "BINDINGS",
     history: "EXECUTION HISTORY",
   };
-  const at = ["sessions", "transcript", "bindings", "history"].indexOf(view.surface) + 1;
+  const at = ["sessions", "transcript", "bindings", "history"].indexOf(surface) + 1;
   return region(
-    "surface-bar",
+    id,
     rect,
     [
       {
         segments: [
-          { text: `${names[view.surface]} · ${at} / 4`, color: C.intro, width: 27 },
-          {
-            text: fixture.badge ?? fixture.crumb,
-            color: fixture.badge === undefined ? C.dim : C.gold,
-          },
+          { text: `${names[surface]} · ${at} / 4`, color: C.intro, width: 27 },
+          { text: badge ?? crumb, color: badge === undefined ? C.dim : C.gold },
           { text: "Tab ▸", color: C.label, width: 7 },
         ],
       },
@@ -1264,7 +1267,7 @@ function surfaceBarRegion(fixture: Fixture, view: View, rect: Rect): Op[] {
   );
 }
 
-function tooSmallRegion(layout: Layout): Op[] {
+export function tooSmallRegion(id: string, layout: Layout): Op[] {
   const lines: VisualLine[] = [
     plain("Terminal too small", C.out),
     plain(
@@ -1273,7 +1276,7 @@ function tooSmallRegion(layout: Layout): Op[] {
     ),
     plain("resize to continue", C.dim),
   ];
-  return region("too-small", layout.screen, lines, {
+  return region(id, layout.screen, lines, {
     bg: BG.app,
     padding: { left: 1, right: 1, top: 1 },
   });
@@ -1297,12 +1300,20 @@ export function renderScreen(request: ScreenRequest): Op[] {
   ];
 
   if (layout.profile === "too-small") {
-    ops.push(...tooSmallRegion(layout), close());
+    ops.push(...tooSmallRegion("too-small", layout), close());
     return ops;
   }
 
   if (layout.surfaceBar) {
-    ops.push(...surfaceBarRegion(fixture, view, layout.surfaceBar));
+    ops.push(
+      ...surfaceBarRegion(
+        "surface-bar",
+        fixture.crumb,
+        fixture.badge,
+        view.surface,
+        layout.surfaceBar,
+      ),
+    );
   }
   if (layout.header) {
     ops.push(...headerRegion(fixture, layout.header));
@@ -1358,9 +1369,9 @@ export function renderScreen(request: ScreenRequest): Op[] {
   }
   // Focus is drawn last, over the regions it describes, because a marker under
   // the thing it marks is a marker nobody sees.
-  ops.push(...focusMarkerOps(layout, focus));
+  ops.push(...focusMarkerOps("focus-marker", layout, focus));
   if (focus?.overlay === true) {
-    ops.push(...focusMapRegion(layout, focus));
+    ops.push(...focusMapRegion("focus-map", layout, focus));
   }
   ops.push(close());
   return ops;
