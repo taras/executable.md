@@ -1,33 +1,37 @@
 /**
- * One clock, as a stream, and the components that animate against it.
+ * One clock, as a stream, and the branches that consume it.
  *
  * The host owns the producer: it is the only thing that knows whether anything
  * is still moving, how long the next wait should be, and when the terminal has
  * been given back. What it hands the interface is a `Stream<Frame, never>` —
- * not a callback to register against — so a component consumes time the same
- * way it consumes anything else in this system, with an Effection operation, in
- * a scope that owns it.
+ * not a callback to register against — so a component consumes time the way it
+ * consumes anything else here, with an Effection operation, in a scope that
+ * owns it.
  *
- * That is the whole of the lifetime story. A subscription is taken inside a
- * task attached to a Freedom node's scope, so removing the branch closes it.
- * There is no registry to keep in step, nothing asking the tree whether a node
- * still exists, and nothing deferred to a later frame. An earlier round had all
- * three, and each of them was a second structure that could disagree with the
- * tree.
+ * Everything a branch takes from the clock belongs to the branch: its
+ * subscription, and its demand for more frames. Both are released by the scope
+ * that ends when the node is removed. There is no registry to keep in step,
+ * nothing asking the tree whether a node still exists, and nothing deferred to
+ * a later frame. An earlier round had all three, and each of them was a second
+ * structure that could disagree with the tree.
  *
- * What a component does with a frame is its own. The progress of an arriving
- * transcript, the position of a travelling playhead — those live in the
- * component's lifecycle, in its own variables, and its render body reads the
- * resulting snapshot and nothing else.
+ * The producer is a `Channel`, because it sends from inside an operation.
+ * `Signal` is for the other direction — a callback arriving from outside
+ * Effection — and nothing here is that.
  *
- * This follows `@effection-contrib/raf`, which is the same shape: one producer
- * of timestamps, consumed as a stream. The clock here is the host's rather than
- * the browser's, because a terminal has no animation frame and the study has to
- * supply time as well as measure it.
+ * Delivery is acknowledged, not timed. `advance` waits for every consumer to
+ * say it has applied the frame, so nothing is ever drawn from a moment half the
+ * interface has not reached. Waiting a scheduler turn instead would be a guess
+ * that happened to be right.
+ *
+ * This follows `@effection-contrib/raf`: one producer of timestamps, consumed
+ * as a stream. The clock is the host's rather than the browser's, because a
+ * terminal has no animation frame and the study has to supply time as well as
+ * measure it.
  */
 
-import { createContext, createSignal, sleep } from "effection";
-import type { Operation, Stream } from "effection";
+import { createChannel, createContext, ensure } from "effection";
+import type { Channel, Operation, Stream } from "effection";
 import type { Node } from "./vendor/freedom/upstream/index.ts";
 
 /** One frame: when it happened, on the one clock the host runs. */
@@ -47,51 +51,133 @@ export interface Frames {
   /** The one stream every component animates against. */
   readonly stream: Stream<Frame, never>;
   /**
-   * Deliver one frame, and return once every subscriber has taken it.
+   * Deliver one frame, and return once every consumer has applied it.
    *
    * Nothing is drawn from a frame half the interface has not reached yet, so
-   * this is an operation: the producer hands the moment over and waits for the
-   * consumers before the caller goes on to render it.
+   * this is an operation: the producer hands the moment over and waits to be
+   * told it has landed.
    */
   advance(at: number): Operation<void>;
+  /** True while at least one branch is still asking to be woken. */
+  wanted(): boolean;
   /**
-   * Ask for the clock to keep running.
+   * Consume frames for as long as this branch exists.
    *
-   * A component that is animating says so and releases when it settles. The
-   * host runs the clock while anything still wants it, so an interface with
-   * nothing moving schedules nothing at all.
+   * The consumer is a task in the node's own scope and the subscription is
+   * taken inside it, so the scope that ends when the branch is removed is the
+   * scope that closes it. The same scope releases every demand the branch still
+   * holds and acknowledges a frame it was halted in the middle of, so a
+   * teardown can neither leave the clock running nor leave the producer
+   * waiting.
+   *
+   * This does not return until that task has actually subscribed. A task
+   * attaches a turn before it runs, and a caller that mounted a component and
+   * advanced the clock in the same turn would otherwise send the first frame to
+   * nobody. That is subscribe-before-spawn, arranged so the subscription still
+   * belongs to the branch rather than to whoever mounted it.
+   */
+  animate(node: Node, apply: (frame: Frame) => void): Operation<Animation>;
+}
+
+/** What a branch gets for animating: its own demand on the clock. */
+export interface Animation {
+  /**
+   * Ask for the clock while a transition runs.
+   *
+   * Released when the transition settles, or by the branch's own teardown if it
+   * is removed before then. A demand cannot outlive what asked for it.
    */
   want(): () => void;
-  /** True while at least one component is still animating. */
-  wanted(): boolean;
 }
 
 export function createFrames(): Frames {
-  const signal = createSignal<Frame, never>();
-  let wants = 0;
+  const frames = createChannel<Frame, never>();
+  const acks = createChannel<void, never>();
+  let consumers = 0;
+  let demands = 0;
   return {
-    stream: signal,
+    stream: frames,
     *advance(at: number) {
-      signal.send({ at });
-      // Every subscriber takes the frame before anything is drawn from it.
-      yield* sleep(0);
+      const expected = consumers;
+      if (expected === 0) {
+        yield* frames.send({ at });
+        return;
+      }
+      // Subscribed to the acknowledgements before the frame goes out, so none
+      // of them can be missed between sending and waiting for them.
+      const acked = yield* acks;
+      yield* frames.send({ at });
+      for (let taken = 0; taken < expected; taken += 1) {
+        yield* acked.next();
+      }
     },
-    want() {
-      wants += 1;
-      let released = false;
-      return () => {
-        if (released) {
-          return;
-        }
-        released = true;
-        wants -= 1;
+    wanted: () => demands > 0,
+    animate(node: Node, apply: (frame: Frame) => void): Operation<Animation> {
+      return {
+        *[Symbol.iterator]() {
+          const held = new Set<() => void>();
+          let owing = false;
+          const started = createChannel<void, never>();
+          const ready = yield* started;
+          yield* node.scope.spawn(function* () {
+            const subscription = yield* frames;
+            yield* ensure(function* () {
+              for (const release of [...held]) {
+                release();
+              }
+              consumers -= 1;
+              if (owing) {
+                // Halted holding a frame. The producer is still counting this
+                // one, and an acknowledgement it never gets is a loop that
+                // never ends.
+                owing = false;
+                yield* acks.send();
+              }
+            });
+            consumers += 1;
+            yield* started.send();
+            for (;;) {
+              const next = yield* subscription.next();
+              if (next.done) {
+                return;
+              }
+              owing = true;
+              apply(next.value);
+              yield* acks.send();
+              owing = false;
+            }
+          });
+          yield* ready.next();
+          return {
+            want() {
+              demands += 1;
+              let released = false;
+              const release = (): void => {
+                if (released) {
+                  return;
+                }
+                released = true;
+                demands -= 1;
+                held.delete(release);
+              };
+              held.add(release);
+              return release;
+            },
+          };
+        },
       };
     },
-    wanted: () => wants > 0,
   };
 }
 
-const FrameContext = createContext<Frames>("xmd:repl:frames");
+/**
+ * Where the one service lives for a run.
+ *
+ * Exported so a caller can install a producer it retains — which is how the
+ * evidence keeps hold of the clock while the thing that was animating against
+ * it is torn down.
+ */
+export const FrameContext = createContext<Frames>("xmd:repl:frames");
 
 /**
  * The one frame service this run animates against.
@@ -110,49 +196,6 @@ export function useFrames(): Operation<Frames> {
         return existing;
       }
       return yield* FrameContext.set(createFrames());
-    },
-  };
-}
-
-/**
- * Consume frames for as long as this branch exists.
- *
- * The consumer is a task in the node's own scope, and the subscription is taken
- * inside it — so the scope that ends when the branch is removed is the scope
- * that closes the subscription. Nothing else has to know it was ever there.
- *
- * A task attaches a turn before it runs, so a caller mounts every consumer it
- * means to have and then lets the scheduler reach them before the first frame.
- * `useReplTree` does exactly that, which is why nothing here has to guess
- * whether it was subscribed in time.
- */
-export function animates(
-  node: Node,
-  frames: Frames,
-  apply: (frame: Frame) => void,
-): Operation<void> {
-  return {
-    *[Symbol.iterator]() {
-      // A task attaches a turn before it runs, so this does not return until
-      // the consumer has actually subscribed. Without that, a caller that
-      // mounted a component and advanced the clock in the same turn would send
-      // the first frame to nobody — which is the whole of what
-      // subscribe-before-spawn is about, arranged so that the subscription
-      // still belongs to the branch rather than to whoever mounted it.
-      const subscribed = createSignal<void, void>();
-      const ready = yield* subscribed;
-      yield* node.scope.spawn(function* () {
-        const subscription = yield* frames.stream;
-        subscribed.send();
-        for (;;) {
-          const next = yield* subscription.next();
-          if (next.done) {
-            return;
-          }
-          apply(next.value);
-        }
-      });
-      yield* ready.next();
     },
   };
 }

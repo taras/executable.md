@@ -63,7 +63,7 @@ import type { DrawerView, HistoryView, InputView, ReplView, TranscriptView } fro
 import { drawerSlots, inputSlot, transportSlots } from "./render.ts";
 import type { Layout, Rect } from "./layout.ts";
 import { isDrawerKind } from "./fixtures.ts";
-import { animates, easeInOutCubic, TRANSITION_SECONDS, useFrames } from "./animation.ts";
+import { easeInOutCubic, TRANSITION_SECONDS, useFrames } from "./animation.ts";
 import { applyAction, layoutOf, reverseTab } from "./store.ts";
 import type { Key, ReduceContext, Reduction, ReplState, Size } from "./store.ts";
 import { isRouteSurface, ROUTE_SURFACES, topDrawer } from "./route.ts";
@@ -340,7 +340,7 @@ export function useReplTree(state: ReplState, composed: Size): Operation<ReplTre
         travelWant?.();
         travelWant = undefined;
       };
-      yield* animates(root.node, frames, ({ at }) => {
+      const animation = yield* frames.animate(root.node, ({ at }) => {
         now = at;
         if (revealPhase === "running") {
           const fraction = Math.min(1, (at - revealFrom) / TRANSITION_SECONDS);
@@ -373,7 +373,7 @@ export function useReplTree(state: ReplState, composed: Size): Operation<ReplTre
           revealPhase = "running";
           revealFrom = now;
           reveal = 0;
-          revealWant = frames.want();
+          revealWant = animation.want();
         }
         attach(
           transcriptNode,
@@ -402,7 +402,7 @@ export function useReplTree(state: ReplState, composed: Size): Operation<ReplTre
           travelTo = history.headAt;
           travelStart = now;
           headAt = travelFrom;
-          travelWant = frames.want();
+          travelWant = animation.want();
         }
         attach(
           historyRegionNode,

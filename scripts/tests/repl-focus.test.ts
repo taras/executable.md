@@ -63,7 +63,12 @@ import { ReplInputApi, sendInput } from "../repl-study/input.ts";
 import { ReplActionApi, UnownedActionError } from "../repl-study/actions.ts";
 import type { ReplAction } from "../repl-study/actions.ts";
 import { boxOf } from "../repl-study/component.ts";
-import { animates, createFrames, useFrames } from "../repl-study/animation.ts";
+import {
+  createFrames,
+  FrameContext,
+  TRANSITION_SECONDS,
+  useFrames,
+} from "../repl-study/animation.ts";
 import type { Frames } from "../repl-study/animation.ts";
 import { UNAVAILABLE } from "../repl-study/store.ts";
 import type { Node } from "../repl-study/vendor/freedom/upstream/index.ts";
@@ -1611,7 +1616,7 @@ describe("one clock, and the components that animate against it", () => {
     clock: Frames,
   ): Operation<Node> {
     const node = find(tree.root.node, name)!;
-    yield* animates(node, clock, ({ at }) => seen.push(at));
+    yield* clock.animate(node, ({ at }) => seen.push(at));
     return node;
   }
 
@@ -1624,7 +1629,7 @@ describe("one clock, and the components that animate against it", () => {
     const seen: number[] = [];
     const node = find(tree.root.node, "drawer:project")!;
     const mounting = yield* spawn(function* () {
-      yield* animates(node, clock, ({ at }) => seen.push(at));
+      yield* clock.animate(node, ({ at }) => seen.push(at));
     });
 
     // No turn was given to the consumer: the branch closes first.
@@ -1717,23 +1722,53 @@ describe("one clock, and the components that animate against it", () => {
     expect(clock.wanted()).toBe(false);
   });
 
-  it("leaves nothing subscribed and nothing wanting when the whole tree goes", function* () {
+  it("releases a running transition's demand when its owner is torn down", function* () {
+    // A demand cannot outlive what asked for it. This tears the composition
+    // down in the middle of a transition — before the timestamp that would have
+    // settled it — and nothing is left asking to be woken.
     const clock = createFrames();
-    const seen: number[] = [];
+    const subject = fixture("drawer");
+    const view = initialView(subject);
+    const transition = transitionOf(playbackBetween("generated", "drawer")!, true);
+    let text = "";
+
+    const applied: number[] = [];
+
     const mounted = yield* spawn(function* () {
-      const { tree } = yield* opened(DRAWER, "cp-14");
-      yield* animates(find(tree.root.node, "drawer:project")!, clock, ({ at }) => seen.push(at));
+      yield* FrameContext.set(clock);
+      const composition = yield* useComposition(subject, view, WIDE);
+      // A witness on the same root, so what the removed tree does with a frame
+      // is observable rather than inferred.
+      yield* clock.animate(composition.tree.root.node, ({ at }) => applied.push(at));
+      const term = yield* useTerm(WIDE);
+      // Presenting a real transition is what takes the demand: the transcript
+      // starts arriving and the playhead starts travelling.
+      yield* clock.advance(0);
+      text = renderInto(term, {
+        fixture: subject,
+        view,
+        composition,
+        size: WIDE,
+        transition,
+        deltaSeconds: 0,
+      }).text;
       yield* suspend();
     });
-    // A spawned task attaches a turn late, so the tree is mounted after this.
+    // A spawned task attaches a turn late, so the composition exists after this.
     yield* sleep(0);
-    yield* clock.advance(1);
-    expect(seen).toEqual([1]);
+    expect(text).not.toBe("");
+    expect(applied).toEqual([0]);
+    expect(clock.wanted()).toBe(true);
 
+    // Torn down before the timestamp that would have settled it. This returns,
+    // which is the other half: a producer left waiting on a consumer that has
+    // gone would never let the teardown finish.
     yield* mounted.halt();
-    yield* clock.advance(2);
-    expect(seen).toEqual([1]);
     expect(clock.wanted()).toBe(false);
+
+    // And the moment that would have finished the transition reaches nothing.
+    yield* clock.advance(TRANSITION_SECONDS);
+    expect(applied).toEqual([0]);
   });
 });
 
