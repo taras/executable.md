@@ -30,7 +30,8 @@ import { drive, enterRoute } from "./drive.ts";
 import type { HarnessEvent, ReplState, View } from "./store.ts";
 import { journalThrough, markerShowing } from "./journal.ts";
 import { formatRoute } from "./route.ts";
-import { RendererCapacityError, useTerm } from "./capture.ts";
+import { RendererCapacityError, useComposition, useTerm } from "./capture.ts";
+import type { Composition } from "./capture.ts";
 import { renderInto } from "./capture.ts";
 import type { Mutation } from "./mutations.ts";
 import {
@@ -203,6 +204,7 @@ interface Painted {
 function draw(
   term: Term,
   state: HarnessState,
+  composition: Composition,
   write: (bytes: Uint8Array) => void,
   mutation?: Mutation,
   motion?: Motion,
@@ -214,6 +216,7 @@ function draw(
   const frame = renderInto(term, {
     fixture: state.fixture,
     view: state.view,
+    composition,
     size: { cols: state.cols, rows: state.rows },
     mutation,
     motion,
@@ -407,6 +410,7 @@ export function* runInteractive(options: InteractiveOptions): Operation<void> {
   let settled = false;
   let held: string | undefined;
   let lastPainted = false;
+  const compositions = new Map<string, Composition>();
 
   const currentSegment = (): Segment | undefined =>
     journey === undefined ? undefined : journey[segmentIndex];
@@ -508,9 +512,16 @@ export function* runInteractive(options: InteractiveOptions): Operation<void> {
         map: overlayOf(tree),
         overlay: repl.overlay,
       };
+      // The moment on screen has its own mounted composition, kept for as long
+      // as that moment is shown.
+      let composition = compositions.get(state.fixture.name);
+      if (composition === undefined) {
+        composition = yield* useComposition(state.fixture, state.view);
+        compositions.set(state.fixture.name, composition);
+      }
       let painted: Painted;
       try {
-        painted = draw(term, state, write, options.mutation, motion, deltaMs, focus);
+        painted = draw(term, state, composition, write, options.mutation, motion, deltaMs, focus);
       } catch (error) {
         if (!(error instanceof RendererCapacityError)) {
           throw error;
@@ -519,7 +530,7 @@ export function* runInteractive(options: InteractiveOptions): Operation<void> {
         // wide terminal will do. A new one starts that cache again and repaints
         // the whole screen, so the person watching sees nothing but a frame.
         term = yield* useTerm(measured);
-        painted = draw(term, state, write, options.mutation, motion, 0, focus);
+        painted = draw(term, state, composition, write, options.mutation, motion, 0, focus);
       }
       frames += 1;
       options.trace?.push({
@@ -719,7 +730,8 @@ export function* runReplay(options: ReplayOptions): Operation<void> {
     if (options.mutation !== "skip-resize-update") {
       term.update({ width: state.cols, height: state.rows });
     }
-    draw(term, state, write, options.mutation);
+    const composition = yield* useComposition(state.fixture, state.view);
+    draw(term, state, composition, write, options.mutation);
     drawn += 1;
     if (options.failAfter !== undefined && drawn >= options.failAfter) {
       throw new Error("the harness failed while drawing a frame");

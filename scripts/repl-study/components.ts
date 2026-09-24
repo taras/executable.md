@@ -166,6 +166,9 @@ export interface TranscriptData {
   readonly view: TranscriptView;
   /** The window over a long transcript, which the renderer clips rather than scrolls. */
   readonly anchor: number;
+  readonly mutation?: Mutation;
+  /** Present only while a playback is running between two moments. */
+  readonly motion?: Motion;
 }
 
 export const transcriptBody: Body<TranscriptData> = ({ self, data, placement, children }) => {
@@ -200,13 +203,29 @@ export const transcriptBody: Body<TranscriptData> = ({ self, data, placement, ch
 
   const body = transcriptLines({ ...entry, sourceLines: 0, rows: data.view.rows }, width);
   const capacity = Math.max(0, rect.height - lines.length);
-  const windowed = body.slice(data.anchor, data.anchor + Math.max(0, capacity - 1));
+  const windowed =
+    data.mutation === "clip-long-transcript"
+      ? body
+      : body.slice(data.anchor, data.anchor + Math.max(0, capacity - 1));
+
+  // While a playback runs, the target's transcript arrives a few rows at a
+  // time. This is the application's own interpolation; the renderer is not
+  // animating anything here.
+  const arriving = data.motion !== undefined && !data.motion.done;
+  if (arriving) {
+    const shown = Math.max(1, Math.ceil(data.motion!.reveal * windowed.length));
+    lines.push(...windowed.slice(0, shown), plain("…", C.dim));
+    return region(self.id, rect, lines, { bg: BG.center, children });
+  }
+
   lines.push(...windowed);
-  const remaining = body.length - data.anchor - windowed.length;
-  if (remaining > 0) {
-    lines.push(plain(`▸ ${remaining} more lines · ↑↓ PgUp PgDn`, C.dim));
-  } else if (data.anchor > 0) {
-    lines.push(plain(`▴ ${data.anchor} earlier lines · ↑ scrolls back`, C.dim));
+  if (data.mutation !== "clip-long-transcript") {
+    const remaining = body.length - data.anchor - windowed.length;
+    if (remaining > 0) {
+      lines.push(plain(`▸ ${remaining} more lines · ↑↓ PgUp PgDn`, C.dim));
+    } else if (data.anchor > 0) {
+      lines.push(plain(`▴ ${data.anchor} earlier lines · ↑ scrolls back`, C.dim));
+    }
   }
   return region(self.id, rect, lines, { bg: BG.center, children });
 };

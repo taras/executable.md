@@ -263,8 +263,8 @@ function markersOf(state: ReplState): MarkerView[] {
  * router addresses and what the scrubber's notch height follows. An invisible
  * helper scope produces no level here, and therefore no marker and no nesting.
  */
-function scopesOf(state: ReplState): ScopeView[] {
-  const rows = fixtureFor(state).entry?.rows ?? [];
+function scopesFrom(subject: ReturnType<typeof fixtureFor>): ScopeView[] {
+  const rows = subject.entry?.rows ?? [];
   // Built mutably and frozen on the way out: a view is immutable to everything
   // that receives it, and this is the one place that is true by construction
   // rather than by everyone remembering.
@@ -311,9 +311,8 @@ function scopesOf(state: ReplState): ScopeView[] {
   return opened.map(settle);
 }
 
-function controlsOf(state: ReplState): ControlView[] {
-  const transport = state.moment.transport;
-  if (state.moment.entry === "none") {
+function controlsFor(transport: Moment["transport"], recorded: boolean): ControlView[] {
+  if (!recorded) {
     return [];
   }
   if (transport === "live") {
@@ -342,17 +341,65 @@ function controlsOf(state: ReplState): ControlView[] {
  * can reach the journal, the store, the tree or the terminal.
  */
 export function project(state: ReplState): ReplView {
-  const subject = fixtureFor(state);
-  const route: Route = state.route;
-  const markers = markersOf(state);
-  const runnable = state.moment.entry !== "running" && route.draft !== "";
-  const drawers = route.drawers.flatMap((kind) => {
-    const drawer = subject.drawer;
-    if (drawer === undefined || drawer.kind !== kind) {
-      return [];
-    }
-    return [drawerViewFrom(drawer, route.inspect)];
+  return projectFixture(fixtureFor(state), {
+    execution: state.route.execution,
+    surface: state.route.surface,
+    scopes: state.route.scopes,
+    drawerOpen: state.route.drawers.length > 0,
+    inspect: state.route.inspect,
+    draft: state.route.draft,
+    transport: state.moment.transport,
+    running: state.moment.entry === "running",
+    selectedAt: undefined,
   });
+}
+
+/**
+ * What a projection needs beyond the fixture itself.
+ *
+ * Kept explicit so the same projector serves a live state and a fixture that
+ * was never routed to — the #838 captures are of a moment, not of a location,
+ * and one projector for both is what keeps them the same interface.
+ */
+export interface ProjectionInputs {
+  readonly execution: string;
+  readonly surface: RouteSurface;
+  readonly scopes: readonly string[];
+  readonly drawerOpen: boolean;
+  readonly inspect: boolean;
+  readonly draft: string;
+  readonly transport: Moment["transport"];
+  readonly running: boolean;
+  /** Overrides the fixture's own selected second, for a capture that chose one. */
+  readonly selectedAt?: number;
+}
+
+export function projectFixture(
+  subject: ReturnType<typeof fixtureFor>,
+  inputs: ProjectionInputs,
+): ReplView {
+  const route = {
+    execution: inputs.execution,
+    surface: inputs.surface,
+    scopes: inputs.scopes,
+    inspect: inputs.inspect,
+    draft: inputs.draft,
+  };
+  const history = historyViewFrom(
+    subject,
+    inputs.transport,
+    controlsFor(inputs.transport, inputs.running || subject.entry !== undefined),
+    inputs.selectedAt,
+  );
+  const markers = history.markers;
+  // The button is drawn whenever the fixture offers it. Whether `Run` joins the
+  // focus ring is a different question, asked of the tree: #838 draws the
+  // affordance, #839 decides when Tab may land on it.
+  const runnable = subject.input.runEnabled;
+  const drawers =
+    inputs.drawerOpen && subject.drawer !== undefined
+      ? [drawerViewFrom(subject.drawer, inputs.inspect)]
+      : [];
   return {
     execution: route.execution,
     surface: route.surface,
@@ -386,7 +433,7 @@ export function project(state: ReplState): ReplView {
               scopeNote: subject.entry.scopeNote,
             },
       rows: subject.entry?.rows ?? [],
-      scopes: scopesOf(state),
+      scopes: scopesFrom(subject),
       placeholder:
         subject.entry === undefined
           ? [
@@ -410,7 +457,7 @@ export function project(state: ReplState): ReplView {
         run: runnable ? { id: "control:input.run", label: "Run", enabled: true } : undefined,
       },
     },
-    history: historyViewFrom(subject, state.moment.transport, controlsOf(state)),
+    history,
   };
 }
 

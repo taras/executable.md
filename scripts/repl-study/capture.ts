@@ -20,8 +20,16 @@ import type { Motion, Playback } from "./playback.ts";
 import type { Fixture } from "./model.ts";
 import type { Profile, SurfaceName } from "./layout.ts";
 import { layoutFor } from "./layout.ts";
-import { renderScreen } from "./render.ts";
 import type { FocusView } from "./render.ts";
+import { paint } from "./paint.ts";
+import { projectFixture } from "./view.ts";
+import type { ReplView } from "./view.ts";
+import { useReplTree } from "./tree.ts";
+import { enterRoute } from "./drive.ts";
+import { hydrate } from "./store.ts";
+import { journalThrough, markerShowing } from "./journal.ts";
+import { formatRoute } from "./route.ts";
+import type { Node } from "./vendor/freedom/upstream/index.ts";
 import { applyAnsi, createGrid, gridText } from "./screen.ts";
 import { initialView } from "./store.ts";
 import type { View } from "./store.ts";
@@ -70,9 +78,60 @@ const MEASURED = [
   "too-small",
 ];
 
+/**
+ * One mounted composition: the tree a frame is rendered by, and its view.
+ *
+ * A frame is drawn by walking a mounted tree, so a caller that wants frames
+ * mounts one first. `playFrames` and the journey mount one and reuse it, which
+ * is also what makes a transition a change to a tree rather than a new one.
+ */
+export interface Composition {
+  readonly root: Node;
+  readonly view: ReplView;
+}
+
+export function useComposition(
+  subject: Fixture,
+  view: View,
+  surface: SurfaceName = view.surface,
+): Operation<Composition> {
+  return {
+    *[Symbol.iterator]() {
+      const open = subject.drawer !== undefined && view.drawerOpen;
+      const url = formatRoute({
+        execution: "e1",
+        surface,
+        scopes: [],
+        drawers: open && subject.drawer !== undefined ? [subject.drawer.kind] : [],
+        inspect: false,
+        draft: "",
+      });
+      const state = hydrate(url, journalThrough(markerShowing(subject.name)));
+      const tree = yield* useReplTree(state);
+      yield* enterRoute(tree, state);
+      return {
+        root: tree.root.node,
+        view: projectFixture(subject, {
+          execution: "e1",
+          surface,
+          scopes: [],
+          drawerOpen: open,
+          inspect: false,
+          draft: "",
+          transport: subject.history.transport,
+          running: subject.entry?.state === "running",
+          selectedAt: subject.history.checkpoints[view.checkpoint]?.at,
+        }),
+      };
+    },
+  };
+}
+
 export interface FrameRequest {
   readonly fixture: Fixture;
   readonly view: View;
+  /** The mounted composition this frame is drawn by. */
+  readonly composition: Composition;
   readonly size: Size;
   readonly mutation?: Mutation;
   readonly surface?: SurfaceName;
@@ -94,9 +153,14 @@ export function* useTerm(size: Size): Operation<Term> {
 }
 
 /** Render one frame into a fresh terminal, which is always a complete repaint. */
-export function* renderFrame(request: FrameRequest): Operation<Frame> {
+export function* renderFrame(request: Omit<FrameRequest, "composition">): Operation<Frame> {
   const term = yield* useTerm(request.size);
-  return renderInto(term, request);
+  const composition = yield* useComposition(
+    request.fixture,
+    request.view,
+    request.surface ?? request.view.surface,
+  );
+  return renderInto(term, { ...request, composition });
 }
 
 /**
@@ -115,9 +179,7 @@ export class RendererCapacityError extends Error {
 
 export function renderInto(term: Term, request: FrameRequest): Frame {
   const { view, size, mutation } = request;
-  // A frame drawn from state the harness has already left behind. The renderer
-  // cannot tell the difference — only a reader, or a golden, can.
-  const subject = mutation === "stale-frame" ? fixture("empty") : request.fixture;
+  const subject = request.fixture;
   const motion =
     mutation === "restore-mid-animation" && request.motion === undefined
       ? // Reconstruction must land on a state, never halfway through a transition.
@@ -135,8 +197,32 @@ export function renderInto(term: Term, request: FrameRequest): Frame {
     surface: request.surface ?? view.surface,
     mutation,
   });
+  // A frame drawn from state the harness has already left behind. The renderer
+  // cannot tell the difference — only a reader, or a golden, can.
+  const shown =
+    mutation === "stale-frame"
+      ? projectFixture(fixture("empty"), {
+          execution: "e1",
+          surface: "transcript",
+          scopes: [],
+          drawerOpen: false,
+          inspect: false,
+          draft: "",
+          transport: "idle",
+          running: false,
+        })
+      : request.composition.view;
+  const painted = paint({
+    root: request.composition.root,
+    view: shown,
+    layout,
+    anchor: view.anchor,
+    focus: request.focus,
+    mutation,
+    motion,
+  });
   const result = term.render(
-    renderScreen({ fixture: subject, view, layout, mutation, motion, focus: request.focus }),
+    painted.ops,
     request.deltaSeconds === undefined ? {} : { deltaTime: request.deltaSeconds },
   );
   if (result.errors.length > 0) {
@@ -152,7 +238,8 @@ export function renderInto(term: Term, request: FrameRequest): Frame {
   const grid = applyAnsi(createGrid(size.cols, size.rows), ansi);
   const bounds: Record<string, BoundingBox | undefined> = {};
   for (const id of MEASURED) {
-    bounds[id] = result.info.get(id)?.bounds;
+    const rendered = painted.ids[id];
+    bounds[id] = rendered === undefined ? undefined : result.info.get(rendered)?.bounds;
   }
   return { ansi, text: gridText(grid), animating: result.animating, bounds };
 }
@@ -175,6 +262,7 @@ export function* playFrames(
   const limit = options.limit ?? 200;
   const subject = fixture(playback.to);
   const view = initialView(subject);
+  const composition = yield* useComposition(subject, view);
   const term = yield* useTerm(size);
   const frames: Frame[] = [];
   // A frame in the middle of a transition is a handful of changed cells, not a
@@ -187,6 +275,7 @@ export function* playFrames(
     const frame = renderInto(term, {
       fixture: subject,
       view,
+      composition,
       size,
       motion,
       deltaSeconds: index === 0 ? 0 : frameMs / 1000,
@@ -225,14 +314,24 @@ export function* journeyFrames(
 ): Operation<JourneyRun> {
   const frameMs = options.frameMs ?? 16;
   let term = yield* useTerm(size);
+  const compositions = new Map<string, Composition>();
   let rebuilds = 0;
   const screen = createGrid(size.cols, size.rows);
   const frames: JourneyFrame[] = [];
   for (const planned of journeyPlan(JOURNEY, frameMs)) {
     const subject = fixture(planned.fixture);
+    const view = initialView(subject);
+    // One composition per moment, reused across that moment's frames: a
+    // transition is a change to a mounted tree, never a new one.
+    let composition = compositions.get(planned.fixture);
+    if (composition === undefined) {
+      composition = yield* useComposition(subject, view);
+      compositions.set(planned.fixture, composition);
+    }
     const request: FrameRequest = {
       fixture: subject,
-      view: initialView(subject),
+      view,
+      composition,
       size,
       motion: planned.motion,
       deltaSeconds: planned.deltaMs / 1000,

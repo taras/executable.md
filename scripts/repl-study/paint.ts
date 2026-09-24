@@ -38,6 +38,8 @@ import type { Node } from "./vendor/freedom/upstream/index.ts";
 import type { ReplView } from "./view.ts";
 import type { FocusView } from "./render.ts";
 import type { SurfaceName } from "./layout.ts";
+import type { Mutation } from "./mutations.ts";
+import type { Motion } from "./playback.ts";
 
 /** A node that is mounted but not composed at this profile draws nothing. */
 const NOWHERE: Rect = { x: 0, y: 0, width: 0, height: 0 };
@@ -98,7 +100,7 @@ function dress(node: Node, request: PaintRequest): void {
     attach(
       node,
       transcriptBody,
-      { view: view.transcript, anchor },
+      { view: view.transcript, anchor, mutation: request.mutation, motion: request.motion },
       placed(layout.transcript, layout),
     );
     return;
@@ -110,6 +112,10 @@ function dress(node: Node, request: PaintRequest): void {
   if (name === "region:input") {
     // While a drawer is open it owns the contextual band, so the input has
     // nowhere to draw — the parent decides placement, not the child.
+    // An open drawer owns the band from the first frame of the transition. Its
+    // *height* is what the transition interpolates — the drawer starts in the
+    // input's four rows and grows — which is why the layout, not this, decides
+    // how tall it is.
     const taken = view.contextual.drawers.length > 0;
     attach(
       node,
@@ -125,7 +131,18 @@ function dress(node: Node, request: PaintRequest): void {
     if (drawer !== undefined) {
       // A drawer takes the contextual band; the input keeps its own node and
       // simply has nowhere to draw while one is open.
-      attach(node, drawerBody, { view: drawer }, placed(layout.contextual, layout));
+      // The control lets the drawer take the rows the band owns. It is drawn
+      // after the footer, so extending it is all it takes to cover what the
+      // study says is never covered.
+      const covering =
+        request.mutation === "drawer-covers-footer" &&
+        layout.contextual !== undefined &&
+        layout.footer !== undefined;
+      const rect =
+        covering && layout.contextual !== undefined && layout.footer !== undefined
+          ? { ...layout.contextual, height: layout.contextual.height + layout.footer.height }
+          : layout.contextual;
+      attach(node, drawerBody, { view: drawer, focus: request.focus }, placed(rect, layout));
       return;
     }
   }
@@ -134,7 +151,17 @@ function dress(node: Node, request: PaintRequest): void {
     // is that trap's way out, not a second Execution History.
     const pane = node.parent?.parent === undefined;
     if (pane) {
-      attach(node, historyBody, { view: view.history }, placed(layout.footer, layout));
+      attach(
+        node,
+        historyBody,
+        {
+          view: view.history,
+          mutation: request.mutation,
+          motion: request.motion,
+          focus: request.focus,
+        },
+        placed(layout.footer, layout),
+      );
       return;
     }
   }
@@ -159,6 +186,9 @@ export interface PaintRequest {
   /** The transcript window, which the renderer clips rather than scrolls. */
   readonly anchor: number;
   readonly focus?: FocusView;
+  readonly mutation?: Mutation;
+  /** Present only while a playback is running between two moments. */
+  readonly motion?: Motion;
 }
 
 /** Which of the four routed surfaces the narrow bar names. */
@@ -166,24 +196,59 @@ function surfaceOf(view: ReplView): SurfaceName {
   return view.surface === "input" ? "transcript" : view.surface;
 }
 
+/**
+ * What each measured region was addressed by.
+ *
+ * The tree addresses components by node id, because two nodes may share a
+ * semantic name. Evidence asks about regions by role — "is the footer ever
+ * covered?" — so the mapping from role to the id actually rendered is reported
+ * rather than guessed.
+ */
+export type RenderedIds = Readonly<Record<string, string>>;
+
+export interface Painted {
+  readonly ops: Op[];
+  readonly ids: RenderedIds;
+}
+
+const ROLES: Readonly<Record<string, string>> = {
+  "region:sessions": "sidebar",
+  "region:transcript": "transcript",
+  "region:bindings": "bindings",
+  "region:input": "contextual",
+  "region:history": "footer",
+  "chrome:surface-bar": "surface-bar",
+  "chrome:header": "header",
+};
+
 /** Hand every mounted node its data, then render the tree. */
-export function paint(request: PaintRequest): Op[] {
+export function paint(request: PaintRequest): Painted {
   const { root, layout } = request;
+  const ids: Record<string, string> = { root: root.id };
   attach(root, rootBody, undefined, placementOf(layout, layout.screen));
   if (layout.profile === "too-small") {
     // Below the minimum the interface is refused rather than shrunk, so the
     // panes are not dressed at all — there is nothing for them to be inside.
     for (const child of root.children) {
       attach(child, refusalBody, layout, placementOf(layout, layout.screen));
-      return walk(child);
+      return { ops: walk(child), ids: { ...ids, "too-small": child.id } };
     }
   }
   const visit = (node: Node): void => {
     for (const child of node.children) {
       dress(child, request);
+      const role = ROLES[child.name];
+      if (role !== undefined && ids[role] === undefined) {
+        ids[role] = child.id;
+      }
+      if (child.name.startsWith("drawer:")) {
+        // An open drawer owns the contextual band, so it is what "contextual"
+        // names while it is there.
+        ids.contextual = child.id;
+      }
       visit(child);
     }
   };
   visit(root);
-  return walk(root);
+  return { ops: walk(root), ids };
 }

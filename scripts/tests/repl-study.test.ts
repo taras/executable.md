@@ -33,6 +33,7 @@ import {
   PROFILE_SIZES,
   renderFrame,
   renderInto,
+  useComposition,
   useTerm,
   writeCaptures,
 } from "../repl-study/capture.ts";
@@ -562,6 +563,7 @@ describe("resize", () => {
       const frame = renderInto(term, {
         fixture: subject,
         view: initialView(subject),
+        composition: yield* useComposition(subject, initialView(subject)),
         size: told ? step.size : PROFILE_SIZES.wide,
         mutation: told ? undefined : "skip-resize-update",
       });

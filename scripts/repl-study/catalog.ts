@@ -129,7 +129,7 @@ export function renderCatalog(subject: CatalogEntry, profile: Profile): Operatio
           view: project(state),
           layout: layoutOf(state, size),
           anchor: 0,
-        }),
+        }).ops,
         { deltaTime: 0 },
       );
       if (result.errors.length > 0) {

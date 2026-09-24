@@ -43,7 +43,7 @@ function* mounted(
   const view = project(state);
   const term = yield* useTerm(WIDE);
   const result = term.render(
-    paint({ root: tree.root.node, view, layout: layoutOf(state, WIDE), anchor: 0 }),
+    paint({ root: tree.root.node, view, layout: layoutOf(state, WIDE), anchor: 0 }).ops,
     { deltaTime: 0 },
   );
   expect(result.errors).toEqual([]);

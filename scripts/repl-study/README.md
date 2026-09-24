@@ -195,7 +195,7 @@ makes a capture legible as evidence against the frame it reproduces.
 | `store.ts` | `ReplState`, its reducer, `hydrate()` and `projection()` |
 | `frames.ts` | the focus study's fourteen frames, as addressable states |
 | `layout.ts` | the profile, and every region's rectangle in cells |
-| `render.ts` | those rectangles and that fixture, as `@bomb.sh/tty` operations |
+| `render.ts` | the study's colours, glyphs and line arithmetic, as `@bomb.sh/tty` operations |
 | `screen.ts` | a terminal's cells, reconstructed from the bytes, so a frame can be read back |
 | `host.ts` | the only module that touches the terminal: modes, raw input, signals, restoration |
 | `capture.ts` | one frame, away from a terminal, in bytes and in cells |
