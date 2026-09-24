@@ -1,11 +1,11 @@
 frame-01.narrow · 90 × 28
  TRANSCRIPT · 2 / 4         REPL                                                  Tab ▸
  TRANSCRIPT                                                         FOCUS MAP · F1
-                                                                      1  Sessions
- No executions yet.                                                   2  Transcript
-                                                                      3  Bindings
- Submitted blocks append here as immutable entries. Each entry keep ▸ 4  REPL input
- rendered output, and the bindings it published.                      5  Execution Hist…
+                                                                      1  Transcript
+ No executions yet.                                                 ▸ 2  REPL input
+
+ Submitted blocks append here as immutable entries. Each entry keeps its source, its
+ rendered output, and the bindings it published.
 
 
 

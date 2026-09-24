@@ -1922,6 +1922,103 @@ describe("a URL addresses the execution, and cannot invent one", () => {
   });
 });
 
+describe("a composition mounts the panes it shows, and only those", () => {
+  const HEAD = "cp-14";
+  const panes = (tree: ReplTree): string[] =>
+    [...tree.root.node.children]
+      .map((node) => node.name)
+      .filter((name) => name.startsWith("region:"));
+
+  it("mounts the panes together when they are composed together", function* () {
+    const { tree } = yield* opened("xmd://repl/e1/transcript/entry-1/document", HEAD, WIDE);
+    expect(panes(tree)).toEqual([
+      "region:sessions",
+      "region:transcript",
+      "region:bindings",
+      "region:input",
+      "region:history",
+    ]);
+    expect(chain(tree).length).toBe(5);
+  });
+
+  it("mounts the routed surface as the whole screen when it is one", function* () {
+    // Narrow routing promotes one surface. What the composition does not show
+    // has no branch, so Tab cannot reach it and the map cannot number it.
+    for (const { url, wanted } of [
+      {
+        url: "xmd://repl/e1/transcript/entry-1/document",
+        // The REPL input is drawn inside the narrow transcript rather than
+        // promoted to a surface of its own, so it is composed with it.
+        wanted: ["region:transcript", "region:input"],
+      },
+      { url: "xmd://repl/e1/sessions/entry-1/document", wanted: ["region:sessions"] },
+      { url: "xmd://repl/e1/bindings/entry-1/document", wanted: ["region:bindings"] },
+      { url: "xmd://repl/e1/history/entry-1/document", wanted: ["region:history"] },
+    ]) {
+      const { tree } = yield* opened(url, HEAD, NARROW);
+      expect({ url, panes: panes(tree) }).toEqual({ url, panes: wanted });
+      // The ring and the map carry the panes this composition shows, and the
+      // controls those panes offer — never a pane that is not on the screen.
+      const regionsIn = (names: readonly string[]): string[] =>
+        names.filter((name) => name.startsWith("region:"));
+      expect({ url, ring: regionsIn(chain(tree)) }).toEqual({ url, ring: wanted });
+      expect({ url, numbered: regionsIn(overlayOf(tree).map((one) => one.id)) }).toEqual({
+        url,
+        numbered: wanted,
+      });
+    }
+  });
+
+  it("takes no input for a pane the composition does not show", function* () {
+    const { state, tree } = yield* opened("xmd://repl/e1/sessions/entry-1/document", HEAD, NARROW);
+    expect(panes(tree)).toEqual(["region:sessions"]);
+    // Walking the whole ring never reaches one, because there is nothing to
+    // reach: no node, no middleware, nothing to deliver to.
+    const reached: string[] = [];
+    for (let at = 0; at < 4; at += 1) {
+      reached.push(tree.focused().name);
+      yield* drive(tree, state, key("Tab"), context(NARROW));
+    }
+    expect(new Set(reached)).toEqual(new Set(["region:sessions"]));
+  });
+
+  it("brings a pane back in its canonical place when the room returns", function* () {
+    const { state, tree } = yield* opened(
+      "xmd://repl/e1/transcript/entry-1/document",
+      HEAD,
+      NARROW,
+    );
+    expect(panes(tree)).toEqual(["region:transcript", "region:input"]);
+
+    yield* tree.sync(state, { size: WIDE });
+    expect(panes(tree)).toEqual([
+      "region:sessions",
+      "region:transcript",
+      "region:bindings",
+      "region:input",
+      "region:history",
+    ]);
+    // And focus is still somewhere the ring has.
+    expect(chain(tree)).toContain(tree.focused().name);
+
+    yield* tree.sync(state, { size: NARROW });
+    expect(panes(tree)).toEqual(["region:transcript", "region:input"]);
+    expect(chain(tree)).toContain(tree.focused().name);
+  });
+
+  it("routes to another surface at narrow, and the one it left goes", function* () {
+    const { state, tree } = yield* opened(
+      "xmd://repl/e1/transcript/entry-1/document",
+      HEAD,
+      NARROW,
+    );
+    const moved = yield* drive(tree, state, key("1"), context(NARROW));
+    expect(moved.state.route.surface).toBe("sessions");
+    expect(panes(tree)).toEqual(["region:sessions"]);
+    expect(tree.focused().name).toBe("region:sessions");
+  });
+});
+
 describe("the frames, as pictures", () => {
   it("renders every committed focus capture exactly", function* () {
     const captures = yield* captureFocus();

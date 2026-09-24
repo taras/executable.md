@@ -101,8 +101,11 @@ export function drive(
           ? { state }
           : reduce(state, event, { ...context, focused: tree.focused().name }));
       const delivery = delivered?.delivery;
-      applyFocus(tree, reduced.focus);
+      // Topology first, then focus. A narrow composition mounts the surface it
+      // routes to, so the node focus is being sent to may not exist until this
+      // sync has run — and the one it is leaving may not survive it.
       yield* tree.sync(reduced.state, { mutation: context.mutation, size: context.size });
+      applyFocus(tree, reduced.focus);
       // Which surface owns focus is read off the tree, not parsed out of the
       // focused node's name.
       const followed = followFocus(

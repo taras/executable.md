@@ -279,6 +279,8 @@ export function useReplTree(
 
       /** The node that says where you tried to go, while there is nowhere to be. */
       let refused: Node | undefined;
+      /** Whether the chrome the panes hang between has been mounted. */
+      let built = false;
       let refusal: Refusal | undefined;
       /** Assigned with the animation below; a teardown settles what it was mid-way through. */
       let settleAnimation = (): void => {};
@@ -295,19 +297,61 @@ export function useReplTree(
         for (const name of ["chrome:surface-bar", "chrome:header"]) {
           root.node.createChild(name).set("container", true);
         }
-        for (const region of ROUTE_SURFACES) {
-          const node = root.node.createChild(`region:${region}`);
-          focusable(node);
-          recordPath(node, node.name);
-          regions.set(region, node);
-        }
         for (const name of ["chrome:rules", "chrome:focus-map"]) {
           root.node.createChild(name).set("container", true);
         }
-        // Activating the band opens a reconstruction of whatever the scrubber
-        // is on. The band is a region rather than a control, and it is still
-        // the thing that was activated.
-        activates(regions.get("history")!, { kind: "inspect" });
+      };
+
+      /**
+       * Mount the panes this composition shows, and only those.
+       *
+       * A wide terminal composes them together; a narrow one composes the
+       * routed surface as the whole screen. What it does not compose is not
+       * there — no branch, no rendering, no focus target, no middleware — so
+       * Tab cannot reach a pane that is not on the screen and the numbered map
+       * cannot offer one.
+       *
+       * The order is `ROUTE_SURFACES`, restored explicitly rather than left to
+       * whichever pane happened to be mounted first, so the ring a resize
+       * arrives at is the ring a cold start builds.
+       */
+      const syncOutlets = function* (wanted: readonly RouteSurface[]): Operation<void> {
+        for (const [name, node] of [...regions]) {
+          if (!wanted.includes(name as RouteSurface)) {
+            yield* until(node.remove());
+            regions.delete(name);
+          }
+        }
+        for (const region of wanted) {
+          if (regions.has(region)) {
+            continue;
+          }
+          const before = [...root.node.children].find((child) => child.name === "chrome:rules");
+          const node = root.node.createChild(`region:${region}`, before ? { before } : undefined);
+          focusable(node);
+          recordPath(node, node.name);
+          if (region === "history") {
+            // Activating the band opens a reconstruction of whatever the
+            // scrubber is on. The band is a region rather than a control, and
+            // it is still the thing that was activated.
+            activates(node, { kind: "inspect" });
+          }
+          regions.set(region, node);
+        }
+        root.node.sort((one, other) => rankOf(one.name) - rankOf(other.name));
+      };
+
+      /** The panes a composition of this size, at this route, actually shows. */
+      const composedIn = (next: ReplState, control?: Mutation): RouteSurface[] => {
+        const layout = layoutOf(next, size, control);
+        const rects: Readonly<Record<RouteSurface, Rect | undefined>> = {
+          sessions: layout.sidebar,
+          transcript: layout.transcript,
+          bindings: layout.bindings,
+          input: layout.contextual,
+          history: layout.footer,
+        };
+        return ROUTE_SURFACES.filter((region) => rects[region] !== undefined);
       };
 
       /**
@@ -571,16 +615,24 @@ export function useReplTree(
         // only once focus is inside it. The tree asks itself where focus is
         // rather than being told, so the two can never disagree.
         const within = withinHistory(current(root.node).name);
+        const band = regions.get("input");
+        const footer = regions.get("history");
         if (mutation === "rebuild-tree-each-sync") {
           // Rebuilding destroys the node focus is on, and takes focus with it.
-          for (const region of [regions.get("input")!, regions.get("history")!]) {
-            for (const child of [...region.children]) {
+          for (const region of [band, footer]) {
+            for (const child of [...(region?.children ?? [])]) {
               yield* until(child.remove());
             }
           }
         }
-        yield* reconcile(regions.get("input")!, runControls(next), mutation);
-        yield* reconcile(regions.get("history")!, transportControls(next, within), mutation);
+        // A pane this composition does not show has no controls to reconcile,
+        // because it has no branch for them to be on.
+        if (band !== undefined) {
+          yield* reconcile(band, runControls(next), mutation);
+        }
+        if (footer !== undefined) {
+          yield* reconcile(footer, transportControls(next, within), mutation);
+        }
       };
 
       /**
@@ -590,7 +642,10 @@ export function useReplTree(
        * keeps the panels already open, and with them whatever focus is inside.
        */
       const mountScopes = function* (next: ReplState): Operation<void> {
-        const wanted = next.route.scopes;
+        const transcript = regions.get("transcript");
+        // The locus lives inside the transcript. A composition that does not
+        // show it shows none of the scopes either.
+        const wanted = transcript === undefined ? [] : next.route.scopes;
         let diverged = 0;
         while (
           diverged < Math.min(scopes.length, wanted.length) &&
@@ -602,7 +657,7 @@ export function useReplTree(
           const leaf = scopes.pop()!;
           yield* until(leaf.remove());
         }
-        let parent = scopes[scopes.length - 1] ?? regions.get("transcript")!;
+        let parent = scopes[scopes.length - 1] ?? transcript;
         for (const scope of wanted.slice(scopes.length)) {
           const node = parent.createChild(`panel:${scope}`);
           // A scope panel is a container, not a target: it owns the middleware
@@ -846,8 +901,9 @@ export function useReplTree(
       const syncShape = function* (next: ReplState, control?: Mutation): Operation<boolean> {
         refusal = control === "render-partial-route" ? undefined : refusalOf(next);
         if (refusal !== undefined) {
-          if (regions.size > 0) {
+          if (built) {
             yield* removeOrdinary();
+            built = false;
           }
           if (refused === undefined) {
             refused = root.node.createChild("chrome:refused");
@@ -859,8 +915,13 @@ export function useReplTree(
           yield* until(refused.remove());
           refused = undefined;
         }
-        if (regions.size === 0) {
+        const fresh = regions.size === 0 && refused === undefined && !built;
+        if (fresh) {
           mountOrdinary();
+          built = true;
+        }
+        yield* syncOutlets(composedIn(next, control));
+        if (fresh) {
           enterOwningSurface(next);
         }
         return false;
@@ -1043,6 +1104,30 @@ function rootAction(input: ReplInput, mutation?: Mutation): ReplAction | undefin
     return { kind: "back" };
   }
   return undefined;
+}
+
+/**
+ * Where one of the root's children belongs, drawn first to last.
+ *
+ * The chrome above the panes, the panes in the order the ring walks them, the
+ * drawers over the contextual band, and the overlays last so they land on top
+ * of what they describe. It is restored explicitly because a pane mounted by a
+ * resize is appended wherever there is room, and the ring a resize arrives at
+ * has to be the ring a cold start builds.
+ */
+function rankOf(name: string): number {
+  const chrome = ["chrome:surface-bar", "chrome:header"].indexOf(name);
+  if (chrome >= 0) {
+    return chrome;
+  }
+  const region = ROUTE_SURFACES.indexOf(name.slice("region:".length) as RouteSurface);
+  if (name.startsWith("region:") && region >= 0) {
+    return 2 + region;
+  }
+  if (name.startsWith("drawer:")) {
+    return 7;
+  }
+  return 8 + ["chrome:rules", "chrome:focus-map", "chrome:refused"].indexOf(name);
 }
 
 /** The subtree traversal is trapped in: the top drawer, or the whole tree. */

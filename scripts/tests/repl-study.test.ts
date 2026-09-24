@@ -157,9 +157,15 @@ function ptyCommand(_command: string): string {
 }
 
 function ptyArguments(command: string): string[] {
-  const full = `deno run --allow-all ${command}`;
+  // The pty is given the wide profile's own size rather than whatever the
+  // terminal running the suite happens to be. These cases are about what the
+  // wide composition does, and one of them ran for months against a narrow
+  // screen because nobody said.
+  const full =
+    `stty rows ${PROFILE_SIZES.wide.rows} cols ${PROFILE_SIZES.wide.cols}; ` +
+    `deno run --allow-all ${command}`;
   if (Deno.build.os === "darwin") {
-    return ["-q", "/dev/null", ...full.split(" ")];
+    return ["-q", "/dev/null", "sh", "-c", full];
   }
   if (Deno.build.os === "linux") {
     return ["-qec", full, "/dev/null"];

@@ -1,15 +1,15 @@
 frame-12.narrow · 90 × 28
  EXECUTION HISTORY · 4 / 4  RECONSTRUCTED AT 00:12 · READ-ONLY                    Tab ▸
  HISTORY    │              ┃ PAUSED HEAD     INSPECTING  [ Continue FOCUS MAP · F1
- 00:53      ││           ││┃ 00:53                                    1  Sessions
- Entry 1    ││ │         ││┃                                          2  Transcript
-           ─◆●─●●───2─≈●─●●┃                                          3  Bindings
-               ▲ 00:12 · snapped · 41.0s before head                  4  REPL input
-                                                                      5  Execution Hist…
- CHECKPOINTS                                                          6  Continue
- 00:02 ◆ Entry 1 submitted                                   REPL     7  Return to paus…
- 00:05 ● document scope entered                              Entry  ▸ 8  Fork from here
- 00:12 ● Plan entered                                        Entry
+ 00:53      ││           ││┃ 00:53                                    1  Execution Hist…
+ Entry 1    ││ │         ││┃                                          2  Continue
+           ─◆●─●●───2─≈●─●●┃                                          3  Return to paus…
+               ▲ 00:12 · snapped · 41.0s before head                ▸ 4  Fork from here
+
+ CHECKPOINTS
+ 00:02 ◆ Entry 1 submitted                                   REPL
+ 00:05 ● document scope entered                              Entry 1 › document
+ 00:12 ● Plan entered                                        Entry 1 › document › Plan
  00:18 ● planning inputs prepared                            … › Plan › PlanInputs
  00:29 ● planning Agent response admitted                    … › Plan › Prompt
  00:30 · draft checked                                       … › Plan › Check
