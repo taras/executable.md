@@ -24,6 +24,7 @@ import {
   focusMark,
   regionMark,
   inputRegion,
+  refusedRegion,
   rule,
   surfaceBarRegion,
   tooSmallRegion,
@@ -41,6 +42,7 @@ import type { VisualLine } from "./render.ts";
 import type { OverlayEntry } from "./tree.ts";
 import type { Layout, Rect, SurfaceName } from "./layout.ts";
 import type { Mutation } from "./mutations.ts";
+import type { Refusal } from "./router.ts";
 import type {
   BindingsView,
   DrawerView,
@@ -418,6 +420,12 @@ export interface FocusMapData {
   /** Ordinary UI state: whether F1 has been pressed. Nothing about focus. */
   readonly visible: boolean;
 }
+
+/** The refusal a URL that names nowhere gets instead of a plausible screen. */
+export const refusedBody: Body<{ readonly refusal: Refusal; readonly layout: Layout }> = ({
+  self,
+  data,
+}) => refusedRegion(self.id, data.refusal, data.layout);
 
 /** The refusal a terminal below the supported minimum gets instead of a screen. */
 export const refusalBody: Body<Layout> = ({ self, data }) => tooSmallRegion(self.id, data);

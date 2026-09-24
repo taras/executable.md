@@ -24,6 +24,7 @@ import { placementOf } from "./component.ts";
 import { MINIMUM } from "./layout.ts";
 import type { View } from "./store.ts";
 import type { Mutation } from "./mutations.ts";
+import type { Refusal } from "./router.ts";
 import type { OverlayEntry } from "./tree.ts";
 
 export const C = {
@@ -1176,6 +1177,29 @@ function refusalColor(badge: string | undefined, notice: string): number {
     return C.hold;
   }
   return badge === undefined ? C.dim : C.gold;
+}
+
+/**
+ * A location that does not exist, said plainly.
+ *
+ * It names the segment, quotes what the URL asked for, and says what the
+ * execution actually did — because the useful thing about a refusal is not that
+ * it happened but which part was wrong.
+ */
+export function refusedRegion(id: string, refusal: Refusal, layout: Layout): Op[] {
+  return region(
+    id,
+    layout.screen,
+    [
+      plain("This location does not exist", C.out),
+      plain(`${refusal.segment} · ${refusal.named}`, C.hold),
+      blank(),
+      plain(refusal.reason, C.dim),
+      blank(),
+      plain("The URL addresses the execution; it cannot invent one.", C.settledText),
+    ],
+    { bg: BG.app, padding: { left: 2, top: 1 } },
+  );
 }
 
 export function tooSmallRegion(id: string, layout: Layout): Op[] {

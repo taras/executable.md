@@ -53,6 +53,7 @@ import {
   inputBody,
   outletBody,
   refusalBody,
+  refusedBody,
   rootBody,
   rulesBody,
   sessionsBody,
@@ -258,7 +259,11 @@ interface Mounted {
  * node each frame and take focus with it, which is the defect a live tree
  * exists to avoid.
  */
-export function useReplTree(state: ReplState, composed: Size): Operation<ReplTree> {
+export function useReplTree(
+  state: ReplState,
+  composed: Size,
+  mutation?: Mutation,
+): Operation<ReplTree> {
   return {
     *[Symbol.iterator]() {
       let size = composed;
@@ -267,6 +272,36 @@ export function useReplTree(state: ReplState, composed: Size): Operation<ReplTre
       // capture wants — time supplied rather than measured.
       const frames = yield* useFrames();
       const root = yield* useRoot();
+      if (state.refusal !== undefined && mutation !== "render-partial-route") {
+        // Nowhere to go means nothing to mount. Hidden content has no branch,
+        // and a location that does not exist is entirely hidden: no panes, no
+        // focus targets, no middleware — one node that says so.
+        const refused = root.node.createChild("chrome:refused");
+        refused.set("container", true);
+        const tree: ReplTree = {
+          root,
+          *sync() {},
+          present(_view, layout) {
+            attach(root.node, rootBody, undefined, placementOf(layout, layout.screen));
+            attach(
+              refused,
+              refusedBody,
+              { refusal: state.refusal!, layout },
+              placementOf(layout, layout.screen),
+            );
+          },
+          deliver: () => ({
+            delivery: { target: root.node.name, path: [], handled: false },
+          }),
+          hit: () => undefined,
+          focused: () => root.node,
+          advance: () => {},
+          retreat: () => {},
+          map: () => [],
+          chain: () => [],
+        };
+        return tree;
+      }
       // Chrome the composition draws around the panes. These are nodes so that
       // rendering order is the tree's, not a sequence written out in one
       // function — but they take no focus, so the ring is unchanged.

@@ -34,6 +34,7 @@ import {
   useTerm,
 } from "../repl-study/capture.ts";
 import { fixture } from "../repl-study/fixtures.ts";
+import { CATALOG } from "../repl-study/catalog.ts";
 import { playbackBetween, transitionOf } from "../repl-study/playback.ts";
 import { FRAMES, frame, stateFor, useFrame } from "../repl-study/frames.ts";
 import { openingState, scanKeys } from "../repl-study/host.ts";
@@ -1769,6 +1770,96 @@ describe("one clock, and the components that animate against it", () => {
     // And the moment that would have finished the transition reaches nothing.
     yield* clock.advance(TRANSITION_SECONDS);
     expect(applied).toEqual([0]);
+  });
+});
+
+describe("a URL addresses the execution, and cannot invent one", () => {
+  const HEAD = "cp-14";
+
+  /** Every URL a committed capture or study frame opens at. */
+  const OPENED: readonly { readonly url: string; readonly head?: string }[] = [
+    ...CATALOG.map((one) => ({ url: one.url, head: one.head })),
+    ...FRAMES.map((one) => ({ url: one.url, head: one.head })),
+  ];
+
+  const refusalFor = (url: string, head: string | undefined = HEAD) =>
+    hydrate(url, journalThrough(head)).refusal;
+
+  it("resolves every location the study actually opens", function* () {
+    for (const one of OPENED) {
+      expect({ url: one.url, refusal: refusalFor(one.url, one.head) }).toEqual({
+        url: one.url,
+        refusal: undefined,
+      });
+    }
+  });
+
+  it("names the segment it could not resolve, for each kind of segment", function* () {
+    const cases = [
+      { url: "xmd://repl/e1/transcript/entry-2/document", segment: "entry", named: "entry-2" },
+      { url: "xmd://repl/e1/transcript/entry-1/nowhere", segment: "scope", named: "nowhere" },
+      {
+        url: "xmd://repl/e1/transcript/entry-1/document/missing",
+        segment: "scope",
+        named: "missing",
+      },
+      {
+        url: "xmd://repl/e1/transcript/entry-1/document?at=cp-99",
+        segment: "checkpoint",
+        named: "cp-99",
+      },
+      {
+        url: "xmd://repl/e1/transcript/entry-1/document/+nope",
+        segment: "drawer",
+        named: "nope",
+      },
+    ];
+    for (const one of cases) {
+      const refusal = refusalFor(one.url);
+      expect({ url: one.url, segment: refusal?.segment, named: refusal?.named }).toEqual({
+        url: one.url,
+        segment: one.segment,
+        named: one.named,
+      });
+      // It says what the execution did, not merely that something is wrong.
+      expect(refusal?.reason.length ?? 0).toBeGreaterThan(0);
+    }
+  });
+
+  it("refuses a drawer when nothing is waiting for an answer", function* () {
+    // The same drawer, against a moment before anything suspended.
+    expect(refusalFor("xmd://repl/e1/transcript/entry-1/document/+project", "cp-03")).toEqual({
+      segment: "drawer",
+      named: "project",
+      reason: "nothing is waiting for an answer",
+    });
+    expect(refusalFor("xmd://repl/e1/transcript/entry-1/document/+project", HEAD)).toBeUndefined();
+  });
+
+  it("mounts nothing but the refusal, and draws it instead of a screen", function* () {
+    const state = hydrate("xmd://repl/e1/transcript/entry-1/nowhere", journalThrough(HEAD));
+    const tree = yield* useReplTree(state, WIDE);
+    // Hidden content has no branch: there are no panes to focus, reach or type
+    // into, because there is nowhere to be.
+    expect(walk(tree.root.node).map((node) => node.name)).toEqual(["", "chrome:refused"]);
+    expect(chain(tree)).toEqual([]);
+    expect(overlayOf(tree)).toEqual([]);
+
+    const drawn = yield* shot(tree, state, { overlay: false });
+    expect(drawn).toContain("This location does not exist");
+    expect(drawn).toContain("nowhere");
+    expect(drawn).not.toContain("BINDINGS");
+  });
+
+  it("renders the plausible screen instead when the refusal is removed", function* () {
+    // The control. A router that resolves what it can and quietly drops the
+    // rest draws an execution that never ran, with nothing saying which part
+    // was invented.
+    const state = hydrate("xmd://repl/e1/transcript/entry-1/nowhere", journalThrough(HEAD));
+    const tree = yield* useReplTree(state, WIDE, "render-partial-route");
+    const drawn = yield* shot(tree, state, { overlay: false });
+    expect(drawn).not.toContain("This location does not exist");
+    expect(drawn).toContain("BINDINGS");
   });
 });
 

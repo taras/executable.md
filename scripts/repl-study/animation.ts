@@ -24,7 +24,7 @@
  * interface has not reached. Waiting a scheduler turn instead would be a guess
  * that happened to be right.
  *
- * This follows `@effection-contrib/raf`: one producer of timestamps, consumed
+ * This follows `@effectionx/raf`: one producer of timestamps, consumed
  * as a stream. The clock is the host's rather than the browser's, because a
  * terminal has no animation frame and the study has to supply time as well as
  * measure it.

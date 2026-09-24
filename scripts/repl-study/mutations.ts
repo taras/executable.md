@@ -60,6 +60,8 @@ export const MUTATIONS = [
   "keep-route-on-focus",
   /** A root that implements no action, so every one reaches the unowned default. */
   "disown-actions",
+  /** Resolve what the URL can and render the rest as if it were there. */
+  "render-partial-route",
   /** Forget the selected marker when a state is rebuilt from its URL. */
   "drop-selection-on-hydrate",
   /** Exit on Ctrl+C while a paused entry is still active. */
