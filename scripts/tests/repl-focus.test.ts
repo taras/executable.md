@@ -55,7 +55,12 @@ import { drive, enterRoute } from "../repl-study/drive.ts";
 import { focus as focusNode } from "../repl-study/tree.ts";
 import { find, overlayOf, surfaceOwning, useReplTree, walk } from "../repl-study/tree.ts";
 import type { OverlayEntry, ReplTree } from "../repl-study/tree.ts";
-import { KeyboardApi, sendKey } from "../repl-study/keys.ts";
+import { ReplInputApi, sendInput } from "../repl-study/input.ts";
+import { ReplActionApi, UnownedActionError } from "../repl-study/actions.ts";
+import type { ReplAction } from "../repl-study/actions.ts";
+import { boxOf } from "../repl-study/component.ts";
+import type { Node } from "../repl-study/vendor/freedom/upstream/index.ts";
+import type { ReplInput } from "../repl-study/input.ts";
 import type { Mutation } from "../repl-study/mutations.ts";
 
 const ROOT = fileURLToPath(new URL("../../", import.meta.url));
@@ -76,6 +81,11 @@ function context(size: Size, mutation?: Mutation) {
 
 function key(code: string, extra: Record<string, unknown> = {}): HarnessEvent {
   return { kind: "key", event: { type: "keydown", key: code, code, ...extra } };
+}
+
+/** One key, already normalized, for a case that delivers it by hand. */
+function press(code: string): ReplInput {
+  return { kind: "key", key: { type: "keydown", code } };
 }
 
 /** One state and the tree that renders it, built from a URL and a journal. */
@@ -299,7 +309,7 @@ describe("input reaches the focused node through its ancestors", () => {
   it("passes through the panel and the drawer that contain it", function* () {
     // A flat registry has no way to produce this: the path is the tree's.
     const { tree } = yield* opened("xmd://repl/e1/transcript/entry-1/document/+project", "cp-14");
-    const delivery = sendKey(tree.root.node, tree.focused(), { type: "keydown", code: "x" });
+    const delivery = sendInput(tree.root.node, tree.focused(), press("x"));
     expect(delivery.target).toBe("field:drawer.project.name");
     expect(delivery.path).toEqual(["drawer:project", "panel:project.body"]);
   });
@@ -307,7 +317,7 @@ describe("input reaches the focused node through its ancestors", () => {
   it("passes through the region that owns a transport control", function* () {
     const { state, tree } = yield* useFrame(frame("10")!, WIDE);
     void state;
-    const delivery = sendKey(tree.root.node, tree.focused(), { type: "keydown", code: "x" });
+    const delivery = sendInput(tree.root.node, tree.focused(), press("x"));
     expect(delivery.target).toBe("control:transport.continue");
     expect(delivery.path).toEqual(["region:history"]);
   });
@@ -324,7 +334,7 @@ describe("input reaches the focused node through its ancestors", () => {
     // it, nothing can focus it, and no middleware path reaches it any more.
     expect(chain(tree)).not.toContain("field:drawer.project.name");
     expect(walk(tree.root.node).map((node) => node.name)).not.toContain("drawer:project");
-    const delivery = sendKey(tree.root.node, tree.focused(), { type: "keydown", code: "x" });
+    const delivery = sendInput(tree.root.node, tree.focused(), press("x"));
     expect(delivery.path).not.toContain("drawer:project");
     expect(delivery.target).not.toBe(field.name);
   });
@@ -336,10 +346,9 @@ describe("a branch may consume a key, and then nothing else runs it", () => {
   it("stops at the branch that claimed it, and the fallback never fires", function* () {
     const { state, tree } = yield* suspended();
     const drawer = find(tree.root.node, "drawer:project")!;
-    drawer.scope.around(KeyboardApi, {
-      keydown([node, pressed], _next): boolean {
-        void node;
-        void pressed;
+    drawer.scope.around(ReplInputApi, {
+      handle([received], _next): boolean {
+        void received;
         return true;
       },
     });
@@ -1121,6 +1130,175 @@ describe("through a real decoder", () => {
     const [event] = events;
     expect("code" in event ? event.code : "").toBe("ArrowUp");
     expect("ctrl" in event ? event.ctrl : undefined).toBe(true);
+  });
+});
+
+describe("input is one gesture, and what it means is an action", () => {
+  const PAUSED = "xmd://repl/e1/history/entry-1/document";
+  const DELIVERY = { size: WIDE, scrollLimit: 0 };
+
+  /** A footer with its transport controls mounted, and a frame drawn once. */
+  function* transport(
+    url: string,
+    head: string,
+  ): Operation<{ state: ReplState; tree: ReplTree; control: Node }> {
+    const { state, tree } = yield* opened(url, head);
+    // The footer is an explicit region: its controls exist once focus is in it.
+    const entered = yield* drive(tree, state, key("5"), context(WIDE));
+    tree.advance();
+    // Drawing once is what gives every node the box a pointer is resolved
+    // against. Nothing is asserted about the picture here.
+    yield* shot(tree, entered.state);
+    return { state: entered.state, tree, control: tree.focused() };
+  }
+
+  /** Every action that passed this node, in order. */
+  function record(node: Node, seen: ReplAction[]): void {
+    node.scope.around(ReplActionApi, {
+      dispatch([action], next): void {
+        seen.push(action);
+        return next(action);
+      },
+    });
+  }
+
+  it("emits one action for Enter, for Space and for a pointer on the same control", function* () {
+    const { state, tree, control } = yield* transport(PAUSED, "cp-18");
+    expect(control.name).toBe("control:transport.continue");
+    const box = boxOf(control)!;
+    // The pointer is aimed at the cell the band itself says the control owns,
+    // and the tree resolves that cell back to the same node.
+    expect(tree.hit(box.x, box.y)).toBe(control);
+
+    const seen: ReplAction[] = [];
+    record(tree.root.node, seen);
+
+    const byEnter = tree.deliver({ state, input: press("Enter"), context: DELIVERY });
+    const bySpace = tree.deliver({ state, input: press("Space"), context: DELIVERY });
+    const byPointer = tree.deliver({
+      state,
+      input: { kind: "pointer", pointer: { button: "primary", x: box.x, y: box.y } },
+      context: DELIVERY,
+    });
+
+    // Byte for byte: there is nothing in an action for a keyboard and a pointer
+    // to differ about, because neither is in it.
+    const [enter, space, pointer] = seen.map((action) => JSON.stringify(action));
+    expect({ space, pointer }).toEqual({ space: enter, pointer: enter });
+    expect(enter).toBe(JSON.stringify({ kind: "continue" }));
+
+    // And the same state, from the same state.
+    const shapes = [byEnter, bySpace, byPointer].map((one) => JSON.stringify(one.reduction?.state));
+    expect(shapes[1]).toBe(shapes[0]);
+    expect(shapes[2]).toBe(shapes[0]);
+    expect(byEnter.reduction?.state.moment.transport).toBe("live");
+  });
+
+  it("runs no fallback and emits no action for an input a branch consumed", function* () {
+    const { state, tree } = yield* transport(PAUSED, "cp-18");
+    // `F1` is not an action: the store owns it, and it is the one that shows
+    // whether the fallback ran at all. Enter is, and shows whether the branch
+    // below the consumer ever got to say so.
+    const loose = yield* drive(tree, state, key("F1"), context(WIDE));
+    expect(loose.state.overlay).toBe(!state.overlay);
+
+    const seen: ReplAction[] = [];
+    record(tree.root.node, seen);
+    find(tree.root.node, "region:history")!.scope.around(ReplInputApi, {
+      handle([received], _next): boolean {
+        void received;
+        return true;
+      },
+    });
+    const overlay = yield* drive(tree, state, key("F1"), context(WIDE));
+    // The store never saw it: a consumed input has no global meaning left.
+    expect(overlay.state.overlay).toBe(state.overlay);
+    expect(overlay.state).toBe(state);
+    expect(overlay.delivery?.handled).toBe(true);
+
+    const activated = yield* drive(tree, state, key("Enter"), context(WIDE));
+    expect(seen).toEqual([]);
+    expect(activated.state).toBe(state);
+  });
+
+  it("lets a drawer say what Back means inside it", function* () {
+    const { state, tree } = yield* opened(DRAWER, "cp-14");
+    const seen: ReplAction[] = [];
+    // Recorded at the root, which is where every action passes: the drawer
+    // consumes `back` rather than forwarding it, so its own scope never sees
+    // both halves of what it did.
+    record(tree.root.node, seen);
+    const inside = tree.deliver({ state, input: press("Escape"), context: DELIVERY });
+    // The drawer owned `back` and dispatched what it really meant there.
+    expect(seen.map((action) => action.kind)).toEqual(["back", "close-drawer"]);
+    expect(inside.reduction?.state.route.drawers).toEqual([]);
+
+    // Back anywhere else is a different thing entirely: it returns focus to the
+    // region that owns the control, and the route keeps its shape.
+    const { state: plain, tree: bare } = yield* transport(PAUSED, "cp-18");
+    const outside = bare.deliver({ state: plain, input: press("Escape"), context: DELIVERY });
+    expect(outside.reduction?.focus).toEqual({ kind: "owner" });
+    expect(outside.reduction?.state.route.drawers).toEqual([]);
+  });
+
+  it("throws on an action nothing owns", function* () {
+    const { state, tree } = yield* transport(PAUSED, "cp-18");
+    // Dispatched where no root is adapting: there is nothing to answer it.
+    expect(() =>
+      ReplActionApi.invoke(tree.focused().scope, "dispatch", [{ kind: "pause" }]),
+    ).toThrow(UnownedActionError);
+
+    // And inside a delivery, against a root that implements nothing.
+    expect(() =>
+      tree.deliver({
+        state,
+        input: press("Enter"),
+        context: { ...DELIVERY, mutation: "disown-actions" },
+      }),
+    ).toThrow(UnownedActionError);
+  });
+
+  it("takes a closed branch's input and action middleware away with it", function* () {
+    const { state, tree } = yield* opened(DRAWER, "cp-14");
+    const seen: ReplAction[] = [];
+    record(tree.root.node, seen);
+
+    const open = tree.deliver({ state, input: press("Escape"), context: DELIVERY });
+    expect(open.delivery.path).toContain("drawer:project");
+    expect(seen.map((action) => action.kind)).toEqual(["back", "close-drawer"]);
+
+    yield* tree.sync(open.reduction!.state);
+    expect(find(tree.root.node, "drawer:project")).toBeUndefined();
+    seen.length = 0;
+    const closed = tree.deliver({
+      state: open.reduction!.state,
+      input: press("Escape"),
+      context: DELIVERY,
+    });
+    // Nothing left to record the path, and nothing left to translate the
+    // action: Back is plain Back again.
+    expect(closed.delivery.path).not.toContain("drawer:project");
+    expect(seen.map((action) => action.kind)).toEqual(["back"]);
+  });
+
+  it("leaves the state it was handed alone, whatever an action does to it", function* () {
+    const { state, tree } = yield* transport(PAUSED, "cp-18");
+    const before = JSON.stringify(state.route);
+    const driven = tree.deliver({ state, input: press("Enter"), context: DELIVERY });
+    expect(JSON.stringify(state.route)).toBe(before);
+    expect(driven.reduction?.state).not.toBe(state);
+  });
+
+  it("keeps route building where the only action handler is", function* () {
+    // The root adapts; nothing else may. A branch that built a route would be a
+    // second place state comes from, and the way to see that is to look.
+    for (const name of ["components.ts", "render.ts", "tree.ts", "input.ts", "actions.ts"]) {
+      const source = yield* readTextFile(join(ROOT, "scripts/repl-study", name));
+      expect({
+        name,
+        builds: source.includes("hydrate(") || source.includes("formatRoute("),
+      }).toEqual({ name, builds: false });
+    }
   });
 });
 

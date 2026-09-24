@@ -36,8 +36,11 @@ import {
 import type { Node, PopFocus, Root } from "./vendor/freedom/upstream/index.ts";
 
 import { drawerTargets, labelFor } from "./surfaces.ts";
-import { recordPath } from "./keys.ts";
-import { attach, placementOf, within } from "./component.ts";
+import { activation, aimedAt, recordPath, ReplInputApi, sendInput } from "./input.ts";
+import type { Delivery, ReplInput } from "./input.ts";
+import { ReplActionApi, UnownedActionError } from "./actions.ts";
+import type { ReplAction } from "./actions.ts";
+import { attach, boxOf, placementOf, within } from "./component.ts";
 import type { Placement, Presentation } from "./component.ts";
 import {
   bindingsBody,
@@ -61,8 +64,8 @@ import type { DrawerView, HistoryView, InputView, ReplView } from "./view.ts";
 import { drawerSlots, inputSlot, transportSlots } from "./render.ts";
 import type { Layout, Rect } from "./layout.ts";
 import { isDrawerKind } from "./fixtures.ts";
-import { layoutOf } from "./store.ts";
-import type { ReplState, Size } from "./store.ts";
+import { applyAction, layoutOf, reverseTab } from "./store.ts";
+import type { Key, ReduceContext, Reduction, ReplState, Size } from "./store.ts";
 import { isRouteSurface, ROUTE_SURFACES, topDrawer } from "./route.ts";
 import type { RouteSurface } from "./route.ts";
 import type { Mutation } from "./mutations.ts";
@@ -122,6 +125,17 @@ export interface ReplTree {
    * from outside.
    */
   present(view: ReplView, layout: Layout, options?: PresentOptions): void;
+  /**
+   * Deliver one normalized input to the node it is aimed at.
+   *
+   * A key goes to whatever has focus; a pointer goes to the node drawn where it
+   * landed. Either way it travels up that node's scope, and whatever action
+   * survives to the root is adapted there — the one place a new state comes
+   * from.
+   */
+  deliver(request: DeliverRequest): Delivered;
+  /** The innermost node drawn over a cell, or nothing where none is. */
+  hit(x: number, y: number): Node | undefined;
   /** Where focus is, asked of the tree. */
   focused(): Node;
   advance(): void;
@@ -130,6 +144,39 @@ export interface ReplTree {
   map(): Node[];
   /** The focus chain: visible, enabled, and in tree order. */
   chain(): Node[];
+}
+
+/**
+ * What each control stands for.
+ *
+ * `Run` and `Fork` are drawn, numbered and focusable, and they are deliberately
+ * not here. Both name execution this study's fixture journal cannot perform —
+ * starting a run, forking from a recorded moment — and giving them an action
+ * the root would have to answer with nothing would be inventing the answer
+ * ahead of the execution model that owes it.
+ */
+const CONTROL_ACTIONS: Readonly<Record<string, ReplAction>> = {
+  "control:transport.pause": { kind: "pause" },
+  "control:transport.continue": { kind: "continue" },
+  "control:transport.return-head": { kind: "return-to-head" },
+};
+
+export interface DeliverRequest {
+  readonly state: ReplState;
+  readonly input: ReplInput;
+  /** Where focus is is the tree's own answer, so it is not asked for. */
+  readonly context: Omit<ReduceContext, "focused">;
+}
+
+export interface Delivered {
+  readonly delivery: Delivery;
+  /**
+   * What an action left, when one was dispatched and the root adapted it.
+   *
+   * Absent where nothing owned the input at all, which is the only case the
+   * store's own fallback may read.
+   */
+  readonly reduction?: Reduction;
 }
 
 export interface SyncOptions {
@@ -271,6 +318,14 @@ export function useReplTree(state: ReplState, composed: Size): Operation<ReplTre
        * appended wherever there is room, so the order is restored explicitly
        * rather than left to the order things happened to be created in.
        */
+      /** Give a control the action it stands for, where the study has one. */
+      const wire = (node: Node): void => {
+        const action = CONTROL_ACTIONS[node.name];
+        if (action !== undefined) {
+          activates(node, () => ({ ...action }));
+        }
+      };
+
       const reconcile = function* (
         parent: Node,
         wanted: readonly Control[],
@@ -294,6 +349,7 @@ export function useReplTree(state: ReplState, composed: Size): Operation<ReplTre
             if (shouldFocus(control)) {
               focusable(node);
             }
+            wire(node);
           }
         }
 
@@ -318,6 +374,7 @@ export function useReplTree(state: ReplState, composed: Size): Operation<ReplTre
           if (shouldFocus(control)) {
             focusable(replacement);
           }
+          wire(replacement);
         }
 
         const order = new Map(wanted.map((control, at) => [control.name, at] as const));
@@ -472,6 +529,22 @@ export function useReplTree(state: ReplState, composed: Size): Operation<ReplTre
               attach(control, controlBody, undefined, within(placement, cells.get(control.name)));
             }
           };
+          // Back, inside a drawer, means close the drawer. The drawer is the
+          // thing that knows it is a drawer, so it owns that translation rather
+          // than the root keeping a list of what might be open.
+          node.scope.around(ReplActionApi, {
+            dispatch([action], next): void {
+              if (action.kind !== "back") {
+                return next(action);
+              }
+              // Owning an action means answering it or saying what it really
+              // means. Saying it is dispatching the other action, not passing a
+              // changed one along — so what the root finally adapts arrived the
+              // same way every other action does.
+              ReplActionApi.invoke(node.scope, "dispatch", [{ kind: "close-drawer" }]);
+            },
+          });
+
           const mounted: Mounted = {
             node,
             historical,
@@ -500,6 +573,74 @@ export function useReplTree(state: ReplState, composed: Size): Operation<ReplTre
           drawers.push(mounted);
         }
       };
+
+      /**
+       * The application root, adapting actions.
+       *
+       * This is the only code that turns an action into a new state. It is
+       * installed on the root's scope, so every action dispatched anywhere in
+       * the tree arrives here last — after every branch that might have owned
+       * or translated it — and whatever it does not implement goes on to the
+       * API default, which throws.
+       *
+       * The state being adapted is set for the length of one delivery and read
+       * back afterwards. Nothing else may write it: a branch that wanted the
+       * state changed says so as an action.
+       */
+      let adapting: { state: ReplState; context: ReduceContext } | undefined;
+      let left: Reduction | undefined;
+      root.node.scope.around(ReplActionApi, {
+        dispatch([action], next): void {
+          if (adapting === undefined) {
+            // Dispatched outside a delivery: there is no state to adapt it
+            // against, so nothing here owns it.
+            return next(action);
+          }
+          // Whatever is nearer the action gets first refusal. Middleware runs
+          // outermost first, so the root — which is the outermost there is —
+          // passes the action on and answers only what comes back unowned. The
+          // default's own error is that signal, and it is the one this catches.
+          try {
+            return next(action);
+          } catch (error) {
+            if (!(error instanceof UnownedActionError)) {
+              throw error;
+            }
+          }
+          const applied = applyAction(adapting.state, action, adapting.context);
+          if (applied === undefined) {
+            throw new UnownedActionError(action);
+          }
+          adapting = { ...adapting, state: applied.state };
+          left = applied;
+        },
+      });
+
+      /**
+       * Give one node an activation of its own.
+       *
+       * Enter, Space and a primary pointer land in the same branch, so the
+       * keyboard and the pointer cannot drift apart: there is one gesture with
+       * three spellings, and one action for all of them. The action is built
+       * fresh each time so that what is dispatched is a value, not a shared
+       * object two call sites happen to hold.
+       */
+      const activates = (node: Node, action: () => ReplAction): void => {
+        node.scope.around(ReplInputApi, {
+          handle([input], next): boolean {
+            if (!activation(input) || !aimedAt(node)) {
+              return next(input);
+            }
+            ReplActionApi.invoke(node.scope, "dispatch", [action()]);
+            return true;
+          },
+        });
+      };
+
+      // Activating the band opens a reconstruction of whatever the scrubber is
+      // on. The band is a region rather than a control, and it is still the
+      // thing that was activated.
+      activates(historyRegionNode, () => ({ kind: "inspect" }));
 
       // The surface the URL names owns focus before anything is pushed over
       // it. A drawer's trap remembers what it interrupted, and a cold start
@@ -554,6 +695,41 @@ export function useReplTree(state: ReplState, composed: Size): Operation<ReplTre
             presentChild(child, view, layout, place, options, overlay, own);
           }
         },
+        deliver({ state, input, context }) {
+          const focused = current(root.node);
+          const target =
+            input.kind === "pointer"
+              ? hitAt(activeRoot(root, drawers), input.pointer.x, input.pointer.y)
+              : focused;
+          if (target === undefined) {
+            // A pointer on a cell nothing is drawn in. There is no node to
+            // deliver to, so nothing happened.
+            return { delivery: { target: root.node.name, path: [], handled: false } };
+          }
+          adapting = { state, context: { ...context, focused: focused.name } };
+          left = undefined;
+          try {
+            const delivery = sendInput(root.node, target, input);
+            if (delivery.handled) {
+              return { delivery, reduction: left };
+            }
+            // Nothing in the tree claimed it, so the root reads it. Its own
+            // action is dispatched **on the target's scope**, so a branch on
+            // the way up may still translate what the key meant there.
+            const action = rootAction(input, context.mutation);
+            if (action === undefined) {
+              return { delivery };
+            }
+            ReplActionApi.invoke(target.scope, "dispatch", [action]);
+            // `handled` stays what the path said. It means an input *handler*
+            // claimed it, and the root is not on the path — what the root read
+            // shows up as a reduction instead.
+            return { delivery, reduction: left };
+          } finally {
+            adapting = undefined;
+          }
+        },
+        hit: (x, y) => hitAt(activeRoot(root, drawers), x, y),
         focused: () => current(root.node),
         advance: () => advance(root.node),
         retreat: () => retreat(root.node),
@@ -567,6 +743,61 @@ export function useReplTree(state: ReplState, composed: Size): Operation<ReplTre
       return tree;
     },
   };
+}
+
+/**
+ * The innermost node drawn over a cell.
+ *
+ * Depth first, deepest wins: a control's own cell sits inside its region's box,
+ * and a pointer on it means the control. Only a node that was placed has a box
+ * at all, so a structural outlet is never what a pointer lands on.
+ *
+ * A container is not something you point at. The chrome that floats over the
+ * whole screen — the rules, the numbered map — is placed against the screen and
+ * would otherwise swallow every pointer that reached it.
+ */
+function hitAt(node: Node, x: number, y: number): Node | undefined {
+  let found: Node | undefined;
+  const box = boxOf(node);
+  if (
+    box !== undefined &&
+    node.props.container !== true &&
+    x >= box.x &&
+    x < box.x + box.width &&
+    y >= box.y &&
+    y < box.y + box.height
+  ) {
+    found = node;
+  }
+  for (const child of node.children) {
+    const deeper = hitAt(child, x, y);
+    if (deeper !== undefined) {
+      found = deeper;
+    }
+  }
+  return found;
+}
+
+/**
+ * What the root reads an input as, when nothing in the tree claimed it.
+ *
+ * Only the two that are navigation rather than editing. Everything else a key
+ * can mean — typing, scrolling, scrubbing, the overlay, quitting — is not an
+ * action and is read by the store instead.
+ */
+function rootAction(input: ReplInput, mutation?: Mutation): ReplAction | undefined {
+  if (input.kind !== "key") {
+    return undefined;
+  }
+  const key: Key = input.key;
+  if (key.code === "Tab" || key.code === "Backtab") {
+    // Traversal is the tree's: it is the thing that knows what exists now.
+    return { kind: "focus", move: reverseTab(key, mutation) ? "previous" : "next" };
+  }
+  if (key.code === "Escape") {
+    return { kind: "back" };
+  }
+  return undefined;
 }
 
 /** The subtree traversal is trapped in: the top drawer, or the whole tree. */

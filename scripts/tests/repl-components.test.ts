@@ -28,13 +28,19 @@ import { drive } from "../repl-study/drive.ts";
 import { applyAnsi, createGrid, gridText } from "../repl-study/screen.ts";
 import { overlayOf, useReplTree } from "../repl-study/tree.ts";
 import { enterRoute } from "../repl-study/drive.ts";
-import { sendKey } from "../repl-study/keys.ts";
+import { sendInput } from "../repl-study/input.ts";
+import type { ReplInput } from "../repl-study/input.ts";
 import { indexOf, project } from "../repl-study/view.ts";
 import type { ReplView } from "../repl-study/view.ts";
 import type { HarnessEvent } from "../repl-study/store.ts";
 import type { Mutation } from "../repl-study/mutations.ts";
 
 const WIDE = PROFILE_SIZES.wide;
+
+/** One key, already normalized, for a case that delivers it by hand. */
+function press(code: string): ReplInput {
+  return { kind: "key", key: { type: "keydown", code } };
+}
 
 function context(size: typeof WIDE, mutation?: Mutation) {
   return { size, mutation, scrollLimit: 40 };
@@ -277,7 +283,7 @@ describe("a recorded drawer keeps its presentation and loses its actionability",
       "control:drawer.project.submit",
       "region:history",
     ]);
-    const delivery = sendKey(tree.root.node, tree.focused(), { type: "keydown", code: "x" });
+    const delivery = sendInput(tree.root.node, tree.focused(), press("x"));
     expect(delivery.target).toBe("field:drawer.project.name");
   });
 
@@ -313,7 +319,7 @@ describe("a recorded drawer keeps its presentation and loses its actionability",
   it("keeps only the navigation that stays valid while inspecting", function* () {
     const { tree } = yield* open(RECORDED, "cp-18");
     expect(tree.focused().name).toBe("region:history");
-    const delivery = sendKey(tree.root.node, tree.focused(), { type: "keydown", code: "x" });
+    const delivery = sendInput(tree.root.node, tree.focused(), press("x"));
     // A key reaches the history path and nothing recorded.
     expect(delivery.target).toBe("region:history");
     expect(delivery.path).not.toContain("panel:project.body");
@@ -358,7 +364,7 @@ describe("one mounted tree answers everything", () => {
     for (const target of tree.chain()) {
       expect(rootOf(target)).toBe(tree.root.node);
     }
-    const delivery = sendKey(tree.root.node, tree.focused(), { type: "keydown", code: "x" });
+    const delivery = sendInput(tree.root.node, tree.focused(), press("x"));
     expect(delivery.target).toBe(tree.focused().name);
     // The overlay is the same tree walked, so every entry names a node in it.
     const names = new Set(walkNames(tree.root.node));

@@ -58,6 +58,8 @@ export const MUTATIONS = [
   "ignore-backtab",
   /** Move focus across a region boundary without moving the URL's surface. */
   "keep-route-on-focus",
+  /** A root that implements no action, so every one reaches the unowned default. */
+  "disown-actions",
   /** Forget the selected marker when a state is rebuilt from its URL. */
   "drop-selection-on-hydrate",
   /** Exit on Ctrl+C while a paused entry is still active. */

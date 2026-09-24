@@ -127,6 +127,7 @@ export function attach<Data>(
 ): Update<Data> {
   let current = data;
   let where = placement;
+  node.data.set(boxKey, placement.rect);
   const self: Surface = { id: node.id, name: node.name === "" ? "root" : node.name };
   node.data.set(bodyKey, {
     render: (_node, children, focus) =>
@@ -135,6 +136,7 @@ export function attach<Data>(
   return (next, to) => {
     current = next;
     where = to;
+    node.data.set(boxKey, to.rect);
   };
 }
 
@@ -165,6 +167,19 @@ export function within(parent: Placement, rect: Rect | undefined): Placement {
     dense: parent.dense,
     profile: parent.profile,
   };
+}
+
+const boxKey = createNodeData<Rect>("xmd:repl:box");
+
+/**
+ * The box a node was last placed in.
+ *
+ * Recorded so that a point on the screen can be resolved to the node drawn
+ * there. It is the framework reading what a parent decided, never a body
+ * reaching for geometry it was not given.
+ */
+export function boxOf(node: Node): Rect | undefined {
+  return node.data.get(boxKey);
 }
 
 export function hasBody(node: Node): boolean {
