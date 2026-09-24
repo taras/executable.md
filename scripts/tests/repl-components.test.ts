@@ -53,7 +53,7 @@ function* mounted(
   chain: string[];
 }> {
   const state = hydrate(url, journalThrough(head));
-  const tree = yield* useReplTree(state);
+  const tree = yield* useReplTree(state, WIDE);
   const view = project(state);
   const term = yield* useTerm(WIDE);
   const result = term.render(paint({ tree, view, layout: layoutOf(state, WIDE) }).ops, {
@@ -107,7 +107,7 @@ describe("the view a component is handed", () => {
 describe("a component is a body on a node", () => {
   it("hands a body its identity and no way to reach the tree", function* () {
     const state = hydrate("xmd://repl/e1/transcript/entry-1/document", journalThrough("cp-14"));
-    const tree = yield* useReplTree(state);
+    const tree = yield* useReplTree(state, WIDE);
     const node = tree.root.node.createChild("probe:self");
     let seen: Record<string, unknown> = {};
     attach(
@@ -157,7 +157,7 @@ describe("a component is a body on a node", () => {
 
   it("lets a parent wrap what its children already rendered", function* () {
     const state = hydrate("xmd://repl/e1/transcript/entry-1/document", journalThrough("cp-14"));
-    const tree = yield* useReplTree(state);
+    const tree = yield* useReplTree(state, WIDE);
     const parent = tree.root.node.createChild("probe:parent");
     const child = parent.createChild("probe:child");
     attach(child, ({ self }) => [{ kind: "text", value: self.name } as never], undefined, {
@@ -183,7 +183,7 @@ describe("a component is a body on a node", () => {
 
   it("keeps the node when its data changes, rather than rebuilding", function* () {
     const state = hydrate("xmd://repl/e1/transcript/entry-1/document", journalThrough("cp-14"));
-    const tree = yield* useReplTree(state);
+    const tree = yield* useReplTree(state, WIDE);
     const node = tree.chain().find((candidate) => candidate.name === "region:transcript")!;
     const before = node.id;
     const view = project(state);
@@ -263,7 +263,7 @@ describe("a recorded drawer keeps its presentation and loses its actionability",
 
   function* open(url: string, head: string) {
     const state = hydrate(url, journalThrough(head));
-    const tree = yield* useReplTree(state);
+    const tree = yield* useReplTree(state, WIDE);
     yield* enterRoute(tree, state);
     return { state, tree };
   }
@@ -333,7 +333,7 @@ describe("a recorded drawer keeps its presentation and loses its actionability",
 describe("one mounted tree answers everything", () => {
   function* harness() {
     const state = hydrate("xmd://repl/e1/transcript/entry-1/document", journalThrough("cp-14"));
-    const tree = yield* useReplTree(state);
+    const tree = yield* useReplTree(state, WIDE);
     yield* enterRoute(tree, state);
     const subject = fixture("nested");
     const composition = composeInto(tree, subject, initialView(subject));
@@ -369,7 +369,7 @@ describe("one mounted tree answers everything", () => {
 
   it("is rejected when rendering uses a tree of its own", function* () {
     const state = hydrate("xmd://repl/e1/transcript/entry-1/document", journalThrough("cp-14"));
-    const tree = yield* useReplTree(state);
+    const tree = yield* useReplTree(state, WIDE);
     yield* enterRoute(tree, state);
     const subject = fixture("nested");
     yield* useForeignTree(subject, initialView(subject));
@@ -397,7 +397,7 @@ describe("one mounted tree answers everything", () => {
     // the bindings pane had focus dragged back to the transcript by the next
     // frame, because drawing was re-deciding where they were.
     const state = hydrate("xmd://repl/e1/transcript/entry-1/document", journalThrough("cp-14"));
-    const tree = yield* useReplTree(state);
+    const tree = yield* useReplTree(state, WIDE);
     yield* enterRoute(tree, state);
     const moved = yield* drive(tree, state, key("Tab"), context(WIDE));
     const focused = tree.focused().name;

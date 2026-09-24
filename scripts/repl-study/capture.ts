@@ -116,7 +116,7 @@ let foreign: Composition | undefined;
 export function useForeignTree(subject: Fixture, view: View): Operation<Composition> {
   return {
     *[Symbol.iterator]() {
-      foreign = yield* useComposition(subject, view);
+      foreign = yield* useComposition(subject, view, PROFILE_SIZES.wide);
       return foreign;
     },
   };
@@ -191,6 +191,7 @@ export function* renderFrame(request: Omit<FrameRequest, "composition">): Operat
   const composition = yield* useComposition(
     request.fixture,
     request.view,
+    request.size,
     request.surface ?? request.view.surface,
   );
   return renderInto(term, { ...request, composition });
@@ -293,7 +294,7 @@ export function* playFrames(
   const limit = options.limit ?? 200;
   const subject = fixture(playback.to);
   const view = initialView(subject);
-  const composition = yield* useComposition(subject, view);
+  const composition = yield* useComposition(subject, view, size);
   const term = yield* useTerm(size);
   const frames: Frame[] = [];
   // A frame in the middle of a transition is a handful of changed cells, not a
@@ -356,7 +357,7 @@ export function* journeyFrames(
     // transition is a change to a mounted tree, never a new one.
     let composition = compositions.get(planned.fixture);
     if (composition === undefined) {
-      composition = yield* useComposition(subject, view);
+      composition = yield* useComposition(subject, view, size);
       compositions.set(planned.fixture, composition);
     }
     const request: FrameRequest = {
@@ -508,10 +509,13 @@ const NARROW_FRAMES = ["01", "05", "07", "12", "14"];
 export function* captureFocus(): Operation<Capture[]> {
   const captures: Capture[] = [];
   for (const subject of FRAMES) {
-    const { state, tree } = yield* useFrame(subject);
     const profiles: Profile[] = NARROW_FRAMES.includes(subject.id) ? ["wide", "narrow"] : ["wide"];
     for (const profile of profiles) {
       const size = PROFILE_SIZES[profile];
+      // One tree per composition. Topology follows the profile — a narrow
+      // drawer owns the screen and offers no way out to a band that is not on
+      // it — so a single tree cannot stand in for both.
+      const { state, tree } = yield* useFrame(subject, size);
       const term = yield* useTerm(size);
       // The frame's own tree draws the frame. It used to be told where focus
       // was and then rendered by a second tree mounted for the occasion, which
@@ -540,6 +544,7 @@ export function* captureFocus(): Operation<Capture[]> {
 export function useComposition(
   subject: Fixture,
   view: View,
+  composed: Size,
   surface: SurfaceName = view.surface,
 ): Operation<Composition> {
   return {
@@ -558,7 +563,7 @@ export function useComposition(
         }),
         journalThrough(markerShowing(subject.name)),
       );
-      const tree = yield* useReplTree(state);
+      const tree = yield* useReplTree(state, composed);
       // A caller that owns the whole composition brings its tree to the moment
       // once, at mount. A repaint never does this.
       yield* tree.sync(state);

@@ -120,7 +120,7 @@ export function renderCatalog(subject: CatalogEntry, profile: Profile): Operatio
     *[Symbol.iterator]() {
       const size = PROFILE_SIZES[profile];
       const state = hydrate(subject.url, journalThrough(subject.head));
-      const tree = yield* useReplTree(state);
+      const tree = yield* useReplTree(state, size);
       yield* enterRoute(tree, state);
       const term = yield* useTerm(size);
       const result = term.render(

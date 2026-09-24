@@ -371,7 +371,7 @@ export function* runInteractive(options: InteractiveOptions): Operation<void> {
 
   // The tree is acquired before the terminal is touched, so its teardown runs
   // after the terminal has been given back rather than into a restored one.
-  const tree = yield* useReplTree(repl);
+  const tree = yield* useReplTree(repl, { cols: state.cols, rows: state.rows });
   // Entering the region the route names comes first, because the footer is an
   // explicit region: its controls exist only once focus is inside it. Without
   // this the interactive harness opened at a frame's *location* but not its
@@ -757,7 +757,10 @@ export function* runReplay(options: ReplayOptions): Operation<void> {
     }
     // The replay owns its whole composition, so mounting one tree here is
     // exactly right — there is no other tree for it to be a second of.
-    const composition = yield* useComposition(state.fixture, state.view);
+    const composition = yield* useComposition(state.fixture, state.view, {
+      cols: state.cols,
+      rows: state.rows,
+    });
     draw(term, state, composition, write, options.mutation);
     drawn += 1;
     if (options.failAfter !== undefined && drawn >= options.failAfter) {

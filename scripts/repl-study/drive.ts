@@ -99,7 +99,7 @@ export function drive(
       }
       const reduced = reduce(state, event, { ...context, focused: tree.focused().name });
       applyFocus(tree, reduced.focus);
-      yield* tree.sync(reduced.state, context.mutation);
+      yield* tree.sync(reduced.state, { mutation: context.mutation, size: context.size });
       // Which surface owns focus is read off the tree, not parsed out of the
       // focused node's name.
       const followed = followFocus(
@@ -108,7 +108,7 @@ export function drive(
         "focus",
         context.mutation,
       );
-      yield* tree.sync(followed, context.mutation);
+      yield* tree.sync(followed, { mutation: context.mutation, size: context.size });
       return { state: followed, delivery };
     },
   };

@@ -16,7 +16,7 @@
 import { journalThrough } from "./journal.ts";
 import type { FixtureName } from "./model.ts";
 import { hydrate } from "./store.ts";
-import type { ReplState } from "./store.ts";
+import type { ReplState, Size } from "./store.ts";
 import { useReplTree } from "./tree.ts";
 import { enterRoute } from "./drive.ts";
 import type { ReplTree } from "./tree.ts";
@@ -363,11 +363,11 @@ export interface Frame {
  * frame was taken, and the evidence's job is to check that the node the study
  * names is one the tree actually offers.
  */
-export function useFrame(subject: StudyFrame): Operation<Frame> {
+export function useFrame(subject: StudyFrame, composed: Size): Operation<Frame> {
   return {
     *[Symbol.iterator]() {
       const state = stateFor(subject);
-      const tree = yield* useReplTree(state);
+      const tree = yield* useReplTree(state, composed);
       // The same entry the interactive harness uses, so a frame opened by
       // `--frame` and a frame built here cannot come out different.
       yield* enterRoute(tree, state, subject.focus);

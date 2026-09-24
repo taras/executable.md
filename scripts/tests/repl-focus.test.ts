@@ -62,6 +62,8 @@ const ROOT = fileURLToPath(new URL("../../", import.meta.url));
 const GOLDENS = fileURLToPath(new URL("./fixtures/repl-focus/", import.meta.url));
 const MAIN = "scripts/repl-study/main.ts";
 
+const DRAWER = "xmd://repl/e1/transcript/entry-1/document/+project";
+
 const WIDE: Size = PROFILE_SIZES.wide;
 const NARROW: Size = PROFILE_SIZES.narrow;
 
@@ -77,12 +79,13 @@ function key(code: string, extra: Record<string, unknown> = {}): HarnessEvent {
 function* opened(
   url: string,
   head: string | undefined,
+  composed: Size = WIDE,
 ): Operation<{
   state: ReplState;
   tree: ReplTree;
 }> {
   const state = hydrate(url, journalThrough(head));
-  const tree = yield* useReplTree(state);
+  const tree = yield* useReplTree(state, composed);
   return { state, tree };
 }
 
@@ -206,7 +209,7 @@ describe("the URL that says where you are", () => {
 describe("every frame of the approved focus study", () => {
   it("builds each frame's targets and numbering out of the live tree", function* () {
     for (const subject of FRAMES) {
-      const { tree } = yield* useFrame(subject);
+      const { tree } = yield* useFrame(subject, WIDE);
       const entries = overlayOf(tree);
       // With the overlay off the study draws only the focused target.
       const shown = subject.overlay
@@ -228,13 +231,13 @@ describe("every frame of the approved focus study", () => {
 
   it("moves where the study says Tab and Shift+Tab move", function* () {
     for (const subject of FRAMES) {
-      const forward = yield* useFrame(subject);
+      const forward = yield* useFrame(subject, WIDE);
       forward.tree.advance();
       expect({ frame: subject.id, tab: forward.tree.focused().name }).toEqual({
         frame: subject.id,
         tab: subject.tab,
       });
-      const reverse = yield* useFrame(subject);
+      const reverse = yield* useFrame(subject, WIDE);
       reverse.tree.retreat();
       expect({ frame: subject.id, shift: reverse.tree.focused().name }).toEqual({
         frame: subject.id,
@@ -246,7 +249,7 @@ describe("every frame of the approved focus study", () => {
   it("drives the real keys through the real tree", function* () {
     // The transition, not two destinations built independently.
     for (const subject of FRAMES) {
-      const { state, tree } = yield* useFrame(subject);
+      const { state, tree } = yield* useFrame(subject, WIDE);
       yield* drive(tree, state, key("Tab"), context(WIDE));
       expect({ frame: subject.id, tab: tree.focused().name }).toEqual({
         frame: subject.id,
@@ -257,7 +260,7 @@ describe("every frame of the approved focus study", () => {
 
   it("takes the URL with it whenever focus changes region", function* () {
     for (const subject of FRAMES) {
-      const { state, tree } = yield* useFrame(subject);
+      const { state, tree } = yield* useFrame(subject, WIDE);
       const driven = yield* drive(tree, state, key("Tab"), context(WIDE));
       const landed = surfaceOwning(tree.focused());
       expect({ frame: subject.id, surface: driven.state.route.surface }).toEqual({
@@ -268,7 +271,7 @@ describe("every frame of the approved focus study", () => {
   });
 
   it("leaves the URL behind when focus is allowed to move without it", function* () {
-    const { state, tree } = yield* useFrame(frame("02")!);
+    const { state, tree } = yield* useFrame(frame("02")!, WIDE);
     const driven = yield* drive(tree, state, key("Tab"), context(WIDE, "keep-route-on-focus"));
     expect(tree.focused().name).toBe("region:history");
     expect(driven.state.route.surface).toBe("input");
@@ -276,7 +279,7 @@ describe("every frame of the approved focus study", () => {
 
   it("walks the whole ring in both directions and comes back to the start", function* () {
     for (const subject of FRAMES) {
-      const { tree } = yield* useFrame(subject);
+      const { tree } = yield* useFrame(subject, WIDE);
       const size = tree.chain().length;
       for (let at = 0; at < size; at += 1) {
         tree.advance();
@@ -299,7 +302,7 @@ describe("input reaches the focused node through its ancestors", () => {
   });
 
   it("passes through the region that owns a transport control", function* () {
-    const { state, tree } = yield* useFrame(frame("10")!);
+    const { state, tree } = yield* useFrame(frame("10")!, WIDE);
     void state;
     const delivery = sendKey(tree.root.node, tree.focused(), { type: "keydown", code: "x" });
     expect(delivery.target).toBe("control:transport.continue");
@@ -358,7 +361,7 @@ describe("a branch may consume a key, and then nothing else runs it", () => {
     // Back from a control returns to the region that owns it. Which region that
     // is comes from walking the live tree, so a node that moved would move with
     // it.
-    const { state, tree } = yield* useFrame(frame("10")!);
+    const { state, tree } = yield* useFrame(frame("10")!, WIDE);
     expect(tree.focused().name).toBe("control:transport.continue");
     const owner = surfaceOwning(tree.focused());
     expect(owner).toBe("history");
@@ -374,7 +377,7 @@ describe("a live tree and a rebuilt one are the same tree", () => {
     state: ReplState;
     order: readonly string[];
   }> {
-    const { state, tree } = yield* useFrame(frame("11")!);
+    const { state, tree } = yield* useFrame(frame("11")!, WIDE);
     const driven = yield* drive(tree, state, key("Enter"), context(WIDE, mutation));
     return {
       state: driven.state,
@@ -385,7 +388,7 @@ describe("a live tree and a rebuilt one are the same tree", () => {
   /** The same URL and journal, with the store and the tree thrown away. */
   function* rebuilt(state: ReplState): Operation<readonly string[]> {
     const fresh = hydrate(formatRoute(state.route), state.journal);
-    const tree = yield* useReplTree(fresh);
+    const tree = yield* useReplTree(fresh, WIDE);
     const region = tree.chain().find((node) => node.name === "region:history");
     if (region) {
       focusNode(region);
@@ -418,7 +421,7 @@ describe("a live tree and a rebuilt one are the same tree", () => {
   });
 
   it("leaves focus on a surviving node after every replacement", function* () {
-    const { state, tree } = yield* useFrame(frame("11")!);
+    const { state, tree } = yield* useFrame(frame("11")!, WIDE);
     const driven = yield* drive(tree, state, key("Enter"), context(WIDE));
     void driven;
     expect(chain(tree)).toContain(tree.focused().name);
@@ -471,23 +474,22 @@ describe("branches, and what closing one destroys", () => {
       "xmd://repl/e1/transcript/entry-1/document/+project",
       "cp-14",
     );
-    yield* tree.sync(
-      hydrate("xmd://repl/e1/transcript/entry-1/document", state.journal),
-      "keep-closed-branch",
-    );
+    yield* tree.sync(hydrate("xmd://repl/e1/transcript/entry-1/document", state.journal), {
+      mutation: "keep-closed-branch",
+    });
     expect(walk(tree.root.node).map((node) => node.name)).toContain("field:drawer.project.name");
   });
 
   it("keeps focus across a sync, because the tree is reconciled and not rebuilt", function* () {
-    const { state, tree } = yield* useFrame(frame("10")!);
+    const { state, tree } = yield* useFrame(frame("10")!, WIDE);
     expect(tree.focused().name).toBe("control:transport.continue");
     yield* tree.sync(state);
     expect(tree.focused().name).toBe("control:transport.continue");
   });
 
   it("loses focus when every node is rebuilt on each sync", function* () {
-    const { state, tree } = yield* useFrame(frame("10")!);
-    yield* tree.sync(state, "rebuild-tree-each-sync");
+    const { state, tree } = yield* useFrame(frame("10")!, WIDE);
+    yield* tree.sync(state, { mutation: "rebuild-tree-each-sync" });
     expect(tree.focused().name).not.toBe("control:transport.continue");
   });
 });
@@ -495,7 +497,7 @@ describe("branches, and what closing one destroys", () => {
 describe("drawers trap traversal and restore outward", () => {
   it("traps the ring in the top drawer, with the footer inside it", function* () {
     for (const subject of FRAMES.filter((one) => one.meta.trap)) {
-      const { tree } = yield* useFrame(subject);
+      const { tree } = yield* useFrame(subject, WIDE);
       const ids = chain(tree);
       expect({ frame: subject.id, last: ids[ids.length - 1] }).toEqual({
         frame: subject.id,
@@ -534,12 +536,100 @@ describe("drawers trap traversal and restore outward", () => {
     expect(tree.focused().name).toBe(invoker);
   });
 
+  it("offers no way out of a narrow drawer, because there is no band to go to", function* () {
+    // A narrow drawer owns the whole screen, so the Execution History band it
+    // would escape to is not composed. A target Tab reaches and nothing draws
+    // is one a person has to guess at, so it is not mounted at all.
+    const { tree } = yield* opened(DRAWER, "cp-14", NARROW);
+    expect(chain(tree)).not.toContain("region:history");
+    expect(overlayOf(tree).map((entry) => entry.id)).not.toContain("region:history");
+    const drawer = find(tree.root.node, "drawer:project")!;
+    // No branch at all, so there is no node to enter the ring, carry
+    // middleware or receive a key.
+    expect(walk(drawer).map((node) => node.name)).not.toContain("region:history");
+  });
+
+  it("keeps the way out of a wide drawer, where the band is on screen", function* () {
+    const { tree } = yield* opened(DRAWER, "cp-14", WIDE);
+    expect(chain(tree)).toContain("region:history");
+    expect(overlayOf(tree).map((entry) => entry.id)).toContain("region:history");
+  });
+
+  it("takes the way out away on a resize, and leaves focus on a live target", function* () {
+    const { state, tree } = yield* opened(DRAWER, "cp-14", WIDE);
+    const escape = tree.chain().find((node) => node.name === "region:history")!;
+    focusNode(escape);
+    expect(tree.focused().name).toBe("region:history");
+
+    yield* drive(
+      tree,
+      state,
+      { kind: "resize", cols: NARROW.cols, rows: NARROW.rows },
+      {
+        size: NARROW,
+        scrollLimit: 0,
+      },
+    );
+    expect(chain(tree)).not.toContain("region:history");
+    // Focus did not go outside the drawer, and it did not stay on a node that
+    // is no longer there.
+    expect(chain(tree)).toContain(tree.focused().name);
+    expect(
+      tree.focused().name.startsWith("field:drawer.") ||
+        tree.focused().name.startsWith("control:drawer."),
+    ).toBe(true);
+  });
+
+  it("brings the way out back in its canonical place when the room returns", function* () {
+    const { state, tree } = yield* opened(DRAWER, "cp-14", WIDE);
+    const order = () =>
+      [...tree.root.node.children]
+        .filter((node) => node.name === "drawer:project")
+        .flatMap((drawer) => [...drawer.children].map((child) => child.name));
+    const wide = order();
+
+    yield* drive(
+      tree,
+      state,
+      { kind: "resize", cols: NARROW.cols, rows: NARROW.rows },
+      {
+        size: NARROW,
+        scrollLimit: 0,
+      },
+    );
+    expect(order()).toEqual(["panel:project.body"]);
+
+    yield* drive(
+      tree,
+      state,
+      { kind: "resize", cols: WIDE.cols, rows: WIDE.rows },
+      {
+        size: WIDE,
+        scrollLimit: 0,
+      },
+    );
+    expect(order()).toEqual(wide);
+  });
+
+  it("gives a narrow drawer's ring nothing that leads off the screen", function* () {
+    // Walking the whole ring is the question a person asks with Tab. Nothing it
+    // stops on is a region, because the only region a drawer carries is the one
+    // the narrow composition does not draw.
+    const { state, tree } = yield* opened(DRAWER, "cp-14", NARROW);
+    const reached: string[] = [];
+    for (let at = 0; at < tree.chain().length + 1; at += 1) {
+      reached.push(tree.focused().name);
+      yield* drive(tree, state, key("Tab"), context(NARROW));
+    }
+    expect(reached).not.toContain("region:history");
+    expect(new Set(reached).size).toBe(tree.chain().length);
+  });
+
   it("lets Tab escape the trap when the branch is not pushed as a focus root", function* () {
     const { state, tree } = yield* opened("xmd://repl/e1/transcript/entry-1/document", "cp-14");
-    yield* tree.sync(
-      hydrate("xmd://repl/e1/transcript/entry-1/document/+project", state.journal),
-      "leak-drawer-trap",
-    );
+    yield* tree.sync(hydrate("xmd://repl/e1/transcript/entry-1/document/+project", state.journal), {
+      mutation: "leak-drawer-trap",
+    });
     expect(chain(tree)).toContain("region:transcript");
   });
 
@@ -548,17 +638,16 @@ describe("drawers trap traversal and restore outward", () => {
       "xmd://repl/e1/transcript/entry-1/document/+project",
       "cp-14",
     );
-    yield* tree.sync(
-      hydrate("xmd://repl/e1/transcript/entry-1/document", state.journal),
-      "forget-drawer-invoker",
-    );
+    yield* tree.sync(hydrate("xmd://repl/e1/transcript/entry-1/document", state.journal), {
+      mutation: "forget-drawer-invoker",
+    });
     expect(tree.focused().name).not.toBe("region:transcript");
   });
 });
 
 describe("removing the focused node", () => {
   it("selects a surviving node before teardown", function* () {
-    const { state, tree } = yield* useFrame(frame("10")!);
+    const { state, tree } = yield* useFrame(frame("10")!, WIDE);
     expect(tree.focused().name).toBe("control:transport.continue");
     // Resuming removes the paused transport and mounts the live one.
     const live = hydrate(formatRoute(state.route), journalThrough("cp-19"));
@@ -595,7 +684,7 @@ describe("background updates", () => {
   });
 
   it("changes nothing about where the person is", function* () {
-    const { state, tree } = yield* useFrame(frame("06")!);
+    const { state, tree } = yield* useFrame(frame("06")!, WIDE);
     const before = tree.focused().name;
     const driven = yield* drive(tree, state, streaming(), context(WIDE));
     expect(tree.focused().name).toBe(before);
@@ -604,7 +693,7 @@ describe("background updates", () => {
   });
 
   it("is rejected when the update moves focus", function* () {
-    const { state, tree } = yield* useFrame(frame("06")!);
+    const { state, tree } = yield* useFrame(frame("06")!, WIDE);
     const before = tree.focused().name;
     yield* drive(tree, state, streaming(), context(WIDE, "steal-focus-on-background"));
     expect(tree.focused().name).not.toBe(before);
@@ -613,7 +702,7 @@ describe("background updates", () => {
 
 describe("a disabled control is drawn and never focusable", () => {
   it("numbers Continue in the overlay and keeps it out of the chain", function* () {
-    const { tree } = yield* useFrame(frame("12")!);
+    const { tree } = yield* useFrame(frame("12")!, WIDE);
     const entries = overlayOf(tree);
     const continues = entries.find((entry) => entry.id === "control:transport.continue");
     expect(continues?.enabled).toBe(false);
@@ -622,8 +711,8 @@ describe("a disabled control is drawn and never focusable", () => {
   });
 
   it("admits it to the chain when a disabled control is made focusable", function* () {
-    const { state, tree } = yield* useFrame(frame("12")!);
-    yield* tree.sync(state, "focus-hidden-target");
+    const { state, tree } = yield* useFrame(frame("12")!, WIDE);
+    yield* tree.sync(state, { mutation: "focus-hidden-target" });
     expect(chain(tree)).toContain("control:transport.continue");
   });
 });
@@ -631,7 +720,7 @@ describe("a disabled control is drawn and never focusable", () => {
 describe("the overlay is the tree", () => {
   it("matches the live tree exactly, node for node", function* () {
     for (const subject of FRAMES) {
-      const { tree } = yield* useFrame(subject);
+      const { tree } = yield* useFrame(subject, WIDE);
       const fromTree = tree
         .map()
         .map((node) => node.name)
@@ -914,7 +1003,7 @@ describe("rebuilding from the URL and the journal alone", () => {
 describe("the same route at two profiles", () => {
   it("says the same thing wide and narrow", function* () {
     for (const subject of FRAMES) {
-      const { state, tree } = yield* useFrame(subject);
+      const { state, tree } = yield* useFrame(subject, WIDE);
       const before = projection(state);
       expect(layoutOf(state, WIDE).profile).toBe("wide");
       expect(layoutOf(state, NARROW).profile).toBe("narrow");
@@ -928,7 +1017,7 @@ describe("the same route at two profiles", () => {
   });
 
   it("loses the route when a resize rebuilds it from the profile", function* () {
-    const { state, tree } = yield* useFrame(frame("07")!);
+    const { state, tree } = yield* useFrame(frame("07")!, WIDE);
     const moved = yield* drive(
       tree,
       state,
@@ -978,7 +1067,7 @@ describe("through a real decoder", () => {
     expect("shift" in event ? event.shift : undefined).toBeUndefined();
 
     const subject = frame("03")!;
-    const { state, tree } = yield* useFrame(subject);
+    const { state, tree } = yield* useFrame(subject, WIDE);
     for (const decodedEvent of events) {
       yield* drive(tree, state, { kind: "key", event: decodedEvent }, context(WIDE));
     }
@@ -989,7 +1078,7 @@ describe("through a real decoder", () => {
     const input: Input = yield* until(createInput({}));
     const events = yield* decoded(input, bytes(ESC, 0x5b, 0x5a));
     const subject = frame("03")!;
-    const { state, tree } = yield* useFrame(subject);
+    const { state, tree } = yield* useFrame(subject, WIDE);
     for (const event of events) {
       yield* drive(tree, state, { kind: "key", event }, context(WIDE, "ignore-backtab"));
     }
@@ -1021,7 +1110,7 @@ describe("the frames, as pictures", () => {
     // The control is to try that again. There is nowhere left for it to land,
     // and the proof is bytes: a frame drawn with a stale claim attached is the
     // frame drawn without one.
-    const { state, tree } = yield* useFrame(frame("01")!);
+    const { state, tree } = yield* useFrame(frame("01")!, WIDE);
     const stale = overlayOf(tree).find((entry) => entry.focused)!;
     const before = yield* shot(tree, state);
     expect(before).toContain(overlayRow(stale));
@@ -1041,7 +1130,7 @@ describe("the frames, as pictures", () => {
     // Nothing else on screen says where focus is when F1 is up, so a control
     // with no marker cell of its own is a control a person has to guess at.
     const state = hydrate("xmd://repl/e1/input?draft=hello", journalThrough(undefined));
-    const tree = yield* useReplTree(state);
+    const tree = yield* useReplTree(state, WIDE);
     const run = tree.chain().find((node) => node.name === "control:input.run")!;
     focusNode(run);
     const rendered = yield* shot(tree, state, { overlay: false });
@@ -1066,7 +1155,7 @@ describe("the frames, as pictures", () => {
   });
 
   it("draws the focused region and the numbered map", function* () {
-    const { state, tree } = yield* useFrame(frame("12")!);
+    const { state, tree } = yield* useFrame(frame("12")!, WIDE);
     const rendered = yield* shot(tree, state);
     expect(rendered).toContain("FOCUS MAP");
     expect(rendered).toContain("Fork from here");
@@ -1076,7 +1165,7 @@ describe("the frames, as pictures", () => {
   // not get it. A frame cannot be silent about focus itself any more: focus is
   // the tree's, the tree always has one, and drawing from the tree draws it.
   it("draws no focus map in a frame that did not ask for one", function* () {
-    const { state, tree } = yield* useFrame(frame("07")!);
+    const { state, tree } = yield* useFrame(frame("07")!, WIDE);
     const rendered = yield* shot(tree, state, { overlay: false });
     expect(rendered).not.toContain("FOCUS MAP");
   });
@@ -1097,7 +1186,7 @@ describe("the command opens at the frame it names", () => {
         route: subject.url,
         head: subject.head,
       });
-      const tree = yield* useReplTree(state);
+      const tree = yield* useReplTree(state, WIDE);
       yield* enterRoute(tree, state, subject.focus);
       expect({ frame: subject.id, focus: tree.focused().name }).toEqual({
         frame: subject.id,

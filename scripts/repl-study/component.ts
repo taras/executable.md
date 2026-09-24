@@ -141,33 +141,16 @@ export function attach<Data>(
 /**
  * How a parent presents its own children.
  *
- * Installed by the lifecycle that created the node, which is the one thing
- * holding it. A render body may not receive a Freedom node; a lifecycle may,
- * and presenting children is a lifecycle's work — it is where a parent decides
- * which of its children exist on screen, what each of them is given and where
- * each of them may draw.
+ * A parent that has children to place writes one of these and **keeps it**. It
+ * closes over the node the lifecycle created — which is what a lifecycle may
+ * hold and a render body may not — so placing a child is the parent's own code
+ * running over the parent's own node.
  *
- * Nothing walks the tree to do this. Each parent is asked, and asks its own
- * children in turn, so no presentation reaches past a direct child.
+ * It is a value the parent retains rather than something stored on the node and
+ * recovered later. Recovering one would mean handing arbitrary data to whatever
+ * presentation happened to be attached, and nothing could say the two matched.
  */
 export type Presentation<Data> = (data: Data, placement: Placement) => void;
-
-const presenterKey = createNodeData<Presentation<never>>("xmd:repl:presents");
-
-export function presents<Data>(node: Node, presentation: Presentation<Data>): void {
-  node.data.set(presenterKey, presentation as Presentation<never>);
-}
-
-/**
- * Ask one node to present its own children.
- *
- * A node with no children to place has nothing installed, and this does
- * nothing — a leaf is not a special case.
- */
-export function presentOwn<Data>(node: Node, data: Data, placement: Placement): void {
-  const presentation = node.data.get(presenterKey);
-  presentation?.(data as never, placement);
-}
 
 /**
  * One child's box, inside its parent's.

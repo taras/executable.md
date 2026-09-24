@@ -37,8 +37,8 @@ import type { Node, PopFocus, Root } from "./vendor/freedom/upstream/index.ts";
 
 import { drawerTargets, labelFor } from "./surfaces.ts";
 import { recordPath } from "./keys.ts";
-import { attach, placementOf, presentOwn, presents, within } from "./component.ts";
-import type { Placement } from "./component.ts";
+import { attach, placementOf, within } from "./component.ts";
+import type { Placement, Presentation } from "./component.ts";
 import {
   bindingsBody,
   controlBody,
@@ -61,7 +61,8 @@ import type { DrawerView, HistoryView, InputView, ReplView } from "./view.ts";
 import { drawerSlots, inputSlot, transportSlots } from "./render.ts";
 import type { Layout, Rect } from "./layout.ts";
 import { isDrawerKind } from "./fixtures.ts";
-import type { ReplState } from "./store.ts";
+import { layoutOf } from "./store.ts";
+import type { ReplState, Size } from "./store.ts";
 import { isRouteSurface, ROUTE_SURFACES, topDrawer } from "./route.ts";
 import type { RouteSurface } from "./route.ts";
 import type { Mutation } from "./mutations.ts";
@@ -111,7 +112,7 @@ export function surfaceOwning(node: Node): RouteSurface | undefined {
 export interface ReplTree {
   readonly root: Root;
   /** Bring the interface into line with a state, mounting and removing branches. */
-  sync(state: ReplState, mutation?: Mutation): Operation<void>;
+  sync(state: ReplState, options?: SyncOptions): Operation<void>;
   /**
    * Hand every direct child its own view subtree and its placement.
    *
@@ -131,12 +132,37 @@ export interface ReplTree {
   chain(): Node[];
 }
 
+export interface SyncOptions {
+  readonly mutation?: Mutation;
+  /**
+   * The terminal this interface is composed for, when it has changed.
+   *
+   * Topology follows the composition: what a profile does not compose has no
+   * branch in the tree. Left out, the size is the one the interface already
+   * has, because most syncs are not resizes.
+   */
+  readonly size?: Size;
+}
+
 export interface PresentOptions {
   readonly anchor?: number;
   readonly mutation?: Mutation;
   readonly motion?: Motion;
   /** Ordinary UI state: whether F1 has been pressed. Nothing about focus. */
   readonly overlay?: boolean;
+}
+
+/**
+ * The presentations the root retains for its own children.
+ *
+ * Each one was written by the lifecycle that created the node it places, and
+ * the root holds them because the root is that lifecycle. A drawer's is looked
+ * up among the drawers this tree mounted, not off the node.
+ */
+interface Owned {
+  readonly input: Presentation<InputView>;
+  readonly history: Presentation<HistoryView>;
+  readonly drawer: (node: Node) => Presentation<DrawerPresentation> | undefined;
 }
 
 /**
@@ -153,9 +179,21 @@ interface DrawerPresentation {
 
 interface Mounted {
   readonly node: Node;
-  readonly pop?: PopFocus;
+  /** Assigned after the way out exists, so the trap has something to land on. */
+  pop?: PopFocus;
   /** True while this drawer was mounted as a recorded, read-only one. */
   readonly historical: boolean;
+  /** The drawer's own presentation of its own children, kept by its lifecycle. */
+  readonly present: Presentation<DrawerPresentation>;
+  /**
+   * The way out, while the composition draws the band it leads to.
+   *
+   * Absent at the narrow profile, where the drawer owns the whole screen and
+   * there is no Execution History band on it. A target whose destination is not
+   * composed is one Tab reaches and nothing shows, so it is not mounted at all
+   * — no node, no place in the ring, no middleware.
+   */
+  escape?: Node;
 }
 
 /**
@@ -165,9 +203,10 @@ interface Mounted {
  * node each frame and take focus with it, which is the defect a live tree
  * exists to avoid.
  */
-export function useReplTree(state: ReplState): Operation<ReplTree> {
+export function useReplTree(state: ReplState, composed: Size): Operation<ReplTree> {
   return {
     *[Symbol.iterator]() {
+      let size = composed;
       const root = yield* useRoot();
       // Chrome the composition draws around the panes. These are nodes so that
       // rendering order is the tree's, not a sequence written out in one
@@ -188,19 +227,19 @@ export function useReplTree(state: ReplState): Operation<ReplTree> {
       }
       useFocus(root.node);
 
-      // Each band places its own controls. These closures hold the node the
+      // Each band places its own controls. These closures hold the node this
       // lifecycle created — which is what a lifecycle may do and a render body
-      // may not — so nothing outside reaches past a direct child to say where a
-      // control draws.
+      // may not — and they are kept here, so presenting a child is always the
+      // parent running its own code rather than something looked up on a node.
       const inputRegionNode = regions.get("input")!;
-      presents<InputView>(inputRegionNode, (input, placement) => {
+      const presentInput: Presentation<InputView> = (_input, placement) => {
         const cell = inputSlot(placement);
         for (const control of inputRegionNode.children) {
           attach(control, controlBody, undefined, within(placement, cell));
         }
-      });
+      };
       const historyRegionNode = regions.get("history")!;
-      presents<HistoryView>(historyRegionNode, (history, placement) => {
+      const presentHistory: Presentation<HistoryView> = (history, placement) => {
         // The band knows where it wrote each bracket, so the band says where
         // its controls may draw. They are mounted in the band's own order,
         // because both come from the same transport mode.
@@ -208,7 +247,7 @@ export function useReplTree(state: ReplState): Operation<ReplTree> {
         [...historyRegionNode.children].forEach((control, at) => {
           attach(control, controlBody, undefined, within(placement, cells[at]));
         });
-      });
+      };
 
       let drawers: Mounted[] = [];
       let scopes: Node[] = [];
@@ -339,6 +378,31 @@ export function useReplTree(state: ReplState): Operation<ReplTree> {
         }
       };
 
+      /**
+       * Whether this composition draws the band a drawer escapes to.
+       *
+       * Asked of the layout rather than of the profile, because the escape
+       * exists exactly when the thing it leads to is on screen.
+       */
+      const composesFooter = (next: ReplState, mutation?: Mutation): boolean =>
+        layoutOf(next, size, mutation).footer !== undefined;
+
+      /** Mount or remove one drawer's way out, to match the composition. */
+      const syncEscape = function* (one: Mounted, composes: boolean): Operation<void> {
+        if (composes && one.escape === undefined) {
+          // Appended, so it lands after the body panel: the same order a
+          // narrow-to-wide resize arrives at and a cold start builds.
+          const node = one.node.createChild("region:history");
+          focusable(node);
+          one.escape = node;
+          return;
+        }
+        if (!composes && one.escape !== undefined) {
+          yield* until(one.escape.remove());
+          one.escape = undefined;
+        }
+      };
+
       const syncDrawers = function* (next: ReplState, mutation?: Mutation): Operation<void> {
         const wanted = next.route.drawers;
         let kept = 0;
@@ -370,6 +434,11 @@ export function useReplTree(state: ReplState): Operation<ReplTree> {
             yield* until(top.node.remove());
           }
         }
+        // A drawer that survived this sync may have survived a resize with it.
+        const composes = composesFooter(next, mutation);
+        for (const one of drawers) {
+          yield* syncEscape(one, composes);
+        }
         for (let at = drawers.length; at < wanted.length; at += 1) {
           const kind = wanted[at];
           if (!isDrawerKind(kind)) {
@@ -395,33 +464,40 @@ export function useReplTree(state: ReplState): Operation<ReplTree> {
               focusable(child);
             }
           }
-          // The footer stays reachable through a suspension, so it is inside
-          // the pushed root rather than outside it — and it is the navigation
-          // that stays valid while a recorded moment is open.
-          const footer = node.createChild("region:history");
-          focusable(footer);
-
           // The panel places the controls it created, and the drawer places the
-          // panel and the way out. Each closure holds only its own node.
-          presents<ReadonlyMap<string, Rect>>(body, (cells, placement) => {
+          // panel and the way out. Each closure holds only its own node, and
+          // the drawer keeps the panel's rather than looking one up.
+          const presentPanel: Presentation<ReadonlyMap<string, Rect>> = (cells, placement) => {
             for (const control of body.children) {
               attach(control, controlBody, undefined, within(placement, cells.get(control.name)));
             }
-          });
-          presents<DrawerPresentation>(node, ({ view, escape }, placement) => {
-            // Whether there is a gutter at all is the question the drawer's own
-            // body asks of itself: is focus inside me? The lifecycle may hold
-            // the node, so it can ask the same question the same way.
-            const gutter = holds(node, current(root.node));
-            const cells = new Map(
-              drawerSlots(view, placement, gutter).map((slot) => [slot.id, slot.rect] as const),
-            );
-            presentOwn(body, cells, placement);
-            attach(footer, escapeBody, undefined, within(placement, escape));
-          });
-
-          const pop = mutation === "leak-drawer-trap" ? undefined : focusPush(node);
-          drawers.push({ node, pop, historical });
+          };
+          const mounted: Mounted = {
+            node,
+            historical,
+            present: ({ view, escape }, placement) => {
+              // Whether there is a gutter at all is the question the drawer's
+              // own body asks of itself: is focus inside me? The lifecycle may
+              // hold the node, so it asks the same question the same way.
+              const gutter = holds(node, current(root.node));
+              const cells = new Map(
+                drawerSlots(view, placement, gutter).map((slot) => [slot.id, slot.rect] as const),
+              );
+              presentPanel(cells, placement);
+              if (mounted.escape !== undefined) {
+                attach(mounted.escape, escapeBody, undefined, within(placement, escape));
+              }
+            },
+          };
+          // The footer stays reachable through a suspension, so it is inside
+          // the pushed root rather than outside it — and it is the navigation
+          // that stays valid while a recorded moment is open. It is mounted
+          // *before* the trap is pushed: a recorded drawer has no other
+          // focusable child, and a trap pushed over nothing keeps focus on the
+          // container itself.
+          yield* syncEscape(mounted, composesFooter(next, mutation));
+          mounted.pop = mutation === "leak-drawer-trap" ? undefined : focusPush(node);
+          drawers.push(mounted);
         }
       };
 
@@ -431,7 +507,9 @@ export function useReplTree(state: ReplState): Operation<ReplTree> {
 
       const tree: ReplTree = {
         root,
-        *sync(next: ReplState, mutation?: Mutation) {
+        *sync(next: ReplState, options: SyncOptions = {}) {
+          const mutation = options.mutation;
+          size = options.size ?? size;
           yield* mountScopes(next);
           yield* mountControls(next, mutation);
           yield* syncDrawers(next, mutation);
@@ -455,8 +533,13 @@ export function useReplTree(state: ReplState): Operation<ReplTree> {
           // The overlay is the tree, walked — by the root, which is the only
           // thing that can see it. Its child is handed the result.
           const overlay = overlayOf(tree, options.mutation);
+          const own: Owned = {
+            input: presentInput,
+            history: presentHistory,
+            drawer: (node) => drawers.find((one) => one.node === node)?.present,
+          };
           for (const child of root.node.children) {
-            presentChild(child, view, layout, place, options, overlay);
+            presentChild(child, view, layout, place, options, overlay, own);
           }
         },
         focused: () => current(root.node),
@@ -587,6 +670,7 @@ function presentChild(
   place: (rect: Rect | undefined) => Placement,
   options: PresentOptions,
   overlay: readonly OverlayEntry[],
+  own: Owned,
 ): void {
   const name = child.name;
   if (name === "region:sessions") {
@@ -617,7 +701,7 @@ function presentChild(
     const taken = view.contextual.drawers.length > 0;
     const placement = place(taken ? undefined : layout.contextual);
     attach(child, inputBody, view.contextual.input, placement);
-    presentOwn(child, view.contextual.input, placement);
+    own.input(view.contextual.input, placement);
     return;
   }
   if (name === "region:history") {
@@ -632,7 +716,7 @@ function presentChild(
       },
       placement,
     );
-    presentOwn(child, view.history, placement);
+    own.history(view.history, placement);
     return;
   }
   if (name.startsWith("drawer:")) {
@@ -649,7 +733,7 @@ function presentChild(
           : layout.contextual;
       const placement = place(rect);
       attach(child, drawerBody, { view: drawer }, placement);
-      presentOwn(child, { view: drawer, escape: layout.footer }, placement);
+      own.drawer(child)?.({ view: drawer, escape: layout.footer }, placement);
       return;
     }
   }
