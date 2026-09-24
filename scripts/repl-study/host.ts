@@ -26,6 +26,7 @@ import { initialView } from "./store.ts";
 import { asKey, fixtureFor, hydrate, reduce, viewOf } from "./store.ts";
 import { useReplTree } from "./tree.ts";
 import { drive, enterRoute } from "./drive.ts";
+import { useFrames } from "./animation.ts";
 import type { HarnessEvent, ReplState, View } from "./store.ts";
 import { journalThrough, markerShowing } from "./journal.ts";
 import { formatRoute } from "./route.ts";
@@ -34,13 +35,13 @@ import type { Composition } from "./capture.ts";
 import { renderInto } from "./capture.ts";
 import type { Mutation } from "./mutations.ts";
 import {
-  motionAt,
+  transitionOf,
   playbackFrom,
   segmentDurationMs,
   segmentFixture,
   segmentLabel,
 } from "./playback.ts";
-import type { Motion, Playback, Segment } from "./playback.ts";
+import type { Playback, Segment, Transition } from "./playback.ts";
 
 /** The modes the harness changes, as one reversible pair. */
 export function terminalModes(): Setting {
@@ -206,7 +207,7 @@ function draw(
   composition: Composition,
   write: (bytes: Uint8Array) => void,
   mutation?: Mutation,
-  motion?: Motion,
+  transition?: Transition,
   deltaMs = 0,
   overlay?: boolean,
 ): Painted {
@@ -218,7 +219,7 @@ function draw(
     composition,
     size: { cols: state.cols, rows: state.rows },
     mutation,
-    motion,
+    transition,
     overlay,
     // The harness counts in milliseconds and the renderer in seconds. The
     // conversion happens here, once, at the only place the two meet.
@@ -257,7 +258,8 @@ export interface TraceEntry {
   /** What the renderer was advanced by, in its own unit: seconds. */
   readonly deltaSeconds: number;
   readonly animating: boolean;
-  readonly motionDone: boolean | null;
+  /** True while a component is still animating and has asked for more frames. */
+  readonly moving: boolean;
   readonly bytes: number;
   /** `hold:nested`, `play:nested→generated`, or `settled` once it is over. */
   readonly segment: string;
@@ -369,6 +371,9 @@ export function* runInteractive(options: InteractiveOptions): Operation<void> {
     quit: false,
   };
 
+  // The one clock, installed before anything is mounted, so the tree's
+  // components and the loop that drives them are looking at the same service.
+  const frameClock = yield* useFrames();
   // The tree is acquired before the terminal is touched, so its teardown runs
   // after the terminal has been given back rather than into a restored one.
   const tree = yield* useReplTree(repl, { cols: state.cols, rows: state.rows });
@@ -507,7 +512,9 @@ export function* runInteractive(options: InteractiveOptions): Operation<void> {
    */
   const paint = function* (deltaMs: number, finished = false): Operation<void> {
     const segment = currentSegment();
-    const motion = playback === undefined ? undefined : motionAt(playback, elapsed);
+    const transition = playback === undefined ? undefined : transitionOf(playback, elapsed > 0);
+    // The one clock, advanced once per frame, before anything is drawn from it.
+    frameClock.advance(deltaMs / 1000);
     const label =
       finished || segment === undefined
         ? journey === undefined
@@ -543,7 +550,7 @@ export function* runInteractive(options: InteractiveOptions): Operation<void> {
           composition,
           write,
           options.mutation,
-          motion,
+          transition,
           deltaMs,
           repl.overlay,
         );
@@ -555,7 +562,16 @@ export function* runInteractive(options: InteractiveOptions): Operation<void> {
         // wide terminal will do. A new one starts that cache again and repaints
         // the whole screen, so the person watching sees nothing but a frame.
         term = yield* useTerm(measured);
-        painted = draw(term, state, composition, write, options.mutation, motion, 0, repl.overlay);
+        painted = draw(
+          term,
+          state,
+          composition,
+          write,
+          options.mutation,
+          transition,
+          0,
+          repl.overlay,
+        );
       }
       frames += 1;
       options.trace?.push({
@@ -563,7 +579,7 @@ export function* runInteractive(options: InteractiveOptions): Operation<void> {
         elapsedMs: elapsed,
         deltaSeconds: deltaMs / 1000,
         animating: painted.animating,
-        motionDone: motion === undefined ? null : motion.done,
+        moving: frameClock.wanted(),
         bytes: painted.bytes,
         segment: label,
         fixture: state.fixture.name,
@@ -573,7 +589,7 @@ export function* runInteractive(options: InteractiveOptions): Operation<void> {
     held = segment?.kind === "hold" ? label : undefined;
 
     const journeyRunning = journey !== undefined && !finished;
-    const moving = lastPainted || (motion !== undefined && !motion.done) || journeyRunning;
+    const moving = lastPainted || frameClock.wanted() || journeyRunning;
     const active = options.mutation === "never-tick" ? false : moving;
     if (clock !== undefined) {
       const running = clock;
@@ -584,7 +600,7 @@ export function* runInteractive(options: InteractiveOptions): Operation<void> {
       const delay = Math.max(1, Math.round(nextDelayMs()));
       clock = yield* spawn(() => ticker(events, delay));
     }
-    if (journey === undefined && motion !== undefined && motion.done && !lastPainted) {
+    if (journey === undefined && playback !== undefined && !frameClock.wanted() && !lastPainted) {
       // The transition has arrived. What remains is the fixture itself, which
       // is what a journal or a URL would restore.
       playback = undefined;

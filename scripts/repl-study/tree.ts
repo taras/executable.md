@@ -59,11 +59,17 @@ import {
   surfaceBarBody,
   transcriptBody,
 } from "./components.ts";
-import type { Motion } from "./playback.ts";
-import type { DrawerView, HistoryView, InputView, ReplView } from "./view.ts";
+import type { DrawerView, HistoryView, InputView, ReplView, TranscriptView } from "./view.ts";
 import { drawerSlots, inputSlot, transportSlots } from "./render.ts";
 import type { Layout, Rect } from "./layout.ts";
 import { isDrawerKind } from "./fixtures.ts";
+import {
+  animates,
+  easeInOutCubic,
+  SETTLED_SECONDS,
+  TRANSITION_SECONDS,
+  useFrames,
+} from "./animation.ts";
 import { applyAction, layoutOf, reverseTab } from "./store.ts";
 import type { Key, ReduceContext, Reduction, ReplState, Size } from "./store.ts";
 import { isRouteSurface, ROUTE_SURFACES, topDrawer } from "./route.ts";
@@ -179,7 +185,14 @@ export interface SyncOptions {
 export interface PresentOptions {
   readonly anchor?: number;
   readonly mutation?: Mutation;
-  readonly motion?: Motion;
+  /**
+   * The moment on screen is being played into rather than cut to.
+   *
+   * It carries where the motion starts, because which two moments they are is a
+   * fact only the thing that chose them knows. How far along it is, and what
+   * that looks like, belongs to the components.
+   */
+  readonly transition?: { readonly fromHeadAt: number };
   /** Ordinary UI state: whether F1 has been pressed. Nothing about focus. */
   readonly overlay?: boolean;
 }
@@ -191,9 +204,25 @@ export interface PresentOptions {
  * the root holds them because the root is that lifecycle. A drawer's is looked
  * up among the drawers this tree mounted, not off the node.
  */
+/** What the root tells the transcript, beyond its own view. */
+interface TranscriptPresentation {
+  readonly view: TranscriptView;
+  readonly anchor: number;
+  readonly mutation?: Mutation;
+  readonly transition?: { readonly fromHeadAt: number };
+}
+
+/** What the root tells the Execution History band, beyond its own view. */
+interface HistoryPresentation {
+  readonly view: HistoryView;
+  readonly mutation?: Mutation;
+  readonly transition?: { readonly fromHeadAt: number };
+}
+
 interface Owned {
   readonly input: Presentation<InputView>;
-  readonly history: Presentation<HistoryView>;
+  readonly transcript: Presentation<TranscriptPresentation>;
+  readonly history: Presentation<HistoryPresentation>;
   readonly drawer: (node: Node) => Presentation<DrawerPresentation> | undefined;
 }
 
@@ -239,6 +268,10 @@ export function useReplTree(state: ReplState, composed: Size): Operation<ReplTre
   return {
     *[Symbol.iterator]() {
       let size = composed;
+      // One clock for the whole interface. The host installs it; a caller that
+      // mounts a tree without one gets a service of its own, which is what a
+      // capture wants — time supplied rather than measured.
+      const frames = yield* useFrames();
       const root = yield* useRoot();
       // Chrome the composition draws around the panes. These are nodes so that
       // rendering order is the tree's, not a sequence written out in one
@@ -263,6 +296,7 @@ export function useReplTree(state: ReplState, composed: Size): Operation<ReplTre
       // lifecycle created — which is what a lifecycle may do and a render body
       // may not — and they are kept here, so presenting a child is always the
       // parent running its own code rather than something looked up on a node.
+      const transcriptNode = regions.get("transcript")!;
       const inputRegionNode = regions.get("input")!;
       const presentInput: Presentation<InputView> = (_input, placement) => {
         const cell = inputSlot(placement);
@@ -271,7 +305,117 @@ export function useReplTree(state: ReplState, composed: Size): Operation<ReplTre
         }
       };
       const historyRegionNode = regions.get("history")!;
-      const presentHistory: Presentation<HistoryView> = (history, placement) => {
+
+      /**
+       * The transcript's own arrival, and the playhead's own travel.
+       *
+       * Both are this component's to keep: how far along they are lives here,
+       * in variables nothing outside can see, advanced by the one clock the
+       * host runs. Their bodies are handed the resulting number and nothing
+       * else — not the clock, not the two moments, not how long it takes.
+       */
+      type Phase = "still" | "running" | "arrived";
+      let reveal = 1;
+      let revealPhase: Phase = "still";
+      let revealed = 0;
+      let revealWant: (() => void) | undefined;
+      const releaseReveal = (): void => {
+        revealWant?.();
+        revealWant = undefined;
+      };
+      animates(transcriptNode, frames, ({ deltaSeconds }) => {
+        if (revealPhase !== "running") {
+          return;
+        }
+        revealed += deltaSeconds;
+        reveal = easeInOutCubic(Math.min(1, revealed / TRANSITION_SECONDS));
+        if (revealed >= TRANSITION_SECONDS - SETTLED_SECONDS) {
+          // Arrived, and it stays arrived: the transition is still being
+          // supplied on every frame after this one, and a component that read
+          // it as a fresh instruction would play the same arrival for ever.
+          revealPhase = "arrived";
+          reveal = 1;
+          releaseReveal();
+        }
+      });
+
+      let headAt: number | undefined;
+      let travelFrom = 0;
+      let travelTo = 0;
+      let travelPhase: Phase = "still";
+      let travelled = 0;
+      let travelWant: (() => void) | undefined;
+      const releaseTravel = (): void => {
+        travelWant?.();
+        travelWant = undefined;
+      };
+      animates(historyRegionNode, frames, ({ deltaSeconds }) => {
+        if (travelPhase !== "running") {
+          return;
+        }
+        travelled += deltaSeconds;
+        const eased = easeInOutCubic(Math.min(1, travelled / TRANSITION_SECONDS));
+        headAt = travelFrom + (travelTo - travelFrom) * eased;
+        if (travelled >= TRANSITION_SECONDS - SETTLED_SECONDS) {
+          travelPhase = "arrived";
+          headAt = travelTo;
+          releaseTravel();
+        }
+      });
+
+      const presentTranscript: Presentation<TranscriptPresentation> = (data, placement) => {
+        if (data.transition === undefined) {
+          revealPhase = "still";
+          reveal = 1;
+          releaseReveal();
+        } else if (revealPhase === "still") {
+          revealPhase = "running";
+          revealed = 0;
+          reveal = 0;
+          revealWant = frames.want();
+        }
+        attach(
+          transcriptNode,
+          transcriptBody,
+          {
+            view: data.view,
+            anchor: data.anchor,
+            mutation: data.mutation,
+            // The control: a reconstruction that lands halfway through a
+            // transition instead of on a moment.
+            reveal: data.mutation === "restore-mid-animation" ? 0.5 : reveal,
+          },
+          placement,
+        );
+      };
+
+      const presentHistory: Presentation<HistoryPresentation> = (data, placement) => {
+        const history = data.view;
+        if (data.transition === undefined) {
+          travelPhase = "still";
+          headAt = history.headAt;
+          releaseTravel();
+        } else if (travelPhase === "still") {
+          travelPhase = "running";
+          travelFrom = data.transition.fromHeadAt;
+          travelTo = history.headAt;
+          travelled = 0;
+          headAt = travelFrom;
+          travelWant = frames.want();
+        }
+        attach(
+          historyRegionNode,
+          historyBody,
+          {
+            view: history,
+            mutation: data.mutation,
+            headAt:
+              data.mutation === "restore-mid-animation"
+                ? history.headAt / 2
+                : (headAt ?? history.headAt),
+          },
+          placement,
+        );
         // The band knows where it wrote each bracket, so the band says where
         // its controls may draw. They are mounted in the band's own order,
         // because both come from the same transport mode.
@@ -676,6 +820,7 @@ export function useReplTree(state: ReplState, composed: Size): Operation<ReplTre
           const overlay = overlayOf(tree, options.mutation);
           const own: Owned = {
             input: presentInput,
+            transcript: presentTranscript,
             history: presentHistory,
             drawer: (node) => drawers.find((one) => one.node === node)?.present,
           };
@@ -935,14 +1080,12 @@ function presentChild(
     return;
   }
   if (name === "region:transcript") {
-    attach(
-      child,
-      transcriptBody,
+    own.transcript(
       {
         view: view.transcript,
         anchor: options.anchor ?? 0,
         mutation: options.mutation,
-        motion: options.motion,
+        transition: options.transition,
       },
       place(layout.transcript),
     );
@@ -962,18 +1105,10 @@ function presentChild(
     return;
   }
   if (name === "region:history") {
-    const placement = place(layout.footer);
-    attach(
-      child,
-      historyBody,
-      {
-        view: view.history,
-        mutation: options.mutation,
-        motion: options.motion,
-      },
-      placement,
+    own.history(
+      { view: view.history, mutation: options.mutation, transition: options.transition },
+      place(layout.footer),
     );
-    own.history(view.history, placement);
     return;
   }
   if (name.startsWith("drawer:")) {

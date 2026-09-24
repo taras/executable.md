@@ -25,7 +25,6 @@ import { MINIMUM } from "./layout.ts";
 import type { View } from "./store.ts";
 import type { Mutation } from "./mutations.ts";
 import type { OverlayEntry } from "./tree.ts";
-import type { Motion } from "./playback.ts";
 
 export const C = {
   src: rgba(0xc8, 0xd2, 0xd9),
@@ -943,13 +942,10 @@ export function bandRegion(
   history: HistoryView,
   placement: Placement,
   mutation?: Mutation,
-  motion?: Motion,
+  headAt = history.headAt,
   focused = false,
 ): Op[] {
   const rect = placement.rect;
-  // While a playback runs, the head is where the application says it is; the
-  // recorded head is where it will be when the motion settles.
-  const headAt = motion !== undefined && !motion.done ? motion.headAt : history.headAt;
   const flat = mutation === "flatten-notches";
   const geometry = bandGeometry(history, placement);
   const { transport, inner, labelWidth, trackLeft, trackWidth } = geometry;

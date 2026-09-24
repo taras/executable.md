@@ -15,8 +15,9 @@ import { ensureDir, writeTextFile } from "@effectionx/fs";
 import { join } from "node:path";
 
 import { fixture, fixtures } from "./fixtures.ts";
-import { JOURNEY, journeyPlan, motionAt, PLAYBACKS } from "./playback.ts";
-import type { Motion, Playback } from "./playback.ts";
+import { JOURNEY, journeyPlan, PLAYBACKS, transitionOf } from "./playback.ts";
+import { useFrames } from "./animation.ts";
+import type { Playback, Transition } from "./playback.ts";
 import type { Fixture } from "./model.ts";
 import type { Profile, SurfaceName } from "./layout.ts";
 import { layoutFor } from "./layout.ts";
@@ -168,7 +169,8 @@ export interface FrameRequest {
   readonly mutation?: Mutation;
   readonly surface?: SurfaceName;
   /** Present only while a playback is running between two fixtures. */
-  readonly motion?: Motion;
+  /** Present only while a moment is being played into rather than cut to. */
+  readonly transition?: Transition;
   /**
    * Ordinary UI state: whether the numbered overlay is drawn.
    *
@@ -218,16 +220,10 @@ export class RendererCapacityError extends Error {
 export function renderInto(term: Term, request: FrameRequest): Frame {
   const { view, size, mutation } = request;
   const subject = request.fixture;
-  const motion =
-    mutation === "restore-mid-animation" && request.motion === undefined
-      ? // Reconstruction must land on a state, never halfway through a transition.
-        // This control makes it land halfway.
-        { progress: 0.5, headAt: subject.history.headAt / 2, reveal: 0.5, done: false }
-      : request.motion;
   // A playback's first frame still shows the moment it is leaving, so a drawer
   // about to open is not open yet: that is what gives the renderer two
   // geometries to interpolate between rather than one it has already arrived at.
-  const opening = motion === undefined || motion.progress > 0;
+  const opening = request.transition === undefined || request.transition.begun;
   const layout = layoutFor({
     cols: size.cols,
     rows: size.rows,
@@ -255,7 +251,7 @@ export function renderInto(term: Term, request: FrameRequest): Frame {
     view: shown,
     layout,
     anchor: view.anchor,
-    options: { overlay: request.overlay, mutation, motion },
+    options: { overlay: request.overlay, mutation, transition: request.transition },
   });
   const result = term.render(
     painted.ops,
@@ -298,6 +294,9 @@ export function* playFrames(
   const limit = options.limit ?? 200;
   const subject = fixture(playback.to);
   const view = initialView(subject);
+  // The clock this playback supplies time to. Components subscribed to it when
+  // the tree below was mounted, so advancing it is the whole of how they move.
+  const clock = yield* useFrames();
   const composition = yield* useComposition(subject, view, size);
   const term = yield* useTerm(size);
   const frames: Frame[] = [];
@@ -305,23 +304,23 @@ export function* playFrames(
   // screen. The screen is what those changes have added up to, so the grid
   // carries across frames exactly as a terminal's does.
   const screen = createGrid(size.cols, size.rows);
-  let elapsed = 0;
   for (let index = 0; index < limit; index += 1) {
-    const motion = motionAt(playback, elapsed);
+    const transition = transitionOf(playback, index > 0);
+    const deltaSeconds = index === 0 ? 0 : frameMs / 1000;
+    clock.advance(deltaSeconds);
     const frame = renderInto(term, {
       fixture: subject,
       view,
       composition,
       size,
-      motion,
-      deltaSeconds: index === 0 ? 0 : frameMs / 1000,
+      transition,
+      deltaSeconds,
     });
     applyAnsi(screen, frame.ansi);
     frames.push({ ...frame, text: gridText(screen) });
-    if (motion.done && !frame.animating) {
+    if (!clock.wanted() && !frame.animating) {
       return frames;
     }
-    elapsed += frameMs;
   }
   return frames;
 }
@@ -354,7 +353,9 @@ export function* journeyFrames(
   let rebuilds = 0;
   const screen = createGrid(size.cols, size.rows);
   const frames: JourneyFrame[] = [];
+  const clock = yield* useFrames();
   for (const planned of journeyPlan(JOURNEY, frameMs)) {
+    clock.advance(planned.deltaMs / 1000);
     const subject = fixture(planned.fixture);
     const view = initialView(subject);
     // One composition per moment, reused across that moment's frames: a
@@ -369,7 +370,7 @@ export function* journeyFrames(
       view,
       composition,
       size,
-      motion: planned.motion,
+      transition: planned.transition,
       deltaSeconds: planned.deltaMs / 1000,
     };
     let frame: Frame;

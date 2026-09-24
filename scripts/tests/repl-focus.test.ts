@@ -19,7 +19,7 @@ import { createInput } from "@bomb.sh/tty";
 import type { Input, InputEvent } from "@bomb.sh/tty";
 import { readTextFile } from "@effectionx/fs";
 import { exec } from "@effectionx/process";
-import { until } from "effection";
+import { sleep, spawn, suspend, until } from "effection";
 import type { Operation } from "effection";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -59,6 +59,7 @@ import { ReplInputApi, sendInput } from "../repl-study/input.ts";
 import { ReplActionApi, UnownedActionError } from "../repl-study/actions.ts";
 import type { ReplAction } from "../repl-study/actions.ts";
 import { boxOf } from "../repl-study/component.ts";
+import { animates, createFrameService, useFrames } from "../repl-study/animation.ts";
 import { UNAVAILABLE } from "../repl-study/store.ts";
 import type { Node } from "../repl-study/vendor/freedom/upstream/index.ts";
 import type { ReplInput } from "../repl-study/input.ts";
@@ -1593,6 +1594,59 @@ describe("input is one gesture, and what it means is an action", () => {
         builds: source.includes("hydrate(") || source.includes("formatRoute("),
       }).toEqual({ name, builds: false });
     }
+  });
+});
+
+describe("one clock, and the components that animate against it", () => {
+  it("wakes a branch's own subscription, and stops when the branch goes", function* () {
+    const clock = yield* useFrames();
+    const { state, tree } = yield* opened(DRAWER, "cp-14");
+    const drawer = find(tree.root.node, "drawer:project")!;
+    const woken: number[] = [];
+    animates(drawer, clock, ({ deltaSeconds }) => woken.push(deltaSeconds));
+
+    clock.advance(0.016);
+    expect(woken).toEqual([0.016]);
+
+    // Closing the drawer removes the branch, and the subscription was the
+    // branch's: nothing had to remember to take it away.
+    yield* tree.sync(hydrate("xmd://repl/e1/transcript/entry-1/document", state.journal));
+    expect(find(tree.root.node, "drawer:project")).toBeUndefined();
+    clock.advance(0.016);
+    expect(woken).toEqual([0.016]);
+  });
+
+  it("asks for the clock only while something is moving", function* () {
+    const clock = yield* useFrames();
+    const { state, tree } = yield* opened("xmd://repl/e1/transcript/entry-1/document", "cp-14");
+    // An interface with nothing moving schedules nothing at all.
+    expect(clock.wanted()).toBe(false);
+    yield* shot(tree, state);
+    expect(clock.wanted()).toBe(false);
+  });
+
+  it("takes its subscriptions down with the tree that owned them", function* () {
+    // A teardown is the whole interface going away. What it leaves behind is
+    // the question: a clock that still had components on it would go on waking
+    // them into a terminal that has been given back.
+    const clock = createFrameService();
+    let woken = 0;
+    const inner = yield* spawn(function* () {
+      const { tree } = yield* opened(DRAWER, "cp-14");
+      animates(find(tree.root.node, "drawer:project")!, clock, () => {
+        woken += 1;
+      });
+      yield* suspend();
+    });
+    // A spawned task attaches a turn late, so the tree is mounted only after
+    // this.
+    yield* sleep(0);
+    clock.advance(0.016);
+    expect(woken).toBe(1);
+
+    yield* inner.halt();
+    clock.advance(0.016);
+    expect(woken).toBe(1);
   });
 });
 

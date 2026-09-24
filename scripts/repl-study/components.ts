@@ -41,7 +41,6 @@ import type { VisualLine } from "./render.ts";
 import type { OverlayEntry } from "./tree.ts";
 import type { Layout, Rect, SurfaceName } from "./layout.ts";
 import type { Mutation } from "./mutations.ts";
-import type { Motion } from "./playback.ts";
 import type {
   BindingsView,
   DrawerView,
@@ -189,8 +188,13 @@ export interface TranscriptData {
   /** The window over a long transcript, which the renderer clips rather than scrolls. */
   readonly anchor: number;
   readonly mutation?: Mutation;
-  /** Present only while a playback is running between two moments. */
-  readonly motion?: Motion;
+  /**
+   * How much of the transcript has arrived, 0…1.
+   *
+   * This component's own number, kept by its lifecycle and read here. A body
+   * cannot ask how far along anything is; it is told what has arrived.
+   */
+  readonly reveal: number;
 }
 
 export const transcriptBody: Body<TranscriptData> = ({
@@ -236,12 +240,12 @@ export const transcriptBody: Body<TranscriptData> = ({
       ? body
       : body.slice(data.anchor, data.anchor + Math.max(0, capacity - 1));
 
-  // While a playback runs, the target's transcript arrives a few rows at a
-  // time. This is the application's own interpolation; the renderer is not
-  // animating anything here.
-  const arriving = data.motion !== undefined && !data.motion.done;
+  // While a moment is being played into, its transcript arrives a few rows at
+  // a time. The component interpolated this against the one clock; the renderer
+  // is not animating anything here.
+  const arriving = data.reveal < 1;
   if (arriving) {
-    const shown = Math.max(1, Math.ceil(data.motion!.reveal * windowed.length));
+    const shown = Math.max(1, Math.ceil(data.reveal * windowed.length));
     lines.push(...windowed.slice(0, shown), plain("…", C.dim));
     return region(self.id, rect, lines, { bg: BG.center, children, focused: focus === "self" });
   }
@@ -313,14 +317,20 @@ export const inputBody: Body<ContextualView["input"]> = ({
  * for it: the band is a component handed its own view and its own box.
  */
 export const historyBody: Body<HistoryData> = ({ self, data, placement, children, focus }) => [
-  ...bandRegion(self.id, data.view, placement, data.mutation, data.motion, focus === "self"),
+  ...bandRegion(self.id, data.view, placement, data.mutation, data.headAt, focus === "self"),
   ...children,
 ];
 
 export interface HistoryData {
   readonly view: HistoryView;
   readonly mutation?: Mutation;
-  readonly motion?: Motion;
+  /**
+   * Where the playhead is, which is this component's own number.
+   *
+   * It is where the head sits *now* — travelling between two moments while one
+   * is being played into, and at the recorded head the rest of the time.
+   */
+  readonly headAt: number;
 }
 
 /**

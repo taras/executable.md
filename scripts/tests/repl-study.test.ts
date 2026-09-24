@@ -46,11 +46,12 @@ import {
   JOURNEY,
   journeyDurationMs,
   journeyPlan,
-  motionAt,
   playbackBetween,
   segmentDurationMs,
   segmentLabel,
+  transitionOf,
 } from "../repl-study/playback.ts";
+import { useFrames } from "../repl-study/animation.ts";
 import { FRAME_SECONDS } from "../repl-study/host.ts";
 import { intersects, layoutFor, MINIMUM, PANE_MINIMUMS, profileFor } from "../repl-study/layout.ts";
 import type { Profile } from "../repl-study/layout.ts";
@@ -180,7 +181,7 @@ const TRACE_ENTRY = z.object({
   elapsedMs: z.number(),
   deltaSeconds: z.number(),
   animating: z.boolean(),
-  motionDone: z.boolean().nullable(),
+  moving: z.boolean(),
   bytes: z.number(),
   segment: z.string(),
   fixture: z.string(),
@@ -914,30 +915,47 @@ describe("animation", () => {
   });
 
   it("moves the head and reveals the transcript on the application's own clock", function* () {
-    const start = motionAt(PLAYBACK, 0);
-    const middle = motionAt(PLAYBACK, PLAYBACK.durationMs / 2);
-    const end = motionAt(PLAYBACK, PLAYBACK.durationMs);
+    const subject = fixture(PLAYBACK.to);
+    const view = initialView(subject);
+    const size = PROFILE_SIZES.wide;
+    const clock = yield* useFrames();
+    const composition = yield* useComposition(subject, view, size);
+    const transition = transitionOf(PLAYBACK, true);
+    // A fresh terminal each time, so every one of these is a whole screen
+    // rather than the handful of cells that changed since the last.
+    const shot = function* (): Operation<string> {
+      const term = yield* useTerm(size);
+      return renderInto(term, {
+        fixture: subject,
+        view,
+        composition,
+        size,
+        transition,
+        deltaSeconds: 0,
+      }).text;
+    };
 
-    expect(start.progress).toBe(0);
-    expect(end.done).toBe(true);
-    expect(middle.headAt).toBeGreaterThan(start.headAt);
-    expect(end.headAt).toBeGreaterThan(middle.headAt);
-    expect(end.headAt).toBe(fixture(PLAYBACK.to).history.headAt);
+    // Nothing moves on its own. Two frames of a transition with no time between
+    // them are the same picture, because the components advance on the clock
+    // and on nothing else.
+    const first = yield* shot();
+    expect(yield* shot()).toBe(first);
 
-    // Time in, frame out: the same instant renders identically every time.
-    const once = yield* renderFrame({
-      fixture: fixture(PLAYBACK.to),
-      view: initialView(fixture(PLAYBACK.to)),
-      size: PROFILE_SIZES.wide,
-      motion: middle,
-    });
-    const twice = yield* renderFrame({
-      fixture: fixture(PLAYBACK.to),
-      view: initialView(fixture(PLAYBACK.to)),
-      size: PROFILE_SIZES.wide,
-      motion: middle,
-    });
-    expect(once.text).toBe(twice.text);
+    // Time in, picture out. The clock is the only thing that moved.
+    clock.advance(PLAYBACK.durationMs / 2 / 1000);
+    const middle = yield* shot();
+    expect(middle).not.toBe(first);
+    clock.advance(PLAYBACK.durationMs / 2 / 1000);
+    const settled = yield* shot();
+    expect(settled).not.toBe(middle);
+
+    // And it has arrived: nothing is still asking to be woken.
+    expect(clock.wanted()).toBe(false);
+
+    // The same clock, run again, draws the same film.
+    const played = yield* playFrames(PLAYBACK, PROFILE_SIZES.wide);
+    const again = yield* playFrames(PLAYBACK, PROFILE_SIZES.wide);
+    expect(again.map((frame) => frame.text)).toEqual(played.map((frame) => frame.text));
   });
 
   it("captures a start, a midpoint and a settled frame that differ", function* () {
@@ -963,7 +981,7 @@ describe("animation", () => {
     yield* exec(ptyCommand(command), { cwd: ROOT, arguments: ptyArguments(command) }).join();
     const drawn = yield* readTrace(trace);
     expect(drawn.length).toBe(1);
-    expect(drawn[0].motionDone).toBe(false);
+    expect(drawn[0].moving).toBe(true);
   });
 
   it("rejects a reconstruction that lands halfway through a transition", function* () {
@@ -995,7 +1013,7 @@ describe("animation in a real terminal", () => {
       drawn.every((entry, index) => index === 0 || entry.elapsedMs > drawn[index - 1].elapsedMs),
     ).toBe(true);
     expect(drawn.some((entry) => entry.animating)).toBe(true);
-    expect(drawn[drawn.length - 1].motionDone).toBe(true);
+    expect(drawn[drawn.length - 1].moving).toBe(false);
     expect(drawn.filter((entry) => entry.bytes > 0).length).toBeGreaterThan(3);
   });
 
@@ -1012,7 +1030,7 @@ describe("animation in a real terminal", () => {
     // The interruption arrived while the transition was still running, and no
     // frame was drawn after it: the clock went down with the session.
     expect(drawn.length).toBe(4);
-    expect(drawn[drawn.length - 1].motionDone).toBe(false);
+    expect(drawn[drawn.length - 1].moving).toBe(true);
     expect(result.stdout.endsWith(new TextDecoder().decode(terminalModes().revert))).toBe(true);
   });
 });
@@ -1112,9 +1130,7 @@ describe("the whole demonstration, in a real terminal", () => {
     const drawn = yield* readTrace(trace);
     expect(visited(drawn)).toEqual([...JOURNEY_SEGMENTS, "settled"]);
     expect(drawn.some((entry) => entry.animating)).toBe(true);
-    expect(
-      drawn.some((entry) => entry.segment.startsWith("play:") && entry.motionDone === false),
-    ).toBe(true);
+    expect(drawn.some((entry) => entry.segment.startsWith("play:") && entry.moving)).toBe(true);
 
     // It stopped because the story ended, not because it ran out of budget —
     // which is what it means for the clock to stop after the settled state.
