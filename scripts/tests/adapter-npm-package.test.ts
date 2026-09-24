@@ -67,7 +67,6 @@ function useBuiltPackage(): Operation<string> {
         // cache and npm configuration, and a bare pair would drop both.
         env: {
           ...inheritedEnvironment(),
-          DNT_LOCAL_SIBLINGS: "1",
           npm_config_legacy_peer_deps: "true",
         },
       });
