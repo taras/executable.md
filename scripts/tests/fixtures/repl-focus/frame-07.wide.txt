@@ -5,7 +5,7 @@ frame-07.wide · 200 × 50
                                                 │ Entry 1  ● running · 48.9s       ↳ document scope suspended                                                           2  Description
  SESSIONS · 3                                   │                                                                                                                       3  Schema disclosure · ⌥S
  chronological · selection follows you, not ac… │ ← opened from Entry 1 · live execution projection, not an editor                                                      4  Submit
-                                                │ document                                                                                                              5  Execution History · still …
+                                                │ document                                                                                                              5  Execution History
  │ plan-a91f7c                                  │ ▶ <Evaluate allow={["write"]}>                                                                              ENTER
    ✓ completed   planner · turn 1 · returned 5… │ │ ▾ Ask for the project details                                                                                      │ # Northstar
                                                 │ │ ● <Elicit as="project" schema={projectSchema}>                                                            WAITING  │

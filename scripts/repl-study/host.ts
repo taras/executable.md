@@ -24,7 +24,9 @@ import { SURFACES } from "./layout.ts";
 import { transcriptLines } from "./render.ts";
 import type { FocusView } from "./render.ts";
 import { initialView } from "./store.ts";
-import { asKey, fixtureFor, focusIn, hydrate, mapOf, reduce, viewOf } from "./store.ts";
+import { asKey, fixtureFor, hydrate, reduce, viewOf } from "./store.ts";
+import { overlayOf, useReplTree } from "./tree.ts";
+import { drive } from "./drive.ts";
 import type { HarnessEvent, ReplState, View } from "./store.ts";
 import { journalThrough, markerShowing } from "./journal.ts";
 import { formatRoute } from "./route.ts";
@@ -348,6 +350,10 @@ export function* runInteractive(options: InteractiveOptions): Operation<void> {
     quit: false,
   };
 
+  // The tree is acquired before the terminal is touched, so its teardown runs
+  // after the terminal has been given back rather than into a restored one.
+  const tree = yield* useReplTree(repl);
+
   let term = yield* useTerm({ cols: state.cols, rows: state.rows });
   const input: Input = yield* until(createInput({}));
 
@@ -491,8 +497,8 @@ export function* runInteractive(options: InteractiveOptions): Operation<void> {
     if (!repeated) {
       const measured = { cols: state.cols, rows: state.rows };
       const focus: FocusView = {
-        here: focusIn(repl, measured, options.mutation),
-        map: mapOf(repl, measured, options.mutation),
+        here: tree.focused().name,
+        map: overlayOf(tree),
         overlay: repl.overlay,
       };
       let painted: Painted;
@@ -610,11 +616,12 @@ export function* runInteractive(options: InteractiveOptions): Operation<void> {
       if (options.mutation !== "skip-resize-update") {
         const measured = { cols: next.value.cols, rows: next.value.rows };
         state = { ...state, cols: measured.cols, rows: measured.rows };
-        repl = reduce(repl, next.value, {
+        const resized = yield* drive(tree, repl, next.value, {
           size: measured,
           mutation: options.mutation,
           scrollLimit: 0,
         });
+        repl = resized.state;
         if (journey === undefined && playback === undefined) {
           follow();
         }
@@ -623,11 +630,12 @@ export function* runInteractive(options: InteractiveOptions): Operation<void> {
       const lines = state.fixture.entry
         ? transcriptLines(state.fixture.entry, Math.max(1, state.cols - 2)).length
         : 0;
-      repl = reduce(repl, next.value, {
+      const driven = yield* drive(tree, repl, next.value, {
         size: { cols: state.cols, rows: state.rows },
         mutation: options.mutation,
         scrollLimit: Math.max(0, lines - Math.max(1, state.rows - 8)),
       });
+      repl = driven.state;
       if (journey === undefined && playback === undefined) {
         follow();
       } else {

@@ -6,7 +6,7 @@ frame-08.wide · 200 × 50
  SESSIONS · 1                                   │                                                                                                                       3  Request changes
  chronological · selection follows you, not ac… │ ← opened from Entry 1 · live execution projection, not an editor                                                      4  Stop
                                                 │ document                                                                                                              5  Submit
- │ plan-a91f7c                                  │ repl:entry-1 · submitted source is immutable while running                                                            6  Execution History · still …
+ │ plan-a91f7c                                  │ repl:entry-1 · submitted source is immutable while running                                                            6  Execution History
    ✓ completed   planner · turn 1 · returned 5… │ ▶ <Evaluate allow={["write"]}>                                                                              ENTER
                                                 │ │ Create a project README                                                                                            │
                                                 │ │ Provide the project name and a one-sentence description. The Plan component drafts the program that asks for them, │ syntax

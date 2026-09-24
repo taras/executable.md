@@ -6,8 +6,8 @@ historical inspection and the loss of its in-memory store — and whether focus
 can be derived rather than remembered, so that background work never moves
 somebody somewhere else.
 
-**Decision: retain the model, and adopt three things it settled.** One URL
-carries location. One registry, rebuilt every frame, carries focus. Between them
+**Decision: retain the model.** One URL carries location. Freedom's node tree
+carries focus, traversal, input targeting and branch lifetime. Between them
 they answer all fourteen frames of the Product Owner's approved focus study,
 forward and in reverse, at the wide and the narrow profile, and a state built by
 a long interaction rebuilds from its URL and a journal alone. Two defects were
@@ -95,47 +95,88 @@ reads as `history` and focusing `Run` reads as `input`.
 
 ## What focus turned out to be
 
-Focus is never a coordinate and never an index. It is a semantic identity —
-`region:transcript`, `control:transport.pause`, `field:drawer.project.name` — and
-every frame a registry is derived from the route, the journal and the layout.
-Asking where focus is means resolving one identity against the registry that
-exists *now*.
+**Freedom's node tree owns it.** The tree replaces the DOM in the terminal: a
+surface is a node, a scope panel mounted inside it is a branch, a drawer is a
+branch pushed as the active focus root, and a control is a leaf. Traversal order
+is tree order, computed on demand from the active subtree. There is no registry,
+no ordered list, no owner strings and no identifier parsing.
 
-That single mechanism answers two of the issue's criteria at once. A background
-update cannot steal focus, because nothing writes focus when one arrives — the
-suite asserts **reference** equality of the route, the focus, the selection and
-the anchor across a background event, since a reducer that rebuilt an equal
-route would pass a deep comparison having already lost the property. And a route
-transition restores a stable identity or the nearest surviving owner, because a
-vanished identity is resolved by walking its owner chain rather than by anybody
-remembering to move anything.
+This experiment's first attempt did keep such a registry — a flat
+`FocusTarget[]` with hand-written traversal order, a hand-written owner chain
+and hand-written restoration. It passed every case written against it, because a
+list compared with itself always agrees. What it could not do was answer a
+question about where a control actually *is*, and three of this slice's cases
+are exactly those questions.
 
-Four things the fourteen frames settled:
+**Input goes to the focused node, not to the application.** A key is invoked on
+`current(root).scope`, so Effection walks that scope's ancestors and every
+branch between the root and the control runs its middleware in order. The
+evidence reads the path rather than inferring it:
 
-- **Two lists, not one.** The **registry** is visible ∧ enabled and is what Tab
-  walks. The **map** is visible whether enabled or not and is what the overlay
-  numbers. Frame 12 numbers a dimmed `Continue` as target 6 and says Tab skips
-  it, so a disabled control is in one list and never in the other. Conflating
-  them is the trap, and `focus-hidden-target` is the control that does.
-- **Traversal order is not numbering order.** The ring is the five regions with
-  each region's own controls inlined immediately after it; numbering assigns 1–5
-  to the regions and 6 upward to the controls. Frames 05, 11 and 14 only agree
-  with each other under that reading — frame 14 numbers `Run` as 6 and traverses
-  it *before* region 5, because `Run` belongs to the input.
-- **Ownership is read from the identity.** Resolution has to answer "who owns
-  this?" for a target that is already gone, so it cannot be a lookup in the
-  registry that no longer contains it. The naming scheme is the ownership.
-- **A transport control declares a counterpart.** Frame 13 requires that leaving
-  history with `Continue` focused lands on `Pause`, so a declared counterpart is
-  preferred over the owner walk. Nothing else needed one.
+```text
+target  field:drawer.project.name
+path    drawer:project → panel:project.body
+```
 
-**The drawer's trap is the drawer's controls and the Execution History region,
-and nothing else.** The footer is inside the trap deliberately — the study calls
-it "the one way out" — which is how #827's "keeps the fixed history footer
-reachable" survives a suspension. Opening a drawer records the identity that
-invoked it; closing it restores that identity through the same resolution walk,
-so a drawer whose invoking scope no longer exists falls back rather than
-dangling.
+A flat registry has no way to produce that: the path is the tree's.
+
+**Closing a branch destroys it.** A drawer closes by removing its node; its
+controls, its body panel and their middleware go with it through structured
+teardown. Afterwards nothing in the tree can be focused, and no dispatch reaches
+what used to be there. There is no second list to update, because there is no
+second list.
+
+**A drawer is a pushed focus root.** `focusPush()` traps cycling inside the
+branch and remembers what to restore; nested drawers nest, and popping restores
+first to the outer drawer and finally to the invoking control. The footer is
+mounted *inside* the pushed branch deliberately — the study calls it "the one
+way out" — which is how #827's "keeps the fixed history footer reachable"
+survives a suspension.
+
+**A disabled control is a node that was never made focusable.** It is mounted,
+the renderer draws it and the `F1` map numbers it; it simply carries no
+`focused` prop, so it cannot enter the chain. That is Freedom's own distinction
+rather than one this harness invents, and it is what study frame 12 means by
+numbering a dimmed `Continue` and saying Tab skips it.
+
+**The overlay is the tree, walked.** Numbering is assigned as the study assigns
+it — regions first, then controls — but the list it numbers is the live tree,
+which is why the overlay follows focus into a drawer instead of going on
+numbering the panes behind it.
+
+**Focus is not in the application model at all.** `ReplState` has no focus
+field. The store decides what an event *means* and names what should happen to
+focus; the tree carries it out, because the tree is the thing that knows what
+exists. That is the strongest form the "background updates never steal focus"
+claim can take: the honest path does not write focus, and the control that
+breaks it has to reach past the store into the tree.
+
+The URL still records the **surface**, because the surface segment is what says
+which region owns focus — so a focus move that crosses a region boundary is a
+move the route makes in the same transition. What the URL never records is the
+focus identity.
+
+## Two gaps found in Freedom, and what was done about them
+
+`@bomb.sh/freedom` is private and unpublished, so its source is vendored here
+from the public playground repository, pinned and manifested. Two patches are
+recorded against it; `vendor/freedom/PROVENANCE.md` has the detail.
+
+1. **A root was parented to Effection `global`.** `createRoot()` alone means
+   host context does not reach the tree and a failure in node work raises into
+   a boundary nobody observes. `useRoot()` acquires the tree as a resource owned
+   by the acquiring scope.
+2. **Removal asked about identity, not containment.** `useFocus()`'s middleware
+   moved focus to a successor when the *removed node* was the focused one — but
+   a drawer or panel is closed by removing the branch *above* the focused
+   control, so the common case left focus on a node that had just been
+   destroyed while a perfectly good sibling survived.
+
+A third thing is this harness's own, and worth stating because it is the same
+mistake in miniature: **a reconciler must add before it removes.** Removing the
+focused control before its replacement exists leaves the region with nothing to
+move focus to, and focus lands outside it — which is how a resumed run first
+lost its transport slot.
 
 ## Divergences from the study, named rather than hidden
 
@@ -221,13 +262,19 @@ lifecycle to whoever closed the terminal.
 
 ## What the evidence rests on
 
-Twenty-three controls, thirteen of them new, each breaking exactly one claim and
-each rejected by name by the same oracle that admits the honest run. The two
+Twenty-six controls, each breaking exactly one claim and each rejected by name
+by the same oracle that admits the honest run. Four of them exist only because
+the tree does: `rebuild-tree-each-sync` destroys focus by rebuilding rather than
+reconciling, `keep-closed-branch` closes a drawer without removing it,
+`flat-overlay` numbers a list kept beside the interface instead of the tree, and
+`focus-hidden-target` makes a disabled control focusable. The two
 that matter most are the two that reproduce the decoder defects, because they
 are the only reason to believe the byte-driven cases would notice if the repair
 were undone.
 
-**Transitions are driven through the reducer**, forward and in reverse, from
-each of the fourteen frames. An earlier round proved them only by constructing
-each destination from its own URL, which is a check a reducer that moved focus
-and left the route behind passes without trouble — and did.
+**Transitions are driven through the real path**, forward and in reverse, from
+each of the fourteen frames — the same `drive()` the interactive harness uses,
+so a case cannot prove a path the running harness does not take. An earlier
+round proved them by constructing each destination from its own URL, which is a
+check a reducer that moved focus and left the route behind passes without
+trouble — and did.

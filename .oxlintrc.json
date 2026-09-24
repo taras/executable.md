@@ -3,6 +3,8 @@
 
   "extends": ["./oxlint.shared.json"],
 
+  "ignorePatterns": ["scripts/repl-study/vendor/freedom/**"],
+
   "plugins": ["typescript", "unicorn", "import"],
 
   "jsPlugins": [

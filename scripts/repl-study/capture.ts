@@ -25,8 +25,9 @@ import type { FocusView } from "./render.ts";
 import { applyAnsi, createGrid, gridText } from "./screen.ts";
 import { initialView } from "./store.ts";
 import type { View } from "./store.ts";
-import { focusIn, mapOf, fixtureFor, viewOf } from "./store.ts";
-import { FRAMES, stateFor } from "./frames.ts";
+import { fixtureFor, viewOf } from "./store.ts";
+import { FRAMES, useFrame } from "./frames.ts";
+import { overlayOf } from "./tree.ts";
 import type { Mutation } from "./mutations.ts";
 
 export interface Size {
@@ -377,7 +378,7 @@ const NARROW_FRAMES = ["01", "05", "07", "12", "14"];
 export function* captureFocus(): Operation<Capture[]> {
   const captures: Capture[] = [];
   for (const subject of FRAMES) {
-    const state = stateFor(subject);
+    const { state, tree } = yield* useFrame(subject);
     const profiles: Profile[] = NARROW_FRAMES.includes(subject.id) ? ["wide", "narrow"] : ["wide"];
     for (const profile of profiles) {
       const size = PROFILE_SIZES[profile];
@@ -385,11 +386,7 @@ export function* captureFocus(): Operation<Capture[]> {
         fixture: fixtureFor(state),
         view: viewOf(state),
         size,
-        focus: {
-          here: focusIn(state, size),
-          map: mapOf(state, size),
-          overlay: true,
-        },
+        focus: { here: tree.focused().name, map: overlayOf(tree), overlay: true },
       });
       captures.push({ name: `frame-${subject.id}.${profile}`, profile, size, frame });
     }

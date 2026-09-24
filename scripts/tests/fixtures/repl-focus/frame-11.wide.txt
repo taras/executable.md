@@ -1,10 +1,10 @@
 frame-11.wide · 200 × 50
  XMD REPL                                       │ REPL › Entry 1 › document › Plan
                                                 │                                                                                                                     FOCUS MAP · F1
- SESSION   JOURNAL   STATE                      │────────────────────────────────────────────────────────────────────────────────────────────────────────────────────   1  Journal · checkpoint list   ─
+ SESSION   JOURNAL   STATE                      │────────────────────────────────────────────────────────────────────────────────────────────────────────────────────   1  Sessions                    ─
                                                 │ Entry 1  ● running · 53.0s       ↳ reconstructed · read-only                                                          2  Transcript
  ENTRY 1 · CREATE PROJECT README                │                                                                                                                       3  Bindings
- inspecting recorded history · read-only        │ reconstructed from the journal · no live action is possible here                                                      4  REPL input · Run disabled
+ inspecting recorded history · read-only        │ reconstructed from the journal · no live action is possible here                                                      4  REPL input
                                                 │ Plan                                                                                                                ▸ 5  Execution History
  00:02 ◆ Entry 1 submitted                      │ ● <Plan as="draft" session={planner}>                                                                       ACTIVE    6  Continue
  00:05 ● document scope entered                 │ │ ✓ Read the Prompt · prompt                                                                                          7  Return to paused head

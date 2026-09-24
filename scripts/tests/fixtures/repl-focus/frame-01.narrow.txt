@@ -1,7 +1,7 @@
 frame-01.narrow · 90 × 28
  TRANSCRIPT · 2 / 4         REPL                                                  Tab ▸
  TRANSCRIPT                                                         FOCUS MAP · F1
-                                                                      1  Sessions · 0
+                                                                      1  Sessions
  No executions yet.                                                   2  Transcript
                                                                       3  Bindings
  Submitted blocks append here as immutable entries. Each entry keep ▸ 4  REPL input

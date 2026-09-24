@@ -73,13 +73,20 @@ Keys, while it is running:
 | `q` | leave, restoring the terminal |
 | `Ctrl+C` | interrupt the entry if one is running, paused or reconstructed; else clear the draft; else leave |
 
-**The ring is five regions with each region's own controls inlined after it** —
-Sessions, Transcript, Bindings, REPL input, Execution History — and it wraps.
-The numbers the overlay draws are assigned separately: regions take 1–5 and
-controls take 6 upward, which is why `Run` is numbered after the footer and
-traversed before it. While a drawer is open the ring is the drawer's own
+**Focus belongs to the tree.** The interface is a Freedom node tree — a surface
+is a node, a scope panel is a branch inside it, a drawer is a branch pushed as
+the active focus root, a control is a leaf — and traversal order is tree order,
+worked out on demand. A key is delivered to the focused node, so every branch
+between the root and it runs its middleware. Closing a drawer removes its
+branch, and its controls and their middleware go with it.
+
+The numbers the overlay draws are assigned separately from traversal: regions
+take 1–5 and controls 6 upward, which is why `Run` is numbered after the footer
+and traversed before it. While a drawer is open the ring is the drawer's own
 controls and the Execution History region, and nothing else: the footer is
-inside the trap deliberately, because it is the one way out of it.
+mounted inside the pushed branch deliberately, because it is the one way out of
+it. A control that is visible but disabled is a node that was never made
+focusable — drawn, numbered, and unreachable by Tab.
 
 **`Esc` is Back.** It closes the top drawer, restoring whatever opened it; then
 leaves a reconstruction for the paused head; then returns from a control to the
@@ -164,7 +171,11 @@ makes a capture legible as evidence against the frame it reproduces.
 | `playback.ts` | the journey, the path between two fixtures, and the motion at one instant of it |
 | `fixtures.ts` | the six moments and the three drawers, from the study's own content |
 | `route.ts` | the URL schema, parsing, formatting, and push versus replace |
-| `focus.ts` | targets, the map, the registry, traversal, resolution and counterparts |
+| `vendor/freedom/` | `@bomb.sh/freedom`, vendored and pinned — the node tree that owns focus |
+| `tree.ts` | the interface as Freedom nodes: surfaces, panels, drawers, controls |
+| `keys.ts` | a key delivered to the focused node, through its ancestors' middleware |
+| `drive.ts` | one event, carried through the tree and the store — the harness and the evidence share it |
+| `surfaces.ts` | which controls a drawer carries, and in what order |
 | `journal.ts` | the hand-authored journal fixture, and the fold that reconstructs a moment from it |
 | `store.ts` | `ReplState`, its reducer, `hydrate()` and `projection()` |
 | `frames.ts` | the focus study's fourteen frames, as addressable states |
@@ -173,7 +184,7 @@ makes a capture legible as evidence against the frame it reproduces.
 | `screen.ts` | a terminal's cells, reconstructed from the bytes, so a frame can be read back |
 | `host.ts` | the only module that touches the terminal: modes, raw input, signals, restoration |
 | `capture.ts` | one frame, away from a terminal, in bytes and in cells |
-| `mutations.ts` | the twenty-three ways the evidence breaks this on purpose |
+| `mutations.ts` | the twenty-six ways the evidence breaks this on purpose |
 | `main.ts` | the documented command |
 
 `--replay` runs the same lifecycle with no terminal attached, writing its byte

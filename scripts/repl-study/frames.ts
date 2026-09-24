@@ -17,6 +17,9 @@ import { journalThrough } from "./journal.ts";
 import type { FixtureName } from "./model.ts";
 import { hydrate } from "./store.ts";
 import type { ReplState } from "./store.ts";
+import { focus as focusNode, useReplTree } from "./tree.ts";
+import type { ReplTree } from "./tree.ts";
+import type { Operation } from "effection";
 
 export interface StudyTarget {
   /** The number the study's overlay writes beside this target. */
@@ -342,5 +345,41 @@ export function frame(id: string): StudyFrame | undefined {
  */
 export function stateFor(subject: StudyFrame): ReplState {
   const state = hydrate(subject.url, journalThrough(subject.head));
-  return { ...state, focus: subject.focus, overlay: subject.overlay };
+  return { ...state, overlay: subject.overlay };
+}
+
+export interface Frame {
+  readonly state: ReplState;
+  readonly tree: ReplTree;
+}
+
+/**
+ * One frame, as a state and the tree that renders it.
+ *
+ * The URL and the journal rebuild the state; the tree is then built from it and
+ * the frame's declared focus placed on the node that carries it. Focus is not
+ * in the URL and never was — placing it here is what the person did before the
+ * frame was taken, and the evidence's job is to check that the node the study
+ * names is one the tree actually offers.
+ */
+export function useFrame(subject: StudyFrame): Operation<Frame> {
+  return {
+    *[Symbol.iterator]() {
+      const state = stateFor(subject);
+      const tree = yield* useReplTree(state);
+      // Entering the region comes first, because the footer is explicit: its
+      // controls exist only once focus is inside it. The route's surface is
+      // what says which region that is — the same invariant the URL records.
+      const region = tree.chain().find((node) => node.name === `region:${state.route.surface}`);
+      if (region) {
+        focusNode(region);
+      }
+      yield* tree.sync(state);
+      const target = tree.chain().find((node) => node.name === subject.focus);
+      if (target) {
+        focusNode(target);
+      }
+      return { state, tree };
+    },
+  };
 }

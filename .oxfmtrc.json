@@ -4,11 +4,14 @@
   // the exact indentation the rule tests assert on.
   // `packages/*/npm` is generated dnt output, written by a test while the
   // battery runs; format-checking it fails on a file nobody wrote by hand.
+  // The vendored snapshots are upstream's bytes: a drift verifier holds each to
+  // the manifest that records it, and reformatting one would break that.
   "ignorePatterns": [
     "**/*.md",
     "scripts/tests/fixtures/**",
     "**/npm/**",
     "packages/workflow/vendor/cloudflare-computer-dofs/**",
-    "packages/acp/vendor/acpx/**"
+    "packages/acp/vendor/acpx/**",
+    "scripts/repl-study/vendor/freedom/**"
   ]
 }

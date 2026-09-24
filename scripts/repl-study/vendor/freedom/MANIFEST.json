@@ -1,0 +1,45 @@
+{
+  "upstream": {
+    "repository": "https://github.com/bombshell-dev/playground",
+    "commit": "8be97e7201cd6effddb2f8b240b4b5166641e7f0",
+    "branch": "focus-stack",
+    "directory": "packages/freedom",
+    "package": "@bomb.sh/freedom",
+    "version": "0.0.0",
+    "license": "MIT"
+  },
+  "patches": [
+    {
+      "file": "upstream/lib/root.ts",
+      "name": "owned-root",
+      "reason": "createRoot() parents the root scope to Effection global. useRoot() acquires the tree as a resource owned by the calling scope, which is the surface this repository uses; createRoot(owner) is the escape hatch behind it."
+    },
+    {
+      "file": "upstream/lib/node.ts",
+      "name": "owned-root",
+      "reason": "NodeImpl takes the owning scope a parentless root is created under."
+    },
+    {
+      "file": "upstream/lib/mod.ts",
+      "name": "owned-root",
+      "reason": "useRoot() joins the public surface."
+    },
+    {
+      "file": "upstream/lib/focus.ts",
+      "name": "containment-removal",
+      "reason": "useFocus()'s remove middleware compared the removed node with the focused one. Closing a drawer or panel removes the branch above the focused control, which left focus on a node that no longer existed; it now asks whether the branch contains the focused node."
+    }
+  ],
+  "files": {
+    "LICENSE": "ff5318b9f1cbe44dec39dd306a042a50900ecfaf0d99489beb11b6a567ad21bf",
+    "upstream/index.ts": "ffae461c16d4a1bf24c2179582ab8d5c81ad0df61e4ae2fba51ef5e5bdf90345",
+    "upstream/lib/dispatch.ts": "c75fbd34bda9786aae58e5539ebc05bd0cf88766771cef55dfb23db55d72e5ec",
+    "upstream/lib/focus.ts": "efe3da62c51e6d8c204e0eee31a13f7fcce22ace39de2a30512e298162f92f6e",
+    "upstream/lib/mod.ts": "48ef87d71e22dbf16d480d38d359d79071259c1f476d8c39b92678a13fee7f17",
+    "upstream/lib/node.ts": "e45e22c0426e8b593ae6cb78be99c78ff6f693ec8ca1102342c6a3ed0687b9a9",
+    "upstream/lib/root.ts": "38f0891afa7deb87f01c65bf63cbeef73c9482e98007b54d0f7d5a332c3b46fd",
+    "upstream/lib/state.ts": "6eb73c1f8daa2d560948a52eb7e87ec91b8cd8c47cacdb4ca57e6ef70f1c4e1f",
+    "upstream/lib/types.ts": "6f1654f4f7855e21167fd62349bf56e461ce61470ba51099382068a296b89e62",
+    "upstream/lib/validate.ts": "561f3b52c1ffdc91ca1cf976aae09319d66ea982758abb6e79e2c1ad351b9c6b"
+  }
+}

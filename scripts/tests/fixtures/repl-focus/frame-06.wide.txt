@@ -1,10 +1,10 @@
 frame-06.wide · 200 × 50
  XMD REPL                                       │ REPL › Entry 1 › document · suspended
                                                 │                                                                                                                     FOCUS MAP · F1
- SESSION   JOURNAL   STATE                      │────────────────────────────────────────────────────────────────────────────────────────────────────────────────────   1  Sessions · 3                ─
+ SESSION   JOURNAL   STATE                      │────────────────────────────────────────────────────────────────────────────────────────────────────────────────────   1  Sessions                    ─
                                                 │▌Entry 1  ● running · 48.9s       ↳ document scope suspended                                                         ▸ 2  Transcript
  SESSIONS · 3                                   │                                                                                                                       3  Bindings
- chronological · selection follows you, not ac… │ ← opened from Entry 1 · live execution projection, not an editor                                                      4  REPL input · Run disabled
+ chronological · selection follows you, not ac… │ ← opened from Entry 1 · live execution projection, not an editor                                                      4  REPL input
                                                 │ document                                                                                                              5  Execution History
  │ plan-a91f7c                                  │ ▶ <Evaluate allow={["write"]}>                                                                              ENTER
    ✓ completed   planner · turn 1 · returned 5… │ │ ▾ Ask for the project details                                                                                      │ # Northstar

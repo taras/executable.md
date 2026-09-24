@@ -1,7 +1,7 @@
 frame-14.wide · 200 × 50
  XMD REPL                                       │ REPL · Entry 1 settled
                                                 │                                                                                                                     FOCUS MAP · F1
- SESSION   JOURNAL   STATE                      │────────────────────────────────────────────────────────────────────────────────────────────────────────────────────   1  Sessions · 3                ─
+ SESSION   JOURNAL   STATE                      │────────────────────────────────────────────────────────────────────────────────────────────────────────────────────   1  Sessions                    ─
                                                 │ Entry 1  ✓ completed · 41.2s     ▸ source · 8 lines                                                                   2  Transcript
  SESSIONS · 3                                   │                                                                                                                       3  Bindings
  persist after settling                         │ Create a project README                                                                                             ▸ 4  REPL input

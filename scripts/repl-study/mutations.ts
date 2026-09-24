@@ -30,9 +30,15 @@ export const MUTATIONS = [
   "restore-mid-animation",
   /** Move focus when a background update arrives. */
   "steal-focus-on-background",
+  /** Rebuild the whole tree on every sync instead of reconciling it. */
+  "rebuild-tree-each-sync",
+  /** Close a drawer without removing its branch, so its controls survive. */
+  "keep-closed-branch",
+  /** Number the overlay from a static list instead of walking the tree. */
+  "flat-overlay",
   /** Let Tab escape an open drawer into the panes behind it. */
   "leak-drawer-trap",
-  /** Admit a target the map shows but the registry excludes. */
+  /** Make a visible-but-disabled control focusable. */
   "focus-hidden-target",
   /** Push a navigation entry for every keystroke in the draft. */
   "push-draft-edits",

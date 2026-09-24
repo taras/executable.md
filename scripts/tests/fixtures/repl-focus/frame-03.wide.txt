@@ -1,7 +1,7 @@
 frame-03.wide · 200 × 50
  XMD REPL                                       │ REPL
                                                 │                                                                                                                     FOCUS MAP · F1
- SESSION   JOURNAL   STATE                      │────────────────────────────────────────────────────────────────────────────────────────────────────────────────────   1  Sessions · 0                ─
+ SESSION   JOURNAL   STATE                      │────────────────────────────────────────────────────────────────────────────────────────────────────────────────────   1  Sessions                    ─
                                                 │ TRANSCRIPT                                                                                                            2  Transcript
  No sessions yet                                │                                                                                                                       3  Bindings
                                                 │ No executions yet.                                                                                                    4  REPL input

@@ -21,8 +21,6 @@ import { fold, JOURNAL, journalThrough, siblingsOf } from "./journal.ts";
 import type { JournalFixture, JournalRecord, Moment } from "./journal.ts";
 import { layoutFor, SURFACES } from "./layout.ts";
 import type { Layout, SurfaceName } from "./layout.ts";
-import { focusMap, registry, resolve, step } from "./focus.ts";
-import type { FocusTarget } from "./focus.ts";
 import type { FixtureName, Fixture, TransportMode } from "./model.ts";
 import type { Mutation } from "./mutations.ts";
 import { formatRoute, navigationFor, parseRoute, surfaceFor, topDrawer } from "./route.ts";
@@ -91,8 +89,6 @@ export interface ReplState {
   readonly journal: JournalFixture;
   /** The fold of that journal at this route, minted with them and never alone. */
   readonly moment: Moment;
-  /** A semantic identity, resolved against the registry that exists now. */
-  readonly focus: string;
   /** Disposable: the transcript window. */
   readonly anchor: number;
   /**
@@ -145,7 +141,6 @@ export function hydrateRoute(
   mutation?: Mutation,
 ): ReplState {
   const rebuilt = mint(route, journal, {
-    focus: `region:${route.surface}`,
     anchor: 0,
     overlay: false,
     invokers: {},
@@ -263,21 +258,6 @@ export function viewOf(state: ReplState): View {
   };
 }
 
-/** The ring: every target Tab may land on, in traversal order. */
-export function targets(state: ReplState, size: Size, mutation?: Mutation): readonly FocusTarget[] {
-  return registry(state, layoutOf(state, size, mutation), mutation);
-}
-
-/** The map: every visible target, enabled or not, which is what F1 numbers. */
-export function mapOf(state: ReplState, size: Size, mutation?: Mutation): readonly FocusTarget[] {
-  return focusMap(state, layoutOf(state, size, mutation), mutation);
-}
-
-/** Where focus actually is, asked fresh rather than remembered. */
-export function focusIn(state: ReplState, size: Size, mutation?: Mutation): string {
-  return resolve(state.focus, targets(state, size, mutation));
-}
-
 /**
  * Go somewhere, and decide whether that is a place you can come Back from.
  *
@@ -289,7 +269,6 @@ function go(state: ReplState, route: Route, change: RouteChange, mutation?: Muta
   const navigation =
     mutation === "push-draft-edits" && change === "draft" ? "push" : navigationFor(change);
   return mint(route, state.journal, {
-    focus: state.focus,
     anchor: state.anchor,
     overlay: state.overlay,
     invokers: state.invokers,
@@ -301,7 +280,6 @@ function go(state: ReplState, route: Route, change: RouteChange, mutation?: Muta
 
 function withJournal(state: ReplState, journal: JournalFixture): ReplState {
   return mint(state.route, journal, {
-    focus: state.focus,
     anchor: state.anchor,
     overlay: state.overlay,
     invokers: state.invokers,
@@ -322,18 +300,17 @@ function extendTo(state: ReplState, kind: JournalRecord["kind"]): ReplState {
 }
 
 /**
- * Put focus on one identity, and take the route with it.
+ * Take the route to wherever focus now is.
  *
- * The surface segment says which region owns focus, so a focus move across a
- * region boundary *is* a move. Leaving the URL behind would let a cold start
- * come back to the region somebody had already tabbed away from, and would let
- * a narrow terminal go on rendering one surface full-screen while focus named
- * another.
+ * Focus itself is the tree's and never appears here. What the route records is
+ * the *surface* focus landed in, because the surface segment is what says which
+ * region owns focus — so a focus move that crosses a region boundary is a move
+ * the URL has to make too, in the same transition.
  */
-function focusTo(
+export function followFocus(
   state: ReplState,
   identity: string,
-  change: RouteChange,
+  change: RouteChange = "focus",
   mutation?: Mutation,
 ): ReplState {
   const surface = surfaceFor(identity);
@@ -342,9 +319,9 @@ function focusTo(
     surface === state.route.surface ||
     mutation === "keep-route-on-focus"
   ) {
-    return { ...state, focus: identity };
+    return state;
   }
-  return { ...go(state, { ...state.route, surface }, change, mutation), focus: identity };
+  return go(state, { ...state.route, surface }, change, mutation);
 }
 
 export type HarnessEvent =
@@ -360,6 +337,31 @@ export interface ReduceContext {
   readonly mutation?: Mutation;
   /** How many transcript lines the window may scroll past. */
   readonly scrollLimit: number;
+  /**
+   * The identity the tree reports as focused.
+   *
+   * Supplied rather than stored: the tree owns focus, and a reducer that kept
+   * its own copy would be the second focus model this rework removes.
+   */
+  readonly focused: string;
+}
+
+/**
+ * What one event did, and what the tree should do about focus.
+ *
+ * Traversal and restoration are the tree's to perform — it is the thing that
+ * knows what exists. The reducer decides *what should happen*, names it, and
+ * lets the tree carry it out, so neither side keeps a second answer.
+ */
+export type FocusIntent =
+  | { readonly kind: "advance" }
+  | { readonly kind: "retreat" }
+  | { readonly kind: "to"; readonly identity: string }
+  | { readonly kind: "owner" };
+
+export interface Reduction {
+  readonly state: ReplState;
+  readonly focus?: FocusIntent;
 }
 
 export interface Key {
@@ -421,48 +423,49 @@ function frozen(state: ReplState, mutation?: Mutation): boolean {
  * return state whose route, focus, selection and anchor are the *same
  * references* it was handed.
  */
-export function reduce(state: ReplState, event: HarnessEvent, context: ReduceContext): ReplState {
+export function reduce(state: ReplState, event: HarnessEvent, context: ReduceContext): Reduction {
   const { mutation } = context;
+  const only = (next: ReplState): Reduction => ({ state: next });
+
   if (event.kind === "quit") {
-    return { ...state, quit: true };
+    return only({ ...state, quit: true });
   }
   if (event.kind === "tick" || event.kind === "resize") {
     // A frame passing and a terminal resizing change what is drawn, never where
     // you are. The route survives a resize because the profile was never
     // recorded in it.
     if (event.kind === "resize" && mutation === "drop-route-on-resize") {
-      return hydrateRoute(
-        {
-          execution: state.route.execution,
-          surface: "transcript",
-          scopes: [],
-          drawers: [],
-          inspect: false,
-          draft: "",
-        },
-        state.journal,
+      return only(
+        hydrateRoute(
+          {
+            execution: state.route.execution,
+            surface: "transcript",
+            scopes: [],
+            drawers: [],
+            inspect: false,
+            draft: "",
+          },
+          state.journal,
+        ),
       );
     }
-    return state;
+    return only(state);
   }
   if (event.kind === "background") {
-    // Nothing here writes focus, the route, the selection or the anchor, which
-    // is the whole of why a background update cannot steal any of them.
-    const extended = withJournal(state, [...state.journal, event.record]);
-    return mutation === "steal-focus-on-background"
-      ? { ...extended, focus: "region:sessions" }
-      : extended;
+    // Nothing here touches focus at all — it is not in this model to touch,
+    // which is the strongest form the "no stealing" claim can take. The control
+    // has to reach past the store, into the tree, to break it.
+    return only(withJournal(state, [...state.journal, event.record]));
   }
 
   const key = asKey(event.event);
   if (key.type !== "keydown") {
-    return state;
+    return only(state);
   }
-  const live = targets(state, context.size, mutation);
-  const here = resolve(state.focus, live);
+  const here = context.focused;
 
   if (key.code === "q" && !editable(here)) {
-    return { ...state, quit: true };
+    return only({ ...state, quit: true });
   }
   if (key.ctrl === true && key.code === "c") {
     // An entry that is paused, or being looked at through a reconstruction, is
@@ -470,24 +473,25 @@ export function reduce(state: ReplState, event: HarnessEvent, context: ReduceCon
     // lifecycle to whoever closed the terminal.
     const active = state.moment.entry === "running" && mutation !== "exit-on-paused-interrupt";
     if (active) {
-      return { ...state, interrupts: state.interrupts + 1 };
+      return only({ ...state, interrupts: state.interrupts + 1 });
     }
     if (state.route.draft !== "") {
-      return go(state, { ...state.route, draft: "" }, "draft", mutation);
+      return only(go(state, { ...state.route, draft: "" }, "draft", mutation));
     }
-    return { ...state, quit: true };
+    return only({ ...state, quit: true });
   }
   if (key.code === "F1") {
-    return { ...state, overlay: !state.overlay };
+    return only({ ...state, overlay: !state.overlay });
   }
   if (key.code === "Tab" || key.code === "Backtab") {
-    return focusTo(state, step(here, live, reverseTab(key, mutation) ? -1 : 1), "focus", mutation);
+    // Traversal is the tree's: it is the thing that knows what exists now.
+    return { state, focus: reverseTab(key, mutation) ? { kind: "retreat" } : { kind: "advance" } };
   }
   if (key.code === "Escape") {
-    return back(state, here, live, context.size, mutation);
+    return back(state, here, context.size, mutation);
   }
   if (key.code === "Enter") {
-    return activate(state, here, mutation);
+    return only(activate(state, here, mutation));
   }
 
   const digit = Number(key.code);
@@ -495,7 +499,11 @@ export function reduce(state: ReplState, event: HarnessEvent, context: ReduceCon
     const surface = (["sessions", "transcript", "bindings", "input", "history"] as const)[
       digit - 1
     ];
-    return focusTo(state, `region:${surface}`, "surface", mutation);
+    const identity = `region:${surface}`;
+    return {
+      state: followFocus(state, identity, "surface", mutation),
+      focus: { kind: "to", identity },
+    };
   }
 
   if (
@@ -506,29 +514,29 @@ export function reduce(state: ReplState, event: HarnessEvent, context: ReduceCon
     // modified arrow is never stolen out of a draft somebody is typing.
     !editable(here)
   ) {
-    return structural(state, key.code, mutation);
+    return only(structural(state, key.code, mutation));
   }
 
   if (key.code === "ArrowUp") {
-    return { ...state, anchor: Math.max(0, state.anchor - 1) };
+    return only({ ...state, anchor: Math.max(0, state.anchor - 1) });
   }
   if (key.code === "ArrowDown") {
-    return { ...state, anchor: Math.min(context.scrollLimit, state.anchor + 1) };
+    return only({ ...state, anchor: Math.min(context.scrollLimit, state.anchor + 1) });
   }
   if (key.code === "PageUp") {
-    return { ...state, anchor: Math.max(0, state.anchor - 10) };
+    return only({ ...state, anchor: Math.max(0, state.anchor - 10) });
   }
   if (key.code === "PageDown") {
-    return { ...state, anchor: Math.min(context.scrollLimit, state.anchor + 10) };
+    return only({ ...state, anchor: Math.min(context.scrollLimit, state.anchor + 10) });
   }
   if (key.code === "ArrowLeft" || key.code === "ArrowRight") {
-    return scrub(state, key.code === "ArrowLeft" ? -1 : 1, mutation);
+    return only(scrub(state, key.code === "ArrowLeft" ? -1 : 1, mutation));
   }
   if (key.code === "d" && !editable(here)) {
-    return toggleDrawer(state, here, context.size, mutation);
+    return toggleDrawer(state, here, mutation);
   }
 
-  return type(state, key, here, mutation);
+  return only(type(state, key, here, mutation));
 }
 
 /**
@@ -538,50 +546,48 @@ export function reduce(state: ReplState, event: HarnessEvent, context: ReduceCon
  * control, then the navigation stack. Every step of it is non-destructive,
  * which is what lets Escape be the one key a person can always press.
  */
-function back(
-  state: ReplState,
-  here: string,
-  live: readonly FocusTarget[],
-  size: Size,
-  mutation?: Mutation,
-): ReplState {
+function back(state: ReplState, here: string, size: Size, mutation?: Mutation): Reduction {
+  void size;
   const top = topDrawer(state.route);
   if (top !== undefined) {
+    // The route loses the drawer; the tree removes the branch and restores the
+    // focus its push remembered. Neither side keeps the other's answer.
     const closed = go(
       state,
       { ...state.route, drawers: state.route.drawers.slice(0, -1) },
       "drawer",
       mutation,
     );
-    if (mutation === "forget-drawer-invoker") {
-      return closed;
-    }
-    const invoker = state.invokers[top] ?? "region:transcript";
-    return focusTo(closed, resolve(invoker, targets(closed, size, mutation)), "focus", mutation);
+    return { state: closed };
   }
   if (state.route.inspect) {
-    return go(state, { ...state.route, inspect: false }, "inspection", mutation);
+    return { state: go(state, { ...state.route, inspect: false }, "inspection", mutation) };
   }
   if (!here.startsWith("region:")) {
-    return focusTo(state, resolve(ownerRegion(here), live), "focus", mutation);
+    const owner = ownerRegion(here);
+    return {
+      state: followFocus(state, owner, "focus", mutation),
+      focus: { kind: "to", identity: owner },
+    };
   }
   const previous = state.history[state.history.length - 1];
   if (previous === undefined) {
-    return state;
+    return { state };
   }
   const parsed = parseRoute(previous);
   if (!parsed.ok) {
-    return state;
+    return { state };
   }
-  return mint(parsed.value, state.journal, {
-    focus: state.focus,
-    anchor: state.anchor,
-    overlay: state.overlay,
-    invokers: state.invokers,
-    history: state.history.slice(0, -1),
-    interrupts: state.interrupts,
-    quit: state.quit,
-  });
+  return {
+    state: mint(parsed.value, state.journal, {
+      anchor: state.anchor,
+      overlay: state.overlay,
+      invokers: state.invokers,
+      history: state.history.slice(0, -1),
+      interrupts: state.interrupts,
+      quit: state.quit,
+    }),
+  };
 }
 
 function ownerRegion(identity: string): string {
@@ -680,24 +686,28 @@ function structural(state: ReplState, code: string, mutation?: Mutation): ReplSt
 }
 
 /** `d` opens the suspension that is waiting, or closes the one that is open. */
-function toggleDrawer(state: ReplState, here: string, size: Size, mutation?: Mutation): ReplState {
-  const top = topDrawer(state.route);
-  if (top !== undefined) {
-    return back(state, here, targets(state, size, mutation), size, mutation);
+function toggleDrawer(state: ReplState, here: string, mutation?: Mutation): Reduction {
+  if (topDrawer(state.route) !== undefined) {
+    return back(state, here, { cols: 0, rows: 0 }, mutation);
   }
   const waiting = state.moment.suspension;
   if (waiting === undefined || frozen(state, mutation)) {
-    return state;
+    return { state };
   }
-  return openDrawer(state, waiting, here, size, mutation);
+  return { state: openDrawer(state, waiting, here, mutation) };
 }
 
-/** Opening records the identity that invoked it, so closing can restore it. */
+/**
+ * Open a suspension's drawer.
+ *
+ * The route gains it and the invoking identity is remembered. Mounting the
+ * branch, pushing it as the focus root and seeding focus inside it are the
+ * tree's — this does not reach across and place focus itself.
+ */
 export function openDrawer(
   state: ReplState,
   kind: DrawerKind,
   invoker: string,
-  size: Size,
   mutation?: Mutation,
 ): ReplState {
   const opened = go(
@@ -706,13 +716,7 @@ export function openDrawer(
     "drawer",
     mutation,
   );
-  // A suspension puts focus on the first meaningful control in the drawer
-  // rather than on the drawer itself, which is what study frame 07 shows.
-  return {
-    ...opened,
-    invokers: { ...state.invokers, [kind]: invoker },
-    focus: targets(opened, size, mutation)[0]?.id ?? state.focus,
-  };
+  return { ...opened, invokers: { ...state.invokers, [kind]: invoker } };
 }
 
 /** Typing edits the draft, which replaces the current URL rather than adding to it. */

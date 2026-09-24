@@ -20,8 +20,7 @@ import type { Layout, Rect } from "./layout.ts";
 import { MINIMUM } from "./layout.ts";
 import type { View } from "./store.ts";
 import type { Mutation } from "./mutations.ts";
-import type { FocusTarget } from "./focus.ts";
-import { mapOrder, numbering } from "./focus.ts";
+import type { OverlayEntry } from "./tree.ts";
 import type { Motion } from "./playback.ts";
 
 const C = {
@@ -253,10 +252,10 @@ const DRAWER_TRANSITION = {
  * second opinion about where focus is may be formed.
  */
 export interface FocusView {
-  /** The identity focus resolved to. */
+  /** The name of the node the tree reports as focused. */
   readonly here: string;
-  /** Every visible target, enabled or not, which is what the overlay numbers. */
-  readonly map: readonly FocusTarget[];
+  /** The live tree, walked and numbered. Nothing here is a second registry. */
+  readonly map: readonly OverlayEntry[];
   readonly overlay: boolean;
 }
 
@@ -322,8 +321,7 @@ const TRANSPORT_WORDS: Record<string, readonly string[]> = {
  * has to show what the ring does not.
  */
 function focusMapRegion(layout: Layout, focus: FocusView): Op[] {
-  const ordered = mapOrder(focus.map);
-  const numbers = numbering(focus.map);
+  const ordered = focus.map;
   const width = Math.min(34, Math.max(18, Math.round(layout.cols * 0.24)));
   const height = Math.min(layout.rows, ordered.length + 2);
   const rect = { x: Math.max(0, layout.cols - width - 1), y: 1, width, height };
@@ -333,7 +331,7 @@ function focusMapRegion(layout: Layout, focus: FocusView): Op[] {
     lines.push({
       segments: [
         { text: on ? `${FOCUS_MARK} ` : "  ", color: C.focus, width: 2 },
-        { text: `${numbers.get(target.id) ?? 0}`, color: target.enabled ? C.out : C.dim, width: 3 },
+        { text: `${target.number}`, color: target.enabled ? C.out : C.dim, width: 3 },
         { text: target.label, color: target.enabled ? C.src : C.dim },
       ],
     });

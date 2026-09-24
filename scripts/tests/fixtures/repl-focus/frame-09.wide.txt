@@ -4,7 +4,7 @@ frame-09.wide · 200 × 50
  SESSION   JOURNAL   STATE                      │────────────────────────────────────────────────────────────────────────────────────────────────────────────────────   1  README preview · scroll re… ─
                                                 │ Entry 1  ● running · 48.9s       ↳ document scope suspended                                                         ▸ 2  Approve
  SESSIONS · 3                                   │                                                                                                                       3  Decline
- chronological · selection follows you, not ac… │ ← opened from Entry 1 · live execution projection, not an editor                                                      4  Execution History · still …
+ chronological · selection follows you, not ac… │ ← opened from Entry 1 · live execution projection, not an editor                                                      4  Execution History
                                                 │ document
  │ plan-a91f7c                                  │ ▶ <Evaluate allow={["write"]}>                                                                              ENTER    │ markdown · 3 lines
    ✓ completed   planner · turn 1 · returned 5… │ │ ▾ Ask for the project details                                                                                      │ # Northstar
