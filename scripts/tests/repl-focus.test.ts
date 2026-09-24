@@ -64,6 +64,9 @@ const MAIN = "scripts/repl-study/main.ts";
 
 const DRAWER = "xmd://repl/e1/transcript/entry-1/document/+project";
 
+/** The same drawer, opened over a reconstruction, which makes it read-only. */
+const RECORDED = "xmd://repl/e1/transcript/entry-1/document/+project?at=cp-04&inspect";
+
 const WIDE: Size = PROFILE_SIZES.wide;
 const NARROW: Size = PROFILE_SIZES.narrow;
 
@@ -623,6 +626,33 @@ describe("drawers trap traversal and restore outward", () => {
     }
     expect(reached).not.toContain("region:history");
     expect(new Set(reached).size).toBe(tree.chain().length);
+  });
+
+  it("closes a recorded narrow drawer back to the surface the URL names", function* () {
+    // A recorded drawer at the narrow profile is a read-only modal: nothing in
+    // it is actionable, and the band it would escape to is not on screen. So
+    // the drawer itself holds focus, Tab does nothing, and Escape is the way
+    // out — which makes where Escape *lands* the whole of this state's
+    // navigation, and it used to land on Sessions.
+    const { state, tree } = yield* opened(RECORDED, "cp-18", NARROW);
+    const drawer = find(tree.root.node, "drawer:project")!;
+    expect([...drawer.children].flatMap((child) => [...child.children]).length).toBeGreaterThan(0);
+    expect(chain(tree)).toEqual([]);
+    expect(tree.focused().name).toBe("drawer:project");
+
+    const closed = yield* drive(tree, state, key("Escape"), context(NARROW));
+    // Escape closes the drawer and nothing else: the reconstruction it was
+    // opened over is still open, at the same recorded marker.
+    expect(closed.state.route.drawers).toEqual([]);
+    expect(closed.state.route.inspect).toBe(true);
+    expect(closed.state.route.at).toBe("cp-04");
+    // Back to the surface the URL names, and to a node the ring actually has.
+    expect(tree.focused().name).toBe("region:transcript");
+    expect(chain(tree)).toContain(tree.focused().name);
+
+    // Leaving the reconstruction is a second, separate Escape.
+    const live = yield* drive(tree, closed.state, key("Escape"), context(NARROW));
+    expect(live.state.route.inspect).toBe(false);
   });
 
   it("lets Tab escape the trap when the branch is not pushed as a focus root", function* () {

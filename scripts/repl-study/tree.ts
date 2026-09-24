@@ -501,6 +501,18 @@ export function useReplTree(state: ReplState, composed: Size): Operation<ReplTre
         }
       };
 
+      // The surface the URL names owns focus before anything is pushed over
+      // it. A drawer's trap remembers what it interrupted, and a cold start
+      // that mounted the drawer first made it remember the ring's default
+      // first region — so closing a drawer opened straight from a URL put you
+      // on Sessions, which the URL had never said.
+      const owner = [...root.node.children].find(
+        (child) => child.name === `region:${state.route.surface}`,
+      );
+      if (owner !== undefined) {
+        focus(owner);
+      }
+
       yield* mountScopes(state);
       yield* mountControls(state);
       yield* syncDrawers(state);
