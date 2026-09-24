@@ -35,7 +35,25 @@ export type ReplAction =
   /** Close the drawer that is open, which is what Back means inside one. */
   | { readonly kind: "close-drawer" }
   /** Move focus, in the tree's own terms rather than the ring's implementation. */
-  | { readonly kind: "focus"; readonly move: "next" | "previous" | "owner" };
+  | { readonly kind: "focus"; readonly move: "next" | "previous" | "owner" }
+  /**
+   * The ones a real execution owns.
+   *
+   * Every one of these is a thing the interface offers and this study cannot
+   * perform: submitting an entry, forking a recorded moment, answering a
+   * suspension. They are still actions — the control emits one, the root owns
+   * it, and what the root does is refuse in a way a person can see. Leaving
+   * them unwired would have been a button that silently does nothing, which is
+   * the failure the whole action boundary exists to make impossible.
+   */
+  | { readonly kind: "run" }
+  | { readonly kind: "fork" }
+  | { readonly kind: "submit" }
+  | { readonly kind: "approve" }
+  | { readonly kind: "request-changes" }
+  | { readonly kind: "stop" }
+  | { readonly kind: "decline" }
+  | { readonly kind: "disclose-schema" };
 
 /** An action that reached the root without anything owning it. */
 export class UnownedActionError extends Error {

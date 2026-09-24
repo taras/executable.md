@@ -174,6 +174,8 @@ export interface ReplView {
   readonly surface: RouteSurface;
   readonly crumb: string;
   readonly badge?: string;
+  /** What the interface last refused, in words. Empty where it refused nothing. */
+  readonly notice: string;
   readonly sessions: SessionsView;
   readonly transcript: TranscriptView;
   readonly bindings: BindingsView;
@@ -351,6 +353,7 @@ export function project(state: ReplState): ReplView {
     transport: state.moment.transport,
     running: state.moment.entry === "running",
     selectedAt: undefined,
+    notice: state.notice,
   });
 }
 
@@ -372,6 +375,8 @@ export interface ProjectionInputs {
   readonly running: boolean;
   /** Overrides the fixture's own selected second, for a capture that chose one. */
   readonly selectedAt?: number;
+  /** What the interface last refused. A capture of a moment refused nothing. */
+  readonly notice?: string;
 }
 
 export function projectFixture(
@@ -405,6 +410,7 @@ export function projectFixture(
     surface: route.surface,
     crumb: subject.crumb,
     badge: subject.badge,
+    notice: inputs.notice ?? "",
     sessions: {
       tab: subject.sidebar.tab,
       heading: subject.sidebar.heading,

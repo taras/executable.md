@@ -146,21 +146,6 @@ export interface ReplTree {
   chain(): Node[];
 }
 
-/**
- * What each control stands for.
- *
- * `Run` and `Fork` are drawn, numbered and focusable, and they are deliberately
- * not here. Both name execution this study's fixture journal cannot perform —
- * starting a run, forking from a recorded moment — and giving them an action
- * the root would have to answer with nothing would be inventing the answer
- * ahead of the execution model that owes it.
- */
-const CONTROL_ACTIONS: Readonly<Record<string, ReplAction>> = {
-  "control:transport.pause": { kind: "pause" },
-  "control:transport.continue": { kind: "continue" },
-  "control:transport.return-head": { kind: "return-to-head" },
-};
-
 export interface DeliverRequest {
   readonly state: ReplState;
   readonly input: ReplInput;
@@ -318,14 +303,6 @@ export function useReplTree(state: ReplState, composed: Size): Operation<ReplTre
        * appended wherever there is room, so the order is restored explicitly
        * rather than left to the order things happened to be created in.
        */
-      /** Give a control the action it stands for, where the study has one. */
-      const wire = (node: Node): void => {
-        const action = CONTROL_ACTIONS[node.name];
-        if (action !== undefined) {
-          activates(node, () => ({ ...action }));
-        }
-      };
-
       const reconcile = function* (
         parent: Node,
         wanted: readonly Control[],
@@ -349,7 +326,9 @@ export function useReplTree(state: ReplState, composed: Size): Operation<ReplTre
             if (shouldFocus(control)) {
               focusable(node);
             }
-            wire(node);
+            if (shouldFocus(control)) {
+              activates(node, control.action);
+            }
           }
         }
 
@@ -374,7 +353,9 @@ export function useReplTree(state: ReplState, composed: Size): Operation<ReplTre
           if (shouldFocus(control)) {
             focusable(replacement);
           }
-          wire(replacement);
+          if (shouldFocus(control)) {
+            activates(replacement, control.action);
+          }
         }
 
         const order = new Map(wanted.map((control, at) => [control.name, at] as const));
@@ -515,10 +496,11 @@ export function useReplTree(state: ReplState, composed: Size): Operation<ReplTre
             const child = body.createChild(target.id);
             // A recorded drawer keeps its complete presentation and offers
             // nothing to act on: its fields and controls are mounted so the
-            // components can render them, and never made focusable, so none of
-            // them enters the ring or receives a key.
+            // components can render them, and never made focusable or wired, so
+            // none of them enters the ring, receives a key or emits an action.
             if (!historical) {
               focusable(child);
+              activates(child, target.action);
             }
           }
           // The panel places the controls it created, and the drawer places the
@@ -625,13 +607,19 @@ export function useReplTree(state: ReplState, composed: Size): Operation<ReplTre
        * fresh each time so that what is dispatched is a value, not a shared
        * object two call sites happen to hold.
        */
-      const activates = (node: Node, action: () => ReplAction): void => {
+      const activates = (node: Node, action: ReplAction | undefined): void => {
         node.scope.around(ReplInputApi, {
           handle([input], next): boolean {
             if (!activation(input) || !aimedAt(node)) {
               return next(input);
             }
-            ReplActionApi.invoke(node.scope, "dispatch", [action()]);
+            if (action !== undefined) {
+              ReplActionApi.invoke(node.scope, "dispatch", [{ ...action }]);
+            }
+            // A control with nothing to say still answers. A field and a scroll
+            // region are activated by being reached, and letting the activation
+            // fall past them would hand it to whatever the fallback makes of
+            // it — which is the silent fall-through this boundary removes.
             return true;
           },
         });
@@ -640,7 +628,7 @@ export function useReplTree(state: ReplState, composed: Size): Operation<ReplTre
       // Activating the band opens a reconstruction of whatever the scrubber is
       // on. The band is a region rather than a control, and it is still the
       // thing that was activated.
-      activates(historyRegionNode, () => ({ kind: "inspect" }));
+      activates(historyRegionNode, { kind: "inspect" });
 
       // The surface the URL names owns focus before anything is pushed over
       // it. A drawer's trap remembers what it interrupted, and a cold start
@@ -706,12 +694,20 @@ export function useReplTree(state: ReplState, composed: Size): Operation<ReplTre
             // deliver to, so nothing happened.
             return { delivery: { target: root.node.name, path: [], handled: false } };
           }
-          adapting = { state, context: { ...context, focused: focused.name } };
+          // Whatever was refused last time was about the last thing done, so
+          // doing anything at all answers it. The identity is kept where there
+          // is nothing to clear, so an ordinary delivery hands back the very
+          // state it was given.
+          const fresh = state.notice === "" ? state : { ...state, notice: "" };
+          adapting = { state: fresh, context: { ...context, focused: focused.name } };
           left = undefined;
           try {
             const delivery = sendInput(root.node, target, input);
             if (delivery.handled) {
-              return { delivery, reduction: left };
+              return {
+                delivery,
+                reduction: left ?? (fresh === state ? undefined : { state: fresh }),
+              };
             }
             // Nothing in the tree claimed it, so the root reads it. Its own
             // action is dispatched **on the target's scope**, so a branch on
@@ -724,7 +720,10 @@ export function useReplTree(state: ReplState, composed: Size): Operation<ReplTre
             // `handled` stays what the path said. It means an input *handler*
             // claimed it, and the root is not on the path — what the root read
             // shows up as a reduction instead.
-            return { delivery, reduction: left };
+            return {
+              delivery,
+              reduction: left ?? (fresh === state ? undefined : { state: fresh }),
+            };
           } finally {
             adapting = undefined;
           }
@@ -809,6 +808,8 @@ function activeRoot(root: Root, drawers: readonly Mounted[]): Node {
 interface Control {
   readonly name: string;
   readonly enabled: boolean;
+  /** What activating it means. Supplied by whatever mounts it. */
+  readonly action?: ReplAction;
 }
 
 /** True while the identity is the footer itself or one of its controls. */
@@ -819,7 +820,7 @@ function withinHistory(identity: string): boolean {
 /** `Run` is listed whenever there is something to run and nothing running. */
 function runControls(state: ReplState): readonly Control[] {
   const runnable = state.moment.entry !== "running" && state.route.draft !== "";
-  return runnable ? [{ name: "control:input.run", enabled: true }] : [];
+  return runnable ? [{ name: "control:input.run", enabled: true, action: { kind: "run" } }] : [];
 }
 
 /**
@@ -834,19 +835,21 @@ function transportControls(state: ReplState, within: boolean): readonly Control[
     return [];
   }
   if (state.moment.transport === "live") {
-    return [{ name: "control:transport.pause", enabled: true }];
+    return [{ name: "control:transport.pause", enabled: true, action: { kind: "pause" } }];
   }
   if (state.moment.transport === "paused") {
     return [
-      { name: "control:transport.continue", enabled: true },
-      { name: "control:transport.return-head", enabled: true },
+      { name: "control:transport.continue", enabled: true, action: { kind: "continue" } },
+      { name: "control:transport.return-head", enabled: true, action: { kind: "return-to-head" } },
     ];
   }
   if (state.moment.transport === "inspecting") {
     return [
+      // Visible, numbered, and not actionable: it is disabled, so it is neither
+      // focusable nor wired to anything.
       { name: "control:transport.continue", enabled: false },
-      { name: "control:transport.return-head", enabled: true },
-      { name: "control:transport.fork", enabled: true },
+      { name: "control:transport.return-head", enabled: true, action: { kind: "return-to-head" } },
+      { name: "control:transport.fork", enabled: true, action: { kind: "fork" } },
     ];
   }
   return [];
@@ -988,13 +991,19 @@ function presentChild(
         crumb: view.crumb,
         badge: view.badge,
         surface: view.surface === "input" ? "transcript" : view.surface,
+        notice: view.notice,
       },
       place(layout.surfaceBar),
     );
     return;
   }
   if (name === "chrome:header") {
-    attach(child, headerBody, { crumb: view.crumb, badge: view.badge }, place(layout.header));
+    attach(
+      child,
+      headerBody,
+      { crumb: view.crumb, badge: view.badge, notice: view.notice },
+      place(layout.header),
+    );
     return;
   }
   if (name === "chrome:rules") {

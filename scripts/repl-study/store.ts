@@ -43,6 +43,8 @@ export interface View {
   readonly checkpoint: number;
   readonly surface: SurfaceName;
   readonly drawerOpen: boolean;
+  /** What the interface last refused. A view of a moment refused nothing. */
+  readonly notice: string;
 }
 
 export function initialView(subject: Fixture): View {
@@ -57,6 +59,7 @@ export function initialView(subject: Fixture): View {
     checkpoint,
     surface: "transcript",
     drawerOpen: subject.drawer !== undefined,
+    notice: "",
   };
 }
 
@@ -101,6 +104,14 @@ export interface ReplState {
   readonly selection: number;
   /** Disposable: whether the F1 focus map is drawn. */
   readonly overlay: boolean;
+  /**
+   * Disposable: what the interface last refused, in words, or nothing.
+   *
+   * A refusal has to be visible or it is indistinguishable from a button that
+   * does nothing. It is not in the URL and it does not survive navigation,
+   * because it is about the last thing you did rather than about where you are.
+   */
+  readonly notice: string;
   /** Which identity opened each drawer, so closing one can restore it. */
   readonly invokers: Readonly<Record<string, string>>;
   /** The navigation stack, for Back. Entries are URLs. */
@@ -144,6 +155,7 @@ export function hydrateRoute(
   const rebuilt = mint(route, journal, {
     anchor: 0,
     overlay: false,
+    notice: "",
     invokers: {},
     history: [],
     interrupts: 0,
@@ -256,6 +268,7 @@ export function viewOf(state: ReplState): View {
         : subject.history.checkpoints.findIndex((point) => point.at === selectedAt),
     surface: surfaceOf(state.route),
     drawerOpen: subject.drawer !== undefined,
+    notice: state.notice,
   };
 }
 
@@ -272,6 +285,8 @@ function go(state: ReplState, route: Route, change: RouteChange, mutation?: Muta
   return mint(route, state.journal, {
     anchor: state.anchor,
     overlay: state.overlay,
+    // Going somewhere answers whatever the last refusal was about.
+    notice: "",
     invokers: state.invokers,
     history: navigation === "push" ? [...state.history, formatRoute(state.route)] : state.history,
     interrupts: state.interrupts,
@@ -283,6 +298,7 @@ function withJournal(state: ReplState, journal: JournalFixture): ReplState {
   return mint(state.route, journal, {
     anchor: state.anchor,
     overlay: state.overlay,
+    notice: state.notice,
     invokers: state.invokers,
     history: state.history,
     interrupts: state.interrupts,
@@ -592,6 +608,7 @@ function back(state: ReplState, here: string, size: Size, mutation?: Mutation): 
     state: mint(parsed.value, state.journal, {
       anchor: state.anchor,
       overlay: state.overlay,
+      notice: "",
       invokers: state.invokers,
       history: state.history.slice(0, -1),
       interrupts: state.interrupts,
@@ -661,14 +678,37 @@ export function applyAction(
   if (action.kind === "back") {
     return back(state, context.focused, context.size, mutation);
   }
-  if (action.move === "next") {
-    return { state, focus: { kind: "advance" } };
+  if (action.kind === "focus") {
+    if (action.move === "next") {
+      return { state, focus: { kind: "advance" } };
+    }
+    return { state, focus: { kind: action.move === "previous" ? "retreat" : "owner" } };
   }
-  if (action.move === "previous") {
-    return { state, focus: { kind: "retreat" } };
-  }
-  return { state, focus: { kind: "owner" } };
+  // Everything left is an operation a real execution owns. The interface offers
+  // it, this study cannot carry it out, and saying so is the only honest
+  // answer: the journal and the URL are untouched, and the refusal is drawn.
+  return { state: { ...state, notice: `${STUDY_REFUSALS[action.kind]} ${UNAVAILABLE}` } };
 }
+
+/**
+ * What the interface calls each operation it cannot perform here.
+ *
+ * The words are the study's own, so a refusal names the thing that was pressed
+ * rather than the shape of the action behind it.
+ */
+const STUDY_REFUSALS: Readonly<Record<string, string>> = {
+  run: "Run",
+  fork: "Fork from here",
+  submit: "Submit",
+  approve: "Approve",
+  "request-changes": "Request changes",
+  stop: "Stop",
+  decline: "Decline",
+  "disclose-schema": "Schema disclosure",
+};
+
+/** The one sentence a refusal says, so a reader can look for exactly it. */
+export const UNAVAILABLE = "needs a real execution — unavailable in this study";
 
 /**
  * The chronological axis: one semantic marker at a time.

@@ -151,6 +151,7 @@ export function composeInto(
       transport: subject.history.transport,
       running: subject.entry?.state === "running",
       selectedAt: subject.history.checkpoints[view.checkpoint]?.at,
+      notice: view.notice,
     }),
   };
 }

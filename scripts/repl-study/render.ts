@@ -1147,6 +1147,7 @@ export function surfaceBarRegion(
   badge: string | undefined,
   surface: SurfaceName,
   rect: Rect,
+  notice = "",
 ): Op[] {
   const names = {
     sessions: "SESSIONS",
@@ -1162,13 +1163,23 @@ export function surfaceBarRegion(
       {
         segments: [
           { text: `${names[surface]} · ${at} / 4`, color: C.intro, width: 27 },
-          { text: badge ?? crumb, color: badge === undefined ? C.dim : C.gold },
+          // A refusal takes the line over: it is about the last thing the
+          // person did, and there is nowhere else this narrow to put it.
+          { text: notice === "" ? (badge ?? crumb) : notice, color: refusalColor(badge, notice) },
           { text: "Tab ▸", color: C.label, width: 7 },
         ],
       },
     ],
     { bg: BG.side },
   );
+}
+
+/** Amber for a refusal, gold for a badge, dim for an ordinary crumb. */
+function refusalColor(badge: string | undefined, notice: string): number {
+  if (notice !== "") {
+    return C.hold;
+  }
+  return badge === undefined ? C.dim : C.gold;
 }
 
 export function tooSmallRegion(id: string, layout: Layout): Op[] {

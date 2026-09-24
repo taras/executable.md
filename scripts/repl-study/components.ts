@@ -54,7 +54,11 @@ import type {
 import { isRedacted } from "./view.ts";
 
 /** The crumb line above the panes. */
-export const headerBody: Body<Pick<ReplView, "crumb" | "badge">> = ({ self, data, placement }) =>
+export const headerBody: Body<Pick<ReplView, "crumb" | "badge" | "notice">> = ({
+  self,
+  data,
+  placement,
+}) =>
   region(
     self.id,
     placement.rect,
@@ -67,7 +71,11 @@ export const headerBody: Body<Pick<ReplView, "crumb" | "badge">> = ({ self, data
             : [{ text: data.badge, color: C.gold, width: [...data.badge].length + 2 }]),
         ],
       },
-      blank(),
+      // A refusal has to be seen or it is the same as a button that does
+      // nothing, which is the failure the action boundary exists to remove. It
+      // gets the row the header already spends on air rather than a share of
+      // the crumb's, because a truncated refusal is not a visible one.
+      data.notice === "" ? blank() : plain(data.notice, C.hold),
     ],
     { bg: BG.center },
   );
@@ -369,8 +377,9 @@ export const surfaceBarBody: Body<{
   readonly crumb: string;
   readonly badge?: string;
   readonly surface: SurfaceName;
+  readonly notice: string;
 }> = ({ self, data, placement, children }) => [
-  ...surfaceBarRegion(self.id, data.crumb, data.badge, data.surface, placement.rect),
+  ...surfaceBarRegion(self.id, data.crumb, data.badge, data.surface, placement.rect, data.notice),
   ...children,
 ];
 

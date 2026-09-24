@@ -59,6 +59,7 @@ import { ReplInputApi, sendInput } from "../repl-study/input.ts";
 import { ReplActionApi, UnownedActionError } from "../repl-study/actions.ts";
 import type { ReplAction } from "../repl-study/actions.ts";
 import { boxOf } from "../repl-study/component.ts";
+import { UNAVAILABLE } from "../repl-study/store.ts";
 import type { Node } from "../repl-study/vendor/freedom/upstream/index.ts";
 import type { ReplInput } from "../repl-study/input.ts";
 import type { Mutation } from "../repl-study/mutations.ts";
@@ -1152,15 +1153,146 @@ describe("input is one gesture, and what it means is an action", () => {
     return { state: entered.state, tree, control: tree.focused() };
   }
 
-  /** Every action that passed this node, in order. */
-  function record(node: Node, seen: ReplAction[]): void {
+  /**
+   * Every action that passed this node, in order.
+   *
+   * Recording is installed for as long as it is wanted and then switched off,
+   * because a case that walks many controls on one tree would otherwise keep
+   * collecting through every middleware it ever added.
+   */
+  function record(node: Node, seen: ReplAction[]): () => void {
+    let on = true;
     node.scope.around(ReplActionApi, {
       dispatch([action], next): void {
-        seen.push(action);
+        if (on) {
+          seen.push(action);
+        }
         return next(action);
       },
     });
+    return () => {
+      on = false;
+    };
   }
+
+  /**
+   * Every state that mounts action-bearing controls, and the controls in it.
+   *
+   * Driven from what the tree actually mounts rather than from a list written
+   * beside it: the roster below is checked against the walk, so a control that
+   * stopped being mounted, or one that was added, fails here rather than going
+   * unexercised.
+   */
+  const MOUNTED: readonly { readonly url: string; readonly head?: string }[] = [
+    // `Run` is offered when there is something to run and nothing running.
+    { url: "xmd://repl/e1/input?draft=hello" },
+    { url: "xmd://repl/e1/history/entry-1/document", head: "cp-14" },
+    { url: "xmd://repl/e1/history/entry-1/document", head: "cp-18" },
+    { url: "xmd://repl/e1/history/entry-1/document/plan?at=cp-04&inspect", head: "cp-18" },
+    { url: "xmd://repl/e1/transcript/entry-1/document/+project", head: "cp-14" },
+    { url: "xmd://repl/e1/transcript/entry-1/document/+review", head: "cp-14" },
+    { url: "xmd://repl/e1/transcript/entry-1/document/+confirm", head: "cp-14" },
+  ];
+
+  /** The actions a real execution owns, which this study answers by refusing. */
+  const UNSUPPORTED = [
+    "run",
+    "fork",
+    "submit",
+    "approve",
+    "request-changes",
+    "stop",
+    "decline",
+    "disclose-schema",
+  ];
+
+  /** What each enabled control emits. An empty string is one that emits nothing. */
+  const ROSTER: Readonly<Record<string, string>> = {
+    "control:input.run": "run",
+    "control:transport.pause": "pause",
+    "control:transport.continue": "continue",
+    "control:transport.return-head": "return-to-head",
+    "control:transport.fork": "fork",
+    "field:drawer.project.name": "",
+    "field:drawer.project.description": "",
+    "control:drawer.project.schema": "disclose-schema",
+    "control:drawer.project.submit": "submit",
+    "control:drawer.review.scroll": "",
+    "control:drawer.review.approve": "approve",
+    "control:drawer.review.request": "request-changes",
+    "control:drawer.review.stop": "stop",
+    "control:drawer.review.submit": "submit",
+    "control:drawer.confirm.preview": "",
+    "control:drawer.confirm.approve": "approve",
+    "control:drawer.confirm.decline": "decline",
+  };
+
+  it("gives every enabled control one action for Enter, Space and a pointer", function* () {
+    const reached = new Set<string>();
+    for (const where of MOUNTED) {
+      const { state, tree } = yield* opened(where.url, where.head);
+      // The footer's controls exist only once focus is inside it.
+      const entered = yield* drive(tree, state, key("5"), context(WIDE));
+      for (const node of tree.chain()) {
+        if (!node.name.startsWith("control:") && !node.name.startsWith("field:")) {
+          continue;
+        }
+        focusNode(node);
+        yield* shot(tree, entered.state);
+        const box = boxOf(node);
+        const seen: ReplAction[] = [];
+        const stop = record(tree.root.node, seen);
+        const inputs: ReplInput[] = [press("Enter"), press("Space")];
+        if (box !== undefined && box.width > 0) {
+          // Pointed at the cell its own parent reserved for it, which the tree
+          // resolves back to this very node.
+          expect({ id: node.name, hit: tree.hit(box.x, box.y)?.name }).toEqual({
+            id: node.name,
+            hit: node.name,
+          });
+          inputs.push({
+            kind: "pointer",
+            pointer: { button: "primary", x: box.x, y: box.y },
+          });
+        }
+        const delivered = inputs.map((input) =>
+          tree.deliver({ state: entered.state, input, context: DELIVERY }),
+        );
+        stop();
+
+        // Nothing fell through: every enabled control answers its own
+        // activation, whether or not it has anything to say about it.
+        expect({ id: node.name, handled: delivered.map((one) => one.delivery.handled) }).toEqual({
+          id: node.name,
+          handled: delivered.map(() => true),
+        });
+        // One action, byte for byte, however it was asked for.
+        const shapes = seen.map((action) => JSON.stringify(action));
+        expect({ id: node.name, shapes }).toEqual({
+          id: node.name,
+          shapes: shapes.map(() => shapes[0] ?? ""),
+        });
+        const expected = ROSTER[node.name];
+        expect({ id: node.name, kind: seen[0]?.kind ?? "" }).toEqual({
+          id: node.name,
+          kind: expected,
+        });
+        expect({ id: node.name, count: seen.length }).toEqual({
+          id: node.name,
+          count: expected === "" ? 0 : inputs.length,
+        });
+        // The same input, the same outcome.
+        const states = delivered.map((one) => JSON.stringify(one.reduction?.state ?? null));
+        expect({ id: node.name, states }).toEqual({
+          id: node.name,
+          states: states.map(() => states[0]),
+        });
+        reached.add(node.name);
+      }
+    }
+    // The roster is the tree's, not a list kept beside it.
+    expect([...reached].sort()).toEqual(Object.keys(ROSTER).sort());
+  });
 
   it("emits one action for Enter, for Space and for a pointer on the same control", function* () {
     const { state, tree, control } = yield* transport(PAUSED, "cp-18");
@@ -1192,6 +1324,99 @@ describe("input is one gesture, and what it means is an action", () => {
     expect(shapes[1]).toBe(shapes[0]);
     expect(shapes[2]).toBe(shapes[0]);
     expect(byEnter.reduction?.state.moment.transport).toBe("live");
+  });
+
+  it("refuses what a real execution owns, visibly, and changes nothing else", function* () {
+    for (const where of MOUNTED) {
+      const { state, tree } = yield* opened(where.url, where.head);
+      const entered = yield* drive(tree, state, key("5"), context(WIDE));
+      for (const node of tree.chain()) {
+        const action = ROSTER[node.name];
+        if (action === undefined || !UNSUPPORTED.includes(action)) {
+          continue;
+        }
+        focusNode(node);
+        const refused = yield* drive(tree, entered.state, key("Enter"), context(WIDE));
+        // Said in words, where the interface can draw it.
+        expect({ id: node.name, notice: refused.state.notice.includes(UNAVAILABLE) }).toEqual({
+          id: node.name,
+          notice: true,
+        });
+        // And nothing else moved: not the journal, not the URL.
+        expect({
+          id: node.name,
+          journal: refused.state.journal,
+          route: refused.state.route,
+        }).toEqual({
+          id: node.name,
+          journal: entered.state.journal,
+          route: entered.state.route,
+        });
+
+        // Drawn, not merely recorded.
+        const drawn = yield* shot(tree, refused.state);
+        expect({ id: node.name, shown: drawn.includes(UNAVAILABLE) }).toEqual({
+          id: node.name,
+          shown: true,
+        });
+      }
+    }
+  });
+
+  it("wires nothing a person cannot reach", function* () {
+    // A disabled control and a recorded drawer's contents are both drawn and
+    // numbered and neither is actionable. Not wiring them is the same act as
+    // not making them focusable: there is one node, and it either takes part or
+    // it does not.
+    const { state, tree } = yield* opened(
+      "xmd://repl/e1/history/entry-1/document/plan?at=cp-04&inspect",
+      "cp-18",
+    );
+    const entered = yield* drive(tree, state, key("5"), context(WIDE));
+    const numbered = overlayOf(tree).map((one) => one.id);
+    expect(numbered).toContain("control:transport.continue");
+    expect(chain(tree)).not.toContain("control:transport.continue");
+
+    const disabled = find(tree.root.node, "control:transport.continue")!;
+    const seen: ReplAction[] = [];
+    record(tree.root.node, seen);
+    const delivery = sendInput(tree.root.node, disabled, press("Enter"));
+    expect(delivery.handled).toBe(false);
+    expect(seen).toEqual([]);
+
+    const recorded = yield* opened(RECORDED, "cp-18");
+    const inside = find(recorded.tree.root.node, "control:drawer.project.submit")!;
+    const heard: ReplAction[] = [];
+    record(recorded.tree.root.node, heard);
+    expect(sendInput(recorded.tree.root.node, inside, press("Enter")).handled).toBe(false);
+    expect(heard).toEqual([]);
+    void entered;
+  });
+
+  it("aims a pointer at what it landed on, not at what had focus", function* () {
+    const { state, tree } = yield* opened(PAUSED, "cp-18");
+    const entered = yield* drive(tree, state, key("5"), context(WIDE));
+    yield* shot(tree, entered.state);
+
+    const chain = tree.chain();
+    const first = chain.find((node) => node.name === "control:transport.continue")!;
+    const other = chain.find((node) => node.name === "control:transport.return-head")!;
+    focusNode(first);
+    expect(tree.focused()).toBe(first);
+
+    const box = boxOf(other)!;
+    const seen: ReplAction[] = [];
+    record(tree.root.node, seen);
+    const pointed = tree.deliver({
+      state: entered.state,
+      input: { kind: "pointer", pointer: { button: "primary", x: box.x, y: box.y } },
+      context: DELIVERY,
+    });
+    // The control that was pointed at is the one that spoke, and it is not the
+    // one that had focus.
+    expect(pointed.delivery.target).toBe("control:transport.return-head");
+    expect(seen.map((action) => action.kind)).toEqual(["return-to-head"]);
+    expect(tree.focused()).toBe(first);
   });
 
   it("runs no fallback and emits no action for an input a branch consumed", function* () {
