@@ -684,16 +684,27 @@ export function useReplTree(state: ReplState, composed: Size): Operation<ReplTre
           }
         },
         deliver({ state, input, context }) {
-          const focused = current(root.node);
           const target =
             input.kind === "pointer"
               ? hitAt(activeRoot(root, drawers), input.pointer.x, input.pointer.y)
-              : focused;
+              : current(root.node);
           if (target === undefined) {
             // A pointer on a cell nothing is drawn in. There is no node to
             // deliver to, so nothing happened.
             return { delivery: { target: root.node.name, path: [], handled: false } };
           }
+          // Pointing at something you can reach is reaching it. Focus moves
+          // first, so the action is dispatched from where the person now is and
+          // everything that reads focus afterwards — the surface the URL
+          // follows, what Back returns to — reads the same answer.
+          //
+          // Nothing else moves it. A cell with nothing in it, a disabled
+          // control, a recorded drawer's read-only contents: none of them can
+          // take focus, so pointing at one changes nothing about where you are.
+          if (input.kind === "pointer" && isFocusable(target)) {
+            focus(target);
+          }
+          const focused = current(root.node);
           // Whatever was refused last time was about the last thing done, so
           // doing anything at all answers it. The identity is kept where there
           // is nothing to clear, so an ordinary delivery hands back the very

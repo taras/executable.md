@@ -1384,13 +1384,30 @@ describe("input is one gesture, and what it means is an action", () => {
     expect(delivery.handled).toBe(false);
     expect(seen).toEqual([]);
 
+    // Drawn, so a pointer reaches it — and it neither acts nor takes focus.
+    yield* shot(tree, entered.state);
+    const box = boxOf(disabled)!;
+    expect(tree.hit(box.x, box.y)).toBe(disabled);
+    const here = tree.focused();
+    const pointed = tree.deliver({
+      state: entered.state,
+      input: { kind: "pointer", pointer: { button: "primary", x: box.x, y: box.y } },
+      context: DELIVERY,
+    });
+    expect(pointed.delivery.handled).toBe(false);
+    expect(seen).toEqual([]);
+    expect(tree.focused()).toBe(here);
+
     const recorded = yield* opened(RECORDED, "cp-18");
     const inside = find(recorded.tree.root.node, "control:drawer.project.submit")!;
     const heard: ReplAction[] = [];
     record(recorded.tree.root.node, heard);
     expect(sendInput(recorded.tree.root.node, inside, press("Enter")).handled).toBe(false);
     expect(heard).toEqual([]);
-    void entered;
+    // A recorded drawer reserves no gutter, so its controls offer no cell to
+    // point at either.
+    yield* shot(recorded.tree, recorded.state);
+    expect(boxOf(inside)?.width ?? 0).toBe(0);
   });
 
   it("aims a pointer at what it landed on, not at what had focus", function* () {
@@ -1413,10 +1430,62 @@ describe("input is one gesture, and what it means is an action", () => {
       context: DELIVERY,
     });
     // The control that was pointed at is the one that spoke, and it is not the
-    // one that had focus.
+    // one that had focus — pointing at something you can reach is reaching it.
     expect(pointed.delivery.target).toBe("control:transport.return-head");
     expect(seen.map((action) => action.kind)).toEqual(["return-to-head"]);
-    expect(tree.focused()).toBe(first);
+    expect(tree.focused()).toBe(other);
+  });
+
+  it("follows a pointer onto another surface, and the URL follows with it", function* () {
+    // `Run` belongs to the input band. Reaching it from the footer is a move,
+    // and the surface segment is what says which region owns focus — so the URL
+    // has to arrive there too, in the same act.
+    const { state, tree } = yield* opened("xmd://repl/e1/history?draft=hello", undefined);
+    expect(tree.focused().name).toBe("region:history");
+    yield* shot(tree, state);
+    const run = tree.chain().find((node) => node.name === "control:input.run")!;
+    const box = boxOf(run)!;
+
+    const driven = yield* drive(
+      tree,
+      state,
+      {
+        kind: "pointer",
+        pointer: { button: "primary", x: box.x, y: box.y },
+      },
+      context(WIDE),
+    );
+
+    expect(tree.focused().name).toBe("control:input.run");
+    expect(driven.state.route.surface).toBe("input");
+    // And what it asked for is a thing this study cannot do, said out loud.
+    expect(driven.state.notice).toContain(UNAVAILABLE);
+    expect(driven.state.journal).toEqual(state.journal);
+  });
+
+  it("leaves focus on a survivor when a pointer's own action removes it", function* () {
+    const { state, tree } = yield* opened(PAUSED, "cp-18");
+    const entered = yield* drive(tree, state, key("5"), context(WIDE));
+    yield* shot(tree, entered.state);
+    const resume = tree.chain().find((node) => node.name === "control:transport.continue")!;
+    const box = boxOf(resume)!;
+
+    const driven = yield* drive(
+      tree,
+      entered.state,
+      {
+        kind: "pointer",
+        pointer: { button: "primary", x: box.x, y: box.y },
+      },
+      context(WIDE),
+    );
+
+    // Resuming replaces the paused transport with the live one, so the control
+    // the pointer landed on is not there any more.
+    expect(driven.state.moment.transport).toBe("live");
+    expect(chain(tree)).not.toContain("control:transport.continue");
+    expect(chain(tree)).toContain("control:transport.pause");
+    expect(chain(tree)).toContain(tree.focused().name);
   });
 
   it("runs no fallback and emits no action for an input a branch consumed", function* () {

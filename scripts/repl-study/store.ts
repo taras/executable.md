@@ -43,6 +43,8 @@ export interface View {
   readonly checkpoint: number;
   readonly surface: SurfaceName;
   readonly drawerOpen: boolean;
+  /** Whether a reconstruction is open, which makes what is drawn read-only. */
+  readonly inspect: boolean;
   /** What the interface last refused. A view of a moment refused nothing. */
   readonly notice: string;
 }
@@ -59,6 +61,7 @@ export function initialView(subject: Fixture): View {
     checkpoint,
     surface: "transcript",
     drawerOpen: subject.drawer !== undefined,
+    inspect: false,
     notice: "",
   };
 }
@@ -268,6 +271,7 @@ export function viewOf(state: ReplState): View {
         : subject.history.checkpoints.findIndex((point) => point.at === selectedAt),
     surface: surfaceOf(state.route),
     drawerOpen: subject.drawer !== undefined,
+    inspect: state.route.inspect,
     notice: state.notice,
   };
 }
@@ -285,8 +289,10 @@ function go(state: ReplState, route: Route, change: RouteChange, mutation?: Muta
   return mint(route, state.journal, {
     anchor: state.anchor,
     overlay: state.overlay,
-    // Going somewhere answers whatever the last refusal was about.
-    notice: "",
+    // A refusal survives the navigation the same input caused — the URL
+    // following focus is part of that one act, not the next one. What clears it
+    // is the next thing the person does.
+    notice: state.notice,
     invokers: state.invokers,
     history: navigation === "push" ? [...state.history, formatRoute(state.route)] : state.history,
     interrupts: state.interrupts,
@@ -608,7 +614,7 @@ function back(state: ReplState, here: string, size: Size, mutation?: Mutation): 
     state: mint(parsed.value, state.journal, {
       anchor: state.anchor,
       overlay: state.overlay,
-      notice: "",
+      notice: state.notice,
       invokers: state.invokers,
       history: state.history.slice(0, -1),
       interrupts: state.interrupts,

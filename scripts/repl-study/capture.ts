@@ -146,7 +146,10 @@ export function composeInto(
       surface,
       scopes: [],
       drawerOpen: subject.drawer !== undefined && view.drawerOpen,
-      inspect: false,
+      // A reconstruction makes what is drawn a recording. Hardcoding this false
+      // drew a recorded drawer as though it were live and actionable, which is
+      // exactly what the tree refuses to make it.
+      inspect: view.inspect,
       draft: "",
       transport: subject.history.transport,
       running: subject.entry?.state === "running",
