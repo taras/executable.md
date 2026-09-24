@@ -1,0 +1,50 @@
+drawer-historical.wide · 200 × 50 · A recorded drawer, rendered without anything to act on
+ XMD REPL
+
+ SESSION   JOURNAL   STATE
+                                                  Entry 1  ● running · 53.0s       ↳ reconstructed · read-only                                                           BINDINGS
+ ENTRY 1 · CREATE PROJECT README                                                                                                                                         Plan scope · as recorded
+ inspecting recorded history · read-only          reconstructed from the journal · no live action is possible here
+                                                  Plan                                                                                                                   prompt
+ 00:02 ◆ Entry 1 submitted                        ● <Plan as="draft" session={planner}>                                                                       ACTIVE     "Create an XMD program that a…
+ 00:05 ● document scope entered                   │ ✓ Read the Prompt · prompt
+ 00:12 ● Plan entered                             │ ▾ Prepare the planning inputs
+ 00:18 ● planning inputs prepared                 │   ✓ <Syntax as="syntax" />                                                                                SETTLED
+ 00:29 ● planning Agent response admitted         │   ● <PlanInputs session={props.session} as="inputs" />                                                    ACTIVE
+ 00:30 ● draft checked                            │   XMD catalog · 47 symbols · component, control, agent, io
+ 00:41 ● review returned Approve
+ 00:47 ● Plan replaced by returned program
+ 00:49 ● project Elicit requested
+ 00:52 ● project Elicit answered
+ 00:53 ● confirmation Elicit requested
+
+ ▸ 26 internal records
+
+ SELECTED CHECKPOINT
+ Plan entered
+ 00:12 elapsed · Entry 1 › document › Plan
+ · scope.enter Plan
+ · inputs.bound content
+ · component.resolved Plan.md
+
+
+
+
+                                                  INPUT REQUIRED
+                                                  suspended at <Elicit as="project"> · document scope · validated against the Elicit schema
+
+                                                  Enter the project details.
+                                                  Project name: Northstar
+                                                  Description: A lightweight workspace for coordinating coding agents.
+
+                                                  · Project name
+                                                  · Description
+                                                  · Schema disclosure · ⌥S
+                                                  · Submit
+
+                                                  recorded · read-only
+
+ EXECUTION HISTORY                                                                                  INSPECTING  [ Continue ] [ Return to paused head ] [ Fork from here ]
+ recorded · 00:53
+ 00:02 ◆ Entry 1 submitted                                                                                                                                                 REPL
+ 00:05 ● document scope entered                                                                                                                                            Entry 1 › document

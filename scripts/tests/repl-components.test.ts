@@ -13,6 +13,10 @@ import { expect } from "@executablemd/test-support/expect";
 import type { Operation } from "effection";
 
 import { PROFILE_SIZES, useTerm } from "../repl-study/capture.ts";
+import { CATALOG, catalogText, renderAll, renderCatalog } from "../repl-study/catalog.ts";
+import { readTextFile } from "@effectionx/fs";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { attach, walk } from "../repl-study/component.ts";
 import { hydrate, layoutOf } from "../repl-study/store.ts";
 import { journalThrough } from "../repl-study/journal.ts";
@@ -86,6 +90,27 @@ describe("the view a component is handed", () => {
 });
 
 describe("a component is a body on a node", () => {
+  it("hands a body its identity and no way to reach the tree", function* () {
+    const state = hydrate("xmd://repl/e1/transcript/entry-1/document", journalThrough("cp-14"));
+    const tree = yield* useReplTree(state);
+    const node = tree.root.node.createChild("probe:self");
+    let seen: Record<string, unknown> = {};
+    attach(
+      node,
+      (context) => {
+        seen = { ...context };
+        return [];
+      },
+      undefined,
+      { rect: { x: 0, y: 0, width: 1, height: 1 }, dense: false },
+    );
+    walk(node);
+    // A body that held the node could create children, remove itself, set props
+    // or reach its scope; the tree's authority would be advisory.
+    expect(Object.keys(seen).toSorted()).toEqual(["children", "data", "placement", "self"]);
+    expect(Object.keys(seen.self as object).toSorted()).toEqual(["id", "name"]);
+  });
+
   it("renders the REPL by walking the mounted tree", function* () {
     const { screen } = yield* mounted("xmd://repl/e1/transcript/entry-1/document", "cp-14");
     expect(screen).toContain("SESSION");
@@ -111,7 +136,7 @@ describe("a component is a body on a node", () => {
     const tree = yield* useReplTree(state);
     const parent = tree.root.node.createChild("probe:parent");
     const child = parent.createChild("probe:child");
-    attach(child, ({ node }) => [{ kind: "text", value: node.name } as never], undefined, {
+    attach(child, ({ self }) => [{ kind: "text", value: self.name } as never], undefined, {
       rect: { x: 0, y: 0, width: 1, height: 1 },
       dense: false,
     });
@@ -142,5 +167,67 @@ describe("a component is a body on a node", () => {
     const after = tree.chain().find((candidate) => candidate.name === "region:transcript")!;
     expect(after.id).toBe(before);
     expect(after).toBe(node);
+  });
+});
+
+const CATALOG_GOLDENS = fileURLToPath(new URL("./fixtures/repl-catalog/", import.meta.url));
+
+describe("the component catalog", () => {
+  it("renders every committed catalog capture exactly", function* () {
+    const frames = yield* renderAll();
+    expect(frames.length).toBe(CATALOG.length * 2);
+    for (const frame of frames) {
+      const golden = yield* readTextFile(join(CATALOG_GOLDENS, `${frame.name}.txt`));
+      expect(catalogText(frame)).toBe(golden);
+    }
+  });
+
+  it("covers every state the contract names", function* () {
+    // Each of these is a state #840's Story asks the catalog to render.
+    for (const required of [
+      "empty",
+      "nested",
+      "sessions",
+      "drawer-project",
+      "drawer-review",
+      "drawer-confirm",
+      "bindings-plan",
+      "bindings-document",
+      "inspecting",
+      "drawer-historical",
+      "settled",
+    ]) {
+      expect({ required, present: CATALOG.some((one) => one.id === required) }).toEqual({
+        required,
+        present: true,
+      });
+    }
+  });
+
+  it("renders a recorded drawer with nothing to act on", function* () {
+    const frame = yield* renderCatalog(
+      CATALOG.find((one) => one.id === "drawer-historical")!,
+      "wide",
+    );
+    expect(frame.text).toContain("recorded · read-only");
+    // A disabled control is shown as recorded state rather than as an
+    // affordance that would do nothing.
+    expect(frame.text).toContain("· Submit");
+    expect(frame.text).not.toContain("[ Submit ]");
+  });
+
+  it("says the same thing at both profiles", function* () {
+    for (const subject of CATALOG) {
+      const wide = yield* renderCatalog(subject, "wide");
+      const narrow = yield* renderCatalog(subject, "narrow");
+      expect({ id: subject.id, drew: wide.text.trim().length > 0 }).toEqual({
+        id: subject.id,
+        drew: true,
+      });
+      expect({ id: subject.id, drew: narrow.text.trim().length > 0 }).toEqual({
+        id: subject.id,
+        drew: true,
+      });
+    }
   });
 });

@@ -1,0 +1,23 @@
+bindings-plan.narrow · 90 × 28 · Bindings at the Plan scope
+
+ BINDINGS
+ Plan scope
+
+ prompt
+ "Create an XMD program that asks me for a
+ project name and a description…"
+
+ syntax
+ XMD catalog · 47 symbols
+ component, control, agent, io
+
+ inputs
+ {
+   surface: "component",
+   session: "plan-a91f7c",
+   budget: 3
+ }
+
+ draft
+ # Create a project README
+ <Elicit as="project" schema={…}>

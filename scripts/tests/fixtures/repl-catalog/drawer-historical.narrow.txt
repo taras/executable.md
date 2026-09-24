@@ -1,0 +1,15 @@
+drawer-historical.narrow · 90 × 28 · A recorded drawer, rendered without anything to act on
+ INPUT REQUIRED
+ suspended at <Elicit as="project"> · document scope · validated against the Elicit
+ schema
+
+ Enter the project details.
+ Project name: Northstar
+ Description: A lightweight workspace for coordinating coding agents.
+
+ · Project name
+ · Description
+ · Schema disclosure · ⌥S
+ · Submit
+
+ recorded · read-only

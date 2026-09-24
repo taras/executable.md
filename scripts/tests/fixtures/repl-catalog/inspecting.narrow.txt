@@ -1,0 +1,15 @@
+inspecting.narrow · 90 × 28 · Historical inspection, reconstructed and read-only
+
+ HISTORY                                     INSPECTING  [ Continue ] [ Return to paused…
+ recorded · 00:53
+ 00:02 ◆ Entry 1 submitted                                   REPL
+ 00:05 ● document scope entered                              Entry 1 › document
+ 00:12 ● Plan entered                                        Entry 1 › document › Plan
+ 00:18 ● planning inputs prepared                            … › Plan › PlanInputs
+ 00:29 ● planning Agent response admitted                    … › Plan › Prompt
+ 00:30 ● draft checked                                       … › Plan › Check
+ 00:41 ● review returned Approve                             … › Plan › Elicit
+ 00:47 ● Plan replaced by returned program                   Entry 1 › document
+ 00:49 ● project Elicit requested                            Entry 1 › document
+ 00:52 ● project Elicit answered                             Entry 1 › document
+ 00:53 ● confirmation Elicit requested                       Entry 1 › document

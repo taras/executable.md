@@ -28,7 +28,17 @@ deno task repl:study --frame 07                 # one frame of the focus study
 deno task repl:study --route 'xmd://repl/e1/transcript/entry-1/plan/+project'
 deno task repl:study --frame 12 --focus-map     # with the numbered overlay on
 deno task repl:study --capture-focus captures/  # the focus study's frames, as text
+
+deno task repl:study --catalog                  # every component state, wide and narrow
+deno task repl:study --catalog captures/        # …written as text files
 ```
+
+**`--catalog` is #840's documented command.** It renders every state the
+component contract names — an empty REPL, nested execution, three concurrent
+Agent sessions, the three Elicit drawers, bindings at two scopes, historical
+inspection, a recorded drawer and a settled entry — through the **mounted
+Freedom tree**, at the wide and the narrow profile. The committed captures are
+under `scripts/tests/fixtures/repl-catalog/`.
 
 **`--frame` and `--route` are the same door.** A frame is a location the
 Product Owner's focus study names, and `--frame 07` is shorthand for its URL
@@ -173,6 +183,11 @@ makes a capture legible as evidence against the frame it reproduces.
 | `route.ts` | the URL schema, parsing, formatting, and push versus replace |
 | `vendor/freedom/` | `@bomb.sh/freedom`, vendored and pinned — the node tree that owns focus |
 | `tree.ts` | the interface as Freedom nodes: surfaces, panels, drawers, controls |
+| `view.ts` | the immutable `ReplView` a component is handed, and what a route may address |
+| `component.ts` | the component interface: a body on a node, and the render walk |
+| `components.ts` | the bodies — sessions, transcript, bindings, input, drawer, history |
+| `paint.ts` | the downward pass that hands each mounted node its own slice |
+| `catalog.ts` | every component state the catalog renders |
 | `keys.ts` | a key delivered to the focused node, through its ancestors' middleware |
 | `drive.ts` | one event, carried through the tree and the store — the harness and the evidence share it |
 | `surfaces.ts` | which controls a drawer carries, and in what order |

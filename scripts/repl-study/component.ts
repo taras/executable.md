@@ -17,6 +17,11 @@
  * A component is handed its own immutable view subtree and nothing else — no
  * journal, no store, no node, no geometry beyond the box its parent gives it,
  * and no callback. What it wants to happen it says as an action.
+ *
+ * "No node" is literal. A body receives a read-only `Surface` carrying the one
+ * identity its operations are addressed by, never the Freedom node itself: a
+ * body holding the node could create children, remove itself, set props or
+ * reach its scope, and the tree's authority over topology would be advisory.
  */
 
 import { createNodeData } from "./vendor/freedom/upstream/index.ts";
@@ -39,8 +44,29 @@ export interface Placement {
   readonly dense: boolean;
 }
 
+/**
+ * The minimum a body needs to know about itself.
+ *
+ * One identity, read-only. Not the node — a body cannot reach topology, focus,
+ * scope or props through this, which is what keeps the tree authoritative
+ * rather than merely conventional.
+ */
+export interface Surface {
+  /**
+   * The unique id this component's operations are addressed by.
+   *
+   * The node's own id, not its name: two nodes may legitimately share a
+   * semantic name — the Execution History region is both a pane and the way
+   * out of a drawer's trap — and the renderer requires each addressed element
+   * to be declared once.
+   */
+  readonly id: string;
+  /** The semantic name, for a body that renders itself differently by role. */
+  readonly name: string;
+}
+
 export interface BodyContext<Data> {
-  readonly node: Node;
+  readonly self: Surface;
   /** This component's own immutable view subtree. */
   readonly data: Data;
   readonly placement: Placement;
@@ -77,8 +103,9 @@ export function attach<Data>(
 ): Update<Data> {
   let current = data;
   let where = placement;
+  const self: Surface = { id: node.id, name: node.name === "" ? "root" : node.name };
   node.data.set(bodyKey, {
-    render: (self, children) => body({ node: self, data: current, placement: where, children }),
+    render: (_node, children) => body({ self, data: current, placement: where, children }),
   });
   return (next, to) => {
     current = next;

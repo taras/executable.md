@@ -18,13 +18,15 @@ import type { Operation } from "effection";
 
 import { captureAll, captureFocus, PROFILE_SIZES, renderFrame, writeCaptures } from "./capture.ts";
 import { frame as studyFrame, FRAMES } from "./frames.ts";
+import { catalogText, CATALOG, renderAll } from "./catalog.ts";
 import { parseRoute } from "./route.ts";
 import { fixture } from "./fixtures.ts";
 import { runInteractive, runReplay } from "./host.ts";
 import type { TraceEntry } from "./host.ts";
 import { JOURNEY, playbackBetween } from "./playback.ts";
 import type { Playback } from "./playback.ts";
-import { writeTextFile } from "@effectionx/fs";
+import { ensureDir, writeTextFile } from "@effectionx/fs";
+import { join } from "node:path";
 import { isFixtureName } from "./model.ts";
 import type { FixtureName } from "./model.ts";
 import type { Profile } from "./layout.ts";
@@ -43,6 +45,7 @@ const USAGE = [
   "  repl-study [--frame <id>] --focus-map   with the numbered focus map drawn",
   "  repl-study --capture <directory> [--mutation <name>]",
   "  repl-study --capture-focus <directory>  the focus study's frames, as text",
+  "  repl-study --catalog [<directory>]      every component state, wide and narrow",
   "  repl-study --print <fixture> <profile> [--mutation <name>]",
   "  repl-study --replay [--interrupt-after <n>] [--fail-after <n>] [--mutation <name>]",
   "",
@@ -50,6 +53,7 @@ const USAGE = [
   "profiles: wide, medium, narrow, too-small",
   "playbacks: empty→nested, nested→generated, generated→drawer, drawer→paused, paused→settled",
   `frames: ${FRAMES.map((one) => one.id).join(", ")}`,
+  `catalog: ${CATALOG.map((one) => one.id).join(", ")}`,
 ].join("\n");
 
 type Mode =
@@ -67,6 +71,7 @@ type Mode =
       readonly focusMap?: boolean;
     }
   | { readonly kind: "capture"; readonly directory: string; readonly focus?: boolean }
+  | { readonly kind: "catalog"; readonly directory?: string }
   | { readonly kind: "print"; readonly fixture: FixtureName; readonly profile: Profile }
   | { readonly kind: "replay"; readonly interruptAfter?: number; readonly failAfter?: number };
 
@@ -202,6 +207,15 @@ export function parse(argv: readonly string[]): Invocation | string {
       route = url;
     } else if (argument === "--focus-map") {
       focusMap = true;
+    } else if (argument === "--catalog") {
+      // A bare `--catalog` prints every state; a directory writes them.
+      const next = argv[at + 1];
+      if (next === undefined || next.startsWith("--")) {
+        mode = { kind: "catalog" };
+      } else {
+        at += 1;
+        mode = { kind: "catalog", directory: next };
+      }
     } else if (argument === "--capture-focus") {
       const directory = value();
       if (directory === undefined) {
@@ -248,6 +262,22 @@ export function parse(argv: readonly string[]): Invocation | string {
 
 function* run(invocation: Invocation): Operation<void> {
   const { mode, mutation } = invocation;
+
+  if (mode.kind === "catalog") {
+    const frames = yield* renderAll();
+    if (mode.directory === undefined) {
+      for (const frame of frames) {
+        console.log(catalogText(frame));
+      }
+      return;
+    }
+    yield* ensureDir(mode.directory);
+    for (const frame of frames) {
+      yield* writeTextFile(join(mode.directory, `${frame.name}.txt`), catalogText(frame));
+    }
+    console.log(`wrote ${frames.length} catalog states to ${mode.directory}`);
+    return;
+  }
 
   if (mode.kind === "capture") {
     const captures = mode.focus === true ? yield* captureFocus() : yield* captureAll();

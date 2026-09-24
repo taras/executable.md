@@ -31,6 +31,7 @@ import {
 import type { VisualLine } from "./render.ts";
 import type {
   BindingsView,
+  DrawerView,
   ContextualView,
   HistoryView,
   ReplView,
@@ -40,9 +41,9 @@ import type {
 import { isRedacted } from "./view.ts";
 
 /** The crumb line above the panes. */
-export const headerBody: Body<Pick<ReplView, "crumb" | "badge">> = ({ node, data, placement }) =>
+export const headerBody: Body<Pick<ReplView, "crumb" | "badge">> = ({ self, data, placement }) =>
   region(
-    node.name,
+    self.id,
     placement.rect,
     [
       {
@@ -58,7 +59,7 @@ export const headerBody: Body<Pick<ReplView, "crumb" | "badge">> = ({ node, data
     { bg: BG.center },
   );
 
-export const sessionsBody: Body<SessionsView> = ({ node, data, placement, children }) => {
+export const sessionsBody: Body<SessionsView> = ({ self, data, placement, children }) => {
   const lines: VisualLine[] = [];
   if (!placement.dense) {
     lines.push(plain("XMD REPL", C.out), blank());
@@ -108,7 +109,7 @@ export const sessionsBody: Body<SessionsView> = ({ node, data, placement, childr
         lines.push(plain(`· ${record}`, C.dim));
       }
     }
-    return region(node.name, placement.rect, lines, { bg: BG.side, children });
+    return region(self.id, placement.rect, lines, { bg: BG.side, children });
   }
 
   if (data.sessions.length === 0) {
@@ -117,7 +118,7 @@ export const sessionsBody: Body<SessionsView> = ({ node, data, placement, childr
         lines.push(plain(wrapped, C.dim));
       }
     }
-    return region(node.name, placement.rect, lines, { bg: BG.side, children });
+    return region(self.id, placement.rect, lines, { bg: BG.side, children });
   }
 
   for (const session of data.sessions) {
@@ -147,7 +148,7 @@ export const sessionsBody: Body<SessionsView> = ({ node, data, placement, childr
     }
     lines.push(blank());
   }
-  return region(node.name, placement.rect, lines, { bg: BG.side, children });
+  return region(self.id, placement.rect, lines, { bg: BG.side, children });
 };
 
 export interface TranscriptData {
@@ -156,7 +157,7 @@ export interface TranscriptData {
   readonly anchor: number;
 }
 
-export const transcriptBody: Body<TranscriptData> = ({ node, data, placement, children }) => {
+export const transcriptBody: Body<TranscriptData> = ({ self, data, placement, children }) => {
   const rect = placement.rect;
   const width = Math.max(0, rect.width - 2);
   const lines: VisualLine[] = [];
@@ -168,7 +169,7 @@ export const transcriptBody: Body<TranscriptData> = ({ node, data, placement, ch
         lines.push(plain(wrapped, C.dim));
       }
     }
-    return region(node.name, rect, lines, { bg: BG.center, children });
+    return region(self.id, rect, lines, { bg: BG.center, children });
   }
   const running = entry.state === "running";
   lines.push(
@@ -196,10 +197,10 @@ export const transcriptBody: Body<TranscriptData> = ({ node, data, placement, ch
   } else if (data.anchor > 0) {
     lines.push(plain(`▴ ${data.anchor} earlier lines · ↑ scrolls back`, C.dim));
   }
-  return region(node.name, rect, lines, { bg: BG.center, children });
+  return region(self.id, rect, lines, { bg: BG.center, children });
 };
 
-export const bindingsBody: Body<BindingsView> = ({ node, data, placement, children }) => {
+export const bindingsBody: Body<BindingsView> = ({ self, data, placement, children }) => {
   const lines: VisualLine[] = [label("BINDINGS"), plain(data.scopeName, C.dim), blank()];
   if (data.bindings.length === 0) {
     for (const placeholder of data.placeholder) {
@@ -207,7 +208,7 @@ export const bindingsBody: Body<BindingsView> = ({ node, data, placement, childr
         lines.push(plain(wrapped, C.dim));
       }
     }
-    return region(node.name, placement.rect, lines, { bg: BG.bind, children });
+    return region(self.id, placement.rect, lines, { bg: BG.bind, children });
   }
   for (const binding of data.bindings) {
     if (isRedacted(binding)) {
@@ -227,10 +228,10 @@ export const bindingsBody: Body<BindingsView> = ({ node, data, placement, childr
     }
     lines.push(blank());
   }
-  return region(node.name, placement.rect, lines, { bg: BG.bind, children });
+  return region(self.id, placement.rect, lines, { bg: BG.bind, children });
 };
 
-export const inputBody: Body<ContextualView["input"]> = ({ node, data, placement, children }) => {
+export const inputBody: Body<ContextualView["input"]> = ({ self, data, placement, children }) => {
   const width = Math.max(0, placement.rect.width - 2);
   const lines: VisualLine[] = [
     {
@@ -246,10 +247,10 @@ export const inputBody: Body<ContextualView["input"]> = ({ node, data, placement
     },
     plain(data.draft === "" ? data.placeholder : data.draft, C.settledText),
   ];
-  return region(node.name, placement.rect, lines, { bg: BG.input, children });
+  return region(self.id, placement.rect, lines, { bg: BG.input, children });
 };
 
-export const historyBody: Body<HistoryView> = ({ node, data, placement, children }) => {
+export const historyBody: Body<HistoryView> = ({ self, data, placement, children }) => {
   const rect = placement.rect;
   const inner = Math.max(0, rect.width - 2);
   const compact = placement.dense;
@@ -289,17 +290,49 @@ export const historyBody: Body<HistoryView> = ({ node, data, placement, children
       ],
     });
   }
-  return region(node.name, rect, lines, { bg: BG.footer, children });
+  return region(self.id, rect, lines, { bg: BG.footer, children });
+};
+
+/**
+ * One suspension's drawer.
+ *
+ * A recorded drawer renders the state it recorded and offers nothing to act on:
+ * `historical` disables every control, and the body says so rather than drawing
+ * affordances that would do nothing.
+ */
+export const drawerBody: Body<DrawerView> = ({ self, data, placement, children }) => {
+  const width = Math.max(0, placement.rect.width - 2);
+  const lines: VisualLine[] = [plain(data.heading, C.hold)];
+  for (const wrapped of wrapText(data.origin, width)) {
+    lines.push(plain(wrapped, C.dim));
+  }
+  lines.push(blank());
+  for (const line of data.lines) {
+    for (const wrapped of wrapText(line, width)) {
+      lines.push(plain(wrapped, C.src));
+    }
+  }
+  lines.push(blank());
+  for (const control of data.controls) {
+    lines.push({
+      segments: [
+        { text: control.enabled ? "  " : "· ", color: C.dim, width: 2 },
+        { text: control.label, color: control.enabled ? C.src : C.dim },
+      ],
+    });
+  }
+  if (data.historical) {
+    lines.push(blank(), plain("recorded · read-only", C.gold));
+  }
+  return region(self.id, placement.rect, lines, { bg: BG.drawer, children });
 };
 
 /** A structural outlet: it draws nothing and contributes its children unchanged. */
 export const outletBody: Body<undefined> = ({ children }) => [...children];
 
 /** The screen, which every region floats against. */
-export const rootBody: Body<undefined> = ({ placement, children }) => [
-  // The root node has no name of its own; the renderer's own id for the screen
-  // is what every region floats against.
-  open("root", {
+export const rootBody: Body<undefined> = ({ self, placement, children }) => [
+  open(self.id, {
     layout: { width: fixed(placement.rect.width), height: fixed(placement.rect.height) },
     bg: BG.app,
   }),
@@ -308,12 +341,12 @@ export const rootBody: Body<undefined> = ({ placement, children }) => [
 ];
 
 export const tooSmallBody: Body<{ readonly cols: number; readonly rows: number }> = ({
-  node,
+  self,
   data,
   placement,
 }) =>
   region(
-    node.name,
+    self.id,
     placement.rect,
     [
       plain("Terminal too small", C.out),

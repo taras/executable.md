@@ -1,0 +1,50 @@
+settled.wide · 200 × 50 · A settled entry, the input ready for the next one
+ XMD REPL
+
+ SESSION   JOURNAL   STATE
+                                                  Entry 1  ✓ completed · 41.2s     ▸ source · 8 lines                                                                    BINDINGS
+ SESSIONS · 3                                                                                                                                                            REPL scope
+ persist after settling                           Create a project README
+                                                  Provide the project name and a one-sentence description.                                                               Entry 1 published none
+ │ plan-a91f7c                                    │ MARKDOWN                                                                                                             Values named with as appear
+   ✓ completed   planner · turn 1 · returned 5…   │ # Northstar                                                                                                          here for the active scope.
+                                                  │
+   review-b72e1d                                  │ A lightweight workspace for coordinating coding agents.
+   ● responding  reviewer · turn 1 · streaming    │ README.md · 63 bytes · +3 lines
+   streaming · background update · selection u…   README.md was created for Northstar.
+                                                  no REPL bindings published · 1 file written
+   implement-c31d2e
+   · queued      implementer · no turn yet
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                                                  REPL INPUT        ready for Entry 2                                                                                                      [ Run ⌘⏎ ]
+                                                  <Plan>
+
+
+ EXECUTION HISTORY                                                                                  IDLE
+ recorded · 01:01
+ 00:02 ◆ Entry 1 submitted                                                                                                                                                 REPL
+ 00:05 ● document scope entered                                                                                                                                            Entry 1 › document

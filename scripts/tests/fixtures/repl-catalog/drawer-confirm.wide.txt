@@ -1,0 +1,50 @@
+drawer-confirm.wide · 200 × 50 · The README confirmation drawer
+ XMD REPL
+
+ SESSION   JOURNAL   STATE
+                                                  Entry 1  ● running · 48.9s       ↳ document scope suspended                                                            BINDINGS
+ SESSIONS · 3                                                                                                                                                            document scope
+ chronological · selection follows you, not ac…   ← opened from Entry 1 · live execution projection, not an editor
+                                                  document                                                                                                               readme
+ │ plan-a91f7c                                    ▶ <Evaluate allow={["write"]}>                                                                              ENTER      markdown · 3 lines
+   ✓ completed   planner · turn 1 · returned 5…   │ ▾ Ask for the project details                                                                                        # Northstar
+                                                  │ ● <Elicit as="project" schema={projectSchema}>                                                            WAITING
+   review-b72e1d                                  │ │ Enter the project details.
+   ● responding  reviewer · turn 1 · streaming    │ ● </Elicit>                                                                                               WAITING
+   streaming · background update · selection u…   │ ▲ suspended · answer in the drawer below
+
+   implement-c31d2e
+   · queued      implementer · no turn yet
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                                                  CONFIRMATION REQUIRED
+                                                  suspended at <Elicit as="confirmation"> · document scope
+
+                                                  Create README.md with the content shown above?
+                                                  # Northstar
+
+                                                  A lightweight workspace for coordinating coding agents.
+
+                                                    README preview · scroll region
+                                                    Approve
+                                                    Decline
+
+
+
+ EXECUTION HISTORY                                                                                  LIVE  [ Pause ]
+ recorded · 00:49
+ 00:02 ◆ Entry 1 submitted                                                                                                                                                 REPL
+ 00:05 ● document scope entered                                                                                                                                            Entry 1 › document

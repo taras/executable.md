@@ -1,0 +1,50 @@
+drawer-review.wide · 200 × 50 · The plan-review Elicit drawer
+ XMD REPL
+
+ SESSION   JOURNAL   STATE
+                                                  Entry 1  ● running · 31.4s       ↳ Plan scope open                                                                     BINDINGS
+ SESSIONS · 1                                                                                                                                                            Plan scope
+ chronological · selection follows you, not ac…   ← opened from Entry 1 · live execution projection, not an editor
+                                                  document                                                                                                               prompt
+ │ plan-a91f7c                                    repl:entry-1 · submitted source is immutable while running                                                             "Create an XMD program that a…
+   ✓ completed   planner · turn 1 · returned 5…   ▶ <Evaluate allow={["write"]}>                                                                              ENTER      project name and a descriptio…
+                                                  │ Create a project README
+                                                  │ Provide the project name and a one-sentence description. The Plan component drafts the program that asks for them,   syntax
+                                                  │ reviews its own draft, and returns it for admission into this document scope.                                        prose
+                                                  │ ● <Plan as="draft" session={planner}>                                                                     ACTIVE     XMD catalog · 47 symbols
+                                                  │ │ ✓ Read the Prompt · prompt                                                                                         component, control, agent, io
+                                                  │ │ ✓ Prepare the planning inputs · syntax, inputs
+                                                  │ │ ✓ Create the first draft · draft                                                                                   inputs
+                                                  │ │ ▾ Check the draft                                                                                                  json
+                                                  │ │   ● <Let as="check">                                                                                    ACTIVE     {
+                                                  │ │   │ ✓ <Classify value={draft} schema={checkSchema} />                                                   SETTLED      surface: "component",
+                                                  │ │   ● <Agent.Ask session={reviewer} as="review">                                                          WAITING      session: "plan-a91f7c",
+                                                  │ │   │ Review the generated Plan and choose Approve, Request changes or Stop.                                           budget: 3
+                                                  │ │   │ The reviewer has the draft, the schema it was checked against, and the capabilities the document would be      }
+                                                  │ │   │ granted if the Plan is admitted. Nothing it returns runs until this scope admits it.
+                                                  │ │   │ ✓ <Syntax as="syntax" />                                                                            SETTLED    draft
+                                                  │ │   │ ✓ <PlanInputs session={props.session} as="inputs" />                                                SETTLED    XMD source · 59 lines
+                                                  │ │   ● </Agent.Ask>                                                                                        WAITING    # Create a project README
+                                                  │ │   ● </Let>                                                                                              ACTIVE     <Elicit as="project" schema={…
+                                                  │ │ ✓ Review the draft · review
+                                                  │ │ ✓ Admit the approved Plan · admitted
+
+
+                                                  REVIEW REQUIRED
+                                                  suspended at <Elicit as="review"> · Plan scope · 59 lines returned
+
+                                                  # Create a project README
+
+                                                  Provide the project name and a one-sentence description.
+
+                                                  <Elicit as="project" schema={projectSchema}>
+                                                  Enter the project details.
+                                                  ▸ 53 more lines · ⌥↓ scrolls the Plan
+
+                                                    Plan review · scroll region
+                                                    Approve
+                                                    Request changes
+ EXECUTION HISTORY                                                                                  LIVE  [ Pause ]
+ recorded · 00:31
+ 00:02 ◆ Entry 1 submitted                                                                                                                                                 REPL
+ 00:05 ● document scope entered                                                                                                                                            Entry 1 › document

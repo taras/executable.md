@@ -19,6 +19,7 @@ import { attach, walk } from "./component.ts";
 import type { Placement } from "./component.ts";
 import {
   bindingsBody,
+  drawerBody,
   headerBody,
   historyBody,
   inputBody,
@@ -65,8 +66,26 @@ function dress(node: Node, view: ReplView, layout: Layout, anchor: number): void
     return;
   }
   if (name === "region:input") {
-    attach(node, inputBody, view.contextual.input, placed(layout.contextual, layout));
+    // While a drawer is open it owns the contextual band, so the input has
+    // nowhere to draw — the parent decides placement, not the child.
+    const taken = view.contextual.drawers.length > 0;
+    attach(
+      node,
+      inputBody,
+      view.contextual.input,
+      placed(taken ? undefined : layout.contextual, layout),
+    );
     return;
+  }
+  if (name.startsWith("drawer:")) {
+    const kind = name.slice("drawer:".length);
+    const drawer = view.contextual.drawers.find((candidate) => candidate.kind === kind);
+    if (drawer !== undefined) {
+      // A drawer takes the contextual band; the input keeps its own node and
+      // simply has nowhere to draw while one is open.
+      attach(node, drawerBody, drawer, placed(layout.contextual, layout));
+      return;
+    }
   }
   if (name === "region:history") {
     attach(node, historyBody, view.history, placed(layout.footer, layout));

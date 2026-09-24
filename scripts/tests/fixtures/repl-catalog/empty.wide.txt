@@ -1,0 +1,48 @@
+empty.wide · 200 × 50 · An empty REPL, before anything has run
+ XMD REPL
+
+ SESSION   JOURNAL   STATE
+                                                  TRANSCRIPT                                                                                                             BINDINGS
+ No sessions yet                                                                                                                                                         REPL scope
+                                                  No executions yet.
+ Agent sessions appear here as executions open                                                                                                                           No REPL bindings yet
+ them.                                            Submitted blocks append here as immutable entries. Each entry keeps its source, its rendered output, and the           Values named with as appear
+ They persist after an entry settles.             bindings it published.                                                                                                 here for the active scope.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                                                  REPL INPUT        ⇧⏎ newline                                                                                                             [ Run ]
+                                                  Enter XMD or invoke a document…
+
+
+ EXECUTION HISTORY                                                                                  IDLE
+ No recorded execution yet
