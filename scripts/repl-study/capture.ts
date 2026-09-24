@@ -96,55 +96,64 @@ export interface Composition {
 /**
  * Compose a moment **into an already mounted tree**.
  *
- * The root is supplied rather than created. One mounted tree answers rendering,
- * focus, scoped input and the overlay; a second tree mounted for rendering
- * alone would be the parallel hierarchy this architecture exists to remove, and
- * nothing would notice because both would look right on their own.
+ * Projection only, and synchronous. It reads the fixture and returns the view;
+ * it mounts nothing, syncs nothing and focuses nothing.
+ *
+ * That is the whole correction. Composing used to hydrate a synthetic state
+ * from a fabricated URL, sync the tree to it and enter its route — on every
+ * repaint. A person who tabbed to the bindings pane had focus dragged back to
+ * the transcript by the next frame, because a repaint was quietly re-deciding
+ * where they were. Topology belongs to the store's own sync and focus belongs
+ * to the person; drawing is allowed to read both and change neither.
  */
+/**
+ * A second mounted tree, for the control that renders from one.
+ *
+ * Mounted lazily and kept, so the control is a *different* tree rather than a
+ * fresh one each call — which is what a parallel rendering hierarchy would
+ * actually be.
+ */
+let foreign: Composition | undefined;
+
+export function useForeignTree(subject: Fixture, view: View): Operation<Composition> {
+  return {
+    *[Symbol.iterator]() {
+      foreign = yield* useComposition(subject, view);
+      return foreign;
+    },
+  };
+}
+
 export function composeInto(
   tree: ReplTree,
   subject: Fixture,
   view: View,
   surface: SurfaceName = view.surface,
   mutation?: Mutation,
-): Operation<Composition> {
+): Composition {
+  if (mutation === "second-tree") {
+    // The control: render from a tree of its own. Each tree is internally
+    // consistent, which is exactly why nothing notices without an oracle that
+    // asks whether the ids rendered belong to the tree focus came from.
+    if (foreign === undefined) {
+      throw new Error("the second-tree control needs its foreign tree mounted first");
+    }
+    return foreign;
+  }
   return {
-    *[Symbol.iterator]() {
-      if (mutation === "second-tree") {
-        // The control: render from a tree of its own. Each tree looks right on
-        // its own, which is exactly why nothing notices without this check.
-        return yield* useComposition(subject, view, surface);
-      }
-      const open = subject.drawer !== undefined && view.drawerOpen;
-      const url = formatRoute({
-        execution: "e1",
-        surface,
-        scopes: [],
-        drawers: open && subject.drawer !== undefined ? [subject.drawer.kind] : [],
-        inspect: false,
-        draft: "",
-      });
-      const state = hydrate(url, journalThrough(markerShowing(subject.name)));
-      // The tree is brought to this moment rather than replaced by one that
-      // already describes it.
-      yield* tree.sync(state);
-      yield* enterRoute(tree, state);
-      return {
-        tree,
-        root: tree.root.node,
-        view: projectFixture(subject, {
-          execution: "e1",
-          surface,
-          scopes: [],
-          drawerOpen: open,
-          inspect: false,
-          draft: "",
-          transport: subject.history.transport,
-          running: subject.entry?.state === "running",
-          selectedAt: subject.history.checkpoints[view.checkpoint]?.at,
-        }),
-      };
-    },
+    tree,
+    root: tree.root.node,
+    view: projectFixture(subject, {
+      execution: "e1",
+      surface,
+      scopes: [],
+      drawerOpen: subject.drawer !== undefined && view.drawerOpen,
+      inspect: false,
+      draft: "",
+      transport: subject.history.transport,
+      running: subject.entry?.state === "running",
+      selectedAt: subject.history.checkpoints[view.checkpoint]?.at,
+    }),
   };
 }
 
@@ -541,7 +550,11 @@ export function useComposition(
         journalThrough(markerShowing(subject.name)),
       );
       const tree = yield* useReplTree(state);
-      return yield* composeInto(tree, subject, view, surface);
+      // A caller that owns the whole composition brings its tree to the moment
+      // once, at mount. A repaint never does this.
+      yield* tree.sync(state);
+      yield* enterRoute(tree, state);
+      return composeInto(tree, subject, view, surface);
     },
   };
 }

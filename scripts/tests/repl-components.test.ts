@@ -20,18 +20,29 @@ import { fileURLToPath } from "node:url";
 import { attach, walk } from "../repl-study/component.ts";
 import type { Node } from "../repl-study/vendor/freedom/upstream/index.ts";
 import { hydrate, initialView, layoutOf } from "../repl-study/store.ts";
-import { composeInto } from "../repl-study/capture.ts";
+import { composeInto, useForeignTree } from "../repl-study/capture.ts";
 import { fixture } from "../repl-study/fixtures.ts";
 import { journalThrough } from "../repl-study/journal.ts";
 import { paint } from "../repl-study/paint.ts";
+import { drive } from "../repl-study/drive.ts";
 import { applyAnsi, createGrid, gridText } from "../repl-study/screen.ts";
 import { overlayOf, useReplTree } from "../repl-study/tree.ts";
 import { enterRoute } from "../repl-study/drive.ts";
 import { sendKey } from "../repl-study/keys.ts";
 import { indexOf, project } from "../repl-study/view.ts";
 import type { ReplView } from "../repl-study/view.ts";
+import type { HarnessEvent } from "../repl-study/store.ts";
+import type { Mutation } from "../repl-study/mutations.ts";
 
 const WIDE = PROFILE_SIZES.wide;
+
+function context(size: typeof WIDE, mutation?: Mutation) {
+  return { size, mutation, scrollLimit: 40 };
+}
+
+function key(code: string): HarnessEvent {
+  return { kind: "key", event: { type: "keydown", key: code, code } };
+}
 
 function* mounted(
   url: string,
@@ -316,7 +327,7 @@ describe("one mounted tree answers everything", () => {
     const tree = yield* useReplTree(state);
     yield* enterRoute(tree, state);
     const subject = fixture("nested");
-    const composition = yield* composeInto(tree, subject, initialView(subject));
+    const composition = composeInto(tree, subject, initialView(subject));
     return { tree, composition };
   }
 
@@ -350,10 +361,47 @@ describe("one mounted tree answers everything", () => {
   it("is rejected when rendering uses a tree of its own", function* () {
     const state = hydrate("xmd://repl/e1/transcript/entry-1/document", journalThrough("cp-14"));
     const tree = yield* useReplTree(state);
+    yield* enterRoute(tree, state);
     const subject = fixture("nested");
-    const split = yield* composeInto(tree, subject, initialView(subject), undefined, "second-tree");
+    yield* useForeignTree(subject, initialView(subject));
+
+    // Move focus, so the two trees have something to disagree about. Node ids
+    // cannot tell them apart — each tree counts from one — so the oracle is the
+    // observable question: does what rendered agree with where focus is?
+    yield* drive(tree, state, key("Tab"), context(WIDE));
+    const focused = tree.focused().name;
+    expect(focused).toBe("region:bindings");
+
+    const honest = composeInto(tree, subject, initialView(subject));
+    const marked = (composed: typeof honest) =>
+      overlayOf(composed.tree).find((entry) => entry.id === composed.tree.focused().name)?.id;
+    expect(marked(honest)).toBe(focused);
+
+    const split = composeInto(tree, subject, initialView(subject), undefined, "second-tree");
+    expect(marked(split)).not.toBe(focused);
     expect(split.root).not.toBe(tree.root.node);
-    expect(split.tree).not.toBe(tree);
+  });
+
+  it("does not move focus or topology when it repaints", function* () {
+    // A repaint used to hydrate a synthetic state from a fabricated URL, sync
+    // the tree to it and enter its route — every frame. Someone who tabbed to
+    // the bindings pane had focus dragged back to the transcript by the next
+    // frame, because drawing was re-deciding where they were.
+    const state = hydrate("xmd://repl/e1/transcript/entry-1/document", journalThrough("cp-14"));
+    const tree = yield* useReplTree(state);
+    yield* enterRoute(tree, state);
+    const moved = yield* drive(tree, state, key("Tab"), context(WIDE));
+    const focused = tree.focused().name;
+    expect(focused).toBe("region:bindings");
+    const topology = walkNames(tree.root.node).join(",");
+
+    const subject = fixture("nested");
+    for (let repaint = 0; repaint < 5; repaint += 1) {
+      composeInto(tree, subject, initialView(subject));
+    }
+    expect(tree.focused().name).toBe(focused);
+    expect(walkNames(tree.root.node).join(",")).toBe(topology);
+    expect(moved.state.route.surface).toBe("bindings");
   });
 
   it("keeps unchanged children when a parent reconciles", function* () {

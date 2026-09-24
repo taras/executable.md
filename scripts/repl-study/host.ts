@@ -303,6 +303,21 @@ export function openingState(options: {
   return { ...routed, overlay: options.focusMap === true };
 }
 
+/** The topology one of the six moments needs mounted, without its focus. */
+function momentState(subject: Fixture): ReplState {
+  return hydrate(
+    formatRoute({
+      execution: "e1",
+      surface: "transcript",
+      scopes: [],
+      drawers: subject.drawer === undefined ? [] : [subject.drawer.kind],
+      inspect: false,
+      draft: "",
+    }),
+    journalThrough(markerShowing(subject.name)),
+  );
+}
+
 export interface InteractiveOptions {
   readonly fixture: FixtureName;
   readonly mutation?: Mutation;
@@ -410,6 +425,7 @@ export function* runInteractive(options: InteractiveOptions): Operation<void> {
   let settled = false;
   let held: string | undefined;
   let lastPainted = false;
+  let composedFor: string | undefined;
 
   const currentSegment = (): Segment | undefined =>
     journey === undefined ? undefined : journey[segmentIndex];
@@ -515,7 +531,16 @@ export function* runInteractive(options: InteractiveOptions): Operation<void> {
       // rendering, focus, scoped input and the overlay all come off the same
       // mounted object. A second tree for rendering would look right on its own
       // and be a parallel hierarchy.
-      const composition = yield* composeInto(tree, state.fixture, state.view);
+      // While the journey or a playback is projecting, the moment on screen is
+      // not the store's, so the tree is brought to that moment's topology —
+      // once, when the moment changes, never on a repaint. Focus is not
+      // touched: a repaint may read where the person is and may not decide it.
+      const projecting = journey !== undefined || playback !== undefined;
+      if (projecting && composedFor !== state.fixture.name) {
+        yield* tree.sync(momentState(state.fixture));
+        composedFor = state.fixture.name;
+      }
+      const composition = composeInto(tree, state.fixture, state.view, undefined, options.mutation);
       let painted: Painted;
       try {
         painted = draw(term, state, composition, write, options.mutation, motion, deltaMs, focus);
