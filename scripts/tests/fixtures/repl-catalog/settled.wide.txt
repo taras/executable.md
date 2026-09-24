@@ -44,7 +44,8 @@ settled.wide · 200 × 50 · A settled entry, the input ready for the next one
                                                   <Plan>
 
 
- EXECUTION HISTORY                                                                                  IDLE
- recorded · 01:01
- 00:02 ◆ Entry 1 submitted                                                                                                                                                 REPL
- 00:05 ● document scope entered                                                                                                                                            Entry 1 › document
+ EXECUTION HISTORY            │                                                                                                                                       ┃ SETTLED         IDLE  [ Pause ]
+ recorded · 01:01             │      │                                                                                                │   │      │  │        │      │ ┃ 01:01
+ Entry 1                      │      │               │                                                                                │   │      │  │        │      │ ┃
+                         ─────◆──────●───────────────●─────────────●────────────────────────●─·───────────≈─────────────●─────────────●───●──────●──●────────●──────●─┃
+                                                                                                          4.9s agent wait · compressed

@@ -44,5 +44,5 @@ empty.wide · 200 × 50 · An empty REPL, before anything has run
                                                   Enter XMD or invoke a document…
 
 
- EXECUTION HISTORY                                                                                  IDLE
- No recorded execution yet
+ EXECUTION HISTORY                                                                                                                                                                      IDLE  [ Pause ]
+ No recorded execution …

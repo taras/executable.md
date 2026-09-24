@@ -74,6 +74,7 @@ import {
 } from "../repl-study/screen.ts";
 import { initialView, scrollBy } from "../repl-study/store.ts";
 import { historyViewFrom } from "../repl-study/view.ts";
+import { placementOf } from "../repl-study/component.ts";
 import type { Fixture } from "../repl-study/model.ts";
 
 /**
@@ -391,7 +392,7 @@ describe("the history footer", () => {
       drawer: false,
       surface: "transcript",
     });
-    const geometry = bandGeometry(bandOf(subject), layout, layout.footer!);
+    const geometry = bandGeometry(bandOf(subject), placementOf(layout, layout.footer!));
     const frame = yield* renderFrame({ fixture: subject, view: initialView(subject), size });
     const rows = bandRows(frame.text, size);
     const byDepth = soleNotchColumns(subject, geometry);
@@ -422,7 +423,7 @@ describe("the history footer", () => {
       drawer: false,
       surface: "transcript",
     });
-    const geometry = bandGeometry(bandOf(subject), layout, layout.footer!);
+    const geometry = bandGeometry(bandOf(subject), placementOf(layout, layout.footer!));
     const byDepth = soleNotchColumns(subject, geometry);
     const deepColumn = byDepth.get(3) ?? byDepth.get(2)!;
     const deepPoint = history.checkpoints.find(
@@ -471,7 +472,7 @@ describe("the history footer", () => {
       drawer: false,
       surface: "transcript",
     });
-    const geometry = bandGeometry(bandOf(subject), layout, layout.footer!);
+    const geometry = bandGeometry(bandOf(subject), placementOf(layout, layout.footer!));
     const frame = yield* renderFrame({
       fixture: subject,
       view: initialView(subject),
@@ -657,7 +658,7 @@ describe("staying operable", () => {
       surface: "history",
     });
     const rect = layout.footer!;
-    const geometry = bandGeometry(bandOf(subject), layout, rect);
+    const geometry = bandGeometry(bandOf(subject), placementOf(layout, rect));
     const notches = notchLayout(bandOf(subject), geometry.trackLeft, geometry.trackWidth);
     const gathered = notches.reduce((total, notch) => total + notch.markers.length, 0);
 
@@ -687,7 +688,7 @@ describe("staying operable", () => {
       drawer: false,
       surface: "history",
     });
-    const geometry = bandGeometry(bandOf(subject), layout, layout.footer!);
+    const geometry = bandGeometry(bandOf(subject), placementOf(layout, layout.footer!));
     const notches = notchLayout(
       bandOf(subject),
       geometry.trackLeft,

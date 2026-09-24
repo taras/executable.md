@@ -104,7 +104,7 @@ describe("a component is a body on a node", () => {
         return [];
       },
       undefined,
-      { rect: { x: 0, y: 0, width: 1, height: 1 }, dense: false },
+      { rect: { x: 0, y: 0, width: 1, height: 1 }, dense: false, profile: "wide" },
     );
     walk(node);
     // A body that held the node could create children, remove itself, set props
@@ -141,6 +141,7 @@ describe("a component is a body on a node", () => {
     attach(child, ({ self }) => [{ kind: "text", value: self.name } as never], undefined, {
       rect: { x: 0, y: 0, width: 1, height: 1 },
       dense: false,
+      profile: "wide",
     });
     attach(
       parent,
@@ -149,6 +150,7 @@ describe("a component is a body on a node", () => {
       {
         rect: { x: 0, y: 0, width: 1, height: 1 },
         dense: false,
+        profile: "wide",
       },
     );
     const ops = walk(parent);

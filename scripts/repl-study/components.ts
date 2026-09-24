@@ -17,6 +17,7 @@ import type { Op } from "@bomb.sh/tty";
 
 import type { Body } from "./component.ts";
 import {
+  bandRegion,
   BG,
   blank,
   C,
@@ -28,7 +29,9 @@ import {
   transcriptLines,
   wrapText,
 } from "./render.ts";
-import type { VisualLine } from "./render.ts";
+import type { FocusView, VisualLine } from "./render.ts";
+import type { Mutation } from "./mutations.ts";
+import type { Motion } from "./playback.ts";
 import type {
   BindingsView,
   DrawerView,
@@ -250,48 +253,24 @@ export const inputBody: Body<ContextualView["input"]> = ({ self, data, placement
   return region(self.id, placement.rect, lines, { bg: BG.input, children });
 };
 
-export const historyBody: Body<HistoryView> = ({ self, data, placement, children }) => {
-  const rect = placement.rect;
-  const inner = Math.max(0, rect.width - 2);
-  const compact = placement.dense;
-  const controls = data.controls.map((control) => `[ ${control.label} ]`).join(" ");
-  const word =
-    data.transport === "live"
-      ? "LIVE"
-      : data.transport === "paused"
-        ? "PAUSED"
-        : data.transport === "inspecting"
-          ? "INSPECTING"
-          : "IDLE";
-  const lines: VisualLine[] = [
-    {
-      segments: [
-        { text: fit(compact ? "HISTORY" : "EXECUTION HISTORY", 20), color: C.label },
-        { text: `${word}  ${controls}`, color: C.dim },
-      ],
-    },
-    {
-      segments: [
-        {
-          text:
-            data.markers.length === 0 ? "No recorded execution yet" : `recorded · ${data.elapsed}`,
-          color: C.dim,
-        },
-      ],
-    },
-  ];
-  for (const marker of data.markers.slice(0, Math.max(0, rect.height - 3))) {
-    lines.push({
-      segments: [
-        { text: clock(marker.at), color: marker.selected ? C.gold : C.dim, width: 6 },
-        { text: marker.boundary ? "◆" : "●", color: marker.selected ? C.gold : C.active, width: 2 },
-        { text: marker.label, color: marker.selected ? C.out : C.src },
-        { text: marker.scope, color: C.dim, width: Math.min(28, Math.max(0, inner - 40)) },
-      ],
-    });
-  }
-  return region(self.id, rect, lines, { bg: BG.footer, children });
-};
+/**
+ * The Execution History band.
+ *
+ * The drawing is `render.ts`'s — notch height is scope depth, the playhead is
+ * its own stem, a selection is gold with a caret — and what changed is who asks
+ * for it: the band is a component handed its own view and its own box.
+ */
+export const historyBody: Body<HistoryData> = ({ self, data, placement, children }) => [
+  ...bandRegion(self.id, data.view, placement, data.mutation, data.motion, data.focus),
+  ...children,
+];
+
+export interface HistoryData {
+  readonly view: HistoryView;
+  readonly mutation?: Mutation;
+  readonly motion?: Motion;
+  readonly focus?: FocusView;
+}
 
 /**
  * One suspension's drawer.

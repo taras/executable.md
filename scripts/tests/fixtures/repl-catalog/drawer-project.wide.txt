@@ -44,7 +44,8 @@ drawer-project.wide · 200 × 50 · The project Elicit drawer
 
 
 
- EXECUTION HISTORY                                                                                  LIVE  [ Pause ]
- recorded · 00:49
- 00:02 ◆ Entry 1 submitted                                                                                                                                                 REPL
- 00:05 ● document scope entered                                                                                                                                            Entry 1 › document
+ EXECUTION HISTORY             │                                                                                                                                             ┃ LIVE     LIVE  [ Pause ]
+ recorded · 00:49              │        │                                                                                                                              │     ┃ 00:49
+ Entry 1                       │        │                    │                                                                                                         │     ┃
+                         ──────◆────────●────────────────────●─────────────────●─────────────────────────────────●──·──────────────≈─────────────────●─────────────────●─────┃
+                                                                                                                                   4.9s agent wait · compressed

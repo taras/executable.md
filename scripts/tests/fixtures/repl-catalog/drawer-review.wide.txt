@@ -44,7 +44,8 @@ drawer-review.wide · 200 × 50 · The plan-review Elicit drawer
                                                     Plan review · scroll region
                                                     Approve
                                                     Request changes
- EXECUTION HISTORY                                                                                  LIVE  [ Pause ]
- recorded · 00:31
- 00:02 ◆ Entry 1 submitted                                                                                                                                                 REPL
- 00:05 ● document scope entered                                                                                                                                            Entry 1 › document
+ EXECUTION HISTORY                 │                                                                                                                                         ┃ LIVE     LIVE  [ Pause ]
+ recorded · 00:31                  │             │                                                                                                                           ┃ 00:31
+ Entry 1                           │             │                                │                                                                                          ┃
+                         ──────────◆─────────────●────────────────────────────────●────────────────────────────●───────────────────────────────────────────────────●────·────┃
+                         notch height is scope depth · digits mark coalesced checkpoints

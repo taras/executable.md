@@ -44,7 +44,8 @@ inspecting.wide · 200 × 50 · Historical inspection, reconstructed and read-on
 
 
 
- EXECUTION HISTORY                                                                                  INSPECTING  [ Continue ] [ Return to paused head ] [ Fork from here ]
- recorded · 00:53
- 00:02 ◆ Entry 1 submitted                                                                                                                                                 REPL
- 00:05 ● document scope entered                                                                                                                                            Entry 1 › document
+ EXECUTION HISTORY          │                                                                           ┃ PAUSED HEAD     INSPECTING HISTORY  [ Continue ] [ Return to paused head ] [ Fork from here ]
+ recorded · 00:53           │   │                                                              │  │    │┃ 00:53
+ Entry 1                    │   │          │                                                   │  │    │┃
+                         ───◆───●──────────●────────●───────────────●─·──────≈────────●────────●──●────●┃
+                                           ▲ 00:12 · snapped · 41.0s before head

@@ -15,7 +15,7 @@
 
 import type { Op } from "@bomb.sh/tty";
 
-import { attach, walk } from "./component.ts";
+import { attach, placementOf, walk } from "./component.ts";
 import type { Placement } from "./component.ts";
 import {
   bindingsBody,
@@ -36,7 +36,7 @@ import type { ReplView } from "./view.ts";
 const NOWHERE: Rect = { x: 0, y: 0, width: 0, height: 0 };
 
 function placed(rect: Rect | undefined, layout: Layout): Placement {
-  return { rect: rect ?? NOWHERE, dense: layout.dense };
+  return placementOf(layout, rect ?? NOWHERE);
 }
 
 /**
@@ -88,8 +88,13 @@ function dress(node: Node, view: ReplView, layout: Layout, anchor: number): void
     }
   }
   if (name === "region:history") {
-    attach(node, historyBody, view.history, placed(layout.footer, layout));
-    return;
+    // Only the pane draws the band. The identically-named node inside a drawer
+    // is that trap's way out, not a second Execution History.
+    const pane = node.parent?.parent === undefined;
+    if (pane) {
+      attach(node, historyBody, { view: view.history }, placed(layout.footer, layout));
+      return;
+    }
   }
   if (name === "header") {
     attach(
@@ -116,7 +121,7 @@ export interface PaintRequest {
 /** Hand every mounted node its data, then render the tree. */
 export function paint(request: PaintRequest): Op[] {
   const { root, view, layout, anchor } = request;
-  attach(root, rootBody, undefined, { rect: layout.screen, dense: layout.dense });
+  attach(root, rootBody, undefined, placementOf(layout, layout.screen));
   const visit = (node: Node): void => {
     for (const child of node.children) {
       dress(child, view, layout, anchor);

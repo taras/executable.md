@@ -19,6 +19,8 @@ import type { Checkpoint, Entry, Fixture, Phase, TranscriptRow, TransportMode } 
 import type { HistoryView, MarkerView } from "./view.ts";
 import { historyViewFrom } from "./view.ts";
 import type { Layout, Rect } from "./layout.ts";
+import type { Placement } from "./component.ts";
+import { placementOf } from "./component.ts";
 import { MINIMUM } from "./layout.ts";
 import type { View } from "./store.ts";
 import type { Mutation } from "./mutations.ts";
@@ -890,15 +892,19 @@ export interface BandGeometry {
  * visible, how wide their labels are — so it takes the view model rather than a
  * fixture. Nothing about a checkpoint's storage reaches it.
  */
-export function bandGeometry(history: HistoryView, layout: Layout, rect: Rect): BandGeometry {
-  const transport = transportFor(history.transport, layout.dense || layout.profile === "narrow");
+export function bandGeometry(history: HistoryView, placement: Placement): BandGeometry {
+  const rect = placement.rect;
+  const transport = transportFor(
+    history.transport,
+    placement.dense || placement.profile === "narrow",
+  );
   const controls = transport.controls.map((control) => `[ ${control} ]`).join(" ");
   const right = `${transport.word}  ${controls}`;
   const inner = Math.max(0, rect.width - 2);
   // A narrow band spends its columns on the track instead of on a label the
   // surface bar above it already carries.
   const labelWidth =
-    layout.profile === "narrow" ? 10 : Math.min(Math.max(18, Math.round(rect.width * 0.12)), 26);
+    placement.profile === "narrow" ? 10 : Math.min(Math.max(18, Math.round(rect.width * 0.12)), 26);
   const headLabelRoom = history.transport === "live" ? 8 : 15;
   const rightReserve = Math.min(inner - labelWidth - 4, [...right].length + 2 + headLabelRoom);
   return {
@@ -947,18 +953,19 @@ export function isDeeperThanBand(depth: number): boolean {
  * holding several checkpoints shows how many.
  */
 export function bandRegion(
+  id: string,
   history: HistoryView,
-  layout: Layout,
-  rect: Rect,
+  placement: Placement,
   mutation?: Mutation,
   motion?: Motion,
   focus?: FocusView,
 ): Op[] {
+  const rect = placement.rect;
   // While a playback runs, the head is where the application says it is; the
   // recorded head is where it will be when the motion settles.
   const headAt = motion !== undefined && !motion.done ? motion.headAt : history.headAt;
   const flat = mutation === "flatten-notches";
-  const geometry = bandGeometry(history, layout, rect);
+  const geometry = bandGeometry(history, placement);
   const { transport, inner, labelWidth, trackLeft, trackWidth } = geometry;
   // The marker replaces the space inside the bracket rather than widening it:
   // the track's room is computed from this string, and a focused control that
@@ -1125,7 +1132,7 @@ export function bandRegion(
     }
   }
 
-  return region("footer", rect, lines, { bg: BG.footer, padding: { left: 1, right: 1 } });
+  return region(id, rect, lines, { bg: BG.footer, padding: { left: 1, right: 1 } });
 }
 
 /** `[ Continue ]` becomes `[▸Continue ]` — the same width, one glyph louder. */
@@ -1266,14 +1273,14 @@ export function renderScreen(request: ScreenRequest): Op[] {
     // tree does, so the two cannot disagree while both exist.
     ops.push(
       ...bandRegion(
+        "footer",
         historyViewFrom(
           fixture,
           fixture.history.transport,
           [],
           fixture.history.checkpoints[view.checkpoint]?.at,
         ),
-        layout,
-        layout.footer,
+        placementOf(layout, layout.footer),
         mutation,
         motion,
         focus,

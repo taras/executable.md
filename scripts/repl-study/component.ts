@@ -28,7 +28,7 @@ import { createNodeData } from "./vendor/freedom/upstream/index.ts";
 import type { Node } from "./vendor/freedom/upstream/index.ts";
 import type { Op } from "@bomb.sh/tty";
 
-import type { Rect } from "./layout.ts";
+import type { Layout, Profile, Rect } from "./layout.ts";
 
 /**
  * What a parent tells a child about where it may draw.
@@ -42,6 +42,17 @@ export interface Placement {
   readonly rect: Rect;
   /** True where the pane is at its floor and secondary detail is dropped. */
   readonly dense: boolean;
+  /** Which composition this is, which changes what a component may spend room on. */
+  readonly profile: Profile;
+}
+
+/** The presentation constraints one region of a composed layout is given. */
+export function placementOf(layout: Layout, rect: Rect | undefined): Placement {
+  return {
+    rect: rect ?? { x: 0, y: 0, width: 0, height: 0 },
+    dense: layout.dense,
+    profile: layout.profile,
+  };
 }
 
 /**
