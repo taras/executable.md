@@ -26,7 +26,7 @@ import { fileURLToPath } from "node:url";
 
 import { captureFocus, captureText, PROFILE_SIZES, renderFrame } from "../repl-study/capture.ts";
 import { FRAMES, frame, stateFor, useFrame } from "../repl-study/frames.ts";
-import { scanKeys } from "../repl-study/host.ts";
+import { openingState, scanKeys } from "../repl-study/host.ts";
 import { fold, JOURNAL, journalThrough, markers, siblingsOf } from "../repl-study/journal.ts";
 import {
   formatRoute,
@@ -44,7 +44,7 @@ import {
   viewOf,
 } from "../repl-study/store.ts";
 import type { HarnessEvent, ReplState, Size } from "../repl-study/store.ts";
-import { drive } from "../repl-study/drive.ts";
+import { drive, enterRoute } from "../repl-study/drive.ts";
 import { focus as focusNode } from "../repl-study/tree.ts";
 import { find, overlayOf, surfaceOwning, useReplTree, walk } from "../repl-study/tree.ts";
 import type { ReplTree } from "../repl-study/tree.ts";
@@ -989,6 +989,42 @@ describe("the frames, as pictures", () => {
       size: WIDE,
     });
     expect(rendered.text).not.toContain("FOCUS MAP");
+  });
+});
+
+describe("the command opens at the frame it names", () => {
+  it("reproduces every frame through the harness's own opening path", function* () {
+    // `--frame <id>` builds its state the way `runInteractive` does, not the
+    // way the rest of this suite does. They were once different: the harness
+    // opened at a frame's location but not its focus, so the footer — whose
+    // controls exist only once focus is inside it — drew none of them, and no
+    // case noticed because every case entered another way.
+    for (const subject of FRAMES) {
+      // Exactly what `runInteractive` does: build the opening state from the
+      // flags, then enter the route with the frame's focus.
+      const state = openingState({
+        fixture: subject.fixture,
+        route: subject.url,
+        head: subject.head,
+      });
+      const tree = yield* useReplTree(state);
+      yield* enterRoute(tree, state, subject.focus);
+      expect({ frame: subject.id, focus: tree.focused().name }).toEqual({
+        frame: subject.id,
+        focus: subject.focus,
+      });
+      const entries = overlayOf(tree);
+      const shown = subject.overlay
+        ? entries
+        : entries.filter((entry) => entry.id === subject.focus);
+      expect({
+        frame: subject.id,
+        targets: shown.map((entry) => ({ n: entry.number, id: entry.id })),
+      }).toEqual({
+        frame: subject.id,
+        targets: subject.targets.map((target) => ({ n: target.n, id: target.id })),
+      });
+    }
   });
 });
 

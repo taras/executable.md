@@ -63,6 +63,7 @@ type Mode =
       readonly trace?: string;
       readonly route?: string;
       readonly head?: string;
+      readonly focus?: string;
       readonly focusMap?: boolean;
     }
   | { readonly kind: "capture"; readonly directory: string; readonly focus?: boolean }
@@ -100,6 +101,7 @@ export function parse(argv: readonly string[]): Invocation | string {
   let trace: string | undefined;
   let route: string | undefined;
   let head: string | undefined;
+  let focus: string | undefined;
   let focusMap = false;
   let at = 0;
 
@@ -186,6 +188,7 @@ export function parse(argv: readonly string[]): Invocation | string {
       }
       route = found.url;
       head = found.head;
+      focus = found.focus;
       fixtureName = found.fixture;
     } else if (argument === "--route") {
       const url = value();
@@ -236,6 +239,7 @@ export function parse(argv: readonly string[]): Invocation | string {
       trace,
       route,
       head,
+      focus,
       focusMap,
     },
     mutation,
@@ -295,6 +299,7 @@ function* run(invocation: Invocation): Operation<void> {
     fixture: mode.fixture,
     route: mode.route,
     head: mode.head,
+    focus: mode.focus,
     focusMap: mode.focusMap,
     mutation,
     play: mode.play,

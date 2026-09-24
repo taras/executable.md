@@ -26,7 +26,7 @@ import type { FocusView } from "./render.ts";
 import { initialView } from "./store.ts";
 import { asKey, fixtureFor, hydrate, reduce, viewOf } from "./store.ts";
 import { overlayOf, useReplTree } from "./tree.ts";
-import { drive } from "./drive.ts";
+import { drive, enterRoute } from "./drive.ts";
 import type { HarnessEvent, ReplState, View } from "./store.ts";
 import { journalThrough, markerShowing } from "./journal.ts";
 import { formatRoute } from "./route.ts";
@@ -307,6 +307,8 @@ export interface InteractiveOptions {
   readonly route?: string;
   /** How far the execution has recorded, which a URL never carries. */
   readonly head?: string;
+  /** The node to put focus on, for a run that opens at a named study frame. */
+  readonly focus?: string;
   /** Start with the numbered focus map drawn. */
   readonly focusMap?: boolean;
   /** Start this playback immediately, rather than waiting for `p`. */
@@ -353,6 +355,11 @@ export function* runInteractive(options: InteractiveOptions): Operation<void> {
   // The tree is acquired before the terminal is touched, so its teardown runs
   // after the terminal has been given back rather than into a restored one.
   const tree = yield* useReplTree(repl);
+  // Entering the region the route names comes first, because the footer is an
+  // explicit region: its controls exist only once focus is inside it. Without
+  // this the interactive harness opened at a frame's *location* but not its
+  // focus, so `--frame 12` drew none of the transport controls it is about.
+  yield* enterRoute(tree, repl, options.focus);
 
   let term = yield* useTerm({ cols: state.cols, rows: state.rows });
   const input: Input = yield* until(createInput({}));

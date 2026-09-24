@@ -115,3 +115,33 @@ export function drive(
 }
 
 export type { Mutation };
+
+/**
+ * Put focus where a run is opening.
+ *
+ * The route's surface says which region owns focus, and a named study frame
+ * additionally says which node inside it. Both are addresses; the tree decides
+ * whether they are there.
+ *
+ * The interactive harness and the evidence both enter through here. When they
+ * did not, `--frame 12` opened at the frame's location but not its focus, so
+ * the footer — an explicit region, whose controls exist only once focus is
+ * inside it — drew none of the transport controls that frame is about, and
+ * nothing noticed because the evidence entered a different way.
+ */
+export function enterRoute(tree: ReplTree, state: ReplState, wanted?: string): Operation<void> {
+  return {
+    *[Symbol.iterator]() {
+      const region = tree.chain().find((node) => node.name === `region:${state.route.surface}`);
+      if (region) {
+        focusNode(region);
+      }
+      yield* tree.sync(state);
+      const target =
+        wanted === undefined ? undefined : tree.chain().find((node) => node.name === wanted);
+      if (target) {
+        focusNode(target);
+      }
+    },
+  };
+}

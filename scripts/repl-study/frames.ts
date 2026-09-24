@@ -17,7 +17,8 @@ import { journalThrough } from "./journal.ts";
 import type { FixtureName } from "./model.ts";
 import { hydrate } from "./store.ts";
 import type { ReplState } from "./store.ts";
-import { focus as focusNode, useReplTree } from "./tree.ts";
+import { useReplTree } from "./tree.ts";
+import { enterRoute } from "./drive.ts";
 import type { ReplTree } from "./tree.ts";
 import type { Operation } from "effection";
 
@@ -367,18 +368,9 @@ export function useFrame(subject: StudyFrame): Operation<Frame> {
     *[Symbol.iterator]() {
       const state = stateFor(subject);
       const tree = yield* useReplTree(state);
-      // Entering the region comes first, because the footer is explicit: its
-      // controls exist only once focus is inside it. The route's surface is
-      // what says which region that is — the same invariant the URL records.
-      const region = tree.chain().find((node) => node.name === `region:${state.route.surface}`);
-      if (region) {
-        focusNode(region);
-      }
-      yield* tree.sync(state);
-      const target = tree.chain().find((node) => node.name === subject.focus);
-      if (target) {
-        focusNode(target);
-      }
+      // The same entry the interactive harness uses, so a frame opened by
+      // `--frame` and a frame built here cannot come out different.
+      yield* enterRoute(tree, state, subject.focus);
       return { state, tree };
     },
   };
