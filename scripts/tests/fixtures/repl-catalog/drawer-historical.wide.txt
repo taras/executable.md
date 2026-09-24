@@ -44,7 +44,7 @@ drawer-historical.wide · 200 × 50 · A recorded drawer, rendered without anyth
                                                 │ both fields valid   Submit  ⌘↵
                                                 │
                                                 │ schema
- EXECUTION HISTORY          │                                                                           ┃ PAUSED HEAD     INSPECTING HISTORY  [ Continue ] [ Return to paused head ] [ Fork from here ]
+▌EXECUTION HISTORY          │                                                                           ┃ PAUSED HEAD     INSPECTING HISTORY  [ Continue ] [ Return to paused head ] [ Fork from here ]
  recorded · 00:53           │   │                                                              │  │    │┃ 00:53
  Entry 1                    │   │          │                                                   │  │    │┃
                          ───◆───●──────────●────────●───────────────●─·──────≈────────●────────●──●────●┃

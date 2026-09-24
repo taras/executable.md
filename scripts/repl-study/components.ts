@@ -22,6 +22,7 @@ import {
   drawerRegion,
   focusMapRegion,
   focusMark,
+  regionMark,
   inputRegion,
   rule,
   surfaceBarRegion,
@@ -329,6 +330,20 @@ export const drawerBody: Body<DrawerData> = ({ self, data, placement, children, 
 ];
 
 /**
+ * The way out of a drawer.
+ *
+ * A drawer traps focus, so the Execution History band outside it is
+ * unreachable; the drawer carries a region of its own that names the same band
+ * and is inside the trap. It draws nothing but its own marker, over the band it
+ * is a way back to — so reaching it looks exactly like reaching the band,
+ * which is what it does.
+ */
+export const escapeBody: Body<undefined> = ({ self, placement, children, focus }) => [
+  ...(focus === "self" ? regionMark(`${self.id}.focus`, placement.rect) : []),
+  ...children,
+];
+
+/**
  * One focusable control: a field, a button, a transport action.
  *
  * It draws exactly one thing — its own focus marker, in the cell its parent
@@ -336,8 +351,9 @@ export const drawerBody: Body<DrawerData> = ({ self, data, placement, children, 
  * say. For a parent to draw this it would have to be told which of its children
  * was focused, and that is the knowledge tree traversal deliberately withholds.
  *
- * A control whose parent reserved no cell draws nothing, which is how the
- * `Run` affordance behaves: the input band spends no column on a gutter.
+ * A control whose parent reserved no cell draws nothing. Every focusable
+ * control in this interface has one, because keyboard focus that nothing shows
+ * is focus a person has to guess at.
  */
 export const controlBody: Body<undefined> = ({ self, placement, children, focus }) => [
   ...(focus === "self" ? focusMark(`${self.id}.mark`, placement.rect) : []),

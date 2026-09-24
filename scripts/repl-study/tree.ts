@@ -37,12 +37,13 @@ import type { Node, PopFocus, Root } from "./vendor/freedom/upstream/index.ts";
 
 import { drawerTargets, labelFor } from "./surfaces.ts";
 import { recordPath } from "./keys.ts";
-import { attach, placementOf } from "./component.ts";
+import { attach, placementOf, presentOwn, presents, within } from "./component.ts";
 import type { Placement } from "./component.ts";
 import {
   bindingsBody,
   controlBody,
   drawerBody,
+  escapeBody,
   focusMapBody,
   headerBody,
   historyBody,
@@ -56,8 +57,8 @@ import {
   transcriptBody,
 } from "./components.ts";
 import type { Motion } from "./playback.ts";
-import type { ReplView } from "./view.ts";
-import { drawerSlots, transportSlots } from "./render.ts";
+import type { DrawerView, HistoryView, InputView, ReplView } from "./view.ts";
+import { drawerSlots, inputSlot, transportSlots } from "./render.ts";
 import type { Layout, Rect } from "./layout.ts";
 import { isDrawerKind } from "./fixtures.ts";
 import type { ReplState } from "./store.ts";
@@ -138,6 +139,18 @@ export interface PresentOptions {
   readonly overlay?: boolean;
 }
 
+/**
+ * What the composition tells a drawer.
+ *
+ * `escape` is the box the way out is drawn over. The root composed both the
+ * drawer and the band, so the root is what knows where the band is; the drawer
+ * decides that its own escape child sits there.
+ */
+interface DrawerPresentation {
+  readonly view: DrawerView;
+  readonly escape: Rect | undefined;
+}
+
 interface Mounted {
   readonly node: Node;
   readonly pop?: PopFocus;
@@ -174,6 +187,28 @@ export function useReplTree(state: ReplState): Operation<ReplTree> {
         root.node.createChild(name).set("container", true);
       }
       useFocus(root.node);
+
+      // Each band places its own controls. These closures hold the node the
+      // lifecycle created — which is what a lifecycle may do and a render body
+      // may not — so nothing outside reaches past a direct child to say where a
+      // control draws.
+      const inputRegionNode = regions.get("input")!;
+      presents<InputView>(inputRegionNode, (input, placement) => {
+        const cell = inputSlot(placement);
+        for (const control of inputRegionNode.children) {
+          attach(control, controlBody, undefined, within(placement, cell));
+        }
+      });
+      const historyRegionNode = regions.get("history")!;
+      presents<HistoryView>(historyRegionNode, (history, placement) => {
+        // The band knows where it wrote each bracket, so the band says where
+        // its controls may draw. They are mounted in the band's own order,
+        // because both come from the same transport mode.
+        const cells = transportSlots(history, placement);
+        [...historyRegionNode.children].forEach((control, at) => {
+          attach(control, controlBody, undefined, within(placement, cells[at]));
+        });
+      });
 
       let drawers: Mounted[] = [];
       let scopes: Node[] = [];
@@ -365,6 +400,26 @@ export function useReplTree(state: ReplState): Operation<ReplTree> {
           // that stays valid while a recorded moment is open.
           const footer = node.createChild("region:history");
           focusable(footer);
+
+          // The panel places the controls it created, and the drawer places the
+          // panel and the way out. Each closure holds only its own node.
+          presents<ReadonlyMap<string, Rect>>(body, (cells, placement) => {
+            for (const control of body.children) {
+              attach(control, controlBody, undefined, within(placement, cells.get(control.name)));
+            }
+          });
+          presents<DrawerPresentation>(node, ({ view, escape }, placement) => {
+            // Whether there is a gutter at all is the question the drawer's own
+            // body asks of itself: is focus inside me? The lifecycle may hold
+            // the node, so it can ask the same question the same way.
+            const gutter = holds(node, current(root.node));
+            const cells = new Map(
+              drawerSlots(view, placement, gutter).map((slot) => [slot.id, slot.rect] as const),
+            );
+            presentOwn(body, cells, placement);
+            attach(footer, escapeBody, undefined, within(placement, escape));
+          });
+
           const pop = mutation === "leak-drawer-trap" ? undefined : focusPush(node);
           drawers.push({ node, pop, historical });
         }
@@ -400,12 +455,8 @@ export function useReplTree(state: ReplState): Operation<ReplTree> {
           // The overlay is the tree, walked — by the root, which is the only
           // thing that can see it. Its child is handed the result.
           const overlay = overlayOf(tree, options.mutation);
-          // Asked of the tree once. It never reaches a body: it is used here to
-          // work out which of a parent's children get a marker cell reserved,
-          // and a body learns only where focus is relative to itself.
-          const here = current(root.node);
           for (const child of root.node.children) {
-            presentChild(child, view, layout, place, options, overlay, here);
+            presentChild(child, view, layout, place, options, overlay);
           }
         },
         focused: () => current(root.node),
@@ -536,7 +587,6 @@ function presentChild(
   place: (rect: Rect | undefined) => Placement,
   options: PresentOptions,
   overlay: readonly OverlayEntry[],
-  here: Node,
 ): void {
   const name = child.name;
   if (name === "region:sessions") {
@@ -565,11 +615,9 @@ function presentChild(
     // An open drawer owns the contextual band; the input keeps its node and
     // simply has nowhere to draw.
     const taken = view.contextual.drawers.length > 0;
-    attach(child, inputBody, view.contextual.input, place(taken ? undefined : layout.contextual));
-    // `Run` is a control of this band, and the band reserves no cell for it.
-    for (const control of child.children) {
-      attach(control, controlBody, undefined, place(undefined));
-    }
+    const placement = place(taken ? undefined : layout.contextual);
+    attach(child, inputBody, view.contextual.input, placement);
+    presentOwn(child, view.contextual.input, placement);
     return;
   }
   if (name === "region:history") {
@@ -584,13 +632,7 @@ function presentChild(
       },
       placement,
     );
-    // The band knows where it wrote each bracket, so it is the band that says
-    // where its controls may draw. They are mounted in the band's own order,
-    // because both come from the same transport mode.
-    const cells = transportSlots(view.history, placement);
-    [...child.children].forEach((control, at) => {
-      attach(control, controlBody, undefined, place(cells[at]));
-    });
+    presentOwn(child, view.history, placement);
     return;
   }
   if (name.startsWith("drawer:")) {
@@ -607,17 +649,7 @@ function presentChild(
           : layout.contextual;
       const placement = place(rect);
       attach(child, drawerBody, { view: drawer }, placement);
-      // The form laid its own gutter out, so the form says which cell each of
-      // its controls owns. Whether there is a gutter at all is the same
-      // question the drawer's body asks of itself: is focus inside me?
-      const cells = new Map(
-        drawerSlots(drawer, placement, holds(child, here)).map((slot) => [slot.id, slot.rect]),
-      );
-      for (const panel of child.children) {
-        for (const control of panel.children) {
-          attach(control, controlBody, undefined, place(cells.get(control.name)));
-        }
-      }
+      presentOwn(child, { view: drawer, escape: layout.footer }, placement);
       return;
     }
   }

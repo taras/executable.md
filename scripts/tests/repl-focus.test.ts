@@ -32,7 +32,6 @@ import {
   renderInto,
   useTerm,
 } from "../repl-study/capture.ts";
-import type { FrameRequest } from "../repl-study/capture.ts";
 import { FRAMES, frame, stateFor, useFrame } from "../repl-study/frames.ts";
 import { openingState, scanKeys } from "../repl-study/host.ts";
 import { fold, JOURNAL, journalThrough, markers, siblingsOf } from "../repl-study/journal.ts";
@@ -55,7 +54,7 @@ import type { HarnessEvent, ReplState, Size } from "../repl-study/store.ts";
 import { drive, enterRoute } from "../repl-study/drive.ts";
 import { focus as focusNode } from "../repl-study/tree.ts";
 import { find, overlayOf, surfaceOwning, useReplTree, walk } from "../repl-study/tree.ts";
-import type { ReplTree } from "../repl-study/tree.ts";
+import type { OverlayEntry, ReplTree } from "../repl-study/tree.ts";
 import { KeyboardApi, sendKey } from "../repl-study/keys.ts";
 import type { Mutation } from "../repl-study/mutations.ts";
 
@@ -94,22 +93,32 @@ function* opened(
  * over a complete request, so anything it carries is carried all the way to
  * `paint`.
  */
-function* shot(
-  tree: ReplTree,
-  state: ReplState,
-  extra: Record<string, unknown> = {},
-): Operation<string> {
+function* shot(tree: ReplTree, state: ReplState, options: Shot = {}): Operation<string> {
   const term = yield* useTerm(WIDE);
   const fixture = fixtureFor(state);
   const view = viewOf(state);
-  return renderInto(term, {
+  const request = {
     fixture,
     view,
     size: WIDE,
-    overlay: true,
+    overlay: options.overlay ?? true,
     composition: composeInto(tree, fixture, view),
-    ...extra,
-  } as FrameRequest).text;
+    // The field #839 threaded a focus identity and a numbered map through.
+    // It is written into the request deliberately; nothing reads it any more.
+    focus: options.claim,
+  };
+  return renderInto(term, request).text;
+}
+
+interface Shot {
+  /** Whether F1 is down. Left out, the map is drawn. */
+  readonly overlay?: boolean;
+  /** A caller still trying to tell the renderer where focus is. */
+  readonly claim?: {
+    readonly here: string;
+    readonly map: readonly OverlayEntry[];
+    readonly overlay: boolean;
+  };
 }
 
 /** The overlay's own row for one entry, as the map draws it. */
@@ -1023,9 +1032,37 @@ describe("the frames, as pictures", () => {
     expect(after).not.toContain(overlayRow(stale));
 
     const claimed = yield* shot(tree, state, {
-      focus: { here: stale.id, map: [stale], overlay: true },
+      claim: { here: stale.id, map: [stale], overlay: true },
     });
     expect(claimed).toBe(after);
+  });
+
+  it("shows the focused Run affordance with the map closed", function* () {
+    // Nothing else on screen says where focus is when F1 is up, so a control
+    // with no marker cell of its own is a control a person has to guess at.
+    const state = hydrate("xmd://repl/e1/input?draft=hello", journalThrough(undefined));
+    const tree = yield* useReplTree(state);
+    const run = tree.chain().find((node) => node.name === "control:input.run")!;
+    focusNode(run);
+    const rendered = yield* shot(tree, state, { overlay: false });
+    expect(rendered).not.toContain("FOCUS MAP");
+    expect(rendered).toContain("[\u25b8Run");
+  });
+
+  it("shows the way out of a drawer with the map closed", function* () {
+    // A drawer traps focus and carries its own Execution History target. It is
+    // a different node from the band outside, so it has to draw its own marker
+    // — over the band it is the way back to.
+    const { state, tree } = yield* opened(
+      "xmd://repl/e1/transcript/entry-1/document/+project",
+      "cp-14",
+    );
+    const inside = tree.chain().find((node) => node.name === "region:history")!;
+    expect(inside.parent?.name).toBe("drawer:project");
+    focusNode(inside);
+    const rendered = yield* shot(tree, state, { overlay: false });
+    expect(rendered).not.toContain("FOCUS MAP");
+    expect(rendered).toContain("\u258cEXECUTION HISTORY");
   });
 
   it("draws the focused region and the numbered map", function* () {

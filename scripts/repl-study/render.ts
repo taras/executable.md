@@ -217,18 +217,34 @@ export function region(
   ops.push(...(options.children ?? []));
   ops.push(close());
   if (options.focused === true) {
-    // A glyph rather than a colour, so focus survives a monochrome terminal and
-    // a committed `.txt` capture.
-    ops.push(
-      open(`${id}.focus`, {
-        layout: { width: fixed(1), height: fixed(1) },
-        floating: { x: rect.x, y: rect.y, attachTo: "root" },
-      }),
-      text("▌", { color: C.focus }),
-      close(),
-    );
+    ops.push(...regionMark(`${id}.focus`, rect));
   }
   return ops;
+}
+
+/** The glyph a focused region wears at its top-left corner. */
+const REGION_MARK = "\u258c";
+
+/**
+ * A focused region's own marker.
+ *
+ * A glyph rather than a colour, so focus survives a monochrome terminal and a
+ * committed `.txt` capture. It is separate from `region()` because a region is
+ * not always the thing that draws its own box: the way out of a drawer is a
+ * region of the drawer's, drawn over the band it names.
+ */
+export function regionMark(id: string, rect: Rect): Op[] {
+  if (rect.width <= 0 || rect.height <= 0) {
+    return [];
+  }
+  return [
+    open(id, {
+      layout: { width: fixed(1), height: fixed(1) },
+      floating: { x: rect.x, y: rect.y, attachTo: "root" },
+    }),
+    text(REGION_MARK, { color: C.focus }),
+    close(),
+  ];
 }
 
 export function rule(id: string, rect: Rect, glyph: string): Op[] {
@@ -675,6 +691,9 @@ export function drawerRegion(
   });
 }
 
+/** The columns the `Run` affordance is written in, focused or not. */
+const RUN_WIDTH = 12;
+
 /** The REPL input band, which the drawer takes over while one is open. */
 export function inputRegion(
   id: string,
@@ -692,13 +711,30 @@ export function inputRegion(
         {
           text: input.run !== undefined ? "[ Run ⌘⏎ ]" : "[ Run ]",
           color: input.run !== undefined ? C.tick : C.dim,
-          width: 12,
+          width: RUN_WIDTH,
         },
       ],
     },
     plain(input.draft === "" ? input.placeholder : input.draft, C.settledText),
   ];
   return region(id, rect, lines, { bg: BG.input, transition: DRAWER_TRANSITION, focused });
+}
+
+/**
+ * The cell the `Run` affordance's own control may draw its marker in.
+ *
+ * The band writes `[ Run ⌘⏎ ]` in a fixed twelve-column segment at the right
+ * end of its first line, so the marker replaces the space inside the bracket
+ * and the affordance keeps its width — the same bargain the transport controls
+ * strike, and for the same reason.
+ */
+export function inputSlot(placement: Placement): Rect | undefined {
+  const rect = placement.rect;
+  const inner = Math.max(0, rect.width - 2);
+  if (inner < RUN_WIDTH + 1) {
+    return undefined;
+  }
+  return { x: rect.x + 1 + (inner - RUN_WIDTH) + 1, y: rect.y, width: 1, height: 1 };
 }
 
 export function clock(seconds: number): string {

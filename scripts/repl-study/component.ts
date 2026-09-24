@@ -138,6 +138,52 @@ export function attach<Data>(
   };
 }
 
+/**
+ * How a parent presents its own children.
+ *
+ * Installed by the lifecycle that created the node, which is the one thing
+ * holding it. A render body may not receive a Freedom node; a lifecycle may,
+ * and presenting children is a lifecycle's work — it is where a parent decides
+ * which of its children exist on screen, what each of them is given and where
+ * each of them may draw.
+ *
+ * Nothing walks the tree to do this. Each parent is asked, and asks its own
+ * children in turn, so no presentation reaches past a direct child.
+ */
+export type Presentation<Data> = (data: Data, placement: Placement) => void;
+
+const presenterKey = createNodeData<Presentation<never>>("xmd:repl:presents");
+
+export function presents<Data>(node: Node, presentation: Presentation<Data>): void {
+  node.data.set(presenterKey, presentation as Presentation<never>);
+}
+
+/**
+ * Ask one node to present its own children.
+ *
+ * A node with no children to place has nothing installed, and this does
+ * nothing — a leaf is not a special case.
+ */
+export function presentOwn<Data>(node: Node, data: Data, placement: Placement): void {
+  const presentation = node.data.get(presenterKey);
+  presentation?.(data as never, placement);
+}
+
+/**
+ * One child's box, inside its parent's.
+ *
+ * The density and the profile are the parent's, because they are facts about
+ * the composition a child was placed into. Only the rectangle is the parent's
+ * decision, and a child given none has nowhere to draw.
+ */
+export function within(parent: Placement, rect: Rect | undefined): Placement {
+  return {
+    rect: rect ?? { x: 0, y: 0, width: 0, height: 0 },
+    dense: parent.dense,
+    profile: parent.profile,
+  };
+}
+
 export function hasBody(node: Node): boolean {
   return node.data.get(bodyKey) !== undefined;
 }
