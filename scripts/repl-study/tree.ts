@@ -134,6 +134,18 @@ export function useReplTree(state: ReplState): Operation<ReplTree> {
        * on each sync would destroy the node focus is on and take focus with
        * it, which is the defect a live tree exists to avoid.
        */
+      /**
+       * Bring one region's controls into line, by name.
+       *
+       * Two things have to hold at once, and an earlier round held only the
+       * first. **Surviving nodes keep their identity**, so focus and the
+       * middleware installed on them survive a sync — that is why this
+       * reconciles rather than rebuilds. And **the rendered order is
+       * canonical**, so the tree a live interaction arrives at is the tree a
+       * cold start rebuilds from the same URL and journal. Replacements are
+       * appended wherever there is room, so the order is restored explicitly
+       * rather than left to the order things happened to be created in.
+       */
       const reconcile = function* (
         parent: Node,
         wanted: readonly Control[],
@@ -145,9 +157,9 @@ export function useReplTree(state: ReplState): Operation<ReplTree> {
           control.enabled || mutation === "focus-hidden-target";
 
         // Additions come first. Removing the focused control before its
-        // replacement exists would leave the tree with nothing in that region
-        // to move focus to, and focus would land outside it — which is how a
-        // resumed run lost its transport slot.
+        // replacement exists would leave the region with nothing to move focus
+        // to, and focus would land outside it — which is how a resumed run once
+        // lost its transport slot.
         let present = childrenByName();
         for (const control of wanted) {
           if (!present.has(control.name)) {
@@ -182,6 +194,14 @@ export function useReplTree(state: ReplState): Operation<ReplTree> {
             focusable(replacement);
           }
         }
+
+        const order = new Map(wanted.map((control, at) => [control.name, at] as const));
+        if (mutation === "append-replacements") {
+          // Leave the order to however the nodes happened to be created, which
+          // is what makes a live tree and a rebuilt one disagree.
+          return;
+        }
+        parent.sort((one, other) => (order.get(one.name) ?? 0) - (order.get(other.name) ?? 0));
       };
 
       const mountControls = function* (next: ReplState, mutation?: Mutation): Operation<void> {

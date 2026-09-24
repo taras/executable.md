@@ -108,9 +108,9 @@ list compared with itself always agrees. What it could not do was answer a
 question about where a control actually *is*, and three of this slice's cases
 are exactly those questions.
 
-**Input goes to the focused node, not to the application.** A key is invoked on
-`current(root).scope`, so Effection walks that scope's ancestors and every
-branch between the root and the control runs its middleware in order. The
+**Input goes to the focused node, and stops where it is consumed.** A key is
+invoked on `current(root).scope`, so Effection walks that scope's ancestors and
+every branch between the root and the control runs its middleware in order. The
 evidence reads the path rather than inferring it:
 
 ```text
@@ -119,6 +119,37 @@ path    drawer:project → panel:project.body
 ```
 
 A flat registry has no way to produce that: the path is the tree's.
+
+**A branch that consumes a key ends the dispatch.** `keydown` returns whether it
+was handled; middleware that handles one returns `true` without calling `next`,
+and the harness's own fallback does not run. An earlier round recorded the path
+and then reduced the same event globally regardless — so a drawer could
+intercept Escape and watch the drawer close anyway. That is the difference
+between a hierarchy that *annotates* a dispatch and one that *governs* it, and
+only the second is worth having.
+
+## What identities may and may not be used for
+
+Nodes carry semantic names — `region:transcript`, `control:transport.pause`,
+`field:drawer.project.name` — and the line between a legitimate use and a
+forbidden one is worth stating exactly, because this experiment crossed it twice
+before getting it right.
+
+**Permitted: annotating routing.** The route's surface segment is one of five
+names, and a digit key naming the region to jump to, or a frame table declaring
+which node it focuses, are addresses. They say *what to look for*; the tree is
+what says whether it is there and where.
+
+**Forbidden: deriving ancestry or input targeting.** Which region owns a
+control, which branch a key passes through, and what focus falls back to when a
+node disappears are all questions about where a node *is*. They are answered by
+walking the live tree — `surfaceOwning()` climbs parents, the dispatch path is
+Effection's own scope chain — never by parsing a prefix out of a name. An
+identity string cannot be wrong about its own spelling but can easily be wrong
+about the tree, and a second answer is precisely what this architecture removes.
+
+The earlier `ownerOf()` and `ownerRegion()` helpers, which read ownership out of
+the identity, are gone.
 
 **Closing a branch destroys it.** A drawer closes by removing its node; its
 controls, its body panel and their middleware go with it through structured
@@ -172,11 +203,24 @@ recorded against it; `vendor/freedom/PROVENANCE.md` has the detail.
    control, so the common case left focus on a node that had just been
    destroyed while a perfectly good sibling survived.
 
-A third thing is this harness's own, and worth stating because it is the same
-mistake in miniature: **a reconciler must add before it removes.** Removing the
-focused control before its replacement exists leaves the region with nothing to
-move focus to, and focus lands outside it — which is how a resumed run first
-lost its transport slot.
+Two more are this harness's own, and both are the same mistake in miniature —
+letting the order things happened to happen in stand in for the order that was
+meant.
+
+**A reconciler must add before it removes.** Removing the focused control
+before its replacement exists leaves the region with nothing to move focus to,
+and focus lands outside it — which is how a resumed run first lost its transport
+slot.
+
+**And it must then restore the canonical order.** A replacement is appended
+wherever there is room, so a control that changed from enabled to disabled ended
+up last. The tree a live interaction arrived at and the tree a cold start
+rebuilt from the same URL and journal then disagreed — `Return → Fork →
+Continue` against `Continue → Return → Fork` — which breaks the reconstruction
+boundary even though every node was present in both. Sorting the region's
+children by their canonical index after reconciling settles it, and the evidence
+drives frame 11 into inspection, throws the store and the tree away, and rebuilds
+to compare the ordered topology.
 
 ## Divergences from the study, named rather than hidden
 

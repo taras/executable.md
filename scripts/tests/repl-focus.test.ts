@@ -45,9 +45,10 @@ import {
 } from "../repl-study/store.ts";
 import type { HarnessEvent, ReplState, Size } from "../repl-study/store.ts";
 import { drive } from "../repl-study/drive.ts";
-import { overlayOf, surfaceOwning, useReplTree, walk } from "../repl-study/tree.ts";
+import { focus as focusNode } from "../repl-study/tree.ts";
+import { find, overlayOf, surfaceOwning, useReplTree, walk } from "../repl-study/tree.ts";
 import type { ReplTree } from "../repl-study/tree.ts";
-import { sendKey } from "../repl-study/keys.ts";
+import { KeyboardApi, sendKey } from "../repl-study/keys.ts";
 import type { Mutation } from "../repl-study/mutations.ts";
 
 const ROOT = fileURLToPath(new URL("../../", import.meta.url));
@@ -273,6 +274,114 @@ describe("input reaches the focused node through its ancestors", () => {
     const delivery = sendKey(tree.root.node, tree.focused(), { type: "keydown", code: "x" });
     expect(delivery.path).not.toContain("drawer:project");
     expect(delivery.target).not.toBe(field.name);
+  });
+});
+
+describe("a branch may consume a key, and then nothing else runs it", () => {
+  const suspended = () => opened("xmd://repl/e1/transcript/entry-1/document/+project", "cp-14");
+
+  it("stops at the branch that claimed it, and the fallback never fires", function* () {
+    const { state, tree } = yield* suspended();
+    const drawer = find(tree.root.node, "drawer:project")!;
+    drawer.scope.around(KeyboardApi, {
+      keydown([node, pressed], _next): boolean {
+        void node;
+        void pressed;
+        return true;
+      },
+    });
+    const driven = yield* drive(tree, state, key("Escape"), context(WIDE));
+    expect(driven.delivery?.handled).toBe(true);
+    // The path stops at the branch that consumed it — the body panel below it
+    // never ran.
+    expect(driven.delivery?.path).toEqual(["drawer:project"]);
+    // And the drawer is still open: Escape's global meaning did not happen.
+    expect(driven.state.route.drawers).toEqual(["project"]);
+  });
+
+  it("reaches the fallback and closes the drawer when nothing claims it", function* () {
+    const { state, tree } = yield* suspended();
+    const driven = yield* drive(tree, state, key("Escape"), context(WIDE));
+    expect(driven.delivery?.handled).toBe(false);
+    expect(driven.delivery?.path).toEqual(["drawer:project", "panel:project.body"]);
+    expect(driven.state.route.drawers).toEqual([]);
+  });
+
+  it("asks the tree which region owns a control, not the control's name", function* () {
+    // Back from a control returns to the region that owns it. Which region that
+    // is comes from walking the live tree, so a node that moved would move with
+    // it.
+    const { state, tree } = yield* useFrame(frame("10")!);
+    expect(tree.focused().name).toBe("control:transport.continue");
+    const owner = surfaceOwning(tree.focused());
+    expect(owner).toBe("history");
+    const driven = yield* drive(tree, state, key("Escape"), context(WIDE));
+    expect(tree.focused().name).toBe("region:history");
+    expect(driven.state.route.surface).toBe("history");
+  });
+});
+
+describe("a live tree and a rebuilt one are the same tree", () => {
+  /** Frame 11, driven into historical inspection through the real path. */
+  function* inspected(mutation?: Mutation): Operation<{
+    state: ReplState;
+    order: readonly string[];
+  }> {
+    const { state, tree } = yield* useFrame(frame("11")!);
+    const driven = yield* drive(tree, state, key("Enter"), context(WIDE, mutation));
+    return {
+      state: driven.state,
+      order: overlayOf(tree).map((entry) => entry.id),
+    };
+  }
+
+  /** The same URL and journal, with the store and the tree thrown away. */
+  function* rebuilt(state: ReplState): Operation<readonly string[]> {
+    const fresh = hydrate(formatRoute(state.route), state.journal);
+    const tree = yield* useReplTree(fresh);
+    const region = tree.chain().find((node) => node.name === "region:history");
+    if (region) {
+      focusNode(region);
+    }
+    yield* tree.sync(fresh);
+    return overlayOf(tree).map((entry) => entry.id);
+  }
+
+  it("rebuilds the same ordered topology from the URL and the journal", function* () {
+    const live = yield* inspected();
+    expect(live.state.route.inspect).toBe(true);
+    expect(yield* rebuilt(live.state)).toEqual(live.order);
+  });
+
+  it("keeps the transport in its canonical order either way", function* () {
+    const live = yield* inspected();
+    const transport = (order: readonly string[]) =>
+      order.filter((id) => id.startsWith("control:transport."));
+    expect(transport(live.order)).toEqual([
+      "control:transport.continue",
+      "control:transport.return-head",
+      "control:transport.fork",
+    ]);
+    expect(transport(yield* rebuilt(live.state))).toEqual(transport(live.order));
+  });
+
+  it("diverges when a replaced control is left where it was appended", function* () {
+    const live = yield* inspected("append-replacements");
+    expect(yield* rebuilt(live.state)).not.toEqual(live.order);
+  });
+
+  it("leaves focus on a surviving node after every replacement", function* () {
+    const { state, tree } = yield* useFrame(frame("11")!);
+    const driven = yield* drive(tree, state, key("Enter"), context(WIDE));
+    void driven;
+    expect(chain(tree)).toContain(tree.focused().name);
+    // …and after a branch is torn down as well.
+    const { state: open, tree: withDrawer } = yield* opened(
+      "xmd://repl/e1/transcript/entry-1/document/+project",
+      "cp-14",
+    );
+    yield* withDrawer.sync(hydrate("xmd://repl/e1/transcript/entry-1/document", open.journal));
+    expect(chain(withDrawer)).toContain(withDrawer.focused().name);
   });
 });
 

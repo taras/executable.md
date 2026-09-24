@@ -23,7 +23,7 @@ import { layoutFor, SURFACES } from "./layout.ts";
 import type { Layout, SurfaceName } from "./layout.ts";
 import type { FixtureName, Fixture, TransportMode } from "./model.ts";
 import type { Mutation } from "./mutations.ts";
-import { formatRoute, navigationFor, parseRoute, surfaceFor, topDrawer } from "./route.ts";
+import { formatRoute, navigationFor, parseRoute, topDrawer } from "./route.ts";
 import type { Route, RouteChange, RouteSurface } from "./route.ts";
 
 /**
@@ -303,17 +303,16 @@ function extendTo(state: ReplState, kind: JournalRecord["kind"]): ReplState {
  * Take the route to wherever focus now is.
  *
  * Focus itself is the tree's and never appears here. What the route records is
- * the *surface* focus landed in, because the surface segment is what says which
- * region owns focus — so a focus move that crosses a region boundary is a move
- * the URL has to make too, in the same transition.
+ * the *surface* focus landed in, and the caller reads that off the tree — this
+ * does not work it out from an identity string. A focus move that crosses a
+ * region boundary is a move the URL has to make too, in the same transition.
  */
 export function followFocus(
   state: ReplState,
-  identity: string,
+  surface: RouteSurface | undefined,
   change: RouteChange = "focus",
   mutation?: Mutation,
 ): ReplState {
-  const surface = surfaceFor(identity);
   if (
     surface === undefined ||
     surface === state.route.surface ||
@@ -499,10 +498,9 @@ export function reduce(state: ReplState, event: HarnessEvent, context: ReduceCon
     const surface = (["sessions", "transcript", "bindings", "input", "history"] as const)[
       digit - 1
     ];
-    const identity = `region:${surface}`;
     return {
-      state: followFocus(state, identity, "surface", mutation),
-      focus: { kind: "to", identity },
+      state: followFocus(state, surface, "surface", mutation),
+      focus: { kind: "to", identity: `region:${surface}` },
     };
   }
 
@@ -564,11 +562,9 @@ function back(state: ReplState, here: string, size: Size, mutation?: Mutation): 
     return { state: go(state, { ...state.route, inspect: false }, "inspection", mutation) };
   }
   if (!here.startsWith("region:")) {
-    const owner = ownerRegion(here);
-    return {
-      state: followFocus(state, owner, "focus", mutation),
-      focus: { kind: "to", identity: owner },
-    };
+    // Which region owns this control is the tree's to answer; the route follows
+    // once the tree has moved, in the same transition.
+    return { state, focus: { kind: "owner" } };
   }
   const previous = state.history[state.history.length - 1];
   if (previous === undefined) {
@@ -588,16 +584,6 @@ function back(state: ReplState, here: string, size: Size, mutation?: Mutation): 
       quit: state.quit,
     }),
   };
-}
-
-function ownerRegion(identity: string): string {
-  if (identity.startsWith("control:transport.")) {
-    return "region:history";
-  }
-  if (identity.startsWith("control:input.")) {
-    return "region:input";
-  }
-  return "region:transcript";
 }
 
 /** Enter: what the focused target does when it is activated. */

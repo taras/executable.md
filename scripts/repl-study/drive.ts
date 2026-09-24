@@ -6,9 +6,10 @@
  * architecture, in five lines:
  *
  * 1. the key is delivered to the focused node, so every branch between the root
- *    and it runs its middleware;
- * 2. the store decides what the event means, told where focus is rather than
- *    keeping its own answer;
+ *    and it runs its middleware — and if one of them **consumes** it, that is
+ *    the end: no fallback runs a key the hierarchy already answered;
+ * 2. otherwise the store decides what the event means, told where focus is
+ *    rather than keeping its own answer;
  * 3. the tree carries out whatever the store decided about focus;
  * 4. the tree is brought into line with the new state, mounting and removing
  *    branches;
@@ -21,11 +22,30 @@ import type { Operation } from "effection";
 import { asKey, followFocus, reduce } from "./store.ts";
 import type { HarnessEvent, ReduceContext, ReplState } from "./store.ts";
 import type { FocusIntent } from "./store.ts";
-import { focus as focusNode } from "./tree.ts";
+import { focus as focusNode, surfaceOwning } from "./tree.ts";
 import type { ReplTree } from "./tree.ts";
+import type { Node } from "./vendor/freedom/upstream/index.ts";
 import { sendKey } from "./keys.ts";
 import type { Delivery } from "./keys.ts";
 import type { Mutation } from "./mutations.ts";
+
+/**
+ * The nearest focusable ancestor of a node, read off the live tree.
+ *
+ * Ownership is a question about where a node *is*, so it is asked of the tree.
+ * Reconstructing it by parsing the identity string would be a second answer,
+ * and a second answer is what this architecture exists to remove.
+ */
+function ownerOf(tree: ReplTree, node: Node): Node | undefined {
+  const reachable = tree.chain();
+  for (let at = node.parent; at; at = at.parent) {
+    const found = reachable.find((candidate) => candidate === at);
+    if (found) {
+      return found;
+    }
+  }
+  return undefined;
+}
 
 /** Carry out what the store decided about focus. The tree performs it. */
 export function applyFocus(tree: ReplTree, intent: FocusIntent | undefined): void {
@@ -40,8 +60,14 @@ export function applyFocus(tree: ReplTree, intent: FocusIntent | undefined): voi
     tree.retreat();
     return;
   }
-  const wanted = intent.kind === "to" ? intent.identity : undefined;
-  const target = tree.chain().find((node) => node.name === wanted);
+  if (intent.kind === "owner") {
+    const owner = ownerOf(tree, tree.focused());
+    if (owner) {
+      focusNode(owner);
+    }
+    return;
+  }
+  const target = tree.chain().find((node) => node.name === intent.identity);
   if (target) {
     focusNode(target);
   }
@@ -65,10 +91,23 @@ export function drive(
         event.kind === "key"
           ? sendKey(tree.root.node, tree.focused(), asKey(event.event))
           : undefined;
+      if (delivery?.handled === true) {
+        // A branch on the live ancestor path claimed it. Running the fallback
+        // anyway is exactly the defect this ordering exists to prevent: the
+        // hierarchy would be annotating the dispatch instead of governing it.
+        return { state, delivery };
+      }
       const reduced = reduce(state, event, { ...context, focused: tree.focused().name });
       applyFocus(tree, reduced.focus);
       yield* tree.sync(reduced.state, context.mutation);
-      const followed = followFocus(reduced.state, tree.focused().name, "focus", context.mutation);
+      // Which surface owns focus is read off the tree, not parsed out of the
+      // focused node's name.
+      const followed = followFocus(
+        reduced.state,
+        surfaceOwning(tree.focused()),
+        "focus",
+        context.mutation,
+      );
       yield* tree.sync(followed, context.mutation);
       return { state: followed, delivery };
     },

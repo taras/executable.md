@@ -32,6 +32,8 @@ export const MUTATIONS = [
   "steal-focus-on-background",
   /** Rebuild the whole tree on every sync instead of reconciling it. */
   "rebuild-tree-each-sync",
+  /** Leave a replaced control wherever it was appended, losing canonical order. */
+  "append-replacements",
   /** Close a drawer without removing its branch, so its controls survive. */
   "keep-closed-branch",
   /** Number the overlay from a static list instead of walking the tree. */
