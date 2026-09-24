@@ -42,6 +42,12 @@ const DENO_ONLY_TOOLING: RuntimeExclusion[] = [
     issue: "https://github.com/taras/executable.md/issues/838",
   },
   {
+    path: "scripts/tests/repl-components.test.ts",
+    reason:
+      "its subject is the component boundary of the same Deno terminal harness: it mounts a Freedom tree, renders through `@bomb.sh/tty` and reads the frame back as cells. A Node or Bun shard has no equivalent of the host it is testing",
+    issue: "https://github.com/taras/executable.md/issues/840",
+  },
+  {
     path: "scripts/tests/repl-focus.test.ts",
     reason:
       "its subject is the route and focus model of the same Deno terminal harness: it drives `@bomb.sh/tty`'s decoder for the pending-Escape flush and for Backtab, renders through the harness's Deno-only host, and runs `deno run` as a child to check the documented command. A Node or Bun shard has no `deno` on PATH and no equivalent of the host it is testing",

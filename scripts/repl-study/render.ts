@@ -23,7 +23,7 @@ import type { Mutation } from "./mutations.ts";
 import type { OverlayEntry } from "./tree.ts";
 import type { Motion } from "./playback.ts";
 
-const C = {
+export const C = {
   src: rgba(0xc8, 0xd2, 0xd9),
   active: rgba(0x7f, 0xd3, 0xe8),
   tick: rgba(0x5a, 0xa8, 0x7c),
@@ -41,7 +41,7 @@ const C = {
   focus: rgba(0x9a, 0xe0, 0xa8),
 };
 
-const BG = {
+export const BG = {
   app: rgba(0x0b, 0x0d, 0x0f),
   side: rgba(0x09, 0x0b, 0x0c),
   center: rgba(0x0c, 0x0e, 0x11),
@@ -80,7 +80,7 @@ export interface VisualLine {
   readonly segments: readonly Segment[];
 }
 
-function fit(value: string, width: number): string {
+export function fit(value: string, width: number): string {
   if (width <= 0) {
     return "";
   }
@@ -143,8 +143,15 @@ function lineOps(id: string, width: number, line: VisualLine): Op[] {
   return ops;
 }
 
-interface RegionOptions {
+export interface RegionOptions {
   readonly bg?: number;
+  /**
+   * What this region's children already rendered.
+   *
+   * A parent wraps them rather than drawing over them, which is what makes the
+   * mounted tree and the rendered composition the same shape.
+   */
+  readonly children?: readonly Op[];
   readonly padding?: { readonly left?: number; readonly right?: number; readonly top?: number };
   /**
    * A transition the renderer owns.
@@ -160,7 +167,7 @@ interface RegionOptions {
   };
 }
 
-function region(
+export function region(
   id: string,
   rect: Rect,
   lines: readonly VisualLine[],
@@ -196,11 +203,12 @@ function region(
   lines.slice(0, capacity).forEach((line, index) => {
     ops.push(...lineOps(`${id}.line.${index}`, innerWidth, line));
   });
+  ops.push(...(options.children ?? []));
   ops.push(close());
   return ops;
 }
 
-function rule(id: string, rect: Rect, glyph: string): Op[] {
+export function rule(id: string, rect: Rect, glyph: string): Op[] {
   const ops: Op[] = [
     open(id, {
       layout: { width: fixed(rect.width), height: fixed(rect.height), direction: "ttb" },
@@ -339,15 +347,15 @@ function focusMapRegion(layout: Layout, focus: FocusView): Op[] {
   return region("focus-map", rect, lines, { bg: BG.drawer });
 }
 
-function blank(): VisualLine {
+export function blank(): VisualLine {
   return { segments: [{ text: "" }] };
 }
 
-function plain(value: string, color = C.src): VisualLine {
+export function plain(value: string, color = C.src): VisualLine {
   return { segments: [{ text: value, color }] };
 }
 
-function label(value: string): VisualLine {
+export function label(value: string): VisualLine {
   return plain(value, C.label);
 }
 
@@ -767,7 +775,7 @@ function contextualRegion(
   return region("contextual", rect, lines, { bg: BG.input, transition: DRAWER_TRANSITION });
 }
 
-function clock(seconds: number): string {
+export function clock(seconds: number): string {
   const minutes = Math.floor(Math.max(0, seconds) / 60);
   const rest = Math.floor(Math.max(0, seconds) % 60);
   return `${String(minutes).padStart(2, "0")}:${String(rest).padStart(2, "0")}`;
@@ -1130,7 +1138,7 @@ function markTransport(right: string, focus: FocusView | undefined): string {
 }
 
 /** Keep each cell's colour when a grid row becomes segments. */
-function runsOf(glyphs: readonly string[], colors: readonly number[]): Segment[] {
+export function runsOf(glyphs: readonly string[], colors: readonly number[]): Segment[] {
   const segments: Segment[] = [];
   let run = "";
   let color = colors[0] ?? C.dim;
