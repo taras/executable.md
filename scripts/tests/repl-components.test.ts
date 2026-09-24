@@ -30,7 +30,7 @@ import { overlayOf, useReplTree } from "../repl-study/tree.ts";
 import { enterRoute } from "../repl-study/drive.ts";
 import { sendInput } from "../repl-study/input.ts";
 import type { ReplInput } from "../repl-study/input.ts";
-import { indexOf, project } from "../repl-study/view.ts";
+import { project } from "../repl-study/view.ts";
 import type { ReplView } from "../repl-study/view.ts";
 import type { HarnessEvent } from "../repl-study/store.ts";
 import type { Mutation } from "../repl-study/mutations.ts";
@@ -102,11 +102,13 @@ describe("the view a component is handed", () => {
 
   it("names what a route may address, so the router can refuse the rest", function* () {
     const state = hydrate("xmd://repl/e1/transcript/entry-1/document", journalThrough("cp-14"));
-    const index = indexOf(project(state));
+    const index = project(state).located;
     expect(index.surfaces).toContain("transcript");
     expect(index.markers.length).toBeGreaterThan(0);
     // The view decides what exists; a URL only addresses it.
-    expect(index.scopes).not.toContain("no-such-scope");
+    expect(index.scopes.map((scope) => scope.id)).not.toContain("no-such-scope");
+    // And where it is: a scope is only inside the parent that opened it.
+    expect(index.scopes.map((scope) => scope.id)).toEqual(["document"]);
   });
 });
 
@@ -265,7 +267,7 @@ describe("the component catalog", () => {
 
 describe("a recorded drawer keeps its presentation and loses its actionability", () => {
   const LIVE = "xmd://repl/e1/transcript/entry-1/document/+project";
-  const RECORDED = "xmd://repl/e1/transcript/entry-1/document/+project?at=cp-04&inspect";
+  const RECORDED = "xmd://repl/e1/transcript/entry-1/document/+project?at=cp-14&inspect";
 
   function* open(url: string, head: string) {
     const state = hydrate(url, journalThrough(head));

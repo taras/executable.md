@@ -23,8 +23,6 @@ import { layoutFor, SURFACES } from "./layout.ts";
 import type { Layout, SurfaceName } from "./layout.ts";
 import type { FixtureName, Fixture, TransportMode } from "./model.ts";
 import type { Mutation } from "./mutations.ts";
-import { resolve } from "./router.ts";
-import type { Refusal } from "./router.ts";
 import type { ReplAction } from "./actions.ts";
 import { formatRoute, navigationFor, parseRoute, topDrawer } from "./route.ts";
 import type { Route, RouteChange, RouteSurface } from "./route.ts";
@@ -107,14 +105,6 @@ export interface ReplState {
    * in memory would render a state the URL could not reopen.
    */
   readonly selection: number;
-  /**
-   * The part of the URL that could not be resolved, when one could not.
-   *
-   * A route addresses structure and never creates any, so a URL naming an entry
-   * that was never submitted or a scope that was never opened cannot be shown.
-   * What is shown instead says which segment it was.
-   */
-  readonly refusal: Refusal | undefined;
   /** Disposable: whether the F1 focus map is drawn. */
   readonly overlay: boolean;
   /**
@@ -137,12 +127,11 @@ export interface ReplState {
 function mint(
   route: Route,
   journal: JournalFixture,
-  rest: Omit<ReplState, "route" | "journal" | "moment" | "selection" | "refusal">,
+  rest: Omit<ReplState, "route" | "journal" | "moment" | "selection">,
 ): ReplState {
   return {
     route,
     journal,
-    refusal: resolve(route, journal),
     // Selecting a marker and reconstructing it are different things: the fold
     // follows the head until `inspect` says the reconstruction is open.
     moment: fold(journal, route.inspect ? route.at : undefined),
@@ -251,8 +240,14 @@ export function layoutOf(state: ReplState, size: Size, mutation?: Mutation): Lay
  */
 export function fixtureFor(state: ReplState): Fixture {
   const base = fixture(state.moment.shows);
-  const top = topDrawer(state.route);
-  const drawer = top !== undefined && isDrawerKind(top) ? drawerOf(top) : undefined;
+  // Which drawer this is, is the execution's. The URL says only whether it is
+  // open; choosing the kind from the URL would let a location invent the
+  // question being asked.
+  const suspended = state.moment.suspension;
+  const drawer =
+    suspended !== undefined && topDrawer(state.route) !== undefined
+      ? drawerOf(suspended)
+      : undefined;
   const inspecting = state.route.inspect;
   const selected = state.journal[state.selection]?.at;
   return {

@@ -28,7 +28,7 @@ import { useReplTree } from "./tree.ts";
 import { drive, enterRoute } from "./drive.ts";
 import { useFrames } from "./animation.ts";
 import type { HarnessEvent, ReplState, View } from "./store.ts";
-import { journalThrough, markerShowing } from "./journal.ts";
+import { journalThrough, markerShowing, markerSuspending } from "./journal.ts";
 import { formatRoute } from "./route.ts";
 import { composeInto, RendererCapacityError, useComposition, useTerm } from "./capture.ts";
 import type { Composition } from "./capture.ts";
@@ -315,7 +315,13 @@ function momentState(subject: Fixture): ReplState {
       inspect: false,
       draft: "",
     }),
-    journalThrough(markerShowing(subject.name)),
+    // A moment that shows a drawer is the moment that drawer's question was
+    // asked, which is the execution's fact rather than the screen's.
+    journalThrough(
+      subject.drawer === undefined
+        ? markerShowing(subject.name)
+        : markerSuspending(subject.drawer.kind),
+    ),
   );
 }
 

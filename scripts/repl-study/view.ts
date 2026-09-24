@@ -15,8 +15,11 @@
  */
 
 import type { Binding, Checkpoint, Phase, TranscriptRow } from "./model.ts";
+import { isDrawerKind } from "./fixtures.ts";
 import type { DrawerKind } from "./fixtures.ts";
+import { siblingsOf } from "./journal.ts";
 import type { Moment } from "./journal.ts";
+import { ROUTE_SURFACES } from "./route.ts";
 import type { Route, RouteSurface } from "./route.ts";
 import { fixtureFor } from "./store.ts";
 import type { ReplState } from "./store.ts";
@@ -176,6 +179,8 @@ export interface ReplView {
   readonly badge?: string;
   /** What the interface last refused, in words. Empty where it refused nothing. */
   readonly notice: string;
+  /** What a route may address in this projection. */
+  readonly located: ViewIndex;
   readonly sessions: SessionsView;
   readonly transcript: TranscriptView;
   readonly bindings: BindingsView;
@@ -183,25 +188,37 @@ export interface ReplView {
   readonly history: HistoryView;
 }
 
-/** The identities a route may address, so the router can refuse what is absent. */
+/**
+ * One place a route may address, and the places inside it.
+ *
+ * A tree rather than a list, because a scope is only where it actually is. A
+ * flattened set would accept `document/plan` and `plan/document` alike, and one
+ * of those is a location the execution never went.
+ */
+export interface ScopeLocation {
+  readonly id: string;
+  readonly scopes: readonly ScopeLocation[];
+}
+
+/**
+ * The identities this projection represents, so the router can refuse the rest.
+ *
+ * It is part of the view because the view is what the interface is showing, and
+ * a URL may address exactly what is shown. The router reads this and nothing
+ * else — no journal, no fixture, no store.
+ *
+ * These are **not** the display identities beside them. A `ScopeView` is named
+ * by the authored component it came from; this is named by the segment a URL
+ * spells it with, which is the execution's own scope name.
+ */
 export interface ViewIndex {
   readonly surfaces: readonly RouteSurface[];
-  readonly scopes: readonly string[];
+  /** The entry, by the name a route spells it with. Absent until one is submitted. */
+  readonly entry?: string;
+  readonly scopes: readonly ScopeLocation[];
   readonly markers: readonly string[];
+  /** What a drawer segment may name here. Empty while nothing is waiting. */
   readonly drawers: readonly DrawerKind[];
-}
-
-function scopeIds(scopes: readonly ScopeView[]): string[] {
-  return scopes.flatMap((scope) => [scope.id, ...scopeIds(scope.scopes)]);
-}
-
-export function indexOf(view: ReplView): ViewIndex {
-  return {
-    surfaces: ["sessions", "transcript", "bindings", "input", "history"],
-    scopes: scopeIds(view.transcript.scopes),
-    markers: view.history.markers.map((marker) => marker.id),
-    drawers: view.contextual.drawers.map((drawer) => drawer.kind),
-  };
 }
 
 /**
@@ -342,8 +359,55 @@ function controlsFor(transport: Moment["transport"], recorded: boolean): Control
  * Everything below this line is data. Nothing a component receives from here
  * can reach the journal, the store, the tree or the terminal.
  */
+/**
+ * Where a route may go, read off the execution that happened.
+ *
+ * The scopes come back as a tree because that is what they are: a scope is only
+ * inside the parent that opened it, and asking `siblingsOf` level by level is
+ * what keeps `document/plan` from meaning the same as `plan/document`.
+ */
+function locate(journal: ReplState["journal"], parents: readonly string[]): ScopeLocation[] {
+  return siblingsOf(journal, parents).map((id) => ({
+    id,
+    scopes: locate(journal, [...parents, id]),
+  }));
+}
+
+/**
+ * The drawer a route may open here.
+ *
+ * The suspension at this moment, and only this one. A reconstruction shows what
+ * was waiting at the checkpoint it reconstructs — scanning the journal for any
+ * suspension that eventually existed would let a URL open a form at a moment
+ * before the question had been asked.
+ *
+ * It comes from the fold because the journal is the only thing that knows.
+ * `contextual.drawers` is the other half of the projection — what is drawn —
+ * and it is open because the URL says so, which is why the router may not read
+ * it to decide whether the URL is allowed.
+ */
+function drawersAt(state: ReplState): DrawerKind[] {
+  return state.moment.suspension === undefined ? [] : [state.moment.suspension];
+}
+
+export function locationsOf(state: ReplState): ViewIndex {
+  return {
+    surfaces: [...ROUTE_SURFACES],
+    // One entry at a time in this study, so there is one name — and it is there
+    // because something was submitted, not because a URL was well formed.
+    entry: state.journal.some((record) => record.kind === "entry.submitted")
+      ? "entry-1"
+      : undefined,
+    scopes: locate(state.journal, []),
+    markers: state.journal.map((record) => record.marker),
+    drawers: drawersAt(state),
+  };
+}
+
 export function project(state: ReplState): ReplView {
-  return projectFixture(fixtureFor(state), {
+  const subject = fixtureFor(state);
+  return projectFixture(subject, {
+    located: locationsOf(state),
     execution: state.route.execution,
     surface: state.route.surface,
     scopes: state.route.scopes,
@@ -377,6 +441,14 @@ export interface ProjectionInputs {
   readonly selectedAt?: number;
   /** What the interface last refused. A capture of a moment refused nothing. */
   readonly notice?: string;
+  /**
+   * What a route may address here.
+   *
+   * A view of a fixture is a view of one moment rather than of a location, so
+   * it represents exactly the route it was projected for — nothing resolves
+   * against it, and a capture has no URL to refuse.
+   */
+  readonly located?: ViewIndex;
 }
 
 export function projectFixture(
@@ -411,6 +483,13 @@ export function projectFixture(
     crumb: subject.crumb,
     badge: subject.badge,
     notice: inputs.notice ?? "",
+    located: inputs.located ?? {
+      surfaces: [...ROUTE_SURFACES],
+      entry: inputs.scopes[0],
+      scopes: [],
+      markers: [],
+      drawers: subject.drawer === undefined ? [] : [subject.drawer.kind],
+    },
     sessions: {
       tab: subject.sidebar.tab,
       heading: subject.sidebar.heading,

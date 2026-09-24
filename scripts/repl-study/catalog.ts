@@ -85,7 +85,7 @@ export const CATALOG: readonly CatalogEntry[] = [
   {
     id: "drawer-historical",
     title: "A recorded drawer, rendered without anything to act on",
-    url: "xmd://repl/e1/transcript/entry-1/document/+project?at=cp-04&inspect",
+    url: "xmd://repl/e1/transcript/entry-1/document/+project?at=cp-14&inspect",
     head: "cp-18",
   },
   {

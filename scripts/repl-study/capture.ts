@@ -28,7 +28,7 @@ import { useReplTree } from "./tree.ts";
 import type { ReplTree } from "./tree.ts";
 import { enterRoute } from "./drive.ts";
 import { hydrate } from "./store.ts";
-import { journalThrough, markerShowing } from "./journal.ts";
+import { journalThrough, markerShowing, markerSuspending } from "./journal.ts";
 import { formatRoute } from "./route.ts";
 import type { Node } from "./vendor/freedom/upstream/index.ts";
 import { applyAnsi, createGrid, gridText } from "./screen.ts";
@@ -571,7 +571,13 @@ export function useComposition(
           inspect: false,
           draft: "",
         }),
-        journalThrough(markerShowing(subject.name)),
+        // A composition that shows a drawer is a composition of the moment that
+        // drawer's question was asked.
+        journalThrough(
+          subject.drawer !== undefined && view.drawerOpen
+            ? markerSuspending(subject.drawer.kind)
+            : markerShowing(subject.name),
+        ),
       );
       const tree = yield* useReplTree(state, composed);
       // A caller that owns the whole composition brings its tree to the moment

@@ -35,6 +35,8 @@ import {
 } from "../repl-study/capture.ts";
 import { fixture } from "../repl-study/fixtures.ts";
 import { CATALOG } from "../repl-study/catalog.ts";
+import { refusalOf } from "../repl-study/router.ts";
+import { project } from "../repl-study/view.ts";
 import { playbackBetween, transitionOf } from "../repl-study/playback.ts";
 import { FRAMES, frame, stateFor, useFrame } from "../repl-study/frames.ts";
 import { openingState, scanKeys } from "../repl-study/host.ts";
@@ -83,7 +85,7 @@ const MAIN = "scripts/repl-study/main.ts";
 const DRAWER = "xmd://repl/e1/transcript/entry-1/document/+project";
 
 /** The same drawer, opened over a reconstruction, which makes it read-only. */
-const RECORDED = "xmd://repl/e1/transcript/entry-1/document/+project?at=cp-04&inspect";
+const RECORDED = "xmd://repl/e1/transcript/entry-1/document/+project?at=cp-14&inspect";
 
 const WIDE: Size = PROFILE_SIZES.wide;
 const NARROW: Size = PROFILE_SIZES.narrow;
@@ -535,28 +537,27 @@ describe("drawers trap traversal and restore outward", () => {
     }
   });
 
-  it("restores first to the outer drawer, then to the invoking control", function* () {
+  it("restores to the control that invoked the drawer", function* () {
+    // A second drawer over this one would need a second question open at the
+    // same moment, and this execution never asks two at once — the URL cannot
+    // invent one, so a stack of two is not a location it offers.
     const { state, tree } = yield* opened("xmd://repl/e1/transcript/entry-1/document", "cp-14");
     // Focus somewhere recognisable before anything is pushed.
     yield* drive(tree, state, key("2"), context(WIDE));
     const invoker = tree.focused().name;
     expect(invoker).toBe("region:transcript");
 
-    const outer = openDrawer(state, "project", invoker);
-    yield* tree.sync(outer);
+    const opened_ = openDrawer(state, "project", invoker);
+    yield* tree.sync(opened_);
     expect(tree.focused().name).toBe("field:drawer.project.name");
-
-    const inner = openDrawer(outer, "confirm", tree.focused().name);
-    yield* tree.sync(inner);
     expect(chain(tree)).toEqual([
-      "control:drawer.confirm.preview",
-      "control:drawer.confirm.approve",
-      "control:drawer.confirm.decline",
+      "field:drawer.project.name",
+      "field:drawer.project.description",
+      "control:drawer.project.schema",
+      "control:drawer.project.submit",
       "region:history",
     ]);
 
-    yield* tree.sync(outer);
-    expect(tree.focused().name).toBe("field:drawer.project.name");
     yield* tree.sync(state);
     expect(tree.focused().name).toBe(invoker);
   });
@@ -667,7 +668,7 @@ describe("drawers trap traversal and restore outward", () => {
     // opened over is still open, at the same recorded marker.
     expect(closed.state.route.drawers).toEqual([]);
     expect(closed.state.route.inspect).toBe(true);
-    expect(closed.state.route.at).toBe("cp-04");
+    expect(closed.state.route.at).toBe("cp-14");
     // Back to the surface the URL names, and to a node the ring actually has.
     expect(tree.focused().name).toBe("region:transcript");
     expect(chain(tree)).toContain(tree.focused().name);
@@ -1202,8 +1203,10 @@ describe("input is one gesture, and what it means is an action", () => {
     { url: "xmd://repl/e1/history/entry-1/document", head: "cp-18" },
     { url: "xmd://repl/e1/history/entry-1/document/plan?at=cp-04&inspect", head: "cp-18" },
     { url: "xmd://repl/e1/transcript/entry-1/document/+project", head: "cp-14" },
-    { url: "xmd://repl/e1/transcript/entry-1/document/+review", head: "cp-14" },
-    { url: "xmd://repl/e1/transcript/entry-1/document/+confirm", head: "cp-14" },
+    // Each drawer at the moment its own question was asked: the URL says a
+    // drawer is open, never which one.
+    { url: "xmd://repl/e1/transcript/entry-1/document/plan/+review", head: "cp-08" },
+    { url: "xmd://repl/e1/transcript/entry-1/document/+confirm", head: "cp-16" },
   ];
 
   /** The actions a real execution owns, which this study answers by refusing. */
@@ -1782,8 +1785,10 @@ describe("a URL addresses the execution, and cannot invent one", () => {
     ...FRAMES.map((one) => ({ url: one.url, head: one.head })),
   ];
 
+  const hydrateAt = (url: string, head: string | undefined = HEAD) =>
+    hydrate(url, journalThrough(head));
   const refusalFor = (url: string, head: string | undefined = HEAD) =>
-    hydrate(url, journalThrough(head)).refusal;
+    refusalOf(hydrateAt(url, head));
 
   it("resolves every location the study actually opens", function* () {
     for (const one of OPENED) {
@@ -1826,14 +1831,35 @@ describe("a URL addresses the execution, and cannot invent one", () => {
     }
   });
 
-  it("refuses a drawer when nothing is waiting for an answer", function* () {
-    // The same drawer, against a moment before anything suspended.
-    expect(refusalFor("xmd://repl/e1/transcript/entry-1/document/+project", "cp-03")).toEqual({
+  it("lets the execution choose which drawer, and the URL only whether", function* () {
+    const asked = "xmd://repl/e1/transcript/entry-1/document/+project";
+    // Nothing is waiting yet — and the presentation fixture chosen for that
+    // moment carries project-drawer display data, which is exactly why the
+    // router may not read what is drawn to decide what may be opened.
+    expect(refusalFor(asked, "cp-13")).toEqual({
       segment: "drawer",
       named: "project",
       reason: "nothing is waiting for an answer",
     });
-    expect(refusalFor("xmd://repl/e1/transcript/entry-1/document/+project", HEAD)).toBeUndefined();
+    expect(project(hydrateAt(asked, "cp-13")).contextual.drawers.length).toBe(0);
+
+    // A mismatched kind names the one actually suspended there.
+    expect(refusalFor(asked, "cp-08")).toEqual({
+      segment: "drawer",
+      named: "project",
+      reason: "what is waiting is the review drawer",
+    });
+
+    // And at the moment that question was asked, it opens.
+    expect(refusalFor(asked, "cp-14")).toBeUndefined();
+
+    // A reconstruction shows what was waiting *then*, not what came later.
+    expect(refusalFor(`${asked}?at=cp-04&inspect`, "cp-18")).toEqual({
+      segment: "drawer",
+      named: "project",
+      reason: "nothing is waiting for an answer",
+    });
+    expect(refusalFor(`${asked}?at=cp-14&inspect`, "cp-18")).toBeUndefined();
   });
 
   it("mounts nothing but the refusal, and draws it instead of a screen", function* () {
@@ -1849,6 +1875,39 @@ describe("a URL addresses the execution, and cannot invent one", () => {
     expect(drawn).toContain("This location does not exist");
     expect(drawn).toContain("nowhere");
     expect(drawn).not.toContain("BINDINGS");
+  });
+
+  it("reconciles a mounted interface into a refusal, and back out of one", function* () {
+    const good = hydrate("xmd://repl/e1/transcript/entry-1/document", journalThrough(HEAD));
+    const badScope = hydrate("xmd://repl/e1/transcript/entry-1/nowhere", journalThrough(HEAD));
+    const badEntry = hydrate("xmd://repl/e1/transcript/entry-2/document", journalThrough(HEAD));
+    const names = (): string[] => walk(tree.root.node).map((node) => node.name);
+    const tree = yield* useReplTree(good, WIDE);
+    expect(names().length).toBeGreaterThan(2);
+    expect(chain(tree).length).toBe(5);
+
+    // Valid → refused. Every ordinary branch goes, and with it every focus
+    // target and every middleware that was on one.
+    yield* tree.sync(badScope);
+    expect(names()).toEqual(["", "chrome:refused"]);
+    expect(chain(tree)).toEqual([]);
+    expect(overlayOf(tree)).toEqual([]);
+    expect(yield* shot(tree, badScope, { overlay: false })).toContain("nowhere");
+
+    // Refused → differently refused. The same one node, saying the other thing.
+    yield* tree.sync(badEntry);
+    expect(names()).toEqual(["", "chrome:refused"]);
+    const other = yield* shot(tree, badEntry, { overlay: false });
+    expect(other).toContain("entry-2");
+    expect(other).not.toContain("nowhere");
+
+    // Refused → valid. The interface is built again, and focus is on the
+    // surface the URL names rather than wherever it was before.
+    yield* tree.sync(good);
+    expect(names().length).toBeGreaterThan(2);
+    expect(chain(tree).length).toBe(5);
+    expect(tree.focused().name).toBe("region:transcript");
+    expect(yield* shot(tree, good, { overlay: false })).toContain("BINDINGS");
   });
 
   it("renders the plausible screen instead when the refusal is removed", function* () {

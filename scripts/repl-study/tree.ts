@@ -65,6 +65,8 @@ import { drawerSlots, inputSlot, transportSlots } from "./render.ts";
 import type { Layout, Rect } from "./layout.ts";
 import { isDrawerKind } from "./fixtures.ts";
 import { easeInOutCubic, TRANSITION_SECONDS, useFrames } from "./animation.ts";
+import { refusalOf } from "./router.ts";
+import type { Refusal } from "./router.ts";
 import { applyAction, layoutOf, reverseTab } from "./store.ts";
 import type { Key, ReduceContext, Reduction, ReplState, Size } from "./store.ts";
 import { isRouteSurface, ROUTE_SURFACES, topDrawer } from "./route.ts";
@@ -272,68 +274,77 @@ export function useReplTree(
       // capture wants — time supplied rather than measured.
       const frames = yield* useFrames();
       const root = yield* useRoot();
-      if (state.refusal !== undefined && mutation !== "render-partial-route") {
-        // Nowhere to go means nothing to mount. Hidden content has no branch,
-        // and a location that does not exist is entirely hidden: no panes, no
-        // focus targets, no middleware — one node that says so.
-        const refused = root.node.createChild("chrome:refused");
-        refused.set("container", true);
-        const tree: ReplTree = {
-          root,
-          *sync() {},
-          present(_view, layout) {
-            attach(root.node, rootBody, undefined, placementOf(layout, layout.screen));
-            attach(
-              refused,
-              refusedBody,
-              { refusal: state.refusal!, layout },
-              placementOf(layout, layout.screen),
-            );
-          },
-          deliver: () => ({
-            delivery: { target: root.node.name, path: [], handled: false },
-          }),
-          hit: () => undefined,
-          focused: () => root.node,
-          advance: () => {},
-          retreat: () => {},
-          map: () => [],
-          chain: () => [],
-        };
-        return tree;
-      }
-      // Chrome the composition draws around the panes. These are nodes so that
-      // rendering order is the tree's, not a sequence written out in one
-      // function — but they take no focus, so the ring is unchanged.
-      for (const name of ["chrome:surface-bar", "chrome:header"]) {
-        root.node.createChild(name).set("container", true);
-      }
       const regions = new Map<string, Node>();
-      for (const region of ROUTE_SURFACES) {
-        const node = root.node.createChild(`region:${region}`);
-        focusable(node);
-        recordPath(node, node.name);
-        regions.set(region, node);
-      }
-      // Drawn after the panes, so they land on top of what they describe.
-      for (const name of ["chrome:rules", "chrome:focus-map"]) {
-        root.node.createChild(name).set("container", true);
-      }
       useFocus(root.node);
+
+      /** The node that says where you tried to go, while there is nowhere to be. */
+      let refused: Node | undefined;
+      let refusal: Refusal | undefined;
+      /** Assigned with the animation below; a teardown settles what it was mid-way through. */
+      let settleAnimation = (): void => {};
+
+      /**
+       * Build the interface this route asks for.
+       *
+       * Chrome first, so rendering order is the tree's rather than a sequence
+       * written out in one function; the panes after it; the overlays last, so
+       * they land on top of what they describe. None of the chrome takes focus,
+       * so the ring is the five regions.
+       */
+      const mountOrdinary = (): void => {
+        for (const name of ["chrome:surface-bar", "chrome:header"]) {
+          root.node.createChild(name).set("container", true);
+        }
+        for (const region of ROUTE_SURFACES) {
+          const node = root.node.createChild(`region:${region}`);
+          focusable(node);
+          recordPath(node, node.name);
+          regions.set(region, node);
+        }
+        for (const name of ["chrome:rules", "chrome:focus-map"]) {
+          root.node.createChild(name).set("container", true);
+        }
+        // Activating the band opens a reconstruction of whatever the scrubber
+        // is on. The band is a region rather than a control, and it is still
+        // the thing that was activated.
+        activates(regions.get("history")!, { kind: "inspect" });
+      };
+
+      /**
+       * Take it all away again.
+       *
+       * Every branch goes, and with it every focus target, every middleware and
+       * the local state any of them held. What a component was in the middle of
+       * is not something the next interface inherits.
+       */
+      const removeOrdinary = function* (): Operation<void> {
+        for (const child of [...root.node.children]) {
+          if (child !== refused) {
+            yield* until(child.remove());
+          }
+        }
+        regions.clear();
+        drawers = [];
+        scopes = [];
+        settleAnimation();
+      };
 
       // Each band places its own controls. These closures hold the node this
       // lifecycle created — which is what a lifecycle may do and a render body
       // may not — and they are kept here, so presenting a child is always the
       // parent running its own code rather than something looked up on a node.
-      const transcriptNode = regions.get("transcript")!;
-      const inputRegionNode = regions.get("input")!;
+      // Looked up when they are used rather than bound once: the panes are
+      // rebuilt when a route stops being refused, and a presentation holding
+      // the node from before would be placing something that is not there.
+      const transcriptNode = (): Node => regions.get("transcript")!;
+      const inputRegionNode = (): Node => regions.get("input")!;
       const presentInput: Presentation<InputView> = (_input, placement) => {
         const cell = inputSlot(placement);
-        for (const control of inputRegionNode.children) {
+        for (const control of inputRegionNode().children) {
           attach(control, controlBody, undefined, within(placement, cell));
         }
       };
-      const historyRegionNode = regions.get("history")!;
+      const historyRegionNode = (): Node => regions.get("history")!;
 
       /**
        * The transcript's own arrival, and the playhead's own travel.
@@ -375,6 +386,14 @@ export function useReplTree(
         travelWant?.();
         travelWant = undefined;
       };
+      settleAnimation = (): void => {
+        revealPhase = "still";
+        reveal = 1;
+        releaseReveal();
+        travelPhase = "still";
+        headAt = undefined;
+        releaseTravel();
+      };
       const animation = yield* frames.animate(root.node, ({ at }) => {
         now = at;
         if (revealPhase === "running") {
@@ -411,7 +430,7 @@ export function useReplTree(
           revealWant = animation.want();
         }
         attach(
-          transcriptNode,
+          transcriptNode(),
           transcriptBody,
           {
             view: data.view,
@@ -440,7 +459,7 @@ export function useReplTree(
           travelWant = animation.want();
         }
         attach(
-          historyRegionNode,
+          historyRegionNode(),
           historyBody,
           {
             view: history,
@@ -456,7 +475,7 @@ export function useReplTree(
         // its controls may draw. They are mounted in the band's own order,
         // because both come from the same transport mode.
         const cells = transportSlots(history, placement);
-        [...historyRegionNode.children].forEach((control, at) => {
+        [...historyRegionNode().children].forEach((control, at) => {
           attach(control, controlBody, undefined, within(placement, cells[at]));
         });
       };
@@ -805,32 +824,62 @@ export function useReplTree(
         });
       };
 
-      // Activating the band opens a reconstruction of whatever the scrubber is
-      // on. The band is a region rather than a control, and it is still the
-      // thing that was activated.
-      activates(historyRegionNode, { kind: "inspect" });
-
       // The surface the URL names owns focus before anything is pushed over
       // it. A drawer's trap remembers what it interrupted, and a cold start
       // that mounted the drawer first made it remember the ring's default
       // first region — so closing a drawer opened straight from a URL put you
       // on Sessions, which the URL had never said.
-      const owner = [...root.node.children].find(
-        (child) => child.name === `region:${state.route.surface}`,
-      );
-      if (owner !== undefined) {
-        focus(owner);
-      }
+      const enterOwningSurface = (next: ReplState): void => {
+        const owner = regions.get(next.route.surface);
+        if (owner !== undefined) {
+          focus(owner);
+        }
+      };
 
-      yield* mountScopes(state);
-      yield* mountControls(state);
-      yield* syncDrawers(state);
+      /**
+       * Show what this route resolves to, or say that it resolves to nothing.
+       *
+       * The three ways across this line all pass through here: an ordinary
+       * interface becoming a refusal, a refusal becoming an interface, and one
+       * refusal becoming a different one.
+       */
+      const syncShape = function* (next: ReplState, control?: Mutation): Operation<boolean> {
+        refusal = control === "render-partial-route" ? undefined : refusalOf(next);
+        if (refusal !== undefined) {
+          if (regions.size > 0) {
+            yield* removeOrdinary();
+          }
+          if (refused === undefined) {
+            refused = root.node.createChild("chrome:refused");
+            refused.set("container", true);
+          }
+          return true;
+        }
+        if (refused !== undefined) {
+          yield* until(refused.remove());
+          refused = undefined;
+        }
+        if (regions.size === 0) {
+          mountOrdinary();
+          enterOwningSurface(next);
+        }
+        return false;
+      };
+
+      if (!(yield* syncShape(state, mutation))) {
+        yield* mountScopes(state);
+        yield* mountControls(state);
+        yield* syncDrawers(state);
+      }
 
       const tree: ReplTree = {
         root,
         *sync(next: ReplState, options: SyncOptions = {}) {
           const mutation = options.mutation;
           size = options.size ?? size;
+          if (yield* syncShape(next, mutation)) {
+            return;
+          }
           yield* mountScopes(next);
           yield* mountControls(next, mutation);
           yield* syncDrawers(next, mutation);
@@ -843,6 +892,11 @@ export function useReplTree(
         present(view, layout, options = {}) {
           const place = (rect: Rect | undefined): Placement => placementOf(layout, rect);
           attach(root.node, rootBody, undefined, place(layout.screen));
+          if (refused !== undefined && refusal !== undefined) {
+            // Nowhere to go means nothing to draw but the saying so.
+            attach(refused, refusedBody, { refusal, layout }, place(layout.screen));
+            return;
+          }
           if (layout.profile === "too-small") {
             // Below the minimum the interface is refused rather than shrunk, so
             // the panes are not presented at all.
