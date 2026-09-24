@@ -352,7 +352,18 @@ describe("build-npm local closure", () => {
       caught = error;
     }
 
-    expect(caught).toBeInstanceOf(Error);
+    // `a` reached dnt, which is what makes the failure below evidence about the
+    // mutation rather than about the observer that applied it: an observer that
+    // threw would leave this list one short.
+    expect(
+      events
+        .filter((event) => event.type === "package-build-started")
+        .map((event) => event.package),
+    ).toEqual([scoped("c"), scoped("b"), scoped("a")]);
+
+    // And it failed where a registry range has to be resolved.
+    expect(caught).toMatchObject({ message: "npm install failed with exit code 1" });
+
     // Before `a` completed and before anything was finalized: the closure never
     // reaches a state where a half-rewritten set could be mistaken for output.
     expect(events.map((event) => event.type)).not.toContain("closure-finalization-started");
