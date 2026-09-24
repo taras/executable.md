@@ -942,10 +942,10 @@ describe("animation", () => {
     expect(yield* shot()).toBe(first);
 
     // Time in, picture out. The clock is the only thing that moved.
-    clock.advance(PLAYBACK.durationMs / 2 / 1000);
+    yield* clock.advance(PLAYBACK.durationMs / 2 / 1000);
     const middle = yield* shot();
     expect(middle).not.toBe(first);
-    clock.advance(PLAYBACK.durationMs / 2 / 1000);
+    yield* clock.advance(PLAYBACK.durationMs / 1000);
     const settled = yield* shot();
     expect(settled).not.toBe(middle);
 

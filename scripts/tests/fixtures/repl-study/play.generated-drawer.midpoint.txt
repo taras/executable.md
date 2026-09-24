@@ -8,8 +8,8 @@ play.generated-drawer.midpoint · 200 × 50
                                                 │ document                                                                                                             │ readme
  │ plan-a91f7c                                  │ ▶ <Evaluate allow={["write"]}>                                                                              ENTER    │ markdown · 3 lines
    ✓ completed   planner · turn 1 · returned 5… │ │ ▾ Ask for the project details                                                                                      │ # Northstar
-                                                │ │ ● <Elicit as="project" schema={projectSchema}>                                                            WAITING  │
-   review-b72e1d                                │ …                                                                                                                    │
+                                                │ …                                                                                                                    │
+   review-b72e1d                                │                                                                                                                      │
    ● responding  reviewer · turn 1 · streaming  │                                                                                                                      │
    streaming · background update · selection u… │                                                                                                                      │
                                                 │                                                                                                                      │

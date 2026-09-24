@@ -374,6 +374,8 @@ export function* runInteractive(options: InteractiveOptions): Operation<void> {
   // The one clock, installed before anything is mounted, so the tree's
   // components and the loop that drives them are looking at the same service.
   const frameClock = yield* useFrames();
+  /** Seconds since this run began, which is what a frame is stamped with. */
+  let clockAt = 0;
   // The tree is acquired before the terminal is touched, so its teardown runs
   // after the terminal has been given back rather than into a restored one.
   const tree = yield* useReplTree(repl, { cols: state.cols, rows: state.rows });
@@ -514,7 +516,9 @@ export function* runInteractive(options: InteractiveOptions): Operation<void> {
     const segment = currentSegment();
     const transition = playback === undefined ? undefined : transitionOf(playback, elapsed > 0);
     // The one clock, advanced once per frame, before anything is drawn from it.
-    frameClock.advance(deltaMs / 1000);
+    // Every component has taken this moment by the time this returns.
+    clockAt += deltaMs / 1000;
+    yield* frameClock.advance(clockAt);
     const label =
       finished || segment === undefined
         ? journey === undefined

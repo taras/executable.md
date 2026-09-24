@@ -307,7 +307,9 @@ export function* playFrames(
   for (let index = 0; index < limit; index += 1) {
     const transition = transitionOf(playback, index > 0);
     const deltaSeconds = index === 0 ? 0 : frameMs / 1000;
-    clock.advance(deltaSeconds);
+    // The clock, then the picture: every component has taken this frame before
+    // anything is drawn from it.
+    yield* clock.advance((index * frameMs) / 1000);
     const frame = renderInto(term, {
       fixture: subject,
       view,
@@ -355,7 +357,6 @@ export function* journeyFrames(
   const frames: JourneyFrame[] = [];
   const clock = yield* useFrames();
   for (const planned of journeyPlan(JOURNEY, frameMs)) {
-    clock.advance(planned.deltaMs / 1000);
     const subject = fixture(planned.fixture);
     const view = initialView(subject);
     // One composition per moment, reused across that moment's frames: a
@@ -365,6 +366,10 @@ export function* journeyFrames(
       composition = yield* useComposition(subject, view, size);
       compositions.set(planned.fixture, composition);
     }
+    // Mounted, then told the time, then drawn. A component that was handed its
+    // first frame before it existed would start its transition from a moment it
+    // never saw.
+    yield* clock.advance(planned.elapsedMs / 1000);
     const request: FrameRequest = {
       fixture: subject,
       view,

@@ -63,13 +63,7 @@ import type { DrawerView, HistoryView, InputView, ReplView, TranscriptView } fro
 import { drawerSlots, inputSlot, transportSlots } from "./render.ts";
 import type { Layout, Rect } from "./layout.ts";
 import { isDrawerKind } from "./fixtures.ts";
-import {
-  animates,
-  easeInOutCubic,
-  SETTLED_SECONDS,
-  TRANSITION_SECONDS,
-  useFrames,
-} from "./animation.ts";
+import { animates, easeInOutCubic, TRANSITION_SECONDS, useFrames } from "./animation.ts";
 import { applyAction, layoutOf, reverseTab } from "./store.ts";
 import type { Key, ReduceContext, Reduction, ReplState, Size } from "./store.ts";
 import { isRouteSurface, ROUTE_SURFACES, topDrawer } from "./route.ts";
@@ -314,52 +308,59 @@ export function useReplTree(state: ReplState, composed: Size): Operation<ReplTre
        * host runs. Their bodies are handed the resulting number and nothing
        * else — not the clock, not the two moments, not how long it takes.
        */
+      /**
+       * The transcript's arrival and the playhead's travel.
+       *
+       * Both move as one transition, so they are one subscription — taken at
+       * the nearest thing that owns them both, which is the root. Two
+       * subscriptions to the same clock for the same motion would be two
+       * answers to when it started.
+       *
+       * How far along each of them is lives here, in variables nothing outside
+       * can see. Their bodies are handed the resulting number and nothing else:
+       * not the clock, not the two moments, not how long it takes.
+       */
       type Phase = "still" | "running" | "arrived";
+      let now = 0;
       let reveal = 1;
       let revealPhase: Phase = "still";
-      let revealed = 0;
+      let revealFrom = 0;
       let revealWant: (() => void) | undefined;
+      let headAt: number | undefined;
+      let travelFrom = 0;
+      let travelTo = 0;
+      let travelStart = 0;
+      let travelPhase: Phase = "still";
+      let travelWant: (() => void) | undefined;
       const releaseReveal = (): void => {
         revealWant?.();
         revealWant = undefined;
       };
-      animates(transcriptNode, frames, ({ deltaSeconds }) => {
-        if (revealPhase !== "running") {
-          return;
-        }
-        revealed += deltaSeconds;
-        reveal = easeInOutCubic(Math.min(1, revealed / TRANSITION_SECONDS));
-        if (revealed >= TRANSITION_SECONDS - SETTLED_SECONDS) {
-          // Arrived, and it stays arrived: the transition is still being
-          // supplied on every frame after this one, and a component that read
-          // it as a fresh instruction would play the same arrival for ever.
-          revealPhase = "arrived";
-          reveal = 1;
-          releaseReveal();
-        }
-      });
-
-      let headAt: number | undefined;
-      let travelFrom = 0;
-      let travelTo = 0;
-      let travelPhase: Phase = "still";
-      let travelled = 0;
-      let travelWant: (() => void) | undefined;
       const releaseTravel = (): void => {
         travelWant?.();
         travelWant = undefined;
       };
-      animates(historyRegionNode, frames, ({ deltaSeconds }) => {
-        if (travelPhase !== "running") {
-          return;
+      yield* animates(root.node, frames, ({ at }) => {
+        now = at;
+        if (revealPhase === "running") {
+          const fraction = Math.min(1, (at - revealFrom) / TRANSITION_SECONDS);
+          reveal = easeInOutCubic(fraction);
+          if (fraction >= 1) {
+            // Arrived, and it stays arrived: the transition is still being
+            // supplied on every frame after this one, and a component that read
+            // it as a fresh instruction would play the same arrival for ever.
+            revealPhase = "arrived";
+            releaseReveal();
+          }
         }
-        travelled += deltaSeconds;
-        const eased = easeInOutCubic(Math.min(1, travelled / TRANSITION_SECONDS));
-        headAt = travelFrom + (travelTo - travelFrom) * eased;
-        if (travelled >= TRANSITION_SECONDS - SETTLED_SECONDS) {
-          travelPhase = "arrived";
-          headAt = travelTo;
-          releaseTravel();
+        if (travelPhase === "running") {
+          const fraction = Math.min(1, (at - travelStart) / TRANSITION_SECONDS);
+          headAt = travelFrom + (travelTo - travelFrom) * easeInOutCubic(fraction);
+          if (fraction >= 1) {
+            travelPhase = "arrived";
+            headAt = travelTo;
+            releaseTravel();
+          }
         }
       });
 
@@ -370,7 +371,7 @@ export function useReplTree(state: ReplState, composed: Size): Operation<ReplTre
           releaseReveal();
         } else if (revealPhase === "still") {
           revealPhase = "running";
-          revealed = 0;
+          revealFrom = now;
           reveal = 0;
           revealWant = frames.want();
         }
@@ -399,7 +400,7 @@ export function useReplTree(state: ReplState, composed: Size): Operation<ReplTre
           travelPhase = "running";
           travelFrom = data.transition.fromHeadAt;
           travelTo = history.headAt;
-          travelled = 0;
+          travelStart = now;
           headAt = travelFrom;
           travelWant = frames.want();
         }

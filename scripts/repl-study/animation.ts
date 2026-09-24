@@ -1,39 +1,59 @@
 /**
- * One clock, and the components that animate against it.
+ * One clock, as a stream, and the components that animate against it.
  *
- * The host owns *when* a frame happens: it is the only thing that knows whether
- * anything is still moving, how long the next wait should be, and when the
- * terminal has been given back. Everything else asks this service for frames
- * and is told; nothing else schedules one.
+ * The host owns the producer: it is the only thing that knows whether anything
+ * is still moving, how long the next wait should be, and when the terminal has
+ * been given back. What it hands the interface is a `Stream<Frame, never>` —
+ * not a callback to register against — so a component consumes time the same
+ * way it consumes anything else in this system, with an Effection operation, in
+ * a scope that owns it.
+ *
+ * That is the whole of the lifetime story. A subscription is taken inside a
+ * task attached to a Freedom node's scope, so removing the branch closes it.
+ * There is no registry to keep in step, nothing asking the tree whether a node
+ * still exists, and nothing deferred to a later frame. An earlier round had all
+ * three, and each of them was a second structure that could disagree with the
+ * tree.
  *
  * What a component does with a frame is its own. The progress of an arriving
  * transcript, the position of a travelling playhead — those live in the
  * component's lifecycle, in its own variables, and its render body reads the
- * resulting snapshot and nothing else. An earlier round computed every one of
- * them centrally and threaded the answer down through the presentation, which
- * is the same second structure the focus rework removed: a number worked out
- * somewhere else, free to disagree with the thing it described.
+ * resulting snapshot and nothing else.
  *
- * Delivery is **synchronous**. A frame is a moment in time, and the component
- * has to have moved before the picture of that moment is drawn — a subscription
- * that woke a turn later would render the frame before last, and a capture
- * would record a screen no viewer ever saw.
+ * This follows `@effection-contrib/raf`, which is the same shape: one producer
+ * of timestamps, consumed as a stream. The clock here is the host's rather than
+ * the browser's, because a terminal has no animation frame and the study has to
+ * supply time as well as measure it.
  */
 
-import { createContext, ensure, suspend } from "effection";
-import type { Operation } from "effection";
+import { createContext, createSignal, sleep } from "effection";
+import type { Operation, Stream } from "effection";
 import type { Node } from "./vendor/freedom/upstream/index.ts";
 
-/** One frame's worth of time, in the unit the renderer measures transitions in. */
+/** One frame: when it happened, on the one clock the host runs. */
 export interface Frame {
-  readonly deltaSeconds: number;
+  /**
+   * Seconds since the producer started.
+   *
+   * A timestamp rather than a delta, so a component works out its own elapsed
+   * time by subtraction and never accumulates one — forty additions of sixteen
+   * milliseconds do not land on 640, and a transition that never quite reaches
+   * its duration never quite ends.
+   */
+  readonly at: number;
 }
 
-export type Listener = (frame: Frame) => void;
-
-export interface FrameService {
-  /** Subscribe until the release is called. */
-  listen(listener: Listener): () => void;
+export interface Frames {
+  /** The one stream every component animates against. */
+  readonly stream: Stream<Frame, never>;
+  /**
+   * Deliver one frame, and return once every subscriber has taken it.
+   *
+   * Nothing is drawn from a frame half the interface has not reached yet, so
+   * this is an operation: the producer hands the moment over and waits for the
+   * consumers before the caller goes on to render it.
+   */
+  advance(at: number): Operation<void>;
   /**
    * Ask for the clock to keep running.
    *
@@ -44,19 +64,17 @@ export interface FrameService {
   want(): () => void;
   /** True while at least one component is still animating. */
   wanted(): boolean;
-  /** Deliver one frame. The host calls this; nothing else does. */
-  advance(deltaSeconds: number): void;
 }
 
-export function createFrameService(): FrameService {
-  const listeners = new Set<Listener>();
+export function createFrames(): Frames {
+  const signal = createSignal<Frame, never>();
   let wants = 0;
   return {
-    listen(listener) {
-      listeners.add(listener);
-      return () => {
-        listeners.delete(listener);
-      };
+    stream: signal,
+    *advance(at: number) {
+      signal.send({ at });
+      // Every subscriber takes the frame before anything is drawn from it.
+      yield* sleep(0);
     },
     want() {
       wants += 1;
@@ -70,101 +88,77 @@ export function createFrameService(): FrameService {
       };
     },
     wanted: () => wants > 0,
-    advance(deltaSeconds) {
-      for (const listener of [...listeners]) {
-        listener({ deltaSeconds });
-      }
-    },
   };
 }
 
-const FrameContext = createContext<FrameService>("xmd:repl:frames");
+const FrameContext = createContext<Frames>("xmd:repl:frames");
 
 /**
  * The one frame service this run animates against.
  *
- * The host installs it before anything is mounted, so the tree and the loop
- * that drives it are looking at the same clock. A caller that mounts a tree
- * without one gets a service of its own — which is what a capture wants: time
- * supplied rather than measured, and nothing shared with any other run.
+ * The host installs it before anything is mounted, so the tree's components and
+ * the loop that drives them are looking at the same clock. A caller that mounts
+ * a tree without one gets a producer of its own — which is what a capture
+ * wants: time supplied rather than measured, and nothing shared with any other
+ * run.
  */
-export function useFrames(): Operation<FrameService> {
+export function useFrames(): Operation<Frames> {
   return {
     *[Symbol.iterator]() {
       const existing = yield* FrameContext.get();
       if (existing !== undefined) {
         return existing;
       }
-      return yield* FrameContext.set(createFrameService());
+      return yield* FrameContext.set(createFrames());
     },
   };
 }
 
 /**
- * Subscribe one node's own scope to the clock.
+ * Consume frames for as long as this branch exists.
  *
- * The subscription belongs to the node: it is created in the node's scope and
- * released when that scope ends, so removing a branch takes its animation with
- * it. Nothing has to remember to unsubscribe, because there is nowhere for the
- * registration to outlive the thing it was for.
+ * The consumer is a task in the node's own scope, and the subscription is taken
+ * inside it — so the scope that ends when the branch is removed is the scope
+ * that closes the subscription. Nothing else has to know it was ever there.
+ *
+ * A task attaches a turn before it runs, so a caller mounts every consumer it
+ * means to have and then lets the scheduler reach them before the first frame.
+ * `useReplTree` does exactly that, which is why nothing here has to guess
+ * whether it was subscribed in time.
  */
-export function animates(node: Node, service: FrameService, listener: Listener): void {
-  // Subscribed **now**, not on the next turn. A task spawned into a scope does
-  // not begin until the scheduler gets one, and a frame loop that renders
-  // without yielding never gives it one — the whole journey ran with nothing
-  // subscribed and nothing moved.
-  //
-  // The node's scope owns the registration and releases it when the branch
-  // goes. It cannot be the *only* thing that does, for the same reason: a
-  // branch removed before that task ever started would be halted with nothing
-  // registered to release. So the clock also asks the tree, which is the
-  // authority on what exists, and a node that is no longer in it is not woken
-  // again.
-  let release = (): void => {};
-  release = service.listen((frame) => {
-    if (!attached(node)) {
-      release();
-      return;
-    }
-    listener(frame);
-  });
-  const owned = release;
-  node.scope.run(function* () {
-    yield* ensure(owned);
-    yield* suspend();
-  });
-}
-
-/** True while this node is still reachable from the tree it was mounted in. */
-function attached(node: Node): boolean {
-  for (let at: Node = node; at.parent !== undefined; at = at.parent) {
-    let found = false;
-    for (const child of at.parent.children) {
-      if (child === at) {
-        found = true;
-        break;
-      }
-    }
-    if (!found) {
-      return false;
-    }
-  }
-  return true;
+export function animates(
+  node: Node,
+  frames: Frames,
+  apply: (frame: Frame) => void,
+): Operation<void> {
+  return {
+    *[Symbol.iterator]() {
+      // A task attaches a turn before it runs, so this does not return until
+      // the consumer has actually subscribed. Without that, a caller that
+      // mounted a component and advanced the clock in the same turn would send
+      // the first frame to nobody — which is the whole of what
+      // subscribe-before-spawn is about, arranged so that the subscription
+      // still belongs to the branch rather than to whoever mounted it.
+      const subscribed = createSignal<void, void>();
+      const ready = yield* subscribed;
+      yield* node.scope.spawn(function* () {
+        const subscription = yield* frames.stream;
+        subscribed.send();
+        for (;;) {
+          const next = yield* subscription.next();
+          if (next.done) {
+            return;
+          }
+          apply(next.value);
+        }
+      });
+      yield* ready.next();
+    },
+  };
 }
 
 /** How long one transition takes, in the seconds the renderer measures in. */
 export const TRANSITION_SECONDS = 0.64;
-
-/**
- * How close to the end counts as the end.
- *
- * Elapsed time is accumulated a frame at a time, so forty sixteen-millisecond
- * steps land a few parts in 10^16 short of the 640 they add up to. A transition
- * that close to its duration has ended: there is no frame left to draw the
- * difference in, and waiting for exact equality would leave one running for
- * ever.
- */
-export const SETTLED_SECONDS = 1e-9;
 
 export function easeInOutCubic(fraction: number): number {
   return fraction < 0.5

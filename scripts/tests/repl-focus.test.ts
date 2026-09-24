@@ -30,8 +30,11 @@ import {
   composeInto,
   PROFILE_SIZES,
   renderInto,
+  useComposition,
   useTerm,
 } from "../repl-study/capture.ts";
+import { fixture } from "../repl-study/fixtures.ts";
+import { playbackBetween, transitionOf } from "../repl-study/playback.ts";
 import { FRAMES, frame, stateFor, useFrame } from "../repl-study/frames.ts";
 import { openingState, scanKeys } from "../repl-study/host.ts";
 import { fold, JOURNAL, journalThrough, markers, siblingsOf } from "../repl-study/journal.ts";
@@ -45,6 +48,7 @@ import {
 import {
   fixtureFor,
   hydrate,
+  initialView,
   layoutOf,
   openDrawer,
   projection,
@@ -59,7 +63,8 @@ import { ReplInputApi, sendInput } from "../repl-study/input.ts";
 import { ReplActionApi, UnownedActionError } from "../repl-study/actions.ts";
 import type { ReplAction } from "../repl-study/actions.ts";
 import { boxOf } from "../repl-study/component.ts";
-import { animates, createFrameService, useFrames } from "../repl-study/animation.ts";
+import { animates, createFrames, useFrames } from "../repl-study/animation.ts";
+import type { Frames } from "../repl-study/animation.ts";
 import { UNAVAILABLE } from "../repl-study/store.ts";
 import type { Node } from "../repl-study/vendor/freedom/upstream/index.ts";
 import type { ReplInput } from "../repl-study/input.ts";
@@ -1598,55 +1603,137 @@ describe("input is one gesture, and what it means is an action", () => {
 });
 
 describe("one clock, and the components that animate against it", () => {
-  it("wakes a branch's own subscription, and stops when the branch goes", function* () {
+  /** A branch, and a record of every frame it took. */
+  function* subscriber(
+    tree: ReplTree,
+    name: string,
+    seen: number[],
+    clock: Frames,
+  ): Operation<Node> {
+    const node = find(tree.root.node, name)!;
+    yield* animates(node, clock, ({ at }) => seen.push(at));
+    return node;
+  }
+
+  it("takes no frame when the branch goes before its consumer ever ran", function* () {
+    // A task attaches a turn before it runs. This closes the branch inside that
+    // turn, while the consumer is still being attached — so the scope that
+    // would have owned the subscription ends before there is one.
     const clock = yield* useFrames();
     const { state, tree } = yield* opened(DRAWER, "cp-14");
-    const drawer = find(tree.root.node, "drawer:project")!;
-    const woken: number[] = [];
-    animates(drawer, clock, ({ deltaSeconds }) => woken.push(deltaSeconds));
+    const seen: number[] = [];
+    const node = find(tree.root.node, "drawer:project")!;
+    const mounting = yield* spawn(function* () {
+      yield* animates(node, clock, ({ at }) => seen.push(at));
+    });
 
-    clock.advance(0.016);
-    expect(woken).toEqual([0.016]);
-
-    // Closing the drawer removes the branch, and the subscription was the
-    // branch's: nothing had to remember to take it away.
+    // No turn was given to the consumer: the branch closes first.
     yield* tree.sync(hydrate("xmd://repl/e1/transcript/entry-1/document", state.journal));
     expect(find(tree.root.node, "drawer:project")).toBeUndefined();
-    clock.advance(0.016);
-    expect(woken).toEqual([0.016]);
+
+    yield* clock.advance(1);
+    expect(seen).toEqual([]);
+    // And the teardown finishes: nothing is left waiting on a branch that has
+    // gone.
+    yield* mounting.halt();
+    yield* clock.advance(2);
+    expect(seen).toEqual([]);
+  });
+
+  it("closes it when the branch goes after consumption has begun", function* () {
+    const clock = yield* useFrames();
+    const { state, tree } = yield* opened(DRAWER, "cp-14");
+    const seen: number[] = [];
+    yield* subscriber(tree, "drawer:project", seen, clock);
+
+    yield* clock.advance(1);
+    expect(seen).toEqual([1]);
+
+    yield* tree.sync(hydrate("xmd://repl/e1/transcript/entry-1/document", state.journal));
+    yield* clock.advance(2);
+    expect(seen).toEqual([1]);
+  });
+
+  it("gives two owners the same timestamps, and keeps only the survivor", function* () {
+    const clock = yield* useFrames();
+    const { state, tree } = yield* opened(DRAWER, "cp-14");
+    const closing: number[] = [];
+    const staying: number[] = [];
+    yield* subscriber(tree, "drawer:project", closing, clock);
+    yield* subscriber(tree, "region:transcript", staying, clock);
+
+    yield* clock.advance(0.5);
+    yield* clock.advance(1);
+    // One producer, two owners, the same moments.
+    expect(closing).toEqual([0.5, 1]);
+    expect(staying).toEqual(closing);
+
+    yield* tree.sync(hydrate("xmd://repl/e1/transcript/entry-1/document", state.journal));
+    yield* clock.advance(1.5);
+    expect(closing).toEqual([0.5, 1]);
+    expect(staying).toEqual([0.5, 1, 1.5]);
+  });
+
+  it("draws the frame it was just given, with nothing left to arrive", function* () {
+    // The picture is of the moment that was delivered, not of the one before
+    // it: every subscriber has taken the frame by the time `advance` returns.
+    const clock = yield* useFrames();
+    const subject = fixture("drawer");
+    const view = initialView(subject);
+    const composition = yield* useComposition(subject, view, WIDE);
+    const transition = transitionOf(playbackBetween("generated", "drawer")!, true);
+    const shot = function* (): Operation<string> {
+      const term = yield* useTerm(WIDE);
+      return renderInto(term, {
+        fixture: subject,
+        view,
+        composition,
+        size: WIDE,
+        transition,
+        deltaSeconds: 0,
+      }).text;
+    };
+
+    yield* clock.advance(0);
+    const opening = yield* shot();
+    yield* clock.advance(0.32);
+    const half = yield* shot();
+    yield* clock.advance(0.64);
+    const whole = yield* shot();
+
+    expect(half).not.toBe(opening);
+    expect(whole).not.toBe(half);
+    // Rendering again without another frame draws the same moment: nothing
+    // arrived between the two, because nothing was sent.
+    expect(yield* shot()).toBe(whole);
+    expect(clock.wanted()).toBe(false);
   });
 
   it("asks for the clock only while something is moving", function* () {
     const clock = yield* useFrames();
     const { state, tree } = yield* opened("xmd://repl/e1/transcript/entry-1/document", "cp-14");
-    // An interface with nothing moving schedules nothing at all.
     expect(clock.wanted()).toBe(false);
     yield* shot(tree, state);
     expect(clock.wanted()).toBe(false);
   });
 
-  it("takes its subscriptions down with the tree that owned them", function* () {
-    // A teardown is the whole interface going away. What it leaves behind is
-    // the question: a clock that still had components on it would go on waking
-    // them into a terminal that has been given back.
-    const clock = createFrameService();
-    let woken = 0;
-    const inner = yield* spawn(function* () {
+  it("leaves nothing subscribed and nothing wanting when the whole tree goes", function* () {
+    const clock = createFrames();
+    const seen: number[] = [];
+    const mounted = yield* spawn(function* () {
       const { tree } = yield* opened(DRAWER, "cp-14");
-      animates(find(tree.root.node, "drawer:project")!, clock, () => {
-        woken += 1;
-      });
+      yield* animates(find(tree.root.node, "drawer:project")!, clock, ({ at }) => seen.push(at));
       yield* suspend();
     });
-    // A spawned task attaches a turn late, so the tree is mounted only after
-    // this.
+    // A spawned task attaches a turn late, so the tree is mounted after this.
     yield* sleep(0);
-    clock.advance(0.016);
-    expect(woken).toBe(1);
+    yield* clock.advance(1);
+    expect(seen).toEqual([1]);
 
-    yield* inner.halt();
-    clock.advance(0.016);
-    expect(woken).toBe(1);
+    yield* mounted.halt();
+    yield* clock.advance(2);
+    expect(seen).toEqual([1]);
+    expect(clock.wanted()).toBe(false);
   });
 });
 
