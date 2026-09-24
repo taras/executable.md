@@ -15,7 +15,9 @@
 import { close, grow, fixed, open, rgba, text } from "@bomb.sh/tty";
 import type { Op } from "@bomb.sh/tty";
 
-import type { Checkpoint, Entry, Fixture, Phase, TranscriptRow } from "./model.ts";
+import type { Checkpoint, Entry, Fixture, Phase, TranscriptRow, TransportMode } from "./model.ts";
+import type { HistoryView, MarkerView } from "./view.ts";
+import { historyViewFrom } from "./view.ts";
 import type { Layout, Rect } from "./layout.ts";
 import { MINIMUM } from "./layout.ts";
 import type { View } from "./store.ts";
@@ -787,8 +789,7 @@ export interface Transport {
   readonly controls: readonly string[];
 }
 
-function transportFor(fixture: Fixture, dense: boolean): Transport {
-  const mode = fixture.history.transport;
+export function transportFor(mode: TransportMode, dense: boolean): Transport {
   if (mode === "live") {
     return { word: "LIVE", color: C.active, controls: ["Pause"] };
   }
@@ -816,7 +817,8 @@ function transportFor(fixture: Fixture, dense: boolean): Transport {
 /** What one column of the band is carrying. */
 export interface Notch {
   readonly column: number;
-  readonly checkpoints: readonly Checkpoint[];
+  /** The recorded markers sharing this column, which the band gathers. */
+  readonly markers: readonly MarkerView[];
 }
 
 /**
@@ -828,32 +830,32 @@ export interface Notch {
  * and the scrubber still steps through every checkpoint behind it.
  */
 export function notchLayout(
-  history: Fixture["history"],
+  history: HistoryView,
   trackLeft: number,
   trackWidth: number,
   mutation?: Mutation,
 ): Notch[] {
   if (mutation === "clip-long-transcript") {
-    return history.checkpoints.map((checkpoint) => ({
-      column: columnFor(checkpoint.at, history, trackLeft, trackWidth),
-      checkpoints: [checkpoint],
+    return history.markers.map((marker) => ({
+      column: columnFor(marker.at, history, trackLeft, trackWidth),
+      markers: [marker],
     }));
   }
-  const columns = new Map<number, Checkpoint[]>();
-  for (const checkpoint of history.checkpoints) {
-    const column = columnFor(checkpoint.at, history, trackLeft, trackWidth);
+  const columns = new Map<number, MarkerView[]>();
+  for (const marker of history.markers) {
+    const column = columnFor(marker.at, history, trackLeft, trackWidth);
     const bucket = columns.get(column) ?? [];
-    bucket.push(checkpoint);
+    bucket.push(marker);
     columns.set(column, bucket);
   }
   return [...columns.entries()]
-    .map(([column, checkpoints]) => ({ column, checkpoints }))
+    .map(([column, markers]) => ({ column, markers }))
     .toSorted((one, other) => one.column - other.column);
 }
 
 export function columnFor(
   at: number,
-  history: Fixture["history"],
+  history: Pick<HistoryView, "headAt">,
   trackLeft: number,
   trackWidth: number,
 ): number {
@@ -881,8 +883,15 @@ export interface BandGeometry {
  * three controls — leaves a much shorter track than running does. The head's
  * label sits just right of the head, so it is reserved too.
  */
-export function bandGeometry(fixture: Fixture, layout: Layout, rect: Rect): BandGeometry {
-  const transport = transportFor(fixture, layout.dense || layout.profile === "narrow");
+/**
+ * How much of the band the track gets, asked of the semantic view.
+ *
+ * The band's arithmetic is about what is *shown* — which transport controls are
+ * visible, how wide their labels are — so it takes the view model rather than a
+ * fixture. Nothing about a checkpoint's storage reaches it.
+ */
+export function bandGeometry(history: HistoryView, layout: Layout, rect: Rect): BandGeometry {
+  const transport = transportFor(history.transport, layout.dense || layout.profile === "narrow");
   const controls = transport.controls.map((control) => `[ ${control} ]`).join(" ");
   const right = `${transport.word}  ${controls}`;
   const inner = Math.max(0, rect.width - 2);
@@ -890,7 +899,7 @@ export function bandGeometry(fixture: Fixture, layout: Layout, rect: Rect): Band
   // surface bar above it already carries.
   const labelWidth =
     layout.profile === "narrow" ? 10 : Math.min(Math.max(18, Math.round(rect.width * 0.12)), 26);
-  const headLabelRoom = fixture.history.transport === "live" ? 8 : 15;
+  const headLabelRoom = history.transport === "live" ? 8 : 15;
   const rightReserve = Math.min(inner - labelWidth - 4, [...right].length + 2 + headLabelRoom);
   return {
     transport,
@@ -937,21 +946,19 @@ export function isDeeperThanBand(depth: number): boolean {
  * it, an entry boundary is `◆` where an ordinary event is `●`, and a column
  * holding several checkpoints shows how many.
  */
-function footerRegion(
-  fixture: Fixture,
-  view: View,
+export function bandRegion(
+  history: HistoryView,
   layout: Layout,
   rect: Rect,
   mutation?: Mutation,
   motion?: Motion,
   focus?: FocusView,
 ): Op[] {
-  const history = fixture.history;
   // While a playback runs, the head is where the application says it is; the
   // recorded head is where it will be when the motion settles.
   const headAt = motion !== undefined && !motion.done ? motion.headAt : history.headAt;
   const flat = mutation === "flatten-notches";
-  const geometry = bandGeometry(fixture, layout, rect);
+  const geometry = bandGeometry(history, layout, rect);
   const { transport, inner, labelWidth, trackLeft, trackWidth } = geometry;
   // The marker replaces the space inside the bracket rather than widening it:
   // the track's room is computed from this string, and a focused control that
@@ -975,8 +982,8 @@ function footerRegion(
     });
   };
 
-  const hasHistory = history.checkpoints.length > 0;
-  const selectedCheckpoint = history.checkpoints[view.checkpoint];
+  const hasHistory = history.markers.length > 0;
+  const selectedCheckpoint = history.markers.find((marker) => marker.selected);
 
   // Text goes down before the markers do, so a notch or a caret always wins the
   // column it belongs in rather than being written over by a label.
@@ -995,7 +1002,7 @@ function footerRegion(
     ),
     C.dim,
   );
-  putText(2, 0, fit(fixture.entry ? fixture.entry.id : "", labelWidth - 1), C.dim);
+  putText(2, 0, fit(history.entryId ?? "", labelWidth - 1), C.dim);
   putText(0, Math.max(0, inner - [...right].length), right, transport.color);
 
   if (hasHistory) {
@@ -1030,22 +1037,20 @@ function footerRegion(
     const notches = notchLayout(history, trackLeft, trackWidth, mutation);
 
     for (const notch of notches) {
-      const boundary = notch.checkpoints.some((checkpoint) => checkpoint.kind === "entry");
-      const deepest = Math.max(...notch.checkpoints.map((checkpoint) => checkpoint.depth));
+      const boundary = notch.markers.some((marker) => marker.boundary);
+      const deepest = Math.max(...notch.markers.map((marker) => marker.depth));
       const later =
-        selected !== undefined &&
-        notch.checkpoints.every((checkpoint) => checkpoint.at > selected.at);
+        selected !== undefined && notch.markers.every((marker) => marker.at > selected.at);
       const color = later ? C.dim : boundary ? C.out : C.active;
-      const coalesced = notch.checkpoints.length > 1;
+      const coalesced = notch.markers.length > 1;
       // The shallowest scope in the column owns the notch's height, so a
       // coalesced column never hides the outermost thing that happened there.
-      const shallowest = Math.min(...notch.checkpoints.map((checkpoint) => checkpoint.depth));
+      const shallowest = Math.min(...notch.markers.map((marker) => marker.depth));
       const chosen =
-        selected !== undefined &&
-        notch.checkpoints.some((checkpoint) => checkpoint.at === selected.at);
+        selected !== undefined && notch.markers.some((marker) => marker.at === selected.at);
       const glyph = coalesced
-        ? notch.checkpoints.length < 10
-          ? String(notch.checkpoints.length)
+        ? notch.markers.length < 10
+          ? String(notch.markers.length)
           : "+"
         : boundary
           ? "◆"
@@ -1098,23 +1103,23 @@ function footerRegion(
   if (rect.height > 6) {
     lines.push(blank(), label("CHECKPOINTS"));
     const room = rect.height - lines.length;
-    const listed = history.checkpoints.slice(0, Math.max(0, room - 1));
-    listed.forEach((point, index) => {
-      const on = index === view.checkpoint;
+    const listed = history.markers.slice(0, Math.max(0, room - 1));
+    for (const marker of listed) {
+      const on = marker.selected;
       lines.push({
         segments: [
-          { text: clock(point.at), color: on ? C.gold : C.dim, width: 6 },
+          { text: clock(marker.at), color: on ? C.gold : C.dim, width: 6 },
           {
-            text: point.kind === "entry" ? "◆" : isDeeperThanBand(point.depth) ? "·" : "●",
+            text: marker.boundary ? "◆" : isDeeperThanBand(marker.depth) ? "·" : "●",
             color: on ? C.gold : C.active,
             width: 2,
           },
-          { text: point.label, color: on ? C.out : C.src },
-          { text: point.scope, color: C.dim, width: Math.min(28, Math.max(0, rect.width - 40)) },
+          { text: marker.label, color: on ? C.out : C.src },
+          { text: marker.scope, color: C.dim, width: Math.min(28, Math.max(0, rect.width - 40)) },
         ],
       });
-    });
-    const hidden = history.checkpoints.length - listed.length;
+    }
+    const hidden = history.markers.length - listed.length;
     if (hidden > 0) {
       lines.push(plain(`▸ ${hidden} more checkpoints · ←/→ moves through every one`, C.dim));
     }
@@ -1257,7 +1262,23 @@ export function renderScreen(request: ScreenRequest): Op[] {
     ops.push(...contextualRegion(fixture, view, layout, layout.contextual, focus));
   }
   if (layout.footer) {
-    ops.push(...footerRegion(fixture, view, layout, layout.footer, mutation, motion, focus));
+    // The rectangle path draws the band from the same projection the component
+    // tree does, so the two cannot disagree while both exist.
+    ops.push(
+      ...bandRegion(
+        historyViewFrom(
+          fixture,
+          fixture.history.transport,
+          [],
+          fixture.history.checkpoints[view.checkpoint]?.at,
+        ),
+        layout,
+        layout.footer,
+        mutation,
+        motion,
+        focus,
+      ),
+    );
   }
   if (layout.contextual && covering) {
     // Drawn last, so it lands on top of the band the study says is never

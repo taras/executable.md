@@ -127,6 +127,8 @@ export interface ContextualView {
 }
 
 export interface HistoryView {
+  /** The entry the band is recording, for the line under its label. */
+  readonly entryId?: string;
   readonly elapsed: string;
   readonly headAt: number;
   readonly selectedAt?: number;
@@ -166,6 +168,43 @@ export function indexOf(view: ReplView): ViewIndex {
     scopes: scopeIds(view.transcript.scopes),
     markers: view.history.markers.map((marker) => marker.id),
     drawers: view.contextual.drawers.map((drawer) => drawer.kind),
+  };
+}
+
+/**
+ * The band's own view of a fixture's recorded history.
+ *
+ * Exported because the composition path that still draws from rectangles needs
+ * exactly this projection, and two projections of the same thing would be two
+ * answers. It goes when that path does.
+ */
+export function historyViewFrom(
+  subject: ReturnType<typeof fixtureFor>,
+  transport: Moment["transport"],
+  controls: readonly ControlView[],
+  /** Which recorded second is selected, when it is not the fixture's own. */
+  selectedAt?: number,
+): HistoryView {
+  const selected = selectedAt ?? subject.history.selectedAt;
+  return {
+    entryId: subject.entry?.id,
+    elapsed: subject.history.elapsed,
+    headAt: subject.history.headAt,
+    selectedAt: selected,
+    transport,
+    controls,
+    markers: subject.history.checkpoints.map((point) => ({
+      id: `cp-${point.at}`,
+      at: point.at,
+      label: point.label,
+      scope: point.scope,
+      depth: point.depth,
+      boundary: point.kind === "entry",
+      selected: selected !== undefined && point.at === selected,
+      later: selected !== undefined && point.at > selected,
+      records: point.records,
+    })),
+    compressed: subject.history.compressed,
   };
 }
 
@@ -340,15 +379,7 @@ export function project(state: ReplState): ReplView {
         run: runnable ? { id: "control:input.run", label: "Run", enabled: true } : undefined,
       },
     },
-    history: {
-      elapsed: subject.history.elapsed,
-      headAt: subject.history.headAt,
-      selectedAt: subject.history.selectedAt,
-      transport: state.moment.transport,
-      controls: controlsOf(state),
-      markers,
-      compressed: subject.history.compressed,
-    },
+    history: historyViewFrom(subject, state.moment.transport, controlsOf(state)),
   };
 }
 

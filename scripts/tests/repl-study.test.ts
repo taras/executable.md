@@ -73,6 +73,19 @@ import {
   viewport,
 } from "../repl-study/screen.ts";
 import { initialView, scrollBy } from "../repl-study/store.ts";
+import { historyViewFrom } from "../repl-study/view.ts";
+import type { Fixture } from "../repl-study/model.ts";
+
+/**
+ * A fixture's band, as the semantic view model the geometry now takes.
+ *
+ * The band's arithmetic moved onto the view when the renderer moved onto the
+ * component tree. The assertions below are unchanged; only what they are asked
+ * of is.
+ */
+function bandOf(subject: Fixture) {
+  return historyViewFrom(subject, subject.history.transport, []);
+}
 
 const ROOT = fileURLToPath(new URL("../../", import.meta.url));
 const GOLDENS = fileURLToPath(new URL("./fixtures/repl-study/", import.meta.url));
@@ -118,11 +131,11 @@ function soleNotchColumns(
   geometry: { readonly trackLeft: number; readonly trackWidth: number },
 ): Map<number, number> {
   const byDepth = new Map<number, number>();
-  for (const notch of notchLayout(subject.history, geometry.trackLeft, geometry.trackWidth)) {
-    if (notch.checkpoints.length !== 1) {
+  for (const notch of notchLayout(bandOf(subject), geometry.trackLeft, geometry.trackWidth)) {
+    if (notch.markers.length !== 1) {
       continue;
     }
-    const [point] = notch.checkpoints;
+    const [point] = notch.markers;
     if (!byDepth.has(point.depth)) {
       byDepth.set(point.depth, notch.column);
     }
@@ -378,7 +391,7 @@ describe("the history footer", () => {
       drawer: false,
       surface: "transcript",
     });
-    const geometry = bandGeometry(subject, layout, layout.footer!);
+    const geometry = bandGeometry(bandOf(subject), layout, layout.footer!);
     const frame = yield* renderFrame({ fixture: subject, view: initialView(subject), size });
     const rows = bandRows(frame.text, size);
     const byDepth = soleNotchColumns(subject, geometry);
@@ -409,12 +422,13 @@ describe("the history footer", () => {
       drawer: false,
       surface: "transcript",
     });
-    const geometry = bandGeometry(subject, layout, layout.footer!);
+    const geometry = bandGeometry(bandOf(subject), layout, layout.footer!);
     const byDepth = soleNotchColumns(subject, geometry);
     const deepColumn = byDepth.get(3) ?? byDepth.get(2)!;
     const deepPoint = history.checkpoints.find(
       (point) =>
-        columnFor(point.at, history, geometry.trackLeft, geometry.trackWidth) === deepColumn,
+        columnFor(point.at, bandOf(subject), geometry.trackLeft, geometry.trackWidth) ===
+        deepColumn,
     )!;
 
     const unselected = yield* renderFrame({
@@ -438,7 +452,12 @@ describe("the history footer", () => {
 
     // An entry boundary is a glyph, and the playhead is its own stem and label.
     const boundary = history.checkpoints.find((point) => point.kind === "entry")!;
-    const boundaryColumn = columnFor(boundary.at, history, geometry.trackLeft, geometry.trackWidth);
+    const boundaryColumn = columnFor(
+      boundary.at,
+      bandOf(subject),
+      geometry.trackLeft,
+      geometry.trackWidth,
+    );
     expect(glyphAt(bandRows(unselected.text, size)[TRACK_ROW], 1 + boundaryColumn)).toBe("◆");
     expect(bandRows(unselected.text, size)[0]).toContain("PAUSED HEAD");
   });
@@ -452,7 +471,7 @@ describe("the history footer", () => {
       drawer: false,
       surface: "transcript",
     });
-    const geometry = bandGeometry(subject, layout, layout.footer!);
+    const geometry = bandGeometry(bandOf(subject), layout, layout.footer!);
     const frame = yield* renderFrame({
       fixture: subject,
       view: initialView(subject),
@@ -638,11 +657,11 @@ describe("staying operable", () => {
       surface: "history",
     });
     const rect = layout.footer!;
-    const geometry = bandGeometry(subject, layout, rect);
-    const notches = notchLayout(subject.history, geometry.trackLeft, geometry.trackWidth);
-    const gathered = notches.reduce((total, notch) => total + notch.checkpoints.length, 0);
+    const geometry = bandGeometry(bandOf(subject), layout, rect);
+    const notches = notchLayout(bandOf(subject), geometry.trackLeft, geometry.trackWidth);
+    const gathered = notches.reduce((total, notch) => total + notch.markers.length, 0);
 
-    expect(notches.some((notch) => notch.checkpoints.length > 1)).toBe(true);
+    expect(notches.some((notch) => notch.markers.length > 1)).toBe(true);
     expect(gathered).toBe(subject.history.checkpoints.length);
 
     for (let index = 0; index < subject.history.checkpoints.length; index += 1) {
@@ -668,9 +687,9 @@ describe("staying operable", () => {
       drawer: false,
       surface: "history",
     });
-    const geometry = bandGeometry(subject, layout, layout.footer!);
+    const geometry = bandGeometry(bandOf(subject), layout, layout.footer!);
     const notches = notchLayout(
-      subject.history,
+      bandOf(subject),
       geometry.trackLeft,
       geometry.trackWidth,
       "clip-long-transcript",
