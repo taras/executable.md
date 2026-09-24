@@ -2,7 +2,7 @@ generated.wide · 200 × 50
  XMD REPL                                       │ REPL › Entry 1 › document · active
                                                 │
  SESSION   JOURNAL   STATE                      │───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
-                                                │ Entry 1  ● running · 48.1s       ↳ document scope open                                                               │ BINDINGS
+                                                │▌Entry 1  ● running · 48.1s       ↳ document scope open                                                               │ BINDINGS
  SESSIONS · 2                                   │                                                                                                                      │ document scope
  chronological · selection follows you, not ac… │ ← opened from Entry 1 · live execution projection, not an editor                                                     │
                                                 │ document                                                                                                             │ admitted

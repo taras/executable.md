@@ -1,5 +1,5 @@
 sessions.wide · 200 × 50 · Three concurrent Agent sessions
- XMD REPL                                       │ REPL › Entry 1 › document · suspended
+▌XMD REPL                                       │ REPL › Entry 1 › document · suspended
                                                 │
  SESSION   JOURNAL   STATE                      │───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
                                                 │ Entry 1  ● running · 48.9s       ↳ document scope suspended                                                          │ BINDINGS

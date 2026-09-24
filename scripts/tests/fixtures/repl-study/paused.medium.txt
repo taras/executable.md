@@ -2,7 +2,7 @@ paused.medium · 140 × 38
  SESSION   JOURNAL   STATE        │ REPL › Entry 1 › document › Plan                                   RECONSTRUCTED AT 00:12 · READ-ONLY
                                   │
  ENTRY 1 · CREATE PROJECT README  │─────────────────────────────────────────────────────────────────────────────────────────────────────────
-                                  │ Entry 1  ● running · 53.0s       ↳ reconstructed · read-only                 │ BINDINGS
+                                  │▌Entry 1  ● running · 53.0s       ↳ reconstructed · read-only                 │ BINDINGS
  00:02 ◆ Entry 1 submitted        │                                                                              │ Plan scope · as recorded
  00:05 ● document scope entered   │ reconstructed from the journal · no live action is possible here             │
  00:12 ● Plan entered             │ Plan                                                                         │ prompt

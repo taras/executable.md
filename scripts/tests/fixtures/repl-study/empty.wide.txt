@@ -2,7 +2,7 @@ empty.wide · 200 × 50
  XMD REPL                                       │ REPL
                                                 │
  SESSION   JOURNAL   STATE                      │───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
-                                                │ TRANSCRIPT                                                                                                           │ BINDINGS
+                                                │▌TRANSCRIPT                                                                                                           │ BINDINGS
  No sessions yet                                │                                                                                                                      │ REPL scope
                                                 │ No executions yet.                                                                                                   │
  Agent sessions appear here as executions open  │                                                                                                                      │ No REPL bindings yet

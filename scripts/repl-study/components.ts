@@ -21,7 +21,7 @@ import {
   BG,
   drawerRegion,
   focusMapRegion,
-  focusMarkerOps,
+  focusMark,
   inputRegion,
   rule,
   surfaceBarRegion,
@@ -36,7 +36,8 @@ import {
   transcriptLines,
   wrapText,
 } from "./render.ts";
-import type { FocusView, VisualLine } from "./render.ts";
+import type { VisualLine } from "./render.ts";
+import type { OverlayEntry } from "./tree.ts";
 import type { Layout, Rect, SurfaceName } from "./layout.ts";
 import type { Mutation } from "./mutations.ts";
 import type { Motion } from "./playback.ts";
@@ -70,7 +71,7 @@ export const headerBody: Body<Pick<ReplView, "crumb" | "badge">> = ({ self, data
     { bg: BG.center },
   );
 
-export const sessionsBody: Body<SessionsView> = ({ self, data, placement, children }) => {
+export const sessionsBody: Body<SessionsView> = ({ self, data, placement, children, focus }) => {
   const lines: VisualLine[] = [];
   if (!placement.dense) {
     lines.push(plain("XMD REPL", C.out), blank());
@@ -120,7 +121,11 @@ export const sessionsBody: Body<SessionsView> = ({ self, data, placement, childr
         lines.push(plain(`· ${record}`, C.dim));
       }
     }
-    return region(self.id, placement.rect, lines, { bg: BG.side, children });
+    return region(self.id, placement.rect, lines, {
+      bg: BG.side,
+      children,
+      focused: focus === "self",
+    });
   }
 
   if (data.sessions.length === 0) {
@@ -129,7 +134,11 @@ export const sessionsBody: Body<SessionsView> = ({ self, data, placement, childr
         lines.push(plain(wrapped, C.dim));
       }
     }
-    return region(self.id, placement.rect, lines, { bg: BG.side, children });
+    return region(self.id, placement.rect, lines, {
+      bg: BG.side,
+      children,
+      focused: focus === "self",
+    });
   }
 
   for (const session of data.sessions) {
@@ -159,7 +168,11 @@ export const sessionsBody: Body<SessionsView> = ({ self, data, placement, childr
     }
     lines.push(blank());
   }
-  return region(self.id, placement.rect, lines, { bg: BG.side, children });
+  return region(self.id, placement.rect, lines, {
+    bg: BG.side,
+    children,
+    focused: focus === "self",
+  });
 };
 
 export interface TranscriptData {
@@ -171,7 +184,13 @@ export interface TranscriptData {
   readonly motion?: Motion;
 }
 
-export const transcriptBody: Body<TranscriptData> = ({ self, data, placement, children }) => {
+export const transcriptBody: Body<TranscriptData> = ({
+  self,
+  data,
+  placement,
+  children,
+  focus,
+}) => {
   const rect = placement.rect;
   const width = Math.max(0, rect.width - 2);
   const lines: VisualLine[] = [];
@@ -183,7 +202,7 @@ export const transcriptBody: Body<TranscriptData> = ({ self, data, placement, ch
         lines.push(plain(wrapped, C.dim));
       }
     }
-    return region(self.id, rect, lines, { bg: BG.center, children });
+    return region(self.id, rect, lines, { bg: BG.center, children, focused: focus === "self" });
   }
   const running = entry.state === "running";
   lines.push(
@@ -215,7 +234,7 @@ export const transcriptBody: Body<TranscriptData> = ({ self, data, placement, ch
   if (arriving) {
     const shown = Math.max(1, Math.ceil(data.motion!.reveal * windowed.length));
     lines.push(...windowed.slice(0, shown), plain("…", C.dim));
-    return region(self.id, rect, lines, { bg: BG.center, children });
+    return region(self.id, rect, lines, { bg: BG.center, children, focused: focus === "self" });
   }
 
   lines.push(...windowed);
@@ -227,10 +246,10 @@ export const transcriptBody: Body<TranscriptData> = ({ self, data, placement, ch
       lines.push(plain(`▴ ${data.anchor} earlier lines · ↑ scrolls back`, C.dim));
     }
   }
-  return region(self.id, rect, lines, { bg: BG.center, children });
+  return region(self.id, rect, lines, { bg: BG.center, children, focused: focus === "self" });
 };
 
-export const bindingsBody: Body<BindingsView> = ({ self, data, placement, children }) => {
+export const bindingsBody: Body<BindingsView> = ({ self, data, placement, children, focus }) => {
   const lines: VisualLine[] = [label("BINDINGS"), plain(data.scopeName, C.dim), blank()];
   if (data.bindings.length === 0) {
     for (const placeholder of data.placeholder) {
@@ -238,7 +257,11 @@ export const bindingsBody: Body<BindingsView> = ({ self, data, placement, childr
         lines.push(plain(wrapped, C.dim));
       }
     }
-    return region(self.id, placement.rect, lines, { bg: BG.bind, children });
+    return region(self.id, placement.rect, lines, {
+      bg: BG.bind,
+      children,
+      focused: focus === "self",
+    });
   }
   for (const binding of data.bindings) {
     if (isRedacted(binding)) {
@@ -258,13 +281,20 @@ export const bindingsBody: Body<BindingsView> = ({ self, data, placement, childr
     }
     lines.push(blank());
   }
-  return region(self.id, placement.rect, lines, { bg: BG.bind, children });
+  return region(self.id, placement.rect, lines, {
+    bg: BG.bind,
+    children,
+    focused: focus === "self",
+  });
 };
 
-export const inputBody: Body<ContextualView["input"]> = ({ self, data, placement, children }) => [
-  ...inputRegion(self.id, data, placement),
-  ...children,
-];
+export const inputBody: Body<ContextualView["input"]> = ({
+  self,
+  data,
+  placement,
+  children,
+  focus,
+}) => [...inputRegion(self.id, data, placement, focus === "self"), ...children];
 
 /**
  * The Execution History band.
@@ -273,8 +303,8 @@ export const inputBody: Body<ContextualView["input"]> = ({ self, data, placement
  * its own stem, a selection is gold with a caret — and what changed is who asks
  * for it: the band is a component handed its own view and its own box.
  */
-export const historyBody: Body<HistoryData> = ({ self, data, placement, children }) => [
-  ...bandRegion(self.id, data.view, placement, data.mutation, data.motion, data.focus),
+export const historyBody: Body<HistoryData> = ({ self, data, placement, children, focus }) => [
+  ...bandRegion(self.id, data.view, placement, data.mutation, data.motion, focus === "self"),
   ...children,
 ];
 
@@ -282,7 +312,6 @@ export interface HistoryData {
   readonly view: HistoryView;
   readonly mutation?: Mutation;
   readonly motion?: Motion;
-  readonly focus?: FocusView;
 }
 
 /**
@@ -291,14 +320,32 @@ export interface HistoryData {
  * A recorded drawer keeps its complete presentation and says so; nothing about
  * it is actionable, and the tree does not offer its controls for focus.
  */
-export const drawerBody: Body<DrawerData> = ({ self, data, placement, children }) => [
-  ...drawerRegion(self.id, data.view, placement, data.focus),
+export const drawerBody: Body<DrawerData> = ({ self, data, placement, children, focus }) => [
+  // The gutter is reserved while focus is anywhere inside this drawer, which is
+  // all this node knows and all it needs: the glyph in it is drawn by whichever
+  // control is focused, not by the form around it.
+  ...drawerRegion(self.id, data.view, placement, focus === "self", focus !== "outside"),
+  ...children,
+];
+
+/**
+ * One focusable control: a field, a button, a transport action.
+ *
+ * It draws exactly one thing — its own focus marker, in the cell its parent
+ * reserved for it — because which control holds focus is the control's own to
+ * say. For a parent to draw this it would have to be told which of its children
+ * was focused, and that is the knowledge tree traversal deliberately withholds.
+ *
+ * A control whose parent reserved no cell draws nothing, which is how the
+ * `Run` affordance behaves: the input band spends no column on a gutter.
+ */
+export const controlBody: Body<undefined> = ({ self, placement, children, focus }) => [
+  ...(focus === "self" ? focusMark(`${self.id}.mark`, placement.rect) : []),
   ...children,
 ];
 
 export interface DrawerData {
   readonly view: DrawerView;
-  readonly focus?: FocusView;
 }
 
 /** Narrow only: the one row naming the surface you are on. */
@@ -319,22 +366,23 @@ export const rulesBody: Body<readonly Rect[]> = ({ self, data, children }) => [
   ...children,
 ];
 
-/** Where focus is, as a glyph that survives a monochrome terminal. */
-export const focusMarkerBody: Body<{ readonly layout: Layout; readonly focus?: FocusView }> = ({
-  self,
-  data,
-  children,
-}) => [...focusMarkerOps(self.id, data.layout, data.focus), ...children];
-
-/** The numbered focus map, when it is asked for. */
-export const focusMapBody: Body<{ readonly layout: Layout; readonly focus?: FocusView }> = ({
-  self,
-  data,
-  children,
-}) => [
-  ...(data.focus?.overlay === true ? focusMapRegion(self.id, data.layout, data.focus) : []),
+/**
+ * The numbered focus map.
+ *
+ * Its entries are derived by walking the mounted tree — by its parent, which is
+ * the only thing that can see the tree — and its box is the placement its
+ * parent gave it. It is handed no layout and no application focus state.
+ */
+export const focusMapBody: Body<FocusMapData> = ({ self, data, placement, children }) => [
+  ...(data.visible ? focusMapRegion(self.id, data.entries, placement) : []),
   ...children,
 ];
+
+export interface FocusMapData {
+  readonly entries: readonly OverlayEntry[];
+  /** Ordinary UI state: whether F1 has been pressed. Nothing about focus. */
+  readonly visible: boolean;
+}
 
 /** The refusal a terminal below the supported minimum gets instead of a screen. */
 export const refusalBody: Body<Layout> = ({ self, data }) => tooSmallRegion(self.id, data);

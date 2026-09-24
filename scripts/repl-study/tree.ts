@@ -41,9 +41,9 @@ import { attach, placementOf } from "./component.ts";
 import type { Placement } from "./component.ts";
 import {
   bindingsBody,
+  controlBody,
   drawerBody,
   focusMapBody,
-  focusMarkerBody,
   headerBody,
   historyBody,
   inputBody,
@@ -55,9 +55,9 @@ import {
   surfaceBarBody,
   transcriptBody,
 } from "./components.ts";
-import type { FocusView } from "./render.ts";
 import type { Motion } from "./playback.ts";
 import type { ReplView } from "./view.ts";
+import { drawerSlots, transportSlots } from "./render.ts";
 import type { Layout, Rect } from "./layout.ts";
 import { isDrawerKind } from "./fixtures.ts";
 import type { ReplState } from "./store.ts";
@@ -134,7 +134,8 @@ export interface PresentOptions {
   readonly anchor?: number;
   readonly mutation?: Mutation;
   readonly motion?: Motion;
-  readonly focus?: FocusView;
+  /** Ordinary UI state: whether F1 has been pressed. Nothing about focus. */
+  readonly overlay?: boolean;
 }
 
 interface Mounted {
@@ -169,7 +170,7 @@ export function useReplTree(state: ReplState): Operation<ReplTree> {
         regions.set(region, node);
       }
       // Drawn after the panes, so they land on top of what they describe.
-      for (const name of ["chrome:rules", "chrome:focus-marker", "chrome:focus-map"]) {
+      for (const name of ["chrome:rules", "chrome:focus-map"]) {
         root.node.createChild(name).set("container", true);
       }
       useFocus(root.node);
@@ -396,8 +397,15 @@ export function useReplTree(state: ReplState): Operation<ReplTree> {
               return;
             }
           }
+          // The overlay is the tree, walked — by the root, which is the only
+          // thing that can see it. Its child is handed the result.
+          const overlay = overlayOf(tree, options.mutation);
+          // Asked of the tree once. It never reaches a body: it is used here to
+          // work out which of a parent's children get a marker cell reserved,
+          // and a body learns only where focus is relative to itself.
+          const here = current(root.node);
           for (const child of root.node.children) {
-            presentChild(child, view, layout, place, options);
+            presentChild(child, view, layout, place, options, overlay, here);
           }
         },
         focused: () => current(root.node),
@@ -475,6 +483,8 @@ export interface OverlayEntry {
   /** False where the node is drawn and numbered but cannot take focus. */
   readonly enabled: boolean;
   readonly number: number;
+  /** Whether this is the node the tree currently reports as focused. */
+  readonly focused: boolean;
 }
 
 /**
@@ -495,17 +505,20 @@ export function overlayOf(tree: ReplTree, mutation?: Mutation): readonly Overlay
       label: labelFor(`region:${region}`),
       enabled: true,
       number: at + 1,
+      focused: false,
     }));
   }
   const nodes = tree.map();
   const regions = nodes.filter((node) => node.name.startsWith("region:"));
   const rest = nodes.filter((node) => !node.name.startsWith("region:"));
   const ordered = regions.length === ROUTE_SURFACES.length ? [...regions, ...rest] : nodes;
+  const here = tree.focused();
   return ordered.map((node, at) => ({
     id: node.name,
     label: labelFor(node.name),
     enabled: isFocusable(node),
     number: at + 1,
+    focused: node === here,
   }));
 }
 
@@ -522,6 +535,8 @@ function presentChild(
   layout: Layout,
   place: (rect: Rect | undefined) => Placement,
   options: PresentOptions,
+  overlay: readonly OverlayEntry[],
+  here: Node,
 ): void {
   const name = child.name;
   if (name === "region:sessions") {
@@ -551,9 +566,14 @@ function presentChild(
     // simply has nowhere to draw.
     const taken = view.contextual.drawers.length > 0;
     attach(child, inputBody, view.contextual.input, place(taken ? undefined : layout.contextual));
+    // `Run` is a control of this band, and the band reserves no cell for it.
+    for (const control of child.children) {
+      attach(control, controlBody, undefined, place(undefined));
+    }
     return;
   }
   if (name === "region:history") {
+    const placement = place(layout.footer);
     attach(
       child,
       historyBody,
@@ -561,10 +581,16 @@ function presentChild(
         view: view.history,
         mutation: options.mutation,
         motion: options.motion,
-        focus: options.focus,
       },
-      place(layout.footer),
+      placement,
     );
+    // The band knows where it wrote each bracket, so it is the band that says
+    // where its controls may draw. They are mounted in the band's own order,
+    // because both come from the same transport mode.
+    const cells = transportSlots(view.history, placement);
+    [...child.children].forEach((control, at) => {
+      attach(control, controlBody, undefined, place(cells[at]));
+    });
     return;
   }
   if (name.startsWith("drawer:")) {
@@ -579,7 +605,19 @@ function presentChild(
         covering && layout.contextual !== undefined && layout.footer !== undefined
           ? { ...layout.contextual, height: layout.contextual.height + layout.footer.height }
           : layout.contextual;
-      attach(child, drawerBody, { view: drawer, focus: options.focus }, place(rect));
+      const placement = place(rect);
+      attach(child, drawerBody, { view: drawer }, placement);
+      // The form laid its own gutter out, so the form says which cell each of
+      // its controls owns. Whether there is a gutter at all is the same
+      // question the drawer's body asks of itself: is focus inside me?
+      const cells = new Map(
+        drawerSlots(drawer, placement, holds(child, here)).map((slot) => [slot.id, slot.rect]),
+      );
+      for (const panel of child.children) {
+        for (const control of panel.children) {
+          attach(control, controlBody, undefined, place(cells.get(control.name)));
+        }
+      }
       return;
     }
   }
@@ -604,13 +642,27 @@ function presentChild(
     attach(child, rulesBody, layout.separators, place(layout.screen));
     return;
   }
-  if (name === "chrome:focus-marker") {
-    attach(child, focusMarkerBody, { layout, focus: options.focus }, place(layout.screen));
-    return;
-  }
   if (name === "chrome:focus-map") {
-    attach(child, focusMapBody, { layout, focus: options.focus }, place(layout.screen));
+    attach(
+      child,
+      focusMapBody,
+      {
+        entries: overlay,
+        visible: options.overlay === true,
+      },
+      place(layout.screen),
+    );
     return;
   }
   attach(child, outletBody, undefined, place(undefined));
+}
+
+/** True where `target` is `node` or sits somewhere beneath it. */
+function holds(node: Node, target: Node): boolean {
+  for (let at: Node | undefined = target; at; at = at.parent) {
+    if (at === node) {
+      return true;
+    }
+  }
+  return false;
 }

@@ -45,10 +45,14 @@ export function paint(request: PaintRequest): Painted {
   const { tree, view, layout } = request;
   tree.present(view, layout, { anchor: request.anchor ?? 0, ...request.options });
   const root: Node = tree.root.node;
+  // Focus is asked of the tree once, here, and handed to the walk. A body then
+  // learns only where focus is relative to itself, which is the whole of what
+  // it may know.
+  const focused = tree.focused();
   const ids: Record<string, string> = { root: root.id };
   if (layout.profile === "too-small") {
     for (const child of root.children) {
-      return { ops: walk(child), ids: { ...ids, "too-small": child.id } };
+      return { ops: walk(child, focused), ids: { ...ids, "too-small": child.id } };
     }
   }
   for (const child of root.children) {
@@ -62,5 +66,5 @@ export function paint(request: PaintRequest): Painted {
       ids.contextual = child.id;
     }
   }
-  return { ops: walk(root), ids };
+  return { ops: walk(root, focused), ids };
 }

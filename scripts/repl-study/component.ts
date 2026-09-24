@@ -76,8 +76,21 @@ export interface Surface {
   readonly name: string;
 }
 
+/**
+ * Where focus is, relative to this node and nothing else.
+ *
+ * `self` is the focused node. `within` is an ancestor of it. `outside` is
+ * everything else. A body is told no more than this: which *descendant* holds
+ * focus is not a question a component may ask, because answering it would let a
+ * parent draw a child's state and the child would stop owning its own
+ * presentation.
+ */
+export type FocusRelation = "self" | "within" | "outside";
+
 export interface BodyContext<Data> {
   readonly self: Surface;
+  /** Where focus is relative to this node, derived while walking the tree. */
+  readonly focus: FocusRelation;
   /** This component's own immutable view subtree. */
   readonly data: Data;
   readonly placement: Placement;
@@ -88,7 +101,7 @@ export interface BodyContext<Data> {
 export type Body<Data> = (context: BodyContext<Data>) => Op[];
 
 interface Attached {
-  readonly render: (node: Node, children: readonly Op[]) => Op[];
+  readonly render: (node: Node, children: readonly Op[], focus: FocusRelation) => Op[];
 }
 
 const bodyKey = createNodeData<Attached>("xmd:repl:body");
@@ -116,7 +129,8 @@ export function attach<Data>(
   let where = placement;
   const self: Surface = { id: node.id, name: node.name === "" ? "root" : node.name };
   node.data.set(bodyKey, {
-    render: (_node, children) => body({ self, data: current, placement: where, children }),
+    render: (_node, children, focus) =>
+      body({ self, data: current, placement: where, children, focus }),
   });
   return (next, to) => {
     current = next;
@@ -135,11 +149,27 @@ export function hasBody(node: Node): boolean {
  * is what lets a purely structural node — a routing outlet, a focus root — exist
  * without drawing anything.
  */
-export function walk(node: Node): Op[] {
+export function walk(node: Node, focused?: Node): Op[] {
   const children: Op[] = [];
+  let holds = false;
   for (const child of node.children) {
-    children.push(...walk(child));
+    children.push(...walk(child, focused));
+    if (focused !== undefined && contains(child, focused)) {
+      holds = true;
+    }
   }
+  const relation: FocusRelation =
+    focused === undefined ? "outside" : node === focused ? "self" : holds ? "within" : "outside";
   const attached = node.data.get(bodyKey);
-  return attached ? attached.render(node, children) : children;
+  return attached ? attached.render(node, children, relation) : children;
+}
+
+/** True where `node` is `target` or one of its ancestors. */
+function contains(node: Node, target: Node): boolean {
+  for (let at: Node | undefined = target; at; at = at.parent) {
+    if (at === node) {
+      return true;
+    }
+  }
+  return false;
 }

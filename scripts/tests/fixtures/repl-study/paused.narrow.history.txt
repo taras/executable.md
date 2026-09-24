@@ -1,6 +1,6 @@
 paused.narrow.history · 90 × 28
  EXECUTION HISTORY · 4 / 4  RECONSTRUCTED AT 00:12 · READ-ONLY                    Tab ▸
- HISTORY    │              ┃ PAUSED HEAD     INSPECTING  [ Continue ] [ Return ] [ Fork ]
+▌HISTORY    │              ┃ PAUSED HEAD     INSPECTING  [ Continue ] [ Return ] [ Fork ]
  00:53      ││           ││┃ 00:53
  Entry 1    ││ │         ││┃
            ─◆●─●●───2─≈●─●●┃

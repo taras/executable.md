@@ -20,7 +20,6 @@ import type { Motion, Playback } from "./playback.ts";
 import type { Fixture } from "./model.ts";
 import type { Profile, SurfaceName } from "./layout.ts";
 import { layoutFor } from "./layout.ts";
-import type { FocusView } from "./render.ts";
 import { paint } from "./paint.ts";
 import { projectFixture } from "./view.ts";
 import type { ReplView } from "./view.ts";
@@ -36,7 +35,6 @@ import { initialView } from "./store.ts";
 import type { View } from "./store.ts";
 import { fixtureFor, viewOf } from "./store.ts";
 import { FRAMES, useFrame } from "./frames.ts";
-import { overlayOf } from "./tree.ts";
 import type { Mutation } from "./mutations.ts";
 
 export interface Size {
@@ -167,8 +165,13 @@ export interface FrameRequest {
   readonly surface?: SurfaceName;
   /** Present only while a playback is running between two fixtures. */
   readonly motion?: Motion;
-  /** Where focus is. Left out, the frame says nothing about focus at all. */
-  readonly focus?: FocusView;
+  /**
+   * Ordinary UI state: whether the numbered overlay is drawn.
+   *
+   * Nothing here says where focus is. There is no longer anywhere to say it:
+   * the tree owns focus, and a frame is drawn by walking the tree.
+   */
+  readonly overlay?: boolean;
   /**
    * Seconds since the previous frame, which is the unit the renderer measures
    * transitions in. Leaving it out hands the renderer its own monotonic clock;
@@ -247,7 +250,7 @@ export function renderInto(term: Term, request: FrameRequest): Frame {
     view: shown,
     layout,
     anchor: view.anchor,
-    options: { focus: request.focus, mutation, motion },
+    options: { overlay: request.overlay, mutation, motion },
   });
   const result = term.render(
     painted.ops,
@@ -509,11 +512,17 @@ export function* captureFocus(): Operation<Capture[]> {
     const profiles: Profile[] = NARROW_FRAMES.includes(subject.id) ? ["wide", "narrow"] : ["wide"];
     for (const profile of profiles) {
       const size = PROFILE_SIZES[profile];
-      const frame = yield* renderFrame({
+      const term = yield* useTerm(size);
+      // The frame's own tree draws the frame. It used to be told where focus
+      // was and then rendered by a second tree mounted for the occasion, which
+      // is how a capture could show focus on a node the rendering tree had
+      // never heard of. One tree answers both.
+      const frame = renderInto(term, {
         fixture: fixtureFor(state),
         view: viewOf(state),
         size,
-        focus: { here: tree.focused().name, map: overlayOf(tree), overlay: true },
+        overlay: true,
+        composition: composeInto(tree, fixtureFor(state), viewOf(state)),
       });
       captures.push({ name: `frame-${subject.id}.${profile}`, profile, size, frame });
     }

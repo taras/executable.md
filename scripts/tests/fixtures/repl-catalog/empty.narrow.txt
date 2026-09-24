@@ -24,5 +24,5 @@ empty.narrow · 90 × 28 · An empty REPL, before anything has run
 
 
 
- REPL INPUT        ⇧⏎ newline                                                [ Run ⌘⏎ ]
+▌REPL INPUT        ⇧⏎ newline                                                [ Run ⌘⏎ ]
  Enter XMD or invoke a document…

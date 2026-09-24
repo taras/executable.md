@@ -40,7 +40,7 @@ settled.wide · 200 × 50 · A settled entry, the input ready for the next one
                                                 │                                                                                                                      │
                                                 │                                                                                                                      │
                                                 │                                                                                                                      │
-                                                │ REPL INPUT        ready for Entry 2                                                                                                      [ Run ⌘⏎ ]
+                                                │▌REPL INPUT        ready for Entry 2                                                                                                      [ Run ⌘⏎ ]
                                                 │ <Plan>
                                                 │
                                                 │

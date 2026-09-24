@@ -122,8 +122,17 @@ describe("a component is a body on a node", () => {
     walk(node);
     // A body that held the node could create children, remove itself, set props
     // or reach its scope; the tree's authority would be advisory.
-    expect(Object.keys(seen).toSorted()).toEqual(["children", "data", "placement", "self"]);
+    expect(Object.keys(seen).toSorted()).toEqual([
+      "children",
+      "data",
+      "focus",
+      "placement",
+      "self",
+    ]);
     expect(Object.keys(seen.self as object).toSorted()).toEqual(["id", "name"]);
+    // Focus arrives as a relation to this node and nothing else: a word, never
+    // a node, an identity or a map of where everything else is.
+    expect(seen.focus).toBe("outside");
   });
 
   it("renders the REPL by walking the mounted tree", function* () {
@@ -435,7 +444,14 @@ describe("one mounted tree answers everything", () => {
       },
     );
     walk(node);
-    expect(Object.keys(seen).toSorted()).toEqual(["children", "data", "placement", "self"]);
+    expect(Object.keys(seen).toSorted()).toEqual([
+      "children",
+      "data",
+      "focus",
+      "placement",
+      "self",
+    ]);
+    expect(seen.focus).toBe("outside");
     // Its own data, not the projection every other component was built from.
     expect(seen.data).toEqual({ only: "mine" });
     expect(Object.keys(seen.self as object).toSorted()).toEqual(["id", "name"]);

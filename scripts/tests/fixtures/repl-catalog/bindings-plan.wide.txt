@@ -2,7 +2,7 @@ bindings-plan.wide · 200 × 50 · Bindings at the Plan scope
  XMD REPL                                       │ REPL › Entry 1 › document › Plan · active
                                                 │
  SESSION   JOURNAL   STATE                      │───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
-                                                │ Entry 1  ● running · 31.4s       ↳ Plan scope open                                                                   │ BINDINGS
+                                                │ Entry 1  ● running · 31.4s       ↳ Plan scope open                                                                   │▌BINDINGS
  SESSIONS · 1                                   │                                                                                                                      │ Plan scope
  chronological · selection follows you, not ac… │ ← opened from Entry 1 · live execution projection, not an editor                                                     │
                                                 │ document                                                                                                             │ prompt

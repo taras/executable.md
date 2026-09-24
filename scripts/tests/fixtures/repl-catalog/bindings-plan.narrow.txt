@@ -1,6 +1,6 @@
 bindings-plan.narrow · 90 × 28 · Bindings at the Plan scope
  BINDINGS · 3 / 4           REPL › Entry 1 › document › Plan · active             Tab ▸
- BINDINGS
+▌BINDINGS
  Plan scope
 
  prompt

@@ -22,10 +22,9 @@ import { fixture, fixtures } from "./fixtures.ts";
 import type { Fixture, FixtureName } from "./model.ts";
 import { SURFACES } from "./layout.ts";
 import { transcriptLines } from "./render.ts";
-import type { FocusView } from "./render.ts";
 import { initialView } from "./store.ts";
 import { asKey, fixtureFor, hydrate, reduce, viewOf } from "./store.ts";
-import { overlayOf, useReplTree } from "./tree.ts";
+import { useReplTree } from "./tree.ts";
 import { drive, enterRoute } from "./drive.ts";
 import type { HarnessEvent, ReplState, View } from "./store.ts";
 import { journalThrough, markerShowing } from "./journal.ts";
@@ -209,7 +208,7 @@ function draw(
   mutation?: Mutation,
   motion?: Motion,
   deltaMs = 0,
-  focus?: FocusView,
+  overlay?: boolean,
 ): Painted {
   // One render path for the harness and for the captures, so what a person sees
   // in a terminal and what a golden records cannot drift apart.
@@ -220,7 +219,7 @@ function draw(
     size: { cols: state.cols, rows: state.rows },
     mutation,
     motion,
-    focus,
+    overlay,
     // The harness counts in milliseconds and the renderer in seconds. The
     // conversion happens here, once, at the only place the two meet.
     deltaSeconds: deltaMs / 1000,
@@ -522,11 +521,6 @@ export function* runInteractive(options: InteractiveOptions): Operation<void> {
     const repeated = journey !== undefined && segment?.kind === "hold" && held === label;
     if (!repeated) {
       const measured = { cols: state.cols, rows: state.rows };
-      const focus: FocusView = {
-        here: tree.focused().name,
-        map: overlayOf(tree),
-        overlay: repl.overlay,
-      };
       // The moment on screen is composed **into the harness's one tree**, so
       // rendering, focus, scoped input and the overlay all come off the same
       // mounted object. A second tree for rendering would look right on its own
@@ -543,7 +537,16 @@ export function* runInteractive(options: InteractiveOptions): Operation<void> {
       const composition = composeInto(tree, state.fixture, state.view, undefined, options.mutation);
       let painted: Painted;
       try {
-        painted = draw(term, state, composition, write, options.mutation, motion, deltaMs, focus);
+        painted = draw(
+          term,
+          state,
+          composition,
+          write,
+          options.mutation,
+          motion,
+          deltaMs,
+          repl.overlay,
+        );
       } catch (error) {
         if (!(error instanceof RendererCapacityError)) {
           throw error;
@@ -552,7 +555,7 @@ export function* runInteractive(options: InteractiveOptions): Operation<void> {
         // wide terminal will do. A new one starts that cache again and repaints
         // the whole screen, so the person watching sees nothing but a frame.
         term = yield* useTerm(measured);
-        painted = draw(term, state, composition, write, options.mutation, motion, 0, focus);
+        painted = draw(term, state, composition, write, options.mutation, motion, 0, repl.overlay);
       }
       frames += 1;
       options.trace?.push({

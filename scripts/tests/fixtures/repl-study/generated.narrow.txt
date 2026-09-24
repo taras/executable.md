@@ -1,6 +1,6 @@
 generated.narrow · 90 × 28
  TRANSCRIPT · 2 / 4         REPL › Entry 1 › document · active                    Tab ▸
- Entry 1  ● running · 48.1s       ↳ document scope open
+▌Entry 1  ● running · 48.1s       ↳ document scope open
 
  ← opened from Entry 1 · live execution projection, not an editor
  document

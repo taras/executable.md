@@ -2,7 +2,7 @@ bindings-document.wide · 200 × 50 · Bindings at the document scope
  XMD REPL                                       │ REPL › Entry 1 › document · suspended
                                                 │
  SESSION   JOURNAL   STATE                      │───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
-                                                │ Entry 1  ● running · 48.9s       ↳ document scope suspended                                                          │ BINDINGS
+                                                │ Entry 1  ● running · 48.9s       ↳ document scope suspended                                                          │▌BINDINGS
  SESSIONS · 3                                   │                                                                                                                      │ document scope
  chronological · selection follows you, not ac… │ ← opened from Entry 1 · live execution projection, not an editor                                                     │
                                                 │ document                                                                                                             │ readme

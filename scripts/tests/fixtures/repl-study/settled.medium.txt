@@ -2,7 +2,7 @@ settled.medium · 140 × 38
  SESSION   JOURNAL   STATE        │ REPL · Entry 1 settled
                                   │
  SESSIONS · 3                     │─────────────────────────────────────────────────────────────────────────────────────────────────────────
-                                  │ Entry 1  ✓ completed · 41.2s     ▸ source · 8 lines                          │ BINDINGS
+                                  │▌Entry 1  ✓ completed · 41.2s     ▸ source · 8 lines                          │ BINDINGS
  │ plan-a91f7c                    │                                                                              │ REPL scope
    ✓ completed   planner          │ Create a project README                                                      │
                                   │ Provide the project name and a one-sentence description.                     │ Entry 1 published none

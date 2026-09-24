@@ -33,7 +33,7 @@ drawer-review.wide · 200 × 50 · The plan-review Elicit drawer
                                                 │ REVIEW REQUIRED
                                                 │ suspended at <Elicit as="review"> · Plan scope · 59 lines returned
                                                 │
-                                                │ # Create a project README
+                                                │ ▸ # Create a project README
                                                 │
                                                 │ Provide the project name and a one-sentence description.
                                                 │
@@ -41,9 +41,9 @@ drawer-review.wide · 200 × 50 · The plan-review Elicit drawer
                                                 │   Enter the project details.
                                                 │ ▸ 53 more lines · ⌥↓ scrolls the Plan
                                                 │
-                                                │ (•) Approve
-                                                │ ( ) Request changes
-                                                │ ( ) Stop
+                                                │ (•)   Approve
+                                                │ ( )   Request changes
+                                                │ ( )   Stop
  EXECUTION HISTORY                 │                                                                                                                                         ┃ LIVE     LIVE  [ Pause ]
  recorded · 00:31                  │             │                                                                                                                           ┃ 00:31
  Entry 1                           │             │                                │                                                                                          ┃

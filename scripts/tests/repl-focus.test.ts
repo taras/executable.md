@@ -24,7 +24,15 @@ import type { Operation } from "effection";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { captureFocus, captureText, PROFILE_SIZES, renderFrame } from "../repl-study/capture.ts";
+import {
+  captureFocus,
+  captureText,
+  composeInto,
+  PROFILE_SIZES,
+  renderInto,
+  useTerm,
+} from "../repl-study/capture.ts";
+import type { FrameRequest } from "../repl-study/capture.ts";
 import { FRAMES, frame, stateFor, useFrame } from "../repl-study/frames.ts";
 import { openingState, scanKeys } from "../repl-study/host.ts";
 import { fold, JOURNAL, journalThrough, markers, siblingsOf } from "../repl-study/journal.ts";
@@ -77,6 +85,36 @@ function* opened(
   const state = hydrate(url, journalThrough(head));
   const tree = yield* useReplTree(state);
   return { state, tree };
+}
+
+/**
+ * One frame, drawn by the tree that owns it.
+ *
+ * `extra` is what a caller might still try to tell the renderer. It is spread
+ * over a complete request, so anything it carries is carried all the way to
+ * `paint`.
+ */
+function* shot(
+  tree: ReplTree,
+  state: ReplState,
+  extra: Record<string, unknown> = {},
+): Operation<string> {
+  const term = yield* useTerm(WIDE);
+  const fixture = fixtureFor(state);
+  const view = viewOf(state);
+  return renderInto(term, {
+    fixture,
+    view,
+    size: WIDE,
+    overlay: true,
+    composition: composeInto(tree, fixture, view),
+    ...extra,
+  } as FrameRequest).text;
+}
+
+/** The overlay's own row for one entry, as the map draws it. */
+function overlayRow(entry: { readonly number: number; readonly label: string }): string {
+  return `\u25b8 ${String(entry.number).padEnd(3)}${entry.label}`;
 }
 
 /** The identities Tab walks, in tree order. */
@@ -968,27 +1006,42 @@ describe("the frames, as pictures", () => {
     }
   });
 
-  it("draws the focused region and the numbered map", function* () {
-    const subject = frame("12")!;
-    const { state, tree } = yield* useFrame(subject);
-    const rendered = yield* renderFrame({
-      fixture: fixtureFor(state),
-      view: viewOf(state),
-      size: WIDE,
-      focus: { here: tree.focused().name, map: overlayOf(tree), overlay: true },
+  it("cannot be told where focus is, from outside or from a moment ago", function* () {
+    // #839 handed the renderer a `FocusView`: an identity and a numbered map,
+    // worked out somewhere else and threaded down through every frame request.
+    // The control is to try that again. There is nowhere left for it to land,
+    // and the proof is bytes: a frame drawn with a stale claim attached is the
+    // frame drawn without one.
+    const { state, tree } = yield* useFrame(frame("01")!);
+    const stale = overlayOf(tree).find((entry) => entry.focused)!;
+    const before = yield* shot(tree, state);
+    expect(before).toContain(overlayRow(stale));
+
+    tree.advance();
+    const after = yield* shot(tree, state);
+    // Focus moved, and the picture moved with it, because the picture asked.
+    expect(after).not.toContain(overlayRow(stale));
+
+    const claimed = yield* shot(tree, state, {
+      focus: { here: stale.id, map: [stale], overlay: true },
     });
-    expect(rendered.text).toContain("FOCUS MAP");
-    expect(rendered.text).toContain("Fork from here");
+    expect(claimed).toBe(after);
   });
 
-  it("says nothing about focus in a frame that was not asked about it", function* () {
-    const state = stateFor(frame("07")!);
-    const rendered = yield* renderFrame({
-      fixture: fixtureFor(state),
-      view: viewOf(state),
-      size: WIDE,
-    });
-    expect(rendered.text).not.toContain("FOCUS MAP");
+  it("draws the focused region and the numbered map", function* () {
+    const { state, tree } = yield* useFrame(frame("12")!);
+    const rendered = yield* shot(tree, state);
+    expect(rendered).toContain("FOCUS MAP");
+    expect(rendered).toContain("Fork from here");
+  });
+
+  // The overlay is ordinary UI state, so a frame that did not ask for it does
+  // not get it. A frame cannot be silent about focus itself any more: focus is
+  // the tree's, the tree always has one, and drawing from the tree draws it.
+  it("draws no focus map in a frame that did not ask for one", function* () {
+    const { state, tree } = yield* useFrame(frame("07")!);
+    const rendered = yield* shot(tree, state, { overlay: false });
+    expect(rendered).not.toContain("FOCUS MAP");
   });
 });
 

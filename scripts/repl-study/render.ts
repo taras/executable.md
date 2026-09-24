@@ -150,6 +150,13 @@ function lineOps(id: string, width: number, line: VisualLine): Op[] {
 export interface RegionOptions {
   readonly bg?: number;
   /**
+   * Draw this region's own focus marker.
+   *
+   * The component that *is* focused draws it, from its own node-relative
+   * relation. Nothing tells a parent which of its children is focused.
+   */
+  readonly focused?: boolean;
+  /**
    * What this region's children already rendered.
    *
    * A parent wraps them rather than drawing over them, which is what makes the
@@ -209,6 +216,18 @@ export function region(
   });
   ops.push(...(options.children ?? []));
   ops.push(close());
+  if (options.focused === true) {
+    // A glyph rather than a colour, so focus survives a monochrome terminal and
+    // a committed `.txt` capture.
+    ops.push(
+      open(`${id}.focus`, {
+        layout: { width: fixed(1), height: fixed(1) },
+        floating: { x: rect.x, y: rect.y, attachTo: "root" },
+      }),
+      text("▌", { color: C.focus }),
+      close(),
+    );
+  }
   return ops;
 }
 
@@ -256,53 +275,26 @@ const DRAWER_TRANSITION = {
   properties: ["height", "y"],
 } as const;
 
-/**
- * What the renderer is told about focus.
- *
- * It is handed the answer rather than asked to work one out: `focus.ts` derives
- * the registry and the map every frame, and drawing is not a place where a
- * second opinion about where focus is may be formed.
- */
-export interface FocusView {
-  /** The name of the node the tree reports as focused. */
-  readonly here: string;
-  /** The live tree, walked and numbered. Nothing here is a second registry. */
-  readonly map: readonly OverlayEntry[];
-  readonly overlay: boolean;
+/** One numbered entry the overlay draws, derived from the mounted tree. */
+export interface OverlayItem {
+  readonly id: string;
+  readonly label: string;
+  readonly enabled: boolean;
+  readonly number: number;
+  readonly focused: boolean;
 }
 
-/** The glyph a focused region wears, so focus survives a monochrome terminal. */
-const FOCUS_GLYPH = "\u258c";
-
-/** The glyph beside a focused control or field. */
+/** The glyph beside the focused entry. */
 const FOCUS_MARK = "\u25b8";
 
-/** Where the region carrying one identity was composed, if it is on screen. */
-function regionRect(layout: Layout, identity: string): Rect | undefined {
-  if (identity === "region:sessions") {
-    return layout.sidebar;
-  }
-  if (identity === "region:transcript") {
-    return layout.transcript;
-  }
-  if (identity === "region:bindings") {
-    return layout.bindings;
-  }
-  if (identity === "region:input") {
-    return layout.contextual;
-  }
-  if (identity === "region:history") {
-    return layout.footer;
-  }
-  return undefined;
-}
-
-export function focusMarkerOps(id: string, layout: Layout, focus: FocusView | undefined): Op[] {
-  if (focus === undefined) {
-    return [];
-  }
-  const rect = regionRect(layout, focus.here);
-  if (rect === undefined) {
+/**
+ * One control's own focus marker, in the single cell its parent reserved.
+ *
+ * Drawn by the control, never by its parent: it is the one thing a component
+ * says about focus, and it says it only about itself.
+ */
+export function focusMark(id: string, rect: Rect): Op[] {
+  if (rect.width <= 0 || rect.height <= 0) {
     return [];
   }
   return [
@@ -310,18 +302,10 @@ export function focusMarkerOps(id: string, layout: Layout, focus: FocusView | un
       layout: { width: fixed(1), height: fixed(1) },
       floating: { x: rect.x, y: rect.y, attachTo: "root" },
     }),
-    text(FOCUS_GLYPH, { color: C.focus }),
+    text(FOCUS_MARK, { color: C.focus }),
     close(),
   ];
 }
-
-/** The word the footer draws for a transport control, keyed by its identity. */
-const TRANSPORT_WORDS: Record<string, readonly string[]> = {
-  "control:transport.pause": ["Pause"],
-  "control:transport.continue": ["Continue"],
-  "control:transport.return-head": ["Return to paused head", "Return"],
-  "control:transport.fork": ["Fork from here", "Fork"],
-};
 
 /**
  * The numbered focus map, as a legend rather than as floating callouts.
@@ -331,18 +315,25 @@ const TRANSPORT_WORDS: Record<string, readonly string[]> = {
  * same numbers, in the same order, with a disabled target dimmed and present —
  * study frame 12 numbers a dimmed `Continue` and says Tab skips it, so the map
  * has to show what the ring does not.
+ *
+ * Its entries are derived from the mounted tree by its parent, and its box is
+ * the placement its parent gave it. It is handed no layout and no application
+ * focus state.
  */
-export function focusMapRegion(id: string, layout: Layout, focus: FocusView): Op[] {
-  const ordered = focus.map;
-  const width = Math.min(34, Math.max(18, Math.round(layout.cols * 0.24)));
-  const height = Math.min(layout.rows, ordered.length + 2);
-  const rect = { x: Math.max(0, layout.cols - width - 1), y: 1, width, height };
+export function focusMapRegion(
+  id: string,
+  ordered: readonly OverlayItem[],
+  placement: Placement,
+): Op[] {
+  const screen = placement.rect;
+  const width = Math.min(34, Math.max(18, Math.round(screen.width * 0.24)));
+  const height = Math.min(screen.height, ordered.length + 2);
+  const rect = { x: Math.max(0, screen.width - width - 1), y: 1, width, height };
   const lines: VisualLine[] = [label("FOCUS MAP · F1")];
   for (const target of ordered) {
-    const on = target.id === focus.here;
     lines.push({
       segments: [
-        { text: on ? `${FOCUS_MARK} ` : "  ", color: C.focus, width: 2 },
+        { text: target.focused ? `${FOCUS_MARK} ` : "  ", color: C.focus, width: 2 },
         { text: `${target.number}`, color: target.enabled ? C.out : C.dim, width: 3 },
         { text: target.label, color: target.enabled ? C.src : C.dim },
       ],
@@ -496,114 +487,201 @@ function entryHeader(entry: Entry): VisualLine {
  * the box its parent gives it, so the same body serves the component tree and
  * the rectangle path while both exist.
  */
+/** One 1×1 cell a control owns, to draw its own focus marker in. */
+export interface Slot {
+  readonly id: string;
+  readonly rect: Rect;
+}
+
+/**
+ * The drawer's lines, and the gutter cell each of its controls owns.
+ *
+ * Both come out of one pass. A slot computed apart from the line it sits in
+ * would be a second layout free to disagree with the first, and the marker
+ * would drift off the word it belongs to.
+ *
+ * The drawer draws the text and *reserves* the gutter; it never fills it. Which
+ * control holds focus is the control's own to say, so the glyph is drawn by the
+ * control, from its own relation to focus. The gutter appears only while focus
+ * is somewhere inside this drawer, which is a fact about this node and its own
+ * subtree — and it is why a drawer nothing is focused in is drawn exactly as
+ * #838 drew it.
+ */
+function drawerContent(
+  drawer: DrawerView,
+  placement: Placement,
+  gutter: boolean,
+): { readonly lines: VisualLine[]; readonly slots: Slot[] } {
+  const rect = placement.rect;
+  const width = Math.max(0, rect.width - 2);
+  const lines: VisualLine[] = [];
+  const slots: Slot[] = [];
+  // A recorded drawer offers nothing to act on, so it spends no column on a
+  // gutter: focus is inside it — on the way out — but none of its controls can
+  // ever hold it, and a gutter would promise one that could.
+  const reserve = gutter && !drawer.historical;
+  /** Reserve the gutter on the line about to be pushed, at `column` within it. */
+  const mark = (id: string, column: number): string => {
+    if (!reserve) {
+      return "";
+    }
+    // Only a line this box actually draws gets a cell. The region clips its own
+    // text; a marker floats above the screen and is clipped by nothing, so a
+    // cell on a line the drawer has no room for would draw over whatever is
+    // there instead — which is what a band shrunk to the closed drawer's height
+    // does during the frame before one opens.
+    const y = rect.y + lines.length;
+    if (lines.length < rect.height && column + 1 < rect.width) {
+      slots.push({ id, rect: { x: rect.x + 1 + column, y, width: 1, height: 1 } });
+    }
+    return "  ";
+  };
+  lines.push(plain(drawer.heading, C.hold));
+  // Which suspended request this is answering is never dropped: a drawer
+  // without its origin is a form with no idea what it belongs to.
+  for (const wrapped of wrapText(drawer.origin, width)) {
+    lines.push(plain(wrapped, C.dim));
+  }
+  if (drawer.historical) {
+    // What this is comes before what it says: a recording offers nothing to
+    // act on, and a reader should know that before reading the form. It also
+    // has to survive a band that clips — appended last, it did not.
+    lines.push(plain("recorded · read-only", C.gold));
+  }
+  lines.push(blank());
+  if (drawer.kind === "project") {
+    for (const wrapped of wrapText(drawer.prompt, width)) {
+      lines.push(plain(wrapped, C.src));
+    }
+    lines.push(blank());
+    for (const field of drawer.fields) {
+      const id = `field:drawer.project.${field.label === "Project name" ? "name" : "description"}`;
+      lines.push(label(`${mark(id, 0)}${field.label}`));
+      lines.push({
+        segments: [
+          { text: "┃ ", color: C.rule, width: 2 },
+          { text: field.value, color: C.out },
+        ],
+      });
+    }
+    lines.push(blank());
+    const validationWidth = Math.min(width, 20);
+    lines.push({
+      segments: [
+        { text: drawer.validation, color: C.dim, width: validationWidth },
+        {
+          text: `${mark("control:drawer.project.submit", validationWidth)}${drawer.submit}`,
+          color: C.tick,
+        },
+      ],
+    });
+    if (!placement.dense) {
+      lines.push(blank());
+      lines.push(label(`${mark("control:drawer.project.schema", 0)}schema`));
+      for (const schema of drawer.schema) {
+        lines.push(plain(schema, C.settledText));
+      }
+    }
+  }
+  if (drawer.kind === "review") {
+    lines.push(plain(`${mark("control:drawer.review.scroll", 0)}${drawer.plan[0] ?? ""}`, C.src));
+    for (const planLine of drawer.plan.slice(1)) {
+      lines.push(plain(planLine, C.src));
+    }
+    lines.push(plain(drawer.more, C.dim), blank());
+    const decided = ["approve", "request", "stop"];
+    drawer.decisions.forEach((decision, index) => {
+      lines.push({
+        segments: [
+          {
+            text: decision.chosen ? "(•) " : "( ) ",
+            color: decision.chosen ? C.tick : C.label,
+            width: 4,
+          },
+          {
+            text: `${mark(`control:drawer.review.${decided[index] ?? index}`, 4)}${decision.label}`,
+            color: decision.chosen ? C.out : C.src,
+          },
+        ],
+      });
+    });
+    lines.push(blank());
+    lines.push(plain(`${mark("control:drawer.review.submit", 0)}${drawer.submit}`, C.tick));
+  }
+  if (drawer.kind === "confirm") {
+    for (const wrapped of wrapText(drawer.prompt, width)) {
+      lines.push(plain(wrapped, C.src));
+    }
+    drawer.preview.forEach((preview, index) => {
+      lines.push({
+        segments: [
+          { text: "│ ", color: C.rule, width: 2 },
+          {
+            text: index === 0 ? `${mark("control:drawer.confirm.preview", 2)}${preview}` : preview,
+            color: C.src,
+          },
+        ],
+      });
+    });
+    lines.push(blank());
+    let column = 0;
+    lines.push({
+      segments: drawer.actions.map((action) => {
+        const at = column;
+        const segmentWidth = action.label.length + 6 + (reserve ? 2 : 0);
+        column += segmentWidth;
+        return {
+          text: `[ ${mark(
+            `control:drawer.confirm.${action.label.toLowerCase()}`,
+            at + 2,
+          )}${action.label} ]`,
+          color: action.primary ? C.tick : C.label,
+          width: segmentWidth,
+        };
+      }),
+    });
+    lines.push(plain(drawer.hint, C.dim));
+  }
+  return { lines, slots };
+}
+
+/** Where each of this drawer's controls may draw its own marker. */
+export function drawerSlots(
+  drawer: DrawerView,
+  placement: Placement,
+  gutter: boolean,
+): readonly Slot[] {
+  return drawerContent(drawer, placement, gutter).slots;
+}
+
+/**
+ * One suspension's drawer.
+ *
+ * The drawing is the study's. What changed is that it takes a `DrawerView` and
+ * the box its parent gives it, so the same body serves the component tree and
+ * the rectangle path while both exist.
+ */
 export function drawerRegion(
   id: string,
   drawer: DrawerView,
   placement: Placement,
-  focus?: FocusView,
+  focused = false,
+  gutter = false,
 ): Op[] {
-  const rect = placement.rect;
-  const width = Math.max(0, rect.width - 2);
-  // With nothing to say about focus the drawer is drawn exactly as #838 drew
-  // it, which is what keeps a frame that is not about focus byte-identical.
-  const mark = (id: string): string =>
-    focus === undefined ? "" : focus.here === id ? `${FOCUS_MARK} ` : "  ";
-  {
-    const lines: VisualLine[] = [plain(drawer.heading, C.hold)];
-    // Which suspended request this is answering is never dropped: a drawer
-    // without its origin is a form with no idea what it belongs to.
-    for (const wrapped of wrapText(drawer.origin, width)) {
-      lines.push(plain(wrapped, C.dim));
-    }
-    if (drawer.historical) {
-      // What this is comes before what it says: a recording offers nothing to
-      // act on, and a reader should know that before reading the form. It also
-      // has to survive a band that clips — appended last, it did not.
-      lines.push(plain("recorded · read-only", C.gold));
-    }
-    lines.push(blank());
-    if (drawer.kind === "project") {
-      for (const wrapped of wrapText(drawer.prompt, width)) {
-        lines.push(plain(wrapped, C.src));
-      }
-      lines.push(blank());
-      for (const field of drawer.fields) {
-        const id = `field:drawer.project.${field.label === "Project name" ? "name" : "description"}`;
-        lines.push(label(`${mark(id)}${field.label}`));
-        lines.push({
-          segments: [
-            { text: "┃ ", color: C.rule, width: 2 },
-            { text: field.value, color: C.out },
-          ],
-        });
-      }
-      lines.push(blank(), {
-        segments: [
-          { text: drawer.validation, color: C.dim, width: Math.min(width, 20) },
-          { text: `${mark("control:drawer.project.submit")}${drawer.submit}`, color: C.tick },
-        ],
-      });
-      if (!placement.dense) {
-        lines.push(blank(), label(`${mark("control:drawer.project.schema")}schema`));
-        for (const schema of drawer.schema) {
-          lines.push(plain(schema, C.settledText));
-        }
-      }
-    }
-    if (drawer.kind === "review") {
-      lines.push(plain(`${mark("control:drawer.review.scroll")}${drawer.plan[0] ?? ""}`, C.src));
-      for (const planLine of drawer.plan.slice(1)) {
-        lines.push(plain(planLine, C.src));
-      }
-      lines.push(plain(drawer.more, C.dim), blank());
-      const decided = ["approve", "request", "stop"];
-      drawer.decisions.forEach((decision, index) => {
-        lines.push({
-          segments: [
-            {
-              text: decision.chosen ? "(•) " : "( ) ",
-              color: decision.chosen ? C.tick : C.label,
-              width: 4,
-            },
-            {
-              text: `${mark(`control:drawer.review.${decided[index] ?? index}`)}${decision.label}`,
-              color: decision.chosen ? C.out : C.src,
-            },
-          ],
-        });
-      });
-      lines.push(blank(), plain(`${mark("control:drawer.review.submit")}${drawer.submit}`, C.tick));
-    }
-    if (drawer.kind === "confirm") {
-      for (const wrapped of wrapText(drawer.prompt, width)) {
-        lines.push(plain(wrapped, C.src));
-      }
-      drawer.preview.forEach((preview, index) => {
-        lines.push({
-          segments: [
-            { text: "│ ", color: C.rule, width: 2 },
-            {
-              text: index === 0 ? `${mark("control:drawer.confirm.preview")}${preview}` : preview,
-              color: C.src,
-            },
-          ],
-        });
-      });
-      lines.push(blank(), {
-        segments: drawer.actions.map((action) => ({
-          text: `[ ${mark(`control:drawer.confirm.${action.label.toLowerCase()}`)}${action.label} ]`,
-          color: action.primary ? C.tick : C.label,
-          width: action.label.length + 6 + (focus === undefined ? 0 : 2),
-        })),
-      });
-      lines.push(plain(drawer.hint, C.dim));
-    }
-    return region(id, rect, lines, { bg: BG.drawer, transition: DRAWER_TRANSITION });
-  }
+  return region(id, placement.rect, drawerContent(drawer, placement, gutter).lines, {
+    bg: BG.drawer,
+    transition: DRAWER_TRANSITION,
+    focused,
+  });
 }
 
 /** The REPL input band, which the drawer takes over while one is open. */
-export function inputRegion(id: string, input: InputView, placement: Placement): Op[] {
+export function inputRegion(
+  id: string,
+  input: InputView,
+  placement: Placement,
+  focused = false,
+): Op[] {
   const rect = placement.rect;
   const width = Math.max(0, rect.width - 2);
   const lines: VisualLine[] = [
@@ -620,7 +698,7 @@ export function inputRegion(id: string, input: InputView, placement: Placement):
     },
     plain(input.draft === "" ? input.placeholder : input.draft, C.settledText),
   ];
-  return region(id, rect, lines, { bg: BG.input, transition: DRAWER_TRANSITION });
+  return region(id, rect, lines, { bg: BG.input, transition: DRAWER_TRANSITION, focused });
 }
 
 export function clock(seconds: number): string {
@@ -762,6 +840,34 @@ export function bandGeometry(history: HistoryView, placement: Placement): BandGe
 }
 
 /**
+ * The cell each transport control may draw its own marker in.
+ *
+ * One per control, in the band's own order — the same order the tree mounts
+ * them in, because both read the same transport mode. The marker replaces the
+ * space inside the bracket rather than widening it: the track's room is
+ * computed from that string, and a focused control that shortened the track
+ * would make focus a layout decision.
+ */
+export function transportSlots(history: HistoryView, placement: Placement): readonly Rect[] {
+  const rect = placement.rect;
+  const geometry = bandGeometry(history, placement);
+  const right = [...geometry.right];
+  const slots: Rect[] = [];
+  let column = Math.max(0, geometry.inner - right.length) + [...geometry.transport.word].length + 2;
+  for (const control of geometry.transport.controls) {
+    const cell = column + 1;
+    slots.push(
+      cell < geometry.inner
+        ? { x: rect.x + 1 + cell, y: rect.y, width: 1, height: 1 }
+        : { x: 0, y: 0, width: 0, height: 0 },
+    );
+    // `[ ` + the word + ` ]`, then the space that joins it to the next one.
+    column += [...control].length + 5;
+  }
+  return slots;
+}
+
+/**
  * How tall the notch for one scope depth is.
  *
  * Height carries depth and nothing else: the shallowest scope gets the whole
@@ -802,7 +908,7 @@ export function bandRegion(
   placement: Placement,
   mutation?: Mutation,
   motion?: Motion,
-  focus?: FocusView,
+  focused = false,
 ): Op[] {
   const rect = placement.rect;
   // While a playback runs, the head is where the application says it is; the
@@ -814,7 +920,7 @@ export function bandRegion(
   // The marker replaces the space inside the bracket rather than widening it:
   // the track's room is computed from this string, and a focused control that
   // shortened the track would make focus a layout decision.
-  const right = markTransport(geometry.right, focus);
+  const right = geometry.right;
 
   const grid: string[][] = BAND_ROWS.map(() => Array.from({ length: inner }, () => " "));
   const colors: number[][] = BAND_ROWS.map(() => Array.from({ length: inner }, () => C.dim));
@@ -976,21 +1082,7 @@ export function bandRegion(
     }
   }
 
-  return region(id, rect, lines, { bg: BG.footer, padding: { left: 1, right: 1 } });
-}
-
-/** `[ Continue ]` becomes `[▸Continue ]` — the same width, one glyph louder. */
-function markTransport(right: string, focus: FocusView | undefined): string {
-  if (focus === undefined) {
-    return right;
-  }
-  for (const word of TRANSPORT_WORDS[focus.here] ?? []) {
-    const bracketed = `[ ${word} ]`;
-    if (right.includes(bracketed)) {
-      return right.replace(bracketed, `[${FOCUS_MARK}${word} ]`);
-    }
-  }
-  return right;
+  return region(id, rect, lines, { bg: BG.footer, padding: { left: 1, right: 1 }, focused });
 }
 
 /** Keep each cell's colour when a grid row becomes segments. */

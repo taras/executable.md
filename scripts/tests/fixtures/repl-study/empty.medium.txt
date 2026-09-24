@@ -2,7 +2,7 @@ empty.medium · 140 × 38
  SESSION   JOURNAL   STATE        │ REPL
                                   │
  No sessions yet                  │─────────────────────────────────────────────────────────────────────────────────────────────────────────
-                                  │ TRANSCRIPT                                                                   │ BINDINGS
+                                  │▌TRANSCRIPT                                                                   │ BINDINGS
  Agent sessions appear here as    │                                                                              │ REPL scope
  executions open them.            │ No executions yet.                                                           │
  They persist after an entry      │                                                                              │ No REPL bindings yet
