@@ -159,10 +159,15 @@ export const HISTORY: ReplHistory = [
 /**
  * Two entries, one after the other, for proving who owns a suspension.
  *
- * `entry-1` opens a `project` wait in its `document` scope, answers it and
- * settles. Only then is `entry-2` submitted, and it opens a `project` wait at
- * the same scope path. Every name is the same; only the owner differs — which
- * is the one thing a drawer path can be answered by.
+ * `entry-1` opens a `project` wait in its `document` scope, answers it, leaves
+ * the scope and settles. Only then is `entry-2` submitted, and it opens a
+ * `project` wait at the same scope path. Every name is the same; only the owner
+ * differs — which is the one thing a drawer path can be answered by.
+ *
+ * The scope exit is not bookkeeping. A settled entry with a scope still open is
+ * two live scope trees at one moment, which is a shape the product never
+ * reaches and which would carry a false active scope into everything that reads
+ * the model.
  *
  * It is deliberately a separate fixture. The representative execution stays one
  * entry, because concurrent entry lifecycles are a state the product does not
@@ -204,6 +209,14 @@ export const SERIAL_HISTORY: ReplHistory = [
   },
   {
     marker: "sp-05",
+    at: 17,
+    kind: "scope.exit",
+    entry: "entry-1",
+    scope: [],
+    detail: "document",
+  },
+  {
+    marker: "sp-06",
     at: 18,
     kind: "entry.settled",
     entry: "entry-1",
@@ -211,7 +224,7 @@ export const SERIAL_HISTORY: ReplHistory = [
     detail: "Add a README to the project",
   },
   {
-    marker: "sp-06",
+    marker: "sp-07",
     at: 22,
     kind: "entry.submitted",
     entry: "entry-2",
@@ -219,7 +232,7 @@ export const SERIAL_HISTORY: ReplHistory = [
     detail: "Update the changelog",
   },
   {
-    marker: "sp-07",
+    marker: "sp-08",
     at: 26,
     kind: "scope.enter",
     entry: "entry-2",
@@ -227,7 +240,7 @@ export const SERIAL_HISTORY: ReplHistory = [
     detail: "document",
   },
   {
-    marker: "sp-08",
+    marker: "sp-09",
     at: 31,
     kind: "suspension.opened",
     entry: "entry-2",
@@ -306,6 +319,20 @@ function snapshot(
     prompt: suspension.prompt,
   }));
   return deepFreeze({ marker, at, entries: copied, suspensions: stack });
+}
+
+/** The first scope anywhere in a tree that has not exited. */
+function unsettledScope(scopes: readonly DraftScope[]): DraftScope | undefined {
+  for (const scope of scopes) {
+    if (!scope.settled) {
+      return scope;
+    }
+    const deeper = unsettledScope(scope.children);
+    if (deeper !== undefined) {
+      return deeper;
+    }
+  }
+  return undefined;
 }
 
 /** Whether one open suspension is the exact wait a record names. */
@@ -402,6 +429,15 @@ export function projectModel(execution: string, history: ReplHistory = HISTORY):
         const waiting = suspensions.find((suspension) => suspension.entry === record.entry);
         if (waiting !== undefined) {
           throw new Error(`${where(record)} settles an entry still waiting on ${waiting.kind}`);
+        }
+        // An entry that settled while a scope it opened had not exited would
+        // leave a second live scope tree beside the next entry's. `settled`
+        // records that a scope exited, so this refuses rather than marking one.
+        const open = unsettledScope(entry.scopes);
+        if (open !== undefined) {
+          throw new Error(
+            `${where(record)} settles an entry whose ${open.name} scope has not exited`,
+          );
         }
         entry.settled = true;
       }

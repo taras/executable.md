@@ -29,7 +29,7 @@ import {
   SERIAL_HISTORY,
 } from "../repl-compose/history.ts";
 import type { ReplHistory } from "../repl-compose/history.ts";
-import type { Checkpoint, ReplModel, Scope } from "../repl-compose/model.ts";
+import type { Checkpoint, Entry, ReplModel, Scope } from "../repl-compose/model.ts";
 import {
   decodeRoute,
   encodeRoute,
@@ -126,6 +126,21 @@ function refused(url: string, model: ReplModel): RouteRefusal {
     throw result.error;
   }
   return result.error;
+}
+
+/** Every scope in one entry that has not exited, as `entry/scope/path`. */
+function live(entry: Entry): string[] {
+  const found: string[] = [];
+  const walk = (scopes: readonly Scope[], path: string[]): void => {
+    for (const scope of scopes) {
+      if (!scope.settled) {
+        found.push([entry.id, ...path, scope.name].join("/"));
+      }
+      walk(scope.children, [...path, scope.name]);
+    }
+  };
+  walk(entry.scopes, []);
+  return found;
 }
 
 /** The checkpoint one marker names, read out of the model rather than resolved. */
@@ -681,11 +696,16 @@ describe("REPL composition: routing", () => {
 
   describe("a drawer belongs to the entry that owns the wait", () => {
     it("puts the two entries one after the other, never both running", function* () {
-      const head = checkpoint(SERIAL, "sp-08");
+      const head = checkpoint(SERIAL, "sp-09");
       const [first, second] = head.entries;
 
       expect([first.id, second.id]).toEqual(["entry-1", "entry-2"]);
       expect([first.settled, second.settled]).toEqual([true, false]);
+      // A settled entry keeps no live scope, so the only unsettled path at this
+      // moment is entry-2's. Two live scope trees would hand everything above
+      // the model a scope the execution had already left.
+      expect(live(first)).toEqual([]);
+      expect(live(second)).toEqual(["entry-2/document"]);
       // Same scope spelling, same suspension kind, same path. Only the owner
       // differs, which is the whole point of this fixture.
       expect(first.scopes[0].name).toBe(second.scopes[0].name);
@@ -696,14 +716,14 @@ describe("REPL composition: routing", () => {
     });
 
     it("refuses the settled entry's drawer and resolves the running entry's", function* () {
-      const head = checkpoint(SERIAL, "sp-08");
+      const head = checkpoint(SERIAL, "sp-09");
 
       // entry-1 answered its `project` before settling, so it has no stack left
       // even though a `project` is open at this very moment.
       const refusal = refused("xmd://repl/e1/transcript/entry-1/document/+project", SERIAL);
       expect(refusal.position).toBe("drawer[0]");
       expect(refusal.found).toEqual([]);
-      expect(refusal.message).toContain("there is no drawer 1 of entry-1 at sp-08");
+      expect(refusal.message).toContain("there is no drawer 1 of entry-1 at sp-09");
 
       const owned = resolved("xmd://repl/e1/transcript/entry-2/document/+project", SERIAL);
       expect(owned.drawers[0]).toBe(head.suspensions[0]);
@@ -729,7 +749,7 @@ describe("REPL composition: routing", () => {
       const stale: ReplHistory = [
         ...SERIAL_HISTORY,
         {
-          marker: "sp-09",
+          marker: "sp-10",
           at: 35,
           kind: "suspension.answered",
           entry: "entry-1",
@@ -743,7 +763,26 @@ describe("REPL composition: routing", () => {
       expect(() => projectModel(EXECUTION, stale)).toThrow(
         /answers no suspension this entry has open/,
       );
-      expect(checkpoint(SERIAL, "sp-08").suspensions.map((one) => one.entry)).toEqual(["entry-2"]);
+      expect(checkpoint(SERIAL, "sp-09").suspensions.map((one) => one.entry)).toEqual(["entry-2"]);
+    });
+
+    it("refuses to settle an entry whose scope has not exited", function* () {
+      const early: ReplHistory = [
+        // Through sp-04 the wait is answered, but `document` has not exited.
+        ...SERIAL_HISTORY.slice(0, 4),
+        {
+          marker: "sp-05",
+          at: 17,
+          kind: "entry.settled",
+          entry: "entry-1",
+          scope: [],
+          detail: "Add a README to the project",
+        },
+      ];
+
+      expect(() => projectModel(EXECUTION, early)).toThrow(
+        /settles an entry whose document scope has not exited/,
+      );
     });
 
     it("refuses to settle an entry that is still waiting", function* () {

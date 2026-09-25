@@ -73,8 +73,12 @@ still name it — which is how bindings a finished scope published stay reachabl
 **Entries in a session are sequential**, so the representative execution has
 exactly one and the projection refuses to describe two running at once. A second
 entry appears only in `SERIAL_HISTORY`, a separate fixture where `entry-1` opens
-a `project` wait in its `document` scope, answers it, and settles — and only
-*then* is `entry-2` submitted, opening the same kind at the same path.
+a `project` wait in its `document` scope, answers it, leaves the scope and
+settles — and only *then* is `entry-2` submitted, opening the same kind at the
+same path. An entry cannot settle while it is waiting, and cannot settle while
+any scope it opened has not exited, so one moment never holds two live scope
+trees. `Scope.settled` records that a scope exited; nothing marks one settled to
+let an entry finish.
 
 Every name in that fixture is the same; only the owner differs. That is what
 suspension ownership has to be proven against: each `Suspension` names the entry
