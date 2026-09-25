@@ -16,6 +16,13 @@
  * and whatever was outstanding on it is released in the same synchronous
  * teardown, so closing a drawer mid-frame leaves the frame's other receivers to
  * finish it and the producer to return.
+ *
+ * The handoff itself is scope-owned for the same reason. It is a value with
+ * state — the set of live receivers and what each of them still owes — so it is
+ * acquired rather than constructed, and the scope that acquired it is what ends
+ * it. A factory would have made that state belong to whoever happened to hold
+ * the reference, which is how a set of receivers outlives the thing they were
+ * receiving from and goes on being counted.
  */
 
 import { resource, withResolvers } from "effection";
@@ -50,15 +57,31 @@ interface Slot<T> {
   release?: () => void;
 }
 
-export function createHandoff<T>(): Handoff<T> {
-  const slots = new Set<Slot<T>>();
+/** Release the producer waiting on this receiver's last value, if one is. */
+function acknowledge<T>(slot: Slot<T>): void {
+  const release = slot.release;
+  slot.release = undefined;
+  release?.();
+}
 
-  function acknowledge(slot: Slot<T>): void {
-    const release = slot.release;
-    slot.release = undefined;
-    release?.();
-  }
+/** One handoff, owned by the scope that acquires it. */
+export function useHandoff<T>(): Operation<Handoff<T>> {
+  return resource(function* (provide) {
+    const slots = new Set<Slot<T>>();
+    try {
+      yield* provide(handoffOver(slots));
+    } finally {
+      // Nothing waiting on a receiver here can still be answered, and no
+      // receiver still counts, so the state ends with the scope that owns it.
+      for (const slot of slots) {
+        acknowledge(slot);
+      }
+      slots.clear();
+    }
+  });
+}
 
+function handoffOver<T>(slots: Set<Slot<T>>): Handoff<T> {
   return {
     get demand(): number {
       return slots.size;

@@ -17,7 +17,7 @@
 
 import { describe as suite, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { race, sleep, spawn, until, withResolvers } from "effection";
+import { race, sleep, spawn, suspend, until, withResolvers } from "effection";
 import type { Operation, Result } from "effection";
 import { when } from "@effectionx/converge";
 
@@ -26,7 +26,9 @@ import type { Node, Root } from "../repl-study/vendor/freedom/upstream/index.ts"
 
 import { component, describe } from "../repl-compose/component.ts";
 import type { Component, Description } from "../repl-compose/component.ts";
-import { createFrameClock } from "../repl-compose/frames.ts";
+import { useFrameClock } from "../repl-compose/frames.ts";
+import { useHandoff } from "../repl-compose/handoff.ts";
+import type { Handoff } from "../repl-compose/handoff.ts";
 import type { FrameClock } from "../repl-compose/frames.ts";
 import { press } from "../repl-compose/input.ts";
 import {
@@ -136,7 +138,7 @@ interface Harness {
 
 function* harness(): Operation<Harness> {
   const root = yield* useRoot();
-  const clock = createFrameClock();
+  const clock = yield* useFrameClock();
   const offer = function* (descriptions: readonly Description[]): Operation<Result<void>> {
     return yield* compose(root.node, descriptions, clock);
   };
@@ -644,6 +646,53 @@ suite("REPL composition: keyed descriptions reconciled into Freedom", () => {
       expect(clock.demand).toBe(0);
       // Advancing a clock nobody is subscribed to completes rather than hanging.
       yield* clock.advance(32);
+    });
+  });
+
+  suite("a value with state is owned by a scope", () => {
+    it("ends a handoff's state with the scope that acquired it", function* () {
+      const acquired = withResolvers<Handoff<number>>();
+
+      const owner = yield* spawn(function* () {
+        const handoff = yield* useHandoff<number>();
+        acquired.resolve(handoff);
+        yield* suspend();
+      });
+      const handoff = yield* acquired.operation;
+
+      // A receiver acquired outside the handoff's own scope, so it cannot be
+      // torn down merely by being a descendant of it.
+      const receiving = yield* spawn(function* () {
+        yield* handoff.receive();
+        yield* suspend();
+      });
+      yield* when(function* () {
+        expect(handoff.demand).toBe(1);
+      });
+
+      yield* until(owner.halt());
+
+      // The scope that owned the handoff ended, so what it was holding is
+      // gone — not a set still counting a receiver nothing can deliver to.
+      expect(handoff.demand).toBe(0);
+      yield* until(receiving.halt());
+    });
+
+    it("gives a clock's demand back when its scope ends", function* () {
+      const acquired = withResolvers<FrameClock>();
+
+      const owner = yield* spawn(function* () {
+        const clock = yield* useFrameClock();
+        yield* clock.subscribe();
+        acquired.resolve(clock);
+        yield* suspend();
+      });
+      const clock = yield* acquired.operation;
+      expect(clock.demand).toBe(1);
+
+      yield* until(owner.halt());
+
+      expect(clock.demand).toBe(0);
     });
   });
 

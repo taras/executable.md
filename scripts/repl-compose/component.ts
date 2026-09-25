@@ -39,7 +39,7 @@ import { createNodeData } from "../repl-study/vendor/freedom/upstream/index.ts";
 import type { Node, NodeDataKey } from "../repl-study/vendor/freedom/upstream/index.ts";
 
 import type { Frames } from "./frames.ts";
-import { createHandoff } from "./handoff.ts";
+import { useHandoff } from "./handoff.ts";
 import type { Handoff, Receiver } from "./handoff.ts";
 import type { Action, KeyPress } from "./input.ts";
 
@@ -223,11 +223,15 @@ export function describe<Input>(
     start:
       lifecycle === null
         ? () => undefined
-        : (node, frames, ready) => {
-            const updates = createHandoff<Input>();
-            node.data.set(component.updates, updates);
-            return lifecycle({ node, input, frames, ready, updates });
-          },
+        : (node, frames, ready) =>
+            (function* start(): Operation<void> {
+              // Acquired here, so the channel belongs to this branch's own scope and
+              // ends when the branch does — rather than being a value the branch
+              // happens to hold.
+              const updates = yield* useHandoff<Input>();
+              node.data.set(component.updates, updates);
+              yield* lifecycle({ node, input, frames, ready, updates });
+            })(),
 
     *update(node: Node): Operation<void> {
       const updates = node.data.get(component.updates);

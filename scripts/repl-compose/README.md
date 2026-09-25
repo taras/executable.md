@@ -119,6 +119,19 @@ removed and whatever was outstanding on it released in the same synchronous
 teardown, so closing a drawer while a frame is in flight leaves the other
 receivers to finish it and the clock to return.
 
+**A value with state is acquired, not constructed.** A handoff holds the set of
+live receivers and what each of them still owes, and a clock holds a handoff, so
+both are resources: `useHandoff()` and `useFrameClock()`, owned by the scope that
+asked for them and ended by it. A branch's update channel is acquired inside the
+branch's own lifecycle, so it belongs to that branch's scope and goes when the
+branch does. A factory would have made that state belong to whoever happened to
+hold the reference — which is how a set of receivers outlives the thing they were
+receiving from and goes on being counted.
+
+The exception is a component's `NodeDataKey`. It is immutable metadata an author
+declares at module evaluation about a value they own, which is what
+`component()` mints and carries — not state, and nothing to tear down.
+
 **Delivery addresses a position in the tree, never a retained reference.**
 Removing a node detaches it from its parent but leaves the node object, and a
 disposed Effection scope still carries the interceptors installed on it — so a

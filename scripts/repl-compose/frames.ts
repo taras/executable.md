@@ -17,7 +17,7 @@
 
 import type { Operation } from "effection";
 
-import { createHandoff } from "./handoff.ts";
+import { useHandoff } from "./handoff.ts";
 import type { Receiver } from "./handoff.ts";
 
 /** What a mounted branch may do with the clock. */
@@ -39,8 +39,15 @@ export interface FrameClock extends Frames {
   advance(timestamp: number): Operation<void>;
 }
 
-export function createFrameClock(): FrameClock {
-  const frames = createHandoff<number>();
+/**
+ * One clock, owned by the scope that acquires it.
+ *
+ * The receivers it is holding are state, so the clock is acquired rather than
+ * constructed: when the scope that asked for it ends, so does what it was
+ * keeping.
+ */
+export function* useFrameClock(): Operation<FrameClock> {
+  const frames = yield* useHandoff<number>();
   return {
     get demand(): number {
       return frames.demand;
