@@ -24,7 +24,7 @@ import { when } from "@effectionx/converge";
 import { useRoot } from "../repl-study/vendor/freedom/upstream/index.ts";
 import type { Node, Root } from "../repl-study/vendor/freedom/upstream/index.ts";
 
-import { describe } from "../repl-compose/component.ts";
+import { component, describe } from "../repl-compose/component.ts";
 import type { Component, Description } from "../repl-compose/component.ts";
 import { createFrameClock } from "../repl-compose/frames.ts";
 import type { FrameClock } from "../repl-compose/frames.ts";
@@ -64,7 +64,7 @@ interface HoldInput {
   readonly hold: Operation<void>;
 }
 
-const Held: Component<HoldInput> = {
+const Held: Component<HoldInput> = component({
   name: "held",
   focusable: false,
   children: () => [],
@@ -78,7 +78,43 @@ const Held: Component<HoldInput> = {
     }
   },
   present: () => [],
-};
+});
+
+/** One component whose lifecycle, children, presentation and keys all read one number. */
+interface ProbeInput {
+  readonly value: number;
+}
+
+const Probe: Component<ProbeInput> = component({
+  name: "probe",
+  focusable: true,
+  children: (input) => [describe(Leaf, "leaf", input)],
+  *lifecycle({ node, input, ready, updates }): Operation<void> {
+    const later = yield* updates.receive();
+    let seen = input.value;
+    let applied = 0;
+    node.set("lifecycle", seen);
+    node.set("applied", applied);
+    yield* ready();
+    while (true) {
+      seen = (yield* later.next()).value;
+      applied += 1;
+      node.set("lifecycle", seen);
+      node.set("applied", applied);
+    }
+  },
+  onPress: (input, key) =>
+    key.key === "Enter" ? { kind: `probe.${input.value}`, from: "probe" } : undefined,
+  present: (input, children) => [`present:${input.value}`, ...children],
+});
+
+const Leaf: Component<ProbeInput> = component({
+  name: "leaf",
+  focusable: false,
+  children: () => [],
+  lifecycle: null,
+  present: (input) => [`leaf:${input.value}`],
+});
 
 function workspace(drawers: readonly DrawerInput[]): WorkspaceInput {
   return { panels: PANELS, drawers };
@@ -480,6 +516,50 @@ suite("REPL composition: keyed descriptions reconciled into Freedom", () => {
     });
   });
 
+  suite("one description carries one input", () => {
+    it("moves the lifecycle, children, presentation and keys together", function* () {
+      const { root, offer } = yield* harness();
+      yield* offer([describe(Probe, "probe", { value: 2 })]);
+
+      const probe = expectNode(root.node, "probe");
+      expect(probe.props.lifecycle).toBe(2);
+      expect(probe.props.applied).toBe(0);
+      expect(paint(root.node)).toEqual(["present:2", "leaf:2"]);
+      expect(press(root.node, probe, { key: "Enter" }).action?.kind).toBe("probe.2");
+
+      yield* offer([describe(Probe, "probe", { value: 3 })]);
+
+      // The node and its local state survived: the same node, and a counter
+      // that advanced rather than restarting.
+      expect(expectNode(root.node, "probe")).toBe(probe);
+      expect(probe.props.applied).toBe(1);
+
+      // And every reader of the input moved to 3 together. There is no member
+      // to replace, so there is no arrangement where one of these is 2.
+      expect(probe.props.lifecycle).toBe(3);
+      expect(paint(root.node)).toEqual(["present:3", "leaf:3"]);
+      expect(press(root.node, probe, { key: "Enter" }).action?.kind).toBe("probe.3");
+    });
+
+    it("split-description: a description has no input to replace", function* () {
+      const intended = describe(Probe, "probe", { value: 2 });
+
+      // There is no payload beside the closures, so there is nothing a spread
+      // could overwrite to leave the lifecycle on one input and the drawing on
+      // another. This is the member the split construction needed.
+      expect("input" in intended).toBe(false);
+      expect(Object.keys(intended)).toEqual(["key", "name", "identity", "focusable"]);
+
+      // @ts-expect-error and nothing assembled from a description's parts is a
+      // description: only `describe()` can make one, so the split construction
+      // is rejected where it is written rather than detected once it has run.
+      const impersonator: Description = { ...intended, input: { value: 3 } };
+      void impersonator;
+
+      expect(intended.key).toBe("probe");
+    });
+  });
+
   suite("a frame is delivered, not merely sent", () => {
     it("has been applied by every subscriber once advancing returns", function* () {
       const { root, clock, show } = yield* harness();
@@ -593,6 +673,39 @@ suite("REPL composition: keyed descriptions reconciled into Freedom", () => {
 
       expect(refused.ok).toBe(false);
       expect(topology(root.node)).toEqual([]);
+    });
+
+    it("erased-payload: a replaceable input plus a bivariant sink splits one component in two", function* () {
+      // The shape this boundary used to have, rebuilt here: a description that
+      // carries its input where anything can reach it, beside closures over the
+      // input it was made with — and a sink whose parameter is `unknown`, which
+      // a method signature accepts bivariantly.
+      interface ErasedDescription {
+        readonly input: unknown;
+        present(): string;
+      }
+      interface ErasedSink {
+        accept(input: unknown): void;
+      }
+
+      let lifecycle = 0;
+      const sink: ErasedSink = {
+        accept: (value: number) => {
+          lifecycle = value;
+        },
+      };
+
+      const intended: ErasedDescription = { input: 2, present: () => "present:2" };
+      const split: ErasedDescription = { ...intended, input: 3 };
+
+      // Nothing refuses it: the payload is writable and the closures are not.
+      sink.accept(split.input);
+
+      expect(lifecycle).toBe(3);
+      expect(split.present()).toBe("present:2");
+      // One component, two inputs, and no identity check can tell — matching
+      // the component only proves who made the original description.
+      expect(lifecycle).not.toBe(Number(split.present().split(":")[1]));
     });
 
     it("positional-only reconciliation: matching by index moves state to the wrong child", function* () {

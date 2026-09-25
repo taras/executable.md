@@ -16,7 +16,7 @@
 import { spawn } from "effection";
 import type { Operation } from "effection";
 
-import { describe } from "./component.ts";
+import { component, describe } from "./component.ts";
 import type { Component, Description, Mounted } from "./component.ts";
 
 export interface ControlInput {
@@ -50,7 +50,7 @@ interface StackedDrawer {
   readonly above: readonly DrawerInput[];
 }
 
-export const Control: Component<ControlInput> = {
+export const Control: Component<ControlInput> = component({
   name: "control",
   focusable: true,
   lifecycle: null,
@@ -64,9 +64,9 @@ export const Control: Component<ControlInput> = {
   present(input) {
     return [`[ ${input.label} ]`];
   },
-};
+});
 
-export const Panel: Component<PanelInput> = {
+export const Panel: Component<PanelInput> = component({
   name: "panel",
   focusable: true,
   lifecycle: null,
@@ -74,9 +74,9 @@ export const Panel: Component<PanelInput> = {
   present(input, children) {
     return [`${input.title}:`, ...input.lines.map((line) => `  ${line}`), ...children];
   },
-};
+});
 
-export const Drawer: Component<StackedDrawer> = {
+export const Drawer: Component<StackedDrawer> = component({
   name: "drawer",
   focusable: true,
 
@@ -134,9 +134,9 @@ export const Drawer: Component<StackedDrawer> = {
   present({ drawer }, children) {
     return [`— ${drawer.kind}: ${drawer.prompt}`, ...children.map((line) => `  ${line}`)];
   },
-};
+});
 
-export const Workspace: Component<WorkspaceInput> = {
+export const Workspace: Component<WorkspaceInput> = component({
   name: "workspace",
   focusable: false,
   lifecycle: null,
@@ -153,4 +153,4 @@ export const Workspace: Component<WorkspaceInput> = {
   present(_input, children) {
     return children;
   },
-};
+});

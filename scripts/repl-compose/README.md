@@ -87,6 +87,25 @@ once the branch has taken it. So when a reconcile returns, every branch it kept
 is acting on the input it was just given. Presentation, children and `onPress`
 read that same current input.
 
+**One description carries one input.** A description does not hold its input
+where anything can reach it: everything the input decides is a closure over one
+captured value, made in one call, and a description is a class with a private
+field, so nothing assembled from its parts is one. An earlier version exposed
+`input: unknown` beside those closures and delivered through a sink whose
+parameter was `unknown`. A spread could then replace the payload while the
+closures kept the original — `{ ...describe(Probe, "probe", 2), input: 3 }`
+type-checked and mounted a component whose lifecycle acted on 3 while it drew 2.
+Matching the component identity did not catch it, because identity only says who
+made the *original* description.
+
+The typed channel that replaces it needs no cast, no bivariance and no table: a
+component carries its own `NodeDataKey<Handoff<Input>>`, minted when the
+component is built with `component()`, and a branch keeps its update channel on
+its own node under that key. Reading it back is
+`node.data.get(component.updates)`, which the compiler already knows is a
+`Handoff<Input>`. The reconciler holds no input of its own and could not
+substitute one.
+
 **Delivery completes; it does not merely send.** One primitive in `handoff.ts`
 carries both frames and input: `deliver()` finishes once every receiver that was
 live when it started has come back for the next value, which is the moment it

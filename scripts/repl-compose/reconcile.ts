@@ -35,7 +35,7 @@ import type { Operation, Result } from "effection";
 import { createNodeData, focusable } from "../repl-study/vendor/freedom/upstream/index.ts";
 import type { Node } from "../repl-study/vendor/freedom/upstream/index.ts";
 
-import type { ComponentIdentity, Description, InputSink } from "./component.ts";
+import type { ComponentIdentity, Description } from "./component.ts";
 import type { Frames } from "./frames.ts";
 import { installBranch } from "./input.ts";
 
@@ -47,9 +47,6 @@ const IdentityOf = createNodeData<ComponentIdentity>("xmd:repl-compose:identity"
 
 /** The description this node is currently reconciled to. */
 const DescriptionOf = createNodeData<Description>("xmd:repl-compose:description");
-
-/** Where this branch's parent hands it later input. */
-const SinkOf = createNodeData<InputSink>("xmd:repl-compose:sink");
 
 /** Two of one parent's direct children answering to one key. */
 export class DuplicateKey extends Error {
@@ -142,14 +139,12 @@ function* reconcile(
       // whatever its lifecycle is holding — and is told what changed.
       found.data.set(DescriptionOf, description);
       found.set("order", order);
-      const sink = found.data.get(SinkOf);
-      if (sink !== undefined) {
-        // Sound because the identity above matched: this description was made
-        // by the very component whose lifecycle built that sink. A branch that
-        // never subscribed for updates has no receiver, and this returns at
-        // once rather than waiting for one.
-        yield* sink.accept(description.input);
-      }
+      // The identity above matched, so this description was made by the very
+      // component whose branch is mounted here — and `update` reaches that
+      // component's own typed channel on this node. The reconciler carries no
+      // input of its own and could not substitute one. A branch that never
+      // subscribed for updates has no receiver, and this returns at once.
+      yield* description.update(found);
       yield* reconcile(found, children, frames, mounted);
       continue;
     }
@@ -194,16 +189,15 @@ function mount(
   installBranch(child, description.key, (key) => child.data.get(DescriptionOf)?.onPress(key));
 
   const gate = withResolvers<void>();
-  const started = description.start(child, frames, function* ready() {
+  const body = description.start(child, frames, function* ready() {
     gate.resolve();
   });
-  if (started === undefined) {
+  if (body === undefined) {
     gate.resolve();
   } else {
-    child.data.set(SinkOf, started.sink);
     child.scope.run(function* () {
       try {
-        yield* started.body;
+        yield* body;
       } finally {
         // A lifecycle that returned or was halted without readying releases the
         // gate here, so a forgotten `ready()` is a branch nothing waited for
