@@ -38,8 +38,54 @@ evidence — and nothing here reuses its router, components, layout or rendering
 | `history.ts` | the hand-authored history fixtures, and the projection that ends history-record access |
 | `model.ts` | `ReplModel` and the frozen values a checkpoint holds |
 | `router.ts` | `decodeRoute`, `encodeRoute`, `resolveRoute`, and nothing else |
+| `component.ts` | what a parent says its children are: keyed descriptions over immutable input |
+| `reconcile.ts` | descriptions in, one mounted Freedom tree out — and the walks that read it |
+| `frames.ts` | the host's clock, and the demand the mounted branches place on it |
+| `input.ts` | a key down the live ancestry, a typed action back up |
+| `shell.ts` | the small set of components the reconciliation evidence drives |
 
-Evidence: `scripts/tests/repl-compose-router.test.ts`.
+Evidence: `scripts/tests/repl-compose-router.test.ts` and
+`scripts/tests/repl-compose-reconcile.test.ts`.
+
+## One mounted tree, and nothing beside it
+
+A parent declares its direct children as keyed descriptions over immutable
+input. It does not reach into a registry, ask what is mounted, or hand a child a
+way to register itself — so the tree is decided before anything exists.
+Reconciliation is then the only thing that mounts anything, and Freedom is the
+only thing it mounts into.
+
+Matching is by key, the way Crank matches keyed children. A description whose
+key *and component* both match the node already there keeps that node, and with
+it the node's Effection scope and everything the branch's lifecycle holds inside
+it. A key that stops being described is removed with its whole subtree, and the
+removal is awaited rather than started.
+
+That is what makes teardown structural rather than remembered. A drawer stack is
+described as a branch — the second drawer is a child of the first — so closing
+the top one removes exactly one subtree. What goes with it goes because its
+scope is gone: its frame subscription, its input middleware, its focus target
+and its presentation. Nothing is notified, and there is nothing to keep in step.
+
+Every question about the interface is answered by walking those same nodes:
+`paint` for what is drawn, `focusTargets` for what can be focused, `press` for
+where a key goes, and the clock's own `demand` for who is asking for frames.
+
+**Delivery addresses a position in the tree, never a retained reference.**
+Removing a node detaches it from its parent but leaves the node object, and a
+disposed Effection scope still carries the interceptors installed on it — so a
+kept reference to a closed drawer's control would otherwise still run that
+drawer's middleware and answer with an action.
+
+**A component declares every member except `onPress`.** A member is optional
+when its absence is the neutral element of a composition and required when its
+absence would substitute a claim. Absent `onPress` means the component says
+nothing about a key, so it carries on to the branch that does understand it —
+which is what would have happened anyway. Absent `children` would instead be the
+reconciler deciding the component has no subtree, and a `children` misspelled or
+lost in a merge would mount a tree missing a branch with nothing to report.
+`lifecycle` is written `null` rather than left out, because whether a branch
+holds anything disposable decides whether a task is started for it at all.
 
 ## The representative execution
 
