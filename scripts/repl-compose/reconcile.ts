@@ -32,7 +32,8 @@
 
 import { Err, Ok, until, withResolvers } from "effection";
 import type { Operation, Result } from "effection";
-import { createNodeData, focusable } from "../repl-study/vendor/freedom/upstream/index.ts";
+import { current, focus, focusable } from "../repl-study/vendor/freedom/upstream/index.ts";
+import { createNodeData } from "../repl-study/vendor/freedom/upstream/index.ts";
 import type { Node } from "../repl-study/vendor/freedom/upstream/index.ts";
 
 import type { ComponentIdentity, Description } from "./component.ts";
@@ -113,7 +114,55 @@ export function* compose(
   for (const ready of mounted) {
     yield* ready;
   }
+  establishFocus(root);
   return Ok();
+}
+
+/**
+ * Put focus where the tree says it belongs.
+ *
+ * A description may say that its branch is the one the location is asking for.
+ * The innermost such branch wins, which is how a drawer opening takes focus
+ * from the surface underneath it without anything knowing what a drawer is.
+ *
+ * Focus moves only when it has to: when nothing holds it, or when whatever held
+ * it is no longer inside the branch being asked for — which happens on a cold
+ * mount, when a drawer opens, and when the branch holding focus is removed. A
+ * reconcile that changes neither does not move it, because focus that jumped on
+ * every update would be taken away from whoever was using it.
+ */
+function establishFocus(root: Node): void {
+  const targets = focusTargets(root);
+  if (targets.length === 0) {
+    return;
+  }
+  const claims = claimed(root);
+  const wanted = claims[claims.length - 1];
+  const focused = current(root);
+
+  if (wanted === undefined) {
+    if (!targets.includes(focused)) {
+      focus(targets[0]);
+    }
+    return;
+  }
+
+  const within = focusTargets(wanted);
+  if (within.length > 0 && !within.includes(focused)) {
+    focus(within[0]);
+  }
+}
+
+/** Every mounted branch whose description asks to hold focus, in tree order. */
+function claimed(node: Node): readonly Node[] {
+  const found: Node[] = [];
+  if (node.data.get(DescriptionOf)?.claimsFocus() === true) {
+    found.push(node);
+  }
+  for (const child of node.children) {
+    found.push(...claimed(child));
+  }
+  return found;
 }
 
 function* reconcile(

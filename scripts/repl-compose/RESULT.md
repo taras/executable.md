@@ -58,10 +58,26 @@ input and decides how a parent arranges what its children drew. The same
 location describes the same tree at every width — proven by composing once at
 each viewport and comparing topology and focus order.
 
-**Normalizing input at the host.** A keypress and a pointer become one value
-before anything is dispatched, so a control cannot tell them apart and
+**Normalizing input at the host, with the pointer's target preserved.** The
+keypress is one value either way, and what the pointer was on rides alongside it
+rather than inside it — so a control cannot tell a click from a keypress, and
 "equivalent activations emit the same action" is not a property anything has to
-maintain.
+maintain. The target is an opaque node identity the host resolves against the
+live tree: a focusable one takes focus and is then dispatched to exactly as a
+keypress there would have been, and a removed, container, never-focusable or
+absent one takes no focus and receives no input. The equivalence is proven
+*targeted* — focus on one control, pointer on another — not merely for whatever
+happened to hold focus.
+
+**The URL reconstructs focus.** Every surface a route can name is a
+focus-owning branch, and a description says whether its input makes it the
+branch the location is asking for. The innermost claim wins, which is how an
+opening drawer takes focus from the surface underneath and closing it gives
+focus back — without the host, the renderer or the reconciler knowing what a
+drawer or a surface is. Focus moves only when nothing holds it or when whatever
+held it is no longer inside the branch being asked for, so a reconcile does not
+take focus away from whoever was using it. Cold-mounting the same URL in a fresh
+root reconstructs the same focus identity.
 
 ## Revise
 
@@ -125,9 +141,11 @@ existed to remove.
 ## Known limits of this evidence
 
 - **Pointer input is proven at the dispatch boundary, not at a terminal.** Mouse
-  reporting is deliberately never enabled, following #838's decision. The claim
-  proven is that a pointer and a key produce the same action through the same
-  live ancestry; hit-testing a click to a node is not proven and is real work.
+  reporting is deliberately never enabled, following #838's decision, and the
+  pointer's target arrives as a node identity rather than as coordinates.
+  Resolving that identity against the live tree, moving focus to it and
+  dispatching there is proven; turning a *screen position* into that identity is
+  not, and needs geometry the render walk does not yet keep.
 - **Presentation is lines of text.** Cells, widths, wrapping and the responsive
   long tail are out of scope here; `render.ts` exists to show the seam is real,
   not to draw well.
@@ -151,15 +169,17 @@ independently reviewable and each one has evidence before the next begins.
 3. **The handoff primitive.** Acknowledged delivery with per-value release and
    scope-owned state, on its own, before anything depends on it.
 4. **The component boundary and reconciler.** Opaque keyed descriptions,
-   component-owned typed update channels, duplicate-key preflight, and
-   reconciliation into Freedom. Evidence: retention, teardown, and the three
-   negative controls.
+   component-owned typed update channels, duplicate-key preflight, focus claims,
+   and reconciliation into Freedom. Evidence: retention, teardown, focus
+   reconstruction, and the three negative controls.
 5. **The frame clock and input normalization**, on the primitive from step 3.
-6. **The screen.** `describeScreen` over a resolved location, with the refusal
-   as a whole screen and layout as presentation only.
-7. **The host and a renderer.** Viewport, frames, raw input, renderer
-   replacement — and a source-level control that the host names nothing it
-   shows.
+6. **The screen.** `describeScreen` over a resolved location, with one
+   focus-owning branch per route surface, the refusal as a whole screen, and
+   layout as presentation only.
+7. **The host and a renderer.** Viewport, frames, raw input with the pointer's
+   target preserved, renderer replacement — and a source-level control that the
+   host names nothing it shows. Screen-position hit-testing belongs here, and is
+   the one thing this experiment left unproven.
 8. **The component catalog and the responsive long tail**, which is where the
    #838 study's content belongs, and which this experiment deliberately did not
    rebuild.

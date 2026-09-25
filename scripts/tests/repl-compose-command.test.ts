@@ -75,10 +75,17 @@ describe("REPL composition: the documented commands", () => {
     expect(output).toContain("xmd://repl/e1/transcript/entry-1/document/+project/+confirm");
     expect(output).toContain("identities are the model's own values");
     expect(output).toContain("drawers entry-1:project → entry-1:confirm");
-    expect(output).toContain("keyboard action suspension.answer");
-    expect(output).toContain("pointer action suspension.answer");
+    // Focus is reconstructed from the URL first, and only then does an
+    // explicit pointer activation move it to a control.
+    expect(output).toContain(
+      "focus reconstructed from the URL at screen › workbench › project › confirm",
+    );
+    expect(output).toContain("pointer action drawer.close");
+    expect(output).toContain("keyboard action drawer.close");
     expect(output).toContain("equivalent yes");
-    expect(output).toContain("removed project, project.answer, confirm, confirm.answer");
+    expect(output).toContain(
+      "removed project, project.answer, project.back, confirm, confirm.answer, confirm.back",
+    );
     expect(output).toContain("frame demand 2 → 0");
   });
 

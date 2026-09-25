@@ -12,7 +12,7 @@
  */
 
 import type { Operation } from "effection";
-import { current, focus } from "../repl-study/vendor/freedom/upstream/index.ts";
+import { current } from "../repl-study/vendor/freedom/upstream/index.ts";
 import type { Node, Root } from "../repl-study/vendor/freedom/upstream/index.ts";
 
 import type { Description } from "./component.ts";
@@ -114,27 +114,35 @@ export function* traceLocation(
 
   yield* host.advance(16);
 
-  // Activation is the thing being traced, so the trace focuses something that
-  // has an action to give: the innermost target in tree order, which is the
-  // control inside the topmost drawer. Choosing what to demonstrate is the
-  // trace's business; the host still knows none of these names.
+  // Where the URL put focus, before anything is interacted with.
+  const reconstructed = ancestry(current(root.node));
+
+  // Then one explicit, generic interaction to reach a control: a pointer on it.
+  // The host resolves that target against the live tree and moves focus there,
+  // which is the same path a real click takes — nothing here calls `focus()`.
   const targets = focusTargets(root.node);
   const innermost = targets[targets.length - 1];
-  if (innermost !== undefined) {
-    focus(innermost);
-  }
+  const pointed =
+    innermost === undefined
+      ? { target: "", path: [], action: undefined }
+      : host.deliver({ kind: "pointer", button: "primary", on: innermost.id });
 
-  const target = current(root.node);
-  const delivered = host.deliver({ kind: "bytes", bytes: Uint8Array.from([13]) });
-  const pointed = host.deliver({ kind: "pointer", button: "primary" });
+  // And the same activation by keyboard, now that focus is there.
+  const typed = host.deliver({ kind: "bytes", bytes: Uint8Array.from([13]) });
 
   const delivery = [
-    `target ${ancestry(target).join(" › ")}`,
-    `keyboard path ${delivered.path.join(" › ")}`,
-    `keyboard action ${delivered.action?.kind ?? "none"}`,
+    `focus reconstructed from the URL at ${reconstructed.join(" › ")}`,
+    `pointer target ${innermost === undefined ? "none" : ancestry(innermost).join(" › ")}`,
     `pointer path ${pointed.path.join(" › ")}`,
     `pointer action ${pointed.action?.kind ?? "none"}`,
-    `equivalent ${delivered.action?.kind === pointed.action?.kind ? "yes" : "no"}`,
+    `focus now at ${ancestry(current(root.node)).join(" › ")}`,
+    `keyboard path ${typed.path.join(" › ")}`,
+    `keyboard action ${typed.action?.kind ?? "none"}`,
+    `equivalent ${
+      typed.action?.kind === pointed.action?.kind && typed.path.join() === pointed.path.join()
+        ? "yes"
+        : "no"
+    }`,
   ];
 
   const before = topology(root.node);

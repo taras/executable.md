@@ -28,6 +28,7 @@ import type { Operation, Result } from "effection";
 import { component, describe } from "./component.ts";
 import type { Component, Description } from "./component.ts";
 import type { Entry, Scope, Suspension } from "./model.ts";
+import { ROUTE_SURFACES } from "./router.ts";
 import type { ResolvedLocation, RouteSurface } from "./router.ts";
 
 /** How much terminal there is. The only thing layout is allowed to read. */
@@ -45,6 +46,20 @@ export interface Viewport {
  */
 export interface SessionSnapshot {
   readonly scroll: Readonly<Record<string, number>>;
+}
+
+/** What each surface has to say about this location. */
+function linesFor(surface: RouteSurface, location: ResolvedLocation): readonly string[] {
+  if (surface === "input") {
+    return [location.draft === "" ? "(nothing typed)" : location.draft];
+  }
+  if (surface === "history") {
+    return [`${location.checkpoint.marker} @ ${location.checkpoint.at}s`];
+  }
+  if (surface === "transcript") {
+    return [];
+  }
+  return [location.checkpoint.marker];
 }
 
 /** Side by side while there is room for it, stacked when there is not. */
@@ -65,6 +80,24 @@ const Control: Component<ControlInput> = component({
   onPress: (input, key) =>
     key.key === "Enter" ? { kind: input.action, from: input.label } : undefined,
   present: (input) => [`[ ${input.label} ]`],
+});
+
+/**
+ * The same control, on a drawer something is stacked on top of.
+ *
+ * Only the top drawer is interactive, so the ones beneath it draw their
+ * controls and offer nothing. A disabled control is not an enabled one carrying
+ * a flag: it is a node that was never made focusable, which is why Tab cannot
+ * reach it and a pointer on it does nothing. Closing the drawer above swaps the
+ * component back, and the key is the same — so reconciliation replaces the node
+ * rather than handing a Control's input to this one.
+ */
+const InertControl: Component<ControlInput> = component({
+  name: "control",
+  focusable: false,
+  children: () => [],
+  lifecycle: null,
+  present: (input) => [`( ${input.label} )`],
 });
 
 interface ScopeInput {
@@ -131,13 +164,18 @@ const DrawerView: Component<DrawerInput> = component({
   focusable: true,
 
   children({ suspension, above }): readonly Description[] {
+    const [next, ...rest] = above;
+    const control = next === undefined ? Control : InertControl;
     const controls = [
-      describe(Control, `${suspension.kind}.answer`, {
+      describe(control, `${suspension.kind}.answer`, {
         label: "Answer",
         action: "suspension.answer",
       }),
+      describe(control, `${suspension.kind}.back`, {
+        label: "Back",
+        action: "drawer.close",
+      }),
     ];
-    const [next, ...rest] = above;
     if (next === undefined) {
       return controls;
     }
@@ -172,6 +210,12 @@ const DrawerView: Component<DrawerInput> = component({
     }
   },
 
+  // The top drawer is what the location is asking for, so focus goes into it
+  // when it appears and comes back out when it closes. A drawer with something
+  // stacked on it asks for nothing, because the one above it is asking.
+  // Nothing outside this file says the word "drawer" to make that happen.
+  claimsFocus: ({ above }) => above.length === 0,
+
   onPress({ suspension }, key) {
     return key.key === "Escape" ? { kind: "drawer.close", from: suspension.kind } : undefined;
   },
@@ -187,17 +231,32 @@ const DrawerView: Component<DrawerInput> = component({
 
 interface SurfaceInput {
   readonly surface: RouteSurface;
-  readonly focused: boolean;
+  /** True when this is the surface the URL names. */
+  readonly named: boolean;
   readonly lines: readonly string[];
+  /** Whatever this surface shows, described by the parent that placed it. */
+  readonly content: readonly Description[];
 }
 
+/**
+ * One region of the interface, and a place focus can be.
+ *
+ * Every surface a route can name has one of these, which is what makes the
+ * surface segment of a URL reconstructable: the branch the location names is
+ * the branch that asks for focus, and Freedom is what puts it there.
+ */
 const SurfaceView: Component<SurfaceInput> = component({
   name: "surface",
   focusable: true,
-  children: () => [],
   lifecycle: null,
-  present({ surface, focused, lines }) {
-    return [`${focused ? "*" : " "} ${surface}`, ...lines.map((line) => `    ${line}`)];
+  children: ({ content }) => content,
+  claimsFocus: ({ named }) => named,
+  present({ surface, named, lines }, children) {
+    return [
+      `${named ? "*" : " "} ${surface}`,
+      ...lines.map((line) => `    ${line}`),
+      ...children.map((line) => `    ${line}`),
+    ];
   },
 });
 
@@ -213,27 +272,28 @@ const Workbench: Component<WorkbenchInput> = component({
   lifecycle: null,
 
   children({ location, session }): readonly Description[] {
-    const described: Description[] = [];
+    const entry = location.entry;
+    const transcript =
+      entry === undefined
+        ? []
+        : [
+            describe(EntryView, entry.id, {
+              entry,
+              scopes: location.scopes,
+              scroll: session.scroll[entry.id] ?? 0,
+            }),
+          ];
 
-    for (const surface of ["sessions", "bindings", "history"] as const) {
-      described.push(
-        describe(SurfaceView, surface, {
-          surface,
-          focused: location.surface === surface,
-          lines: [`${location.checkpoint.marker} @ ${location.checkpoint.at}s`],
-        }),
-      );
-    }
-
-    if (location.entry !== undefined) {
-      described.push(
-        describe(EntryView, location.entry.id, {
-          entry: location.entry,
-          scopes: location.scopes,
-          scroll: session.scroll[location.entry.id] ?? 0,
-        }),
-      );
-    }
+    // Every surface a route can name is a branch, so every surface a route can
+    // name is somewhere focus can be reconstructed to.
+    const described: Description[] = ROUTE_SURFACES.map((surface) =>
+      describe(SurfaceView, surface, {
+        surface,
+        named: location.surface === surface,
+        lines: linesFor(surface, location),
+        content: surface === "transcript" ? transcript : [],
+      }),
+    );
 
     const [first, ...above] = location.drawers;
     if (first !== undefined) {
@@ -263,6 +323,7 @@ const RefusalView: Component<RefusalInput> = component({
   focusable: true,
   children: () => [],
   lifecycle: null,
+  claimsFocus: () => true,
   present: (input) => ["This location does not exist in this execution.", `  ${input.message}`],
 });
 

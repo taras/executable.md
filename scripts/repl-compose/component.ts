@@ -116,6 +116,14 @@ export interface ComponentSpec<Input> {
   readonly focusable: boolean;
   /** The semantic action this input gives a key. Absent means: pass it on. */
   onPress?(input: Input, key: KeyPress): Action | undefined;
+  /**
+   * Whether this input makes the branch the one the location is asking for.
+   *
+   * It is a property of the input rather than of the component, because which
+   * surface a URL names changes while the component does not. Absent means this
+   * component never asks, which is the neutral answer: something else will.
+   */
+  claimsFocus?(input: Input): boolean;
   /** What this component draws, around what its children drew. */
   present(input: Input, children: readonly string[]): readonly string[];
 }
@@ -144,6 +152,7 @@ export function component<Input>(spec: ComponentSpec<Input>): Component<Input> {
 
 interface DescribedParts {
   children(): readonly Description[];
+  claimsFocus(): boolean;
   start(node: Node, frames: Frames, ready: () => Operation<void>): Operation<void> | undefined;
   update(node: Node): Operation<void>;
   onPress(key: KeyPress): Action | undefined;
@@ -174,6 +183,11 @@ class DescribedChild {
   /** The children this description's own input describes. */
   children(): readonly Description[] {
     return this.#parts.children();
+  }
+
+  /** Whether the location is asking for this branch to hold focus. */
+  claimsFocus(): boolean {
+    return this.#parts.claimsFocus();
   }
 
   /** Start this branch, or nothing when the component holds nothing disposable. */
@@ -219,6 +233,7 @@ export function describe<Input>(
   const lifecycle = component.lifecycle;
   return new DescribedChild(key, component.name, component, component.focusable, {
     children: () => component.children(input),
+    claimsFocus: () => component.claimsFocus?.(input) === true,
 
     start:
       lifecycle === null

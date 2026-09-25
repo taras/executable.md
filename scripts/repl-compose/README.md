@@ -162,6 +162,23 @@ The exception is a component's `NodeDataKey`. It is immutable metadata an author
 declares at module evaluation about a value they own, which is what
 `component()` mints and carries — not state, and nothing to tear down.
 
+**The URL reconstructs focus.** Every surface a route can name is a
+focus-owning branch, and a description says whether its input makes it the
+branch the location is asking for. The innermost claim wins, which is how an
+opening drawer takes focus from the surface underneath it and closing it gives
+focus back — without the host, the renderer or the reconciler knowing what a
+drawer or a surface is. Focus moves only when nothing holds it or when whatever
+held it is no longer inside the branch being asked for, so an ordinary reconcile
+does not take focus away from whoever was using it.
+
+**A pointer names what it was on.** The target survives normalization as an
+opaque node identity, and the host resolves it against the live tree: a
+focusable target takes focus and is then dispatched to exactly as a keypress
+there would have been, and a removed, container, never-focusable or absent one
+takes no focus and receives no input. Only the top drawer is interactive, so the
+controls beneath it are a different component that was never made focusable —
+which is what makes "disabled" an absence rather than a flag.
+
 **Delivery addresses a position in the tree, never a retained reference.**
 Removing a node detaches it from its parent but leaves the node object, and a
 disposed Effection scope still carries the interceptors installed on it — so a

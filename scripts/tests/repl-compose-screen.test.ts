@@ -30,7 +30,7 @@ import { createHost, focused, normalize } from "../repl-compose/host.ts";
 import type { Host } from "../repl-compose/host.ts";
 import { focusTargets, keyOf, paint, topology } from "../repl-compose/reconcile.ts";
 import { framedRenderer, plainRenderer } from "../repl-compose/render.ts";
-import { decodeRoute, resolveRoute } from "../repl-compose/router.ts";
+import { decodeRoute, resolveRoute, ROUTE_SURFACES } from "../repl-compose/router.ts";
 import type { ResolvedLocation } from "../repl-compose/router.ts";
 import { describeScreen } from "../repl-compose/screen.ts";
 import type { SessionSnapshot, Viewport } from "../repl-compose/screen.ts";
@@ -40,6 +40,7 @@ const SESSION: SessionSnapshot = { scroll: {} };
 const WIDE: Viewport = { columns: 120, rows: 30 };
 const NARROW: Viewport = { columns: 72, rows: 20 };
 
+const ENTRY = "xmd://repl/e1/transcript/entry-1/document?at=cp-10&inspect";
 const PROJECT = "xmd://repl/e1/transcript/entry-1/document/+project?at=cp-10&inspect";
 const STACKED = "xmd://repl/e1/transcript/entry-1/document/+project/+confirm?at=cp-10&inspect";
 const NOWHERE = "xmd://repl/e1/transcript/entry-1/document/+review?at=cp-10&inspect";
@@ -87,6 +88,18 @@ function find(node: Node, key: string): Node | undefined {
   return undefined;
 }
 
+/** Where a node sits, by the keys it was described by, outermost first. */
+function ancestryOf(node: Node): string[] {
+  const path: string[] = [];
+  for (let at: Node | undefined = node; at; at = at.parent) {
+    const key = keyOf(at);
+    if (key !== undefined) {
+      path.unshift(key);
+    }
+  }
+  return path;
+}
+
 function expectNode(node: Node, key: string): Node {
   const found = find(node, key);
   if (found === undefined) {
@@ -105,15 +118,23 @@ suite("REPL composition: one location, all the way down", () => {
         "screen",
         "workbench",
         "sessions",
-        "bindings",
-        "history",
+        "transcript",
         "entry-1",
         "document",
+        "bindings",
+        "input",
+        "history",
         "project",
         "project.answer",
+        "project.back",
         "confirm",
         "confirm.answer",
+        "confirm.back",
       ]);
+
+      // The entry lives inside the transcript surface, which is the branch the
+      // URL's surface segment names.
+      expect(expectNode(root.node, "entry-1").parent).toBe(expectNode(root.node, "transcript"));
 
       // The stack is a branch: confirm is inside project, as the suspension
       // stack says it is.
@@ -128,6 +149,63 @@ suite("REPL composition: one location, all the way down", () => {
       expect(drawn).toBe(plainRenderer.draw(paint(root.node), WIDE.columns));
       expect(drawn).toContain("owner: document/write");
       expect(drawn).toContain("owner: document/publish");
+    });
+  });
+
+  suite("the URL reconstructs focus", () => {
+    it("focuses the branch it names, cold, for every surface a route can name", function* () {
+      for (const surface of ROUTE_SURFACES) {
+        // A fresh root each time: nothing carried over, nothing remembered.
+        const { root, go } = yield* harness();
+        yield* go(`xmd://repl/e1/${surface}/entry-1/document?at=cp-10&inspect`);
+
+        expect({ surface, focused: keyOf(focused(root)) }).toEqual({ surface, focused: surface });
+      }
+    });
+
+    it("rebuilds the same focus identity in a fresh root", function* () {
+      const first = yield* harness();
+      yield* first.go(STACKED);
+      const identity = ancestryOf(focused(first.root));
+
+      const second = yield* harness();
+      yield* second.go(STACKED);
+
+      // Different nodes, because it is a different tree — and the same place,
+      // because the URL says where that is.
+      expect(ancestryOf(focused(second.root))).toEqual(identity);
+      expect(focused(second.root)).not.toBe(focused(first.root));
+    });
+
+    it("hands focus to the drawer the location opened, and back when it closes", function* () {
+      const { root, go } = yield* harness();
+      yield* go(ENTRY);
+      expect(keyOf(focused(root))).toBe("transcript");
+
+      yield* go(PROJECT);
+      expect(ancestryOf(focused(root))).toEqual(["screen", "workbench", "project"]);
+
+      yield* go(STACKED);
+      expect(ancestryOf(focused(root))).toEqual(["screen", "workbench", "project", "confirm"]);
+
+      yield* go(PROJECT);
+      // The branch that held focus is gone, so focus is back on what is asking
+      // for it now. Nothing outside the description said the word "drawer".
+      expect(ancestryOf(focused(root))).toEqual(["screen", "workbench", "project"]);
+    });
+
+    it("leaves focus alone when the same location is composed again", function* () {
+      const { root, host, go } = yield* harness();
+      yield* go(STACKED);
+      const back = expectNode(root.node, "confirm.back");
+      host.deliver({ kind: "pointer", button: "primary", on: back.id });
+      expect(keyOf(focused(root))).toBe("confirm.back");
+
+      yield* go(STACKED);
+
+      // Focus that jumped on every reconcile would be taken away from whoever
+      // was using it.
+      expect(keyOf(focused(root))).toBe("confirm.back");
     });
   });
 
@@ -199,10 +277,21 @@ suite("REPL composition: one location, all the way down", () => {
 
   suite("keyboard and pointer are the same activation", () => {
     it("normalizes both to one value before anything is dispatched", function* () {
-      expect(normalize({ kind: "bytes", bytes: Uint8Array.from([13]) })).toEqual({ key: "Enter" });
-      expect(normalize({ kind: "pointer", button: "primary" })).toEqual({ key: "Enter" });
-      expect(normalize({ kind: "bytes", bytes: Uint8Array.from([27]) })).toEqual({ key: "Escape" });
-      expect(normalize({ kind: "pointer", button: "secondary" })).toEqual({ key: "Escape" });
+      // The keypress is the same value either way; the target rides alongside
+      // it, so the tree is handed something with no trace of how it arrived.
+      expect(normalize({ kind: "bytes", bytes: Uint8Array.from([13]) })?.key).toEqual({
+        key: "Enter",
+      });
+      expect(normalize({ kind: "pointer", button: "primary", on: "node-3" })).toEqual({
+        key: { key: "Enter" },
+        on: "node-3",
+      });
+      expect(normalize({ kind: "bytes", bytes: Uint8Array.from([27]) })?.key).toEqual({
+        key: "Escape",
+      });
+      expect(normalize({ kind: "pointer", button: "secondary", on: "node-3" })?.key).toEqual({
+        key: "Escape",
+      });
     });
 
     it("emits one action down one live ancestry, whichever arrived", function* () {
@@ -211,9 +300,9 @@ suite("REPL composition: one location, all the way down", () => {
 
       const answer = expectNode(root.node, "confirm.answer");
       focus(answer);
-
       const typed = host.deliver({ kind: "bytes", bytes: Uint8Array.from([13]) });
-      const clicked = host.deliver({ kind: "pointer", button: "primary" });
+
+      const clicked = host.deliver({ kind: "pointer", button: "primary", on: answer.id });
 
       expect(typed.action).toEqual({ kind: "suspension.answer", from: "Answer" });
       expect(clicked.action).toEqual(typed.action);
@@ -221,13 +310,68 @@ suite("REPL composition: one location, all the way down", () => {
       expect(typed.path).toEqual(["screen", "workbench", "project", "confirm", "confirm.answer"]);
     });
 
+    it("activates what the pointer was on, not what had focus", function* () {
+      const { root, host, go } = yield* harness();
+      yield* go(STACKED);
+
+      const answer = expectNode(root.node, "confirm.answer");
+      const back = expectNode(root.node, "confirm.back");
+      focus(answer);
+      expect(keyOf(focused(root))).toBe("confirm.answer");
+
+      const clicked = host.deliver({ kind: "pointer", button: "primary", on: back.id });
+
+      // Focus moved to what was pointed at, and the action is that control's.
+      expect(keyOf(focused(root))).toBe("confirm.back");
+      expect(clicked.action).toEqual({ kind: "drawer.close", from: "Back" });
+      expect(clicked.path[clicked.path.length - 1]).toBe("confirm.back");
+
+      // And the keyboard at that same node now answers identically.
+      const typed = host.deliver({ kind: "bytes", bytes: Uint8Array.from([13]) });
+      expect(typed.action).toEqual(clicked.action);
+      expect(typed.path).toEqual(clicked.path);
+    });
+
+    it("gives nothing to a removed, disabled, container or absent target", function* () {
+      const { root, host, go } = yield* harness();
+      yield* go(STACKED);
+
+      const settled = keyOf(focused(root));
+      const cases: readonly [string, string][] = [
+        // Drawn, but never made focusable: a control on the drawer underneath.
+        ["disabled", expectNode(root.node, "project.answer").id],
+        // A branch that holds children and is not a place focus can be.
+        ["container", expectNode(root.node, "workbench").id],
+        // Nothing at all.
+        ["absent", "node-that-was-never-here"],
+      ];
+
+      for (const [name, on] of cases) {
+        const clicked = host.deliver({ kind: "pointer", button: "primary", on });
+        expect({ name, path: clicked.path, action: clicked.action }).toEqual({
+          name,
+          path: [],
+          action: undefined,
+        });
+        expect(keyOf(focused(root))).toBe(settled);
+      }
+
+      // Removed: the node existed a moment ago and does not now.
+      const going = expectNode(root.node, "confirm.answer").id;
+      yield* go(PROJECT);
+      const after = host.deliver({ kind: "pointer", button: "primary", on: going });
+      expect(after.path).toEqual([]);
+      expect(after.action).toBe(undefined);
+    });
+
     it("bubbles to the drawer when the control has nothing to say", function* () {
       const { root, host, go } = yield* harness();
       yield* go(STACKED);
       focus(expectNode(root.node, "confirm.answer"));
 
+      const answer = expectNode(root.node, "confirm.answer");
       const escaped = host.deliver({ kind: "bytes", bytes: Uint8Array.from([27]) });
-      const secondary = host.deliver({ kind: "pointer", button: "secondary" });
+      const secondary = host.deliver({ kind: "pointer", button: "secondary", on: answer.id });
 
       expect(escaped.action).toEqual({ kind: "drawer.close", from: "confirm" });
       expect(secondary.action).toEqual(escaped.action);
@@ -260,9 +404,7 @@ suite("REPL composition: one location, all the way down", () => {
       // address the control that went — and the node it used to be is inert.
       expect(focusTargets(root.node).map((node) => keyOf(node))).not.toContain("confirm.answer");
       expect(find(root.node, "confirm")).toBe(undefined);
-      expect(host.deliver({ kind: "pointer", button: "primary" }).path).not.toContain(
-        "confirm.answer",
-      );
+      expect(host.deliver({ kind: "pointer", button: "primary", on: answer.id }).path).toEqual([]);
       expect(answer.props.opened).toBe(undefined);
     });
   });

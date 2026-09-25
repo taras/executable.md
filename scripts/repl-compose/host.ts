@@ -10,10 +10,19 @@
  * to be taught to it.
  *
  * **Equivalent activations are the same activation.** A key arrives as bytes
- * and a pointer arrives as a button, and both are normalized *here*, before
- * anything is dispatched. What reaches the tree is one value with no trace of
- * how it was produced — so a control cannot tell a click from a keypress, and
- * "the same semantic action" is not a property anything has to maintain.
+ * and a pointer arrives as a button on something, and both are normalized
+ * *here*, before anything is dispatched. What reaches the tree is one value
+ * with no trace of how it was produced — so a control cannot tell a click from
+ * a keypress, and "the same semantic action" is not a property anything has to
+ * maintain.
+ *
+ * A pointer names *what* it was on, and that survives normalization. The name
+ * is an opaque node identity the host resolves against the live tree: a target
+ * the tree no longer holds, or one that was never a place focus could be —
+ * a container, something drawn but not made focusable, or nothing at all —
+ * takes no focus and receives no input. A target that is focusable takes focus
+ * first, and then the activation is dispatched exactly as a keypress there
+ * would have been.
  */
 
 import { until } from "effection";
@@ -32,23 +41,54 @@ import type { Viewport } from "./screen.ts";
 /** What a terminal actually delivers, before anything has interpreted it. */
 export type RawInput =
   | { readonly kind: "bytes"; readonly bytes: Uint8Array }
-  | { readonly kind: "pointer"; readonly button: "primary" | "secondary" };
+  | {
+      readonly kind: "pointer";
+      readonly button: "primary" | "secondary";
+      /** Which node it was on, as an opaque identity the host does not read. */
+      readonly on: string;
+    };
+
+/**
+ * One activation: what happened, and what it happened on.
+ *
+ * The target survives normalization and the keypress does not carry it, so the
+ * tree is handed the same value either way and a component cannot answer one
+ * differently from the other.
+ */
+export interface Activation {
+  readonly key: KeyPress;
+  /** The node the raw input named, when it named one. */
+  readonly on?: string;
+}
 
 /** The one normalized form. Nothing downstream can tell which raw input made it. */
-export function normalize(raw: RawInput): KeyPress | undefined {
+export function normalize(raw: RawInput): Activation | undefined {
   if (raw.kind === "pointer") {
-    // A primary click on what is focused means the same as pressing it.
-    return raw.button === "primary" ? { key: "Enter" } : { key: "Escape" };
+    return { key: raw.button === "primary" ? { key: "Enter" } : { key: "Escape" }, on: raw.on };
   }
   const [first, ...rest] = raw.bytes;
   if (first === 13 || first === 10) {
-    return { key: "Enter" };
+    return { key: { key: "Enter" } };
   }
   if (first === 27 && rest.length === 0) {
-    return { key: "Escape" };
+    return { key: { key: "Escape" } };
   }
   if (first === 9) {
-    return { key: "Tab" };
+    return { key: { key: "Tab" } };
+  }
+  return undefined;
+}
+
+/** The node one opaque identity names, searched in the tree that exists now. */
+function held(root: Node, id: string): Node | undefined {
+  if (root.id === id) {
+    return root;
+  }
+  for (const child of root.children) {
+    const found = held(child, id);
+    if (found !== undefined) {
+      return found;
+    }
   }
   return undefined;
 }
@@ -90,28 +130,28 @@ export function createHost(options: HostOptions): Host {
       return renderer;
     },
 
-    *show(descriptions: readonly Description[]): Operation<Result<void>> {
-      const composed = yield* compose(root.node, descriptions, clock);
-      if (composed.ok) {
-        // Focus is derived from the tree that exists now, never remembered from
-        // the tree that used to. A target that is gone was never a target.
-        const targets = focusTargets(root.node);
-        const focused = current(root.node);
-        if (targets.length > 0 && !targets.includes(focused)) {
-          focus(targets[0]);
-        }
-      }
-      return composed;
-    },
+    show: (descriptions: readonly Description[]) => compose(root.node, descriptions, clock),
 
     advance: (timestamp: number) => clock.advance(timestamp),
 
     deliver(raw: RawInput): Delivery {
-      const key = normalize(raw);
-      if (key === undefined) {
-        return { target: "", path: [], action: undefined };
+      const nothing: Delivery = { target: "", path: [], action: undefined };
+      const activation = normalize(raw);
+      if (activation === undefined) {
+        return nothing;
       }
-      return press(root.node, current(root.node), key);
+      if (activation.on === undefined) {
+        return press(root.node, current(root.node), activation.key);
+      }
+      const on = held(root.node, activation.on);
+      if (on === undefined || !focusTargets(root.node).includes(on)) {
+        // Removed, a container, drawn but never made focusable, or nothing at
+        // all: none of those is a place input can go, so none of them takes
+        // focus on the way to finding that out.
+        return nothing;
+      }
+      focus(on);
+      return press(root.node, on, activation.key);
     },
 
     draw(): string {
