@@ -55,28 +55,132 @@ export function isRouteSurface(value: string): value is RouteSurface {
 }
 
 /**
- * One location, as its parts.
+ * Only this module mints a `Route`.
  *
- * The entry is separate from the scopes it owns because they are different
- * kinds of thing: an entry is something you submitted, and a scope is something
- * the execution opened while running it. A route with scopes and no entry
- * names scopes belonging to nothing, and is refused rather than represented.
+ * A route is checked when it is built, and the check is worth nothing if a
+ * caller can write an object that satisfies the type without passing through
+ * it. This key is module-local, so a look-alike literal is not a `Route` and
+ * `encodeRoute()` never receives one. It is a construction boundary and not a
+ * secrecy one: a holder can read it, and reading it grants nothing.
  */
-export interface Route {
-  readonly execution: string;
-  readonly surface: RouteSurface;
-  /** The transcript entry, when the location is inside one. */
-  readonly entry?: string;
-  /** The scope path inside that entry, outermost first. */
-  readonly scopes: readonly string[];
-  /** The drawer stack, outermost first. The last one is the top. */
-  readonly drawers: readonly string[];
+const MINTED: unique symbol = Symbol("repl-compose.route");
+
+interface Minted {
+  readonly [MINTED]: true;
+}
+
+/** What a location selects on the recorded timeline, and what is typed. */
+export interface RouteSelection {
   /** The recorded marker the scrubber has selected. Absent means the head. */
   readonly at?: string;
   /** True while the reconstruction at `at` is open rather than merely selected. */
   readonly inspect: boolean;
   /** What has been typed and not run. Empty is the same as nothing typed. */
   readonly draft: string;
+}
+
+/** A location that names a region of the REPL and nothing inside an entry. */
+export interface SurfaceRoute extends Minted, RouteSelection {
+  readonly kind: "surface";
+  readonly execution: string;
+  readonly surface: RouteSurface;
+}
+
+/**
+ * A location inside one transcript entry.
+ *
+ * The entry is separate from the scopes it owns because they are different
+ * kinds of thing: an entry is something you submitted, and a scope is something
+ * the execution opened while running it.
+ */
+export interface EntryRoute extends Minted, RouteSelection {
+  readonly kind: "entry";
+  readonly execution: string;
+  readonly surface: RouteSurface;
+  readonly entry: string;
+  /** The scope path inside that entry, outermost first. */
+  readonly scopes: readonly string[];
+  /** The drawer stack, outermost first. The last one is the top. */
+  readonly drawers: readonly string[];
+}
+
+/**
+ * One location.
+ *
+ * Scopes and drawers live on the arm that has an entry to own them, so a route
+ * carrying a scope path and no entry is not a value this type can hold — which
+ * is what stops `encodeRoute()` writing a scope segment that decodes back as an
+ * entry.
+ */
+export type Route = SurfaceRoute | EntryRoute;
+
+function named(part: string, value: string): Error | undefined {
+  if (value === "") {
+    return new RouteSyntaxError("", `a ${part} cannot be empty`);
+  }
+  return undefined;
+}
+
+function checkSelection(selection: RouteSelection): Error | undefined {
+  if (selection.at !== undefined && selection.at === "") {
+    return new RouteSyntaxError("", "a marker cannot be empty; leave `at` out to select none");
+  }
+  if (selection.inspect && selection.at === undefined) {
+    return new RouteSyntaxError("", "inspect needs the marker it reconstructs; add at=<marker>");
+  }
+  return undefined;
+}
+
+/** A location naming a region, checked. */
+export function surfaceRoute(
+  parts: { execution: string; surface: RouteSurface } & RouteSelection,
+): Result<SurfaceRoute> {
+  const refusal = named("execution", parts.execution) ?? checkSelection(parts);
+  if (refusal !== undefined) {
+    return Err(refusal);
+  }
+  return Ok({
+    [MINTED]: true,
+    kind: "surface",
+    execution: parts.execution,
+    surface: parts.surface,
+    at: parts.at,
+    inspect: parts.inspect,
+    draft: parts.draft,
+  });
+}
+
+/** A location inside one entry, checked. */
+export function entryRoute(
+  parts: {
+    execution: string;
+    surface: RouteSurface;
+    entry: string;
+    scopes: readonly string[];
+    drawers: readonly string[];
+  } & RouteSelection,
+): Result<EntryRoute> {
+  const refusal =
+    named("execution", parts.execution) ??
+    named("entry", parts.entry) ??
+    parts.scopes.map((scope) => named("scope", scope)).find((one) => one !== undefined) ??
+    parts.drawers.map((drawer) => named("drawer", drawer)).find((one) => one !== undefined) ??
+    checkSelection(parts);
+  if (refusal !== undefined) {
+    return Err(refusal);
+  }
+  return Ok({
+    [MINTED]: true,
+    kind: "entry",
+    execution: parts.execution,
+    surface: parts.surface,
+    entry: parts.entry,
+    scopes: [...parts.scopes],
+    drawers: [...parts.drawers],
+    at: parts.at,
+    inspect: parts.inspect,
+    draft: parts.draft,
+  });
 }
 
 /**
@@ -103,11 +207,14 @@ export interface ResolvedLocation {
 /** A URL that is not spelled like a location. */
 export class RouteSyntaxError extends Error {
   readonly url: string;
+  /** Which part of the URL was refused: `execution`, `surface`, `entry`, … */
+  readonly part: string;
 
-  constructor(url: string, message: string) {
+  constructor(url: string, message: string, part = "url") {
     super(message);
     this.name = "RouteSyntaxError";
     this.url = url;
+    this.part = part;
   }
 }
 
@@ -150,13 +257,15 @@ function list(names: readonly string[]): string {
 
 /** One location, in the one spelling it has. */
 export function encodeRoute(route: Route): string {
-  const path = [
-    encodeURIComponent(route.execution),
-    route.surface,
-    ...(route.entry === undefined ? [] : [encodeURIComponent(route.entry)]),
-    ...route.scopes.map((scope) => encodeURIComponent(scope)),
-    ...route.drawers.map((drawer) => `${DRAWER_PREFIX}${encodeURIComponent(drawer)}`),
-  ].join("/");
+  const inside =
+    route.kind === "entry"
+      ? [
+          encodeURIComponent(route.entry),
+          ...route.scopes.map((scope) => encodeURIComponent(scope)),
+          ...route.drawers.map((drawer) => `${DRAWER_PREFIX}${encodeURIComponent(drawer)}`),
+        ]
+      : [];
+  const path = [encodeURIComponent(route.execution), route.surface, ...inside].join("/");
 
   const query: string[] = [];
   if (route.at !== undefined) {
@@ -173,7 +282,32 @@ export function encodeRoute(route: Route): string {
   return query.length === 0 ? `${PREFIX}${path}` : `${PREFIX}${path}?${query.join("&")}`;
 }
 
-function decodeQuery(url: string, query: string): Result<Pick<Route, "at" | "inspect" | "draft">> {
+/**
+ * One percent-encoded piece of a URL, decoded, or `undefined` when it is not
+ * valid percent-encoding.
+ *
+ * `decodeURIComponent` throws on a lone `%`, and a URL is untrusted text, so
+ * every decode in this module goes through here. A syntax failure that escaped
+ * as a thrown `URIError` would leave `decodeRoute()`'s `Result<Route>` a
+ * promise it does not keep.
+ */
+function percentDecode(value: string): string | undefined {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return undefined;
+  }
+}
+
+function malformed(url: string, part: string, value: string): RouteSyntaxError {
+  return new RouteSyntaxError(
+    url,
+    `the ${part} ${JSON.stringify(value)} is not valid percent-encoding`,
+    part,
+  );
+}
+
+function decodeQuery(url: string, query: string): Result<RouteSelection> {
   let at: string | undefined;
   let inspect = false;
   let draft = "";
@@ -182,23 +316,39 @@ function decodeQuery(url: string, query: string): Result<Pick<Route, "at" | "ins
   for (const pair of query === "" ? [] : query.split("&")) {
     const equals = pair.indexOf("=");
     const key = equals === -1 ? pair : pair.slice(0, equals);
-    const value = equals === -1 ? "" : decodeURIComponent(pair.slice(equals + 1));
+    const written = equals === -1 ? "" : pair.slice(equals + 1);
     if (!(QUERY_KEYS as readonly string[]).includes(key)) {
-      return Err(new RouteSyntaxError(url, `${JSON.stringify(key)} is not part of a REPL route`));
+      return Err(
+        new RouteSyntaxError(url, `${JSON.stringify(key)} is not part of a REPL route`, "query"),
+      );
     }
     if (seen.includes(key)) {
-      return Err(new RouteSyntaxError(url, `${key} is written twice, and names two locations`));
+      return Err(
+        new RouteSyntaxError(url, `${key} is written twice, and names two locations`, key),
+      );
     }
     seen.push(key);
+    const value = percentDecode(written);
+    if (value === undefined) {
+      return Err(malformed(url, key, written));
+    }
     if (key === "at") {
       if (value === "") {
-        return Err(new RouteSyntaxError(url, "at= names no marker; leave it out to select none"));
+        return Err(
+          new RouteSyntaxError(url, "at= names no marker; leave it out to select none", "at"),
+        );
       }
       at = value;
     }
     if (key === "inspect") {
       if (equals !== -1) {
-        return Err(new RouteSyntaxError(url, "inspect takes no value; it is present or it is not"));
+        return Err(
+          new RouteSyntaxError(
+            url,
+            "inspect takes no value; it is present or it is not",
+            "inspect",
+          ),
+        );
       }
       inspect = true;
     }
@@ -211,7 +361,11 @@ function decodeQuery(url: string, query: string): Result<Pick<Route, "at" | "ins
 
   if (inspect && at === undefined) {
     return Err(
-      new RouteSyntaxError(url, "inspect needs the marker it reconstructs; add at=<marker>"),
+      new RouteSyntaxError(
+        url,
+        "inspect needs the marker it reconstructs; add at=<marker>",
+        "inspect",
+      ),
     );
   }
 
@@ -228,7 +382,8 @@ function decodeQuery(url: string, query: string): Result<Pick<Route, "at" | "ins
  * rule that turns an equivalent spelling away.
  *
  * Percent-decoding is `decodeURIComponent` alone: `+` is a literal plus here,
- * which is what lets a drawer segment wear one.
+ * which is what lets a drawer segment wear one. Text it cannot decode is a
+ * refusal naming the part it came from, never a throw.
  */
 export function decodeRoute(url: string): Result<Route> {
   if (!url.startsWith(PREFIX)) {
@@ -248,9 +403,12 @@ export function decodeRoute(url: string): Result<Route> {
     return Err(new RouteSyntaxError(url, `${JSON.stringify(url)} names no surface`));
   }
 
-  const execution = decodeURIComponent(segments[0]);
+  const execution = percentDecode(segments[0]);
+  if (execution === undefined) {
+    return Err(malformed(url, "execution", segments[0]));
+  }
   if (execution === "") {
-    return Err(new RouteSyntaxError(url, `${JSON.stringify(url)} names no execution`));
+    return Err(new RouteSyntaxError(url, `${JSON.stringify(url)} names no execution`, "execution"));
   }
 
   const surface = segments[1];
@@ -259,6 +417,7 @@ export function decodeRoute(url: string): Result<Route> {
       new RouteSyntaxError(
         url,
         `${JSON.stringify(surface)} is not a surface; the surfaces are ${list([...ROUTE_SURFACES])}`,
+        "surface",
       ),
     );
   }
@@ -271,7 +430,15 @@ export function decodeRoute(url: string): Result<Route> {
       return Err(new RouteSyntaxError(url, `${JSON.stringify(url)} has an empty path segment`));
     }
     if (segment.startsWith(DRAWER_PREFIX)) {
-      drawers.push(decodeURIComponent(segment.slice(DRAWER_PREFIX.length)));
+      const written = segment.slice(DRAWER_PREFIX.length);
+      const drawer = percentDecode(written);
+      if (drawer === undefined) {
+        return Err(malformed(url, "drawer", written));
+      }
+      if (drawer === "") {
+        return Err(new RouteSyntaxError(url, "a drawer segment names no drawer", "drawer"));
+      }
+      drawers.push(drawer);
       continue;
     }
     if (drawers.length > 0) {
@@ -279,30 +446,46 @@ export function decodeRoute(url: string): Result<Route> {
         new RouteSyntaxError(
           url,
           `${JSON.stringify(segment)} is a scope below a drawer, which cannot be reopened`,
+          "scope",
         ),
       );
     }
+    const part = entry === undefined ? "entry" : "scope";
+    const name = percentDecode(segment);
+    if (name === undefined) {
+      return Err(malformed(url, part, segment));
+    }
     if (entry === undefined) {
-      entry = decodeURIComponent(segment);
+      entry = name;
       continue;
     }
-    scopes.push(decodeURIComponent(segment));
+    scopes.push(name);
   }
   if (entry === undefined && drawers.length > 0) {
     return Err(
       new RouteSyntaxError(
         url,
         `a drawer is opened inside an entry, and ${JSON.stringify(url)} names none`,
+        "drawer",
       ),
     );
   }
 
-  const query = decodeQuery(url, split === -1 ? "" : rest.slice(split + 1));
-  if (!query.ok) {
-    return query;
+  const selection = decodeQuery(url, split === -1 ? "" : rest.slice(split + 1));
+  if (!selection.ok) {
+    return selection;
   }
 
-  return Ok({ execution, surface, entry, scopes, drawers, ...query.value });
+  // Building through the same constructors any other caller uses is what keeps
+  // one definition of a well-formed location rather than two.
+  const built =
+    entry === undefined
+      ? surfaceRoute({ execution, surface, ...selection.value })
+      : entryRoute({ execution, surface, entry, scopes, drawers, ...selection.value });
+  if (!built.ok) {
+    return Err(new RouteSyntaxError(url, built.error.message, "url"));
+  }
+  return built;
 }
 
 /**
@@ -339,17 +522,7 @@ export function resolveRoute(route: Route, model: ReplModel): Result<ResolvedLoc
     );
   }
 
-  if (route.entry === undefined) {
-    if (route.scopes.length > 0 || route.drawers.length > 0) {
-      return Err(
-        new RouteRefusal(
-          "entry",
-          "",
-          checkpoint.entries.map((candidate) => candidate.id),
-          `a scope or drawer belongs to an entry, and this route names none; the entries at ${checkpoint.marker} are ${list(checkpoint.entries.map((candidate) => candidate.id))}`,
-        ),
-      );
-    }
+  if (route.kind === "surface") {
     return Ok({
       route,
       surface: route.surface,
@@ -396,7 +569,11 @@ export function resolveRoute(route: Route, model: ReplModel): Result<ResolvedLoc
     holder = found.name;
   }
 
-  const stack = checkpoint.suspensions;
+  // One entry's drawer stack, in recorded order. A checkpoint holds every
+  // suspension the moment was waiting on, across every entry; the drawer path
+  // under `entry-1` indexes entry-1's, so a wait `entry-2` owns is not a drawer
+  // `entry-1` can open even when both spell the kind the same way.
+  const stack = checkpoint.suspensions.filter((suspension) => suspension.entry === entry.id);
   const open = stack.map((suspension) => suspension.kind);
   for (const [index, kind] of route.drawers.entries()) {
     const suspension = stack[index];
@@ -406,7 +583,7 @@ export function resolveRoute(route: Route, model: ReplModel): Result<ResolvedLoc
           `drawer[${index}]`,
           kind,
           open,
-          `there is no drawer ${index + 1} at ${checkpoint.marker}; the suspension stack there is ${list(open)}`,
+          `there is no drawer ${index + 1} of ${entry.id} at ${checkpoint.marker}; its suspension stack is ${list(open)}`,
         ),
       );
     }
@@ -416,7 +593,7 @@ export function resolveRoute(route: Route, model: ReplModel): Result<ResolvedLoc
           `drawer[${index}]`,
           kind,
           [suspension.kind],
-          `${JSON.stringify(kind)} is not drawer ${index + 1} at ${checkpoint.marker}; the suspension stack there is ${list(open)}`,
+          `${JSON.stringify(kind)} is not drawer ${index + 1} of ${entry.id} at ${checkpoint.marker}; its suspension stack is ${list(open)}`,
         ),
       );
     }

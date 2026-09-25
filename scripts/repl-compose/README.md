@@ -43,7 +43,7 @@ Evidence: `scripts/tests/repl-compose-router.test.ts`.
 
 ## The representative execution
 
-One entry, a nested scope tree, and two live suspensions:
+Two entries, a nested scope tree, and four live suspensions:
 
 ```text
 entry-1  "Add a README to the project"
@@ -51,6 +51,9 @@ entry-1  "Add a README to the project"
     ├── plan     (settled — opened `review`, answered it, exited)
     ├── write    (waiting on `project`)
     └── publish  (waiting on `confirm`)
+
+entry-2  "Update the changelog"
+└── document    (waiting on `review`, then on `project`)
 ```
 
 `document` runs `write` and `publish` as concurrent branches. `write` opens a
@@ -70,7 +73,15 @@ The `plan` scope exists to be a *settled* nested scope. Leaving a scope closes
 it rather than erasing it, so a settled scope stays in the tree and a URL can
 still name it — which is how bindings a finished scope published stay reachable.
 
-## Two decisions this slice makes
+`entry-2` exists to make names ambiguous on purpose. It runs a `document` scope
+of its own and waits on `review` and then `project`, so at the head there are
+two `document` scopes and two `project` suspensions. A drawer path is then only
+answerable by an ownership the model retains: each `Suspension` names the entry
+*and* the scope path that own it, and a drawer path under `entry-1` indexes
+entry-1's stack. A wait `entry-2` owns is not a drawer `entry-1` can open, even
+when both spell the kind the same way.
+
+## Three decisions this slice makes
 
 **The entry is separate from the scopes it owns.** #839 spelled the entry as the
 first scope segment. It is a different kind of thing: an entry is something you
@@ -90,9 +101,28 @@ and it buys nothing the encoder does not already guarantee.
 What decoding still refuses is a URL that is malformed, or one that names two
 locations at once: an unknown query key, a repeated one, a value on the valueless
 `inspect`, an empty `at=`, `inspect` without the marker it reconstructs, an empty
-path segment (which is what a trailing slash is), a scope written below a drawer,
-and a drawer written outside any entry. Accepting a *spelling* is not accepting a
-*structure*, and the evidence carries a named control for exactly that.
+path segment (which is what a trailing slash is), an unnamed drawer (`/+`), a
+scope written below a drawer, and a drawer written outside any entry. Accepting a
+*spelling* is not accepting a *structure*, and the evidence carries a named
+control for exactly that.
+
+A URL is untrusted text, and `decodeURIComponent` throws on a lone `%`. Every
+percent-decode in the router therefore goes through one guarded helper that
+answers `undefined`, and the refusal names the part the text came from —
+`execution`, `entry`, `scope`, `drawer`, `at` or `draft`. `decodeRoute()`
+promises `Result<Route>`, and a syntax failure leaving as a thrown `URIError`
+would be that promise broken.
+
+**A `Route` cannot hold a structure its encoder would change.** `Route` is a
+closed union: a `SurfaceRoute` names a region and has no member a scope path
+could occupy, and an `EntryRoute` carries the entry that owns its scopes and
+drawers. Both are minted by checked constructors — `surfaceRoute()` and
+`entryRoute()` return `Result` and refuse an empty execution, entry, scope,
+drawer or marker — and a module-local symbol on the type means a hand-written
+look-alike is not a `Route` and never reaches `encodeRoute()`. The defect this
+closes: a route carrying `scopes: ["document"]` and no entry used to encode to
+`xmd://repl/e1/transcript/document`, which decoded back with `document` as the
+*entry*. The round trip now holds for every route that can be built.
 
 ## `path-to-regexp` was evaluated and is not adopted
 

@@ -64,6 +64,12 @@ export const EXECUTION = "e1";
  * The `plan` scope exists to be a *settled* nested scope: it opened a `review`
  * suspension, that suspension was answered, and the scope exited. It stays in
  * the tree, because leaving a scope closes it rather than erasing it.
+ *
+ * `entry-2` exists to make scope names ambiguous on purpose. It runs a
+ * `document` scope of its own and waits on `review` and then `project` — a kind
+ * `entry-1` is also waiting on. So at the head there are two `document` scopes
+ * and two `project` suspensions, and a drawer path is only answerable by an
+ * ownership the model retains rather than by a name it could match anywhere.
  */
 export const HISTORY: ReplHistory = [
   {
@@ -149,6 +155,40 @@ export const HISTORY: ReplHistory = [
     detail: "confirm",
     prompt: "Commit and push the README now?",
   },
+  {
+    marker: "cp-11",
+    at: 54,
+    kind: "entry.submitted",
+    entry: "entry-2",
+    scope: [],
+    detail: "Update the changelog",
+  },
+  {
+    marker: "cp-12",
+    at: 58,
+    kind: "scope.enter",
+    entry: "entry-2",
+    scope: [],
+    detail: "document",
+  },
+  {
+    marker: "cp-13",
+    at: 62,
+    kind: "suspension.opened",
+    entry: "entry-2",
+    scope: ["document"],
+    detail: "review",
+    prompt: "Is this the release the changelog covers?",
+  },
+  {
+    marker: "cp-14",
+    at: 66,
+    kind: "suspension.opened",
+    entry: "entry-2",
+    scope: ["document"],
+    detail: "project",
+    prompt: "Which project's changelog is this?",
+  },
 ];
 
 /** The records up to and including one marker, which is the history as it stood. */
@@ -213,6 +253,7 @@ function snapshot(
   }));
   const stack: Suspension[] = suspensions.map((suspension) => ({
     kind: suspension.kind,
+    entry: suspension.entry,
     scope: [...suspension.scope],
     prompt: suspension.prompt,
   }));
@@ -271,6 +312,7 @@ export function projectModel(execution: string, history: ReplHistory = HISTORY):
         }
         suspensions.push({
           kind: record.detail,
+          entry: record.entry,
           scope: [...record.scope],
           prompt: record.prompt ?? "",
         });

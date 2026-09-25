@@ -18,12 +18,15 @@
 /**
  * One durable wait, and the scope that owns it.
  *
- * `scope` is the path inside the entry, outermost first, which is the same
- * spelling a route segment uses. An empty path means the entry's own body owns
- * the wait.
+ * Ownership is the entry *and* the path inside it, because a scope path alone
+ * is only meaningful within one entry: two entries can each run a `document`
+ * scope, and a wait belonging to one of them is not a drawer the other can
+ * open. `scope` is that path, outermost first, in the same spelling a route
+ * segment uses; an empty path means the entry's own body owns the wait.
  */
 export interface Suspension {
   readonly kind: string;
+  readonly entry: string;
   readonly scope: readonly string[];
   readonly prompt: string;
 }

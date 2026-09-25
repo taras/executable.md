@@ -23,8 +23,22 @@ import { fileURLToPath } from "node:url";
 
 import { EXECUTION, HISTORY, historyThrough, projectModel } from "../repl-compose/history.ts";
 import type { Checkpoint, ReplModel, Scope } from "../repl-compose/model.ts";
-import { decodeRoute, encodeRoute, resolveRoute, RouteRefusal } from "../repl-compose/router.ts";
-import type { ResolvedLocation, Route } from "../repl-compose/router.ts";
+import {
+  decodeRoute,
+  encodeRoute,
+  entryRoute,
+  resolveRoute,
+  RouteRefusal,
+  ROUTE_SURFACES,
+  RouteSyntaxError,
+  surfaceRoute,
+} from "../repl-compose/router.ts";
+import type {
+  EntryRoute,
+  ResolvedLocation,
+  Route,
+  RouteSelection,
+} from "../repl-compose/router.ts";
 
 /** The whole recorded execution: head `cp-10`, two live suspensions. */
 const MODEL = projectModel(EXECUTION);
@@ -53,12 +67,32 @@ function decoded(url: string): Route {
   return result.value;
 }
 
-function refusedDecoding(url: string): Error {
+function refusedDecoding(url: string): RouteSyntaxError {
   const result = decodeRoute(url);
   if (result.ok) {
     throw new Error(`${JSON.stringify(url)} was accepted, and should not have been`);
   }
+  if (!(result.error instanceof RouteSyntaxError)) {
+    throw result.error;
+  }
   return result.error;
+}
+
+/** One decoded location that is inside an entry. */
+function insideEntry(url: string): EntryRoute {
+  const route = decoded(url);
+  if (route.kind !== "entry") {
+    throw new Error(`${JSON.stringify(url)} names no entry`);
+  }
+  return route;
+}
+
+/** A checked route, or the reason it could not be built. */
+function built(result: ReturnType<typeof entryRoute> | ReturnType<typeof surfaceRoute>): Route {
+  if (!result.ok) {
+    throw result.error;
+  }
+  return result.value;
 }
 
 function resolved(url: string, model: ReplModel): ResolvedLocation {
@@ -94,8 +128,8 @@ describe("REPL composition: routing", () => {
     it("records one checkpoint per history record, ending at the head", function* () {
       expect(MODEL.execution).toBe("e1");
       expect(MODEL.checkpoints.length).toBe(HISTORY.length);
-      expect(MODEL.head).toBe("cp-10");
-      expect(MODEL.checkpoints[MODEL.checkpoints.length - 1].marker).toBe("cp-10");
+      expect(MODEL.head).toBe("cp-14");
+      expect(MODEL.checkpoints[MODEL.checkpoints.length - 1].marker).toBe("cp-14");
     });
 
     it("gives each checkpoint its own complete moment", function* () {
@@ -126,11 +160,27 @@ describe("REPL composition: routing", () => {
       ]);
     });
 
-    it("names the scope that owns each suspension", function* () {
-      expect(checkpoint(MODEL, "cp-10").suspensions.map((one) => one.scope)).toEqual([
-        ["document", "write"],
-        ["document", "publish"],
+    it("names the entry and the scope that own each suspension", function* () {
+      expect(
+        checkpoint(MODEL, "cp-14").suspensions.map((one) => [one.entry, ...one.scope].join("/")),
+      ).toEqual([
+        "entry-1/document/write",
+        "entry-1/document/publish",
+        "entry-2/document",
+        "entry-2/document",
       ]);
+    });
+
+    it("keeps two entries that spell a scope and a suspension the same apart", function* () {
+      const head = checkpoint(MODEL, "cp-14");
+      const [one, two] = head.entries;
+
+      expect([one.id, two.id]).toEqual(["entry-1", "entry-2"]);
+      expect(one.scopes[0].name).toBe(two.scopes[0].name);
+      expect(one.scopes[0]).not.toBe(two.scopes[0]);
+      expect(
+        head.suspensions.filter((each) => each.kind === "project").map((each) => each.entry),
+      ).toEqual(["entry-1", "entry-2"]);
     });
 
     it("freezes the model through every value it reaches", function* () {
@@ -161,7 +211,7 @@ describe("REPL composition: routing", () => {
     });
 
     it("keeps every part of the location it was given", function* () {
-      const route = decoded(REPRESENTATIVE);
+      const route = insideEntry(REPRESENTATIVE);
 
       expect(route.execution).toBe("e1");
       expect(route.surface).toBe("transcript");
@@ -174,16 +224,18 @@ describe("REPL composition: routing", () => {
     });
 
     it("carries a draft and a separator through the encoding", function* () {
-      const route: Route = {
-        execution: "e1",
-        surface: "input",
-        entry: "entry-1",
-        scopes: ["a/b"],
-        drawers: ["+odd"],
-        at: "cp-04",
-        inspect: true,
-        draft: "<Plan> write it",
-      };
+      const route = built(
+        entryRoute({
+          execution: "e1",
+          surface: "input",
+          entry: "entry-1",
+          scopes: ["a/b"],
+          drawers: ["+odd"],
+          at: "cp-04",
+          inspect: true,
+          draft: "<Plan> write it",
+        }),
+      );
       const url = encodeRoute(route);
 
       expect(url).toBe(
@@ -258,7 +310,7 @@ describe("REPL composition: routing", () => {
       const location = resolved("xmd://repl/e1/transcript/entry-1/document/+project", MODEL);
 
       expect(location.drawers.map((one) => one.kind)).toEqual(["project"]);
-      expect(location.drawers[0]).toBe(checkpoint(MODEL, "cp-10").suspensions[0]);
+      expect(location.drawers[0]).toBe(checkpoint(MODEL, "cp-14").suspensions[0]);
     });
 
     it("resolves a nested scope through its real parent, settled or not", function* () {
@@ -269,7 +321,7 @@ describe("REPL composition: routing", () => {
     });
 
     it("selects the head when no marker is named", function* () {
-      expect(resolved("xmd://repl/e1/sessions", MODEL).checkpoint.marker).toBe("cp-10");
+      expect(resolved("xmd://repl/e1/sessions", MODEL).checkpoint.marker).toBe("cp-14");
       expect(resolved("xmd://repl/e1/sessions", EARLY).checkpoint.marker).toBe("cp-08");
     });
 
@@ -306,7 +358,7 @@ describe("REPL composition: routing", () => {
       expect(refusal.position).toBe("scope[0]");
       expect(refusal.segment).toBe("plan");
       expect(refusal.found).toEqual(["document"]);
-      expect(refusal.message).toContain("is not a scope of entry-1 at cp-10");
+      expect(refusal.message).toContain("is not a scope of entry-1 at cp-14");
     });
 
     it("refuses a fabricated scope and says what is there instead", function* () {
@@ -347,7 +399,7 @@ describe("REPL composition: routing", () => {
 
       expect(refusal.position).toBe("drawer[2]");
       expect(refusal.found).toEqual(["project", "confirm"]);
-      expect(refusal.message).toContain("there is no drawer 3 at cp-10");
+      expect(refusal.message).toContain("there is no drawer 3 of entry-1 at cp-14");
     });
 
     it("refuses a drawer that belongs to another checkpoint", function* () {
@@ -358,13 +410,13 @@ describe("REPL composition: routing", () => {
 
       expect(refusal.position).toBe("drawer[0]");
       expect(refusal.found).toEqual(["review"]);
-      expect(refusal.message).toContain("the suspension stack there is review");
+      expect(refusal.message).toContain("its suspension stack is review");
     });
 
     it("refuses an entry and a marker nothing recorded", function* () {
       const entry = refused("xmd://repl/e1/transcript/entry-9", MODEL);
       expect(entry.position).toBe("entry");
-      expect(entry.found).toEqual(["entry-1"]);
+      expect(entry.found).toEqual(["entry-1", "entry-2"]);
 
       const marker = refused("xmd://repl/e1/transcript/entry-1?at=cp-99", MODEL);
       expect(marker.position).toBe("at");
@@ -375,7 +427,7 @@ describe("REPL composition: routing", () => {
   describe("negative controls", () => {
     it("partial-resolution: a resolver that stops after the entry accepts a fabricated scope", function* () {
       const url = "xmd://repl/e1/transcript/entry-1/document/review";
-      const route = decoded(url);
+      const route = insideEntry(url);
       const head = checkpoint(MODEL, "cp-10");
 
       const partial = head.entries.some((entry) => entry.id === route.entry);
@@ -386,7 +438,7 @@ describe("REPL composition: routing", () => {
 
     it("flattened-scopes: a resolver that searches the whole tree accepts a skipped parent", function* () {
       const url = "xmd://repl/e1/transcript/entry-1/plan";
-      const route = decoded(url);
+      const route = insideEntry(url);
 
       const anywhere = (scopes: readonly Scope[], name: string): boolean =>
         scopes.some((scope) => scope.name === name || anywhere(scope.children, name));
@@ -397,7 +449,7 @@ describe("REPL composition: routing", () => {
 
     it("drawers-as-a-set: membership accepts a reordered stack the prefix rule refuses", function* () {
       const url = "xmd://repl/e1/transcript/entry-1/document/+confirm/+project";
-      const route = decoded(url);
+      const route = insideEntry(url);
       const open = checkpoint(MODEL, "cp-10").suspensions.map((one) => one.kind);
 
       const asSet = route.drawers.every((drawer) => open.includes(drawer));
@@ -413,16 +465,20 @@ describe("REPL composition: routing", () => {
       // a decoder that took the first would have answered a different one. Both
       // are spellings of an ask nobody made.
       const [first, last] = ["cp-10", "cp-04"].map((at) =>
-        encodeRoute({
-          execution: "e1",
-          surface: "transcript",
-          entry: "entry-1",
-          scopes: [],
-          drawers: [],
-          at,
-          inspect: false,
-          draft: "",
-        }),
+        encodeRoute(
+          built(
+            entryRoute({
+              execution: "e1",
+              surface: "transcript",
+              entry: "entry-1",
+              scopes: [],
+              drawers: [],
+              at,
+              inspect: false,
+              draft: "",
+            }),
+          ),
+        ),
       );
 
       expect(first).not.toBe(last);
@@ -439,6 +495,216 @@ describe("REPL composition: routing", () => {
       expect(refusedDecoding("xmd://repl/e1/transcript/+project").message).toContain(
         "a drawer is opened inside an entry",
       );
+    });
+  });
+
+  describe("malformed text refuses instead of throwing", () => {
+    it("refuses malformed percent-encoding in every part it decodes", function* () {
+      const cases: [string, string][] = [
+        ["xmd://repl/%/transcript", "execution"],
+        ["xmd://repl/e1/transcript/%", "entry"],
+        ["xmd://repl/e1/transcript/entry-1/%E0%A4%A", "scope"],
+        ["xmd://repl/e1/transcript/entry-1/+%", "drawer"],
+        ["xmd://repl/e1/transcript/entry-1?at=%", "at"],
+        ["xmd://repl/e1/transcript/entry-1?draft=%", "draft"],
+      ];
+
+      for (const [url, part] of cases) {
+        const refusal = refusedDecoding(url);
+        expect(refusal.part).toBe(part);
+        expect(refusal.message).toContain("is not valid percent-encoding");
+      }
+    });
+
+    it("answers a Result for anything at all, including text that is not a URL", function* () {
+      // The signature promises `Result<Route>` for untrusted text, so nothing
+      // here may leave by throwing.
+      for (const url of ["", "%", "xmd://repl/", "xmd://repl/%/%", "xmd://repl/e1/transcript?%="]) {
+        expect(decodeRoute(url).ok).toBe(false);
+      }
+    });
+  });
+
+  describe("a Route cannot hold a structure its encoder would change", () => {
+    it("survives decodeRoute(encodeRoute(route)) for every representable route", function* () {
+      const selections: RouteSelection[] = [
+        { inspect: false, draft: "" },
+        { at: "cp-04", inspect: false, draft: "" },
+        { at: "cp-04", inspect: true, draft: "" },
+        { at: "cp-04", inspect: true, draft: "<Plan> write it" },
+        { inspect: false, draft: "a/b?c&d=e+f%g" },
+      ];
+
+      const routes: Route[] = [];
+      for (const selection of selections) {
+        for (const surface of ROUTE_SURFACES) {
+          routes.push(built(surfaceRoute({ execution: "e1", surface, ...selection })));
+          routes.push(
+            built(
+              entryRoute({
+                execution: "e1",
+                surface,
+                entry: "entry-1",
+                scopes: [],
+                drawers: [],
+                ...selection,
+              }),
+            ),
+          );
+          routes.push(
+            built(
+              entryRoute({
+                execution: "a/b +c",
+                surface,
+                entry: "entry 1",
+                scopes: ["document", "a+b"],
+                drawers: ["project", "+confirm"],
+                ...selection,
+              }),
+            ),
+          );
+        }
+      }
+
+      expect(routes.length).toBe(75);
+      for (const route of routes) {
+        expect(decoded(encodeRoute(route))).toEqual(route);
+      }
+    });
+
+    it("cannot build a surface route that carries scopes or drawers", function* () {
+      const surfaceOnly = built(
+        surfaceRoute({
+          execution: "e1",
+          surface: "transcript",
+          inspect: false,
+          draft: "",
+        }),
+      );
+
+      expect(surfaceOnly.kind).toBe("surface");
+      // `scopes` and `drawers` live on the arm that has an entry to own them,
+      // so the surface arm has no member for a scope path to occupy.
+      expect(Object.keys(surfaceOnly)).not.toContain("scopes");
+      expect(Object.keys(surfaceOnly)).not.toContain("drawers");
+      expect(encodeRoute(surfaceOnly)).toBe("xmd://repl/e1/transcript");
+    });
+
+    it("refuses an unnamed drawer, entry, scope, execution and marker", function* () {
+      expect(refusedDecoding("xmd://repl/e1/transcript/entry-1/+").message).toContain(
+        "a drawer segment names no drawer",
+      );
+
+      const empties = [
+        entryRoute({
+          execution: "e1",
+          surface: "transcript",
+          entry: "entry-1",
+          scopes: [],
+          drawers: [""],
+          inspect: false,
+          draft: "",
+        }),
+        entryRoute({
+          execution: "e1",
+          surface: "transcript",
+          entry: "",
+          scopes: [],
+          drawers: [],
+          inspect: false,
+          draft: "",
+        }),
+        entryRoute({
+          execution: "e1",
+          surface: "transcript",
+          entry: "entry-1",
+          scopes: [""],
+          drawers: [],
+          inspect: false,
+          draft: "",
+        }),
+        surfaceRoute({ execution: "", surface: "transcript", inspect: false, draft: "" }),
+        surfaceRoute({ execution: "e1", surface: "transcript", at: "", inspect: false, draft: "" }),
+      ];
+
+      for (const result of empties) {
+        expect(result.ok).toBe(false);
+      }
+    });
+
+    it("cannot encode a scope into the place an entry is read from", function* () {
+      // The defect this closes: a route carrying `scopes: ["document"]` and no
+      // entry once encoded to a URL whose first inside segment decoded as the
+      // entry `document`.
+      const scoped = built(
+        entryRoute({
+          execution: "e1",
+          surface: "transcript",
+          entry: "entry-1",
+          scopes: ["document"],
+          drawers: [],
+          inspect: false,
+          draft: "",
+        }),
+      );
+      const back = decoded(encodeRoute(scoped));
+
+      expect(back.kind).toBe("entry");
+      if (back.kind === "entry") {
+        expect(back.entry).toBe("entry-1");
+        expect(back.scopes).toEqual(["document"]);
+      }
+    });
+  });
+
+  describe("a drawer belongs to the entry that owns the wait", () => {
+    it("resolves a suspension only under its own entry", function* () {
+      const head = checkpoint(MODEL, "cp-14");
+
+      // `review` is waiting in entry-2, and entry-1 is waiting on project and
+      // confirm. The kind exists at this moment; the ownership is what decides.
+      const refusal = refused("xmd://repl/e1/transcript/entry-1/document/+review", MODEL);
+      expect(refusal.position).toBe("drawer[0]");
+      expect(refusal.found).toEqual(["project"]);
+
+      const owned = resolved("xmd://repl/e1/transcript/entry-2/document/+review", MODEL);
+      expect(owned.drawers[0]).toBe(head.suspensions[2]);
+      expect(owned.drawers[0].entry).toBe("entry-2");
+    });
+
+    it("gives each entry the suspension of that kind that is its own", function* () {
+      const head = checkpoint(MODEL, "cp-14");
+      const mine = resolved("xmd://repl/e1/transcript/entry-1/document/+project", MODEL);
+
+      // Both entries are waiting on a `project`. Matching the stack by kind
+      // alone answered entry-1's route with the first `project` in the
+      // checkpoint whichever entry owned it.
+      expect(mine.drawers[0]).toBe(head.suspensions[0]);
+      expect(mine.drawers[0]).not.toBe(head.suspensions[3]);
+      expect(head.suspensions[3].entry).toBe("entry-2");
+    });
+
+    it("keeps the drawer path an ordered prefix of that entry's own stack", function* () {
+      // entry-2 opened `review` before `project`, so `+project` alone is not a
+      // prefix of its stack even though entry-1's stack starts with one.
+      const refusal = refused("xmd://repl/e1/transcript/entry-2/document/+project", MODEL);
+      expect(refusal.position).toBe("drawer[0]");
+      expect(refusal.found).toEqual(["review"]);
+
+      const both = resolved("xmd://repl/e1/transcript/entry-2/document/+review/+project", MODEL);
+      expect(both.drawers.map((one) => one.kind)).toEqual(["review", "project"]);
+      expect(both.drawers.map((one) => one.entry)).toEqual(["entry-2", "entry-2"]);
+    });
+
+    it("counts a missing drawer against the entry's stack, not the checkpoint's", function* () {
+      const refusal = refused(
+        "xmd://repl/e1/transcript/entry-2/document/+review/+project/+confirm",
+        MODEL,
+      );
+
+      expect(refusal.position).toBe("drawer[2]");
+      expect(refusal.found).toEqual(["review", "project"]);
+      expect(refusal.message).toContain("there is no drawer 3 of entry-2");
     });
   });
 
