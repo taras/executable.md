@@ -48,6 +48,12 @@ const DENO_ONLY_TOOLING: RuntimeExclusion[] = [
     issue: "https://github.com/taras/executable.md/issues/839",
   },
   {
+    path: "scripts/tests/repl-compose-command.test.ts",
+    reason:
+      "its subject is the documented `deno task repl:compose` command, which it runs as a `deno` child process to check the journey and the structural trace. A Node or Bun shard has no `deno` on PATH; the composition itself is covered portably by scripts/tests/repl-compose-screen.test.ts",
+    issue: "https://github.com/taras/executable.md/issues/840",
+  },
+  {
     path: "scripts/tests/build-npm.test.ts",
     reason:
       "subject is scripts/build-npm.ts, a dnt build that only runs under Deno; the test calls Deno.execPath()",

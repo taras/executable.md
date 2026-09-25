@@ -44,9 +44,39 @@ evidence — and nothing here reuses its router, components, layout or rendering
 | `frames.ts` | the host's clock, and the demand the mounted branches place on it |
 | `input.ts` | a key down the live ancestry, a typed action back up |
 | `shell.ts` | the small set of components the reconciliation evidence drives |
+| `screen.ts` | a resolved location, described as an interface — and the refusal when it is not one |
+| `render.ts` | cells, and nothing else: two renderers, so the seam is a seam |
+| `host.ts` | the terminal, the viewport, the frames, the raw input — and none of their names |
+| `trace.ts` | one location followed through every layer |
+| `main.ts` | the documented command |
 
-Evidence: `scripts/tests/repl-compose-router.test.ts` and
-`scripts/tests/repl-compose-reconcile.test.ts`.
+Evidence: `scripts/tests/repl-compose-router.test.ts`,
+`scripts/tests/repl-compose-reconcile.test.ts`,
+`scripts/tests/repl-compose-screen.test.ts` and
+`scripts/tests/repl-compose-command.test.ts`.
+
+Conclusions — what to retain, revise and discard, and the production
+sequencing — are in [`RESULT.md`](RESULT.md).
+
+## Run it
+
+```bash
+deno task repl:compose --journey          # the representative journey, unattended
+deno task repl:compose --journey --narrow # the same tree, laid out for less width
+deno task repl:compose --trace '<url>'    # one location, through every layer
+```
+
+The journey opens a drawer, stacks another on it, closes the top one, and then
+asks for a location the execution never went to. Nothing needs pressing, and no
+terminal is attached: the host measures its viewport from a flag rather than a
+device, which is the whole point of it being the host.
+
+`--trace` prints the seven things #840 asks for — the decoded route, the model
+identities it resolved to, the keyed description, the mounted tree and its focus
+chain, where an activation went and what it meant, what a closing branch took
+with it, and the output drawn from that same tree. Every line is read from the
+one place that answers it, so a wrong line means a wrong thing rather than a
+stale report.
 
 ## One mounted tree, and nothing beside it
 

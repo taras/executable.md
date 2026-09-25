@@ -48,23 +48,46 @@ export interface Handoff<T> {
   readonly demand: number;
 }
 
+/**
+ * One value on its way to one receiver, and the producer it will release.
+ *
+ * The release travels *with* the value rather than living on the slot, because
+ * a value that waited in the queue must be acknowledged when it is applied and
+ * not when it is handed over. Keeping one release per slot acknowledged a
+ * queued value on the call that fetched it — before the receiver had done
+ * anything with it — which is a producer told "applied" about work that had not
+ * started.
+ */
+interface Parcel<T> {
+  readonly value: T;
+  readonly release: () => void;
+}
+
 interface Slot<T> {
-  /** A value delivered before this receiver asked for one. */
-  queued: T[];
+  /** Values delivered before this receiver asked for one, oldest first. */
+  queued: Parcel<T>[];
   /** Resumes a receiver that is waiting for a value. */
-  resume?: (value: T) => void;
-  /** Releases the producer waiting on this receiver's last value. */
-  release?: () => void;
+  resume?: (parcel: Parcel<T>) => void;
+  /** The release owed for the value this receiver is applying right now. */
+  applying?: () => void;
 }
 
-/** Release the producer waiting on this receiver's last value, if one is. */
+/** Release the producer of the value this receiver has now finished applying. */
 function acknowledge<T>(slot: Slot<T>): void {
-  const release = slot.release;
-  slot.release = undefined;
-  release?.();
+  const applying = slot.applying;
+  slot.applying = undefined;
+  applying?.();
 }
 
-/** One handoff, owned by the scope that acquires it. */
+/** Release everything this slot still owes, because it can owe nothing now. */
+function abandon<T>(slot: Slot<T>): void {
+  acknowledge(slot);
+  for (const parcel of slot.queued) {
+    parcel.release();
+  }
+  slot.queued = [];
+}
+
 export function useHandoff<T>(): Operation<Handoff<T>> {
   return resource(function* (provide) {
     const slots = new Set<Slot<T>>();
@@ -74,7 +97,7 @@ export function useHandoff<T>(): Operation<Handoff<T>> {
       // Nothing waiting on a receiver here can still be answered, and no
       // receiver still counts, so the state ends with the scope that owns it.
       for (const slot of slots) {
-        acknowledge(slot);
+        abandon(slot);
       }
       slots.clear();
     }
@@ -98,22 +121,26 @@ function handoffOver<T>(slots: Set<Slot<T>>): Handoff<T> {
               acknowledge(slot);
               const queued = slot.queued.shift();
               if (queued !== undefined) {
-                return queued;
+                slot.applying = queued.release;
+                return queued.value;
               }
-              const waiting = withResolvers<T>();
+              const waiting = withResolvers<Parcel<T>>();
               slot.resume = waiting.resolve;
+              let parcel: Parcel<T>;
               try {
-                return yield* waiting.operation;
+                parcel = yield* waiting.operation;
               } finally {
                 slot.resume = undefined;
               }
+              slot.applying = parcel.release;
+              return parcel.value;
             },
           });
         } finally {
-          // Leaving releases whatever a producer is still waiting on, so a
-          // receiver that goes away cannot hold delivery open.
+          // Leaving releases everything this receiver still owes, so one that
+          // goes away cannot hold delivery open.
           slots.delete(slot);
-          acknowledge(slot);
+          abandon(slot);
         }
       });
     },
@@ -124,14 +151,14 @@ function handoffOver<T>(slots: Set<Slot<T>>): Handoff<T> {
       const outstanding: Operation<void>[] = [];
       for (const slot of [...slots]) {
         const applied = withResolvers<void>();
-        slot.release = applied.resolve;
+        const parcel: Parcel<T> = { value, release: applied.resolve };
         outstanding.push(applied.operation);
         const resume = slot.resume;
         if (resume === undefined) {
-          slot.queued.push(value);
+          slot.queued.push(parcel);
         } else {
           slot.resume = undefined;
-          resume(value);
+          resume(parcel);
         }
       }
       for (const applied of outstanding) {

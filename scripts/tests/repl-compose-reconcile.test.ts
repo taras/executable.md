@@ -678,6 +678,34 @@ suite("REPL composition: keyed descriptions reconciled into Freedom", () => {
       yield* until(receiving.halt());
     });
 
+    it("acknowledges a queued value when it is applied, not when it is fetched", function* () {
+      const handoff = yield* useHandoff<number>();
+      const receiver = yield* handoff.receive();
+      let delivered = false;
+
+      // Nobody is waiting, so this value queues.
+      const producing = yield* spawn(function* () {
+        yield* handoff.deliver(16);
+        delivered = true;
+      });
+      yield* sleep(5);
+      expect(delivered).toBe(false);
+
+      expect(yield* receiver.next()).toBe(16);
+
+      // Fetching a queued value is not applying it. A release that lived on the
+      // receiver rather than on the value would have fired on that call, and
+      // told the producer its frame had landed before anything had been done
+      // with it.
+      yield* sleep(5);
+      expect(delivered).toBe(false);
+
+      const applying = yield* spawn(() => receiver.next());
+      yield* producing;
+      expect(delivered).toBe(true);
+      yield* until(applying.halt());
+    });
+
     it("gives a clock's demand back when its scope ends", function* () {
       const acquired = withResolvers<FrameClock>();
 
