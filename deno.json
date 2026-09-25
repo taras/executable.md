@@ -66,6 +66,8 @@
     "weights:measure": "deno run --allow-all scripts/measure-test-weights.ts",
     "repl:study": "deno run --allow-all --frozen scripts/repl-study/main.ts",
     "repl:compose": "deno run --allow-all --frozen scripts/repl-compose/main.ts",
+    "repl:pause": "deno run --allow-all --frozen scripts/repl-pause/main.ts",
+    "repl:pause:seam": "deno run --allow-all --frozen scripts/repl-pause/missing-seam.ts",
     "test": "deno test --allow-all --frozen",
     "verify": "deno run --allow-all --node-modules-dir=none --cached-only --frozen scripts/preflight.ts scripts/verify.ts",
     "vendor:verify": "deno run --allow-read --allow-write=/tmp --allow-env --allow-run --cached-only --frozen scripts/verify-cloudflare-dofs.ts",
