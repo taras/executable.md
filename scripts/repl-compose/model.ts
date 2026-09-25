@@ -45,10 +45,16 @@ export interface Scope {
   readonly children: readonly Scope[];
 }
 
-/** One transcript entry, which owns its scope tree. */
+/**
+ * One transcript entry, which owns its scope tree.
+ *
+ * Entries in a session are sequential: one settles before the next is
+ * submitted, so at most one is unsettled at any recorded moment.
+ */
 export interface Entry {
   readonly id: string;
   readonly title: string;
+  readonly settled: boolean;
   readonly scopes: readonly Scope[];
 }
 

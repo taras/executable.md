@@ -35,7 +35,7 @@ evidence — and nothing here reuses its router, components, layout or rendering
 
 | File | What it owns |
 | --- | --- |
-| `history.ts` | the hand-authored history fixture, and the projection that ends history-record access |
+| `history.ts` | the hand-authored history fixtures, and the projection that ends history-record access |
 | `model.ts` | `ReplModel` and the frozen values a checkpoint holds |
 | `router.ts` | `decodeRoute`, `encodeRoute`, `resolveRoute`, and nothing else |
 
@@ -43,7 +43,7 @@ Evidence: `scripts/tests/repl-compose-router.test.ts`.
 
 ## The representative execution
 
-Two entries, a nested scope tree, and four live suspensions:
+One entry, a nested scope tree, and two live suspensions:
 
 ```text
 entry-1  "Add a README to the project"
@@ -51,9 +51,6 @@ entry-1  "Add a README to the project"
     ├── plan     (settled — opened `review`, answered it, exited)
     ├── write    (waiting on `project`)
     └── publish  (waiting on `confirm`)
-
-entry-2  "Update the changelog"
-└── document    (waiting on `review`, then on `project`)
 ```
 
 `document` runs `write` and `publish` as concurrent branches. `write` opens a
@@ -73,13 +70,20 @@ The `plan` scope exists to be a *settled* nested scope. Leaving a scope closes
 it rather than erasing it, so a settled scope stays in the tree and a URL can
 still name it — which is how bindings a finished scope published stay reachable.
 
-`entry-2` exists to make names ambiguous on purpose. It runs a `document` scope
-of its own and waits on `review` and then `project`, so at the head there are
-two `document` scopes and two `project` suspensions. A drawer path is then only
-answerable by an ownership the model retains: each `Suspension` names the entry
-*and* the scope path that own it, and a drawer path under `entry-1` indexes
-entry-1's stack. A wait `entry-2` owns is not a drawer `entry-1` can open, even
-when both spell the kind the same way.
+**Entries in a session are sequential**, so the representative execution has
+exactly one and the projection refuses to describe two running at once. A second
+entry appears only in `SERIAL_HISTORY`, a separate fixture where `entry-1` opens
+a `project` wait in its `document` scope, answers it, and settles — and only
+*then* is `entry-2` submitted, opening the same kind at the same path.
+
+Every name in that fixture is the same; only the owner differs. That is what
+suspension ownership has to be proven against: each `Suspension` names the entry
+*and* the scope path that own it, a drawer path under `entry-1` indexes
+entry-1's own stack, and an answer consumes a wait only when the entry, the
+exact scope path and the kind all match. Without the entry in that comparison, a
+stale answer for the finished `entry-1` removed `entry-2`'s live wait and left
+the head with an empty stack — a moment that never happened, which routing would
+then accept or refuse the wrong drawer against.
 
 ## Three decisions this slice makes
 

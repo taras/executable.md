@@ -23,7 +23,8 @@ export type HistoryRecordKind =
   | "scope.enter"
   | "scope.exit"
   | "suspension.opened"
-  | "suspension.answered";
+  | "suspension.answered"
+  | "entry.settled";
 
 export interface HistoryRecord {
   /** The marker a URL names this moment by. */
@@ -65,11 +66,9 @@ export const EXECUTION = "e1";
  * suspension, that suspension was answered, and the scope exited. It stays in
  * the tree, because leaving a scope closes it rather than erasing it.
  *
- * `entry-2` exists to make scope names ambiguous on purpose. It runs a
- * `document` scope of its own and waits on `review` and then `project` — a kind
- * `entry-1` is also waiting on. So at the head there are two `document` scopes
- * and two `project` suspensions, and a drawer path is only answerable by an
- * ownership the model retains rather than by a name it could match anywhere.
+ * Entries in a session are sequential, so this execution has exactly one. The
+ * evidence for suspension ownership uses `SERIAL_HISTORY` below, where a second
+ * entry begins only after the first has settled.
  */
 export const HISTORY: ReplHistory = [
   {
@@ -155,34 +154,81 @@ export const HISTORY: ReplHistory = [
     detail: "confirm",
     prompt: "Commit and push the README now?",
   },
+];
+
+/**
+ * Two entries, one after the other, for proving who owns a suspension.
+ *
+ * `entry-1` opens a `project` wait in its `document` scope, answers it and
+ * settles. Only then is `entry-2` submitted, and it opens a `project` wait at
+ * the same scope path. Every name is the same; only the owner differs — which
+ * is the one thing a drawer path can be answered by.
+ *
+ * It is deliberately a separate fixture. The representative execution stays one
+ * entry, because concurrent entry lifecycles are a state the product does not
+ * create and routing must not be shown resolving against one.
+ */
+export const SERIAL_HISTORY: ReplHistory = [
   {
-    marker: "cp-11",
-    at: 54,
+    marker: "sp-01",
+    at: 2,
+    kind: "entry.submitted",
+    entry: "entry-1",
+    scope: [],
+    detail: "Add a README to the project",
+  },
+  {
+    marker: "sp-02",
+    at: 5,
+    kind: "scope.enter",
+    entry: "entry-1",
+    scope: [],
+    detail: "document",
+  },
+  {
+    marker: "sp-03",
+    at: 9,
+    kind: "suspension.opened",
+    entry: "entry-1",
+    scope: ["document"],
+    detail: "project",
+    prompt: "Which project should the README describe?",
+  },
+  {
+    marker: "sp-04",
+    at: 14,
+    kind: "suspension.answered",
+    entry: "entry-1",
+    scope: ["document"],
+    detail: "project",
+  },
+  {
+    marker: "sp-05",
+    at: 18,
+    kind: "entry.settled",
+    entry: "entry-1",
+    scope: [],
+    detail: "Add a README to the project",
+  },
+  {
+    marker: "sp-06",
+    at: 22,
     kind: "entry.submitted",
     entry: "entry-2",
     scope: [],
     detail: "Update the changelog",
   },
   {
-    marker: "cp-12",
-    at: 58,
+    marker: "sp-07",
+    at: 26,
     kind: "scope.enter",
     entry: "entry-2",
     scope: [],
     detail: "document",
   },
   {
-    marker: "cp-13",
-    at: 62,
-    kind: "suspension.opened",
-    entry: "entry-2",
-    scope: ["document"],
-    detail: "review",
-    prompt: "Is this the release the changelog covers?",
-  },
-  {
-    marker: "cp-14",
-    at: 66,
+    marker: "sp-08",
+    at: 31,
     kind: "suspension.opened",
     entry: "entry-2",
     scope: ["document"],
@@ -209,6 +255,7 @@ interface DraftScope {
 interface DraftEntry {
   id: string;
   title: string;
+  settled: boolean;
   scopes: DraftScope[];
 }
 
@@ -249,6 +296,7 @@ function snapshot(
   const copied: Entry[] = entries.map((entry) => ({
     id: entry.id,
     title: entry.title,
+    settled: entry.settled,
     scopes: entry.scopes.map(snapshotScope),
   }));
   const stack: Suspension[] = suspensions.map((suspension) => ({
@@ -258,6 +306,16 @@ function snapshot(
     prompt: suspension.prompt,
   }));
   return deepFreeze({ marker, at, entries: copied, suspensions: stack });
+}
+
+/** Whether one open suspension is the exact wait a record names. */
+function owns(suspension: Suspension, record: HistoryRecord): boolean {
+  return (
+    suspension.entry === record.entry &&
+    suspension.kind === record.detail &&
+    suspension.scope.length === record.scope.length &&
+    suspension.scope.every((name, at) => name === record.scope[at])
+  );
 }
 
 function where(record: HistoryRecord): string {
@@ -283,7 +341,14 @@ export function projectModel(execution: string, history: ReplHistory = HISTORY):
       if (entries.some((entry) => entry.id === record.entry)) {
         throw new Error(`${where(record)} submits an entry that is already open`);
       }
-      entries.push({ id: record.entry, title: record.detail, scopes: [] });
+      // Entries in a session are sequential. Two live at once is a state the
+      // product does not create, so the projection refuses to describe one
+      // rather than letting a fixture drift into proving routing against it.
+      const running = entries.find((entry) => !entry.settled);
+      if (running !== undefined) {
+        throw new Error(`${where(record)} submits an entry while ${running.id} is still running`);
+      }
+      entries.push({ id: record.entry, title: record.detail, settled: false, scopes: [] });
     } else {
       const entry = entries.find((candidate) => candidate.id === record.entry);
       if (entry === undefined) {
@@ -318,20 +383,27 @@ export function projectModel(execution: string, history: ReplHistory = HISTORY):
         });
       }
       if (record.kind === "suspension.answered") {
+        // An answer names one wait completely: the entry, the exact scope path
+        // inside it, and the kind. Matching on anything less lets an answer for
+        // a finished entry consume a live wait belonging to the next one, which
+        // reconstructs a moment that never happened.
         let answered = -1;
         for (let index = suspensions.length - 1; index >= 0 && answered === -1; index -= 1) {
-          const suspension = suspensions[index];
-          const owner =
-            suspension.scope.length === record.scope.length &&
-            suspension.scope.every((name, at) => name === record.scope[at]);
-          if (suspension.kind === record.detail && owner) {
+          if (owns(suspensions[index], record)) {
             answered = index;
           }
         }
         if (answered === -1) {
-          throw new Error(`${where(record)} answers a suspension nothing opened`);
+          throw new Error(`${where(record)} answers no suspension this entry has open`);
         }
         suspensions.splice(answered, 1);
+      }
+      if (record.kind === "entry.settled") {
+        const waiting = suspensions.find((suspension) => suspension.entry === record.entry);
+        if (waiting !== undefined) {
+          throw new Error(`${where(record)} settles an entry still waiting on ${waiting.kind}`);
+        }
+        entry.settled = true;
       }
     }
     checkpoints.push(snapshot(record.marker, record.at, entries, suspensions));

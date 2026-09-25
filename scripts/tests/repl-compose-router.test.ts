@@ -21,7 +21,14 @@ import { readTextFile } from "@effectionx/fs";
 import type { Operation } from "effection";
 import { fileURLToPath } from "node:url";
 
-import { EXECUTION, HISTORY, historyThrough, projectModel } from "../repl-compose/history.ts";
+import {
+  EXECUTION,
+  HISTORY,
+  historyThrough,
+  projectModel,
+  SERIAL_HISTORY,
+} from "../repl-compose/history.ts";
+import type { ReplHistory } from "../repl-compose/history.ts";
 import type { Checkpoint, ReplModel, Scope } from "../repl-compose/model.ts";
 import {
   decodeRoute,
@@ -51,6 +58,13 @@ const OPENING = projectModel(EXECUTION, historyThrough("cp-02"));
 
 /** The same records, recorded by another execution. */
 const OTHER = projectModel("e2");
+
+/**
+ * Two entries, one after the other: `entry-1` answers a `project` wait in its
+ * `document` scope and settles, then `entry-2` opens the same kind at the same
+ * path. Only the owner tells them apart.
+ */
+const SERIAL = projectModel(EXECUTION, SERIAL_HISTORY);
 
 /** The location #840 names, written the one way it is written. */
 const REPRESENTATIVE =
@@ -128,8 +142,8 @@ describe("REPL composition: routing", () => {
     it("records one checkpoint per history record, ending at the head", function* () {
       expect(MODEL.execution).toBe("e1");
       expect(MODEL.checkpoints.length).toBe(HISTORY.length);
-      expect(MODEL.head).toBe("cp-14");
-      expect(MODEL.checkpoints[MODEL.checkpoints.length - 1].marker).toBe("cp-14");
+      expect(MODEL.head).toBe("cp-10");
+      expect(MODEL.checkpoints[MODEL.checkpoints.length - 1].marker).toBe("cp-10");
     });
 
     it("gives each checkpoint its own complete moment", function* () {
@@ -162,25 +176,33 @@ describe("REPL composition: routing", () => {
 
     it("names the entry and the scope that own each suspension", function* () {
       expect(
-        checkpoint(MODEL, "cp-14").suspensions.map((one) => [one.entry, ...one.scope].join("/")),
-      ).toEqual([
-        "entry-1/document/write",
-        "entry-1/document/publish",
-        "entry-2/document",
-        "entry-2/document",
-      ]);
+        checkpoint(MODEL, "cp-10").suspensions.map((one) => [one.entry, ...one.scope].join("/")),
+      ).toEqual(["entry-1/document/write", "entry-1/document/publish"]);
     });
 
-    it("keeps two entries that spell a scope and a suspension the same apart", function* () {
-      const head = checkpoint(MODEL, "cp-14");
-      const [one, two] = head.entries;
+    it("keeps the representative execution to one entry, because entries are serial", function* () {
+      for (const point of MODEL.checkpoints) {
+        expect(point.entries.map((entry) => entry.id)).toEqual(["entry-1"]);
+        expect(point.entries.filter((entry) => !entry.settled).length).toBeLessThanOrEqual(1);
+      }
+    });
 
-      expect([one.id, two.id]).toEqual(["entry-1", "entry-2"]);
-      expect(one.scopes[0].name).toBe(two.scopes[0].name);
-      expect(one.scopes[0]).not.toBe(two.scopes[0]);
-      expect(
-        head.suspensions.filter((each) => each.kind === "project").map((each) => each.entry),
-      ).toEqual(["entry-1", "entry-2"]);
+    it("refuses to describe two entries running at once", function* () {
+      const overlapping: ReplHistory = [
+        ...HISTORY,
+        {
+          marker: "cp-11",
+          at: 54,
+          kind: "entry.submitted",
+          entry: "entry-2",
+          scope: [],
+          detail: "Update the changelog",
+        },
+      ];
+
+      expect(() => projectModel(EXECUTION, overlapping)).toThrow(
+        /submits an entry while entry-1 is still running/,
+      );
     });
 
     it("freezes the model through every value it reaches", function* () {
@@ -310,7 +332,7 @@ describe("REPL composition: routing", () => {
       const location = resolved("xmd://repl/e1/transcript/entry-1/document/+project", MODEL);
 
       expect(location.drawers.map((one) => one.kind)).toEqual(["project"]);
-      expect(location.drawers[0]).toBe(checkpoint(MODEL, "cp-14").suspensions[0]);
+      expect(location.drawers[0]).toBe(checkpoint(MODEL, "cp-10").suspensions[0]);
     });
 
     it("resolves a nested scope through its real parent, settled or not", function* () {
@@ -321,7 +343,7 @@ describe("REPL composition: routing", () => {
     });
 
     it("selects the head when no marker is named", function* () {
-      expect(resolved("xmd://repl/e1/sessions", MODEL).checkpoint.marker).toBe("cp-14");
+      expect(resolved("xmd://repl/e1/sessions", MODEL).checkpoint.marker).toBe("cp-10");
       expect(resolved("xmd://repl/e1/sessions", EARLY).checkpoint.marker).toBe("cp-08");
     });
 
@@ -358,7 +380,7 @@ describe("REPL composition: routing", () => {
       expect(refusal.position).toBe("scope[0]");
       expect(refusal.segment).toBe("plan");
       expect(refusal.found).toEqual(["document"]);
-      expect(refusal.message).toContain("is not a scope of entry-1 at cp-14");
+      expect(refusal.message).toContain("is not a scope of entry-1 at cp-10");
     });
 
     it("refuses a fabricated scope and says what is there instead", function* () {
@@ -399,7 +421,7 @@ describe("REPL composition: routing", () => {
 
       expect(refusal.position).toBe("drawer[2]");
       expect(refusal.found).toEqual(["project", "confirm"]);
-      expect(refusal.message).toContain("there is no drawer 3 of entry-1 at cp-14");
+      expect(refusal.message).toContain("there is no drawer 3 of entry-1 at cp-10");
     });
 
     it("refuses a drawer that belongs to another checkpoint", function* () {
@@ -416,7 +438,7 @@ describe("REPL composition: routing", () => {
     it("refuses an entry and a marker nothing recorded", function* () {
       const entry = refused("xmd://repl/e1/transcript/entry-9", MODEL);
       expect(entry.position).toBe("entry");
-      expect(entry.found).toEqual(["entry-1", "entry-2"]);
+      expect(entry.found).toEqual(["entry-1"]);
 
       const marker = refused("xmd://repl/e1/transcript/entry-1?at=cp-99", MODEL);
       expect(marker.position).toBe("at");
@@ -658,53 +680,88 @@ describe("REPL composition: routing", () => {
   });
 
   describe("a drawer belongs to the entry that owns the wait", () => {
-    it("resolves a suspension only under its own entry", function* () {
-      const head = checkpoint(MODEL, "cp-14");
+    it("puts the two entries one after the other, never both running", function* () {
+      const head = checkpoint(SERIAL, "sp-08");
+      const [first, second] = head.entries;
 
-      // `review` is waiting in entry-2, and entry-1 is waiting on project and
-      // confirm. The kind exists at this moment; the ownership is what decides.
-      const refusal = refused("xmd://repl/e1/transcript/entry-1/document/+review", MODEL);
+      expect([first.id, second.id]).toEqual(["entry-1", "entry-2"]);
+      expect([first.settled, second.settled]).toEqual([true, false]);
+      // Same scope spelling, same suspension kind, same path. Only the owner
+      // differs, which is the whole point of this fixture.
+      expect(first.scopes[0].name).toBe(second.scopes[0].name);
+      expect(first.scopes[0]).not.toBe(second.scopes[0]);
+      expect(head.suspensions.map((one) => [one.entry, ...one.scope, one.kind].join("/"))).toEqual([
+        "entry-2/document/project",
+      ]);
+    });
+
+    it("refuses the settled entry's drawer and resolves the running entry's", function* () {
+      const head = checkpoint(SERIAL, "sp-08");
+
+      // entry-1 answered its `project` before settling, so it has no stack left
+      // even though a `project` is open at this very moment.
+      const refusal = refused("xmd://repl/e1/transcript/entry-1/document/+project", SERIAL);
       expect(refusal.position).toBe("drawer[0]");
-      expect(refusal.found).toEqual(["project"]);
+      expect(refusal.found).toEqual([]);
+      expect(refusal.message).toContain("there is no drawer 1 of entry-1 at sp-08");
 
-      const owned = resolved("xmd://repl/e1/transcript/entry-2/document/+review", MODEL);
-      expect(owned.drawers[0]).toBe(head.suspensions[2]);
+      const owned = resolved("xmd://repl/e1/transcript/entry-2/document/+project", SERIAL);
+      expect(owned.drawers[0]).toBe(head.suspensions[0]);
       expect(owned.drawers[0].entry).toBe("entry-2");
     });
 
-    it("gives each entry the suspension of that kind that is its own", function* () {
-      const head = checkpoint(MODEL, "cp-14");
-      const mine = resolved("xmd://repl/e1/transcript/entry-1/document/+project", MODEL);
-
-      // Both entries are waiting on a `project`. Matching the stack by kind
-      // alone answered entry-1's route with the first `project` in the
-      // checkpoint whichever entry owned it.
-      expect(mine.drawers[0]).toBe(head.suspensions[0]);
-      expect(mine.drawers[0]).not.toBe(head.suspensions[3]);
-      expect(head.suspensions[3].entry).toBe("entry-2");
-    });
-
-    it("keeps the drawer path an ordered prefix of that entry's own stack", function* () {
-      // entry-2 opened `review` before `project`, so `+project` alone is not a
-      // prefix of its stack even though entry-1's stack starts with one.
-      const refusal = refused("xmd://repl/e1/transcript/entry-2/document/+project", MODEL);
-      expect(refusal.position).toBe("drawer[0]");
-      expect(refusal.found).toEqual(["review"]);
-
-      const both = resolved("xmd://repl/e1/transcript/entry-2/document/+review/+project", MODEL);
-      expect(both.drawers.map((one) => one.kind)).toEqual(["review", "project"]);
-      expect(both.drawers.map((one) => one.entry)).toEqual(["entry-2", "entry-2"]);
-    });
-
-    it("counts a missing drawer against the entry's stack, not the checkpoint's", function* () {
-      const refusal = refused(
-        "xmd://repl/e1/transcript/entry-2/document/+review/+project/+confirm",
-        MODEL,
+    it("resolves the same drawer differently before and after the hand-over", function* () {
+      // At sp-03 the identical URL means entry-1's wait; at sp-08 entry-1 has
+      // none and entry-2 owns the only one.
+      const earlier = resolved(
+        "xmd://repl/e1/transcript/entry-1/document/+project?at=sp-03&inspect",
+        SERIAL,
       );
+      expect(earlier.drawers[0]).toBe(checkpoint(SERIAL, "sp-03").suspensions[0]);
+      expect(earlier.drawers[0].entry).toBe("entry-1");
 
-      expect(refusal.position).toBe("drawer[2]");
-      expect(refusal.found).toEqual(["review", "project"]);
-      expect(refusal.message).toContain("there is no drawer 3 of entry-2");
+      expect(refused("xmd://repl/e1/transcript/entry-1/document/+project", SERIAL).found).toEqual(
+        [],
+      );
+    });
+
+    it("refuses a stale answer instead of consuming the next entry's wait", function* () {
+      const stale: ReplHistory = [
+        ...SERIAL_HISTORY,
+        {
+          marker: "sp-09",
+          at: 35,
+          kind: "suspension.answered",
+          entry: "entry-1",
+          scope: ["document"],
+          detail: "project",
+        },
+      ];
+
+      // Matching an answer by kind and scope alone removed entry-2's live wait
+      // and left the head with an empty stack.
+      expect(() => projectModel(EXECUTION, stale)).toThrow(
+        /answers no suspension this entry has open/,
+      );
+      expect(checkpoint(SERIAL, "sp-08").suspensions.map((one) => one.entry)).toEqual(["entry-2"]);
+    });
+
+    it("refuses to settle an entry that is still waiting", function* () {
+      const early: ReplHistory = [
+        ...SERIAL_HISTORY.slice(0, 3),
+        {
+          marker: "sp-04",
+          at: 16,
+          kind: "entry.settled",
+          entry: "entry-1",
+          scope: [],
+          detail: "Add a README to the project",
+        },
+      ];
+
+      expect(() => projectModel(EXECUTION, early)).toThrow(
+        /settles an entry still waiting on project/,
+      );
     });
   });
 
