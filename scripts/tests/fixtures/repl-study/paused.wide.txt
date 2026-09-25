@@ -2,7 +2,7 @@ paused.wide · 200 × 50
  XMD REPL                                       │ REPL › Entry 1 › document › Plan                                                                                 RECONSTRUCTED AT 00:12 · READ-ONLY
                                                 │
  SESSION   JOURNAL   STATE                      │───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
-                                                │▌Entry 1  ● running · 53.0s       ↳ reconstructed · read-only                                                         │ BINDINGS
+                                                │ Entry 1  ● running · 53.0s       ↳ reconstructed · read-only                                                         │ BINDINGS
  ENTRY 1 · CREATE PROJECT README                │                                                                                                                      │ Plan scope · as recorded
  inspecting recorded history · read-only        │ reconstructed from the journal · no live action is possible here                                                     │
                                                 │ Plan                                                                                                                 │ prompt

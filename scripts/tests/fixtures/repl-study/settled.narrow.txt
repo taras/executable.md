@@ -1,6 +1,6 @@
 settled.narrow · 90 × 28
  TRANSCRIPT · 2 / 4         REPL · Entry 1 settled                                Tab ▸
-▌Entry 1  ✓ completed · 41.2s     ▸ source · 8 lines
+ Entry 1  ✓ completed · 41.2s     ▸ source · 8 lines
 
  Create a project README
  Provide the project name and a one-sentence description.

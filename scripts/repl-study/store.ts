@@ -23,7 +23,6 @@ import { layoutFor, SURFACES } from "./layout.ts";
 import type { Layout, SurfaceName } from "./layout.ts";
 import type { FixtureName, Fixture, TransportMode } from "./model.ts";
 import type { Mutation } from "./mutations.ts";
-import type { ReplAction } from "./actions.ts";
 import { formatRoute, navigationFor, parseRoute, topDrawer } from "./route.ts";
 import type { Route, RouteChange, RouteSurface } from "./route.ts";
 
@@ -43,10 +42,6 @@ export interface View {
   readonly checkpoint: number;
   readonly surface: SurfaceName;
   readonly drawerOpen: boolean;
-  /** Whether a reconstruction is open, which makes what is drawn read-only. */
-  readonly inspect: boolean;
-  /** What the interface last refused. A view of a moment refused nothing. */
-  readonly notice: string;
 }
 
 export function initialView(subject: Fixture): View {
@@ -61,8 +56,6 @@ export function initialView(subject: Fixture): View {
     checkpoint,
     surface: "transcript",
     drawerOpen: subject.drawer !== undefined,
-    inspect: false,
-    notice: "",
   };
 }
 
@@ -107,14 +100,6 @@ export interface ReplState {
   readonly selection: number;
   /** Disposable: whether the F1 focus map is drawn. */
   readonly overlay: boolean;
-  /**
-   * Disposable: what the interface last refused, in words, or nothing.
-   *
-   * A refusal has to be visible or it is indistinguishable from a button that
-   * does nothing. It is not in the URL and it does not survive navigation,
-   * because it is about the last thing you did rather than about where you are.
-   */
-  readonly notice: string;
   /** Which identity opened each drawer, so closing one can restore it. */
   readonly invokers: Readonly<Record<string, string>>;
   /** The navigation stack, for Back. Entries are URLs. */
@@ -158,7 +143,6 @@ export function hydrateRoute(
   const rebuilt = mint(route, journal, {
     anchor: 0,
     overlay: false,
-    notice: "",
     invokers: {},
     history: [],
     interrupts: 0,
@@ -240,14 +224,8 @@ export function layoutOf(state: ReplState, size: Size, mutation?: Mutation): Lay
  */
 export function fixtureFor(state: ReplState): Fixture {
   const base = fixture(state.moment.shows);
-  // Which drawer this is, is the execution's. The URL says only whether it is
-  // open; choosing the kind from the URL would let a location invent the
-  // question being asked.
-  const suspended = state.moment.suspension;
-  const drawer =
-    suspended !== undefined && topDrawer(state.route) !== undefined
-      ? drawerOf(suspended)
-      : undefined;
+  const top = topDrawer(state.route);
+  const drawer = top !== undefined && isDrawerKind(top) ? drawerOf(top) : undefined;
   const inspecting = state.route.inspect;
   const selected = state.journal[state.selection]?.at;
   return {
@@ -277,8 +255,6 @@ export function viewOf(state: ReplState): View {
         : subject.history.checkpoints.findIndex((point) => point.at === selectedAt),
     surface: surfaceOf(state.route),
     drawerOpen: subject.drawer !== undefined,
-    inspect: state.route.inspect,
-    notice: state.notice,
   };
 }
 
@@ -295,10 +271,6 @@ function go(state: ReplState, route: Route, change: RouteChange, mutation?: Muta
   return mint(route, state.journal, {
     anchor: state.anchor,
     overlay: state.overlay,
-    // A refusal survives the navigation the same input caused — the URL
-    // following focus is part of that one act, not the next one. What clears it
-    // is the next thing the person does.
-    notice: state.notice,
     invokers: state.invokers,
     history: navigation === "push" ? [...state.history, formatRoute(state.route)] : state.history,
     interrupts: state.interrupts,
@@ -310,7 +282,6 @@ function withJournal(state: ReplState, journal: JournalFixture): ReplState {
   return mint(state.route, journal, {
     anchor: state.anchor,
     overlay: state.overlay,
-    notice: state.notice,
     invokers: state.invokers,
     history: state.history,
     interrupts: state.interrupts,
@@ -355,14 +326,6 @@ export function followFocus(
 export type HarnessEvent =
   /** Whatever the decoder produced. It is parsed here, never assumed. */
   | { readonly kind: "key"; readonly event: unknown }
-  /**
-   * A pointer landing on a cell.
-   *
-   * Synthetic: mouse reporting is never enabled. It exists so that activating a
-   * control with a pointer and activating it with the keyboard can be shown to
-   * be the same act by the time either reaches an action.
-   */
-  | { readonly kind: "pointer"; readonly pointer: Pointer }
   | { readonly kind: "resize"; readonly cols: number; readonly rows: number }
   | { readonly kind: "tick"; readonly advanceMs: number }
   | { readonly kind: "background"; readonly record: JournalRecord }
@@ -398,12 +361,6 @@ export type FocusIntent =
 export interface Reduction {
   readonly state: ReplState;
   readonly focus?: FocusIntent;
-}
-
-export interface Pointer {
-  readonly button: "primary";
-  readonly x: number;
-  readonly y: number;
 }
 
 export interface Key {
@@ -445,7 +402,7 @@ function editable(identity: string): boolean {
  * key code `Backtab` carrying no shift flag. A reducer that tested `Tab` with
  * `shift` was testing an event only a test had ever produced.
  */
-export function reverseTab(key: Key, mutation?: Mutation): boolean {
+function reverseTab(key: Key, mutation?: Mutation): boolean {
   if (key.code === "Tab" && key.shift === true) {
     return true;
   }
@@ -500,11 +457,6 @@ export function reduce(state: ReplState, event: HarnessEvent, context: ReduceCon
     return only(withJournal(state, [...state.journal, event.record]));
   }
 
-  if (event.kind === "pointer") {
-    // A pointer that nothing owned did nothing. There is no global meaning for
-    // one: it is an address, and an address nobody answered is not an event.
-    return only(state);
-  }
   const key = asKey(event.event);
   if (key.type !== "keydown") {
     return only(state);
@@ -530,17 +482,15 @@ export function reduce(state: ReplState, event: HarnessEvent, context: ReduceCon
   if (key.code === "F1") {
     return only({ ...state, overlay: !state.overlay });
   }
-  if (key.code === "Tab" || key.code === "Backtab" || key.code === "Escape") {
-    // Traversal and Back are actions: the root maps these keys before the store
-    // ever sees them, so reaching here means the delivery was refused and there
-    // is nothing left to do.
-    return only(state);
+  if (key.code === "Tab" || key.code === "Backtab") {
+    // Traversal is the tree's: it is the thing that knows what exists now.
+    return { state, focus: reverseTab(key, mutation) ? { kind: "retreat" } : { kind: "advance" } };
+  }
+  if (key.code === "Escape") {
+    return back(state, here, context.size, mutation);
   }
   if (key.code === "Enter") {
-    // Activation belongs to whatever was activated. An Enter that reaches the
-    // fallback activated nothing, and inserting it into a draft instead would
-    // make the same key mean two things.
-    return only(state);
+    return only(activate(state, here, mutation));
   }
 
   const digit = Number(key.code);
@@ -596,10 +546,18 @@ export function reduce(state: ReplState, event: HarnessEvent, context: ReduceCon
  */
 function back(state: ReplState, here: string, size: Size, mutation?: Mutation): Reduction {
   void size;
-  // A drawer is not a step in this sequence any more. An open drawer traps
-  // focus, so Back inside one passes through the drawer's own branch, and the
-  // drawer translates it into closing itself — which is the thing that knows
-  // it is a drawer.
+  const top = topDrawer(state.route);
+  if (top !== undefined) {
+    // The route loses the drawer; the tree removes the branch and restores the
+    // focus its push remembered. Neither side keeps the other's answer.
+    const closed = go(
+      state,
+      { ...state.route, drawers: state.route.drawers.slice(0, -1) },
+      "drawer",
+      mutation,
+    );
+    return { state: closed };
+  }
   if (state.route.inspect) {
     return { state: go(state, { ...state.route, inspect: false }, "inspection", mutation) };
   }
@@ -620,7 +578,6 @@ function back(state: ReplState, here: string, size: Size, mutation?: Mutation): 
     state: mint(parsed.value, state.journal, {
       anchor: state.anchor,
       overlay: state.overlay,
-      notice: state.notice,
       invokers: state.invokers,
       history: state.history.slice(0, -1),
       interrupts: state.interrupts,
@@ -629,98 +586,28 @@ function back(state: ReplState, here: string, size: Size, mutation?: Mutation): 
   };
 }
 
-/**
- * What an action does to the state.
- *
- * `undefined` means this store does not own the action, which is how an action
- * nobody implements reaches the API default and throws instead of quietly doing
- * nothing.
- *
- * Every transition the interface can perform is here, and nowhere else. The
- * branch an action came from decided *what* should happen; this is the only
- * place that decides what the state becomes because of it.
- */
-export function applyAction(
-  state: ReplState,
-  action: ReplAction,
-  context: ReduceContext,
-): Reduction | undefined {
-  const { mutation } = context;
-  if (mutation === "disown-actions") {
-    // The control: a root that implements nothing. Every action then reaches
-    // the default, which is the only thing that can tell the difference between
-    // an action nobody owns and a button that happens to do nothing.
-    return undefined;
+/** Enter: what the focused target does when it is activated. */
+function activate(state: ReplState, here: string, mutation?: Mutation): ReplState {
+  if (here === "control:transport.pause") {
+    return frozen(state, mutation) ? state : extendTo(state, "paused");
   }
-  if (action.kind === "pause") {
-    return { state: frozen(state, mutation) ? state : extendTo(state, "paused") };
+  if (here === "control:transport.continue") {
+    return frozen(state, mutation) ? state : extendTo(state, "resumed");
   }
-  if (action.kind === "continue") {
-    return { state: frozen(state, mutation) ? state : extendTo(state, "resumed") };
-  }
-  if (action.kind === "return-to-head") {
+  if (here === "control:transport.return-head") {
     // Closing the reconstruction leaves the selection where it was: returning
     // to the head is not the same act as deselecting a marker.
-    return { state: go(state, { ...state.route, inspect: false }, "inspection", mutation) };
+    return go(state, { ...state.route, inspect: false }, "inspection", mutation);
   }
-  if (action.kind === "inspect") {
+  if (here === "region:history" && state.selection >= 0 && !state.route.inspect) {
     // A reconstruction has no live suspension, so the drawer stack does not
     // survive into one. That is what makes study frame 12's focus walk real:
     // the trapped controls leave the sequence and focus has to resolve to the
     // nearest owner that did survive.
-    if (state.selection < 0 || state.route.inspect) {
-      return { state };
-    }
-    return {
-      state: go(state, { ...state.route, inspect: true, drawers: [] }, "inspection", mutation),
-    };
+    return go(state, { ...state.route, inspect: true, drawers: [] }, "inspection", mutation);
   }
-  if (action.kind === "close-drawer") {
-    // The route loses the drawer; the tree removes the branch and restores the
-    // focus its push remembered. Neither side keeps the other's answer.
-    return {
-      state: go(
-        state,
-        { ...state.route, drawers: state.route.drawers.slice(0, -1) },
-        "drawer",
-        mutation,
-      ),
-    };
-  }
-  if (action.kind === "back") {
-    return back(state, context.focused, context.size, mutation);
-  }
-  if (action.kind === "focus") {
-    if (action.move === "next") {
-      return { state, focus: { kind: "advance" } };
-    }
-    return { state, focus: { kind: action.move === "previous" ? "retreat" : "owner" } };
-  }
-  // Everything left is an operation a real execution owns. The interface offers
-  // it, this study cannot carry it out, and saying so is the only honest
-  // answer: the journal and the URL are untouched, and the refusal is drawn.
-  return { state: { ...state, notice: `${STUDY_REFUSALS[action.kind]} ${UNAVAILABLE}` } };
+  return state;
 }
-
-/**
- * What the interface calls each operation it cannot perform here.
- *
- * The words are the study's own, so a refusal names the thing that was pressed
- * rather than the shape of the action behind it.
- */
-const STUDY_REFUSALS: Readonly<Record<string, string>> = {
-  run: "Run",
-  fork: "Fork from here",
-  submit: "Submit",
-  approve: "Approve",
-  "request-changes": "Request changes",
-  stop: "Stop",
-  decline: "Decline",
-  "disclose-schema": "Schema disclosure",
-};
-
-/** The one sentence a refusal says, so a reader can look for exactly it. */
-export const UNAVAILABLE = "needs a real execution — unavailable in this study";
 
 /**
  * The chronological axis: one semantic marker at a time.

@@ -22,26 +22,25 @@ import { fixture, fixtures } from "./fixtures.ts";
 import type { Fixture, FixtureName } from "./model.ts";
 import { SURFACES } from "./layout.ts";
 import { transcriptLines } from "./render.ts";
+import type { FocusView } from "./render.ts";
 import { initialView } from "./store.ts";
 import { asKey, fixtureFor, hydrate, reduce, viewOf } from "./store.ts";
-import { useReplTree } from "./tree.ts";
+import { overlayOf, useReplTree } from "./tree.ts";
 import { drive, enterRoute } from "./drive.ts";
-import { useFrames } from "./animation.ts";
 import type { HarnessEvent, ReplState, View } from "./store.ts";
-import { journalThrough, markerShowing, markerSuspending } from "./journal.ts";
+import { journalThrough, markerShowing } from "./journal.ts";
 import { formatRoute } from "./route.ts";
-import { composeInto, RendererCapacityError, useComposition, useTerm } from "./capture.ts";
-import type { Composition } from "./capture.ts";
+import { RendererCapacityError, useTerm } from "./capture.ts";
 import { renderInto } from "./capture.ts";
 import type { Mutation } from "./mutations.ts";
 import {
-  transitionOf,
+  motionAt,
   playbackFrom,
   segmentDurationMs,
   segmentFixture,
   segmentLabel,
 } from "./playback.ts";
-import type { Playback, Segment, Transition } from "./playback.ts";
+import type { Motion, Playback, Segment } from "./playback.ts";
 
 /** The modes the harness changes, as one reversible pair. */
 export function terminalModes(): Setting {
@@ -199,40 +198,32 @@ export function* scanKeys(
 interface Painted {
   readonly animating: boolean;
   readonly bytes: number;
-  /** How tall the contextual band came out, which is what a drawer grows. */
-  readonly contextualRows: number;
 }
 
 function draw(
   term: Term,
   state: HarnessState,
-  composition: Composition,
   write: (bytes: Uint8Array) => void,
   mutation?: Mutation,
-  transition?: Transition,
+  motion?: Motion,
   deltaMs = 0,
-  overlay?: boolean,
+  focus?: FocusView,
 ): Painted {
   // One render path for the harness and for the captures, so what a person sees
   // in a terminal and what a golden records cannot drift apart.
   const frame = renderInto(term, {
     fixture: state.fixture,
     view: state.view,
-    composition,
     size: { cols: state.cols, rows: state.rows },
     mutation,
-    transition,
-    overlay,
+    motion,
+    focus,
     // The harness counts in milliseconds and the renderer in seconds. The
     // conversion happens here, once, at the only place the two meet.
     deltaSeconds: deltaMs / 1000,
   });
   write(frame.ansi);
-  return {
-    animating: frame.animating,
-    bytes: frame.ansi.length,
-    contextualRows: frame.bounds.contextual?.height ?? 0,
-  };
+  return { animating: frame.animating, bytes: frame.ansi.length };
 }
 
 /** A frame every sixteen milliseconds, which is the rate the study was made at. */
@@ -264,16 +255,7 @@ export interface TraceEntry {
   /** What the renderer was advanced by, in its own unit: seconds. */
   readonly deltaSeconds: number;
   readonly animating: boolean;
-  /** True while a component is still animating and has asked for more frames. */
-  readonly moving: boolean;
-  /**
-   * How tall the contextual band was drawn.
-   *
-   * In the trace because a claim about a drawer growing has to be readable by
-   * something that cannot watch a screen, and "the renderer said it was
-   * interpolating" does not say what moved.
-   */
-  readonly contextualRows: number;
+  readonly motionDone: boolean | null;
   readonly bytes: number;
   /** `hold:nested`, `play:nested→generated`, or `settled` once it is over. */
   readonly segment: string;
@@ -316,27 +298,6 @@ export function openingState(options: {
       ? opened
       : hydrate(formatRoute({ ...start, drawers: [waiting] }), journal);
   return { ...routed, overlay: options.focusMap === true };
-}
-
-/** The topology one of the six moments needs mounted, without its focus. */
-function momentState(subject: Fixture): ReplState {
-  return hydrate(
-    formatRoute({
-      execution: "e1",
-      surface: "transcript",
-      scopes: [],
-      drawers: subject.drawer === undefined ? [] : [subject.drawer.kind],
-      inspect: false,
-      draft: "",
-    }),
-    // A moment that shows a drawer is the moment that drawer's question was
-    // asked, which is the execution's fact rather than the screen's.
-    journalThrough(
-      subject.drawer === undefined
-        ? markerShowing(subject.name)
-        : markerSuspending(subject.drawer.kind),
-    ),
-  );
 }
 
 export interface InteractiveOptions {
@@ -391,14 +352,9 @@ export function* runInteractive(options: InteractiveOptions): Operation<void> {
     quit: false,
   };
 
-  // The one clock, installed before anything is mounted, so the tree's
-  // components and the loop that drives them are looking at the same service.
-  const frameClock = yield* useFrames();
-  /** Seconds since this run began, which is what a frame is stamped with. */
-  let clockAt = 0;
   // The tree is acquired before the terminal is touched, so its teardown runs
   // after the terminal has been given back rather than into a restored one.
-  const tree = yield* useReplTree(repl, { cols: state.cols, rows: state.rows });
+  const tree = yield* useReplTree(repl);
   // Entering the region the route names comes first, because the footer is an
   // explicit region: its controls exist only once focus is inside it. Without
   // this the interactive harness opened at a frame's *location* but not its
@@ -444,8 +400,6 @@ export function* runInteractive(options: InteractiveOptions): Operation<void> {
   const journey = options.journey;
   let segmentIndex = 0;
   let playback = options.play;
-  /** True while the next frame should be drawn by a renderer with an empty cache. */
-  let freshen = false;
   let elapsed = 0;
   let frames = 0;
   let clock: Task<void> | undefined;
@@ -453,7 +407,6 @@ export function* runInteractive(options: InteractiveOptions): Operation<void> {
   let settled = false;
   let held: string | undefined;
   let lastPainted = false;
-  let composedFor: string | undefined;
 
   const currentSegment = (): Segment | undefined =>
     journey === undefined ? undefined : journey[segmentIndex];
@@ -523,14 +476,6 @@ export function* runInteractive(options: InteractiveOptions): Operation<void> {
       }
       show(segmentFixture(entered));
       playback = entered.kind === "play" ? entered.playback : undefined;
-      // A transition is interpolated by the renderer between two frames it drew
-      // itself, so it must not be handed a new one halfway through. Clay's
-      // measurement cache fills on a run this wordy, and the rebuild that
-      // answers that used to land inside a transition and take the geometry it
-      // was growing from with it. The clean one is taken here, before the
-      // movement starts, where the only cost is a full repaint of a frame that
-      // was about to change anyway.
-      freshen = playback !== undefined;
     }
     return "running";
   };
@@ -544,11 +489,7 @@ export function* runInteractive(options: InteractiveOptions): Operation<void> {
    */
   const paint = function* (deltaMs: number, finished = false): Operation<void> {
     const segment = currentSegment();
-    const transition = playback === undefined ? undefined : transitionOf(playback, elapsed > 0);
-    // The one clock, advanced once per frame, before anything is drawn from it.
-    // Every component has taken this moment by the time this returns.
-    clockAt += deltaMs / 1000;
-    yield* frameClock.advance(clockAt);
+    const motion = playback === undefined ? undefined : motionAt(playback, elapsed);
     const label =
       finished || segment === undefined
         ? journey === undefined
@@ -562,36 +503,14 @@ export function* runInteractive(options: InteractiveOptions): Operation<void> {
     const repeated = journey !== undefined && segment?.kind === "hold" && held === label;
     if (!repeated) {
       const measured = { cols: state.cols, rows: state.rows };
-      if (freshen) {
-        freshen = false;
-        term = yield* useTerm(measured);
-      }
-      // The moment on screen is composed **into the harness's one tree**, so
-      // rendering, focus, scoped input and the overlay all come off the same
-      // mounted object. A second tree for rendering would look right on its own
-      // and be a parallel hierarchy.
-      // While the journey or a playback is projecting, the moment on screen is
-      // not the store's, so the tree is brought to that moment's topology —
-      // once, when the moment changes, never on a repaint. Focus is not
-      // touched: a repaint may read where the person is and may not decide it.
-      const projecting = journey !== undefined || playback !== undefined;
-      if (projecting && composedFor !== state.fixture.name) {
-        yield* tree.sync(momentState(state.fixture));
-        composedFor = state.fixture.name;
-      }
-      const composition = composeInto(tree, state.fixture, state.view, undefined, options.mutation);
+      const focus: FocusView = {
+        here: tree.focused().name,
+        map: overlayOf(tree),
+        overlay: repl.overlay,
+      };
       let painted: Painted;
       try {
-        painted = draw(
-          term,
-          state,
-          composition,
-          write,
-          options.mutation,
-          transition,
-          deltaMs,
-          repl.overlay,
-        );
+        painted = draw(term, state, write, options.mutation, motion, deltaMs, focus);
       } catch (error) {
         if (!(error instanceof RendererCapacityError)) {
           throw error;
@@ -600,16 +519,7 @@ export function* runInteractive(options: InteractiveOptions): Operation<void> {
         // wide terminal will do. A new one starts that cache again and repaints
         // the whole screen, so the person watching sees nothing but a frame.
         term = yield* useTerm(measured);
-        painted = draw(
-          term,
-          state,
-          composition,
-          write,
-          options.mutation,
-          transition,
-          0,
-          repl.overlay,
-        );
+        painted = draw(term, state, write, options.mutation, motion, 0, focus);
       }
       frames += 1;
       options.trace?.push({
@@ -617,8 +527,7 @@ export function* runInteractive(options: InteractiveOptions): Operation<void> {
         elapsedMs: elapsed,
         deltaSeconds: deltaMs / 1000,
         animating: painted.animating,
-        moving: frameClock.wanted(),
-        contextualRows: painted.contextualRows,
+        motionDone: motion === undefined ? null : motion.done,
         bytes: painted.bytes,
         segment: label,
         fixture: state.fixture.name,
@@ -628,7 +537,7 @@ export function* runInteractive(options: InteractiveOptions): Operation<void> {
     held = segment?.kind === "hold" ? label : undefined;
 
     const journeyRunning = journey !== undefined && !finished;
-    const moving = lastPainted || frameClock.wanted() || journeyRunning;
+    const moving = lastPainted || (motion !== undefined && !motion.done) || journeyRunning;
     const active = options.mutation === "never-tick" ? false : moving;
     if (clock !== undefined) {
       const running = clock;
@@ -639,7 +548,7 @@ export function* runInteractive(options: InteractiveOptions): Operation<void> {
       const delay = Math.max(1, Math.round(nextDelayMs()));
       clock = yield* spawn(() => ticker(events, delay));
     }
-    if (journey === undefined && playback !== undefined && !frameClock.wanted() && !lastPainted) {
+    if (journey === undefined && motion !== undefined && motion.done && !lastPainted) {
       // The transition has arrived. What remains is the fixture itself, which
       // is what a journal or a URL would restore.
       playback = undefined;
@@ -810,13 +719,7 @@ export function* runReplay(options: ReplayOptions): Operation<void> {
     if (options.mutation !== "skip-resize-update") {
       term.update({ width: state.cols, height: state.rows });
     }
-    // The replay owns its whole composition, so mounting one tree here is
-    // exactly right — there is no other tree for it to be a second of.
-    const composition = yield* useComposition(state.fixture, state.view, {
-      cols: state.cols,
-      rows: state.rows,
-    });
-    draw(term, state, composition, write, options.mutation);
+    draw(term, state, write, options.mutation);
     drawn += 1;
     if (options.failAfter !== undefined && drawn >= options.failAfter) {
       throw new Error("the harness failed while drawing a frame");

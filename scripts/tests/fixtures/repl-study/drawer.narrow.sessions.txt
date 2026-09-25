@@ -1,6 +1,6 @@
 drawer.narrow.sessions · 90 × 28
  SESSIONS · 1 / 4           REPL › Entry 1 › document · suspended                 Tab ▸
-▌SESSION   JOURNAL   STATE
+ SESSION   JOURNAL   STATE
 
  SESSIONS · 3
 

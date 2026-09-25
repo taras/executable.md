@@ -1,6 +1,6 @@
 nested.narrow.bindings · 90 × 28
  BINDINGS · 3 / 4           REPL › Entry 1 › document › Plan · active             Tab ▸
-▌BINDINGS
+ BINDINGS
  Plan scope
 
  prompt

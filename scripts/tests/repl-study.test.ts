@@ -33,7 +33,6 @@ import {
   PROFILE_SIZES,
   renderFrame,
   renderInto,
-  useComposition,
   useTerm,
   writeCaptures,
 } from "../repl-study/capture.ts";
@@ -46,12 +45,11 @@ import {
   JOURNEY,
   journeyDurationMs,
   journeyPlan,
+  motionAt,
   playbackBetween,
   segmentDurationMs,
   segmentLabel,
-  transitionOf,
 } from "../repl-study/playback.ts";
-import { useFrames } from "../repl-study/animation.ts";
 import { FRAME_SECONDS } from "../repl-study/host.ts";
 import { intersects, layoutFor, MINIMUM, PANE_MINIMUMS, profileFor } from "../repl-study/layout.ts";
 import type { Profile } from "../repl-study/layout.ts";
@@ -75,20 +73,6 @@ import {
   viewport,
 } from "../repl-study/screen.ts";
 import { initialView, scrollBy } from "../repl-study/store.ts";
-import { historyViewFrom } from "../repl-study/view.ts";
-import { placementOf } from "../repl-study/component.ts";
-import type { Fixture } from "../repl-study/model.ts";
-
-/**
- * A fixture's band, as the semantic view model the geometry now takes.
- *
- * The band's arithmetic moved onto the view when the renderer moved onto the
- * component tree. The assertions below are unchanged; only what they are asked
- * of is.
- */
-function bandOf(subject: Fixture) {
-  return historyViewFrom(subject, subject.history.transport, []);
-}
 
 const ROOT = fileURLToPath(new URL("../../", import.meta.url));
 const GOLDENS = fileURLToPath(new URL("./fixtures/repl-study/", import.meta.url));
@@ -134,11 +118,11 @@ function soleNotchColumns(
   geometry: { readonly trackLeft: number; readonly trackWidth: number },
 ): Map<number, number> {
   const byDepth = new Map<number, number>();
-  for (const notch of notchLayout(bandOf(subject), geometry.trackLeft, geometry.trackWidth)) {
-    if (notch.markers.length !== 1) {
+  for (const notch of notchLayout(subject.history, geometry.trackLeft, geometry.trackWidth)) {
+    if (notch.checkpoints.length !== 1) {
       continue;
     }
-    const [point] = notch.markers;
+    const [point] = notch.checkpoints;
     if (!byDepth.has(point.depth)) {
       byDepth.set(point.depth, notch.column);
     }
@@ -157,15 +141,9 @@ function ptyCommand(_command: string): string {
 }
 
 function ptyArguments(command: string): string[] {
-  // The pty is given the wide profile's own size rather than whatever the
-  // terminal running the suite happens to be. These cases are about what the
-  // wide composition does, and one of them ran for months against a narrow
-  // screen because nobody said.
-  const full =
-    `stty rows ${PROFILE_SIZES.wide.rows} cols ${PROFILE_SIZES.wide.cols}; ` +
-    `deno run --allow-all ${command}`;
+  const full = `deno run --allow-all ${command}`;
   if (Deno.build.os === "darwin") {
-    return ["-q", "/dev/null", "sh", "-c", full];
+    return ["-q", "/dev/null", ...full.split(" ")];
   }
   if (Deno.build.os === "linux") {
     return ["-qec", full, "/dev/null"];
@@ -187,8 +165,7 @@ const TRACE_ENTRY = z.object({
   elapsedMs: z.number(),
   deltaSeconds: z.number(),
   animating: z.boolean(),
-  moving: z.boolean(),
-  contextualRows: z.number(),
+  motionDone: z.boolean().nullable(),
   bytes: z.number(),
   segment: z.string(),
   fixture: z.string(),
@@ -401,7 +378,7 @@ describe("the history footer", () => {
       drawer: false,
       surface: "transcript",
     });
-    const geometry = bandGeometry(bandOf(subject), placementOf(layout, layout.footer!));
+    const geometry = bandGeometry(subject, layout, layout.footer!);
     const frame = yield* renderFrame({ fixture: subject, view: initialView(subject), size });
     const rows = bandRows(frame.text, size);
     const byDepth = soleNotchColumns(subject, geometry);
@@ -432,13 +409,12 @@ describe("the history footer", () => {
       drawer: false,
       surface: "transcript",
     });
-    const geometry = bandGeometry(bandOf(subject), placementOf(layout, layout.footer!));
+    const geometry = bandGeometry(subject, layout, layout.footer!);
     const byDepth = soleNotchColumns(subject, geometry);
     const deepColumn = byDepth.get(3) ?? byDepth.get(2)!;
     const deepPoint = history.checkpoints.find(
       (point) =>
-        columnFor(point.at, bandOf(subject), geometry.trackLeft, geometry.trackWidth) ===
-        deepColumn,
+        columnFor(point.at, history, geometry.trackLeft, geometry.trackWidth) === deepColumn,
     )!;
 
     const unselected = yield* renderFrame({
@@ -462,12 +438,7 @@ describe("the history footer", () => {
 
     // An entry boundary is a glyph, and the playhead is its own stem and label.
     const boundary = history.checkpoints.find((point) => point.kind === "entry")!;
-    const boundaryColumn = columnFor(
-      boundary.at,
-      bandOf(subject),
-      geometry.trackLeft,
-      geometry.trackWidth,
-    );
+    const boundaryColumn = columnFor(boundary.at, history, geometry.trackLeft, geometry.trackWidth);
     expect(glyphAt(bandRows(unselected.text, size)[TRACK_ROW], 1 + boundaryColumn)).toBe("◆");
     expect(bandRows(unselected.text, size)[0]).toContain("PAUSED HEAD");
   });
@@ -481,7 +452,7 @@ describe("the history footer", () => {
       drawer: false,
       surface: "transcript",
     });
-    const geometry = bandGeometry(bandOf(subject), placementOf(layout, layout.footer!));
+    const geometry = bandGeometry(subject, layout, layout.footer!);
     const frame = yield* renderFrame({
       fixture: subject,
       view: initialView(subject),
@@ -571,7 +542,6 @@ describe("resize", () => {
       const frame = renderInto(term, {
         fixture: subject,
         view: initialView(subject),
-        composition: yield* useComposition(subject, initialView(subject), step.size),
         size: told ? step.size : PROFILE_SIZES.wide,
         mutation: told ? undefined : "skip-resize-update",
       });
@@ -668,11 +638,11 @@ describe("staying operable", () => {
       surface: "history",
     });
     const rect = layout.footer!;
-    const geometry = bandGeometry(bandOf(subject), placementOf(layout, rect));
-    const notches = notchLayout(bandOf(subject), geometry.trackLeft, geometry.trackWidth);
-    const gathered = notches.reduce((total, notch) => total + notch.markers.length, 0);
+    const geometry = bandGeometry(subject, layout, rect);
+    const notches = notchLayout(subject.history, geometry.trackLeft, geometry.trackWidth);
+    const gathered = notches.reduce((total, notch) => total + notch.checkpoints.length, 0);
 
-    expect(notches.some((notch) => notch.markers.length > 1)).toBe(true);
+    expect(notches.some((notch) => notch.checkpoints.length > 1)).toBe(true);
     expect(gathered).toBe(subject.history.checkpoints.length);
 
     for (let index = 0; index < subject.history.checkpoints.length; index += 1) {
@@ -698,9 +668,9 @@ describe("staying operable", () => {
       drawer: false,
       surface: "history",
     });
-    const geometry = bandGeometry(bandOf(subject), placementOf(layout, layout.footer!));
+    const geometry = bandGeometry(subject, layout, layout.footer!);
     const notches = notchLayout(
-      bandOf(subject),
+      subject.history,
       geometry.trackLeft,
       geometry.trackWidth,
       "clip-long-transcript",
@@ -810,11 +780,10 @@ describe("the boundary this experiment keeps", () => {
 
   it("uses every control it declares", function* () {
     // A control nobody passes is a claim nobody is checking, so the evidence's
-    // own source has to mention each one. #838's controls are exercised here,
-    // #839's next door and #840's beside them; the declaration is one list, so
-    // the check reads every suite rather than letting any of them go
-    // unclaimed.
-    const suites = ["./repl-study.test.ts", "./repl-focus.test.ts", "./repl-components.test.ts"];
+    // own source has to mention each one. #838's controls are exercised here
+    // and #839's next door; the declaration is one list, so the check reads
+    // both suites rather than letting either half go unclaimed.
+    const suites = ["./repl-study.test.ts", "./repl-focus.test.ts"];
     const sources: string[] = [];
     for (const suite of suites) {
       sources.push(yield* readTextFile(fileURLToPath(new URL(suite, import.meta.url))));
@@ -922,47 +891,30 @@ describe("animation", () => {
   });
 
   it("moves the head and reveals the transcript on the application's own clock", function* () {
-    const subject = fixture(PLAYBACK.to);
-    const view = initialView(subject);
-    const size = PROFILE_SIZES.wide;
-    const clock = yield* useFrames();
-    const composition = yield* useComposition(subject, view, size);
-    const transition = transitionOf(PLAYBACK, true);
-    // A fresh terminal each time, so every one of these is a whole screen
-    // rather than the handful of cells that changed since the last.
-    const shot = function* (): Operation<string> {
-      const term = yield* useTerm(size);
-      return renderInto(term, {
-        fixture: subject,
-        view,
-        composition,
-        size,
-        transition,
-        deltaSeconds: 0,
-      }).text;
-    };
+    const start = motionAt(PLAYBACK, 0);
+    const middle = motionAt(PLAYBACK, PLAYBACK.durationMs / 2);
+    const end = motionAt(PLAYBACK, PLAYBACK.durationMs);
 
-    // Nothing moves on its own. Two frames of a transition with no time between
-    // them are the same picture, because the components advance on the clock
-    // and on nothing else.
-    const first = yield* shot();
-    expect(yield* shot()).toBe(first);
+    expect(start.progress).toBe(0);
+    expect(end.done).toBe(true);
+    expect(middle.headAt).toBeGreaterThan(start.headAt);
+    expect(end.headAt).toBeGreaterThan(middle.headAt);
+    expect(end.headAt).toBe(fixture(PLAYBACK.to).history.headAt);
 
-    // Time in, picture out. The clock is the only thing that moved.
-    yield* clock.advance(PLAYBACK.durationMs / 2 / 1000);
-    const middle = yield* shot();
-    expect(middle).not.toBe(first);
-    yield* clock.advance(PLAYBACK.durationMs / 1000);
-    const settled = yield* shot();
-    expect(settled).not.toBe(middle);
-
-    // And it has arrived: nothing is still asking to be woken.
-    expect(clock.wanted()).toBe(false);
-
-    // The same clock, run again, draws the same film.
-    const played = yield* playFrames(PLAYBACK, PROFILE_SIZES.wide);
-    const again = yield* playFrames(PLAYBACK, PROFILE_SIZES.wide);
-    expect(again.map((frame) => frame.text)).toEqual(played.map((frame) => frame.text));
+    // Time in, frame out: the same instant renders identically every time.
+    const once = yield* renderFrame({
+      fixture: fixture(PLAYBACK.to),
+      view: initialView(fixture(PLAYBACK.to)),
+      size: PROFILE_SIZES.wide,
+      motion: middle,
+    });
+    const twice = yield* renderFrame({
+      fixture: fixture(PLAYBACK.to),
+      view: initialView(fixture(PLAYBACK.to)),
+      size: PROFILE_SIZES.wide,
+      motion: middle,
+    });
+    expect(once.text).toBe(twice.text);
   });
 
   it("captures a start, a midpoint and a settled frame that differ", function* () {
@@ -988,7 +940,7 @@ describe("animation", () => {
     yield* exec(ptyCommand(command), { cwd: ROOT, arguments: ptyArguments(command) }).join();
     const drawn = yield* readTrace(trace);
     expect(drawn.length).toBe(1);
-    expect(drawn[0].moving).toBe(true);
+    expect(drawn[0].motionDone).toBe(false);
   });
 
   it("rejects a reconstruction that lands halfway through a transition", function* () {
@@ -1019,47 +971,9 @@ describe("animation in a real terminal", () => {
     expect(
       drawn.every((entry, index) => index === 0 || entry.elapsedMs > drawn[index - 1].elapsedMs),
     ).toBe(true);
-    // The drawer is the only thing the renderer interpolates here: the REPL
-    // input is not mounted behind an open drawer, so an `animating` frame is
-    // the drawer growing and can be nothing else. It has to be a movement
-    // rather than a blip, so more than one frame in a row reports it.
-    // The drawer grew, in the live loop, and the trace says by how much: the
-    // first frames establish the closed band, later ones are taller, and it
-    // arrives by passing through heights in between rather than by cutting.
-    const rows = drawn.map((entry) => entry.contextualRows);
-    const closed = rows[0];
-    const open = Math.max(...rows);
-    expect(open).toBeGreaterThan(closed);
-    expect(rows.some((height) => height > closed && height < open)).toBe(true);
-    expect(rows[rows.length - 1]).toBe(open);
-
-    const runs = drawn.reduce(
-      (longest, entry) => ({
-        current: entry.animating ? longest.current + 1 : 0,
-        longest: Math.max(longest.longest, entry.animating ? longest.current + 1 : 0),
-      }),
-      { current: 0, longest: 0 },
-    ).longest;
-    expect(runs).toBeGreaterThan(1);
-    expect(drawn[drawn.length - 1].animating).toBe(false);
-    expect(drawn[drawn.length - 1].moving).toBe(false);
+    expect(drawn.some((entry) => entry.animating)).toBe(true);
+    expect(drawn[drawn.length - 1].motionDone).toBe(true);
     expect(drawn.filter((entry) => entry.bytes > 0).length).toBeGreaterThan(3);
-  });
-
-  it("interpolates nothing when the drawer is already open on the first frame", function* () {
-    // The control. With no pre-transition geometry the drawer is a cut, and the
-    // renderer has nothing to move between — which is what the claim above is
-    // actually about. The hidden input band used to satisfy it instead.
-    const directory = yield* useTempDirectory("repl-study-cut");
-    const trace = join(directory, "cut.jsonl");
-    const command = `${MAIN} --play generated drawer --frames 80 --mutation cut-to-drawer --trace ${trace}`;
-    yield* exec(ptyCommand(command), { cwd: ROOT, arguments: ptyArguments(command) }).join();
-    const drawn = yield* readTrace(trace);
-    expect(drawn.length).toBeGreaterThan(10);
-    // The application still moves — the transcript still arrives — and the
-    // renderer interpolates nothing.
-    expect(drawn.some((entry) => entry.moving)).toBe(true);
-    expect(drawn.some((entry) => entry.animating)).toBe(false);
   });
 
   it("stops the clock and restores the terminal when interrupted mid-animation", function* () {
@@ -1075,7 +989,7 @@ describe("animation in a real terminal", () => {
     // The interruption arrived while the transition was still running, and no
     // frame was drawn after it: the clock went down with the session.
     expect(drawn.length).toBe(4);
-    expect(drawn[drawn.length - 1].moving).toBe(true);
+    expect(drawn[drawn.length - 1].motionDone).toBe(false);
     expect(result.stdout.endsWith(new TextDecoder().decode(terminalModes().revert))).toBe(true);
   });
 });
@@ -1175,20 +1089,9 @@ describe("the whole demonstration, in a real terminal", () => {
     const drawn = yield* readTrace(trace);
     expect(visited(drawn)).toEqual([...JOURNEY_SEGMENTS, "settled"]);
     expect(drawn.some((entry) => entry.animating)).toBe(true);
-    expect(drawn.some((entry) => entry.segment.startsWith("play:") && entry.moving)).toBe(true);
-
-    // The drawer grows inside its own segment, where it is the only thing the
-    // renderer interpolates: the REPL input is not mounted behind it. The
-    // segment's first frame establishes the closed band, and the heights after
-    // it pass through rather than jumping.
-    const opening = drawn.filter((entry) => entry.segment === "play:generated→drawer");
-    expect(opening.length).toBeGreaterThan(3);
-    const rows = opening.map((entry) => entry.contextualRows);
-    const closed = rows[0];
-    const open = Math.max(...rows);
-    expect(open).toBeGreaterThan(closed);
-    expect(rows.some((height) => height > closed && height < open)).toBe(true);
-    expect(opening.some((entry) => entry.animating)).toBe(true);
+    expect(
+      drawn.some((entry) => entry.segment.startsWith("play:") && entry.motionDone === false),
+    ).toBe(true);
 
     // It stopped because the story ended, not because it ran out of budget —
     // which is what it means for the clock to stop after the settled state.

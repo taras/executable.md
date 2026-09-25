@@ -15,27 +15,19 @@ import { ensureDir, writeTextFile } from "@effectionx/fs";
 import { join } from "node:path";
 
 import { fixture, fixtures } from "./fixtures.ts";
-import { JOURNEY, journeyPlan, PLAYBACKS, transitionOf } from "./playback.ts";
-import { useFrames } from "./animation.ts";
-import type { Playback, Transition } from "./playback.ts";
+import { JOURNEY, journeyPlan, motionAt, PLAYBACKS } from "./playback.ts";
+import type { Motion, Playback } from "./playback.ts";
 import type { Fixture } from "./model.ts";
 import type { Profile, SurfaceName } from "./layout.ts";
 import { layoutFor } from "./layout.ts";
-import { paint } from "./paint.ts";
-import { projectFixture } from "./view.ts";
-import type { ReplView } from "./view.ts";
-import { useReplTree } from "./tree.ts";
-import type { ReplTree } from "./tree.ts";
-import { enterRoute } from "./drive.ts";
-import { hydrate } from "./store.ts";
-import { journalThrough, markerShowing, markerSuspending } from "./journal.ts";
-import { formatRoute } from "./route.ts";
-import type { Node } from "./vendor/freedom/upstream/index.ts";
+import { renderScreen } from "./render.ts";
+import type { FocusView } from "./render.ts";
 import { applyAnsi, createGrid, gridText } from "./screen.ts";
 import { initialView } from "./store.ts";
 import type { View } from "./store.ts";
 import { fixtureFor, viewOf } from "./store.ts";
 import { FRAMES, useFrame } from "./frames.ts";
+import { overlayOf } from "./tree.ts";
 import type { Mutation } from "./mutations.ts";
 
 export interface Size {
@@ -78,106 +70,16 @@ const MEASURED = [
   "too-small",
 ];
 
-/**
- * One mounted composition: the tree a frame is rendered by, and its view.
- *
- * A frame is drawn by walking a mounted tree, so a caller that wants frames
- * mounts one first. `playFrames` and the journey mount one and reuse it, which
- * is also what makes a transition a change to a tree rather than a new one.
- */
-export interface Composition {
-  /** The one mounted tree this frame is rendered by. */
-  readonly tree: ReplTree;
-  readonly root: Node;
-  readonly view: ReplView;
-}
-
-/**
- * Compose a moment **into an already mounted tree**.
- *
- * Projection only, and synchronous. It reads the fixture and returns the view;
- * it mounts nothing, syncs nothing and focuses nothing.
- *
- * That is the whole correction. Composing used to hydrate a synthetic state
- * from a fabricated URL, sync the tree to it and enter its route — on every
- * repaint. A person who tabbed to the bindings pane had focus dragged back to
- * the transcript by the next frame, because a repaint was quietly re-deciding
- * where they were. Topology belongs to the store's own sync and focus belongs
- * to the person; drawing is allowed to read both and change neither.
- */
-/**
- * A second mounted tree, for the control that renders from one.
- *
- * Mounted lazily and kept, so the control is a *different* tree rather than a
- * fresh one each call — which is what a parallel rendering hierarchy would
- * actually be.
- */
-let foreign: Composition | undefined;
-
-export function useForeignTree(subject: Fixture, view: View): Operation<Composition> {
-  return {
-    *[Symbol.iterator]() {
-      foreign = yield* useComposition(subject, view, PROFILE_SIZES.wide);
-      return foreign;
-    },
-  };
-}
-
-export function composeInto(
-  tree: ReplTree,
-  subject: Fixture,
-  view: View,
-  surface: SurfaceName = view.surface,
-  mutation?: Mutation,
-): Composition {
-  if (mutation === "second-tree") {
-    // The control: render from a tree of its own. Each tree is internally
-    // consistent, which is exactly why nothing notices without an oracle that
-    // asks whether the ids rendered belong to the tree focus came from.
-    if (foreign === undefined) {
-      throw new Error("the second-tree control needs its foreign tree mounted first");
-    }
-    return foreign;
-  }
-  return {
-    tree,
-    root: tree.root.node,
-    view: projectFixture(subject, {
-      execution: "e1",
-      surface,
-      scopes: [],
-      drawerOpen: subject.drawer !== undefined && view.drawerOpen,
-      // A reconstruction makes what is drawn a recording. Hardcoding this false
-      // drew a recorded drawer as though it were live and actionable, which is
-      // exactly what the tree refuses to make it.
-      inspect: view.inspect,
-      draft: "",
-      transport: subject.history.transport,
-      running: subject.entry?.state === "running",
-      selectedAt: subject.history.checkpoints[view.checkpoint]?.at,
-      notice: view.notice,
-    }),
-  };
-}
-
 export interface FrameRequest {
   readonly fixture: Fixture;
   readonly view: View;
-  /** The mounted composition this frame is drawn by. */
-  readonly composition: Composition;
   readonly size: Size;
   readonly mutation?: Mutation;
   readonly surface?: SurfaceName;
   /** Present only while a playback is running between two fixtures. */
-  /** Present only while a moment is being played into rather than cut to. */
-  readonly transition?: Transition;
-  /**
-   * Ordinary UI state: whether the numbered overlay is drawn.
-   *
-   * Nothing here says where focus is. There is no longer anywhere to say it:
-   * the tree owns focus, and a frame is drawn by walking the tree.
-   */
-  readonly overlay?: boolean;
+  readonly motion?: Motion;
+  /** Where focus is. Left out, the frame says nothing about focus at all. */
+  readonly focus?: FocusView;
   /**
    * Seconds since the previous frame, which is the unit the renderer measures
    * transitions in. Leaving it out hands the renderer its own monotonic clock;
@@ -192,15 +94,9 @@ export function* useTerm(size: Size): Operation<Term> {
 }
 
 /** Render one frame into a fresh terminal, which is always a complete repaint. */
-export function* renderFrame(request: Omit<FrameRequest, "composition">): Operation<Frame> {
+export function* renderFrame(request: FrameRequest): Operation<Frame> {
   const term = yield* useTerm(request.size);
-  const composition = yield* useComposition(
-    request.fixture,
-    request.view,
-    request.size,
-    request.surface ?? request.view.surface,
-  );
-  return renderInto(term, { ...request, composition });
+  return renderInto(term, request);
 }
 
 /**
@@ -219,14 +115,19 @@ export class RendererCapacityError extends Error {
 
 export function renderInto(term: Term, request: FrameRequest): Frame {
   const { view, size, mutation } = request;
-  const subject = request.fixture;
+  // A frame drawn from state the harness has already left behind. The renderer
+  // cannot tell the difference — only a reader, or a golden, can.
+  const subject = mutation === "stale-frame" ? fixture("empty") : request.fixture;
+  const motion =
+    mutation === "restore-mid-animation" && request.motion === undefined
+      ? // Reconstruction must land on a state, never halfway through a transition.
+        // This control makes it land halfway.
+        { progress: 0.5, headAt: subject.history.headAt / 2, reveal: 0.5, done: false }
+      : request.motion;
   // A playback's first frame still shows the moment it is leaving, so a drawer
   // about to open is not open yet: that is what gives the renderer two
   // geometries to interpolate between rather than one it has already arrived at.
-  // The control: a drawer that is already open on the frame the transition
-  // starts has one geometry, and one geometry is a cut rather than a movement.
-  const opening =
-    mutation === "cut-to-drawer" || request.transition === undefined || request.transition.begun;
+  const opening = motion === undefined || motion.progress > 0;
   const layout = layoutFor({
     cols: size.cols,
     rows: size.rows,
@@ -234,30 +135,8 @@ export function renderInto(term: Term, request: FrameRequest): Frame {
     surface: request.surface ?? view.surface,
     mutation,
   });
-  // A frame drawn from state the harness has already left behind. The renderer
-  // cannot tell the difference — only a reader, or a golden, can.
-  const shown =
-    mutation === "stale-frame"
-      ? projectFixture(fixture("empty"), {
-          execution: "e1",
-          surface: "transcript",
-          scopes: [],
-          drawerOpen: false,
-          inspect: false,
-          draft: "",
-          transport: "idle",
-          running: false,
-        })
-      : request.composition.view;
-  const painted = paint({
-    tree: request.composition.tree,
-    view: shown,
-    layout,
-    anchor: view.anchor,
-    options: { overlay: request.overlay, mutation, transition: request.transition },
-  });
   const result = term.render(
-    painted.ops,
+    renderScreen({ fixture: subject, view, layout, mutation, motion, focus: request.focus }),
     request.deltaSeconds === undefined ? {} : { deltaTime: request.deltaSeconds },
   );
   if (result.errors.length > 0) {
@@ -273,8 +152,7 @@ export function renderInto(term: Term, request: FrameRequest): Frame {
   const grid = applyAnsi(createGrid(size.cols, size.rows), ansi);
   const bounds: Record<string, BoundingBox | undefined> = {};
   for (const id of MEASURED) {
-    const rendered = painted.ids[id];
-    bounds[id] = rendered === undefined ? undefined : result.info.get(rendered)?.bounds;
+    bounds[id] = result.info.get(id)?.bounds;
   }
   return { ansi, text: gridText(grid), animating: result.animating, bounds };
 }
@@ -297,35 +175,28 @@ export function* playFrames(
   const limit = options.limit ?? 200;
   const subject = fixture(playback.to);
   const view = initialView(subject);
-  // The clock this playback supplies time to. Components subscribed to it when
-  // the tree below was mounted, so advancing it is the whole of how they move.
-  const clock = yield* useFrames();
-  const composition = yield* useComposition(subject, view, size);
   const term = yield* useTerm(size);
   const frames: Frame[] = [];
   // A frame in the middle of a transition is a handful of changed cells, not a
   // screen. The screen is what those changes have added up to, so the grid
   // carries across frames exactly as a terminal's does.
   const screen = createGrid(size.cols, size.rows);
+  let elapsed = 0;
   for (let index = 0; index < limit; index += 1) {
-    const transition = transitionOf(playback, index > 0);
-    const deltaSeconds = index === 0 ? 0 : frameMs / 1000;
-    // The clock, then the picture: every component has taken this frame before
-    // anything is drawn from it.
-    yield* clock.advance((index * frameMs) / 1000);
+    const motion = motionAt(playback, elapsed);
     const frame = renderInto(term, {
       fixture: subject,
       view,
-      composition,
       size,
-      transition,
-      deltaSeconds,
+      motion,
+      deltaSeconds: index === 0 ? 0 : frameMs / 1000,
     });
     applyAnsi(screen, frame.ansi);
     frames.push({ ...frame, text: gridText(screen) });
-    if (!clock.wanted() && !frame.animating) {
+    if (motion.done && !frame.animating) {
       return frames;
     }
+    elapsed += frameMs;
   }
   return frames;
 }
@@ -354,31 +225,16 @@ export function* journeyFrames(
 ): Operation<JourneyRun> {
   const frameMs = options.frameMs ?? 16;
   let term = yield* useTerm(size);
-  const compositions = new Map<string, Composition>();
   let rebuilds = 0;
   const screen = createGrid(size.cols, size.rows);
   const frames: JourneyFrame[] = [];
-  const clock = yield* useFrames();
   for (const planned of journeyPlan(JOURNEY, frameMs)) {
     const subject = fixture(planned.fixture);
-    const view = initialView(subject);
-    // One composition per moment, reused across that moment's frames: a
-    // transition is a change to a mounted tree, never a new one.
-    let composition = compositions.get(planned.fixture);
-    if (composition === undefined) {
-      composition = yield* useComposition(subject, view, size);
-      compositions.set(planned.fixture, composition);
-    }
-    // Mounted, then told the time, then drawn. A component that was handed its
-    // first frame before it existed would start its transition from a moment it
-    // never saw.
-    yield* clock.advance(planned.elapsedMs / 1000);
     const request: FrameRequest = {
       fixture: subject,
-      view,
-      composition,
+      view: initialView(subject),
       size,
-      transition: planned.transition,
+      motion: planned.motion,
       deltaSeconds: planned.deltaMs / 1000,
     };
     let frame: Frame;
@@ -522,72 +378,18 @@ const NARROW_FRAMES = ["01", "05", "07", "12", "14"];
 export function* captureFocus(): Operation<Capture[]> {
   const captures: Capture[] = [];
   for (const subject of FRAMES) {
+    const { state, tree } = yield* useFrame(subject);
     const profiles: Profile[] = NARROW_FRAMES.includes(subject.id) ? ["wide", "narrow"] : ["wide"];
     for (const profile of profiles) {
       const size = PROFILE_SIZES[profile];
-      // One tree per composition. Topology follows the profile — a narrow
-      // drawer owns the screen and offers no way out to a band that is not on
-      // it — so a single tree cannot stand in for both.
-      const { state, tree } = yield* useFrame(subject, size);
-      const term = yield* useTerm(size);
-      // The frame's own tree draws the frame. It used to be told where focus
-      // was and then rendered by a second tree mounted for the occasion, which
-      // is how a capture could show focus on a node the rendering tree had
-      // never heard of. One tree answers both.
-      const frame = renderInto(term, {
+      const frame = yield* renderFrame({
         fixture: fixtureFor(state),
         view: viewOf(state),
         size,
-        overlay: true,
-        composition: composeInto(tree, fixtureFor(state), viewOf(state)),
+        focus: { here: tree.focused().name, map: overlayOf(tree), overlay: true },
       });
       captures.push({ name: `frame-${subject.id}.${profile}`, profile, size, frame });
     }
   }
   return captures;
-}
-
-/**
- * A moment, with a tree of its own.
- *
- * For a caller that owns the whole composition — a capture, a playback — where
- * mounting one tree is exactly right. A caller that already has a tree uses
- * `composeInto` so that one tree keeps answering everything.
- */
-export function useComposition(
-  subject: Fixture,
-  view: View,
-  composed: Size,
-  surface: SurfaceName = view.surface,
-): Operation<Composition> {
-  return {
-    *[Symbol.iterator]() {
-      const state = hydrate(
-        formatRoute({
-          execution: "e1",
-          surface,
-          scopes: [],
-          drawers:
-            subject.drawer !== undefined && view.drawerOpen && subject.drawer !== undefined
-              ? [subject.drawer.kind]
-              : [],
-          inspect: false,
-          draft: "",
-        }),
-        // A composition that shows a drawer is a composition of the moment that
-        // drawer's question was asked.
-        journalThrough(
-          subject.drawer !== undefined && view.drawerOpen
-            ? markerSuspending(subject.drawer.kind)
-            : markerShowing(subject.name),
-        ),
-      );
-      const tree = yield* useReplTree(state, composed);
-      // A caller that owns the whole composition brings its tree to the moment
-      // once, at mount. A repaint never does this.
-      yield* tree.sync(state);
-      yield* enterRoute(tree, state);
-      return composeInto(tree, subject, view, surface);
-    },
-  };
 }

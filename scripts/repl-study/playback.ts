@@ -95,30 +95,41 @@ export function playbackBetween(from: FixtureName, to: FixtureName): Playback | 
   return PLAYBACKS.find((playback) => playback.from === from && playback.to === to);
 }
 
-/**
- * What a playback tells the components: where the motion starts.
- *
- * Which two moments these are is a fact about the playback, and only the thing
- * that chose them knows it. How far along the motion is, and what that looks
- * like, is each component's own — kept in its lifecycle and advanced by the one
- * clock the host runs.
- */
-export interface Transition {
-  readonly fromHeadAt: number;
-  /**
-   * False on the very first frame of the motion, true afterwards.
-   *
-   * A playback's first frame still shows the moment it is leaving, so a drawer
-   * about to open is not open yet — that is what gives the renderer two
-   * geometries to interpolate between rather than one it has already arrived
-   * at. It is a fact about which frame this is, which only the thing supplying
-   * the time knows.
-   */
-  readonly begun: boolean;
+export interface Motion {
+  /** Eased 0…1. */
+  readonly progress: number;
+  /** Where the recorded head sits while it travels between the two moments. */
+  readonly headAt: number;
+  /** How much of the target's transcript has arrived, as a share of its rows. */
+  readonly reveal: number;
+  readonly done: boolean;
 }
 
-export function transitionOf(playback: Playback, begun: boolean): Transition {
-  return { fromHeadAt: fixture(playback.from).history.headAt, begun };
+function easeInOutCubic(fraction: number): number {
+  return fraction < 0.5
+    ? 4 * fraction * fraction * fraction
+    : 1 - Math.pow(-2 * fraction + 2, 3) / 2;
+}
+
+/**
+ * The motion of one playback at one moment.
+ *
+ * Pure, and a function of elapsed time alone, so the same instant can be
+ * rendered from a capture, from a test, or from the frame loop and come out
+ * identical.
+ */
+export function motionAt(playback: Playback, elapsedMs: number): Motion {
+  const fraction =
+    playback.durationMs <= 0 ? 1 : Math.max(0, Math.min(1, elapsedMs / playback.durationMs));
+  const progress = easeInOutCubic(fraction);
+  const from = fixture(playback.from).history.headAt;
+  const to = fixture(playback.to).history.headAt;
+  return {
+    progress,
+    headAt: from + (to - from) * progress,
+    reveal: progress,
+    done: fraction >= 1,
+  };
 }
 
 /** The moment a playback settles on, which is the state anything restores to. */
@@ -130,8 +141,7 @@ export function settledFixture(playback: Playback): FixtureName {
 export interface PlannedFrame {
   readonly label: string;
   readonly fixture: FixtureName;
-  /** Present only on a frame that is being played into. */
-  readonly transition?: Transition;
+  readonly motion?: Motion;
   readonly deltaMs: number;
   readonly elapsedMs: number;
 }
@@ -163,7 +173,7 @@ export function journeyPlan(journey: readonly Segment[] = JOURNEY, frameMs = 16)
       planned.push({
         label: segmentLabel(segment),
         fixture: segment.playback.to,
-        transition: transitionOf(segment.playback, within > 0),
+        motion: motionAt(segment.playback, within),
         deltaMs: planned.length === 0 ? 0 : frameMs,
         elapsedMs: elapsed + within,
       });

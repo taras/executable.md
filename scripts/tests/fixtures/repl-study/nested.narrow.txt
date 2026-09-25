@@ -1,6 +1,6 @@
 nested.narrow · 90 × 28
  TRANSCRIPT · 2 / 4         REPL › Entry 1 › document › Plan · active             Tab ▸
-▌Entry 1  ● running · 31.4s       ↳ Plan scope open
+ Entry 1  ● running · 31.4s       ↳ Plan scope open
 
  ← opened from Entry 1 · live execution projection, not an editor
  document

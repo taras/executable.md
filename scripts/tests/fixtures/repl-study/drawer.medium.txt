@@ -23,12 +23,12 @@ drawer.medium · 140 × 38
                                   │
                                   │ Enter the project details.
                                   │
-                                  │ ▸ Project name
+                                  │ Project name
                                   │ ┃ Northstar
-                                  │   Description
+                                  │ Description
                                   │ ┃ A lightweight workspace for coordinating coding agents.
                                   │
-                                  │ both fields valid     Submit  ⌘↵
+                                  │ both fields valid   Submit  ⌘↵
                                   │
                                   │
                                   │

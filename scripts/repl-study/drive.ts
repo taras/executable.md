@@ -19,14 +19,14 @@
 
 import type { Operation } from "effection";
 
-import { followFocus, reduce } from "./store.ts";
+import { asKey, followFocus, reduce } from "./store.ts";
 import type { HarnessEvent, ReduceContext, ReplState } from "./store.ts";
 import type { FocusIntent } from "./store.ts";
 import { focus as focusNode, surfaceOwning } from "./tree.ts";
 import type { ReplTree } from "./tree.ts";
 import type { Node } from "./vendor/freedom/upstream/index.ts";
-import { normalize } from "./input.ts";
-import type { Delivery } from "./input.ts";
+import { sendKey } from "./keys.ts";
+import type { Delivery } from "./keys.ts";
 import type { Mutation } from "./mutations.ts";
 
 /**
@@ -87,25 +87,19 @@ export function drive(
 ): Operation<Driven> {
   return {
     *[Symbol.iterator]() {
-      // The terminal's event is read once, here, and what travels on is a
-      // normalized input. A resize, a frame passing and a record arriving are
-      // not things a person did, so they never become one.
-      const input = normalize(event);
-      const delivered = input === undefined ? undefined : tree.deliver({ state, input, context });
-      // A branch on the live ancestor path claimed it. Running the fallback
-      // anyway is exactly the defect this ordering exists to prevent: the
-      // hierarchy would be annotating the dispatch instead of governing it.
-      const reduced =
-        delivered?.reduction ??
-        (delivered?.delivery.handled === true
-          ? { state }
-          : reduce(state, event, { ...context, focused: tree.focused().name }));
-      const delivery = delivered?.delivery;
-      // Topology first, then focus. A narrow composition mounts the surface it
-      // routes to, so the node focus is being sent to may not exist until this
-      // sync has run — and the one it is leaving may not survive it.
-      yield* tree.sync(reduced.state, { mutation: context.mutation, size: context.size });
+      const delivery =
+        event.kind === "key"
+          ? sendKey(tree.root.node, tree.focused(), asKey(event.event))
+          : undefined;
+      if (delivery?.handled === true) {
+        // A branch on the live ancestor path claimed it. Running the fallback
+        // anyway is exactly the defect this ordering exists to prevent: the
+        // hierarchy would be annotating the dispatch instead of governing it.
+        return { state, delivery };
+      }
+      const reduced = reduce(state, event, { ...context, focused: tree.focused().name });
       applyFocus(tree, reduced.focus);
+      yield* tree.sync(reduced.state, context.mutation);
       // Which surface owns focus is read off the tree, not parsed out of the
       // focused node's name.
       const followed = followFocus(
@@ -114,7 +108,7 @@ export function drive(
         "focus",
         context.mutation,
       );
-      yield* tree.sync(followed, { mutation: context.mutation, size: context.size });
+      yield* tree.sync(followed, context.mutation);
       return { state: followed, delivery };
     },
   };

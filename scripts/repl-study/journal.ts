@@ -365,22 +365,6 @@ export function markers(journal: JournalFixture): readonly string[] {
 }
 
 /** The first marker whose moment reconstructs to one of the six fixtures. */
-/**
- * The moment a suspension of this kind opened.
- *
- * A capture of a drawer is a capture of the moment something was waiting, which
- * is a fact about the execution rather than about the screen. Mounting one
- * against the marker its fixture happens to be named after would put the form
- * at a moment where nothing had been asked.
- */
-export function markerSuspending(
-  kind: DrawerKind,
-  journal: JournalFixture = JOURNAL,
-): string | undefined {
-  return journal.find((record) => record.kind === "suspension.opened" && record.detail === kind)
-    ?.marker;
-}
-
 export function markerShowing(
   name: FixtureName,
   journal: JournalFixture = JOURNAL,

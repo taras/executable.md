@@ -35,14 +35,14 @@ play.generated-drawer.midpoint · 200 × 50
                                                 │
                                                 │ Enter the project details.
                                                 │
-                                                │ ▸ Project name
+                                                │ Project name
                                                 │ ┃ Northstar
-                                                │   Description
+                                                │ Description
                                                 │ ┃ A lightweight workspace for coordinating coding agents.
                                                 │
-                                                │ both fields valid     Submit  ⌘↵
+                                                │ both fields valid   Submit  ⌘↵
                                                 │
-                                                │   schema
+                                                │ schema
                                                 │ {
  EXECUTION HISTORY             │                                                                                                                                           ┃ LIVE       LIVE  [ Pause ]
  recorded · 00:49              │        │                                                                                                                              │   ┃ 00:48
