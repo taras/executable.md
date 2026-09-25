@@ -15,14 +15,27 @@
  * different child, so the old one is unmounted first. A key that stops being
  * described is removed with its whole subtree, and removal is awaited rather
  * than started, because a branch that is merely on its way out is still there.
+ *
+ * A retained branch is *told* what changed rather than rebuilt. Its new input
+ * goes down the same parent-child boundary the first one did, and the delivery
+ * completes only once the branch has taken it — so when a reconcile returns,
+ * every branch it kept is acting on the input it was just given, not the one
+ * before.
+ *
+ * Nothing is mutated until the whole description tree has been checked. A key
+ * has to be unique among one parent's direct children, because two branches
+ * answering to one key is a tree that cannot be addressed: the second shadows
+ * the first, and the first is then unreachable by the only name anything has
+ * for it — never matched again, never removed, mounted for as long as its
+ * parent lives.
  */
 
-import { sleep, until, withResolvers } from "effection";
-import type { Operation } from "effection";
+import { Err, Ok, until, withResolvers } from "effection";
+import type { Operation, Result } from "effection";
 import { createNodeData, focusable } from "../repl-study/vendor/freedom/upstream/index.ts";
 import type { Node } from "../repl-study/vendor/freedom/upstream/index.ts";
 
-import type { ComponentIdentity, Description } from "./component.ts";
+import type { ComponentIdentity, Description, InputSink } from "./component.ts";
 import type { Frames } from "./frames.ts";
 import { installBranch } from "./input.ts";
 
@@ -35,32 +48,80 @@ const IdentityOf = createNodeData<ComponentIdentity>("xmd:repl-compose:identity"
 /** The description this node is currently reconciled to. */
 const DescriptionOf = createNodeData<Description>("xmd:repl-compose:description");
 
+/** Where this branch's parent hands it later input. */
+const SinkOf = createNodeData<InputSink>("xmd:repl-compose:sink");
+
+/** Two of one parent's direct children answering to one key. */
+export class DuplicateKey extends Error {
+  readonly key: string;
+  /** The component whose children collided, by name. */
+  readonly parent: string;
+
+  constructor(parent: string, key: string) {
+    super(`${parent} describes two children keyed ${JSON.stringify(key)}; a key names one child`);
+    this.name = "DuplicateKey";
+    this.key = key;
+    this.parent = parent;
+  }
+}
+
 /** The key one mounted node was described by, when it was described at all. */
 export function keyOf(node: Node): string | undefined {
   return node.data.get(KeyOf);
 }
 
+/** One checked description, with its children already checked too. */
+interface Planned {
+  readonly description: Description;
+  readonly children: readonly Planned[];
+}
+
+function plan(parent: string, descriptions: readonly Description[]): Result<readonly Planned[]> {
+  const seen = new Set<string>();
+  const planned: Planned[] = [];
+  for (const description of descriptions) {
+    if (seen.has(description.key)) {
+      return Err(new DuplicateKey(parent, description.key));
+    }
+    seen.add(description.key);
+    const children = plan(description.key, description.children());
+    if (!children.ok) {
+      return children;
+    }
+    planned.push({ description, children: children.value });
+  }
+  return Ok(planned);
+}
+
 /**
  * Reconcile one root's children to `descriptions`.
  *
- * It returns once every branch it mounted has said its local state exists, so
- * what the caller then observes is the whole tree and not a half-built one.
+ * The whole description tree is checked before a single node is created,
+ * removed or handed new input, so a refusal leaves the mounted tree exactly as
+ * it was. It returns once every branch it mounted has said its local state
+ * exists and every branch it kept has taken its new input, so what the caller
+ * then observes is the whole tree and not a half-built one.
  */
 export function* compose(
   root: Node,
   descriptions: readonly Description[],
   frames: Frames,
-): Operation<void> {
+): Operation<Result<void>> {
+  const planned = plan(root.name === "" ? "the root" : root.name, descriptions);
+  if (!planned.ok) {
+    return planned;
+  }
   const mounted: Operation<void>[] = [];
-  yield* reconcile(root, descriptions, frames, mounted);
+  yield* reconcile(root, planned.value, frames, mounted);
   for (const ready of mounted) {
     yield* ready;
   }
+  return Ok();
 }
 
 function* reconcile(
   parent: Node,
-  descriptions: readonly Description[],
+  planned: readonly Planned[],
   frames: Frames,
   mounted: Operation<void>[],
 ): Operation<void> {
@@ -73,15 +134,23 @@ function* reconcile(
   }
 
   const described = new Set<string>();
-  for (const [order, description] of descriptions.entries()) {
+  for (const [order, { description, children }] of planned.entries()) {
     described.add(description.key);
     const found = existing.get(description.key);
     if (found !== undefined && found.data.get(IdentityOf) === description.identity) {
       // The same child. It keeps its node, so it keeps its scope, so it keeps
-      // whatever its lifecycle is holding.
+      // whatever its lifecycle is holding — and is told what changed.
       found.data.set(DescriptionOf, description);
       found.set("order", order);
-      yield* reconcile(found, description.children(), frames, mounted);
+      const sink = found.data.get(SinkOf);
+      if (sink !== undefined) {
+        // Sound because the identity above matched: this description was made
+        // by the very component whose lifecycle built that sink. A branch that
+        // never subscribed for updates has no receiver, and this returns at
+        // once rather than waiting for one.
+        yield* sink.accept(description.input);
+      }
+      yield* reconcile(found, children, frames, mounted);
       continue;
     }
     if (found !== undefined) {
@@ -90,7 +159,7 @@ function* reconcile(
       yield* until(found.remove());
     }
     const child = mount(parent, description, order, frames, mounted);
-    yield* reconcile(child, description.children(), frames, mounted);
+    yield* reconcile(child, children, frames, mounted);
   }
 
   for (const [key, child] of existing) {
@@ -125,15 +194,16 @@ function mount(
   installBranch(child, description.key, (key) => child.data.get(DescriptionOf)?.onPress(key));
 
   const gate = withResolvers<void>();
-  const body = description.lifecycle(child, frames, function* ready() {
+  const started = description.start(child, frames, function* ready() {
     gate.resolve();
   });
-  if (body === undefined) {
+  if (started === undefined) {
     gate.resolve();
   } else {
+    child.data.set(SinkOf, started.sink);
     child.scope.run(function* () {
       try {
-        yield* body;
+        yield* started.body;
       } finally {
         // A lifecycle that returned or was halted without readying releases the
         // gate here, so a forgotten `ready()` is a branch nothing waited for
@@ -188,9 +258,4 @@ export function topology(node: Node): readonly string[] {
     found.push(...topology(child));
   }
   return found;
-}
-
-/** Let every scope started by the last reconcile settle before observing it. */
-export function* settle(): Operation<void> {
-  yield* sleep(0);
 }

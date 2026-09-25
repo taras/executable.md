@@ -40,6 +40,7 @@ evidence — and nothing here reuses its router, components, layout or rendering
 | `router.ts` | `decodeRoute`, `encodeRoute`, `resolveRoute`, and nothing else |
 | `component.ts` | what a parent says its children are: keyed descriptions over immutable input |
 | `reconcile.ts` | descriptions in, one mounted Freedom tree out — and the walks that read it |
+| `handoff.ts` | deliver a value to every live receiver, and know when they have applied it |
 | `frames.ts` | the host's clock, and the demand the mounted branches place on it |
 | `input.ts` | a key down the live ancestry, a typed action back up |
 | `shell.ts` | the small set of components the reconciliation evidence drives |
@@ -70,6 +71,34 @@ and its presentation. Nothing is notified, and there is nothing to keep in step.
 Every question about the interface is answered by walking those same nodes:
 `paint` for what is drawn, `focusTargets` for what can be focused, `press` for
 where a key goes, and the clock's own `demand` for who is asking for frames.
+
+**A key names one child.** Uniqueness among a parent's direct children is
+checked over the whole description tree before a single node is created,
+removed or updated, so a refusal leaves the mounted tree exactly as it was. Two
+branches under one key is a tree that cannot be addressed: the reconciler finds
+children by key, so the second shadows the first, and the first is then never
+matched for an update and never counted as undescribed for removal — mounted for
+as long as its parent lives.
+
+**A retained branch is told what changed rather than rebuilt.** Its new input
+travels the same direct parent-child boundary the first one did — nothing
+ambient, nothing looked up, nothing polled — and the delivery completes only
+once the branch has taken it. So when a reconcile returns, every branch it kept
+is acting on the input it was just given. Presentation, children and `onPress`
+read that same current input.
+
+**Delivery completes; it does not merely send.** One primitive in `handoff.ts`
+carries both frames and input: `deliver()` finishes once every receiver that was
+live when it started has come back for the next value, which is the moment it
+has finished applying this one. Asking for the next value *is* the
+acknowledgement, so there is no `ack()` to forget and a slow receiver holds the
+producer rather than being overtaken. When `advance(timestamp)` returns, a
+render walk sees that frame. Nothing sleeps to find out.
+
+A receiver that goes away mid-delivery does not strand the producer: its slot is
+removed and whatever was outstanding on it released in the same synchronous
+teardown, so closing a drawer while a frame is in flight leaves the other
+receivers to finish it and the clock to return.
 
 **Delivery addresses a position in the tree, never a retained reference.**
 Removing a node detaches it from its parent but leaves the node object, and a

@@ -17,26 +17,27 @@
 
 import { describe as suite, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { until } from "effection";
-import type { Operation } from "effection";
+import { race, sleep, spawn, until, withResolvers } from "effection";
+import type { Operation, Result } from "effection";
+import { when } from "@effectionx/converge";
 
 import { useRoot } from "../repl-study/vendor/freedom/upstream/index.ts";
 import type { Node, Root } from "../repl-study/vendor/freedom/upstream/index.ts";
 
 import { describe } from "../repl-compose/component.ts";
-import type { Description } from "../repl-compose/component.ts";
+import type { Component, Description } from "../repl-compose/component.ts";
 import { createFrameClock } from "../repl-compose/frames.ts";
 import type { FrameClock } from "../repl-compose/frames.ts";
 import { press } from "../repl-compose/input.ts";
 import {
   compose,
+  DuplicateKey,
   focusTargets,
   keyOf,
   paint,
-  settle,
   topology,
 } from "../repl-compose/reconcile.ts";
-import { Control, Drawer, Workspace } from "../repl-compose/shell.ts";
+import { Control, Drawer, Panel, Workspace } from "../repl-compose/shell.ts";
 import type { DrawerInput, WorkspaceInput } from "../repl-compose/shell.ts";
 
 const PANELS = [
@@ -58,6 +59,27 @@ const CONFIRM: DrawerInput = {
   controls: [{ label: "Commit", action: "drawer.commit" }],
 };
 
+/** A branch that holds onto a frame instead of returning for the next one. */
+interface HoldInput {
+  readonly hold: Operation<void>;
+}
+
+const Held: Component<HoldInput> = {
+  name: "held",
+  focusable: false,
+  children: () => [],
+  *lifecycle({ node, input, frames, ready }): Operation<void> {
+    const clock = yield* frames.subscribe();
+    yield* ready();
+    while (true) {
+      const at = yield* clock.next();
+      node.set("at", at);
+      yield* input.hold;
+    }
+  },
+  present: () => [],
+};
+
 function workspace(drawers: readonly DrawerInput[]): WorkspaceInput {
   return { panels: PANELS, drawers };
 }
@@ -70,17 +92,27 @@ function shell(input: WorkspaceInput): readonly Description[] {
 interface Harness {
   readonly root: Root;
   readonly clock: FrameClock;
+  /** Compose, refusing to continue if the description tree was rejected. */
   show(input: WorkspaceInput): Operation<void>;
+  /** Compose, handing back whatever the reconciler answered. */
+  offer(descriptions: readonly Description[]): Operation<Result<void>>;
 }
 
 function* harness(): Operation<Harness> {
   const root = yield* useRoot();
   const clock = createFrameClock();
+  const offer = function* (descriptions: readonly Description[]): Operation<Result<void>> {
+    return yield* compose(root.node, descriptions, clock);
+  };
   return {
     root,
     clock,
+    offer,
     *show(input: WorkspaceInput): Operation<void> {
-      yield* compose(root.node, shell(input), clock);
+      const composed = yield* offer(shell(input));
+      if (!composed.ok) {
+        throw composed.error;
+      }
     },
   };
 }
@@ -160,10 +192,10 @@ suite("REPL composition: keyed descriptions reconciled into Freedom", () => {
       yield* show(workspace([PROJECT]));
 
       const before = expectNode(root.node, "+project");
-      clock.tick(16);
-      clock.tick(16);
-      yield* settle();
+      yield* clock.advance(16);
+      yield* clock.advance(32);
       expect(before.props.opened).toBe(2);
+      expect(before.props.at).toBe(32);
 
       // New input for the panels; the drawer's key and component are unchanged.
       yield* show({
@@ -176,15 +208,14 @@ suite("REPL composition: keyed descriptions reconciled into Freedom", () => {
       // The lifecycle was never restarted, so its count carries on rather than
       // beginning again at zero.
       expect(after.props.opened).toBe(2);
-      clock.tick(16);
-      yield* settle();
+      yield* clock.advance(48);
       expect(after.props.opened).toBe(3);
     });
 
     it("replaces a node whose key is reused by a different component", function* () {
-      const { root, clock } = yield* harness();
+      const { root, clock, offer } = yield* harness();
 
-      yield* compose(root.node, [describe(Drawer, "slot", { drawer: PROJECT, above: [] })], clock);
+      yield* offer([describe(Drawer, "slot", { drawer: PROJECT, above: [] })]);
       const before = expectNode(root.node, "slot");
       expect(before.name).toBe("drawer");
       expect(clock.demand).toBe(1);
@@ -192,11 +223,7 @@ suite("REPL composition: keyed descriptions reconciled into Freedom", () => {
       // The same key, describing a different component. A key is not an
       // identity on its own: this is a different child, so the drawer is
       // unmounted rather than handed a Control's input.
-      yield* compose(
-        root.node,
-        [describe(Control, "slot", { label: "Submit", action: "drawer.submit" })],
-        clock,
-      );
+      yield* offer([describe(Control, "slot", { label: "Submit", action: "drawer.submit" })]);
 
       const after = expectNode(root.node, "slot");
       expect(after).not.toBe(before);
@@ -289,14 +316,12 @@ suite("REPL composition: keyed descriptions reconciled into Freedom", () => {
       yield* show(workspace([PROJECT, CONFIRM]));
       const confirm = expectNode(root.node, "+confirm");
 
-      clock.tick(16);
-      yield* settle();
+      yield* clock.advance(48);
       expect(confirm.props.opened).toBe(1);
 
       yield* show(workspace([PROJECT]));
-      clock.tick(16);
-      clock.tick(16);
-      yield* settle();
+      yield* clock.advance(16);
+      yield* clock.advance(32);
 
       // Its scope is destroyed, so the props it last wrote are all it has.
       expect(confirm.props.opened).toBe(1);
@@ -343,7 +368,233 @@ suite("REPL composition: keyed descriptions reconciled into Freedom", () => {
     });
   });
 
+  suite("a key names one child", () => {
+    it("refuses two siblings under one key, and changes nothing doing it", function* () {
+      const { root, clock, show, offer } = yield* harness();
+      yield* show(workspace([PROJECT]));
+
+      const before = topology(root.node);
+      const drawer = expectNode(root.node, "+project");
+      yield* clock.advance(16);
+      expect(drawer.props.opened).toBe(1);
+
+      const refused = yield* offer([
+        describe(Panel, "twice", PANELS[0]),
+        describe(Panel, "twice", PANELS[1]),
+      ]);
+
+      expect(refused.ok).toBe(false);
+      if (!refused.ok) {
+        expect(refused.error).toBeInstanceOf(DuplicateKey);
+        if (refused.error instanceof DuplicateKey) {
+          expect(refused.error.key).toBe("twice");
+        }
+      }
+
+      // The tree is exactly what it was: nothing mounted, nothing removed, and
+      // the lifecycle that was already running is still the one running.
+      expect(topology(root.node)).toEqual(before);
+      expect(expectNode(root.node, "+project")).toBe(drawer);
+      yield* clock.advance(32);
+      expect(drawer.props.opened).toBe(2);
+      expect(clock.demand).toBe(1);
+    });
+
+    it("refuses a duplicate described deeper in the tree", function* () {
+      const { root, show, offer } = yield* harness();
+      yield* show(workspace([]));
+
+      const duplicated: DrawerInput = {
+        ...PROJECT,
+        controls: [
+          { label: "Submit", action: "drawer.submit" },
+          { label: "Submit", action: "drawer.retry" },
+        ],
+      };
+      const refused = yield* offer(shell(workspace([duplicated])));
+
+      expect(refused.ok).toBe(false);
+      if (!refused.ok && refused.error instanceof DuplicateKey) {
+        expect(refused.error.parent).toBe("+project");
+        expect(refused.error.key).toBe("+project.Submit");
+      }
+      expect(topology(root.node)).toEqual(["workspace", "transcript", "bindings"]);
+    });
+
+    it("mounts exactly one node and one lifecycle for that key afterwards", function* () {
+      const { root, clock, show, offer } = yield* harness();
+
+      const refused = yield* offer([
+        describe(Panel, "twice", PANELS[0]),
+        describe(Panel, "twice", PANELS[1]),
+      ]);
+      expect(refused.ok).toBe(false);
+
+      yield* show(workspace([PROJECT]));
+
+      expect(topology(root.node).filter((key) => key === "+project")).toEqual(["+project"]);
+      expect(clock.demand).toBe(1);
+    });
+  });
+
+  suite("a retained branch is told what changed", () => {
+    it("keeps its node and local state while acting on the new input", function* () {
+      const { root, clock, show } = yield* harness();
+      yield* show(workspace([PROJECT]));
+
+      const drawer = expectNode(root.node, "+project");
+      yield* clock.advance(16);
+      expect(drawer.props.opened).toBe(1);
+      expect(drawer.props.prompt).toBe(PROJECT.prompt);
+
+      const asked: DrawerInput = { ...PROJECT, prompt: "Which project, exactly?" };
+      yield* show(workspace([asked]));
+
+      // Same node, same lifecycle, same count — and the new input already
+      // applied by the time the reconcile returned.
+      expect(expectNode(root.node, "+project")).toBe(drawer);
+      expect(drawer.props.opened).toBe(1);
+      expect(drawer.props.prompt).toBe("Which project, exactly?");
+      expect(drawer.props.prompt).not.toBe(PROJECT.prompt);
+
+      // The local state carried on rather than restarting.
+      yield* clock.advance(32);
+      expect(drawer.props.opened).toBe(2);
+    });
+
+    it("gives presentation, children and onPress that same current input", function* () {
+      const { root, show } = yield* harness();
+      yield* show(workspace([PROJECT]));
+
+      const asked: DrawerInput = {
+        ...PROJECT,
+        prompt: "Which project, exactly?",
+        controls: [{ label: "Submit", action: "drawer.retry" }],
+      };
+      yield* show(workspace([asked]));
+
+      expect(paint(root.node).join("\n")).toContain("Which project, exactly?");
+      expect(topology(root.node)).toContain("+project.Submit");
+      const submit = expectNode(root.node, "+project.Submit");
+      expect(press(root.node, submit, { key: "Enter" }).action?.kind).toBe("drawer.retry");
+    });
+  });
+
+  suite("a frame is delivered, not merely sent", () => {
+    it("has been applied by every subscriber once advancing returns", function* () {
+      const { root, clock, show } = yield* harness();
+      yield* show(workspace([PROJECT, CONFIRM]));
+      const project = expectNode(root.node, "+project");
+      const confirm = expectNode(root.node, "+confirm");
+
+      yield* clock.advance(16);
+
+      // No settling, no sleeping: the operation completed, so the frame landed.
+      expect(project.props.at).toBe(16);
+      expect(confirm.props.at).toBe(16);
+      expect(project.props.opened).toBe(1);
+      expect(confirm.props.opened).toBe(1);
+    });
+
+    it("keeps delivering to the survivor when one subscriber is removed", function* () {
+      const { root, clock, show } = yield* harness();
+      yield* show(workspace([PROJECT, CONFIRM]));
+      expect(clock.demand).toBe(2);
+
+      yield* clock.advance(16);
+      const confirm = expectNode(root.node, "+confirm");
+      yield* show(workspace([PROJECT]));
+
+      expect(clock.demand).toBe(1);
+
+      // The removed branch is not waited for, and does not hold the clock open.
+      yield* clock.advance(32);
+
+      const project = expectNode(root.node, "+project");
+      expect(project.props.at).toBe(32);
+      expect(project.props.opened).toBe(2);
+      // It also receives no later frame.
+      expect(confirm.props.at).toBe(16);
+      expect(confirm.props.opened).toBe(1);
+    });
+
+    it("releases a producer waiting on a branch that goes away mid-delivery", function* () {
+      const { root, clock, offer } = yield* harness();
+      const held = withResolvers<void>();
+
+      yield* offer([
+        describe(Held, "held", { hold: held.operation }),
+        describe(Panel, "panel", PANELS[0]),
+      ]);
+      expect(clock.demand).toBe(1);
+
+      const advancing = yield* spawn(() => clock.advance(16));
+      // Wait until the frame has actually reached the slow branch, so the
+      // removal below happens while the producer is still owed an answer.
+      const slow = expectNode(root.node, "held");
+      yield* when(function* () {
+        expect(slow.props.at).toBe(16);
+      });
+
+      yield* offer([describe(Panel, "panel", PANELS[0])]);
+
+      const finished = yield* race([
+        (function* delivered(): Operation<string> {
+          yield* advancing;
+          return "delivered";
+        })(),
+        (function* stranded(): Operation<string> {
+          yield* sleep(500);
+          return "stranded";
+        })(),
+      ]);
+
+      expect(finished).toBe("delivered");
+      expect(clock.demand).toBe(0);
+      held.resolve();
+    });
+
+    it("leaves no demand and no waiting producer once the root is gone", function* () {
+      const { root, clock, show } = yield* harness();
+      yield* show(workspace([PROJECT, CONFIRM]));
+      yield* clock.advance(16);
+
+      yield* until(root.destroy());
+
+      expect(clock.demand).toBe(0);
+      // Advancing a clock nobody is subscribed to completes rather than hanging.
+      yield* clock.advance(32);
+    });
+  });
+
   suite("negative controls", () => {
+    it("duplicate-keys-permitted: one of two same-keyed siblings becomes unreachable", function* () {
+      // The reconciler addresses a parent's mounted children by key. Two
+      // siblings under one key collapse to a single entry, so the shadowed one
+      // is never matched for an update and never counted as undescribed for
+      // removal — it stays mounted, and holding whatever it holds, for as long
+      // as its parent lives.
+      const permitted = [
+        { key: "twice", node: "first" },
+        { key: "twice", node: "second" },
+      ];
+      const addressable = new Map(permitted.map((child) => [child.key, child.node]));
+
+      expect(addressable.size).toBe(1);
+      expect([...addressable.values()]).toEqual(["second"]);
+      expect([...addressable.values()]).not.toContain("first");
+
+      // Which is why the reconciler refuses before either node can exist.
+      const { root, offer } = yield* harness();
+      const refused = yield* offer([
+        describe(Panel, "twice", PANELS[0]),
+        describe(Panel, "twice", PANELS[1]),
+      ]);
+
+      expect(refused.ok).toBe(false);
+      expect(topology(root.node)).toEqual([]);
+    });
+
     it("positional-only reconciliation: matching by index moves state to the wrong child", function* () {
       const { root, show } = yield* harness();
       yield* show(workspace([PROJECT]));

@@ -13,6 +13,7 @@
  * stop asking the host for frames.
  */
 
+import { spawn } from "effection";
 import type { Operation } from "effection";
 
 import { describe } from "./component.ts";
@@ -91,20 +92,35 @@ export const Drawer: Component<StackedDrawer> = {
     return [...controls, describe(Drawer, next.key, { drawer: next, above: rest })];
   },
 
-  *lifecycle({ node, frames, ready }: Mounted<StackedDrawer>): Operation<void> {
+  *lifecycle({ node, input, frames, ready, updates }: Mounted<StackedDrawer>): Operation<void> {
     // A drawer opens over time, so it asks the host for frames — and stops
     // asking when this scope ends, which is when the branch is removed.
     const clock = yield* frames.subscribe();
+    const later = yield* updates.receive();
     let opened = 0;
+    let current = input;
     node.set("opened", opened);
-    yield* ready();
-    while (true) {
-      const frame = yield* clock.next();
-      if (frame.done) {
-        return;
+    node.set("prompt", current.drawer.prompt);
+
+    // Both subscriptions belong to this body's scope, and are acquired before
+    // the child that reads one is spawned.
+    yield* spawn(function* () {
+      while (true) {
+        const elapsed = yield* clock.next();
+        opened += 1;
+        node.set("opened", opened);
+        node.set("at", elapsed);
       }
-      opened += 1;
-      node.set("opened", opened);
+    });
+
+    yield* ready();
+
+    // Its parent tells it what changed. Taking the next input is what reports
+    // the previous one applied, so a reconcile does not return until the prompt
+    // on screen is the prompt that was just described.
+    while (true) {
+      current = yield* later.next();
+      node.set("prompt", current.drawer.prompt);
     }
   },
 

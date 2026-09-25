@@ -6,10 +6,19 @@
  * the demand — there is nothing else to consult and nothing to keep in step.
  * A closed drawer stops demanding frames because its scope is gone, not because
  * something remembered to say so.
+ *
+ * Advancing the clock is an operation that completes, not a send that returns
+ * at once. When `advance()` returns, every branch that was subscribed has
+ * applied that timestamp, so whatever reads the tree next — a render walk, an
+ * assertion — sees that frame rather than the one before it. A host that cannot
+ * tell when a frame has landed can only guess, and drawing on a guess is how a
+ * frame comes out half old.
  */
 
-import { createSignal, resource } from "effection";
-import type { Operation, Subscription } from "effection";
+import type { Operation } from "effection";
+
+import { createHandoff } from "./handoff.ts";
+import type { Receiver } from "./handoff.ts";
 
 /** What a mounted branch may do with the clock. */
 export interface Frames {
@@ -19,42 +28,24 @@ export interface Frames {
    * It is a resource, so the subscription and the demand it represents both end
    * when the scope that acquired them does.
    */
-  subscribe(): Operation<Subscription<number, never>>;
+  subscribe(): Operation<Receiver<number>>;
   /** How many mounted branches are asking for frames right now. */
   readonly demand: number;
 }
 
 /** The host's side: the same clock, plus the ability to advance it. */
 export interface FrameClock extends Frames {
-  /** Advance every subscriber by one frame. */
-  tick(elapsed: number): void;
+  /** Advance to one timestamp, completing once every subscriber has applied it. */
+  advance(timestamp: number): Operation<void>;
 }
 
 export function createFrameClock(): FrameClock {
-  // A Signal, because the host advances the clock from a timer callback rather
-  // than from inside an operation.
-  const frames = createSignal<number, never>();
-  let demand = 0;
-
+  const frames = createHandoff<number>();
   return {
     get demand(): number {
-      return demand;
+      return frames.demand;
     },
-
-    tick(elapsed: number): void {
-      frames.send(elapsed);
-    },
-
-    subscribe(): Operation<Subscription<number, never>> {
-      return resource(function* (provide) {
-        const subscription = yield* frames;
-        demand += 1;
-        try {
-          yield* provide(subscription);
-        } finally {
-          demand -= 1;
-        }
-      });
-    },
+    subscribe: () => frames.receive(),
+    advance: (timestamp: number) => frames.deliver(timestamp),
   };
 }

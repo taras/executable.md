@@ -27,6 +27,8 @@ import type { Operation } from "effection";
 import type { Node } from "../repl-study/vendor/freedom/upstream/index.ts";
 
 import type { Frames } from "./frames.ts";
+import { createHandoff } from "./handoff.ts";
+import type { Receiver } from "./handoff.ts";
 import type { Action, KeyPress } from "./input.ts";
 
 /**
@@ -43,10 +45,21 @@ export type ComponentIdentity = object;
 export interface Mounted<Input> {
   /** This branch's Freedom node. Its scope owns everything the branch holds. */
   readonly node: Node;
-  /** The input as of mount. Later input reaches `present` and `onPress`. */
+  /** The input this branch was mounted on. Later input arrives on `updates`. */
   readonly input: Input;
   /** The one host frame stream, and the demand this branch may place on it. */
   readonly frames: Frames;
+  /**
+   * Later input for this same branch, handed down by its parent.
+   *
+   * A retained branch keeps its node and its local state, so it has to be told
+   * what changed rather than rebuilt. This is that channel, and it crosses the
+   * direct parent-child boundary like the first input did: nothing ambient,
+   * nothing to look up, and nothing to poll. Taking the next input reports that
+   * the previous one was applied, so the reconcile that delivered it does not
+   * return until this branch has acted on it.
+   */
+  readonly updates: Updates<Input>;
   /**
    * Say that this branch's local state exists.
    *
@@ -94,6 +107,31 @@ export interface Component<Input> {
   present(input: Input, children: readonly string[]): readonly string[];
 }
 
+/** Where a branch waits for the input its parent hands it next. */
+export interface Updates<Input> {
+  receive(): Operation<Receiver<Input>>;
+}
+
+/**
+ * Where a parent puts the input a retained branch should see next.
+ *
+ * Written with method syntax deliberately. A method parameter is bivariant in
+ * TypeScript, which is what lets a branch keep a sink typed to its own input
+ * while the reconciler holds it as this untyped shape — with no cast anywhere.
+ * What makes that sound is the reconciler itself: it delivers into a sink only
+ * after confirming the new description names the very component that made it,
+ * so the value arriving is always of the type the sink was built for.
+ */
+export interface InputSink {
+  accept(input: unknown): Operation<void>;
+}
+
+/** A started branch: the body to run, and where its parent hands it later input. */
+export interface Branch {
+  readonly body: Operation<void>;
+  readonly sink: InputSink;
+}
+
 /** A parent's statement that one keyed child exists, with the input it runs on. */
 export interface Description {
   readonly key: string;
@@ -102,7 +140,10 @@ export interface Description {
   readonly focusable: boolean;
   /** The children this description's own input describes. */
   children(): readonly Description[];
-  lifecycle(node: Node, frames: Frames, ready: () => Operation<void>): Operation<void> | undefined;
+  /** The immutable input this description carries, for its branch to be given. */
+  readonly input: unknown;
+  /** Start this branch, or nothing when the component holds nothing disposable. */
+  start(node: Node, frames: Frames, ready: () => Operation<void>): Branch | undefined;
   onPress(key: KeyPress): Action | undefined;
   present(children: readonly string[]): readonly string[];
 }
@@ -124,11 +165,18 @@ export function describe<Input>(
     name: component.name,
     identity: component,
     focusable: component.focusable,
+    input,
     children: () => component.children(input),
-    lifecycle:
+    start:
       lifecycle === null
         ? () => undefined
-        : (node, frames, ready) => lifecycle({ node, input, frames, ready }),
+        : (node, frames, ready) => {
+            const updates = createHandoff<Input>();
+            return {
+              body: lifecycle({ node, input, frames, ready, updates }),
+              sink: { accept: updates.deliver },
+            };
+          },
     onPress: (key) => component.onPress?.(input, key),
     present: (children) => component.present(input, children),
   };
