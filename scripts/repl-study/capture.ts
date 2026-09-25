@@ -223,7 +223,10 @@ export function renderInto(term: Term, request: FrameRequest): Frame {
   // A playback's first frame still shows the moment it is leaving, so a drawer
   // about to open is not open yet: that is what gives the renderer two
   // geometries to interpolate between rather than one it has already arrived at.
-  const opening = request.transition === undefined || request.transition.begun;
+  // The control: a drawer that is already open on the frame the transition
+  // starts has one geometry, and one geometry is a cut rather than a movement.
+  const opening =
+    mutation === "cut-to-drawer" || request.transition === undefined || request.transition.begun;
   const layout = layoutFor({
     cols: size.cols,
     rows: size.rows,

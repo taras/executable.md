@@ -108,12 +108,13 @@ function* opened(
   url: string,
   head: string | undefined,
   composed: Size = WIDE,
+  control?: Mutation,
 ): Operation<{
   state: ReplState;
   tree: ReplTree;
 }> {
   const state = hydrate(url, journalThrough(head));
-  const tree = yield* useReplTree(state, composed);
+  const tree = yield* useReplTree(state, composed, control);
   return { state, tree };
 }
 
@@ -2004,6 +2005,84 @@ describe("a composition mounts the panes it shows, and only those", () => {
     yield* tree.sync(state, { size: NARROW });
     expect(panes(tree)).toEqual(["region:transcript", "region:input"]);
     expect(chain(tree)).toContain(tree.focused().name);
+  });
+
+  it("has no REPL input at all while a drawer owns the band it drew in", function* () {
+    // Somewhere to type that nothing can reach is worse than no input: the ring,
+    // the map and a pointer all still find it. Asked of the whole mounted tree
+    // rather than of the ring, because the ring is the last place it would show.
+    for (const size of [WIDE, NARROW]) {
+      const { state, tree } = yield* opened(DRAWER, HEAD, size);
+      const all = walk(tree.root.node).map((node) => node.name);
+      expect({
+        size: size.cols,
+        input: all.filter((name) => name.startsWith("region:input")),
+      }).toEqual({ size: size.cols, input: [] });
+      expect({ size: size.cols, run: all.filter((name) => name === "control:input.run") }).toEqual({
+        size: size.cols,
+        run: [],
+      });
+
+      // No focus target, and no input path: nothing to deliver to and nothing
+      // on a delivery's way through.
+      expect(chain(tree)).not.toContain("region:input");
+      yield* shot(tree, state);
+      const delivered = tree.deliver({
+        state,
+        input: press("x"),
+        context: { size, scrollLimit: 0 },
+      });
+      expect(delivered.delivery.path).not.toContain("region:input");
+
+      // And no hit target anywhere in the band it used to draw in. Those cells
+      // are the drawer's now, and a pointer on one reaches the drawer's own
+      // controls or nothing at all.
+      const drawer = find(tree.root.node, "drawer:project")!;
+      const box = boxOf(drawer)!;
+      const under: (string | undefined)[] = [];
+      for (let y = box.y; y < box.y + box.height; y += 1) {
+        under.push(tree.hit(box.x + 2, y)?.name);
+      }
+      expect({ size: size.cols, input: under.filter((name) => name === "region:input") }).toEqual({
+        size: size.cols,
+        input: [],
+      });
+    }
+  });
+
+  it("brings the REPL input back in canonical order when the drawer closes", function* () {
+    const { state, tree } = yield* opened(DRAWER, HEAD, WIDE);
+    const before = find(tree.root.node, "region:input");
+    expect(before).toBeUndefined();
+
+    const closed = hydrate("xmd://repl/e1/transcript/entry-1/document", journalThrough(HEAD));
+    yield* tree.sync(closed);
+    expect(
+      [...tree.root.node.children]
+        .map((node) => node.name)
+        .filter((name) => name.startsWith("region:")),
+    ).toEqual([
+      "region:sessions",
+      "region:transcript",
+      "region:bindings",
+      "region:input",
+      "region:history",
+    ]);
+    expect(chain(tree)).toContain("region:input");
+
+    // And it is a new node: nothing of what the old one was in the middle of
+    // came back with it.
+    yield* tree.sync(state);
+    expect(find(tree.root.node, "region:input")).toBeUndefined();
+    yield* tree.sync(closed);
+    expect(find(tree.root.node, "region:input")).not.toBe(before);
+  });
+
+  it("keeps it mounted behind the drawer when the control says to", function* () {
+    // The control. A pane that is drawn nowhere but still mounted is still in
+    // the ring, still numbered, and still takes a key.
+    const { tree } = yield* opened(DRAWER, HEAD, WIDE, "keep-hidden-input");
+    expect(walk(tree.root.node).map((node) => node.name)).toContain("region:input");
   });
 
   it("routes to another surface at narrow, and the one it left goes", function* () {

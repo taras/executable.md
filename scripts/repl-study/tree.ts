@@ -344,11 +344,16 @@ export function useReplTree(
       /** The panes a composition of this size, at this route, actually shows. */
       const composedIn = (next: ReplState, control?: Mutation): RouteSurface[] => {
         const layout = layoutOf(next, size, control);
+        // An open drawer owns the contextual outlet. The REPL input is not
+        // merely drawn nowhere then — it is not there, at either profile.
+        // Somewhere to type that nothing can reach is worse than no input at
+        // all, because the ring, the map and a pointer all still find it.
+        const taken = next.route.drawers.length > 0 && control !== "keep-hidden-input";
         const rects: Readonly<Record<RouteSurface, Rect | undefined>> = {
           sessions: layout.sidebar,
           transcript: layout.transcript,
           bindings: layout.bindings,
-          input: layout.contextual,
+          input: taken ? undefined : layout.contextual,
           history: layout.footer,
         };
         return ROUTE_SURFACES.filter((region) => rects[region] !== undefined);

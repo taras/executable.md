@@ -199,6 +199,8 @@ export function* scanKeys(
 interface Painted {
   readonly animating: boolean;
   readonly bytes: number;
+  /** How tall the contextual band came out, which is what a drawer grows. */
+  readonly contextualRows: number;
 }
 
 function draw(
@@ -226,7 +228,11 @@ function draw(
     deltaSeconds: deltaMs / 1000,
   });
   write(frame.ansi);
-  return { animating: frame.animating, bytes: frame.ansi.length };
+  return {
+    animating: frame.animating,
+    bytes: frame.ansi.length,
+    contextualRows: frame.bounds.contextual?.height ?? 0,
+  };
 }
 
 /** A frame every sixteen milliseconds, which is the rate the study was made at. */
@@ -260,6 +266,14 @@ export interface TraceEntry {
   readonly animating: boolean;
   /** True while a component is still animating and has asked for more frames. */
   readonly moving: boolean;
+  /**
+   * How tall the contextual band was drawn.
+   *
+   * In the trace because a claim about a drawer growing has to be readable by
+   * something that cannot watch a screen, and "the renderer said it was
+   * interpolating" does not say what moved.
+   */
+  readonly contextualRows: number;
   readonly bytes: number;
   /** `hold:nested`, `play:nested→generated`, or `settled` once it is over. */
   readonly segment: string;
@@ -430,6 +444,8 @@ export function* runInteractive(options: InteractiveOptions): Operation<void> {
   const journey = options.journey;
   let segmentIndex = 0;
   let playback = options.play;
+  /** True while the next frame should be drawn by a renderer with an empty cache. */
+  let freshen = false;
   let elapsed = 0;
   let frames = 0;
   let clock: Task<void> | undefined;
@@ -507,6 +523,14 @@ export function* runInteractive(options: InteractiveOptions): Operation<void> {
       }
       show(segmentFixture(entered));
       playback = entered.kind === "play" ? entered.playback : undefined;
+      // A transition is interpolated by the renderer between two frames it drew
+      // itself, so it must not be handed a new one halfway through. Clay's
+      // measurement cache fills on a run this wordy, and the rebuild that
+      // answers that used to land inside a transition and take the geometry it
+      // was growing from with it. The clean one is taken here, before the
+      // movement starts, where the only cost is a full repaint of a frame that
+      // was about to change anyway.
+      freshen = playback !== undefined;
     }
     return "running";
   };
@@ -538,6 +562,10 @@ export function* runInteractive(options: InteractiveOptions): Operation<void> {
     const repeated = journey !== undefined && segment?.kind === "hold" && held === label;
     if (!repeated) {
       const measured = { cols: state.cols, rows: state.rows };
+      if (freshen) {
+        freshen = false;
+        term = yield* useTerm(measured);
+      }
       // The moment on screen is composed **into the harness's one tree**, so
       // rendering, focus, scoped input and the overlay all come off the same
       // mounted object. A second tree for rendering would look right on its own
@@ -590,6 +618,7 @@ export function* runInteractive(options: InteractiveOptions): Operation<void> {
         deltaSeconds: deltaMs / 1000,
         animating: painted.animating,
         moving: frameClock.wanted(),
+        contextualRows: painted.contextualRows,
         bytes: painted.bytes,
         segment: label,
         fixture: state.fixture.name,

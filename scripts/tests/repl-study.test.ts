@@ -188,6 +188,7 @@ const TRACE_ENTRY = z.object({
   deltaSeconds: z.number(),
   animating: z.boolean(),
   moving: z.boolean(),
+  contextualRows: z.number(),
   bytes: z.number(),
   segment: z.string(),
   fixture: z.string(),
@@ -1018,9 +1019,47 @@ describe("animation in a real terminal", () => {
     expect(
       drawn.every((entry, index) => index === 0 || entry.elapsedMs > drawn[index - 1].elapsedMs),
     ).toBe(true);
-    expect(drawn.some((entry) => entry.animating)).toBe(true);
+    // The drawer is the only thing the renderer interpolates here: the REPL
+    // input is not mounted behind an open drawer, so an `animating` frame is
+    // the drawer growing and can be nothing else. It has to be a movement
+    // rather than a blip, so more than one frame in a row reports it.
+    // The drawer grew, in the live loop, and the trace says by how much: the
+    // first frames establish the closed band, later ones are taller, and it
+    // arrives by passing through heights in between rather than by cutting.
+    const rows = drawn.map((entry) => entry.contextualRows);
+    const closed = rows[0];
+    const open = Math.max(...rows);
+    expect(open).toBeGreaterThan(closed);
+    expect(rows.some((height) => height > closed && height < open)).toBe(true);
+    expect(rows[rows.length - 1]).toBe(open);
+
+    const runs = drawn.reduce(
+      (longest, entry) => ({
+        current: entry.animating ? longest.current + 1 : 0,
+        longest: Math.max(longest.longest, entry.animating ? longest.current + 1 : 0),
+      }),
+      { current: 0, longest: 0 },
+    ).longest;
+    expect(runs).toBeGreaterThan(1);
+    expect(drawn[drawn.length - 1].animating).toBe(false);
     expect(drawn[drawn.length - 1].moving).toBe(false);
     expect(drawn.filter((entry) => entry.bytes > 0).length).toBeGreaterThan(3);
+  });
+
+  it("interpolates nothing when the drawer is already open on the first frame", function* () {
+    // The control. With no pre-transition geometry the drawer is a cut, and the
+    // renderer has nothing to move between — which is what the claim above is
+    // actually about. The hidden input band used to satisfy it instead.
+    const directory = yield* useTempDirectory("repl-study-cut");
+    const trace = join(directory, "cut.jsonl");
+    const command = `${MAIN} --play generated drawer --frames 80 --mutation cut-to-drawer --trace ${trace}`;
+    yield* exec(ptyCommand(command), { cwd: ROOT, arguments: ptyArguments(command) }).join();
+    const drawn = yield* readTrace(trace);
+    expect(drawn.length).toBeGreaterThan(10);
+    // The application still moves — the transcript still arrives — and the
+    // renderer interpolates nothing.
+    expect(drawn.some((entry) => entry.moving)).toBe(true);
+    expect(drawn.some((entry) => entry.animating)).toBe(false);
   });
 
   it("stops the clock and restores the terminal when interrupted mid-animation", function* () {
@@ -1137,6 +1176,19 @@ describe("the whole demonstration, in a real terminal", () => {
     expect(visited(drawn)).toEqual([...JOURNEY_SEGMENTS, "settled"]);
     expect(drawn.some((entry) => entry.animating)).toBe(true);
     expect(drawn.some((entry) => entry.segment.startsWith("play:") && entry.moving)).toBe(true);
+
+    // The drawer grows inside its own segment, where it is the only thing the
+    // renderer interpolates: the REPL input is not mounted behind it. The
+    // segment's first frame establishes the closed band, and the heights after
+    // it pass through rather than jumping.
+    const opening = drawn.filter((entry) => entry.segment === "play:generated→drawer");
+    expect(opening.length).toBeGreaterThan(3);
+    const rows = opening.map((entry) => entry.contextualRows);
+    const closed = rows[0];
+    const open = Math.max(...rows);
+    expect(open).toBeGreaterThan(closed);
+    expect(rows.some((height) => height > closed && height < open)).toBe(true);
+    expect(opening.some((entry) => entry.animating)).toBe(true);
 
     // It stopped because the story ended, not because it ran out of budget —
     // which is what it means for the clock to stop after the settled state.

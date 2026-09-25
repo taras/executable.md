@@ -62,6 +62,10 @@ export const MUTATIONS = [
   "disown-actions",
   /** Resolve what the URL can and render the rest as if it were there. */
   "render-partial-route",
+  /** Keep the REPL input mounted while a drawer owns the band it draws in. */
+  "keep-hidden-input",
+  /** Open the drawer at its full height on the first frame, with nothing to grow from. */
+  "cut-to-drawer",
   /** Forget the selected marker when a state is rebuilt from its URL. */
   "drop-selection-on-hydrate",
   /** Exit on Ctrl+C while a paused entry is still active. */
