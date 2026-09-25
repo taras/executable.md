@@ -21,6 +21,7 @@ import { race, sleep } from "effection";
 import type { Operation } from "effection";
 
 import { advanceOf, startFixture } from "../repl-pause/fixture.ts";
+import { advanceOf as advanceOfXmd, isolated, startXmdFixture } from "../repl-pause/xmd-fixture.ts";
 
 /**
  * A promise settled from outside Effection, standing in for a subprocess or a
@@ -255,5 +256,254 @@ suite("REPL pause — the XMD execution Api as a pause seam", () => {
     expect(fixture.gate.inspect().state).toBe("pausing");
 
     fixture.gate.release();
+  });
+});
+
+/**
+ * Slice 2 — the REPL-owned design, over the surfaces that already exist.
+ *
+ * Slice 1 asked what middleware around *an* Api can do. These cases ask the
+ * question that decides the design: are XMD's existing execution, component and
+ * REPL-owned expansion surfaces enough for a REPL to pause one real document
+ * execution, with no new core pause API?
+ *
+ * The answer is in the last three cases, and it is a boundary rather than a
+ * failure. Pass-through is exact, the document really does come to rest at a
+ * boundary, its journal really is fixed, and Continue really does release the
+ * same continuation once. What the REPL cannot do is *certify* it: a real
+ * execution keeps engine-owned scopes alive that never re-enter any surface a
+ * REPL can reach, so the fail-closed controller stays in `pausing` and names
+ * them. It never reports `paused`, which is why nothing here asserts that it
+ * does — an assertion satisfied by a state the design never reaches would prove
+ * nothing at all.
+ */
+
+const advanceOfExecution = advanceOfXmd;
+
+suite("REPL pause — the existing XMD surfaces", () => {
+  it("installs before the execution and delegates immediately while playing", function* () {
+    const control = yield* isolated(function* () {
+      const fixture = yield* startXmdFixture({ withoutMiddleware: true });
+      expect(fixture.gate).toBe(undefined);
+      const output = yield* fixture.execution;
+      return { output: String(output), journal: yield* fixture.journalKinds() };
+    });
+
+    const instrumented = yield* isolated(function* () {
+      const fixture = yield* startXmdFixture({});
+      const output = yield* fixture.execution;
+      const gate = fixture.gate;
+      if (!gate) {
+        throw new Error("the instrumented run must have a gate");
+      }
+      return {
+        output: String(output),
+        journal: yield* fixture.journalKinds(),
+        surfaces: [...new Set(gate.crossings.map((c) => c.surface))].toSorted(),
+        held: gate.inspect().held,
+        state: gate.state,
+        releases: gate.releases,
+      };
+    });
+
+    // Pass-through is exact: same ordered application trace, same outcome.
+    expect(instrumented.output).toBe(control.output);
+    expect(instrumented.journal).toEqual(control.journal);
+
+    // Observation is present, across every surface the document actually used.
+    expect(instrumented.surfaces).toEqual([
+      "applyBoundModifiers",
+      "applyModifiers",
+      "codeBlock",
+      "content",
+      "document",
+      "expand",
+      "importComponent",
+      "replCheckpoint",
+    ]);
+
+    // Nothing waited and no gate was retained.
+    expect(instrumented.held).toEqual([]);
+    expect(instrumented.state).toBe("playing");
+    expect(instrumented.releases).toBe(0);
+  });
+
+  it("enters pausing synchronously and lets work already inside reach its next boundary", function* () {
+    yield* isolated(function* () {
+      const fixture = yield* startXmdFixture({});
+      const gate = fixture.gate;
+      if (!gate) {
+        throw new Error("expected a gate");
+      }
+      const advancing = yield* fixture.advances;
+
+      // Pause only once a component body is demonstrably running ordinary
+      // Effection, so this is work already in flight and not work not yet begun.
+      yield* advanceOfExecution(advancing, "slow");
+      const stepsAtRequest = fixture.slowSteps();
+      expect(stepsAtRequest).toBeGreaterThan(0);
+
+      expect(gate.state).toBe("playing");
+      gate.request();
+      expect(gate.state).toBe("pausing");
+
+      yield* bounded(gate.reached(), "reached");
+
+      // The call already inside finished, and the walk stopped at the next
+      // existing boundary rather than being cut short inside the component.
+      expect(fixture.slowSteps()).toBeGreaterThan(stepsAtRequest);
+      const resting = gate.inspect();
+      expect(resting.held.length).toBeGreaterThan(0);
+      expect(resting.held.join(" ")).toMatch(/importComponent|applyModifiers|expand/);
+
+      gate.release();
+      yield* fixture.execution;
+    });
+  });
+
+  it("fixes the target's journal while it rests, and the unrelated sibling keeps advancing", function* () {
+    yield* isolated(function* () {
+      const fixture = yield* startXmdFixture({});
+      const gate = fixture.gate;
+      if (!gate) {
+        throw new Error("expected a gate");
+      }
+      const advancing = yield* fixture.advances;
+      yield* advanceOfExecution(advancing, "slow");
+
+      gate.request();
+      yield* bounded(gate.reached(), "reached");
+
+      const journalAtRest = yield* fixture.journalKinds();
+      const heldAtRest = gate.inspect().held;
+      expect(heldAtRest.length).toBeGreaterThan(0);
+
+      // The interval is defined by the sibling's own announced advances, so both
+      // sides of the comparison are measured across the same stretch of time.
+      for (let advance = 0; advance < 20; advance += 1) {
+        yield* advanceOfExecution(advancing, "sibling");
+      }
+
+      expect(yield* fixture.journalKinds()).toEqual(journalAtRest);
+      expect(gate.inspect().held).toEqual(heldAtRest);
+
+      gate.release();
+      yield* fixture.execution;
+    });
+  });
+
+  it("never reports paused for a real execution, and names the scopes it cannot account for", function* () {
+    yield* isolated(function* () {
+      const fixture = yield* startXmdFixture({});
+      const gate = fixture.gate;
+      if (!gate) {
+        throw new Error("expected a gate");
+      }
+      const advancing = yield* fixture.advances;
+      yield* advanceOfExecution(advancing, "slow");
+
+      gate.request();
+      const outcome = yield* bounded(gate.reached(), "reached");
+
+      // This is the finding. The controller is fail-closed, so it refuses to
+      // certify a subtree it cannot fully account for.
+      expect(outcome).toBe("unsettled:reached");
+      expect(gate.state).toBe("pausing");
+
+      const seen = gate.inspect();
+      expect(seen.unaccounted.length).toBeGreaterThan(0);
+      // Most live descendants of a real execution are engine-owned and never
+      // re-enter any surface a REPL can reach.
+      expect(seen.crossed.length).toBeLessThan(seen.live.length);
+      expect(seen.held.length).toBeLessThan(seen.live.length);
+
+      gate.release();
+      yield* fixture.execution;
+    });
+  });
+
+  it("releases the retained continuation exactly once and completes without replaying", function* () {
+    yield* isolated(function* () {
+      const fixture = yield* startXmdFixture({});
+      const gate = fixture.gate;
+      if (!gate) {
+        throw new Error("expected a gate");
+      }
+      const advancing = yield* fixture.advances;
+      yield* advanceOfExecution(advancing, "slow");
+
+      gate.request();
+      yield* bounded(gate.reached(), "reached");
+
+      const held = gate.inspect().held;
+      const journalAtRest = yield* fixture.journalKinds();
+      // Without this the assertions below would be satisfied by a controller
+      // that held nothing and released nothing.
+      expect(held.length).toBeGreaterThan(0);
+
+      gate.release();
+      expect(gate.state).toBe("playing");
+      expect(gate.releases).toBe(held.length);
+      expect(gate.doubleReleases).toBe(0);
+
+      const output = yield* fixture.execution;
+      const journal = yield* fixture.journalKinds();
+
+      // The released continuation carried on from where it was held: the run
+      // reached its expected result, the records written before the hold are
+      // still the same records, and nothing was written twice.
+      expect(String(output)).toContain("Hello from declared Markdown.");
+      expect(String(output)).toContain("Projected content the component asks for.");
+      expect(journal.slice(0, journalAtRest.length)).toEqual(journalAtRest);
+      expect(journal.length).toBeGreaterThan(journalAtRest.length);
+      expect(journal.at(-1)).toBe("close");
+      expect(gate.doubleReleases).toBe(0);
+    });
+  });
+
+  it("keeps the controller pausing while a legitimate descendant bypasses every controlled surface", function* () {
+    yield* isolated(function* () {
+      const fixture = yield* startXmdFixture({ bypass: true });
+      const gate = fixture.gate;
+      if (!gate) {
+        throw new Error("expected a gate");
+      }
+      const advancing = yield* fixture.advances;
+
+      // The bypassing child is a spawned descendant of a component body. It asks
+      // the engine for nothing, which is what any component does between two
+      // boundaries — not a contrived escape.
+      yield* advanceOfExecution(advancing, "bypass");
+      const stepsAtRequest = fixture.bypassSteps();
+
+      gate.request();
+      const outcome = yield* bounded(gate.reached(), "reached");
+
+      expect(outcome).toBe("unsettled:reached");
+      expect(gate.state).toBe("pausing");
+      expect(gate.inspect().unaccounted.length).toBeGreaterThan(0);
+
+      // And it is not merely unaccounted for — it is still advancing.
+      yield* advanceOfExecution(advancing, "bypass");
+      expect(fixture.bypassSteps()).toBeGreaterThan(stepsAtRequest);
+      expect(gate.state).toBe("pausing");
+
+      gate.release();
+      yield* fixture.execution;
+    });
+  });
+
+  it("leaves ordinary execution behind when the REPL middleware is removed", function* () {
+    yield* isolated(function* () {
+      const fixture = yield* startXmdFixture({ withoutMiddleware: true });
+
+      // No controller, so no pause status, no retained gate and no accounting.
+      expect(fixture.gate).toBe(undefined);
+
+      const output = yield* fixture.execution;
+      expect(String(output)).toContain("Hello from declared Markdown.");
+      const journal = yield* fixture.journalKinds();
+      expect(journal.at(-1)).toBe("close");
+    });
   });
 });
