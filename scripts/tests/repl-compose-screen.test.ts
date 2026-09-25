@@ -209,6 +209,58 @@ suite("REPL composition: one location, all the way down", () => {
     });
   });
 
+  suite("the top drawer owns interaction", () => {
+    it("excludes the covered drawer and the surfaces behind it from traversal", function* () {
+      const { root, go } = yield* harness();
+      yield* go(STACKED);
+
+      // Everything is still mounted, still drawing, still animating.
+      expect(topology(root.node)).toContain("project.answer");
+      expect(topology(root.node)).toContain("transcript");
+
+      // And exactly one branch can be reached.
+      expect(focusTargets(root.node).map((node) => keyOf(node))).toEqual([
+        "confirm",
+        "confirm.answer",
+        "confirm.back",
+      ]);
+      expect(ancestryOf(focused(root))).toEqual(["screen", "workbench", "project", "confirm"]);
+    });
+
+    it("still lets a key the drawer does not claim bubble out through it", function* () {
+      const { root, host, go } = yield* harness();
+      yield* go(STACKED);
+      const answer = expectNode(root.node, "confirm.answer");
+      host.deliver({ kind: "pointer", button: "primary", on: answer.id });
+
+      const escaped = host.deliver({ kind: "bytes", bytes: Uint8Array.from([27]) });
+
+      // Input travels scopes, not focusability, so the covered ancestry is
+      // still on the path even though none of it can be focused.
+      expect(escaped.action).toEqual({ kind: "drawer.close", from: "confirm" });
+      expect(escaped.path).toEqual(["screen", "workbench", "project", "confirm", "confirm.answer"]);
+    });
+
+    it("restores the drawer beneath, and then the surface the URL names", function* () {
+      const { root, go } = yield* harness();
+      yield* go(STACKED);
+      expect(ancestryOf(focused(root))).toEqual(["screen", "workbench", "project", "confirm"]);
+
+      yield* go(PROJECT);
+      expect(ancestryOf(focused(root))).toEqual(["screen", "workbench", "project"]);
+      expect(focusTargets(root.node).map((node) => keyOf(node))).toEqual([
+        "project",
+        "project.answer",
+        "project.back",
+      ]);
+
+      yield* go(ENTRY);
+      expect(keyOf(focused(root))).toBe("transcript");
+      // With nothing open, the surfaces are reachable again.
+      expect(focusTargets(root.node).map((node) => keyOf(node))).toContain("history");
+    });
+  });
+
   suite("layout presents; it does not decide existence", () => {
     it("describes the same tree at two viewports and draws it differently", function* () {
       const { root, host, go } = yield* harness();
@@ -332,14 +384,18 @@ suite("REPL composition: one location, all the way down", () => {
       expect(typed.path).toEqual(clicked.path);
     });
 
-    it("gives nothing to a removed, disabled, container or absent target", function* () {
+    it("gives nothing to a covered, background, container or absent target", function* () {
       const { root, host, go } = yield* harness();
       yield* go(STACKED);
 
       const settled = keyOf(focused(root));
       const cases: readonly [string, string][] = [
-        // Drawn, but never made focusable: a control on the drawer underneath.
-        ["disabled", expectNode(root.node, "project.answer").id],
+        // The drawer underneath the open one: still mounted, still drawing,
+        // and not a place interaction can go.
+        ["covered drawer", expectNode(root.node, "project").id],
+        ["covered control", expectNode(root.node, "project.answer").id],
+        // A surface behind the drawer, for the same reason.
+        ["background surface", expectNode(root.node, "transcript").id],
         // A branch that holds children and is not a place focus can be.
         ["container", expectNode(root.node, "workbench").id],
         // Nothing at all.

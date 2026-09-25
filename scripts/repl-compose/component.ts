@@ -44,6 +44,18 @@ import type { Handoff, Receiver } from "./handoff.ts";
 import type { Action, KeyPress } from "./input.ts";
 
 /**
+ * What a description says about where focus belongs.
+ *
+ * `"none"` says nothing, and is what a component that never asks answers.
+ * `"here"` says focus belongs in this branch — a surface the URL names, which
+ * is where you start without stopping you going elsewhere. `"alone"` says focus
+ * belongs in this branch *and nowhere else*, which is what an open drawer
+ * means: everything outside it stays mounted, keeps drawing and keeps its
+ * lifecycle, and none of it can be reached.
+ */
+export type FocusClaim = "none" | "here" | "alone";
+
+/**
  * A component's identity is the component value itself.
  *
  * Nothing mints an id and nothing remembers one: reconciliation compares the
@@ -117,13 +129,13 @@ export interface ComponentSpec<Input> {
   /** The semantic action this input gives a key. Absent means: pass it on. */
   onPress?(input: Input, key: KeyPress): Action | undefined;
   /**
-   * Whether this input makes the branch the one the location is asking for.
+   * Where this input says focus belongs.
    *
    * It is a property of the input rather than of the component, because which
    * surface a URL names changes while the component does not. Absent means this
    * component never asks, which is the neutral answer: something else will.
    */
-  claimsFocus?(input: Input): boolean;
+  claimsFocus?(input: Input): FocusClaim;
   /** What this component draws, around what its children drew. */
   present(input: Input, children: readonly string[]): readonly string[];
 }
@@ -152,7 +164,7 @@ export function component<Input>(spec: ComponentSpec<Input>): Component<Input> {
 
 interface DescribedParts {
   children(): readonly Description[];
-  claimsFocus(): boolean;
+  claimsFocus(): FocusClaim;
   start(node: Node, frames: Frames, ready: () => Operation<void>): Operation<void> | undefined;
   update(node: Node): Operation<void>;
   onPress(key: KeyPress): Action | undefined;
@@ -186,7 +198,7 @@ class DescribedChild {
   }
 
   /** Whether the location is asking for this branch to hold focus. */
-  claimsFocus(): boolean {
+  claimsFocus(): FocusClaim {
     return this.#parts.claimsFocus();
   }
 
@@ -233,7 +245,7 @@ export function describe<Input>(
   const lifecycle = component.lifecycle;
   return new DescribedChild(key, component.name, component, component.focusable, {
     children: () => component.children(input),
-    claimsFocus: () => component.claimsFocus?.(input) === true,
+    claimsFocus: () => component.claimsFocus?.(input) ?? "none",
 
     start:
       lifecycle === null

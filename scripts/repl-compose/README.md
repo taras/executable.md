@@ -162,22 +162,42 @@ The exception is a component's `NodeDataKey`. It is immutable metadata an author
 declares at module evaluation about a value they own, which is what
 `component()` mints and carries — not state, and nothing to tear down.
 
-**The URL reconstructs focus.** Every surface a route can name is a
-focus-owning branch, and a description says whether its input makes it the
-branch the location is asking for. The innermost claim wins, which is how an
-opening drawer takes focus from the surface underneath it and closing it gives
-focus back — without the host, the renderer or the reconciler knowing what a
-drawer or a surface is. Focus moves only when nothing holds it or when whatever
-held it is no longer inside the branch being asked for, so an ordinary reconcile
-does not take focus away from whoever was using it.
+**The URL reconstructs focus, structurally.** Every surface a route can name is
+a focus-owning branch, and a description says where focus belongs: `"none"`,
+`"here"` — a surface the URL names, where focus starts without stopping you
+going elsewhere — or `"alone"`, which is what an open drawer means.
+
+Those claims have to describe *one* place, so they are required to lie on one
+ancestry. A branch may claim inside a branch that also claims, and the deeper
+one wins, because that is the same place at more depth. Two claims in unrelated
+subtrees name two places at once and are refused in the same preflight that
+checks keys, before a single node is created, removed or updated.
+
+"Deepest" here means ancestry, not rendering order. The active branch is found
+by descending — at each level at most one subtree can hold a claim, which is
+what the preflight guarantees — so no sibling's position is part of the answer.
+An earlier version flattened every claimant in tree order and took the last,
+which made moving an unrelated sibling move focus.
+
+Focus moves only when it is not already inside the branch being asked for: on a
+cold mount, when the location names somewhere else, and when the branch that
+held it was removed. Focus already there stays where the person put it.
+
+**An open drawer owns interaction.** Because its claim is `"alone"`, nothing
+outside it can be reached: the drawer beneath it and the surfaces behind it stay
+mounted, keep drawing and keep their lifecycles, and none of them is a focus or
+pointer target. Input still travels their scopes, so a key the top drawer does
+not claim — `Escape` — still bubbles out through the live ancestry. Closing the
+top drawer makes the one beneath it the active branch; closing the last one
+gives the route-named surface focus and makes the other surfaces reachable
+again. Nothing outside `screen.ts` knows what a drawer or a surface is.
 
 **A pointer names what it was on.** The target survives normalization as an
 opaque node identity, and the host resolves it against the live tree: a
-focusable target takes focus and is then dispatched to exactly as a keypress
-there would have been, and a removed, container, never-focusable or absent one
-takes no focus and receives no input. Only the top drawer is interactive, so the
-controls beneath it are a different component that was never made focusable —
-which is what makes "disabled" an absence rather than a flag.
+reachable target takes focus and is then dispatched to exactly as a keypress
+there would have been, and a covered, background, container or absent one takes
+no focus and receives no input. "Covered" is not a flag or a second set of
+components — it is the focus boundary, and there is one mechanism for it.
 
 **Delivery addresses a position in the tree, never a retained reference.**
 Removing a node detaches it from its parent but leaves the node object, and a

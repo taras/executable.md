@@ -21,7 +21,7 @@ import { race, sleep, spawn, suspend, until, withResolvers } from "effection";
 import type { Operation, Result } from "effection";
 import { when } from "@effectionx/converge";
 
-import { useRoot } from "../repl-study/vendor/freedom/upstream/index.ts";
+import { current, useRoot } from "../repl-study/vendor/freedom/upstream/index.ts";
 import type { Node, Root } from "../repl-study/vendor/freedom/upstream/index.ts";
 
 import { component, describe } from "../repl-compose/component.ts";
@@ -32,6 +32,7 @@ import type { Handoff } from "../repl-compose/handoff.ts";
 import type { FrameClock } from "../repl-compose/frames.ts";
 import { press } from "../repl-compose/input.ts";
 import {
+  AmbiguousFocus,
   compose,
   DuplicateKey,
   focusTargets,
@@ -116,6 +117,25 @@ const Leaf: Component<ProbeInput> = component({
   children: () => [],
   lifecycle: null,
   present: (input) => [`leaf:${input.value}`],
+});
+
+/** A focusable branch that asks for nothing. */
+const Plain: Component<Record<never, never>> = component({
+  name: "plain",
+  focusable: true,
+  children: () => [],
+  lifecycle: null,
+  present: () => [],
+});
+
+/** A focusable branch that says the location is asking for it. */
+const Asking: Component<{ readonly within: readonly Description[] }> = component({
+  name: "asking",
+  focusable: true,
+  lifecycle: null,
+  children: ({ within }) => within,
+  claimsFocus: () => "alone",
+  present: () => [],
 });
 
 function workspace(drawers: readonly DrawerInput[]): WorkspaceInput {
@@ -721,6 +741,66 @@ suite("REPL composition: keyed descriptions reconciled into Freedom", () => {
       yield* until(owner.halt());
 
       expect(clock.demand).toBe(0);
+    });
+  });
+
+  suite("one location asks for one place", () => {
+    it("is unmoved by reordering siblings that are not asking", function* () {
+      const asking = describe(Asking, "asks", { within: [] });
+      const orders: readonly (readonly Description[])[] = [
+        [describe(Plain, "one", {}), asking, describe(Plain, "two", {})],
+        [asking, describe(Plain, "one", {}), describe(Plain, "two", {})],
+        [describe(Plain, "two", {}), describe(Plain, "one", {}), asking],
+      ];
+
+      for (const order of orders) {
+        const { root, offer } = yield* harness();
+        const composed = yield* offer(order);
+        expect(composed.ok).toBe(true);
+
+        // Arbitration is structural, so where a sibling sits is not part of
+        // the answer. Flattening the tree and taking the last claimant made it
+        // part of the answer.
+        expect(keyOf(current(root.node))).toBe("asks");
+      }
+    });
+
+    it("lets a claim inside a claim win, because it is the same place deeper", function* () {
+      const { root, offer } = yield* harness();
+      const composed = yield* offer([
+        describe(Plain, "outside", {}),
+        describe(Asking, "outer", { within: [describe(Asking, "inner", { within: [] })] }),
+      ]);
+
+      expect(composed.ok).toBe(true);
+      expect(keyOf(current(root.node))).toBe("inner");
+      // And only what is inside the deepest claim can be reached at all.
+      expect(focusTargets(root.node).map((node) => keyOf(node))).toEqual(["inner"]);
+    });
+
+    it("refuses two claims in unrelated subtrees, before anything moves", function* () {
+      const { root, offer } = yield* harness();
+      yield* offer([describe(Plain, "one", {}), describe(Asking, "asks", { within: [] })]);
+
+      const before = topology(root.node);
+      const focused = current(root.node);
+
+      const refused = yield* offer([
+        describe(Asking, "here", { within: [] }),
+        describe(Asking, "there", { within: [] }),
+      ]);
+
+      expect(refused.ok).toBe(false);
+      if (!refused.ok) {
+        expect(refused.error).toBeInstanceOf(AmbiguousFocus);
+        if (refused.error instanceof AmbiguousFocus) {
+          expect(refused.error.claims).toEqual(["here", "there"]);
+        }
+      }
+
+      // Nothing was mounted, nothing was removed, and focus did not move.
+      expect(topology(root.node)).toEqual(before);
+      expect(current(root.node)).toBe(focused);
     });
   });
 

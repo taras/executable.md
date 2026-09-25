@@ -64,20 +64,31 @@ rather than inside it — so a control cannot tell a click from a keypress, and
 "equivalent activations emit the same action" is not a property anything has to
 maintain. The target is an opaque node identity the host resolves against the
 live tree: a focusable one takes focus and is then dispatched to exactly as a
-keypress there would have been, and a removed, container, never-focusable or
+keypress there would have been, and a covered, background, container or
 absent one takes no focus and receives no input. The equivalence is proven
 *targeted* — focus on one control, pointer on another — not merely for whatever
 happened to hold focus.
 
-**The URL reconstructs focus.** Every surface a route can name is a
-focus-owning branch, and a description says whether its input makes it the
-branch the location is asking for. The innermost claim wins, which is how an
-opening drawer takes focus from the surface underneath and closing it gives
-focus back — without the host, the renderer or the reconciler knowing what a
-drawer or a surface is. Focus moves only when nothing holds it or when whatever
-held it is no longer inside the branch being asked for, so a reconcile does not
-take focus away from whoever was using it. Cold-mounting the same URL in a fresh
-root reconstructs the same focus identity.
+**The URL reconstructs focus, and it does so structurally.** Every surface a
+route can name is a focus-owning branch, and a description says where focus
+belongs: nowhere, *here*, or *here alone*. Claims are required to lie on one
+ancestry — a claim inside a claim is the same place deeper, and the deeper one
+wins — and two claims in unrelated subtrees are refused in the same preflight
+that checks keys, before anything is mounted, removed or moved.
+
+"Deepest" is ancestry, not rendering order. The active branch is found by
+descending, so no sibling's position is part of the answer; an earlier version
+flattened claimants in tree order and took the last, which made reordering an
+unrelated sibling move focus. Cold-mounting the same URL in a fresh root
+reconstructs the same focus identity.
+
+An `alone` claim is what makes a drawer modal: everything outside it stays
+mounted and drawing and keeps its lifecycle, and none of it is a focus or
+pointer target — while input still travels those scopes, so an unclaimed key
+bubbles out through the live ancestry. Closing the top drawer makes the one
+beneath it active; closing the last restores the route-named surface and the
+reachability of the others. One mechanism, and nothing outside the screen module
+knows what a drawer is.
 
 ## Revise
 
@@ -169,9 +180,10 @@ independently reviewable and each one has evidence before the next begins.
 3. **The handoff primitive.** Acknowledged delivery with per-value release and
    scope-owned state, on its own, before anything depends on it.
 4. **The component boundary and reconciler.** Opaque keyed descriptions,
-   component-owned typed update channels, duplicate-key preflight, focus claims,
-   and reconciliation into Freedom. Evidence: retention, teardown, focus
-   reconstruction, and the three negative controls.
+   component-owned typed update channels, a preflight that checks both key
+   uniqueness and single-ancestry focus claims, and reconciliation into Freedom.
+   Evidence: retention, teardown, focus reconstruction, ambiguity refusal, and
+   the three negative controls.
 5. **The frame clock and input normalization**, on the primitive from step 3.
 6. **The screen.** `describeScreen` over a resolved location, with one
    focus-owning branch per route surface, the refusal as a whole screen, and

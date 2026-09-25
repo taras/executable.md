@@ -82,24 +82,6 @@ const Control: Component<ControlInput> = component({
   present: (input) => [`[ ${input.label} ]`],
 });
 
-/**
- * The same control, on a drawer something is stacked on top of.
- *
- * Only the top drawer is interactive, so the ones beneath it draw their
- * controls and offer nothing. A disabled control is not an enabled one carrying
- * a flag: it is a node that was never made focusable, which is why Tab cannot
- * reach it and a pointer on it does nothing. Closing the drawer above swaps the
- * component back, and the key is the same — so reconciliation replaces the node
- * rather than handing a Control's input to this one.
- */
-const InertControl: Component<ControlInput> = component({
-  name: "control",
-  focusable: false,
-  children: () => [],
-  lifecycle: null,
-  present: (input) => [`( ${input.label} )`],
-});
-
 interface ScopeInput {
   readonly scope: Scope;
   /** The scopes below this one on the route's path, outermost first. */
@@ -165,16 +147,12 @@ const DrawerView: Component<DrawerInput> = component({
 
   children({ suspension, above }): readonly Description[] {
     const [next, ...rest] = above;
-    const control = next === undefined ? Control : InertControl;
     const controls = [
-      describe(control, `${suspension.kind}.answer`, {
+      describe(Control, `${suspension.kind}.answer`, {
         label: "Answer",
         action: "suspension.answer",
       }),
-      describe(control, `${suspension.kind}.back`, {
-        label: "Back",
-        action: "drawer.close",
-      }),
+      describe(Control, `${suspension.kind}.back`, { label: "Back", action: "drawer.close" }),
     ];
     if (next === undefined) {
       return controls;
@@ -210,11 +188,13 @@ const DrawerView: Component<DrawerInput> = component({
     }
   },
 
-  // The top drawer is what the location is asking for, so focus goes into it
-  // when it appears and comes back out when it closes. A drawer with something
-  // stacked on it asks for nothing, because the one above it is asking.
-  // Nothing outside this file says the word "drawer" to make that happen.
-  claimsFocus: ({ above }) => above.length === 0,
+  // The top drawer is what the location is asking for, so it owns interaction
+  // while it is open: its controls are reachable and the drawer beneath it and
+  // the surfaces behind it are not, even though all of them stay mounted and
+  // keep drawing. A drawer with something stacked on it asks for nothing,
+  // because the one above it is asking. Nothing outside this file says the
+  // word "drawer" to make any of that happen.
+  claimsFocus: ({ above }) => (above.length === 0 ? "alone" : "none"),
 
   onPress({ suspension }, key) {
     return key.key === "Escape" ? { kind: "drawer.close", from: suspension.kind } : undefined;
@@ -233,6 +213,8 @@ interface SurfaceInput {
   readonly surface: RouteSurface;
   /** True when this is the surface the URL names. */
   readonly named: boolean;
+  /** True when this surface is also where the location is asking focus to be. */
+  readonly holdsFocus: boolean;
   readonly lines: readonly string[];
   /** Whatever this surface shows, described by the parent that placed it. */
   readonly content: readonly Description[];
@@ -250,7 +232,7 @@ const SurfaceView: Component<SurfaceInput> = component({
   focusable: true,
   lifecycle: null,
   children: ({ content }) => content,
-  claimsFocus: ({ named }) => named,
+  claimsFocus: ({ holdsFocus }) => (holdsFocus ? "here" : "none"),
   present({ surface, named, lines }, children) {
     return [
       `${named ? "*" : " "} ${surface}`,
@@ -290,6 +272,10 @@ const Workbench: Component<WorkbenchInput> = component({
       describe(SurfaceView, surface, {
         surface,
         named: location.surface === surface,
+        // A surface asks for focus only while nothing is open over it. With a
+        // drawer up, the drawer is the one place the location names — two
+        // claims side by side would be two places, and are refused.
+        holdsFocus: location.surface === surface && location.drawers.length === 0,
         lines: linesFor(surface, location),
         content: surface === "transcript" ? transcript : [],
       }),
@@ -323,7 +309,7 @@ const RefusalView: Component<RefusalInput> = component({
   focusable: true,
   children: () => [],
   lifecycle: null,
-  claimsFocus: () => true,
+  claimsFocus: () => "alone",
   present: (input) => ["This location does not exist in this execution.", `  ${input.message}`],
 });
 

@@ -63,6 +63,26 @@ export class DuplicateKey extends Error {
   }
 }
 
+/**
+ * Two branches in unrelated subtrees both asking to hold focus.
+ *
+ * A location names one place. Claims that lie on one ancestry describe the same
+ * place at different depths, which is a drawer inside the surface it opened
+ * over; claims that do not describe two, and there is no answer to give.
+ */
+export class AmbiguousFocus extends Error {
+  /** The two claims that are not in each other's ancestry. */
+  readonly claims: readonly [string, string];
+
+  constructor(first: string, second: string) {
+    super(
+      `${JSON.stringify(first)} and ${JSON.stringify(second)} both ask to hold focus, and neither contains the other`,
+    );
+    this.name = "AmbiguousFocus";
+    this.claims = [first, second];
+  }
+}
+
 /** The key one mounted node was described by, when it was described at all. */
 export function keyOf(node: Node): string | undefined {
   return node.data.get(KeyOf);
@@ -109,6 +129,10 @@ export function* compose(
   if (!planned.ok) {
     return planned;
   }
+  const focus = claimedBy(planned.value);
+  if (!focus.ok) {
+    return focus;
+  }
   const mounted: Operation<void>[] = [];
   yield* reconcile(root, planned.value, frames, mounted);
   for (const ready of mounted) {
@@ -119,50 +143,117 @@ export function* compose(
 }
 
 /**
- * Put focus where the tree says it belongs.
+ * Put focus inside the one branch the location is asking for.
  *
- * A description may say that its branch is the one the location is asking for.
- * The innermost such branch wins, which is how a drawer opening takes focus
- * from the surface underneath it without anything knowing what a drawer is.
+ * A description may say that its branch is the one the location wants. Those
+ * claims have to describe *one* place, so they are required to lie on a single
+ * ancestry: a branch may claim inside a branch that also claims, and the
+ * deepest one wins, but two claims in unrelated subtrees name two places at
+ * once and are refused before a single node is touched.
  *
- * Focus moves only when it has to: when nothing holds it, or when whatever held
- * it is no longer inside the branch being asked for — which happens on a cold
- * mount, when a drawer opens, and when the branch holding focus is removed. A
- * reconcile that changes neither does not move it, because focus that jumped on
- * every update would be taken away from whoever was using it.
+ * That is the difference between structure and rendering order. An earlier
+ * version flattened every claimant in tree order and took the last, so moving
+ * an unrelated sibling moved focus. Here the active branch is found by
+ * descending — at each level at most one subtree can hold a claim, which is
+ * what the preflight guarantees — so no sibling's position is part of the
+ * answer.
+ *
+ * The active branch is also the *only* place focus can be. Everything outside
+ * it stops being a focus target for as long as it is covered: a drawer under
+ * another drawer, and the surfaces behind them, remain mounted and keep
+ * drawing and keep their lifecycles, and none of them can be reached by Tab or
+ * by a pointer. Input still travels their scopes, so a key the top drawer does
+ * not claim still bubbles out through them.
  */
 function establishFocus(root: Node): void {
-  const targets = focusTargets(root);
-  if (targets.length === 0) {
-    return;
-  }
-  const claims = claimed(root);
-  const wanted = claims[claims.length - 1];
-  const focused = current(root);
+  const active = activeBranch(root);
+  const branch = active ?? root;
+  // A drawer says focus belongs to it *alone*, so nothing outside it can be
+  // reached. A surface says only where focus starts and leaves the rest of the
+  // interface reachable — trapping traversal inside one region would be a
+  // different product, and moving focus across a region boundary is what moves
+  // the URL in the first place.
+  const alone = active !== undefined && active.data.get(DescriptionOf)?.claimsFocus() === "alone";
+  reachable(root, branch, !alone || root === branch);
 
-  if (wanted === undefined) {
-    if (!targets.includes(focused)) {
-      focus(targets[0]);
+  const within = focusTargets(branch);
+  const anywhere = focusTargets(root);
+  const settled = current(root);
+
+  if (within.length === 0) {
+    if (anywhere.length > 0 && !anywhere.includes(settled)) {
+      focus(anywhere[0]);
     }
     return;
   }
 
-  const within = focusTargets(wanted);
-  if (within.length > 0 && !within.includes(focused)) {
+  // Focus moves when it is not already inside the branch being asked for: on a
+  // cold mount, when the location names somewhere else, and when the branch
+  // that held it was removed. Focus that is already there stays where the
+  // person put it.
+  if (!within.includes(settled)) {
     focus(within[0]);
   }
 }
 
-/** Every mounted branch whose description asks to hold focus, in tree order. */
-function claimed(node: Node): readonly Node[] {
-  const found: Node[] = [];
-  if (node.data.get(DescriptionOf)?.claimsFocus() === true) {
-    found.push(node);
+/**
+ * The deepest branch asking for focus, found by descending rather than sorting.
+ *
+ * At most one child subtree can hold a claim, so which child is visited first
+ * cannot change the answer.
+ */
+function activeBranch(node: Node): Node | undefined {
+  let deeper: Node | undefined;
+  for (const child of node.children) {
+    deeper = activeBranch(child) ?? deeper;
+  }
+  if (deeper !== undefined) {
+    return deeper;
+  }
+  return node.data.get(DescriptionOf)?.claimsFocus() === "none" ? undefined : node;
+}
+
+/** Make exactly the focusable nodes inside the active branch reachable. */
+function reachable(node: Node, active: Node, inside: boolean): void {
+  const within = inside || node === active;
+  const description = node.data.get(DescriptionOf);
+  if (description?.focusable === true) {
+    if (within) {
+      focusable(node);
+    } else if ("focused" in node.props) {
+      node.unset("focused");
+    }
   }
   for (const child of node.children) {
-    found.push(...claimed(child));
+    reachable(child, active, within);
   }
-  return found;
+}
+
+/**
+ * The deepest claim in a described forest, or the reason there is no one claim.
+ *
+ * Checked over the whole description tree before anything is created, removed
+ * or updated, so a location that names two places at once changes nothing at
+ * all rather than mounting half of itself and then discovering the problem.
+ */
+function claimedBy(planned: readonly Planned[]): Result<Description | undefined> {
+  let found: Description | undefined;
+  for (const { description, children } of planned) {
+    const deeper = claimedBy(children);
+    if (!deeper.ok) {
+      return deeper;
+    }
+    // A claim inside a claiming branch is the same place, deeper. A claim
+    // beside one is a different place.
+    const here = deeper.value ?? (description.claimsFocus() === "none" ? undefined : description);
+    if (here !== undefined) {
+      if (found !== undefined) {
+        return Err(new AmbiguousFocus(found.key, here.key));
+      }
+      found = here;
+    }
+  }
+  return Ok(found);
 }
 
 function* reconcile(
