@@ -8795,13 +8795,18 @@ validated answer binds into the evaluation environment. A `$ref` that leaves the
 supplied schema is refused with its position; only self-contained references
 resolve today (#192).
 
-**Durability.** Only the validated answer is journaled, keyed by a fingerprint of
-the compiled schema and the rendered message. Preflight is not what replay
-skips: compiling and expanding the content run on every execution, replay
-included, because they are how a run knows which recorded answer it is looking
-for. What replay never repeats is the provider call and the interaction it
-stands for. A recorded answer whose question does not match the one this run
-computed is refused rather than bound.
+**Durability.** The validated answer is the `elicit` record's result, keyed by a
+fingerprint of the compiled schema and the rendered message. The compiled schema
+travels beside it in the same description, under the namespaced
+`executablemd.elicitation-schema` field, so a host reading the history back knows
+which fields the person was shown without a provider still being installed. It is
+descriptive input: only `type` and `name` identify the record, the fingerprint
+stays the guard, and no provider, form, or presentation state is journaled at
+all. Preflight is not what replay skips: compiling and expanding the content run
+on every execution, replay included, because they are how a run knows which
+recorded answer it is looking for. What replay never repeats is the provider call
+and the interaction it stands for. A recorded answer whose question does not match
+the one this run computed is refused rather than bound.
 
 **Under a workflow run the durability is different, and the Markdown is not.**
 `xmd workflow` resolves `Elicit` to a registration of its own, installed by the

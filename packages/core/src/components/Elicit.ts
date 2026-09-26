@@ -81,6 +81,7 @@ export default function* Elicit(props: Record<string, Json>): Operation<Json> {
   const identity = {
     location: formatLocation(expansion),
     fingerprint: questionFingerprint({ schema: prepared.schema, message }),
+    schema: prepared.schema,
     position: expansion.position,
   };
 

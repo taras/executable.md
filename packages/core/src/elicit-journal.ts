@@ -1,15 +1,18 @@
 /**
  * What an elicitation leaves behind.
  *
- * Only the validated response is journaled. Which provider was installed, what
- * it opened, how long a person took — all of it belongs to the run that happened
- * to ask, and a replay that restored any of it would describe an interaction
- * that is over.
+ * The validated response is the answer, and it is the record's result. Beside it
+ * the description retains the question's normalized schema — descriptive input,
+ * never identity — so a reader of the history knows which fields the person was
+ * shown without asking a provider that is no longer running. Which provider was
+ * installed, what it opened, how long a person took, and what the form looked
+ * like all belong to the run that happened to ask, and a replay that restored
+ * any of it would describe an interaction that is over.
  *
- * The description carries a fingerprint of what the person was actually asked:
- * the normalized schema and the rendered message. This module decides what a
- * mismatch means, because nothing else does — only `type` and `name` decide
- * whether a journal entry matches, and neither of those changes when the
+ * The description also carries a fingerprint of what the person was actually
+ * asked: the normalized schema and the rendered message. This module decides
+ * what a mismatch means, because nothing else does — only `type` and `name`
+ * decide whether a journal entry matches, and neither of those changes when the
  * question does. A recorded answer whose fingerprint is not this run's is
  * refused with a `StaleInputError` rather than bound: binding an answer to a
  * question nobody was given is the failure a human-decision component must not
@@ -26,15 +29,31 @@ import {
   ReplayGuard,
   StaleInputError,
 } from "@executablemd/durable-streams";
-import type { Json as DurableJson, Workflow } from "@executablemd/durable-streams";
+import type {
+  EffectDescription,
+  Json as DurableJson,
+  Workflow,
+} from "@executablemd/durable-streams";
 import type { Operation } from "effection";
 
 import { canonicalFingerprint } from "./canonical.ts";
-import { parseJson } from "./json.ts";
+import { isJsonObject, parseJson } from "./json.ts";
 import { sourceDescription } from "./source-position.ts";
 import type { Json, JsonObject, SourcePosition } from "./types.ts";
 
 const ELICIT = "elicit";
+
+/**
+ * The description field the question's normalized schema occupies.
+ *
+ * Beside `type` and `name` rather than in either, under one stable namespaced
+ * field, because a durable effect's identity is its type and its name and
+ * nothing else: a schema that travelled in one would change what a replay
+ * matches. It is stored descriptive input — never compared during divergence
+ * detection, never part of admission — and the fingerprint over schema and
+ * message remains the guard.
+ */
+export const ELICITATION_SCHEMA_FIELD = "executablemd.elicitation-schema";
 
 export interface ElicitationQuestion {
   schema: JsonObject;
@@ -46,6 +65,8 @@ export interface ElicitationIdentity {
   /** `path:line:column` — the durable name. */
   location: string;
   fingerprint: string;
+  /** The normalized schema, retained so history can show what was asked. */
+  schema: JsonObject;
   /** Where the element was written, for history. Never read back as identity. */
   position?: Readonly<SourcePosition>;
 }
@@ -57,6 +78,19 @@ function recordName(location: string): string {
 /** A stable name for what was asked. */
 export function questionFingerprint(question: ElicitationQuestion): string {
   return canonicalFingerprint({ schema: question.schema, message: question.message });
+}
+
+/**
+ * The normalized schema a recorded elicitation retains, or none.
+ *
+ * Parsed rather than asserted: a description is journal data, so a field that
+ * is absent or is not a JSON object answers "none" instead of reaching a reader
+ * as a schema it is not. A record written before the field existed has none,
+ * and that is the same answer.
+ */
+export function readElicitationSchema(description: EffectDescription): JsonObject | undefined {
+  const field = description[ELICITATION_SCHEMA_FIELD];
+  return isJsonObject(field) ? field : undefined;
 }
 
 /**
@@ -119,6 +153,7 @@ export function* persistElicitation(
       type: ELICIT,
       name: recordName(identity.location),
       input: identity.fingerprint,
+      [ELICITATION_SCHEMA_FIELD]: identity.schema,
       ...sourceDescription(identity.position),
     },
     function* (): Operation<DurableJson> {
