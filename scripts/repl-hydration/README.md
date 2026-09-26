@@ -191,6 +191,7 @@ implementation it rules out.
 | `streamed-into-the-record` | a partial chunk under the right request, indistinguishable from the result |
 | `draft-as-a-visit` | four navigation entries for one place, burying where the person came from |
 | `kind-only-replay` | another document's submission, binding and Agent occurrence, all matching on kind alone |
+| `discarded-result` | a replay that recognizes the record and then publishes the script's own literal |
 
 ## The StarFX store
 
@@ -280,6 +281,26 @@ another document's journal : record 0: expected entry.submitted "entry-1" in ent
 another binding, right kind: record 7: expected binding.published "notes" in entry-1,
                              found binding.published "other" in entry-1
 ```
+
+**A matched operation returns its recorded result.** Consuming is not merely
+declining to perform: the value the live performer would have produced has to
+arrive at the same place, or the document carries on with whatever its source
+happened to say and the replay only looked correct. Every producing step names
+what it puts into execution state, every consuming step derives from that
+state, and both the performer's value and the matched record's are written to
+the same one. The script holds no second copy of a result it did not compute —
+`publish` names a value, it does not carry one.
+
+```
+— a matched operation returns its recorded result —
+  the Agent was          : agent entry-1/document/draft
+  the next step performed: publish notes
+  and published          : "RESTORED AGENT RESULT"
+```
+
+The same holds for a recovered answer: `channel` lands in execution state and
+the step after it publishes what the person said, so a recovery that reached
+only the report array would be visible as a missing binding.
 
 Two elicitations differ on the way there, and that difference is the secret
 rule. An ordinary answer is in the record, so replay recovers it and asks

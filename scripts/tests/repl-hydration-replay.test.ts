@@ -31,6 +31,7 @@ import { projectPrefix } from "../repl-hydration/project.ts";
 import {
   answered,
   elicitation,
+  ExecutionGap,
   ReplayDivergence,
   resume,
   SCRIPT,
@@ -250,7 +251,13 @@ describe("replay consumes what was recorded and stops at the frontier", () => {
 
     expect(second.recovered).toEqual(["channel=#releases"]);
     expect(secrets.asked).toEqual([]);
-    expect(second.performed).toEqual([]);
+
+    // The recovered answer reached the continuation, not just the report:
+    // the step after it publishes what the person said.
+    expect(second.performed).toEqual(["publish announced"]);
+    const announced = second.records.find((record) => Object(record).name === "announced");
+    expect(Object(announced).value).toBe("#releases");
+
     expect(second.frontier).toEqual({
       kind: "awaiting",
       wait: "token",
@@ -267,7 +274,11 @@ describe("replay consumes what was recorded and stops at the frontier", () => {
 
     expect(run.frontier).toEqual({ kind: "complete" });
     expect(run.performed).toEqual([]);
-    expect(run.consumed).toEqual(["agent entry-1/document/draft", "publish notes"]);
+    expect(run.consumed).toEqual([
+      "agent entry-1/document/draft",
+      "publish notes",
+      "publish announced",
+    ]);
 
     // The document finished, and the journal it finished on projects.
     const events = parseJournal(run.records);
@@ -279,7 +290,7 @@ describe("replay consumes what was recorded and stops at the frontier", () => {
       throw model.error;
     }
     expect(model.value.entries[0].outcome).toEqual({ status: "settled" });
-    expect(model.value.bindings.map((one) => one.name)).toEqual(["notes"]);
+    expect(model.value.bindings.map((one) => one.name)).toEqual(["notes", "announced"]);
   });
 });
 
@@ -540,7 +551,11 @@ describe("replay consumes only its own records", () => {
     const run = ran(replayed(records));
 
     expect(run.performed).toEqual([]);
-    expect(run.consumed).toEqual(["agent entry-1/document/draft", "publish notes"]);
+    expect(run.consumed).toEqual([
+      "agent entry-1/document/draft",
+      "publish notes",
+      "publish announced",
+    ]);
     expect(run.records).toEqual(records);
     expect(run.frontier).toEqual({ kind: "complete" });
 
@@ -617,6 +632,122 @@ describe("replay consumes only its own records", () => {
   });
 });
 
+describe("a matched operation returns its recorded result", () => {
+  const RESTORED = "RESTORED AGENT RESULT";
+
+  /** The valid prefix through the admitted Agent result, with that result altered. */
+  function altered(): readonly unknown[] {
+    const first = ran(
+      resume({ script: SCRIPT, prior: [], streaming: createStreaming(), secrets: noSecrets() }),
+    );
+    const at = first.records.findIndex((record) => Object(record).kind === "outcome.recorded");
+    return first.records
+      .slice(0, at + 1)
+      .map((record, index) => (index === at ? { ...Object(record), label: RESTORED } : record));
+  }
+
+  function replayed(prior: readonly unknown[]) {
+    return ran(
+      resume({
+        script: SCRIPT,
+        prior,
+        streaming: createStreaming(),
+        secrets: scriptedSecrets({ token: TOKEN }),
+      }),
+    );
+  }
+
+  it("publishes the recorded Agent result, not the one the script would have produced", function* () {
+    const prior = altered();
+    const run = replayed(prior);
+
+    // 1. The Agent is consumed, not performed.
+    expect(run.consumed).toEqual(["agent entry-1/document/draft"]);
+    expect(run.performed).toEqual(["publish notes"]);
+
+    // 2 and 3. The binding is published once, carrying the recorded result.
+    const published = run.records.filter(
+      (record) => Object(record).kind === "binding.published" && Object(record).name === "notes",
+    );
+    expect(published.length).toBe(1);
+    expect(Object(published[0]).value).toBe(RESTORED);
+    expect(Object(published[0]).value).not.toBe("Release notes for 0.14.0");
+
+    // 4. Resuming what it wrote performs nothing.
+    const again = replayed(run.records);
+    expect(again.performed).toEqual([]);
+    expect(again.consumed).toEqual(["agent entry-1/document/draft", "publish notes"]);
+    expect(again.records).toEqual(run.records);
+  });
+
+  it("projects the altered result and the binding derived from it", function* () {
+    const run = replayed(altered());
+    const events = parseJournal(run.records);
+    if (!events.ok) {
+      throw events.error;
+    }
+    const model = projectPrefix(EXECUTION, events.value, undefined);
+    if (!model.ok) {
+      throw model.error;
+    }
+
+    // 5. A cold projection of the resulting journal agrees with both.
+    expect(model.value.outcomes.map((one) => one.label)).toEqual([RESTORED]);
+    const notes = model.value.bindings.find((one) => one.name === "notes");
+    expect(notes?.value).toBe(RESTORED);
+    expect(JSON.stringify(model.value)).not.toContain("Release notes for 0.14.0");
+  });
+
+  it("refuses a step whose value nothing before it produced", function* () {
+    const orphan = SCRIPT.filter((step) => !(step.kind === "agent" && step.produces === "notes"));
+    const run = resume({
+      script: orphan,
+      prior: [],
+      streaming: createStreaming(),
+      secrets: noSecrets(),
+    });
+
+    expect(run.ok).toBe(false);
+    if (run.ok) {
+      return;
+    }
+    expect(run.error).toBeInstanceOf(ExecutionGap);
+    expect(run.error.message).toContain('publish notes needs "notes"');
+  });
+
+  describe("negative controls", () => {
+    it("discarded-result: recognizing the record and then using the script's own literal", function* () {
+      const prior = altered();
+      const run = replayed(prior);
+      const agent = SCRIPT.find((step) => step.kind === "agent");
+      if (agent === undefined || agent.kind !== "agent") {
+        throw new Error("the document has no Agent step");
+      }
+
+      // A replay that matched the record, reported it consumed, and then let
+      // the continuation read `step.admitted` would publish this instead.
+      const discarded = agent.admitted;
+      const restored = Object(
+        run.records.find(
+          (record) =>
+            Object(record).kind === "binding.published" && Object(record).name === "notes",
+        ),
+      ).value;
+
+      expect(discarded).toBe("Release notes for 0.14.0");
+      expect(restored).toBe(RESTORED);
+      expect(restored).not.toBe(discarded);
+
+      // And the script has no second copy of the result to fall back to.
+      const publishes = SCRIPT.filter((step) => step.kind === "publish");
+      expect(publishes.length).toBeGreaterThan(0);
+      for (const step of publishes) {
+        expect(Object.keys(step)).not.toContain("value");
+      }
+    });
+  });
+});
+
 describe("process loss offers replay, not Continue", () => {
   it("removes Continue and claims no pause, while the reconstruction is unchanged", function* () {
     const records = bothAnswered();
@@ -674,7 +805,11 @@ describe("process loss offers replay, not Continue", () => {
 
       expect(ignoring.performed).toEqual(["agent entry-1/document/draft", "publish notes"]);
       expect(honest.performed).toEqual([]);
-      expect(honest.consumed).toEqual(ignoring.performed);
+      // Every effect the ignoring run carried out is one the honest run read
+      // out of the record instead.
+      for (const effect of ignoring.performed) {
+        expect(honest.consumed).toContain(effect);
+      }
     });
 
     it("recoverable-secret: an answer in the record makes the re-prompt disappear", function* () {

@@ -31,6 +31,15 @@
  * Where it stops is the **replay frontier**: the first elicitation with no
  * answer recorded. Live execution belongs after that point and nowhere else.
  *
+ * **A matched operation returns its recorded result.** Consuming is not
+ * merely declining to perform: the value the live performer would have
+ * produced has to arrive at the same place, or the document carries on with
+ * whatever its source happened to say and the replay only looked correct.
+ * So every producing step names what it puts into execution state, every
+ * consuming step derives from that state, and the two paths — the performer's
+ * value and the matched record's — write to the same one. The script holds no
+ * second copy of a result it did not compute.
+ *
  * Two elicitations behave differently on the way there, and the difference is
  * the secret rule. An ordinary answer is in the record, so replay recovers it
  * and asks nobody. A secret answer is not in the record and never was, so
@@ -72,14 +81,17 @@ export type Step =
       readonly scope: readonly string[];
       /** What the Agent streamed on the way to its answer. Never durable. */
       readonly chunks: readonly string[];
-      /** What it finally said, which is the durable outcome. */
+      /** What it finally says when it runs. A replay never reads this. */
       readonly admitted: string;
+      /** Where the admitted result lands, whoever produced it. */
+      readonly produces: string;
     }
   | {
       readonly kind: "publish";
       readonly entry: string;
       readonly name: string;
-      readonly value: string;
+      /** The execution-state value to publish. There is no literal to fall back to. */
+      readonly from: string;
     }
   | {
       readonly kind: "elicit";
@@ -88,6 +100,8 @@ export type Step =
       readonly wait: string;
       readonly prompt: string;
       readonly secret: boolean;
+      /** Where the answer lands, whether a person gave it or the record did. */
+      readonly produces: string;
     }
   | { readonly kind: "settle"; readonly entry: string };
 
@@ -95,10 +109,13 @@ export type Step =
  * The representative document.
  *
  * It drafts release notes with an Agent, admits the result, opens the scope
- * that result creates, publishes what it produced, and then needs two answers
- * before it can publish: an ordinary one and a secret one. Everything after
- * the secret exists so that a replay which stopped there can be told apart
- * from one that got past it.
+ * that result creates, and publishes **what the Agent produced** — read out of
+ * execution state, not out of this list, which is why changing the recorded
+ * result changes what the replay goes on to publish. It then needs two
+ * answers: an ordinary one, whose value the next step publishes, and a secret
+ * one, whose value nothing records. Everything after the secret exists so
+ * that a replay which stopped there can be told apart from one that got past
+ * it.
  */
 export const SCRIPT: readonly Step[] = [
   { kind: "submit", entry: "entry-1", title: "Publish the release notes" },
@@ -110,11 +127,12 @@ export const SCRIPT: readonly Step[] = [
     scope: ["document", "draft"],
     chunks: ["Rele", "Release notes for ", "Release notes for 0.14.0"],
     admitted: "Release notes for 0.14.0",
+    produces: "notes",
   },
   { kind: "open", entry: "entry-1", scope: ["document", "draft"], name: "review", source: 0 },
   { kind: "complete", entry: "entry-1", scope: ["document", "draft"], name: "review" },
   { kind: "complete", entry: "entry-1", scope: ["document"], name: "draft" },
-  { kind: "publish", entry: "entry-1", name: "notes", value: "Release notes for 0.14.0" },
+  { kind: "publish", entry: "entry-1", name: "notes", from: "notes" },
   { kind: "open", entry: "entry-1", scope: ["document"], name: "publish", source: 1 },
   {
     kind: "elicit",
@@ -123,7 +141,9 @@ export const SCRIPT: readonly Step[] = [
     wait: "channel",
     prompt: "Which channel should this be announced on?",
     secret: false,
+    produces: "channel",
   },
+  { kind: "publish", entry: "entry-1", name: "announced", from: "channel" },
   {
     kind: "elicit",
     entry: "entry-1",
@@ -131,6 +151,7 @@ export const SCRIPT: readonly Step[] = [
     wait: "token",
     prompt: "Registry token?",
     secret: true,
+    produces: "token",
   },
   { kind: "complete", entry: "entry-1", scope: ["document"], name: "publish" },
   { kind: "complete", entry: "entry-1", scope: [], name: "document" },
@@ -251,6 +272,21 @@ function expectations(step: Step): readonly Identity[] {
     { kind: "suspension.opened", entry: step.entry, scope: step.scope, name: step.wait },
     { kind: "suspension.answered", entry: step.entry, scope: step.scope, name: step.wait },
   ];
+}
+
+/** A step that needs a value nothing before it produced. */
+export class ExecutionGap extends Error {
+  /** The step that could not proceed. */
+  readonly step: string;
+  /** The execution-state value it wanted. */
+  readonly needed: string;
+
+  constructor(step: string, needed: string) {
+    super(`${step} needs ${JSON.stringify(needed)}, and nothing before it produced one`);
+    this.name = "ExecutionGap";
+    this.step = step;
+    this.needed = needed;
+  }
 }
 
 /** A retained Journal that is not this document's. */
@@ -378,6 +414,14 @@ export function resume(options: Resume): Result<Run> {
   const performed: string[] = [];
   const consumed: string[] = [];
   const recovered: string[] = [];
+  /**
+   * What the document has produced so far.
+   *
+   * One map, written by the live performer and by the matched record alike,
+   * so a consumed operation and a performed one hand the same thing to
+   * whatever comes next. It never leaves this function: a secret is in here.
+   */
+  const state = new Map<string, string>();
 
   function stopped(frontier: Frontier): Result<Run> {
     return Ok({
@@ -433,14 +477,24 @@ export function resume(options: Resume): Result<Run> {
 
     if (step.kind === "publish") {
       if (claimed.length === 1) {
+        // The recorded value is the one that was published, and it lands in
+        // execution state exactly where a live publication would have put it.
+        const record = events[claimed[0]];
+        const value = record.kind === "binding.published" ? record.value : "";
+        state.set(step.name, value);
         consumed.push(`publish ${step.name}`);
         continue;
       }
+      const value = state.get(step.from);
+      if (value === undefined) {
+        return Err(new ExecutionGap(`publish ${step.name}`, step.from));
+      }
+      state.set(step.name, value);
       performed.push(`publish ${step.name}`);
       append(into, "binding.published", {
         entry: step.entry,
         name: step.name,
-        value: step.value,
+        value,
       });
       continue;
     }
@@ -450,13 +504,18 @@ export function resume(options: Resume): Result<Run> {
       if (claimed.length === 1) {
         // The result is written down against this request, so the Agent does
         // not run and nothing streams. There is no partial output after a
-        // restart because none was produced, not because it was hidden.
+        // restart because none was produced, not because it was hidden — and
+        // the recorded result goes where the live one would have gone, which
+        // is what makes the rest of the document follow it.
+        const record = events[claimed[0]];
+        state.set(step.produces, record.kind === "outcome.recorded" ? record.label : "");
         consumed.push(`agent ${request}`);
         continue;
       }
       for (const chunk of step.chunks) {
         streaming.receive(request, chunk);
       }
+      state.set(step.produces, step.admitted);
       performed.push(`agent ${request}`);
       streaming.admit(request);
       append(into, "outcome.recorded", {
@@ -490,9 +549,11 @@ export function resume(options: Resume): Result<Run> {
     }
 
     if (!step.secret) {
-      // Read out of the matched record and nowhere else.
+      // Read out of the matched record and nowhere else, and put where the
+      // person's answer would have gone, so the steps after it see it.
       const record = events[claimed[1]];
       const answer = record.kind === "suspension.answered" ? record.answer : "";
+      state.set(step.produces, answer);
       recovered.push(`${step.wait}=${answer}`);
       continue;
     }
@@ -503,6 +564,8 @@ export function resume(options: Resume): Result<Run> {
     if (!revealed.known) {
       return stopped({ kind: "unrevealed", wait: step.wait, prompt: step.prompt });
     }
+    // Used, and used only here: nothing downstream records it.
+    state.set(step.produces, revealed.value);
   }
 
   return stopped({ kind: "complete" });

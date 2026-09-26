@@ -331,6 +331,30 @@ function* walkRestart(): Operation<void> {
     secrets: noSecrets(),
     streaming: createStreaming(),
   });
+  const at = records.findIndex((record) => Object(record).kind === "outcome.recorded");
+  const restored = records
+    .slice(0, at + 1)
+    .map((record, index) =>
+      index === at ? { ...Object(record), label: "RESTORED AGENT RESULT" } : record,
+    );
+  const derived = resume({
+    script: SCRIPT,
+    prior: restored,
+    secrets: noSecrets(),
+    streaming: createStreaming(),
+  });
+  if (!derived.ok) {
+    throw derived.error;
+  }
+  const notes = derived.value.records.find(
+    (record) => Object(record).kind === "binding.published" && Object(record).name === "notes",
+  );
+  console.log("— a matched operation returns its recorded result —");
+  console.log(`  the Agent was          : ${derived.value.consumed.join(", ")}`);
+  console.log(`  the next step performed: ${derived.value.performed.join(", ")}`);
+  console.log(`  and published          : ${JSON.stringify(Object(notes).value)}`);
+  console.log("");
+
   console.log("— a record is consumed only when it is this step's own —");
   console.log(
     `  another document's journal: ${diverged.ok ? "ACCEPTED, which is a defect" : diverged.error.message}`,
