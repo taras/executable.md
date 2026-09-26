@@ -508,3 +508,93 @@ export const TERMINAL_MARKERS = { settled: "t-06", failed: "t-13", interrupted: 
 
 /** The last marker before `entry-2` failed. */
 export const BEFORE_FAILURE = "t-12";
+
+/**
+ * A fork of the representative execution, taken at `r-07`.
+ *
+ * Its Journal is its own and nothing in it points outward for a *value*: the
+ * environment the parent had at `r-07` — one binding, `project` — is
+ * published into this Journal by its first entry, so reconstructing this fork
+ * reads these records and no others. The parent's name and marker are here
+ * too, and they are the only outward-facing things: a label to point at,
+ * which needs the parent to exist only when someone follows it.
+ *
+ * `e1`'s later `release` and `changelog` bindings are deliberately absent.
+ * The fork was taken at `r-07`, and inheriting what the parent published
+ * afterwards is the leak this fixture would otherwise hide.
+ */
+const FORK_RECORDS: readonly Record<string, unknown>[] = [
+  {
+    id: "f-01",
+    seq: 1,
+    at: 1,
+    kind: "entry.inherited",
+    entry: "entry-0",
+    title: "Forked from the README run",
+    parent: "e1",
+    source: "r-07",
+  },
+  {
+    id: "f-02",
+    seq: 2,
+    at: 2,
+    kind: "binding.published",
+    entry: "entry-0",
+    name: "project",
+    value: "executable.md",
+  },
+  { id: "f-03", seq: 3, at: 3, kind: "entry.settled", entry: "entry-0" },
+
+  {
+    id: "f-04",
+    seq: 4,
+    at: 8,
+    kind: "entry.submitted",
+    entry: "entry-1",
+    title: "Try the release again",
+  },
+  {
+    id: "f-05",
+    seq: 5,
+    at: 9,
+    kind: "scope.opened",
+    entry: "entry-1",
+    scope: [],
+    name: "document",
+    source: 0,
+  },
+  {
+    id: "f-06",
+    seq: 6,
+    at: 12,
+    kind: "binding.published",
+    entry: "entry-1",
+    name: "release",
+    value: "0.13.1",
+  },
+  {
+    id: "f-07",
+    seq: 7,
+    at: 15,
+    kind: "suspension.opened",
+    entry: "entry-1",
+    scope: ["document"],
+    wait: "confirm",
+    prompt: "Tag 0.13.1 now?",
+    secret: false,
+  },
+];
+
+/** The execution the fork records. */
+export const FORK_EXECUTION = "e1-fork";
+
+/** The marker in the parent this fork was taken at. */
+export const FORK_SOURCE = "r-07";
+
+/** The fork's own Journal, as a reader receives it. */
+export const FORK_JOURNAL: readonly unknown[] = FORK_RECORDS;
+
+/** The fork's journal with one record's fields changed. */
+export function forkChanging(at: number, changes: Record<string, unknown>): readonly unknown[] {
+  return FORK_RECORDS.map((record, index) => (index === at ? { ...record, ...changes } : record));
+}

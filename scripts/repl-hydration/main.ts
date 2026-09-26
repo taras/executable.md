@@ -19,6 +19,8 @@ import type { Operation } from "effection";
 import {
   BEFORE_FAILURE,
   EXECUTION,
+  FORK_EXECUTION,
+  FORK_JOURNAL,
   JOURNAL,
   journalChanging,
   journalDropping,
@@ -40,6 +42,7 @@ import { layout, topology } from "./layout.ts";
 import type { Viewport } from "./layout.ts";
 import { createStreaming, noSecrets, scriptedSecrets } from "./ephemeral.ts";
 import { answered, elicitation, resume, SCRIPT } from "./replay.ts";
+import { alone, library, provenanceLink } from "./provenance.ts";
 import { hydrate } from "./store.ts";
 import type { ReplSession, SemanticState } from "./store.ts";
 
@@ -374,6 +377,55 @@ function* walkRestart(): Operation<void> {
   );
 }
 
+function* walkFork(): Operation<void> {
+  const parsed = events(FORK_JOURNAL);
+  const projected = projectPrefix(FORK_EXECUTION, parsed, undefined);
+  if (!projected.ok) {
+    throw projected.error;
+  }
+  const fork = projected.value;
+
+  console.log("— a fork stands on its own —");
+  console.log(`  records            : ${parsed.length}`);
+  console.log(`  inherited entry    : ${fork.entries[0].id} (${fork.entries[0].outcome.status})`);
+  console.log(
+    `  environment        : ${fork.bindings.map((one) => `${one.name}=${one.value}`).join(" ")}`,
+  );
+  console.log(`  published by       : ${fork.bindings.map((one) => one.entry).join(" ")}`);
+
+  const withParent = provenanceLink(fork, library({ [EXECUTION]: JOURNAL }));
+  const withoutParent = provenanceLink(fork, alone());
+  console.log(
+    `  with the parent    : ${withParent.kind} ${
+      withParent.kind === "resolvable" ? withParent.url : ""
+    }`,
+  );
+  console.log(
+    `  without the parent : ${withoutParent.kind} ${
+      withoutParent.kind === "unavailable"
+        ? `(${withoutParent.parent}@${withoutParent.source})`
+        : ""
+    }`,
+  );
+
+  const unaided = yield* hydrate(
+    FORK_EXECUTION,
+    "xmd://repl/e1-fork/transcript/entry-1/document",
+    FORK_JOURNAL,
+  );
+  if (!unaided.ok) {
+    throw unaided.error;
+  }
+  console.log(`  hydrates unaided   : ${unaided.value.semantic().model.execution}`);
+  console.log(
+    `  the parent's later work is absent: ${
+      JSON.stringify(unaided.value.state()).includes("changelog")
+        ? "FOUND, which is a defect"
+        : "true"
+    }`,
+  );
+}
+
 function* run(): Operation<void> {
   const parsed = events(JOURNAL);
 
@@ -527,6 +579,9 @@ function* run(): Operation<void> {
   console.log("");
 
   yield* walkRestart();
+  console.log("");
+
+  yield* walkFork();
 }
 
 if (import.meta.main) {

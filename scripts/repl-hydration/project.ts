@@ -29,6 +29,7 @@ import type {
   Entry,
   Marker,
   Outcome,
+  Provenance,
   Recorded,
   Scope,
   SemanticModel,
@@ -86,6 +87,7 @@ interface DraftEntry {
 }
 
 interface Draft {
+  provenance: Provenance;
   readonly entries: DraftEntry[];
   readonly bindings: Binding[];
   readonly suspensions: Suspension[];
@@ -94,7 +96,14 @@ interface Draft {
 }
 
 function draft(): Draft {
-  return { entries: [], bindings: [], suspensions: [], outcomes: [], markers: [] };
+  return {
+    provenance: { kind: "root" },
+    entries: [],
+    bindings: [],
+    suspensions: [],
+    outcomes: [],
+    markers: [],
+  };
 }
 
 function findScope(scopes: readonly DraftScope[], path: readonly string[]): DraftScope | undefined {
@@ -168,9 +177,30 @@ function openEntry(state: Draft, event: SemanticEvent): Result<DraftEntry> {
 }
 
 function apply(state: Draft, event: SemanticEvent): Result<void> {
-  if (event.kind === "entry.submitted") {
+  if (event.kind === "entry.submitted" || event.kind === "entry.inherited") {
     if (state.entries.some((entry) => entry.id === event.entry)) {
       return Err(new ProjectionError(event, "submits an entry that is already recorded"));
+    }
+    if (event.kind === "entry.inherited") {
+      // One fork, one inheritance. A second would describe an execution with
+      // two pasts, and nothing could say which environment it started in.
+      if (state.provenance.kind === "forked") {
+        return Err(
+          new ProjectionError(
+            event,
+            `inherits again; this execution already forked from ${state.provenance.parent}`,
+          ),
+        );
+      }
+      if (state.entries.length > 0) {
+        return Err(new ProjectionError(event, "inherits after this execution already began"));
+      }
+      state.provenance = {
+        kind: "forked",
+        parent: event.parent,
+        source: event.source,
+        entry: event.entry,
+      };
     }
     // Top-level entries run serially. Two overlapping is a shape the product
     // never reaches, and describing one would carry a second live scope tree
@@ -414,6 +444,7 @@ function snapshot(execution: string, state: Draft, records: number): SemanticMod
   const head = state.markers[state.markers.length - 1];
   return deepFreeze({
     execution,
+    provenance: { ...state.provenance },
     marker: head === undefined ? "" : head.id,
     at: head === undefined ? 0 : head.at,
     records,

@@ -143,9 +143,30 @@ export interface Marker {
   readonly entry: string;
 }
 
+/**
+ * Where an execution came from.
+ *
+ * A fork carries its parent's name and the marker it was taken at, and
+ * carries them in its *own* Journal. That is what lets the transcript point
+ * back without needing the parent to be there: the pointer is a fact this
+ * execution recorded, and only following it needs the other one.
+ */
+export type Provenance =
+  | { readonly kind: "root" }
+  | {
+      readonly kind: "forked";
+      readonly parent: string;
+      /** The marker in the parent this fork was taken at. */
+      readonly source: string;
+      /** The entry in this execution that carries what was inherited. */
+      readonly entry: string;
+    };
+
 /** One execution as of one selected marker. */
 export interface SemanticModel {
   readonly execution: string;
+  /** Where this execution came from, said by this execution's own records. */
+  readonly provenance: Provenance;
   /** The newest marker in this prefix, which is this prefix's History head. */
   readonly marker: string;
   readonly at: number;

@@ -27,9 +27,10 @@
 import { Err, Ok } from "effection";
 import type { Result } from "effection";
 
-/** The ten things one REPL execution durably records. */
+/** The eleven things one REPL execution durably records. */
 export const SEMANTIC_KINDS = [
   "entry.submitted",
+  "entry.inherited",
   "entry.settled",
   "entry.failed",
   "entry.interrupted",
@@ -60,6 +61,7 @@ export type MarkerWeight = "boundary" | "terminal" | "opening" | "checkpoint";
 
 export const MARKER_POLICY: Record<SemanticKind, MarkerWeight | "none"> = {
   "entry.submitted": "boundary",
+  "entry.inherited": "boundary",
   "entry.settled": "terminal",
   "entry.failed": "terminal",
   "entry.interrupted": "terminal",
@@ -106,6 +108,23 @@ export type SemanticEvent =
       readonly kind: "entry.submitted";
       readonly entry: string;
       readonly title: string;
+    })
+  | (Recorded & {
+      /**
+       * The first entry of a fork: what it carries over, and where from.
+       *
+       * It submits an entry like any other, so the values it inherits are
+       * published into this Journal rather than read out of the parent's. The
+       * parent is named so the transcript can point at where it came from,
+       * and naming is all it is — nothing here needs the parent to exist.
+       */
+      readonly kind: "entry.inherited";
+      readonly entry: string;
+      readonly title: string;
+      /** The execution this fork was taken from. */
+      readonly parent: string;
+      /** The marker in that execution the fork was taken at. */
+      readonly source: string;
     })
   | (Recorded & { readonly kind: "entry.settled"; readonly entry: string })
   | (Recorded & { readonly kind: "entry.failed"; readonly entry: string; readonly reason: string })
@@ -179,6 +198,7 @@ export class JournalParseError extends Error {
 /** The fields each kind declares, beyond the envelope. A record carries these and no others. */
 const FIELDS: Record<SemanticKind, readonly string[]> = {
   "entry.submitted": ["entry", "title"],
+  "entry.inherited": ["entry", "title", "parent", "source"],
   "entry.settled": ["entry"],
   "entry.failed": ["entry", "reason"],
   "entry.interrupted": ["entry", "reason"],
@@ -193,8 +213,17 @@ const FIELDS: Record<SemanticKind, readonly string[]> = {
 /** The fields that are a path inside an entry rather than a name. */
 const PATHS: readonly string[] = ["scope"];
 
-/** The fields that are a number rather than text. */
-const NUMBERS: readonly string[] = ["source"];
+/**
+ * The fields that are a number rather than text, by the kind that declares
+ * them.
+ *
+ * `source` is an ordinal on a scope opening and a marker on an inherited
+ * entry. One table of field names could not tell those apart, and reading a
+ * marker as an ordinal would have refused every fork.
+ */
+const NUMBERS: Readonly<Record<string, readonly string[]>> = {
+  "scope.opened": ["source"],
+};
 
 /** The fields that are a flag rather than text. */
 const FLAGS: readonly string[] = ["secret"];
@@ -325,7 +354,7 @@ function parseRecord(index: number, raw: unknown, seen: Set<string>): Result<Sem
     const value = raw[field];
     const read = PATHS.includes(field)
       ? path(index, field, value)
-      : NUMBERS.includes(field)
+      : (NUMBERS[kind] ?? []).includes(field)
         ? ordinal(index, field, value)
         : FLAGS.includes(field)
           ? flag(index, field, value)

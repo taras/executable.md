@@ -34,8 +34,10 @@ import { markersOf, projectPrefix } from "./project.ts";
 export {
   decodeRoute,
   encodeRoute,
+  entryRoute,
   RouteRefusal,
   RouteSyntaxError,
+  surfaceRoute,
 } from "../repl-compose/router.ts";
 export type { Route, RouteSurface } from "../repl-compose/router.ts";
 

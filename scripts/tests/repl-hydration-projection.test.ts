@@ -32,6 +32,7 @@ import {
   PAUSE_MARKER,
   positionOf,
   TERMINAL_EXECUTION,
+  FORK_JOURNAL,
   TERMINAL_JOURNAL,
   TERMINAL_MARKERS,
   BEFORE_FAILURE,
@@ -192,18 +193,20 @@ function scopeOf(model: SemanticModel, entry: string, path: readonly string[]): 
 }
 
 describe("the durable vocabulary", () => {
-  it("reads both journals into one closed set of kinds", function* () {
+  it("reads every journal into one closed set of kinds", function* () {
     expect(EVENTS.length).toBe(23);
     expect(TERMINAL.length).toBe(18);
-    const used = new Set([...EVENTS, ...TERMINAL].map((event) => event.kind));
+    const forked = read(FORK_JOURNAL);
+    const used = new Set([...EVENTS, ...TERMINAL, ...forked].map((event) => event.kind));
     expect([...used].every((kind) => SEMANTIC_KINDS.some((one) => one === kind))).toBe(true);
     expect(used.size).toBe(SEMANTIC_KINDS.length);
-    expect(SEMANTIC_KINDS.length).toBe(10);
+    expect(SEMANTIC_KINDS.length).toBe(11);
   });
 
   it("mints a marker for every record but a closing one, at the policy's weight", function* () {
     expect(MARKER_POLICY).toEqual({
       "entry.submitted": "boundary",
+      "entry.inherited": "boundary",
       "entry.settled": "terminal",
       "entry.failed": "terminal",
       "entry.interrupted": "terminal",

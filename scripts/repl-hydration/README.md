@@ -20,11 +20,16 @@ record, an Agent result without the stream that produced it, a replay that
 consumes what is written instead of doing it again, and a secret that has to be
 asked for a second time.
 
+**Slice 4 forks the execution**, completes the refusal matrix, and concludes.
+[RESULT.md](RESULT.md) is the conclusion: the exact vocabulary, URL schema,
+hydration boundary, snapshot policy, replay frontier and verdict.
+
 ```bash
 deno task repl:hydration                                    # the observable trace
 deno task test scripts/tests/repl-hydration-projection.test.ts   # slice 1
 deno task test scripts/tests/repl-hydration-store.test.ts        # slice 2
 deno task test scripts/tests/repl-hydration-replay.test.ts       # slice 3
+deno task test scripts/tests/repl-hydration-fork.test.ts         # slice 4
 ```
 
 ## The layers
@@ -42,6 +47,7 @@ deno task test scripts/tests/repl-hydration-replay.test.ts       # slice 3
 | `layout.ts` | presentation, computed outside the store, and the topology that must not move |
 | `ephemeral.ts` | partial Agent output and the secret seam — the other half process loss takes |
 | `replay.ts` | the deterministic document, and one function that both runs and replays it |
+| `provenance.ts` | following a fork back to its parent, when this process can reach one |
 
 `journal.ts`, `model.ts`, `project.ts` and `purity.ts` import `effection` and
 each other. None of them imports `overlay.ts`, and the evidence reads their
@@ -192,6 +198,10 @@ implementation it rules out.
 | `draft-as-a-visit` | four navigation entries for one place, burying where the person came from |
 | `kind-only-replay` | another document's submission, binding and Agent occurrence, all matching on kind alone |
 | `discarded-result` | a replay that recognizes the record and then publishes the script's own literal |
+| `parent-backed-fork` | an inheritance read from the parent, which empties when the parent goes |
+| `provenance-at-hydration` | resolving the link while hydrating, making the parent a dependency |
+| `plausible-partial` | the readable prefix of a damaged journal, describing a binding that was never published |
+| `marker-without-a-record` | a prefix ending at a record that minted no marker |
 
 ## The StarFX store
 
@@ -348,7 +358,31 @@ lives beside the store rather than in it — is replaced in place rather than
 grown. Three keystrokes are one place, so Back goes where the person came from
 instead of walking backwards through their typing.
 
-## What Slice 3 does not do
+## Forks
 
-No renderer, no terminal, no real XMD execution, no model provider, no forks.
-Forks are Slice 4.
+A fork owns a new Journal whose first record is `entry.inherited`: it submits
+an entry, publishes into *this* Journal the environment the parent had at the
+source marker, and names the parent and that marker. Nothing points outward
+for a value.
+
+```
+— a fork stands on its own —
+  records            : 7
+  inherited entry    : entry-0 (settled)
+  environment        : project=executable.md release=0.13.1
+  published by       : entry-0 entry-1
+  with the parent    : resolvable xmd://repl/e1/transcript?at=r-07
+  without the parent : unavailable (e1@r-07)
+  hydrates unaided   : e1-fork
+  the parent's later work is absent: true
+```
+
+Removing the parent costs the link and nothing else. Resolving provenance is a
+separate function over whatever journals the process can reach, never part of
+hydration — a hydration that insisted on a resolvable link would have made the
+parent a dependency.
+
+## What this POC does not do
+
+No renderer, no terminal, no real XMD execution and no model provider. The
+limits of the evidence are recorded in [RESULT.md](RESULT.md).
