@@ -156,6 +156,8 @@ export type SemanticEvent =
       readonly kind: "outcome.recorded";
       readonly entry: string;
       readonly scope: readonly string[];
+      /** The durable name of the work this is the outcome of, which is not the outcome. */
+      readonly request: string;
       readonly label: string;
     });
 
@@ -185,7 +187,7 @@ const FIELDS: Record<SemanticKind, readonly string[]> = {
   "binding.published": ["entry", "name", "value"],
   "suspension.opened": ["entry", "scope", "wait", "prompt", "secret"],
   "suspension.answered": ["entry", "scope", "wait", "answer"],
-  "outcome.recorded": ["entry", "scope", "label"],
+  "outcome.recorded": ["entry", "scope", "request", "label"],
 };
 
 /** The fields that are a path inside an entry rather than a name. */

@@ -91,10 +91,18 @@ export interface Suspension {
   readonly marker: string;
 }
 
-/** One durable outcome a background coroutine recorded. */
+/**
+ * One durable outcome a coroutine recorded.
+ *
+ * `request` names the work and `label` is what came back. They are separate
+ * because restart replay matches on the first and restores the second: an
+ * outcome identified by its own result could only ever be recognized by
+ * already knowing the answer.
+ */
 export interface Recorded {
   readonly entry: string;
   readonly scope: readonly string[];
+  readonly request: string;
   readonly label: string;
   readonly marker: string;
 }

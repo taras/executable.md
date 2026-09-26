@@ -314,6 +314,33 @@ function* walkRestart(): Operation<void> {
     JSON.stringify(secrets.asked),
     JSON.stringify(replayed.value),
   ];
+  const foreign = records.map((record) => ({ ...Object(record), entry: "other-entry" }));
+  const diverged = resume({
+    script: SCRIPT,
+    prior: foreign,
+    secrets: noSecrets(),
+    streaming: createStreaming(),
+  });
+  const swapped = records.map((record) => {
+    const one = Object(record);
+    return one.kind === "binding.published" ? { ...one, name: "other", value: "wrong" } : one;
+  });
+  const wrongBinding = resume({
+    script: SCRIPT,
+    prior: swapped,
+    secrets: noSecrets(),
+    streaming: createStreaming(),
+  });
+  console.log("— a record is consumed only when it is this step's own —");
+  console.log(
+    `  another document's journal: ${diverged.ok ? "ACCEPTED, which is a defect" : diverged.error.message}`,
+  );
+  console.log(
+    `  another binding, right kind: ${wrongBinding.ok ? "ACCEPTED, which is a defect" : wrongBinding.error.message}`,
+  );
+  console.log(`  the supplied journal is unchanged: ${foreign.length === records.length}`);
+  console.log("");
+
   console.log("— the secret —");
   console.log(`  asked for again in : ${secrets.asked.join(", ")}`);
   console.log(

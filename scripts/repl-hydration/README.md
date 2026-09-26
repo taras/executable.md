@@ -188,8 +188,9 @@ implementation it rules out.
 | `overlay-in-the-store` | a pause flag in the state, surviving a restart that cannot know it |
 | `replay-reperforms` | a run that ignores the record and does both durable effects again |
 | `recoverable-secret` | a secret treated as ordinary: nobody is asked, so the value had to be somewhere |
-| `streamed-into-the-record` | a partial chunk written as an admitted outcome, indistinguishable downstream |
+| `streamed-into-the-record` | a partial chunk under the right request, indistinguishable from the result |
 | `draft-as-a-visit` | four navigation entries for one place, burying where the person came from |
+| `kind-only-replay` | another document's submission, binding and Agent occurrence, all matching on kind alone |
 
 ## The StarFX store
 
@@ -256,6 +257,29 @@ beside the Journal in append order, and each step either *consumes* the records
 it already produced or *performs* itself for the first time. A consumed step
 never reaches the performer, which is the whole no-repeat claim. Where it stops
 is the **replay frontier**: the first elicitation with no answer recorded.
+
+**A record is consumed only when it is that step's own record.** The kind alone
+says far too little — every scope opening is a `scope.opened` — so every
+replayable occurrence has an identity: operation, owning entry, owning scope,
+and the durable name of the occurrence there. That identity is separate from
+the result: replay *matches* the request and *restores* what came back, which
+is why `outcome.recorded` carries `request` beside `label`. An outcome
+recognized by its own result could only be recognized by a replay that already
+knew the answer.
+
+Alignment happens first and completely: the prior Journal is parsed, projected,
+and walked against the script before a single effect runs. A divergence
+therefore costs nothing — no effect, no appended record, and the Journal handed
+in comes back untouched. A retained record still unclaimed when the document
+has finished is a divergence too, because it describes work this document does
+not do.
+
+```
+another document's journal : record 0: expected entry.submitted "entry-1" in entry-1,
+                             found entry.submitted "other-entry" in other-entry
+another binding, right kind: record 7: expected binding.published "notes" in entry-1,
+                             found binding.published "other" in entry-1
+```
 
 Two elicitations differ on the way there, and that difference is the secret
 rule. An ordinary answer is in the record, so replay recovers it and asks

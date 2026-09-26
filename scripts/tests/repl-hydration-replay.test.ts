@@ -28,7 +28,13 @@ import { createStreaming, noSecrets, scriptedSecrets } from "../repl-hydration/e
 import { parseJournal } from "../repl-hydration/journal.ts";
 import * as overlay from "../repl-hydration/overlay.ts";
 import { projectPrefix } from "../repl-hydration/project.ts";
-import { answered, elicitation, resume, SCRIPT } from "../repl-hydration/replay.ts";
+import {
+  answered,
+  elicitation,
+  ReplayDivergence,
+  resume,
+  SCRIPT,
+} from "../repl-hydration/replay.ts";
 import type { Run } from "../repl-hydration/replay.ts";
 import { hydrate } from "../repl-hydration/store.ts";
 import type { ReplSession } from "../repl-hydration/store.ts";
@@ -81,6 +87,18 @@ function awaitingSecret(): readonly unknown[] {
 /** The journal after both answers were recorded: what a restart would find. */
 function bothAnswered(): readonly unknown[] {
   return recorded(awaitingSecret(), SECRET, "");
+}
+
+/** The journal of a document that ran all the way to the end. */
+function finished(): readonly unknown[] {
+  return ran(
+    resume({
+      script: SCRIPT,
+      prior: bothAnswered(),
+      secrets: scriptedSecrets({ token: TOKEN }),
+      streaming: createStreaming(),
+    }),
+  ).records;
 }
 
 function* open(url: string, records: readonly unknown[]): Operation<ReplSession> {
@@ -243,16 +261,16 @@ describe("replay consumes what was recorded and stops at the frontier", () => {
 
   it("runs to completion once every answer is recorded, performing nothing twice", function* () {
     const secrets = scriptedSecrets({ token: TOKEN });
-    const finished = ran(
+    const run = ran(
       resume({ script: SCRIPT, prior: bothAnswered(), secrets, streaming: createStreaming() }),
     );
 
-    expect(finished.frontier).toEqual({ kind: "complete" });
-    expect(finished.performed).toEqual([]);
-    expect(finished.consumed).toEqual(["agent entry-1/document/draft", "publish notes"]);
+    expect(run.frontier).toEqual({ kind: "complete" });
+    expect(run.performed).toEqual([]);
+    expect(run.consumed).toEqual(["agent entry-1/document/draft", "publish notes"]);
 
     // The document finished, and the journal it finished on projects.
-    const events = parseJournal(finished.records);
+    const events = parseJournal(run.records);
     if (!events.ok) {
       throw events.error;
     }
@@ -363,6 +381,242 @@ describe("a secret is asked for again, never recovered", () => {
   });
 });
 
+describe("replay consumes only its own records", () => {
+  function replayed(prior: readonly unknown[]) {
+    return resume({
+      script: SCRIPT,
+      prior,
+      streaming: createStreaming(),
+      secrets: scriptedSecrets({ token: TOKEN }),
+    });
+  }
+
+  function diverged(prior: readonly unknown[]): ReplayDivergence {
+    const run = replayed(prior);
+    if (run.ok) {
+      throw new Error("the journal was resumed, and should not have been");
+    }
+    if (!(run.error instanceof ReplayDivergence)) {
+      throw run.error;
+    }
+    return run.error;
+  }
+
+  /** The representative journal with one record's fields changed. */
+  function changing(prior: readonly unknown[], at: number, changes: Record<string, unknown>) {
+    return prior.map((record, index) =>
+      index === at ? { ...Object(record), ...changes } : record,
+    );
+  }
+
+  function positionOf(prior: readonly unknown[], kind: string): number {
+    const at = prior.findIndex((record) => Object(record).kind === kind);
+    if (at === -1) {
+      throw new Error(`no ${kind} in this journal`);
+    }
+    return at;
+  }
+
+  it("refuses a journal that submitted another entry", function* () {
+    const first = ran(
+      resume({ script: SCRIPT, prior: [], streaming: createStreaming(), secrets: noSecrets() }),
+    );
+    // A coherent journal belonging to another document, not a damaged one:
+    // it projects perfectly well, and it is still not this document's past.
+    const foreign = first.records.map((record) => ({ ...Object(record), entry: "other-entry" }));
+    const before = JSON.stringify(foreign);
+    const refusal = diverged(foreign);
+
+    expect(refusal.position).toBe(0);
+    expect(refusal.expected).toContain('entry.submitted "entry-1"');
+    expect(refusal.found).toContain("other-entry");
+    // Nothing ran and nothing was written: the journal handed in is intact.
+    expect(JSON.stringify(foreign)).toBe(before);
+  });
+
+  it("refuses another binding under the right record kind", function* () {
+    const first = ran(
+      resume({ script: SCRIPT, prior: [], streaming: createStreaming(), secrets: noSecrets() }),
+    );
+    const at = positionOf(first.records, "binding.published");
+    const refusal = diverged(changing(first.records, at, { name: "other", value: "wrong" }));
+
+    expect(refusal.position).toBe(at);
+    expect(refusal.expected).toContain('binding.published "notes"');
+    expect(refusal.found).toContain('"other"');
+  });
+
+  it("refuses another Agent occurrence under outcome.recorded", function* () {
+    const first = ran(
+      resume({ script: SCRIPT, prior: [], streaming: createStreaming(), secrets: noSecrets() }),
+    );
+    const at = positionOf(first.records, "outcome.recorded");
+
+    // The result is untouched; only the request differs. Matching on what
+    // came back rather than what was asked would have accepted this.
+    const refusal = diverged(
+      changing(first.records, at, { request: "entry-1/document/elsewhere" }),
+    );
+    expect(refusal.position).toBe(at);
+    expect(refusal.expected).toContain("entry-1/document/draft");
+    expect(refusal.found).toContain("elsewhere");
+
+    const moved = diverged(changing(first.records, at, { scope: ["document"] }));
+    expect(moved.position).toBe(at);
+  });
+
+  it("refuses another suspension under the right record kind", function* () {
+    const first = ran(
+      resume({ script: SCRIPT, prior: [], streaming: createStreaming(), secrets: noSecrets() }),
+    );
+    const at = positionOf(first.records, "suspension.opened");
+    const renamed = diverged(changing(first.records, at, { wait: "elsewhere" }));
+
+    expect(renamed.position).toBe(at);
+    expect(renamed.expected).toContain('suspension.opened "channel"');
+    expect(renamed.found).toContain("elsewhere");
+
+    // An answer that belongs to no open wait never reaches alignment: the
+    // projection refuses it first, which is the earlier of the two guards.
+    const records = bothAnswered();
+    const answers = records.findIndex((record) => Object(record).kind === "suspension.answered");
+    expect(replayed(changing(records, answers, { wait: "elsewhere" })).ok).toBe(false);
+  });
+
+  it("refuses a retained record left over once the document has finished", function* () {
+    const complete = finished();
+    // A perfectly valid record — a second entry may follow a settled one —
+    // that this document nonetheless does not write.
+    const extra = [
+      ...complete,
+      {
+        id: "x-01",
+        seq: complete.length + 1,
+        at: 99,
+        kind: "entry.submitted",
+        entry: "entry-2",
+        title: "Something this document never submits",
+      },
+    ];
+
+    const refusal = diverged(extra);
+    expect(refusal.position).toBe(complete.length);
+    expect(refusal.expected).toContain("the document to be finished");
+    expect(refusal.found).toContain("entry-2");
+
+    // The same journal without it resumes to completion and appends nothing.
+    const run = ran(replayed(complete));
+    expect(run.frontier).toEqual({ kind: "complete" });
+    expect(run.records).toEqual(complete);
+  });
+
+  it("performs the first unrecorded effect exactly once on a compatible prefix", function* () {
+    const first = ran(
+      resume({ script: SCRIPT, prior: [], streaming: createStreaming(), secrets: noSecrets() }),
+    );
+    const agentAt = positionOf(first.records, "outcome.recorded");
+    // Everything up to and including the admitted Agent result, and no more.
+    const prefix = first.records.slice(0, agentAt + 1);
+
+    const run = ran(replayed(prefix));
+    expect(run.consumed).toEqual(["agent entry-1/document/draft"]);
+    expect(run.performed).toEqual(["publish notes"]);
+    expect(run.frontier).toEqual({
+      kind: "awaiting",
+      wait: "channel",
+      prompt: CHANNEL.prompt,
+      secret: false,
+    });
+
+    // Once, not twice: resuming over what it just wrote performs nothing.
+    const again = ran(replayed(run.records));
+    expect(again.performed).toEqual([]);
+    expect(again.consumed).toEqual(["agent entry-1/document/draft", "publish notes"]);
+    expect(again.records).toEqual(run.records);
+  });
+
+  it("performs nothing at all on an exact replay", function* () {
+    const records = finished();
+    const run = ran(replayed(records));
+
+    expect(run.performed).toEqual([]);
+    expect(run.consumed).toEqual(["agent entry-1/document/draft", "publish notes"]);
+    expect(run.records).toEqual(records);
+    expect(run.frontier).toEqual({ kind: "complete" });
+
+    // An unfinished journal appends the records its remaining steps write,
+    // and still performs no durable effect that is already recorded.
+    const partial = ran(replayed(bothAnswered()));
+    expect(partial.performed).toEqual([]);
+    expect(partial.records.length).toBeGreaterThan(bothAnswered().length);
+  });
+
+  it("refuses a journal that reads but cannot have happened, before performing anything", function* () {
+    const first = ran(
+      resume({ script: SCRIPT, prior: [], streaming: createStreaming(), secrets: noSecrets() }),
+    );
+    // A scope completed twice describes a run the projection refuses, and the
+    // refusal has to arrive before any effect does.
+    const impossible = [
+      ...first.records.slice(0, 3),
+      first.records[5],
+      ...first.records.slice(3),
+    ].map((record, index) => ({ ...Object(record), seq: index + 1 }));
+
+    const run = replayed(impossible);
+    expect(run.ok).toBe(false);
+  });
+
+  describe("negative controls", () => {
+    it("kind-only-replay: matching on the record kind consumes another document's records", function* () {
+      const first = ran(
+        resume({ script: SCRIPT, prior: [], streaming: createStreaming(), secrets: noSecrets() }),
+      );
+      const kindOnly = (one: unknown, other: unknown) => Object(one).kind === Object(other).kind;
+
+      const foreign = changing(first.records, 0, { entry: "other-entry" });
+      const wrongBinding = changing(first.records, positionOf(first.records, "binding.published"), {
+        name: "other",
+        value: "wrong",
+      });
+      const wrongAgent = changing(first.records, positionOf(first.records, "outcome.recorded"), {
+        request: "entry-1/document/elsewhere",
+      });
+      const leftOver = [
+        ...finished(),
+        {
+          id: "x-01",
+          seq: finished().length + 1,
+          at: 99,
+          kind: "entry.submitted",
+          entry: "entry-2",
+          title: "Something this document never submits",
+        },
+      ];
+
+      // A kind-only reader sees nothing wrong with any of the first three,
+      // and has no opinion at all about the fourth.
+      expect(kindOnly(foreign[0], first.records[0])).toBe(true);
+      expect(
+        kindOnly(
+          wrongBinding[positionOf(first.records, "binding.published")],
+          first.records[positionOf(first.records, "binding.published")],
+        ),
+      ).toBe(true);
+      expect(
+        kindOnly(
+          wrongAgent[positionOf(first.records, "outcome.recorded")],
+          first.records[positionOf(first.records, "outcome.recorded")],
+        ),
+      ).toBe(true);
+
+      for (const journal of [foreign, wrongBinding, wrongAgent, leftOver]) {
+        expect(replayed(journal).ok).toBe(false);
+      }
+    });
+  });
+});
+
 describe("process loss offers replay, not Continue", () => {
   it("removes Continue and claims no pause, while the reconstruction is unchanged", function* () {
     const records = bothAnswered();
@@ -442,24 +696,33 @@ describe("process loss offers replay, not Continue", () => {
       expect(run.recovered).toEqual(["channel=#releases", "token="]);
     });
 
-    it("streamed-into-the-record: partial chunks in the journal survive a restart that never saw them", function* () {
+    it("streamed-into-the-record: a chunk under the right request is still the producer's job", function* () {
       const { run } = firstRun();
-      const smuggled = [
-        ...run.records,
-        {
-          id: "x-01",
-          seq: run.records.length + 1,
-          at: 99,
-          kind: "outcome.recorded",
-          entry: "entry-1",
-          scope: ["document", "draft"],
-          label: "Rele",
-        },
-      ];
+      const chunk = {
+        id: "x-01",
+        seq: 1,
+        at: 1,
+        kind: "outcome.recorded",
+        entry: "entry-1",
+        scope: ["document", "draft"],
+        request: "entry-1/document/draft",
+        label: "Rele",
+      };
 
-      // It parses, which is exactly why the discipline is at the producer:
-      // nothing downstream can tell a chunk from an admitted result.
-      expect(parseJournal(smuggled).ok).toBe(true);
+      // Under a request nobody asked for, alignment turns it away.
+      const foreign = resume({
+        script: SCRIPT,
+        prior: [{ ...chunk, request: "entry-1/document/elsewhere" }],
+        streaming: createStreaming(),
+        secrets: noSecrets(),
+      });
+      expect(foreign.ok).toBe(false);
+
+      // Under the *right* request it aligns, and nothing downstream can tell
+      // a chunk from the result: both are text under one durable name. That
+      // is why admission discards the buffer at the producer instead of a
+      // reader guessing whether the label looks finished.
+      expect(parseJournal([chunk]).ok).toBe(true);
       expect(JSON.stringify(run.records)).not.toContain('"Rele"');
       expect(run.consumed).toEqual([]);
     });

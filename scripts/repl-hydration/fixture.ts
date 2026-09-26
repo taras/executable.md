@@ -253,6 +253,7 @@ const RECORDS: readonly Record<string, unknown>[] = [
     kind: "outcome.recorded",
     entry: "entry-3",
     scope: ["document", "publish"],
+    request: "fetch remote tags",
     label: "remote tags fetched",
   },
 ];

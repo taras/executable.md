@@ -380,6 +380,7 @@ function apply(state: Draft, event: SemanticEvent): Result<void> {
   state.outcomes.push({
     entry: entry.id,
     scope: [...event.scope],
+    request: event.request,
     label: event.label,
     marker: event.id,
   });

@@ -11,6 +11,23 @@
  * suspended routine in a process that still exists (#841), and this rebuilds
  * a position from what was recorded.
  *
+ * **A record is consumed only when it is that step's own record.** The kind
+ * alone says far too little: every scope opening is a `scope.opened`, and a
+ * replay that matched on kind would let one document's records stand in for
+ * another's — suppressing an effect that never happened and reporting it as
+ * done. So every replayable occurrence has an identity — operation, owning
+ * entry, owning scope, and the durable name of the occurrence — and the
+ * identity is separate from the result: replay *matches* the request and
+ * *restores* what came back. An `outcome.recorded` carries both, which is why
+ * `request` is a field and not the label.
+ *
+ * Alignment happens first and completely. The prior Journal is parsed,
+ * projected, and then walked against the script before a single effect runs,
+ * so a divergence refuses with nothing performed, nothing appended and the
+ * supplied Journal untouched. A retained record left unclaimed when the
+ * document has finished is a divergence too: it describes work this document
+ * does not do.
+ *
  * Where it stops is the **replay frontier**: the first elicitation with no
  * answer recorded. Live execution belongs after that point and nowhere else.
  *
@@ -30,7 +47,8 @@ import type { Result } from "effection";
 
 import type { Secrets, Streaming } from "./ephemeral.ts";
 import { parseJournal } from "./journal.ts";
-import type { SemanticKind } from "./journal.ts";
+import type { SemanticEvent, SemanticKind } from "./journal.ts";
+import { projectPrefix } from "./project.ts";
 
 /** One thing the document does. */
 export type Step =
@@ -148,47 +166,164 @@ export interface Run {
   readonly frontier: Frontier;
 }
 
-interface Cursor {
+/**
+ * What makes one replayable occurrence that occurrence and no other.
+ *
+ * Four things, and none of them is the result: the operation, the entry that
+ * owns it, the scope path inside that entry, and the durable name of the
+ * occurrence there. A step and a record agree when all four agree.
+ */
+interface Identity {
+  readonly kind: SemanticKind;
+  readonly entry: string;
+  readonly scope: readonly string[];
+  readonly name: string;
+}
+
+function says(identity: Identity): string {
+  const where =
+    identity.scope.length === 0 ? identity.entry : `${identity.entry}/${identity.scope.join("/")}`;
+  return `${identity.kind} ${JSON.stringify(identity.name)} in ${where}`;
+}
+
+function same(one: Identity, other: Identity): boolean {
+  return (
+    one.kind === other.kind &&
+    one.entry === other.entry &&
+    one.name === other.name &&
+    one.scope.length === other.scope.length &&
+    one.scope.every((segment, at) => segment === other.scope[at])
+  );
+}
+
+/** The identity of a record that is already durable. */
+function identityOf(event: SemanticEvent): Identity {
+  if (event.kind === "scope.opened" || event.kind === "scope.completed") {
+    return { kind: event.kind, entry: event.entry, scope: event.scope, name: event.name };
+  }
+  if (event.kind === "binding.published") {
+    return { kind: event.kind, entry: event.entry, scope: [], name: event.name };
+  }
+  if (event.kind === "suspension.opened" || event.kind === "suspension.answered") {
+    return { kind: event.kind, entry: event.entry, scope: event.scope, name: event.wait };
+  }
+  if (event.kind === "outcome.recorded") {
+    // The request, never the label: an outcome recognized by its own result
+    // could only be recognized by a replay that already knew the answer.
+    return { kind: event.kind, entry: event.entry, scope: event.scope, name: event.request };
+  }
+  return { kind: event.kind, entry: event.entry, scope: [], name: event.entry };
+}
+
+/** The durable name this fixture gives one Agent occurrence. */
+function agentRequest(step: Extract<Step, { kind: "agent" }>): string {
+  return [step.entry, ...step.scope].join("/");
+}
+
+/** The records one step writes, in order, as the identities they will have. */
+function expectations(step: Step): readonly Identity[] {
+  if (step.kind === "submit") {
+    return [{ kind: "entry.submitted", entry: step.entry, scope: [], name: step.entry }];
+  }
+  if (step.kind === "settle") {
+    return [{ kind: "entry.settled", entry: step.entry, scope: [], name: step.entry }];
+  }
+  if (step.kind === "open") {
+    return [{ kind: "scope.opened", entry: step.entry, scope: step.scope, name: step.name }];
+  }
+  if (step.kind === "complete") {
+    return [{ kind: "scope.completed", entry: step.entry, scope: step.scope, name: step.name }];
+  }
+  if (step.kind === "publish") {
+    return [{ kind: "binding.published", entry: step.entry, scope: [], name: step.name }];
+  }
+  if (step.kind === "agent") {
+    return [
+      {
+        kind: "outcome.recorded",
+        entry: step.entry,
+        scope: step.scope,
+        name: agentRequest(step),
+      },
+    ];
+  }
+  return [
+    { kind: "suspension.opened", entry: step.entry, scope: step.scope, name: step.wait },
+    { kind: "suspension.answered", entry: step.entry, scope: step.scope, name: step.wait },
+  ];
+}
+
+/** A retained Journal that is not this document's. */
+export class ReplayDivergence extends Error {
+  /** The append position that diverged, or the record count when one is left over. */
+  readonly position: number;
+  readonly expected: string;
+  readonly found: string;
+
+  constructor(position: number, expected: string, found: string) {
+    super(`record ${position}: expected ${expected}, found ${found}`);
+    this.name = "ReplayDivergence";
+    this.position = position;
+    this.expected = expected;
+    this.found = found;
+  }
+}
+
+/** Which retained records each step claimed, in script order. */
+type Alignment = readonly (readonly number[])[];
+
+/**
+ * Pair the script against what is already durable, or refuse.
+ *
+ * This runs to completion before anything is performed, so a divergence costs
+ * nothing: no effect happens, no record is written, and the Journal handed in
+ * is the Journal handed back to the caller untouched.
+ *
+ * Running out of retained records is not a divergence — it is where the live
+ * frontier is. Having some left over when the document is finished *is* one.
+ */
+function align(script: readonly Step[], events: readonly SemanticEvent[]): Result<Alignment> {
+  const claimed: number[][] = [];
+  let at = 0;
+  for (const step of script) {
+    const mine: number[] = [];
+    for (const expected of expectations(step)) {
+      if (at >= events.length) {
+        break;
+      }
+      const found = identityOf(events[at]);
+      if (!same(expected, found)) {
+        return Err(new ReplayDivergence(at, says(expected), says(found)));
+      }
+      mine.push(at);
+      at += 1;
+    }
+    claimed.push(mine);
+  }
+  if (at < events.length) {
+    return Err(
+      new ReplayDivergence(at, "the document to be finished", says(identityOf(events[at]))),
+    );
+  }
+  return Ok(claimed);
+}
+
+interface Appending {
   readonly records: unknown[];
-  at: number;
   seq: number;
 }
 
-function kindAt(cursor: Cursor): string {
-  const record = cursor.records[cursor.at];
-  if (record === null || typeof record !== "object" || !("kind" in record)) {
-    return "";
-  }
-  const kind = record.kind;
-  return typeof kind === "string" ? kind : "";
-}
-
-function answerAt(cursor: Cursor): string {
-  const record = cursor.records[cursor.at];
-  if (record === null || typeof record !== "object" || !("answer" in record)) {
-    return "";
-  }
-  const answer = record.answer;
-  return typeof answer === "string" ? answer : "";
-}
-
-function append(cursor: Cursor, kind: SemanticKind, fields: Record<string, unknown>): void {
-  cursor.records.push({
-    id: `s-${String(cursor.seq).padStart(2, "0")}`,
-    seq: cursor.seq,
+function append(into: Appending, kind: SemanticKind, fields: Record<string, unknown>): void {
+  into.records.push({
+    id: `s-${String(into.seq).padStart(2, "0")}`,
+    seq: into.seq,
     // Recorded time advances with the record, which is all this fixture needs
     // of a clock and all a replay can know about one.
-    at: cursor.seq,
+    at: into.seq,
     kind,
     ...fields,
   });
-  cursor.seq += 1;
-  cursor.at += 1;
-}
-
-/** Whether the record under the cursor is the one this step would have written. */
-function recorded(cursor: Cursor, kind: SemanticKind): boolean {
-  return cursor.at < cursor.records.length && kindAt(cursor) === kind;
+  into.seq += 1;
 }
 
 export interface Resume {
@@ -221,71 +356,88 @@ export function resume(options: Resume): Result<Run> {
   if (!parsed.ok) {
     return parsed;
   }
+  // A Journal that reads but cannot have happened is not something to resume
+  // from, and finding that out after performing half the document would be
+  // finding out too late.
+  const projected = projectPrefix("", parsed.value, undefined);
+  if (!projected.ok) {
+    return projected;
+  }
+  const aligned = align(options.script, parsed.value);
+  if (!aligned.ok) {
+    return aligned;
+  }
 
   const { secrets, streaming } = options;
-  const cursor: Cursor = {
+  const events = parsed.value;
+  const plan = aligned.value;
+  const into: Appending = {
     records: [...options.prior],
-    at: 0,
     seq: options.prior.length + 1,
   };
   const performed: string[] = [];
   const consumed: string[] = [];
   const recovered: string[] = [];
 
-  for (const step of options.script) {
+  function stopped(frontier: Frontier): Result<Run> {
+    return Ok({
+      records: into.records,
+      performed,
+      consumed,
+      recovered,
+      asked: secrets.asked,
+      streaming: streaming.streaming(),
+      frontier,
+    });
+  }
+
+  for (const [index, step] of options.script.entries()) {
+    const claimed = plan[index];
+
     if (step.kind === "submit") {
-      if (recorded(cursor, "entry.submitted")) {
-        cursor.at += 1;
-        continue;
+      if (claimed.length === 0) {
+        append(into, "entry.submitted", { entry: step.entry, title: step.title });
       }
-      append(cursor, "entry.submitted", { entry: step.entry, title: step.title });
       continue;
     }
 
     if (step.kind === "open") {
-      if (recorded(cursor, "scope.opened")) {
-        cursor.at += 1;
-        continue;
+      if (claimed.length === 0) {
+        append(into, "scope.opened", {
+          entry: step.entry,
+          scope: step.scope,
+          name: step.name,
+          source: step.source,
+        });
       }
-      append(cursor, "scope.opened", {
-        entry: step.entry,
-        scope: step.scope,
-        name: step.name,
-        source: step.source,
-      });
       continue;
     }
 
     if (step.kind === "complete") {
-      if (recorded(cursor, "scope.completed")) {
-        cursor.at += 1;
-        continue;
+      if (claimed.length === 0) {
+        append(into, "scope.completed", {
+          entry: step.entry,
+          scope: step.scope,
+          name: step.name,
+        });
       }
-      append(cursor, "scope.completed", {
-        entry: step.entry,
-        scope: step.scope,
-        name: step.name,
-      });
       continue;
     }
 
     if (step.kind === "settle") {
-      if (recorded(cursor, "entry.settled")) {
-        cursor.at += 1;
-        continue;
+      if (claimed.length === 0) {
+        append(into, "entry.settled", { entry: step.entry });
       }
-      append(cursor, "entry.settled", { entry: step.entry });
       continue;
     }
 
     if (step.kind === "publish") {
-      if (recorded(cursor, "binding.published")) {
-        cursor.at += 1;
+      if (claimed.length === 1) {
         consumed.push(`publish ${step.name}`);
         continue;
       }
       performed.push(`publish ${step.name}`);
-      append(cursor, "binding.published", {
+      append(into, "binding.published", {
         entry: step.entry,
         name: step.name,
         value: step.value,
@@ -294,33 +446,30 @@ export function resume(options: Resume): Result<Run> {
     }
 
     if (step.kind === "agent") {
-      const where = [step.entry, ...step.scope].join("/");
-      if (recorded(cursor, "outcome.recorded")) {
-        // The result is written down, so the Agent does not run and nothing
-        // streams. There is no partial output after a restart because none
-        // was produced, not because it was hidden.
-        cursor.at += 1;
-        consumed.push(`agent ${where}`);
+      const request = agentRequest(step);
+      if (claimed.length === 1) {
+        // The result is written down against this request, so the Agent does
+        // not run and nothing streams. There is no partial output after a
+        // restart because none was produced, not because it was hidden.
+        consumed.push(`agent ${request}`);
         continue;
       }
       for (const chunk of step.chunks) {
-        streaming.receive(where, chunk);
+        streaming.receive(request, chunk);
       }
-      performed.push(`agent ${where}`);
-      streaming.admit(where);
-      append(cursor, "outcome.recorded", {
+      performed.push(`agent ${request}`);
+      streaming.admit(request);
+      append(into, "outcome.recorded", {
         entry: step.entry,
         scope: step.scope,
+        request,
         label: step.admitted,
       });
       continue;
     }
 
-    const opened = recorded(cursor, "suspension.opened");
-    if (opened) {
-      cursor.at += 1;
-    } else {
-      append(cursor, "suspension.opened", {
+    if (claimed.length === 0) {
+      append(into, "suspension.opened", {
         entry: step.entry,
         scope: step.scope,
         wait: step.wait,
@@ -329,28 +478,22 @@ export function resume(options: Resume): Result<Run> {
       });
     }
 
-    if (!recorded(cursor, "suspension.answered")) {
+    if (claimed.length < 2) {
       // Nobody has answered yet. This is the replay frontier: everything
       // before it is reconstructed and everything after it is live.
-      return Ok({
-        records: cursor.records,
-        performed,
-        consumed,
-        recovered,
-        asked: secrets.asked,
-        streaming: streaming.streaming(),
-        frontier: {
-          kind: "awaiting",
-          wait: step.wait,
-          prompt: step.prompt,
-          secret: step.secret,
-        },
+      return stopped({
+        kind: "awaiting",
+        wait: step.wait,
+        prompt: step.prompt,
+        secret: step.secret,
       });
     }
 
     if (!step.secret) {
-      recovered.push(`${step.wait}=${answerAt(cursor)}`);
-      cursor.at += 1;
+      // Read out of the matched record and nowhere else.
+      const record = events[claimed[1]];
+      const answer = record.kind === "suspension.answered" ? record.answer : "";
+      recovered.push(`${step.wait}=${answer}`);
       continue;
     }
 
@@ -358,28 +501,11 @@ export function resume(options: Resume): Result<Run> {
     // which is the point. Replay reconstructs the question, not the answer.
     const revealed = secrets.reveal(step.wait, step.prompt);
     if (!revealed.known) {
-      return Ok({
-        records: cursor.records,
-        performed,
-        consumed,
-        recovered,
-        asked: secrets.asked,
-        streaming: streaming.streaming(),
-        frontier: { kind: "unrevealed", wait: step.wait, prompt: step.prompt },
-      });
+      return stopped({ kind: "unrevealed", wait: step.wait, prompt: step.prompt });
     }
-    cursor.at += 1;
   }
 
-  return Ok({
-    records: cursor.records,
-    performed,
-    consumed,
-    recovered,
-    asked: secrets.asked,
-    streaming: streaming.streaming(),
-    frontier: { kind: "complete" },
-  });
+  return stopped({ kind: "complete" });
 }
 
 /**

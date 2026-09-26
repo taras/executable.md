@@ -862,8 +862,15 @@ describe("the boundary", () => {
     expect(yield* importsOf("overlay.ts")).toEqual([]);
     expect(yield* importsOf("ephemeral.ts")).toEqual([]);
 
-    // Replay is where a live process and a record meet, so it may reach both.
-    expect(yield* importsOf("replay.ts")).toEqual(["./ephemeral.ts", "./journal.ts", "effection"]);
+    // Replay is where a live process and a record meet, so it may reach both
+    // — and it reads the projection, because a journal that cannot have
+    // happened is not one to resume from.
+    expect(yield* importsOf("replay.ts")).toEqual([
+      "./ephemeral.ts",
+      "./journal.ts",
+      "./project.ts",
+      "effection",
+    ]);
   });
 
   it("reaches the URL grammar through #840 rather than restating it", function* () {
