@@ -17,6 +17,7 @@ import { main } from "effection";
 import type { Operation } from "effection";
 
 import {
+  BEFORE_FAILURE,
   EXECUTION,
   JOURNAL,
   journalChanging,
@@ -25,11 +26,13 @@ import {
   LIVE_HEAD,
   PAUSE_MARKER,
   positionOf,
+  TERMINAL_JOURNAL,
+  TERMINAL_MARKERS,
 } from "./fixture.ts";
-import { parseJournal } from "./journal.ts";
+import { MARKER_POLICY, parseJournal, SEMANTIC_KINDS } from "./journal.ts";
 import type { SemanticEvent } from "./journal.ts";
 import { decodeRoute, encodeRoute, resolveLocation } from "./location.ts";
-import type { SemanticModel } from "./model.ts";
+import type { Outcome, Scope, SemanticModel } from "./model.ts";
 import * as overlay from "./overlay.ts";
 import { markersOf, projectPrefix } from "./project.ts";
 import { foreignValues } from "./purity.ts";
@@ -68,6 +71,19 @@ function describe(one: SemanticModel): string {
   ].join("\n");
 }
 
+function say(outcome: Outcome): string {
+  return outcome.status === "failed" || outcome.status === "interrupted"
+    ? `${outcome.status} (${outcome.reason})`
+    : outcome.status;
+}
+
+function lines(scopes: readonly Scope[], indent: string): readonly string[] {
+  return scopes.flatMap((scope) => [
+    `${indent}${scope.name}: ${say(scope.outcome)}`,
+    ...lines(scope.children, `${indent}  `),
+  ]);
+}
+
 function refusal(what: string, thrown: unknown): string {
   return thrown instanceof Error ? `  ${what}: ${thrown.name} — ${thrown.message}` : `  ${what}: ?`;
 }
@@ -82,6 +98,12 @@ function refused(what: string, records: readonly unknown[]): string {
 
 function* run(): Operation<void> {
   const parsed = events(JOURNAL);
+
+  console.log("— the marker policy —");
+  for (const kind of SEMANTIC_KINDS) {
+    console.log(`  ${kind.padEnd(20)} ${MARKER_POLICY[kind]}`);
+  }
+  console.log("");
 
   console.log("— the Journal, and the Execution History it mints —");
   console.log(`  durable records : ${parsed.length}`);
@@ -118,6 +140,33 @@ function* run(): Operation<void> {
     const inherited = entry.inherited.map((binding) => `${binding.name}=${binding.value}`);
     console.log(`  ${entry.id}: ${inherited.length === 0 ? "nothing" : inherited.join(" ")}`);
   }
+  console.log("");
+
+  console.log("— how an entry ends —");
+  const terminal = events(TERMINAL_JOURNAL);
+  console.log(`  durable records : ${terminal.length}`);
+  console.log(`  semantic markers: ${markersOf(terminal).length}`);
+  for (const [name, marker] of Object.entries(TERMINAL_MARKERS)) {
+    const ended = model(terminal, marker);
+    const last = ended.markers[ended.markers.length - 1];
+    console.log(`  ${marker} ${name.padEnd(12)} weight=${last.weight}`);
+    for (const entry of ended.entries) {
+      console.log(`    ${entry.id} ${say(entry.outcome)}`);
+      for (const line of lines(entry.scopes, "      ")) {
+        console.log(line);
+      }
+    }
+  }
+  const before = model(terminal, BEFORE_FAILURE);
+  const endings = before.entries.filter(
+    (entry) => entry.outcome.status === "failed" || entry.outcome.status === "interrupted",
+  );
+  console.log(`  before the failure (${BEFORE_FAILURE}): ${endings.length} ended entries`);
+  console.log(
+    `  release survives the failure: ${model(terminal)
+      .bindings.map((binding) => `${binding.name}=${binding.value}`)
+      .join(" ")}`,
+  );
   console.log("");
 
   console.log("— three locations —");

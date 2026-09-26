@@ -22,7 +22,7 @@ deno task test scripts/tests/repl-hydration-projection.test.ts
 | module | what it owns |
 | --- | --- |
 | `journal.ts` | the closed semantic vocabulary, parsed out of untrusted durable records |
-| `fixture.ts` | one truthful append-only journal, and the one-thing-wrong variants of it |
+| `fixture.ts` | two truthful append-only journals, and the one-thing-wrong variants of the first |
 | `model.ts` | the semantic model's types: frozen plain data, no optional member |
 | `project.ts` | the fold — one prefix in, one model out — and the inconsistency refusals |
 | `location.ts` | #840's URL grammar, resolved against a selected prefix |
@@ -35,10 +35,10 @@ imports to say so.
 
 ## The event vocabulary
 
-Nine kinds, and a record naming anything else is refused rather than carried:
+Ten kinds, and a record naming anything else is refused rather than carried:
 
 ```
-entry.submitted   entry.settled      entry.failed
+entry.submitted   entry.settled  entry.failed  entry.interrupted
 scope.opened      scope.completed
 binding.published
 suspension.opened suspension.answered
@@ -55,16 +55,60 @@ A record's marker is its own opaque `id`. Its `seq` is append position: it
 orders replay, names nothing, and a gap in it is how a short stream is
 recognized.
 
-**Openings mint a marker; completions update what the opening minted.** #842's
-contract states this for scopes — "a user-visible scope opening creates one
-semantic History marker; scope completion updates its outcome without creating
-a closing marker" — and this POC extends the same rule to the rest of the
-vocabulary: `entry.submitted`, `scope.opened`, `suspension.opened`,
-`binding.published` and `outcome.recorded` mint; `entry.settled`,
-`entry.failed`, `scope.completed` and `suspension.answered` update. The
-representative journal is 23 records and 18 markers. Whether a point fact
-should mint a navigable marker is a product decision the contract does not
-settle; this is the reading Slice 1 proceeds under.
+## The marker policy
+
+Every record mints a marker except the two *closing* kinds. Weight is how
+prominent the position is, and it is a value on the marker rather than a
+convention:
+
+| kind | marker |
+| --- | --- |
+| `entry.submitted` | major entry boundary |
+| `entry.settled` | terminal |
+| `entry.failed` | terminal |
+| `entry.interrupted` | terminal |
+| `scope.opened` | opening |
+| `suspension.opened` | opening |
+| `binding.published` | small semantic checkpoint |
+| `outcome.recorded` | small semantic checkpoint |
+| `scope.completed` | none — updates the scope the opening minted |
+| `suspension.answered` | none — updates the suspension the opening minted |
+
+An entry's end is a place to stand, not a property of the marker before it, so
+settlement, failure and interruption are each directly navigable. The
+representative journal is 23 records and 20 markers; the terminal journal is
+18 records and 15.
+
+## How an entry ends
+
+There are four lifecycle statuses and no fifth: `running`, `settled`, `failed`
+and `interrupted`.
+
+One terminal record ends an entry and interrupts whatever it still had open.
+The entry carries what the record said; each still-running descendant scope
+becomes `interrupted` and carries the same reason, because the Journal
+recorded one ending and not one per scope. A scope that completed earlier
+stays completed, open waits close, and published bindings are untouched.
+
+```
+t-13 failed       weight=terminal
+  entry-2 failed (the registry rejected the tarball)
+    document: interrupted (the registry rejected the tarball)
+      verify: settled
+      upload: interrupted (the registry rejected the tarball)
+
+t-18 interrupted  weight=terminal
+  entry-3 interrupted (the operator stopped the run)
+    document: interrupted (the operator stopped the run)
+      watch: interrupted (the operator stopped the run)
+
+before the failure (t-12): 0 ended entries
+release survives the failure: release=0.14.0
+```
+
+`fixture.ts` holds two journals. The representative one is the pause/head
+subject and keeps that shape; the terminal one is three entries and nothing
+else, one for each way an entry can end.
 
 ## The URL
 
@@ -119,6 +163,10 @@ implementation it rules out.
 | `snapshot-dependent` | a projector that answers from a cache and answers nothing without one |
 | `permissive-ownership` | two top-level entries running at once |
 | `permissive-closure` | an entry settling over a scope that never completed |
+| `restore-abandoned` | a fifth lifecycle status renaming an interruption |
+| `omit-terminal-kinds` | a policy whose nearest position to a failure is `t-12`, where the entry is still running |
+| `closing-marker` | `t-04`, a second position for a scope that has one |
+| `interrupt-completed-scope` | `verify:interrupted`, rewriting a scope that finished |
 
 ## What Slice 1 does not do
 

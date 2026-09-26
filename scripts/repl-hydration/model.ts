@@ -37,15 +37,21 @@ export interface Binding {
 /**
  * What became of something that was opened.
  *
- * An entry or a scope is running until a record closes it. A failure carries
- * its reason; settling carries nothing, and abandonment is what happens to a
- * scope whose entry failed underneath it.
+ * An entry or a scope is running until a record closes it. Settling carries
+ * nothing. A failure and an interruption each carry their reason, and an
+ * interrupted scope carries its entry's, because the Journal recorded one
+ * terminal record and not one per scope.
+ *
+ * There are four statuses and no fifth. A scope that was still open when its
+ * entry ended is `interrupted` — never `settled`, which would claim an
+ * outcome the execution never reached, and never `failed`, which would invent
+ * a failure for each scope out of the one the entry recorded.
  */
 export type Outcome =
   | { readonly status: "running" }
   | { readonly status: "settled" }
   | { readonly status: "failed"; readonly reason: string }
-  | { readonly status: "abandoned"; readonly reason: string };
+  | { readonly status: "interrupted"; readonly reason: string };
 
 /**
  * One user-visible scope, and the scopes opened inside it.
@@ -107,13 +113,16 @@ export interface Entry {
  * One semantic History marker: a navigable position, not a durable record.
  *
  * Execution History is the UI projection of the Journal, and this is its unit.
- * Only an opening mints one; a completion updates what the opening already
- * minted.
+ * `weight` is how prominent the position is, which is the marker policy said
+ * as a value: a submission is a boundary, an entry's end is terminal, an
+ * opening is an opening, and a point fact is a small checkpoint. Only a
+ * closing record mints nothing at all.
  */
 export interface Marker {
   readonly id: string;
   readonly at: number;
   readonly kind: string;
+  readonly weight: string;
   readonly entry: string;
 }
 

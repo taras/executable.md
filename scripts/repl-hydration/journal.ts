@@ -27,11 +27,12 @@
 import { Err, Ok } from "effection";
 import type { Result } from "effection";
 
-/** The nine things one REPL execution durably records. */
+/** The ten things one REPL execution durably records. */
 export const SEMANTIC_KINDS = [
   "entry.submitted",
   "entry.settled",
   "entry.failed",
+  "entry.interrupted",
   "scope.opened",
   "scope.completed",
   "binding.published",
@@ -43,23 +44,51 @@ export const SEMANTIC_KINDS = [
 export type SemanticKind = (typeof SEMANTIC_KINDS)[number];
 
 /**
- * The kinds that mint a semantic History marker.
+ * How prominent the marker a record mints is, or that it mints none.
  *
- * Openings mint and closings update: a user-visible scope opening creates one
- * marker, and its completion updates that marker's outcome without creating a
- * closing one. A binding publication and a recorded outcome have no closing
- * half, so each mints its own.
+ * A submission is where a reader enters the transcript, and a terminal record
+ * is where one run of it ends, so both are navigable in their own right — a
+ * settlement, a failure and an interruption are each a place to stand, not a
+ * property of the marker before them. An opening is where something visible
+ * began. A published binding and a recorded outcome are point facts with no
+ * closing half, so each is its own small checkpoint.
+ *
+ * Only the two *closing* kinds mint nothing: a scope completion and a
+ * suspension answer update the state the opening already minted.
  */
-export const MARKER_KINDS: readonly SemanticKind[] = [
-  "entry.submitted",
-  "scope.opened",
-  "binding.published",
-  "suspension.opened",
-  "outcome.recorded",
-];
+export type MarkerWeight = "boundary" | "terminal" | "opening" | "checkpoint";
+
+export const MARKER_POLICY: Record<SemanticKind, MarkerWeight | "none"> = {
+  "entry.submitted": "boundary",
+  "entry.settled": "terminal",
+  "entry.failed": "terminal",
+  "entry.interrupted": "terminal",
+  "scope.opened": "opening",
+  "suspension.opened": "opening",
+  "binding.published": "checkpoint",
+  "outcome.recorded": "checkpoint",
+  "scope.completed": "none",
+  "suspension.answered": "none",
+};
+
+/** The kinds that mint a semantic History marker, in vocabulary order. */
+export const MARKER_KINDS: readonly SemanticKind[] = SEMANTIC_KINDS.filter(
+  (kind) => MARKER_POLICY[kind] !== "none",
+);
 
 export function mintsMarker(kind: SemanticKind): boolean {
-  return MARKER_KINDS.includes(kind);
+  return MARKER_POLICY[kind] !== "none";
+}
+
+/**
+ * The weight of the marker a record mints.
+ *
+ * Asking this of a closing kind is a mistake the caller has already made, so
+ * it answers `"none"` rather than inventing a rank for a marker that does not
+ * exist.
+ */
+export function markerWeight(kind: SemanticKind): MarkerWeight | "none" {
+  return MARKER_POLICY[kind];
 }
 
 /** What every record carries: its opaque identity, its position, its time. */
@@ -80,6 +109,11 @@ export type SemanticEvent =
     })
   | (Recorded & { readonly kind: "entry.settled"; readonly entry: string })
   | (Recorded & { readonly kind: "entry.failed"; readonly entry: string; readonly reason: string })
+  | (Recorded & {
+      readonly kind: "entry.interrupted";
+      readonly entry: string;
+      readonly reason: string;
+    })
   | (Recorded & {
       readonly kind: "scope.opened";
       readonly entry: string;
@@ -141,6 +175,7 @@ const FIELDS: Record<SemanticKind, readonly string[]> = {
   "entry.submitted": ["entry", "title"],
   "entry.settled": ["entry"],
   "entry.failed": ["entry", "reason"],
+  "entry.interrupted": ["entry", "reason"],
   "scope.opened": ["entry", "scope", "name", "source"],
   "scope.completed": ["entry", "scope", "name"],
   "binding.published": ["entry", "name", "value"],

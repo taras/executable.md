@@ -1,6 +1,10 @@
 /**
- * One truthful append-only Journal, written as the durable records would
+ * Two truthful append-only Journals, written as the durable records would
  * arrive.
+ *
+ * The first is representative: the pause point, the live head, and everything
+ * a prefix has to isolate. The second, at the bottom of this file, is minimal
+ * and its only subject is how an entry ends.
  *
  * Truthful means the fold is the only way to learn what this execution
  * reached. Nothing here is a snapshot of an answer, nothing is derived from a
@@ -11,7 +15,8 @@
  * - `entry-1` nests `plan` inside `document` and completes both, so a
  *   historical marker exists on either side of a scope's settlement.
  * - `entry-2` publishes `release` and *then* fails, with both its scopes open.
- *   The binding survives; the scopes are abandoned, not settled.
+ *   The binding survives, and its open scopes become interrupted rather than
+ *   settled.
  * - `entry-3` opens `publish` before `write` although `write` comes first in
  *   the document. The records carry each scope's source position, and the
  *   projection reads them in the document's order rather than the coroutines'.
@@ -312,3 +317,188 @@ export function positionOf(id: string): number {
   }
   return at;
 }
+
+/**
+ * A second, minimal journal whose only subject is how an entry ends.
+ *
+ * The representative journal above is the pause/head fixture and stays that
+ * shape; bending it to also carry three terminal entries would have made both
+ * subjects harder to read. This one is three entries and nothing else:
+ *
+ * - `entry-1` completes its scopes and settles.
+ * - `entry-2` completes `verify` and publishes `release`, then opens `upload`
+ *   and fails with it still running. The completed scope stays completed, the
+ *   binding survives, and `upload` and `document` are interrupted.
+ * - `entry-3` is waiting on an elicitation when the run is interrupted. The
+ *   wait closes and its scopes are interrupted, and the entry itself is
+ *   `interrupted` rather than `failed`.
+ *
+ * Every one of its three endings is a terminal marker, so each end state is a
+ * place a URL can stand.
+ */
+const TERMINAL_RECORDS: readonly Record<string, unknown>[] = [
+  { id: "t-01", seq: 1, at: 1, kind: "entry.submitted", entry: "entry-1", title: "Check the tree" },
+  {
+    id: "t-02",
+    seq: 2,
+    at: 2,
+    kind: "scope.opened",
+    entry: "entry-1",
+    scope: [],
+    name: "document",
+    source: 0,
+  },
+  {
+    id: "t-03",
+    seq: 3,
+    at: 3,
+    kind: "scope.opened",
+    entry: "entry-1",
+    scope: ["document"],
+    name: "check",
+    source: 0,
+  },
+  {
+    id: "t-04",
+    seq: 4,
+    at: 5,
+    kind: "scope.completed",
+    entry: "entry-1",
+    scope: ["document"],
+    name: "check",
+  },
+  {
+    id: "t-05",
+    seq: 5,
+    at: 6,
+    kind: "scope.completed",
+    entry: "entry-1",
+    scope: [],
+    name: "document",
+  },
+  { id: "t-06", seq: 6, at: 7, kind: "entry.settled", entry: "entry-1" },
+
+  {
+    id: "t-07",
+    seq: 7,
+    at: 10,
+    kind: "entry.submitted",
+    entry: "entry-2",
+    title: "Publish the release",
+  },
+  {
+    id: "t-08",
+    seq: 8,
+    at: 11,
+    kind: "scope.opened",
+    entry: "entry-2",
+    scope: [],
+    name: "document",
+    source: 0,
+  },
+  {
+    id: "t-09",
+    seq: 9,
+    at: 12,
+    kind: "scope.opened",
+    entry: "entry-2",
+    scope: ["document"],
+    name: "verify",
+    source: 0,
+  },
+  {
+    id: "t-10",
+    seq: 10,
+    at: 15,
+    kind: "scope.completed",
+    entry: "entry-2",
+    scope: ["document"],
+    name: "verify",
+  },
+  {
+    id: "t-11",
+    seq: 11,
+    at: 16,
+    kind: "binding.published",
+    entry: "entry-2",
+    name: "release",
+    value: "0.14.0",
+  },
+  {
+    id: "t-12",
+    seq: 12,
+    at: 18,
+    kind: "scope.opened",
+    entry: "entry-2",
+    scope: ["document"],
+    name: "upload",
+    source: 1,
+  },
+  {
+    id: "t-13",
+    seq: 13,
+    at: 22,
+    kind: "entry.failed",
+    entry: "entry-2",
+    reason: "the registry rejected the tarball",
+  },
+
+  {
+    id: "t-14",
+    seq: 14,
+    at: 26,
+    kind: "entry.submitted",
+    entry: "entry-3",
+    title: "Watch the deploy",
+  },
+  {
+    id: "t-15",
+    seq: 15,
+    at: 27,
+    kind: "scope.opened",
+    entry: "entry-3",
+    scope: [],
+    name: "document",
+    source: 0,
+  },
+  {
+    id: "t-16",
+    seq: 16,
+    at: 28,
+    kind: "scope.opened",
+    entry: "entry-3",
+    scope: ["document"],
+    name: "watch",
+    source: 0,
+  },
+  {
+    id: "t-17",
+    seq: 17,
+    at: 31,
+    kind: "suspension.opened",
+    entry: "entry-3",
+    scope: ["document", "watch"],
+    wait: "approve",
+    prompt: "Approve the deploy?",
+  },
+  {
+    id: "t-18",
+    seq: 18,
+    at: 35,
+    kind: "entry.interrupted",
+    entry: "entry-3",
+    reason: "the operator stopped the run",
+  },
+];
+
+/** The execution the terminal journal records. */
+export const TERMINAL_EXECUTION = "e2";
+
+/** The terminal journal, as a reader receives it. */
+export const TERMINAL_JOURNAL: readonly unknown[] = TERMINAL_RECORDS;
+
+/** The three markers a reader can stand on to see an entry's exact end state. */
+export const TERMINAL_MARKERS = { settled: "t-06", failed: "t-13", interrupted: "t-18" } as const;
+
+/** The last marker before `entry-2` failed. */
+export const BEFORE_FAILURE = "t-12";

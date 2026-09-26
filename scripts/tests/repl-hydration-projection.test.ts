@@ -31,11 +31,17 @@ import {
   LIVE_HEAD,
   PAUSE_MARKER,
   positionOf,
+  TERMINAL_EXECUTION,
+  TERMINAL_JOURNAL,
+  TERMINAL_MARKERS,
+  BEFORE_FAILURE,
   truncatedAfter,
 } from "../repl-hydration/fixture.ts";
 import {
   JournalParseError,
   MARKER_KINDS,
+  MARKER_POLICY,
+  markerWeight,
   mintsMarker,
   parseJournal,
   SEMANTIC_KINDS,
@@ -48,7 +54,7 @@ import {
   RouteRefusal,
 } from "../repl-hydration/location.ts";
 import type { EntryLocation, SemanticLocation } from "../repl-hydration/location.ts";
-import type { Scope, SemanticModel } from "../repl-hydration/model.ts";
+import type { Entry, Outcome, Scope, SemanticModel } from "../repl-hydration/model.ts";
 import * as overlay from "../repl-hydration/overlay.ts";
 import {
   foldMarkers,
@@ -80,6 +86,36 @@ function refusedRead(records: readonly unknown[]): JournalParseError {
 
 const EVENTS = read(JOURNAL);
 const MARKERS = markersOf(EVENTS);
+
+const TERMINAL = read(TERMINAL_JOURNAL);
+const TERMINAL_MARKER_IDS = markersOf(TERMINAL);
+
+function ended(marker?: string): SemanticModel {
+  const projected = projectPrefix(TERMINAL_EXECUTION, TERMINAL, marker);
+  if (!projected.ok) {
+    throw projected.error;
+  }
+  return projected.value;
+}
+
+function entryOf(model: SemanticModel, id: string): Entry {
+  const entry = model.entries.find((one) => one.id === id);
+  if (entry === undefined) {
+    throw new Error(`no ${id} at ${model.marker}`);
+  }
+  return entry;
+}
+
+function statuses(scopes: readonly Scope[]): readonly string[] {
+  return scopes.flatMap((scope) => [
+    `${scope.name}:${scope.outcome.status}`,
+    ...statuses(scope.children),
+  ]);
+}
+
+function reasonOf(outcome: Outcome): string {
+  return outcome.status === "failed" || outcome.status === "interrupted" ? outcome.reason : "";
+}
 
 function at(marker?: string, events: readonly SemanticEvent[] = EVENTS): SemanticModel {
   const projected = projectPrefix(EXECUTION, events, marker);
@@ -156,25 +192,47 @@ function scopeOf(model: SemanticModel, entry: string, path: readonly string[]): 
 }
 
 describe("the durable vocabulary", () => {
-  it("reads the representative journal into a closed set of kinds", function* () {
+  it("reads both journals into one closed set of kinds", function* () {
     expect(EVENTS.length).toBe(23);
-    const used = new Set(EVENTS.map((event) => event.kind));
+    expect(TERMINAL.length).toBe(18);
+    const used = new Set([...EVENTS, ...TERMINAL].map((event) => event.kind));
     expect([...used].every((kind) => SEMANTIC_KINDS.some((one) => one === kind))).toBe(true);
     expect(used.size).toBe(SEMANTIC_KINDS.length);
+    expect(SEMANTIC_KINDS.length).toBe(10);
   });
 
-  it("mints a marker for an opening and updates one for a completion", function* () {
-    expect(MARKERS.length).toBe(18);
+  it("mints a marker for every record but a closing one, at the policy's weight", function* () {
+    expect(MARKER_POLICY).toEqual({
+      "entry.submitted": "boundary",
+      "entry.settled": "terminal",
+      "entry.failed": "terminal",
+      "entry.interrupted": "terminal",
+      "scope.opened": "opening",
+      "suspension.opened": "opening",
+      "binding.published": "checkpoint",
+      "outcome.recorded": "checkpoint",
+      "scope.completed": "none",
+      "suspension.answered": "none",
+    });
+    for (const kind of SEMANTIC_KINDS) {
+      expect(mintsMarker(kind)).toBe(markerWeight(kind) !== "none");
+      expect(mintsMarker(kind)).toBe(MARKER_KINDS.includes(kind));
+    }
+
+    expect(MARKERS.length).toBe(20);
+    expect(MARKERS).toContain("r-09");
+    expect(MARKERS).toContain("r-14");
     expect(MARKERS).toContain("r-22");
     expect(MARKERS).toContain("r-23");
 
-    // The completions and settlements in the fixture mint nothing.
-    for (const id of ["r-05", "r-06", "r-08", "r-09", "r-14"]) {
+    // Only the two closing kinds mint nothing.
+    for (const id of ["r-05", "r-06", "r-08"]) {
       expect(MARKERS).not.toContain(id);
     }
-    for (const kind of SEMANTIC_KINDS) {
-      expect(mintsMarker(kind)).toBe(MARKER_KINDS.includes(kind));
+    for (const id of ["t-04", "t-05", "t-10"]) {
+      expect(TERMINAL_MARKER_IDS).not.toContain(id);
     }
+    expect(TERMINAL_MARKER_IDS.length).toBe(15);
   });
 
   it("refuses a record naming the pause controller", function* () {
@@ -260,6 +318,15 @@ describe("the semantic projection", () => {
     for (const marker of MARKERS) {
       expect(at(marker)).toEqual(accumulated.value.get(marker));
     }
+
+    const terminal = foldMarkers(TERMINAL_EXECUTION, TERMINAL);
+    if (!terminal.ok) {
+      throw terminal.error;
+    }
+    expect([...terminal.value.keys()]).toEqual([...TERMINAL_MARKER_IDS]);
+    for (const marker of TERMINAL_MARKER_IDS) {
+      expect(ended(marker)).toEqual(terminal.value.get(marker));
+    }
   });
 
   it("ends the prefix at the selected record, so the live head is the newest marker", function* () {
@@ -327,7 +394,7 @@ describe("the semantic projection", () => {
     expect(inherited("entry-3")).not.toContain("changelog=CHANGELOG.md");
   });
 
-  it("keeps a binding published before a later failure, and abandons what the failure left open", function* () {
+  it("keeps a binding published before a later failure, and interrupts what it left open", function* () {
     const head = at();
     const release = head.bindings.find((binding) => binding.name === "release");
 
@@ -339,10 +406,14 @@ describe("the semantic projection", () => {
       status: "failed",
       reason: "tag 0.13.0 already exists on the remote",
     });
-    // Abandoned, never settled: the scopes did not complete, and recording
-    // that they did would claim an outcome the execution never reached.
-    expect(scopeOf(head, "entry-2", ["document"]).outcome.status).toBe("abandoned");
-    expect(scopeOf(head, "entry-2", ["document", "tag"]).outcome.status).toBe("abandoned");
+    // Interrupted, never settled and never independently failed: the Journal
+    // recorded one ending, and the scopes carry its reason rather than each
+    // inventing a failure of its own.
+    expect(scopeOf(head, "entry-2", ["document"]).outcome).toEqual({
+      status: "interrupted",
+      reason: "tag 0.13.0 already exists on the remote",
+    });
+    expect(scopeOf(head, "entry-2", ["document", "tag"]).outcome.status).toBe("interrupted");
   });
 
   it("orders concurrent sibling scopes by source, not by the order they opened", function* () {
@@ -523,6 +594,176 @@ describe("a journal that reads but cannot have happened", () => {
 
       expect(completed.map((event) => event.id)).toEqual(["r-06"]);
       expect(refusedProjection(events).record).toBe("r-09");
+    });
+  });
+});
+
+describe("how an entry ends", () => {
+  function terminalInside(url: string): EntryLocation {
+    const route = decodeRoute(url);
+    if (!route.ok) {
+      throw route.error;
+    }
+    const answer = resolveLocation(route.value, TERMINAL_EXECUTION, TERMINAL);
+    if (!answer.ok) {
+      throw answer.error;
+    }
+    if (answer.value.kind !== "entry") {
+      throw new Error(`${url} named a surface, not an entry`);
+    }
+    return answer.value;
+  }
+
+  it("fails the entry and interrupts only what was still open", function* () {
+    const model = ended(TERMINAL_MARKERS.failed);
+    const entry = entryOf(model, "entry-2");
+    const reason = "the registry rejected the tarball";
+
+    expect(entry.outcome).toEqual({ status: "failed", reason });
+    // `verify` completed before the failure and stays completed; `upload` and
+    // the `document` around it were open, and carry the entry's reason.
+    expect(statuses(entry.scopes)).toEqual([
+      "document:interrupted",
+      "verify:settled",
+      "upload:interrupted",
+    ]);
+    expect(reasonOf(scopeOf(model, "entry-2", ["document", "upload"]).outcome)).toBe(reason);
+    expect(reasonOf(scopeOf(model, "entry-2", ["document", "verify"]).outcome)).toBe("");
+  });
+
+  it("interrupts the entry itself when the run was stopped rather than failing", function* () {
+    const model = ended(TERMINAL_MARKERS.interrupted);
+    const entry = entryOf(model, "entry-3");
+    const reason = "the operator stopped the run";
+
+    expect(entry.outcome).toEqual({ status: "interrupted", reason });
+    expect(statuses(entry.scopes)).toEqual(["document:interrupted", "watch:interrupted"]);
+    // The wait it was holding closes with it.
+    expect(model.suspensions).toEqual([]);
+    expect(ended(BEFORE_FAILURE).suspensions).toEqual([]);
+    expect(ended("t-17").suspensions.map((one) => one.wait)).toEqual(["approve"]);
+  });
+
+  it("keeps a binding published before the failure", function* () {
+    expect(ended().bindings.map((binding) => `${binding.name}=${binding.value}`)).toEqual([
+      "release=0.14.0",
+    ]);
+    expect(ended().bindings[0].entry).toBe("entry-2");
+  });
+
+  it("mints one terminal marker for each way an entry ends", function* () {
+    for (const marker of Object.values(TERMINAL_MARKERS)) {
+      expect(TERMINAL_MARKER_IDS).toContain(marker);
+      const model = ended(marker);
+      expect(model.markers[model.markers.length - 1].weight).toBe("terminal");
+    }
+    expect(markerWeight("entry.settled")).toBe("terminal");
+    expect(markerWeight("entry.failed")).toBe("terminal");
+    expect(markerWeight("entry.interrupted")).toBe("terminal");
+    expect(markerWeight("entry.submitted")).toBe("boundary");
+    expect(markerWeight("scope.completed")).toBe("none");
+    expect(markerWeight("suspension.answered")).toBe("none");
+  });
+
+  it("resolves each terminal marker through the #840 grammar to its exact end state", function* () {
+    const settled = terminalInside(
+      `xmd://repl/e2/transcript/entry-1/document/check?at=${TERMINAL_MARKERS.settled}`,
+    );
+    expect(entryOf(settled.model, "entry-1").outcome).toEqual({ status: "settled" });
+    expect(settled.scopes.map((scope) => scope.outcome.status)).toEqual(["settled", "settled"]);
+
+    const failed = terminalInside(
+      `xmd://repl/e2/transcript/entry-2/document/upload?at=${TERMINAL_MARKERS.failed}`,
+    );
+    expect(entryOf(failed.model, "entry-2").outcome.status).toBe("failed");
+    expect(failed.scopes.map((scope) => scope.outcome.status)).toEqual([
+      "interrupted",
+      "interrupted",
+    ]);
+
+    const stopped = terminalInside(
+      `xmd://repl/e2/transcript/entry-3/document/watch?at=${TERMINAL_MARKERS.interrupted}`,
+    );
+    expect(entryOf(stopped.model, "entry-3").outcome.status).toBe("interrupted");
+    expect(stopped.drawers).toEqual([]);
+
+    // Each is the one spelling of that location.
+    expect(encodeRoute(failed.route)).toBe(
+      "xmd://repl/e2/transcript/entry-2/document/upload?at=t-13",
+    );
+  });
+
+  it("shows no ending at all in a prefix before the failure", function* () {
+    const before = ended(BEFORE_FAILURE);
+    const outcomes = before.entries.map((entry) => entry.outcome.status);
+
+    expect(outcomes).toEqual(["settled", "running"]);
+    expect(statuses(entryOf(before, "entry-2").scopes)).toEqual([
+      "document:running",
+      "verify:settled",
+      "upload:running",
+    ]);
+    expect(JSON.stringify(before)).not.toContain("interrupted");
+    expect(JSON.stringify(before)).not.toContain("failed");
+  });
+
+  describe("negative controls", () => {
+    it("restore-abandoned: a fifth status renames an interruption into something the model has no record of", function* () {
+      const scope = scopeOf(ended(TERMINAL_MARKERS.failed), "entry-2", ["document", "upload"]);
+      const restored = { ...scope.outcome, status: "abandoned" };
+
+      expect(restored.status).toBe("abandoned");
+      expect(scope.outcome.status).toBe("interrupted");
+      expect(JSON.stringify(ended())).not.toContain("abandoned");
+      expect(JSON.stringify(at())).not.toContain("abandoned");
+      expect(SEMANTIC_KINDS.join(" ")).not.toContain("abandon");
+    });
+
+    it("omit-terminal-kinds: a policy without them cannot stand where the entry ended", function* () {
+      const terminals = ["entry.settled", "entry.failed", "entry.interrupted"];
+      const weaker = TERMINAL.filter(
+        (event) => mintsMarker(event.kind) && !terminals.includes(event.kind),
+      );
+
+      expect(weaker.map((event) => event.id)).not.toContain(TERMINAL_MARKERS.failed);
+
+      // The nearest position the weaker policy can offer is the scope opening
+      // before it, where entry-2 is still running.
+      const reachable = weaker.filter((event) => event.seq <= 13);
+      const nearest = reachable[reachable.length - 1].id;
+      expect(nearest).toBe("t-12");
+      expect(entryOf(ended(nearest), "entry-2").outcome.status).toBe("running");
+      expect(entryOf(ended(TERMINAL_MARKERS.failed), "entry-2").outcome.status).toBe("failed");
+    });
+
+    it("closing-marker: minting on completion gives one scope two positions", function* () {
+      const closing = TERMINAL.filter(
+        (event) => mintsMarker(event.kind) || event.kind === "scope.completed",
+      ).map((event) => event.id);
+
+      expect(closing.length).toBe(TERMINAL_MARKER_IDS.length + 3);
+      expect(closing).toContain("t-04");
+      // `check` opened at t-03 and completed at t-04. One marker, updated.
+      expect(TERMINAL_MARKER_IDS).toContain("t-03");
+      expect(TERMINAL_MARKER_IDS).not.toContain("t-04");
+      expect(scopeOf(ended(), "entry-1", ["document", "check"]).marker).toBe("t-03");
+    });
+
+    it("interrupt-completed-scope: stamping the whole subtree rewrites a scope that finished", function* () {
+      const entry = entryOf(ended(TERMINAL_MARKERS.failed), "entry-2");
+      const stamped = (scopes: readonly Scope[]): readonly string[] =>
+        scopes.flatMap((scope) => [`${scope.name}:interrupted`, ...stamped(scope.children)]);
+
+      expect(stamped(entry.scopes)).toEqual([
+        "document:interrupted",
+        "verify:interrupted",
+        "upload:interrupted",
+      ]);
+      expect(statuses(entry.scopes)).toEqual([
+        "document:interrupted",
+        "verify:settled",
+        "upload:interrupted",
+      ]);
     });
   });
 });

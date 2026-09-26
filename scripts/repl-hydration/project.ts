@@ -21,7 +21,7 @@
 import { Err, Ok } from "effection";
 import type { Result } from "effection";
 
-import { mintsMarker } from "./journal.ts";
+import { markerWeight, mintsMarker } from "./journal.ts";
 import type { SemanticEvent } from "./journal.ts";
 import { deepFreeze } from "./model.ts";
 import type {
@@ -123,12 +123,29 @@ function running(scopes: readonly DraftScope[]): DraftScope | undefined {
   return undefined;
 }
 
-function abandon(scopes: readonly DraftScope[], reason: string): void {
+/**
+ * Every descendant scope still running becomes interrupted; the rest are left
+ * exactly as they are.
+ *
+ * The status check is what keeps a scope that completed before the terminal
+ * record completed. Walking a whole subtree and stamping it would rewrite
+ * history the Journal already recorded.
+ */
+function interrupt(scopes: readonly DraftScope[], reason: string): void {
   for (const scope of scopes) {
     if (scope.outcome.status === "running") {
-      scope.outcome = { status: "abandoned", reason };
+      scope.outcome = { status: "interrupted", reason };
     }
-    abandon(scope.children, reason);
+    interrupt(scope.children, reason);
+  }
+}
+
+/** Close every wait the entry still had open when it ended. */
+function closeWaits(state: Draft, entry: string): void {
+  for (let index = state.suspensions.length - 1; index >= 0; index -= 1) {
+    if (state.suspensions[index].entry === entry) {
+      state.suspensions.splice(index, 1);
+    }
   }
 }
 
@@ -194,17 +211,17 @@ function apply(state: Draft, event: SemanticEvent): Result<void> {
     return Ok();
   }
 
-  if (event.kind === "entry.failed") {
-    // A failure abandons what the entry had open rather than closing it: the
-    // scopes never completed, and saying they settled would record an outcome
-    // the execution never reached. Published bindings are untouched.
-    abandon(entry.scopes, event.reason);
-    for (let index = state.suspensions.length - 1; index >= 0; index -= 1) {
-      if (state.suspensions[index].entry === entry.id) {
-        state.suspensions.splice(index, 1);
-      }
-    }
-    entry.outcome = { status: "failed", reason: event.reason };
+  if (event.kind === "entry.failed" || event.kind === "entry.interrupted") {
+    // One terminal record ends the entry and interrupts whatever it still had
+    // open. The entry carries what the record said; each still-running scope
+    // carries the same reason, because the Journal recorded one ending and
+    // not one per scope. Published bindings are untouched.
+    interrupt(entry.scopes, event.reason);
+    closeWaits(state, entry.id);
+    entry.outcome =
+      event.kind === "entry.failed"
+        ? { status: "failed", reason: event.reason }
+        : { status: "interrupted", reason: event.reason };
     return Ok();
   }
 
@@ -400,6 +417,16 @@ function snapshot(execution: string, state: Draft, records: number): SemanticMod
   });
 }
 
+function mintMarker(event: SemanticEvent): Marker {
+  return {
+    id: event.id,
+    at: event.at,
+    kind: event.kind,
+    weight: markerWeight(event.kind),
+    entry: event.entry,
+  };
+}
+
 /** Every semantic marker this journal mints, in append order. */
 export function markersOf(events: readonly SemanticEvent[]): readonly string[] {
   return events.filter((event) => mintsMarker(event.kind)).map((event) => event.id);
@@ -435,7 +462,7 @@ export function projectPrefix(
       return applied;
     }
     if (mintsMarker(event.kind)) {
-      state.markers.push({ id: event.id, at: event.at, kind: event.kind, entry: event.entry });
+      state.markers.push(mintMarker(event));
     }
   }
   return Ok(snapshot(execution, state, end));
@@ -460,7 +487,7 @@ export function foldMarkers(
       return applied;
     }
     if (mintsMarker(event.kind)) {
-      state.markers.push({ id: event.id, at: event.at, kind: event.kind, entry: event.entry });
+      state.markers.push(mintMarker(event));
       accumulated.set(event.id, snapshot(execution, state, index + 1));
     }
   }
