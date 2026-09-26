@@ -66,3 +66,20 @@ export function released(overlay: LiveOverlay): LiveOverlay {
 export function cold(): ColdOverlay {
   return { held: false };
 }
+
+/**
+ * Whether Continue may be offered while standing at `marker`.
+ *
+ * Three things have to hold at once: a process is holding expansion, it still
+ * owns the original continuation, and the marker being looked at is the one
+ * it is holding at. Returning to the expansion pause point and continuing are
+ * separate actions, so standing at the live head offers nothing even while the
+ * hold is intact.
+ *
+ * This takes an overlay and a marker and touches no store. A reconstruction
+ * that has only a Journal and a URL has no overlay to pass, and `cold()`
+ * answers `false` everywhere without a claim about whether anything is paused.
+ */
+export function canContinueAt(overlay: Overlay, marker: string): boolean {
+  return overlay.held && overlay.canContinue && overlay.pauseMarker === marker;
+}

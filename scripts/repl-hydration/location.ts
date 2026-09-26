@@ -107,8 +107,22 @@ export function resolveLocation(
       ),
     );
   }
-  const model = projected.value;
+  return resolveIn(route, projected.value);
+}
 
+/**
+ * The same resolution, against a model that has already been projected.
+ *
+ * A caller that holds the prefix — because it kept one, or because it has
+ * just built one — resolves through here rather than projecting a second
+ * time. It is the same function `resolveLocation()` finishes with, so an
+ * accelerated answer and a cold one cannot diverge by taking different code.
+ *
+ * The model decides; a caller that hands over the wrong prefix gets a correct
+ * answer about the wrong moment, which is why a snapshot must never outlive
+ * the process that derived it.
+ */
+export function resolveIn(route: Route, model: SemanticModel): Result<SemanticLocation> {
   if (route.kind === "surface") {
     return Ok({
       kind: "surface",

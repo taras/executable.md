@@ -36,6 +36,10 @@ import type { Outcome, Scope, SemanticModel } from "./model.ts";
 import * as overlay from "./overlay.ts";
 import { markersOf, projectPrefix } from "./project.ts";
 import { foreignValues } from "./purity.ts";
+import { layout, topology } from "./layout.ts";
+import type { Viewport } from "./layout.ts";
+import { hydrate } from "./store.ts";
+import type { ReplSession, SemanticState } from "./store.ts";
 
 const AT_PAUSE = `xmd://repl/e1/transcript/entry-3/document/publish/+source/+confirm?at=${PAUSE_MARKER}&inspect`;
 const AT_HEAD = "xmd://repl/e1/transcript/entry-3/document/write";
@@ -94,6 +98,110 @@ function refused(what: string, records: readonly unknown[]): string {
     return `  ${what}: ACCEPTED, which is a defect`;
   }
   return refusal(what, parsed.error);
+}
+
+/** The journey #842 names, as the locations it visits and what has arrived. */
+const JOURNEY: readonly {
+  readonly name: string;
+  readonly url: string;
+  readonly records: number;
+}[] = [
+  { name: "empty", url: "xmd://repl/e1/transcript", records: 0 },
+  { name: "the first entry", url: "xmd://repl/e1/transcript/entry-1", records: 1 },
+  { name: "nested scopes", url: "xmd://repl/e1/transcript/entry-1/document/plan", records: 3 },
+  { name: "a published binding", url: "xmd://repl/e1/bindings", records: 7 },
+  { name: "the expansion pause marker", url: AT_PAUSE, records: 22 },
+  { name: "a background append, expansion held", url: AT_PAUSE, records: 23 },
+  {
+    name: "historical inspection",
+    url: "xmd://repl/e1/transcript/entry-1/document?at=r-03",
+    records: 23,
+  },
+  { name: "the live head", url: AT_HEAD, records: 23 },
+  { name: "back to the pause marker", url: AT_PAUSE, records: 23 },
+];
+
+const WIDE: Viewport = { columns: 120, rows: 40 };
+const NARROW: Viewport = { columns: 28, rows: 40 };
+
+function* session(url: string, records: readonly unknown[]): Operation<ReplSession> {
+  const opened = yield* hydrate(EXECUTION, url, records);
+  if (!opened.ok) {
+    throw opened.error;
+  }
+  return opened.value;
+}
+
+function same(one: SemanticState, other: SemanticState): boolean {
+  return JSON.stringify(one) === JSON.stringify(other);
+}
+
+function* walkJourney(): Operation<void> {
+  const live = yield* session("xmd://repl/e1/transcript", []);
+  console.log("— the journey, accumulated live against a cold rebuild —");
+  for (const step of JOURNEY) {
+    for (const record of JOURNAL.slice(live.state().records.length, step.records)) {
+      const applied = yield* live.append(record);
+      if (!applied.ok) {
+        throw applied.error;
+      }
+    }
+    const moved = yield* live.navigate(step.url);
+    if (!moved.ok) {
+      throw moved.error;
+    }
+    const cold = yield* session(step.url, JOURNAL.slice(0, step.records));
+    const state = live.semantic();
+    const future = state.history.filter((one) => one.position === "future").length;
+    console.log(
+      `  ${step.name.padEnd(38)} prefix ${(state.model.marker || "none").padEnd(5)} records ${String(
+        state.model.records,
+      ).padStart(2)}  future markers ${future}  rebuild identical ${same(state, cold.semantic())}`,
+    );
+  }
+  console.log("");
+
+  const held = overlay.live(PAUSE_MARKER);
+  const paused = live.semantic();
+  console.log("— Continue is the live process's to offer —");
+  console.log(
+    `  at ${paused.model.marker}, holding      : ${overlay.canContinueAt(held, paused.model.marker)}`,
+  );
+  console.log(
+    `  at ${paused.model.marker}, released     : ${overlay.canContinueAt(overlay.released(held), paused.model.marker)}`,
+  );
+  console.log(
+    `  at ${paused.model.marker}, after restart: ${overlay.canContinueAt(overlay.cold(), paused.model.marker)}`,
+  );
+  console.log(`  the reconstruction is unchanged  : ${same(live.semantic(), paused)}`);
+  console.log("");
+
+  console.log("— the cache accelerates and decides nothing —");
+  console.log(`  memoized markers      : ${live.cached().join(" ")}`);
+  const warm = live.semantic();
+  yield* live.discardSnapshots();
+  const again = yield* live.navigate(AT_PAUSE);
+  if (!again.ok) {
+    throw again.error;
+  }
+  console.log(`  after discarding them : ${same(live.semantic(), warm)}`);
+  console.log("");
+
+  console.log("— one state, two terminals —");
+  const wide = layout(warm, WIDE);
+  const narrow = layout(warm, NARROW);
+  console.log(`  lines at ${WIDE.columns} columns : ${wide.length}`);
+  console.log(`  lines at ${NARROW.columns} columns  : ${narrow.length}`);
+  console.log(
+    `  topology identical    : ${
+      JSON.stringify(topology(warm.model)) === JSON.stringify(topology(live.semantic().model))
+    }`,
+  );
+  console.log(
+    `  nothing foreign in the store: ${
+      foreignValues(live.state(), "state").length === 0 ? "clean" : "FOUND"
+    }`,
+  );
 }
 
 function* run(): Operation<void> {
@@ -243,6 +351,9 @@ function* run(): Operation<void> {
       `  a URL the execution never went to   : ${answer.ok ? "ACCEPTED, which is a defect" : answer.error.message}`,
     );
   }
+  console.log("");
+
+  yield* walkJourney();
 }
 
 if (import.meta.main) {
