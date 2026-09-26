@@ -62,6 +62,13 @@ export interface Fixture {
   readonly advances: Signal<Advance, never>;
   /** How many times child A's continuation ran past its external operation. */
   readonly pastExternal: () => number;
+  /**
+   * Destroy the scope that owns the target subtree.
+   *
+   * Used by the lifecycle matrix for the two rows that need the `paused` state,
+   * which only this synthetic gate reaches.
+   */
+  shutdown(): Operation<void>;
 }
 
 export function* startFixture(options: FixtureOptions): Operation<Fixture> {
@@ -76,7 +83,9 @@ export function* startFixture(options: FixtureOptions): Operation<Fixture> {
     advances.send({ owner, count });
   }
 
-  const targetScope = createScope(session);
+  // Destructured so the matrix can tear the owner down explicitly. Reading the
+  // tuple creates no scope, so the live set is the same as before.
+  const [targetScope, disposeTarget] = createScope(session);
   targetScope.set(ExecutionOwner, "entry");
 
   const gate = yield* useGate({
@@ -135,6 +144,9 @@ export function* startFixture(options: FixtureOptions): Operation<Fixture> {
     entry,
     advances,
     pastExternal: () => counts.pastExternal,
+    *shutdown() {
+      yield* disposeTarget();
+    },
   };
 }
 

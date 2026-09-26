@@ -12,16 +12,19 @@ different questions, and the second one supersedes nothing in the first.
   document execution, with no new core pause API? Answered under
   *Slice 2* at the end. The verdict is **REVISE**.
 
-The later lifecycle matrix is deliberately not here, and `RESULT.md` is written
-after it.
+- **Slice 3 — the lifecycle matrix.** Every deferred row, against the real
+  execution, plus the two rows that need a state the REPL design never reaches.
+
+**The conclusion is [`RESULT.md`](RESULT.md).** Read that first; this file is the
+working record behind it.
 
 Run the evidence:
 
 ```bash
-deno task test scripts/tests/repl-pause-gate.test.ts   # 6 slice-1 + 7 slice-2 cases
+deno task test scripts/tests/repl-pause-gate.test.ts   # 23 cases, three suites
 deno task repl:pause                                    # slice 1's representative trace
 deno task repl:pause:seam                               # what Effection 4.1.0 does not publish
-deno task repl:pause:xmd                                # slice 2's inventory and lifecycle trace
+deno task repl:pause:xmd                                # coverage inventory and lifecycle trace
 ```
 
 ## The answer
@@ -163,15 +166,6 @@ now asserts that three continuations were actually held first.
 
 ## What is deliberately absent
 
-- The later lifecycle matrix: concurrent descendants beyond A and B, a child
-  settling during coordination, a child starting while pausing, failure during
-  coordination, cancellation of the request, interruption while paused, owner
-  shutdown while pausing and while paused, and cleanup on every terminal path.
-  `release()` already covers abandoning an unsettled request, but that is not
-  yet proven.
-- Teardown while held. The gate holds continuations in `action()`, whose discard
-  runs when a routine unwinds, so ordinary teardown is expected to work — but
-  "expected" is not evidence, and it belongs to the matrix.
 - Uninstalling the decoration. `Scope.around()` has no removal, so the gate is
   installed for the target scope's lifetime.
 - Everything #841 puts out of scope: rendering, routing, StarFX, durable
@@ -221,6 +215,7 @@ Measured by running the document, not read off the Api declarations
 | Markdown component invocation | `Component.importComponent(name)` | holdable | the body-walk scope | enter/exit pair | n/a |
 | function-component invocation | `Component.importComponent(name)` | holdable **at the invocation only** | the body-walk scope | enter/exit pair | n/a |
 | a function component's **body** | **none** | — | its own invocation scope | only that the scope is live | — |
+| a component-retained resource | `Component.retain` at acquisition | holdable at acquisition only | the invocation site's scope | enter/exit pair | — |
 | projected content | `Component.content(slot)` | holdable | the invoking component's scope | enter/exit pair | n/a |
 | code-block modifier execution | `Component.applyModifiers` + `Component.codeBlock` | holdable | the body-walk scope | enter/exit pair | n/a |
 | bound `exec as=` | `Component.applyBoundModifiers` | holdable | the body-walk scope | enter/exit pair | n/a |
@@ -229,10 +224,16 @@ Measured by running the document, not read off the Api declarations
 | an external operation already in flight | **none** | — | the awaiting component's scope | only that the scope is live | — |
 | prose, headings, core structural syntax (`<If>`, `<Each>`, `<Let>`) | **none** | — | the body-walk scope | nothing | — |
 
-Eight surfaces are crossed by the representative document —
+Nine surfaces are crossed by the representative document —
 `applyBoundModifiers`, `applyModifiers`, `codeBlock`, `content`, `document`,
-`expand`, `importComponent`, `replCheckpoint` — and every one of them can hold,
-because each is an operation the REPL wraps.
+`expand`, `importComponent`, `replCheckpoint`, `retain` — and every one of them
+can hold, because each is an operation the REPL wraps.
+
+(Slice 2's own commit reported eight and *2 of 12* live scopes. Slice 3 added
+`<Holder>`, which retains a resource through `Component.retain`, because cleanup
+on every terminal path has to be watched through a real XMD surface. The
+inventory and the scope arithmetic below are the enriched document's, and the
+conclusion is unchanged.)
 
 Two facts from that table decide the verdict:
 
@@ -249,14 +250,14 @@ Two facts from that table decide the verdict:
 With Pause requested while a component body was running ordinary Effection:
 
 ```
-live descendant scopes            : 12
+live descendant scopes            : 15
 held at a controlled boundary     :  1   [s20@enter:importComponent:Fanout]
-live and unheld                   : 11
+live and unheld                   : 14
 ever crossed a controlled surface :  2   [s6, s20]
 ```
 
-**Two of twelve live scopes ever cross a surface the REPL can reach.** The other
-ten are engine-owned — the invocation owner, the durable run, the stream
+**Two of fifteen live scopes ever cross a surface the REPL can reach.** The
+others are engine-owned — the invocation owner, the durable run, the stream
 machinery, region streams — and they are alive for the execution's whole
 lifetime. The controller is fail-closed, so it stays in `pausing` and names them.
 
@@ -350,13 +351,30 @@ same as every point where a document *advances*. Closing the gap needs one of:
 
 Neither is an XMD execution protocol, which is why this slice adds none.
 
-## What Slice 2 deliberately does not do
+## What the matrix added
+
+Slice 3 runs every row the contract deferred. The rest state for a real execution
+is `pausing`, so each row is proven at the rest point the design reaches, and the
+two rows that specifically require `paused` are proven on Slice 1's synthetic
+gate with the evidence saying so. Details and the terminal-path table are in
+[`RESULT.md`](RESULT.md).
+
+The one row that closes the reviewer's named gap: **an external operation
+completing while `pausing`, through the real document.** Its continuation runs —
+there is no surface at the await — and is stopped one boundary later, with the
+next element's body never entered.
+
+## What the experiment deliberately does not do
 
 - No `Execution.advance` and no other public or core XMD pause API.
 - No edits to any production package.
 - No claim that the controller reaches `paused` for a real execution.
 - No narrowing of the target subtree to "scopes the REPL happens to see", which
   would report `paused` by ignoring exactly the branches that matter.
-- The later lifecycle matrix — interruption while paused, owner shutdown,
-  cancellation of the controller, a child settling during coordination, failure
-  during coordination, cleanup on every terminal path — and `RESULT.md`.
+- No classification of the engine-owned scopes. Their count and persistence are
+  measured; what each is waiting on is not, because answering that *is* the
+  missing seam.
+
+`RESULT.md` records the remaining limits of the evidence, including the eval-block
+path, which needs a platform compiler and so does not run under the Node and Bun
+suites.
