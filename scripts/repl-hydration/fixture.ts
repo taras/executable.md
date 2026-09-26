@@ -1,10 +1,11 @@
 /**
- * Two truthful append-only Journals, written as the durable records would
+ * Three truthful append-only Journals, written as the durable records would
  * arrive.
  *
  * The first is representative: the pause point, the live head, and everything
  * a prefix has to isolate. The second, at the bottom of this file, is minimal
- * and its only subject is how an entry ends.
+ * and its only subject is how an entry ends. The third is a fork, and its
+ * first record is computed from the first rather than written out.
  *
  * Truthful means the fold is the only way to learn what this execution
  * reached. Nothing here is a snapshot of an answer, nothing is derived from a
@@ -31,6 +32,9 @@
  * the live process owns — `overlay.ts` is where a test says it, and nothing in
  * the durable stream can.
  */
+
+import { inherit } from "./fork.ts";
+import { parseJournal } from "./journal.ts";
 
 /** The execution these records belong to. A route naming another one refuses. */
 export const EXECUTION = "e1";
@@ -512,50 +516,48 @@ export const BEFORE_FAILURE = "t-12";
 /**
  * A fork of the representative execution, taken at `r-07`.
  *
- * Its Journal is its own and nothing in it points outward for a *value*: the
- * environment the parent had at `r-07` — one binding, `project` — is
- * published into this Journal by its first entry, so reconstructing this fork
- * reads these records and no others. The parent's name and marker are here
- * too, and they are the only outward-facing things: a label to point at,
- * which needs the parent to exist only when someone follows it.
+ * Its first record is built by `inherit()` from the parent's projection at
+ * exactly that marker — not from the parent's head, and not by writing the
+ * values out again here, which would only prove this file agrees with
+ * itself. Everything after it is the fork's own work.
  *
- * `e1`'s later `release` and `changelog` bindings are deliberately absent.
- * The fork was taken at `r-07`, and inheriting what the parent published
- * afterwards is the leak this fixture would otherwise hide.
+ * `e1`'s later `release` and `changelog` bindings are therefore absent, and
+ * absent because the projection at `r-07` did not have them rather than
+ * because nobody typed them.
  */
-const FORK_RECORDS: readonly Record<string, unknown>[] = [
-  {
-    id: "f-01",
-    seq: 1,
-    at: 1,
-    kind: "entry.inherited",
-    entry: "entry-0",
-    title: "Forked from the README run",
+const INHERITED: unknown = (() => {
+  const events = parseJournal(RECORDS);
+  if (!events.ok) {
+    throw events.error;
+  }
+  const record = inherit(events.value, {
     parent: "e1",
     source: "r-07",
-  },
-  {
-    id: "f-02",
-    seq: 2,
-    at: 2,
-    kind: "binding.published",
     entry: "entry-0",
-    name: "project",
-    value: "executable.md",
-  },
-  { id: "f-03", seq: 3, at: 3, kind: "entry.settled", entry: "entry-0" },
+    title: "Forked from the README run",
+    id: "f-01",
+  });
+  if (!record.ok) {
+    throw record.error;
+  }
+  return record.value;
+})();
+
+const FORK_RECORDS: readonly unknown[] = [
+  INHERITED,
+  { id: "f-02", seq: 2, at: 3, kind: "entry.settled", entry: "entry-0" },
 
   {
-    id: "f-04",
-    seq: 4,
+    id: "f-03",
+    seq: 3,
     at: 8,
     kind: "entry.submitted",
     entry: "entry-1",
     title: "Try the release again",
   },
   {
-    id: "f-05",
-    seq: 5,
+    id: "f-04",
+    seq: 4,
     at: 9,
     kind: "scope.opened",
     entry: "entry-1",
@@ -564,8 +566,8 @@ const FORK_RECORDS: readonly Record<string, unknown>[] = [
     source: 0,
   },
   {
-    id: "f-06",
-    seq: 6,
+    id: "f-05",
+    seq: 5,
     at: 12,
     kind: "binding.published",
     entry: "entry-1",
@@ -573,8 +575,8 @@ const FORK_RECORDS: readonly Record<string, unknown>[] = [
     value: "0.13.1",
   },
   {
-    id: "f-07",
-    seq: 7,
+    id: "f-06",
+    seq: 6,
     at: 15,
     kind: "suspension.opened",
     entry: "entry-1",
@@ -594,7 +596,17 @@ export const FORK_SOURCE = "r-07";
 /** The fork's own Journal, as a reader receives it. */
 export const FORK_JOURNAL: readonly unknown[] = FORK_RECORDS;
 
+/** The fork's first record alone: an inheritance nobody has settled yet. */
+export const FORK_INHERITED: readonly unknown[] = [INHERITED];
+
 /** The fork's journal with one record's fields changed. */
 export function forkChanging(at: number, changes: Record<string, unknown>): readonly unknown[] {
-  return FORK_RECORDS.map((record, index) => (index === at ? { ...record, ...changes } : record));
+  return FORK_RECORDS.map((record, index) =>
+    index === at ? { ...Object(record), ...changes } : record,
+  );
+}
+
+/** The fork's journal with records appended after it. */
+export function forkWith(...records: readonly unknown[]): readonly unknown[] {
+  return [...FORK_RECORDS, ...records];
 }

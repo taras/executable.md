@@ -19,7 +19,7 @@
 import { encodeRoute, surfaceRoute } from "./location.ts";
 import { parseJournal } from "./journal.ts";
 import type { SemanticModel } from "./model.ts";
-import { markersOf } from "./project.ts";
+import { markersOf, projectPrefix } from "./project.ts";
 
 /** One execution's records, if this process can reach them. */
 export type Found =
@@ -99,6 +99,13 @@ export function provenanceLink(model: SemanticModel, reachable: Library): Proven
       source,
       why: `${parent} has no marker ${source}`,
     };
+  }
+  // A parent that reads but cannot have happened has nothing to open at that
+  // marker either. Every one of these is the link going dark, never the fork
+  // failing: whether the parent is well is not the fork's business.
+  const at = projectPrefix(parent, events.value, source);
+  if (!at.ok) {
+    return { kind: "unavailable", parent, source, why: `${parent} cannot be reconstructed` };
   }
 
   const route = surfaceRoute({

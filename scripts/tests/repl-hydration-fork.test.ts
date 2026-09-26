@@ -22,9 +22,11 @@ import type { Operation } from "effection";
 import {
   EXECUTION,
   FORK_EXECUTION,
+  FORK_INHERITED,
   FORK_JOURNAL,
   FORK_SOURCE,
   forkChanging,
+  forkWith,
   JOURNAL,
   journalChanging,
   journalDropping,
@@ -34,6 +36,7 @@ import {
   positionOf,
   truncatedAfter,
 } from "../repl-hydration/fixture.ts";
+import { inherit } from "../repl-hydration/fork.ts";
 import { JournalParseError, parseJournal } from "../repl-hydration/journal.ts";
 import { decodeRoute, resolveLocation, RouteRefusal } from "../repl-hydration/location.ts";
 import type { SemanticModel } from "../repl-hydration/model.ts";
@@ -95,6 +98,120 @@ describe("a fork owns its own past", () => {
     // The fork's own entry inherits what the inherited entry published.
     const mine = model.entries.find((entry) => entry.id === "entry-1");
     expect(mine?.inherited.map((one) => one.name)).toEqual(["project"]);
+  });
+
+  it("carries the whole inherited environment in its first record", function* () {
+    // One record in, and the environment is already complete. There is no
+    // prefix of a fork that has the entry and only part of what it inherited.
+    const events = parseJournal(FORK_INHERITED);
+    if (!events.ok) {
+      throw events.error;
+    }
+    expect(events.value.length).toBe(1);
+
+    const model = projectPrefix(FORK_EXECUTION, events.value, undefined);
+    if (!model.ok) {
+      throw model.error;
+    }
+    expect(model.value.bindings.map((one) => `${one.name}=${one.value}`)).toEqual([
+      "project=executable.md",
+    ]);
+    // The synthetic entry has not settled yet, and that changes nothing
+    // about the environment it brought with it.
+    expect(model.value.entries[0].outcome).toEqual({ status: "running" });
+    expect(model.value.entries[0].inherited).toEqual([]);
+    expect(model.value.bindings[0].marker).toBe(model.value.entries[0].marker);
+  });
+
+  it("takes that payload from the parent at the source marker, never from its head", function* () {
+    const built = inherit(parsedParent(), {
+      parent: EXECUTION,
+      source: FORK_SOURCE,
+      entry: "entry-0",
+      title: "Forked from the README run",
+      id: "f-01",
+    });
+    if (!built.ok) {
+      throw built.error;
+    }
+    // The fixture's first record *is* this, rather than a hand-written copy
+    // that could agree with nothing but itself.
+    expect(built.value).toEqual(FORK_JOURNAL[0]);
+
+    const atHead = inherit(parsedParent(), {
+      parent: EXECUTION,
+      source: "r-23",
+      entry: "entry-0",
+      title: "Forked from the head",
+      id: "f-01",
+    });
+    if (!atHead.ok) {
+      throw atHead.error;
+    }
+    const names = (record: unknown) =>
+      (Object(record).bindings as readonly { name: string }[]).map((one) => one.name);
+    expect(names(built.value)).toEqual(["project"]);
+    expect(names(atHead.value)).toEqual(["project", "release", "changelog"]);
+
+    // A marker the parent never minted has no environment to inherit.
+    expect(
+      inherit(parsedParent(), {
+        parent: EXECUTION,
+        source: "r-99",
+        entry: "entry-0",
+        title: "Nowhere",
+        id: "f-01",
+      }).ok,
+    ).toBe(false);
+  });
+
+  it("settles and carries on with the parent absent", function* () {
+    const session = yield* open(FORK_EXECUTION, AT_FORK, FORK_JOURNAL);
+    const model = session.semantic().model;
+
+    expect(provenanceLink(model, alone()).kind).toBe("unavailable");
+    expect(model.entries.map((entry) => `${entry.id}:${entry.outcome.status}`)).toEqual([
+      "entry-0:settled",
+      "entry-1:running",
+    ]);
+    // The work it did after settling inherited what the fork brought over.
+    expect(model.entries[1].inherited.map((one) => one.name)).toEqual(["project"]);
+    expect(model.suspensions.map((one) => one.wait)).toEqual(["confirm"]);
+    expect(model.bindings.map((one) => `${one.name}=${one.value}`)).toEqual([
+      "project=executable.md",
+      "release=0.13.1",
+    ]);
+  });
+
+  it("refuses an environment that names one binding twice or holds a malformed member", function* () {
+    const cases: readonly (readonly [string, unknown])[] = [
+      [
+        "a repeated name",
+        [
+          { name: "project", value: "one" },
+          { name: "project", value: "two" },
+        ],
+      ],
+      ["a member that is not a binding", [{ name: "project", value: "one" }, "project=two"]],
+      ["a member with no name", [{ name: "", value: "one" }]],
+      ["a member with no text value", [{ name: "project", value: 1 }]],
+      ["a member carrying more", [{ name: "project", value: "one", secret: true }]],
+      ["an environment that is not a list", { project: "one" }],
+    ];
+
+    for (const [what, bindings] of cases) {
+      const refused = parseJournal(forkChanging(0, { bindings }));
+      expect(`${what}:${refused.ok}`).toBe(`${what}:false`);
+      if (refused.ok) {
+        continue;
+      }
+      expect(refused.error).toBeInstanceOf(JournalParseError);
+      expect((refused.error as JournalParseError).field).toBe("bindings");
+    }
+
+    // An empty environment is a fork of an execution that had published
+    // nothing, which is a thing that happens.
+    expect(parseJournal(forkChanging(0, { bindings: [] })).ok).toBe(true);
   });
 
   it("inherits the parent's environment as of the source marker and no later", function* () {
@@ -187,11 +304,34 @@ describe("a fork owns its own past", () => {
       expect(missing.why).toContain("no marker r-07");
     }
 
+    // A parent that reads but cannot have happened, at or before the marker
+    // this fork points at, has nothing to open there.
+    const impossible = library({
+      [EXECUTION]: journalChanging(positionOf("r-04"), { entry: "entry-9" }),
+    });
+    const unreconstructable = provenanceLink(model, impossible);
+    expect(unreconstructable.kind).toBe("unavailable");
+    if (unreconstructable.kind === "unavailable") {
+      expect(unreconstructable.why).toContain("cannot be reconstructed");
+    }
+
+    // An inconsistency the parent only reaches *after* the source marker
+    // leaves the link alone: the moment this fork points at is still there.
+    const laterTrouble = library({ [EXECUTION]: journalWithout(positionOf("r-08")) });
+    expect(provenanceLink(model, laterTrouble).kind).toBe("resolvable");
+
     // The fork itself is unaffected by any of it.
     expect(forked()).toEqual(model);
   });
 
   it("copies no secret and no process-local state", function* () {
+    // The inherited payload first, since that is the one record that reads
+    // the parent, and then the whole Journal.
+    const payload = JSON.stringify(FORK_JOURNAL[0]);
+    expect(payload).not.toContain("secret");
+    expect(payload).not.toContain("prompt");
+    expect(payload).not.toContain("canContinue");
+
     const serialized = JSON.stringify(FORK_JOURNAL);
     for (const word of ["secret", "token", "pauseMarker", "canContinue", "EXPANSION PAUSED"]) {
       if (word === "secret") {
@@ -204,27 +344,26 @@ describe("a fork owns its own past", () => {
   });
 
   it("refuses a second inheritance and one taken mid-execution", function* () {
-    const twice = [
-      ...FORK_JOURNAL,
-      {
-        id: "f-08",
-        seq: 8,
-        at: 20,
-        kind: "entry.inherited",
-        entry: "entry-2",
-        title: "Forked again",
-        parent: "e1",
-        source: "r-03",
-      },
-    ];
+    const twice = forkWith({
+      id: "f-07",
+      seq: 7,
+      at: 20,
+      kind: "entry.inherited",
+      entry: "entry-2",
+      title: "Forked again",
+      parent: "e1",
+      source: "r-03",
+      bindings: [],
+    });
     const again = projectPrefix(FORK_EXECUTION, parsedFork(twice), undefined);
     expect(again.ok).toBe(false);
     if (!again.ok) {
       expect(again.error.message).toContain("already forked");
     }
 
+    // The same inheritance, written after this execution had already begun.
     const late = [
-      { ...Object(FORK_JOURNAL[3]), seq: 1, id: "g-01" },
+      { ...Object(FORK_JOURNAL[2]), seq: 1, id: "g-01" },
       { ...Object(FORK_JOURNAL[0]), seq: 2, id: "g-02" },
     ];
     const afterwards = projectPrefix(FORK_EXECUTION, parsedFork(late), undefined);
@@ -235,6 +374,68 @@ describe("a fork owns its own past", () => {
   });
 
   describe("negative controls", () => {
+    it("multi-record-inheritance: a copy spread over records can stop halfway", function* () {
+      // What the previous representation looked like: the entry, then the
+      // environment published one record at a time.
+      const spread: readonly unknown[] = [
+        {
+          id: "m-01",
+          seq: 1,
+          at: 0,
+          kind: "entry.inherited",
+          entry: "entry-0",
+          title: "Forked from the README run",
+          parent: "e1",
+          source: FORK_SOURCE,
+          bindings: [],
+        },
+        {
+          id: "m-02",
+          seq: 2,
+          at: 1,
+          kind: "binding.published",
+          entry: "entry-0",
+          name: "project",
+          value: "executable.md",
+        },
+        {
+          id: "m-03",
+          seq: 3,
+          at: 2,
+          kind: "binding.published",
+          entry: "entry-0",
+          name: "team",
+          value: "frontside",
+        },
+      ];
+
+      const halfway = parseJournal(spread.slice(0, 2));
+      if (!halfway.ok) {
+        throw halfway.error;
+      }
+      const partial = projectPrefix(FORK_EXECUTION, halfway.value, undefined);
+      if (!partial.ok) {
+        throw partial.error;
+      }
+      // It hydrates, and it is wrong in a way nothing downstream can see:
+      // an environment that existed at no point in either execution.
+      expect(partial.value.bindings.map((one) => one.name)).toEqual(["project"]);
+      expect(partial.value.provenance.kind).toBe("forked");
+
+      // One record cannot be half-read, so the real representation has no
+      // prefix that answers anything but the whole environment.
+      const atomic = parseJournal(FORK_INHERITED);
+      if (!atomic.ok) {
+        throw atomic.error;
+      }
+      const whole = projectPrefix(FORK_EXECUTION, atomic.value, undefined);
+      if (!whole.ok) {
+        throw whole.error;
+      }
+      expect(whole.value.bindings.map((one) => one.name)).toEqual(["project"]);
+      expect(FORK_INHERITED.length).toBe(1);
+    });
+
     it("parent-backed-fork: reading the environment from the parent loses it with the parent", function* () {
       // What a fork that referenced its parent would have to do: go and read
       // the parent's bindings at the source marker.

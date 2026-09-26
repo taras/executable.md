@@ -20,6 +20,7 @@ import {
   BEFORE_FAILURE,
   EXECUTION,
   FORK_EXECUTION,
+  FORK_INHERITED,
   FORK_JOURNAL,
   JOURNAL,
   journalChanging,
@@ -385,8 +386,19 @@ function* walkFork(): Operation<void> {
   }
   const fork = projected.value;
 
+  const alone1 = events(FORK_INHERITED);
+  const first = projectPrefix(FORK_EXECUTION, alone1, undefined);
+  if (!first.ok) {
+    throw first.error;
+  }
+
   console.log("— a fork stands on its own —");
   console.log(`  records            : ${parsed.length}`);
+  console.log(
+    `  its first alone    : ${first.value.entries[0].id} (${first.value.entries[0].outcome.status}), environment ${first.value.bindings
+      .map((one) => `${one.name}=${one.value}`)
+      .join(" ")}`,
+  );
   console.log(`  inherited entry    : ${fork.entries[0].id} (${fork.entries[0].outcome.status})`);
   console.log(
     `  environment        : ${fork.bindings.map((one) => `${one.name}=${one.value}`).join(" ")}`,

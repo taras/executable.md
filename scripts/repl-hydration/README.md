@@ -47,6 +47,7 @@ deno task test scripts/tests/repl-hydration-fork.test.ts         # slice 4
 | `layout.ts` | presentation, computed outside the store, and the topology that must not move |
 | `ephemeral.ts` | partial Agent output and the secret seam — the other half process loss takes |
 | `replay.ts` | the deterministic document, and one function that both runs and replays it |
+| `fork.ts` | taking a fork: the one moment a fork reads its parent |
 | `provenance.ts` | following a fork back to its parent, when this process can reach one |
 
 `journal.ts`, `model.ts`, `project.ts` and `purity.ts` import `effection` and
@@ -202,6 +203,7 @@ implementation it rules out.
 | `provenance-at-hydration` | resolving the link while hydrating, making the parent a dependency |
 | `plausible-partial` | the readable prefix of a damaged journal, describing a binding that was never published |
 | `marker-without-a-record` | a prefix ending at a record that minted no marker |
+| `multi-record-inheritance` | an environment copied record by record, hydrating after half of it |
 
 ## The StarFX store
 
@@ -360,10 +362,13 @@ instead of walking backwards through their typing.
 
 ## Forks
 
-A fork owns a new Journal whose first record is `entry.inherited`: it submits
-an entry, publishes into *this* Journal the environment the parent had at the
-source marker, and names the parent and that marker. Nothing points outward
-for a value.
+A fork owns a new Journal whose first record is `entry.inherited`. It carries
+the synthetic entry, the parent and source marker, and **the whole inherited
+environment in that one record** — so a Journal containing nothing but it
+already hydrates into the complete environment. Spread over a run of ordinary
+publications the copy could be read half-finished, and nothing downstream
+could tell. `inherit()` builds the payload from the parent's projection at
+exactly the source marker, which is the only moment a fork needs its parent.
 
 ```
 — a fork stands on its own —

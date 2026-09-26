@@ -31,7 +31,7 @@ into the durable stream and read back as an execution fact.
 | kind | fields beyond the envelope | marker |
 | --- | --- | --- |
 | `entry.submitted` | `entry`, `title` | boundary |
-| `entry.inherited` | `entry`, `title`, `parent`, `source` | boundary |
+| `entry.inherited` | `entry`, `title`, `parent`, `source`, `bindings` | boundary |
 | `entry.settled` | `entry` | terminal |
 | `entry.failed` | `entry`, `reason` | terminal |
 | `entry.interrupted` | `entry`, `reason` | terminal |
@@ -59,6 +59,8 @@ Three fields exist because something would otherwise be unprovable:
 - **`source` on `scope.opened`.** Concurrent siblings open in dispatch order
   and the transcript is a reading of the document, so the position has to be
   recorded rather than inferred.
+- **`bindings` on `entry.inherited`.** A fork's inheritance is complete in its
+  first record — see below.
 
 ### Marker policy
 
@@ -180,10 +182,30 @@ frontier of its own.
 
 ## Forks
 
-A fork owns a new Journal whose first record is `entry.inherited`: it submits
-an entry, publishes the environment the parent had at the source marker into
-*this* Journal, and names the parent and that marker. Nothing points outward
-for a value.
+A fork owns a new Journal whose first record is `entry.inherited`:
+
+```
+{ id, seq, at, kind: "entry.inherited",
+  entry, title,                       // the synthetic entry it begins with
+  parent, source,                     // where it was taken from
+  bindings: [{ name, value }, …] }    // the whole inherited environment, ordered
+```
+
+**Inheritance becomes self-contained in that one record.** The projection
+publishes the environment from `entry.inherited` itself, so a Journal
+containing nothing but that record already hydrates into the complete
+environment — an unsettled synthetic entry with everything it carried over.
+Spread across a run of ordinary `binding.published` records the copy could be
+read half-finished, and a prefix ending in the middle would hydrate into an
+environment that existed in neither execution; nothing downstream could tell.
+One record cannot be half-read. `entry.settled` stays separate, because
+settling is a later thing that happened, not part of the payload.
+
+**The parent is needed only while that record is created.** `inherit()`
+projects the parent at exactly the source marker and writes what it finds
+into the payload — not the parent's head, and not a hand-transcribed copy
+that could only agree with itself. After the record exists the parent is a
+name.
 
 ```
 with the parent    : resolvable xmd://repl/e1/transcript?at=r-07
@@ -192,10 +214,13 @@ hydrates unaided   : e1-fork
 ```
 
 Removing the parent costs the link and nothing else. The fork still
-reconstructs, still says where it came from, and merely has nowhere to send
-someone who follows it. Resolving provenance is a separate function over
-whatever journals the process can reach, never part of hydration — a hydration
-that insisted on a resolvable link would have made the parent a dependency.
+reconstructs, settles and carries on, still says where it came from, and
+merely has nowhere to send someone who follows it. Resolving provenance is a
+separate function over whatever journals the process can reach, never part of
+hydration — a hydration that insisted on a resolvable link would have made the
+parent a dependency. A parent that is missing, short, malformed, or
+inconsistent at the source marker dims the link and nothing else; an
+inconsistency the parent reaches only *after* that marker leaves it alone.
 
 ## Refusals
 
@@ -209,7 +234,7 @@ leaves a live session's state intact when a move is refused.
 
 ## Named negative controls
 
-Twenty-seven, each a weaker implementation written in the evidence that accepts
+Twenty-eight, each a weaker implementation written in the evidence that accepts
 what the real boundary refuses.
 
 `open-vocabulary` · `skip-malformed` · `leaky-prefix` · `pause-truncates-head`
@@ -220,7 +245,7 @@ what the real boundary refuses.
 `overlay-in-the-store` · `replay-reperforms` · `recoverable-secret` ·
 `streamed-into-the-record` · `draft-as-a-visit` · `kind-only-replay` ·
 `discarded-result` · `parent-backed-fork` · `provenance-at-hydration` ·
-`plausible-partial` · `marker-without-a-record`
+`plausible-partial` · `marker-without-a-record` · `multi-record-inheritance`
 
 ## Evidence
 
@@ -250,7 +275,9 @@ Green on Deno, Node and Bun.
 - **Presentation is lines of text.** `layout.ts` exists to show the seam is
   real, not to draw well; cells, widths and wrapping are #838's subject.
 - **One fork, one parent.** Fork chains, and what a provenance link means two
-  generations back, were not exercised.
+  generations back, were not exercised. Nor was a large environment: the
+  payload is one record however big it gets, and nothing here says where that
+  stops being reasonable.
 - **Nothing was measured.** No snapshot was shown to make navigation faster,
   only to be unnecessary.
 
@@ -271,7 +298,10 @@ Written afresh from current `main`, in dependency order.
 5. **Restart replay.** Alignment before execution, identity matching, result
    restoration, and the frontier — in that order, because each of the three
    was a defect found after the one before it looked finished.
-6. **Forks**, which need nothing above them but the vocabulary.
+6. **Forks**, which need nothing above them but the vocabulary. Inheritance
+   is atomic: one record carrying the ordered environment, built from the
+   parent's projection at the source marker, and a provenance link resolved
+   separately from hydration.
 
 Steps 1–3 are the contract. Step 5 is the one that repaid adversarial review
 three times, and its evidence must include a downstream data dependency: a

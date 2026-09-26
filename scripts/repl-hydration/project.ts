@@ -181,6 +181,12 @@ function apply(state: Draft, event: SemanticEvent): Result<void> {
     if (state.entries.some((entry) => entry.id === event.entry)) {
       return Err(new ProjectionError(event, "submits an entry that is already recorded"));
     }
+    // What this entry was submitted into, read before it publishes anything.
+    // A fork's synthetic entry inherits nothing: it *is* the inheritance, and
+    // reporting the environment it just introduced as its own inheritance
+    // would make the fork look like it started from itself.
+    const before = state.bindings.map((binding) => ({ ...binding }));
+
     if (event.kind === "entry.inherited") {
       // One fork, one inheritance. A second would describe an execution with
       // two pasts, and nothing could say which environment it started in.
@@ -201,6 +207,16 @@ function apply(state: Draft, event: SemanticEvent): Result<void> {
         source: event.source,
         entry: event.entry,
       };
+      // The environment arrives with the entry, from this one record. There
+      // is no prefix of a fork that has the entry and only some of it.
+      for (const inherited of event.bindings) {
+        state.bindings.push({
+          name: inherited.name,
+          value: inherited.value,
+          entry: event.entry,
+          marker: event.id,
+        });
+      }
     }
     // Top-level entries run serially. Two overlapping is a shape the product
     // never reaches, and describing one would carry a second live scope tree
@@ -215,7 +231,7 @@ function apply(state: Draft, event: SemanticEvent): Result<void> {
       outcome: { status: "running" },
       marker: event.id,
       scopes: [],
-      inherited: state.bindings.map((binding) => ({ ...binding })),
+      inherited: before,
     });
     return Ok();
   }

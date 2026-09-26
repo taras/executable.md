@@ -93,6 +93,12 @@ export function markerWeight(kind: SemanticKind): MarkerWeight | "none" {
   return MARKER_POLICY[kind];
 }
 
+/** One name and value a fork carries over from its parent. */
+export interface InheritedBinding {
+  readonly name: string;
+  readonly value: string;
+}
+
 /** What every record carries: its opaque identity, its position, its time. */
 interface Recorded {
   /** The record's opaque durable identity. A marker is one of these. */
@@ -125,6 +131,15 @@ export type SemanticEvent =
       readonly parent: string;
       /** The marker in that execution the fork was taken at. */
       readonly source: string;
+      /**
+       * The whole inherited environment, in order, in this one record.
+       *
+       * Spread across a run of ordinary publications it could be read
+       * half-copied: a prefix ending in the middle would hydrate into an
+       * environment that never existed anywhere. One record cannot be
+       * half-read.
+       */
+      readonly bindings: readonly InheritedBinding[];
     })
   | (Recorded & { readonly kind: "entry.settled"; readonly entry: string })
   | (Recorded & { readonly kind: "entry.failed"; readonly entry: string; readonly reason: string })
@@ -198,7 +213,7 @@ export class JournalParseError extends Error {
 /** The fields each kind declares, beyond the envelope. A record carries these and no others. */
 const FIELDS: Record<SemanticKind, readonly string[]> = {
   "entry.submitted": ["entry", "title"],
-  "entry.inherited": ["entry", "title", "parent", "source"],
+  "entry.inherited": ["entry", "title", "parent", "source", "bindings"],
   "entry.settled": ["entry"],
   "entry.failed": ["entry", "reason"],
   "entry.interrupted": ["entry", "reason"],
@@ -227,6 +242,9 @@ const NUMBERS: Readonly<Record<string, readonly string[]>> = {
 
 /** The fields that are a flag rather than text. */
 const FLAGS: readonly string[] = ["secret"];
+
+/** The fields that are a whole environment rather than one value. */
+const ENVIRONMENTS: readonly string[] = ["bindings"];
 
 /**
  * The fields whose text may be empty, because empty is a value they can hold.
@@ -291,6 +309,50 @@ function flag(index: number, field: string, value: unknown): Result<boolean> {
 }
 
 /**
+ * An ordered environment, read.
+ *
+ * A member is a name and a value and nothing else, and a name appears once.
+ * Two members under one name would make the environment depend on which the
+ * reader kept, which is not a question a durable record may leave open.
+ */
+function environment(
+  index: number,
+  field: string,
+  value: unknown,
+): Result<readonly InheritedBinding[]> {
+  if (!Array.isArray(value)) {
+    return Err(new JournalParseError(index, field, `${field} is not an environment`));
+  }
+  const members: InheritedBinding[] = [];
+  for (const member of value) {
+    if (!isRecordObject(member)) {
+      return Err(
+        new JournalParseError(index, field, `${field} has a member that is not a binding`),
+      );
+    }
+    const extra = Object.keys(member).find((key) => key !== "name" && key !== "value");
+    if (extra !== undefined) {
+      return Err(
+        new JournalParseError(index, field, `a binding carries no ${JSON.stringify(extra)}`),
+      );
+    }
+    if (typeof member.name !== "string" || member.name === "") {
+      return Err(new JournalParseError(index, field, `${field} has a member with no name`));
+    }
+    if (typeof member.value !== "string") {
+      return Err(
+        new JournalParseError(index, field, `the binding ${member.name} has no text value`),
+      );
+    }
+    if (members.some((one) => one.name === member.name)) {
+      return Err(new JournalParseError(index, field, `${field} names ${member.name} twice`));
+    }
+    members.push({ name: member.name, value: member.value });
+  }
+  return Ok(members);
+}
+
+/**
  * One durable record, read.
  *
  * Every declared field is required and every undeclared one refuses, so a
@@ -346,7 +408,10 @@ function parseRecord(index: number, raw: unknown, seen: Set<string>): Result<Sem
     return Err(new JournalParseError(index, "at", "at is not a recorded time"));
   }
 
-  const fields: Record<string, string | number | boolean | readonly string[]> = {};
+  const fields: Record<
+    string,
+    string | number | boolean | readonly string[] | readonly InheritedBinding[]
+  > = {};
   for (const field of FIELDS[kind]) {
     if (!(field in raw)) {
       return Err(new JournalParseError(index, field, `a ${kind} record declares ${field}`));
@@ -358,7 +423,9 @@ function parseRecord(index: number, raw: unknown, seen: Set<string>): Result<Sem
         ? ordinal(index, field, value)
         : FLAGS.includes(field)
           ? flag(index, field, value)
-          : text(index, field, value);
+          : ENVIRONMENTS.includes(field)
+            ? environment(index, field, value)
+            : text(index, field, value);
     if (!read.ok) {
       return read;
     }
