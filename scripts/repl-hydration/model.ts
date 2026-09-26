@@ -72,13 +72,22 @@ export interface Scope {
   readonly children: readonly Scope[];
 }
 
-/** One durable wait, and the scope inside one entry that owns it. */
+/**
+ * One durable wait, and the scope inside one entry that owns it.
+ *
+ * `secret` travels with the request because a drawer for a secret must never
+ * echo what is typed into it, and because replay has to know that answering
+ * this one again is the only way to get past it. The answer itself is not
+ * here and is not anywhere: a secret elicitation records that it was asked
+ * and that it was answered, and nothing else.
+ */
 export interface Suspension {
   readonly wait: string;
   readonly entry: string;
   /** The owning scope path, outermost first. Empty means the entry's own body. */
   readonly scope: readonly string[];
   readonly prompt: string;
+  readonly secret: boolean;
   readonly marker: string;
 }
 

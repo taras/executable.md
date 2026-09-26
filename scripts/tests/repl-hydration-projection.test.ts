@@ -844,11 +844,26 @@ describe("the boundary", () => {
     return [...new Set(found.map((one) => one[1]))].toSorted();
   }
 
-  it("keeps the live overlay out of everything that reads durable state", function* () {
-    for (const name of ["journal.ts", "model.ts", "project.ts", "purity.ts", "location.ts"]) {
+  it("keeps process-local state out of everything that reads durable state", function* () {
+    const durable = [
+      "journal.ts",
+      "model.ts",
+      "project.ts",
+      "purity.ts",
+      "location.ts",
+      "store.ts",
+    ];
+    for (const name of durable) {
+      // The pause controller and the Agent stream are the two halves process
+      // loss takes. Neither is reachable from anything that reads a record.
       expect(yield* importsOf(name)).not.toContain("./overlay.ts");
+      expect(yield* importsOf(name)).not.toContain("./ephemeral.ts");
     }
     expect(yield* importsOf("overlay.ts")).toEqual([]);
+    expect(yield* importsOf("ephemeral.ts")).toEqual([]);
+
+    // Replay is where a live process and a record meet, so it may reach both.
+    expect(yield* importsOf("replay.ts")).toEqual(["./ephemeral.ts", "./journal.ts", "effection"]);
   });
 
   it("reaches the URL grammar through #840 rather than restating it", function* () {

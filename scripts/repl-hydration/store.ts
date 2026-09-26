@@ -30,7 +30,7 @@ import type { FxStore } from "starfx";
 
 import { parseJournal } from "./journal.ts";
 import type { SemanticEvent } from "./journal.ts";
-import { decodeRoute, encodeRoute, resolveIn } from "./location.ts";
+import { decodeRoute, encodeRoute, resolveIn, withDraft } from "./location.ts";
 import type { Route, SemanticLocation } from "./location.ts";
 import type { Marker, SemanticModel } from "./model.ts";
 import { projectPrefix } from "./project.ts";
@@ -253,21 +253,41 @@ export interface ReplSession {
   append(record: unknown): Operation<Result<void>>;
   /** Select another location. The URL is authoritative. */
   navigate(url: string): Operation<Result<void>>;
+  /**
+   * Replace the draft, which moves the URL and nothing else.
+   *
+   * Typing is not navigating and it is not executing: no Journal record is
+   * appended, and the ordinary navigation history is replaced in place rather
+   * than grown, so Back goes where the person came from instead of walking
+   * backwards through their keystrokes.
+   */
+  type(draft: string): Operation<Result<void>>;
   /** Throw away every memoized marker model. */
   discardSnapshots(): Operation<void>;
   /** Which markers the accelerator is currently holding. */
   cached(): readonly string[];
+  /**
+   * The ordinary navigation history, oldest first.
+   *
+   * It is process-local, like the snapshot cache: where this person has been
+   * is not a fact about the execution, and a reconstruction that invented one
+   * would be claiming to know something the Journal never recorded. So it
+   * lives beside the store rather than in it.
+   */
+  visits(): readonly string[];
 }
 
 class Session implements ReplSession {
   readonly #store: FxStore<State>;
   readonly #schema: Schema;
   readonly #execution: string;
+  readonly #visits: string[];
 
-  constructor(store: FxStore<State>, schema: Schema, execution: string) {
+  constructor(store: FxStore<State>, schema: Schema, execution: string, url: string) {
     this.#store = store;
     this.#schema = schema;
     this.#execution = execution;
+    this.#visits = [url];
   }
 
   semantic(): SemanticState {
@@ -292,13 +312,37 @@ class Session implements ReplSession {
     return Object.keys(this.#store.getState().snapshots).toSorted();
   }
 
+  visits(): readonly string[] {
+    return [...this.#visits];
+  }
+
   *append(record: unknown): Operation<Result<void>> {
     const state = this.#store.getState();
     return yield* this.#settle(state.url, [...state.records, record]);
   }
 
   *navigate(url: string): Operation<Result<void>> {
-    return yield* this.#settle(url, this.#store.getState().records);
+    const moved = yield* this.#settle(url, this.#store.getState().records);
+    if (moved.ok) {
+      this.#visits.push(this.#store.getState().url);
+    }
+    return moved;
+  }
+
+  *type(draft: string): Operation<Result<void>> {
+    const route = decodeRoute(this.#store.getState().url);
+    if (!route.ok) {
+      return route;
+    }
+    const typed = withDraft(route.value, draft);
+    if (!typed.ok) {
+      return typed;
+    }
+    const settled = yield* this.#settle(encodeRoute(typed.value), this.#store.getState().records);
+    if (settled.ok) {
+      this.#visits[this.#visits.length - 1] = this.#store.getState().url;
+    }
+    return settled;
   }
 
   *discardSnapshots(): Operation<void> {
@@ -353,5 +397,5 @@ export function* hydrate(
   const scope = yield* useScope();
   const store = createStore({ initialState, scope });
   yield* write(store, schema, derived.value);
-  return Ok(new Session(store, schema, execution));
+  return Ok(new Session(store, schema, execution, derived.value.url));
 }

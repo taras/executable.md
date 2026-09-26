@@ -38,6 +38,8 @@ import { markersOf, projectPrefix } from "./project.ts";
 import { foreignValues } from "./purity.ts";
 import { layout, topology } from "./layout.ts";
 import type { Viewport } from "./layout.ts";
+import { createStreaming, noSecrets, scriptedSecrets } from "./ephemeral.ts";
+import { answered, elicitation, resume, SCRIPT } from "./replay.ts";
 import { hydrate } from "./store.ts";
 import type { ReplSession, SemanticState } from "./store.ts";
 
@@ -204,6 +206,123 @@ function* walkJourney(): Operation<void> {
   );
 }
 
+/** The secret this trace uses, so the sweep below has something to look for. */
+const TOKEN = "npm_Ie4Xz9QqSECRETvalue";
+
+function* walkRestart(): Operation<void> {
+  const channel = elicitation("channel");
+  const token = elicitation("token");
+
+  const first = resume({
+    script: SCRIPT,
+    prior: [],
+    streaming: createStreaming(),
+    secrets: noSecrets(),
+  });
+  if (!first.ok) {
+    throw first.error;
+  }
+  console.log("— a first run, live —");
+  console.log(`  performed : ${first.value.performed.join(", ")}`);
+  console.log(
+    `  frontier  : ${first.value.frontier.kind} ${
+      first.value.frontier.kind === "complete" ? "" : first.value.frontier.wait
+    }`,
+  );
+  console.log("");
+
+  const withChannel = answered(first.value.records, channel, "#releases");
+  if (!withChannel.ok) {
+    throw withChannel.error;
+  }
+  const second = resume({
+    script: SCRIPT,
+    prior: withChannel.value,
+    streaming: createStreaming(),
+    secrets: noSecrets(),
+  });
+  if (!second.ok) {
+    throw second.error;
+  }
+  const withToken = answered(second.value.records, token, "");
+  if (!withToken.ok) {
+    throw withToken.error;
+  }
+  const records = withToken.value;
+
+  const secrets = scriptedSecrets({ token: TOKEN });
+  const streaming = createStreaming();
+  const replayed = resume({ script: SCRIPT, prior: records, secrets, streaming });
+  if (!replayed.ok) {
+    throw replayed.error;
+  }
+  console.log("— the same document after process loss —");
+  console.log(
+    `  performed again : ${replayed.value.performed.length === 0 ? "nothing" : replayed.value.performed.join(", ")}`,
+  );
+  console.log(`  consumed        : ${replayed.value.consumed.join(", ")}`);
+  console.log(`  recovered       : ${replayed.value.recovered.join(", ")}`);
+  console.log(`  re-prompted for : ${replayed.value.asked.join(", ")}`);
+  console.log(
+    `  partial output  : ${replayed.value.streaming.length === 0 ? "none" : replayed.value.streaming.join(", ")}`,
+  );
+  console.log(`  frontier        : ${replayed.value.frontier.kind}`);
+
+  const headless = resume({
+    script: SCRIPT,
+    prior: records,
+    secrets: noSecrets(),
+    streaming: createStreaming(),
+  });
+  if (!headless.ok) {
+    throw headless.error;
+  }
+  console.log(
+    `  with nobody to ask: ${headless.value.frontier.kind} ${
+      headless.value.frontier.kind === "complete" ? "" : headless.value.frontier.wait
+    }`,
+  );
+  console.log("");
+
+  const restarted = yield* session("xmd://repl/e3/transcript/entry-1/document/draft", records);
+  const typed = yield* restarted.type(TOKEN.slice(0, 4));
+  if (!typed.ok) {
+    throw typed.error;
+  }
+  const draft = restarted.semantic().model.entries[0].scopes[0].children[0];
+  console.log("— what the restart shows —");
+  console.log(
+    `  admitted result : ${restarted
+      .semantic()
+      .model.outcomes.map((one) => one.label)
+      .join(", ")}`,
+  );
+  console.log(
+    `  its scopes      : ${draft.name} > ${draft.children.map((one) => one.name).join(" ")}`,
+  );
+  console.log(`  journal records : ${restarted.state().records.length} (typing appended none)`);
+  console.log(`  navigation stack: ${restarted.visits().length}`);
+  console.log(
+    `  Continue offered: ${overlay.canContinueAt(overlay.cold(), restarted.semantic().model.marker)}`,
+  );
+  console.log("");
+
+  const swept = [
+    JSON.stringify(records),
+    JSON.stringify(restarted.state()),
+    JSON.stringify(restarted.visits()),
+    JSON.stringify(secrets.asked),
+    JSON.stringify(replayed.value),
+  ];
+  console.log("— the secret —");
+  console.log(`  asked for again in : ${secrets.asked.join(", ")}`);
+  console.log(
+    `  present in journal, store, navigation, audit or run: ${
+      swept.some((surface) => surface.includes(TOKEN)) ? "FOUND, which is a defect" : "nowhere"
+    }`,
+  );
+}
+
 function* run(): Operation<void> {
   const parsed = events(JOURNAL);
 
@@ -354,6 +473,9 @@ function* run(): Operation<void> {
   console.log("");
 
   yield* walkJourney();
+  console.log("");
+
+  yield* walkRestart();
 }
 
 if (import.meta.main) {

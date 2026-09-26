@@ -24,7 +24,7 @@
 import { Err, Ok } from "effection";
 import type { Result } from "effection";
 
-import { RouteRefusal } from "../repl-compose/router.ts";
+import { entryRoute, RouteRefusal, surfaceRoute } from "../repl-compose/router.ts";
 import type { Route, RouteSurface } from "../repl-compose/router.ts";
 
 import type { SemanticEvent } from "./journal.ts";
@@ -38,6 +38,37 @@ export {
   RouteSyntaxError,
 } from "../repl-compose/router.ts";
 export type { Route, RouteSurface } from "../repl-compose/router.ts";
+
+/**
+ * The same location with another draft.
+ *
+ * Typing moves the draft and nothing else, so the new route is built from the
+ * old one's own parts through the same constructors any other caller uses.
+ * The draft lives in the URL because the URL is where the selected location
+ * lives, and it reaches no Journal: there is no record kind that could carry
+ * it.
+ */
+export function withDraft(route: Route, draft: string): Result<Route> {
+  if (route.kind === "surface") {
+    return surfaceRoute({
+      execution: route.execution,
+      surface: route.surface,
+      at: route.at,
+      inspect: route.inspect,
+      draft,
+    });
+  }
+  return entryRoute({
+    execution: route.execution,
+    surface: route.surface,
+    entry: route.entry,
+    scopes: route.scopes,
+    drawers: route.drawers,
+    at: route.at,
+    inspect: route.inspect,
+    draft,
+  });
+}
 
 /** What a location names, and the prefix it named it in. */
 interface Located {

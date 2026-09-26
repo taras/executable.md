@@ -339,6 +339,7 @@ function apply(state: Draft, event: SemanticEvent): Result<void> {
       entry: entry.id,
       scope: [...event.scope],
       prompt: event.prompt,
+      secret: event.secret,
       marker: event.id,
     });
     return Ok();
@@ -362,6 +363,15 @@ function apply(state: Draft, event: SemanticEvent): Result<void> {
     }
     if (answered === -1) {
       return Err(new ProjectionError(event, "answers no wait this entry has open there"));
+    }
+    // A secret answer is not stored anywhere, so a record carrying one is a
+    // journal that already leaked. Refusing it is the last place that can be
+    // said, and saying it by dropping the value instead would leave the leak
+    // written down and merely unread.
+    if (state.suspensions[answered].secret && event.answer !== "") {
+      return Err(
+        new ProjectionError(event, `answers the secret wait ${event.wait} with a recorded value`),
+      );
     }
     state.suspensions.splice(answered, 1);
     return Ok();

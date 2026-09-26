@@ -15,10 +15,16 @@ everything else.
 **Slice 2 puts that model in the actual StarFX store** and shows the store adds
 nothing to it.
 
+**Slice 3 takes the process away** and asks what is left: a draft that is not a
+record, an Agent result without the stream that produced it, a replay that
+consumes what is written instead of doing it again, and a secret that has to be
+asked for a second time.
+
 ```bash
 deno task repl:hydration                                    # the observable trace
 deno task test scripts/tests/repl-hydration-projection.test.ts   # slice 1
 deno task test scripts/tests/repl-hydration-store.test.ts        # slice 2
+deno task test scripts/tests/repl-hydration-replay.test.ts       # slice 3
 ```
 
 ## The layers
@@ -34,10 +40,13 @@ deno task test scripts/tests/repl-hydration-store.test.ts        # slice 2
 | `overlay.ts` | the live process's pause state, where nothing durable can reach it |
 | `store.ts` | the actual StarFX store, hydrated from records plus a URL |
 | `layout.ts` | presentation, computed outside the store, and the topology that must not move |
+| `ephemeral.ts` | partial Agent output and the secret seam — the other half process loss takes |
+| `replay.ts` | the deterministic document, and one function that both runs and replays it |
 
 `journal.ts`, `model.ts`, `project.ts` and `purity.ts` import `effection` and
 each other. None of them imports `overlay.ts`, and the evidence reads their
-imports to say so. `store.ts` is the only module that imports `starfx`.
+imports to say so, and `ephemeral.ts` is held out of the same set. `store.ts` is
+the only module that imports `starfx`.
 
 ## The event vocabulary
 
@@ -177,6 +186,10 @@ implementation it rules out.
 | `head-memoized` | a frozen live head still reporting 22 records after the 23rd arrived |
 | `layout-in-the-store` | a viewport in the state, making two terminals two executions |
 | `overlay-in-the-store` | a pause flag in the state, surviving a restart that cannot know it |
+| `replay-reperforms` | a run that ignores the record and does both durable effects again |
+| `recoverable-secret` | a secret treated as ordinary: nobody is asked, so the value had to be somewhere |
+| `streamed-into-the-record` | a partial chunk written as an admitted outcome, indistinguishable downstream |
+| `draft-as-a-visit` | four navigation entries for one place, burying where the person came from |
 
 ## The StarFX store
 
@@ -236,7 +249,61 @@ expansion is held at `r-22` and the Journal advances to `r-23`, the selected
 model does not move and the string `remote tags fetched` appears in neither
 the model nor the History.
 
-## What Slice 2 does not do
+## Restart
 
-No renderer, no terminal, no real XMD execution, no Agent, no secrets, no
-restart replay, no forks. Those are slices 3 and 4.
+A live run and a replay are one function. `resume()` walks the document's steps
+beside the Journal in append order, and each step either *consumes* the records
+it already produced or *performs* itself for the first time. A consumed step
+never reaches the performer, which is the whole no-repeat claim. Where it stops
+is the **replay frontier**: the first elicitation with no answer recorded.
+
+Two elicitations differ on the way there, and that difference is the secret
+rule. An ordinary answer is in the record, so replay recovers it and asks
+nobody. A secret answer is not in the record and never was, so replay knows
+only that it was asked — and asks again. With nobody to ask, that is a frontier
+of its own.
+
+`suspension.opened` carries `secret` and `suspension.answered` carries
+`answer`, which is what makes the two cases distinguishable at all. The
+projection refuses a `suspension.answered` that carries a value for a wait the
+Journal opened as secret, so a leak cannot be written down and then merely left
+unread.
+
+```
+— a first run, live —
+  performed : agent entry-1/document/draft, publish notes
+  frontier  : awaiting channel
+
+— the same document after process loss —
+  performed again : nothing
+  consumed        : agent entry-1/document/draft, publish notes
+  recovered       : channel=#releases
+  re-prompted for : token
+  partial output  : none
+  frontier        : complete
+  with nobody to ask: unrevealed token
+
+— what the restart shows —
+  admitted result : Release notes for 0.14.0
+  its scopes      : draft > review
+  journal records : 13 (typing appended none)
+  navigation stack: 1
+  Continue offered: false
+
+— the secret —
+  asked for again in : token
+  present in journal, store, navigation, audit or run: nowhere
+```
+
+## Drafts
+
+Typing moves the URL and nothing else. No record is appended, and the ordinary
+navigation history — which is process-local, like the snapshot cache, and so
+lives beside the store rather than in it — is replaced in place rather than
+grown. Three keystrokes are one place, so Back goes where the person came from
+instead of walking backwards through their typing.
+
+## What Slice 3 does not do
+
+No renderer, no terminal, no real XMD execution, no model provider, no forks.
+Forks are Slice 4.

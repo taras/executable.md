@@ -81,6 +81,7 @@ const RECORDS: readonly Record<string, unknown>[] = [
     scope: ["document", "plan"],
     wait: "review",
     prompt: "Approve this plan before it runs?",
+    secret: false,
   },
   {
     id: "r-05",
@@ -90,6 +91,7 @@ const RECORDS: readonly Record<string, unknown>[] = [
     entry: "entry-1",
     scope: ["document", "plan"],
     wait: "review",
+    answer: "approved",
   },
   {
     id: "r-06",
@@ -231,6 +233,7 @@ const RECORDS: readonly Record<string, unknown>[] = [
     scope: ["document", "write"],
     wait: "source",
     prompt: "Which project should the changelog describe?",
+    secret: false,
   },
   {
     id: "r-22",
@@ -241,6 +244,7 @@ const RECORDS: readonly Record<string, unknown>[] = [
     scope: ["document", "publish"],
     wait: "confirm",
     prompt: "Commit and push the changelog now?",
+    secret: false,
   },
   {
     id: "r-23",
@@ -480,6 +484,7 @@ const TERMINAL_RECORDS: readonly Record<string, unknown>[] = [
     scope: ["document", "watch"],
     wait: "approve",
     prompt: "Approve the deploy?",
+    secret: false,
   },
   {
     id: "t-18",

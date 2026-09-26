@@ -141,12 +141,16 @@ export type SemanticEvent =
       readonly scope: readonly string[];
       readonly wait: string;
       readonly prompt: string;
+      /** Whether the answer is a secret. A secret one records no answer, ever. */
+      readonly secret: boolean;
     })
   | (Recorded & {
       readonly kind: "suspension.answered";
       readonly entry: string;
       readonly scope: readonly string[];
       readonly wait: string;
+      /** What was answered, so replay recovers it instead of asking again. Empty for a secret. */
+      readonly answer: string;
     })
   | (Recorded & {
       readonly kind: "outcome.recorded";
@@ -179,8 +183,8 @@ const FIELDS: Record<SemanticKind, readonly string[]> = {
   "scope.opened": ["entry", "scope", "name", "source"],
   "scope.completed": ["entry", "scope", "name"],
   "binding.published": ["entry", "name", "value"],
-  "suspension.opened": ["entry", "scope", "wait", "prompt"],
-  "suspension.answered": ["entry", "scope", "wait"],
+  "suspension.opened": ["entry", "scope", "wait", "prompt", "secret"],
+  "suspension.answered": ["entry", "scope", "wait", "answer"],
   "outcome.recorded": ["entry", "scope", "label"],
 };
 
@@ -190,8 +194,18 @@ const PATHS: readonly string[] = ["scope"];
 /** The fields that are a number rather than text. */
 const NUMBERS: readonly string[] = ["source"];
 
-/** The fields whose text may be empty, because empty is a value they can hold. */
-const MAY_BE_EMPTY: readonly string[] = ["reason", "prompt", "value"];
+/** The fields that are a flag rather than text. */
+const FLAGS: readonly string[] = ["secret"];
+
+/**
+ * The fields whose text may be empty, because empty is a value they can hold.
+ *
+ * `answer` is here because an empty one is the whole point: a secret
+ * elicitation records that it was answered and records nothing of what was
+ * said. The projection is what refuses a secret wait answered with a value;
+ * the parser cannot know which wait this record closes.
+ */
+const MAY_BE_EMPTY: readonly string[] = ["reason", "prompt", "value", "answer"];
 
 const ENVELOPE: readonly string[] = ["id", "seq", "at", "kind"];
 
@@ -234,6 +248,13 @@ function path(index: number, field: string, value: unknown): Result<readonly str
 function ordinal(index: number, field: string, value: unknown): Result<number> {
   if (typeof value !== "number" || !Number.isInteger(value) || value < 0) {
     return Err(new JournalParseError(index, field, `${field} is not a source ordinal`));
+  }
+  return Ok(value);
+}
+
+function flag(index: number, field: string, value: unknown): Result<boolean> {
+  if (typeof value !== "boolean") {
+    return Err(new JournalParseError(index, field, `${field} is not a flag`));
   }
   return Ok(value);
 }
@@ -294,7 +315,7 @@ function parseRecord(index: number, raw: unknown, seen: Set<string>): Result<Sem
     return Err(new JournalParseError(index, "at", "at is not a recorded time"));
   }
 
-  const fields: Record<string, string | number | readonly string[]> = {};
+  const fields: Record<string, string | number | boolean | readonly string[]> = {};
   for (const field of FIELDS[kind]) {
     if (!(field in raw)) {
       return Err(new JournalParseError(index, field, `a ${kind} record declares ${field}`));
@@ -304,7 +325,9 @@ function parseRecord(index: number, raw: unknown, seen: Set<string>): Result<Sem
       ? path(index, field, value)
       : NUMBERS.includes(field)
         ? ordinal(index, field, value)
-        : text(index, field, value);
+        : FLAGS.includes(field)
+          ? flag(index, field, value)
+          : text(index, field, value);
     if (!read.ok) {
       return read;
     }
