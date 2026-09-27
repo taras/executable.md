@@ -83,6 +83,8 @@ import type {
 } from "@executablemd/core";
 import { useAcpxProvider } from "@executablemd/acp";
 import { command as hostCommand, cwd } from "@executablemd/runtime";
+import { runReplProgram } from "./repl/program.ts";
+import { decodeLocation } from "./repl/route.ts";
 import { renderAgentOptions, renderAgentOptionsJson, scanAgentArgs } from "./agent-options.ts";
 import type { MachineSessionAssembly } from "./session-coordinator.ts";
 import {
@@ -276,6 +278,30 @@ const runConfig = object({
     ...field(z.string().optional()),
   },
   ...executionFields,
+});
+
+/** What `xmd --help` says the repl command is for. */
+const REPL_DESCRIPTION = "Run and reconstruct one XMD entry in an interactive terminal.";
+
+/**
+ * `xmd repl` — one entry, one terminal, one retained history.
+ *
+ * The optional positional is a location this command printed earlier. With one,
+ * the command reopens exactly that retained history and selects exactly what the
+ * location names; with none, it starts a fresh execution with an empty draft.
+ *
+ * No option a run configures appears here. This command renders no file, takes
+ * no document reference and spends no model turn beyond what the one entry a
+ * person types asks for, so a permission mode, an exec deadline, a props file
+ * and a journal each configure work this command never performs.
+ */
+const replConfig = object({
+  location: {
+    description:
+      "a location this REPL printed earlier — `xmd://repl/<execution>/<surface>...` — to reopen " +
+      "that retained history and the exact view it names",
+    ...field(z.string().optional(), cli.argument()),
+  },
 });
 
 /** What `xmd --help` says the plan command is for. */
@@ -503,6 +529,7 @@ const xmd = program({
       syntax: syntaxConfig,
       agent: { ...agentConfig, description: AGENT_DESCRIPTION },
       upgrade: { ...upgradeConfig, description: UPGRADE_DESCRIPTION },
+      repl: { ...replConfig, description: REPL_DESCRIPTION },
       "test-agent": testAgentConfig,
       workflow: workflowConfig,
     },
@@ -519,6 +546,77 @@ const UPGRADE_JOURNAL_ALIAS = "-j";
 
 /** Everything the command accepts, as help and refusals name it. */
 const UPGRADE_OPTIONS: readonly string[] = [...UPGRADE_SWITCHES, UPGRADE_JOURNAL];
+
+/**
+ * What `xmd repl --help` says beyond its argument list.
+ *
+ * The one-entry limit is stated because it is the product, not a restriction to
+ * be worked around: an execution admits one entry, and reopening its location
+ * shows that entry's history rather than offering a second.
+ */
+const REPL_HELP = [
+  "ONE ENTRY",
+  "",
+  "  xmd repl opens an empty draft in a full-screen terminal. Type or paste one",
+  "  XMD entry and submit it; the REPL runs it, and you can pause its expansion,",
+  "  look at an earlier point in its history, answer a question it asks and read",
+  "  what it produced.",
+  "",
+  "  An execution admits exactly one entry. The screen always shows a location",
+  "  of the form xmd://repl/<execution>/<surface>..., and the command prints the",
+  "  one it ended at. Passing that location back reopens the same retained",
+  "  history and selects the same view — in this process or another one, from the",
+  "  history file alone.",
+].join("\n");
+
+/**
+ * How a host installs everything the REPL needs from it.
+ *
+ * A value the entrypoint supplies rather than something shared code reaches for,
+ * exactly as the standard-input reader and the plugin loader are: a per-user data
+ * directory, an exclusive create, an append and a terminal are host capabilities,
+ * and the shared command names none of them.
+ */
+export type ReplHostInstaller = () => Operation<void>;
+
+/**
+ * What fixed grammar refuses about one `xmd repl` command line.
+ *
+ * Pure over argv: it reads nothing, so a malformed line is answered before this
+ * command has taken a directory, a file or a terminal. `xmd repl` defines no
+ * option of its own, which is why anything option-shaped is refused rather than
+ * ignored — a caller who wrote `--json` asked for something, and silence would
+ * let them believe they got it.
+ */
+export function replGrammarError(
+  args: readonly string[],
+  location: string | undefined,
+): string | undefined {
+  // The command's own name is the first token, as it is for every command that
+  // reads its line directly.
+  const rest = args.slice(1);
+  const option = rest.find((token) => token.startsWith("-") && token !== "-");
+  if (option !== undefined) {
+    return (
+      `unrecognized option for xmd repl: ${option} — xmd repl takes one optional location ` +
+      "and no options"
+    );
+  }
+  const positional = rest.filter((token) => !token.startsWith("-"));
+  if (positional.length > 1) {
+    return (
+      "xmd repl takes at most one location. This REPL admits one entry per execution, so " +
+      "there is no second document to name."
+    );
+  }
+  if (location !== undefined) {
+    const decoded = decodeLocation(location);
+    if (!decoded.ok) {
+      return `xmd repl: ${decoded.error.message}`;
+    }
+  }
+  return undefined;
+}
 
 /** What fixed grammar establishes about one `xmd upgrade` command line. */
 interface UpgradeScan {
@@ -2303,6 +2401,7 @@ const COMMAND_NAMES = [
   "syntax",
   "upgrade",
   "agent",
+  "repl",
   "test-agent",
   "workflow",
 ];
@@ -2429,7 +2528,9 @@ function renderHelp(phase: PropsPhase): string {
           ? UPGRADE_HELP
           : command === "agent"
             ? AGENT_OPTIONS_HELP
-            : "";
+            : command === "repl"
+              ? REPL_HELP
+              : "";
   const withSource = epilogue === "" ? base : `${base}\n\n${epilogue}`;
 
   if (!phase.root) {
@@ -2516,6 +2617,7 @@ function* dispatch(
   readStandardInput: StandardInputReader,
   workflowHost: WorkflowHost | undefined,
   sessions: MachineSessionAssembly | undefined,
+  installRepl: ReplHostInstaller | undefined,
   /**
    * What this invocation's Plugins installed.
    *
@@ -2718,6 +2820,44 @@ function* dispatch(
       );
       if (exitCode !== 0) {
         yield* exit(exitCode);
+      }
+      break;
+    }
+    case "repl": {
+      // The command's whole grammar is one optional location, so anything else
+      // on the line is refused here — before a per-user directory is formed,
+      // before a history file is created or opened, and before the terminal's
+      // modes are touched. A refusal that had already taken the terminal would
+      // print into an alternate screen nobody is looking at.
+      const stray = replGrammarError(helpRequest.args, command.config.location);
+      if (stray !== undefined) {
+        console.error(stray);
+        yield* exit(1);
+        break;
+      }
+      if (installRepl === undefined) {
+        console.error(
+          "xmd repl: this host assembles no interactive terminal, so there is nothing to open.",
+        );
+        yield* exit(1);
+        break;
+      }
+      yield* installRepl();
+      const ran = yield* runReplProgram(
+        command.config.location === undefined ? {} : { location: command.config.location },
+      );
+      if (!ran.ok) {
+        console.error(`xmd repl: ${ran.error.message}`);
+        yield* exit(1);
+        break;
+      }
+      // The location it ended at, so a person can reopen exactly this view.
+      const written = yield* deliverWhole(`${ran.value.location}\n`, process.stdout);
+      if (!written.ok) {
+        console.error(
+          `xmd repl: stdout did not accept the whole location: ${describeError(written.error)}`,
+        );
+        yield* exit(1);
       }
       break;
     }
@@ -3080,6 +3220,13 @@ export function* runXmd(
   // owns the session or which build it belongs to. A caller that names none
   // gets no machine sessions at all, which is the ordinary ACP behaviour.
   sessions?: MachineSessionAssembly,
+  // How this host assembles the interactive REPL: a per-user data directory, an
+  // opaque execution name, exclusive create and append, and a terminal. Only the
+  // `repl` command calls it, so help and every other command reach none of it —
+  // which is what keeps raw mode and a data directory off their path. A host that
+  // names none has no REPL, and says so rather than opening a terminal it cannot
+  // restore.
+  installRepl?: ReplHostInstaller,
 ): Operation<void> {
   // Before every scanner and before anything reads a path: what a command line
   // selects is read from the argv the caller wrote, and the tokens that
@@ -3113,6 +3260,7 @@ export function* runXmd(
     loadPluginModule,
     installWorkflowHost,
     sessions,
+    installRepl,
   );
 }
 
@@ -3174,6 +3322,7 @@ function* runCommand(
   loadPluginModule: PluginModuleLoader,
   installWorkflowHost: HostWorkflowInstaller,
   sessions: MachineSessionAssembly | undefined,
+  installRepl: ReplHostInstaller | undefined,
 ): Operation<void> {
   // First, so that no later scanner — help, properties, agent flags — can
   // mistake the inline document's own text for an option.
@@ -3238,6 +3387,7 @@ function* runCommand(
       readStandardInput,
       workflowHost,
       sessions,
+      installRepl,
       plugins,
     );
 

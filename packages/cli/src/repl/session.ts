@@ -147,6 +147,16 @@ export interface ReplSession {
   readonly live: boolean;
   /** Each reprojection, as the history grows under it. */
   readonly changes: Stream<ReplModel, never>;
+  /**
+   * The overlay's output, each time the document adds to it.
+   *
+   * Separate from `changes` because plain output is precisely what the Journal
+   * does not record: a document that only writes appends nothing, reprojects
+   * nothing, and would otherwise be invisible to anything watching the
+   * history. A reader that shows `overlay.output` has to watch this too, or it
+   * shows text only when something unrelated happens to move.
+   */
+  readonly outputs: Stream<string, never>;
   /** Wait for this process's execution to finish, and answer how it finished. */
   join(): Operation<Result<unknown>>;
 }
@@ -219,6 +229,7 @@ function* start(
   }
 
   const changes = createSignal<ReplModel, never>();
+  const outputs = createSignal<string, never>();
   let output = "";
   let live = true;
   const admission = withResolvers<Result<ReplSession>>();
@@ -288,6 +299,7 @@ function* start(
         return live;
       },
       changes,
+      outputs,
       join(): Operation<Result<unknown>> {
         return task;
       },
@@ -342,6 +354,10 @@ function* start(
           let next = yield* chunks.next();
           while (!next.done) {
             output += next.value;
+            // Announced, not merely accumulated: nothing else will say that the
+            // overlay moved, because output the Journal has not settled leaves
+            // no record to reproject from.
+            outputs.send(output);
             next = yield* chunks.next();
           }
         });
@@ -411,6 +427,8 @@ function idle(execution: string, model: ReplModel): ReplSession {
     elicitation,
     live: false,
     changes,
+    // Nothing is running, so nothing will ever write.
+    outputs: createSignal<string, never>(),
     // deno-lint-ignore require-yield
     *join(): Operation<Result<unknown>> {
       return Ok(undefined);

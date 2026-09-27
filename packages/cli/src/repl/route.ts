@@ -223,8 +223,20 @@ export function encodeLocation(route: ReplRoute): string {
  * did not record. A target that is absent refuses; so does a drawer stack whose
  * earlier members were left out, because a stack with a hole in it does not
  * describe a surface anybody saw.
+ *
+ * `asking` is the one thing the model cannot answer. A question that is waiting
+ * has by definition not been recorded — a Journal holds answered questions, not
+ * pending ones — so no reading of any history can establish that a live
+ * question's drawer is mountable. The process that is asking says so. It
+ * defaults to false, because a caller that cannot say is a caller with no
+ * question: resolving one it does not have would accept a URL naming a drawer
+ * nothing will mount.
  */
-export function resolveLocation(model: ReplModel, route: ReplRoute): Result<ReplSelection> {
+export function resolveLocation(
+  model: ReplModel,
+  route: ReplRoute,
+  asking = false,
+): Result<ReplSelection> {
   if (route.at !== model.selection) {
     return Err(
       new ReplRouteError(
@@ -280,7 +292,7 @@ export function resolveLocation(model: ReplModel, route: ReplRoute): Result<Repl
 
   const drawers: ReplDrawer[] = [];
   for (const reference of route.drawers) {
-    const drawer = openDrawer(model, route, scope, reference);
+    const drawer = openDrawer(model, route, scope, reference, asking);
     if (!drawer.ok) {
       return drawer;
     }
@@ -302,6 +314,7 @@ function openDrawer(
   route: ReplRoute,
   scope: ReplScope | undefined,
   reference: ReplDrawerRef,
+  asking: boolean,
 ): Result<ReplDrawer> {
   if (reference.kind === "history") {
     return Ok({ kind: "history" });
@@ -326,6 +339,21 @@ function openDrawer(
         new ReplRouteError(
           "a live question belongs to the running expansion, and this view is frozen at an " +
             "earlier position. Return to the live head to answer it.",
+        ),
+      );
+    }
+    if (!asking) {
+      // Nothing retained can establish this drawer. A waiting question is the
+      // one thing a Journal never holds — it records answers — so `settled`,
+      // the recorded elicitations and every other fact in the model are all
+      // consistent with no question ever arriving. A route resolved here
+      // without one replays a whole execution, mounts nothing and reports
+      // success. Only the process actually asking may open it.
+      return Err(
+        new ReplRouteError(
+          "nothing is being asked. A live question's drawer belongs to the process holding the " +
+            "question, and no history records one that is still waiting — so this location " +
+            "cannot be reopened into answering it.",
         ),
       );
     }

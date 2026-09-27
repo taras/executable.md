@@ -232,4 +232,39 @@ describe("Tier CH — xmd help", { sanitizeOps: false, sanitizeResources: false 
     expect(stdout).not.toContain("%23");
     expect(stdout).not.toContain("document reference");
   });
+
+  it("CH12: program help lists repl, and its own help describes the one entry", function* () {
+    const listed = yield* runCli(["--help"]).expect();
+    expect(listed.stdout).toContain("repl");
+    expect(listed.stdout).toContain(
+      "Run and reconstruct one XMD entry in an interactive terminal.",
+    );
+
+    const own = yield* runCli(["repl", "--help"]).expect();
+    expect(own.stdout).toContain("Usage: xmd repl [OPTIONS] [location]");
+    expect(own.stdout).toContain("a location this REPL printed earlier");
+    expect(own.stdout).toContain("ONE ENTRY");
+    expect(own.stdout).toContain("An execution admits exactly one entry.");
+    // Describing a command is not running one: help reaches no data directory,
+    // no history file and no terminal mode.
+    expect(own.stdout).not.toContain("xmd/repl/");
+  });
+
+  it("CH13: xmd repl refuses a bad command line before it opens anything", function* () {
+    // Each of these is refused by fixed grammar, which reads nothing — so the
+    // refusal arrives before a per-user directory is formed, a history file is
+    // created or the terminal's modes are touched.
+    const second = yield* runCli(["repl", "one", "two"]).join();
+    expect(second.code).toBe(1);
+    expect(second.stderr).toContain("xmd repl takes at most one location");
+
+    const unknown = yield* runCli(["repl", "--json"]).join();
+    expect(unknown.code).toBe(1);
+    expect(unknown.stderr).toContain("unrecognized option for xmd repl: --json");
+
+    const malformed = yield* runCli(["repl", "xmd://nope"]).join();
+    expect(malformed.code).toBe(1);
+    expect(malformed.stderr).toContain("xmd repl:");
+    expect(malformed.stderr).toContain("xmd://repl/");
+  });
 });

@@ -17,6 +17,7 @@ import process from "node:process";
 import { API, useHostFiles } from "@executablemd/runtime";
 import { compileTempFile } from "@executablemd/core";
 import { runXmd, XMD_VERSION } from "./cli.ts";
+import { useNodeRepl } from "./node-repl.ts";
 import { readInputStream } from "./standard-input.ts";
 import { importPluginModule } from "./host-plugin-modules.ts";
 import type { UpgradeAssembly } from "./upgrade.ts";
@@ -84,5 +85,6 @@ await main(function* (args) {
     importPluginModule,
     unsupportedWorkflowHost,
     unassembledMachineSessions(),
+    useNodeRepl,
   );
 });

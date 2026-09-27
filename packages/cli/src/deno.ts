@@ -13,6 +13,7 @@ import process from "node:process";
 import { API, useHostFiles } from "@executablemd/runtime";
 import { compileDataUri } from "@executablemd/core";
 import { runXmd, XMD_VERSION } from "./cli.ts";
+import { useDenoRepl } from "./deno-repl.ts";
 import { readInputStream } from "./standard-input.ts";
 import { importPluginModule } from "./host-plugin-modules.ts";
 import type { UpgradeAssembly } from "./upgrade.ts";
@@ -111,6 +112,7 @@ if (isCredentialHelperMode(process.argv.slice(2))) {
       importPluginModule,
       () => useDenoWorkflowHost(HELPER),
       useMachineSessions(),
+      useDenoRepl,
     );
   });
 }

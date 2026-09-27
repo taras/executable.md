@@ -38,6 +38,15 @@ export class ReplTerminalError extends Error {
 }
 
 export interface ReplTerminalApi {
+  /**
+   * Whether a person is at this terminal.
+   *
+   * Asked before anything is created, because the REPL is not available over a
+   * pipe and finding that out by calling `setRaw` on one is finding it out
+   * after a history file already exists. A host answers from what it knows
+   * about its own descriptors; nothing here guesses.
+   */
+  interactive(): Operation<boolean>;
   /** The size as it stands. */
   size(): Operation<ReplTerminalSize>;
   /** Write bytes, returning once the terminal has them. */
@@ -59,6 +68,10 @@ export interface ReplTerminalApi {
 }
 
 export const ReplTerminal: Api<ReplTerminalApi> = createApi<ReplTerminalApi>("ReplTerminal", {
+  // deno-lint-ignore require-yield
+  *interactive(): Operation<boolean> {
+    throw new ReplTerminalError("asking whether a person is at it");
+  },
   // deno-lint-ignore require-yield
   *size(): Operation<ReplTerminalSize> {
     throw new ReplTerminalError("reading its size");

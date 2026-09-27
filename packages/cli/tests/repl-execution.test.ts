@@ -18,7 +18,7 @@ import { expect } from "@executablemd/test-support/expect";
 import { useTempFileCompiler } from "@executablemd/core";
 import { InMemoryStream, serializeDurableEvent } from "@executablemd/durable-streams";
 import type { DurableEvent } from "@executablemd/durable-streams";
-import { ensure, race, scoped, sleep, until } from "effection";
+import { ensure, race, scoped, sleep, spawn, until } from "effection";
 import type { Operation, Result } from "effection";
 import { ensureDir, rm, writeTextFile } from "@effectionx/fs";
 import { API } from "@executablemd/runtime";
@@ -247,6 +247,40 @@ describe("REPL execution: submitting one entry", () => {
     expect(session.model.settled).toBe(true);
     expect(session.model.terminal?.output).toContain("Decision: approve");
     expect(session.overlay.output).toBe(session.model.terminal?.output);
+  });
+
+  it("X1: the overlay reports its output as the document prints it", function* () {
+    const holder = execution();
+    const source = yield* referenceSource();
+    const session = opened(yield* submitReplEntry({ ...options(holder), source }));
+
+    // Output is the one thing in the overlay that no record describes: a
+    // document that prints and nothing else reprojects nothing, so a reader
+    // watching the history would never learn that the overlay had moved.
+    const reported: string[] = [];
+    yield* spawn(function* (): Operation<void> {
+      const outputs = yield* session.outputs;
+      let next = yield* outputs.next();
+      while (!next.done) {
+        reported.push(next.value);
+        next = yield* outputs.next();
+      }
+    });
+
+    const question = yield* nextQuestion(session);
+
+    // Reported while the run is still holding at its question, rather than
+    // collected and handed over once it finished.
+    expect(reported.length).toBeGreaterThan(0);
+    const latest = reported[reported.length - 1];
+    expect(latest).toContain("About to evaluate:");
+    // What it reported is what the overlay holds: the same text, not a chunk
+    // the reader would have to accumulate itself.
+    expect(latest).toBe(session.overlay.output);
+    expect(session.model.terminal).toBe(undefined);
+
+    question.answer("approve");
+    yield* session.join();
   });
 
   it("X1: the generated fragment is shown before it is admitted, and follows the binding", function* () {

@@ -853,6 +853,7 @@ function recordingTerminal(size: ReplTerminalSize = { columns: 160, rows: 36 }):
   };
 
   const host: ReplTerminalCapabilities = {
+    interactive: () => true,
     size(): ReplTerminalSize {
       return log.size;
     },

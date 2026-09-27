@@ -21,6 +21,11 @@ import type { ReplTerminalSize } from "./repl/terminal.ts";
 /** Install the Bun-backed terminal for the calling scope. */
 export function useBunReplTerminal(): Operation<void> {
   return installReplTerminal({
+    interactive(): boolean {
+      // Both ends, because the REPL reads keys from one and draws frames on
+      // the other: a redirected half is a half this product cannot run on.
+      return process.stdin.isTTY === true && process.stdout.isTTY === true;
+    },
     size(): ReplTerminalSize {
       return { columns: process.stdout.columns, rows: process.stdout.rows };
     },
