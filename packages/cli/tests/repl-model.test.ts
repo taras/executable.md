@@ -196,14 +196,14 @@ describe("REPL model: what one journal projects", () => {
     const generated = child(entry, "generated-1");
     expect(generated.kind).toBe("generated");
     expect(generated.source).toBe('<Json value={{"title":"Ship the REPL","steps":2}} />');
-    expect(generated.position?.line).toBe(14);
+    expect(generated.position?.line).toBe(16);
 
     expect(entry.generated).toHaveLength(1);
     expect(entry.generated[0].decision).toBe("admitted");
 
     expect(entry.elicitations).toHaveLength(1);
     expect(entry.elicitations[0].answer).toEqual(REFERENCE_ANSWER);
-    expect(entry.elicitations[0].location).toBe("<eval>:16:1");
+    expect(entry.elicitations[0].location).toBe("<eval>:18:1");
     expect(entry.elicitations[0].schema).toEqual({
       type: "object",
       properties: { decision: { type: "string", enum: ["approve", "decline"] } },

@@ -11,6 +11,8 @@ const responseSchema = {
 
 <Checklist title={plan.title} steps={plan.steps} />
 
+About to evaluate: {summarySource}
+
 <Evaluate text={summarySource} />
 
 <Elicit schema={responseSchema} as="response">Approve {plan.title}?</Elicit>
