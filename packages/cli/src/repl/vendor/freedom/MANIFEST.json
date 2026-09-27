@@ -1,0 +1,99 @@
+{
+  "format": 1,
+  "package": "@bomb.sh/freedom",
+  "version": "0.0.0",
+  "repository": "https://github.com/bombshell-dev/playground",
+  "directory": "packages/freedom",
+  "commit": "8be97e7201cd6effddb2f8b240b4b5166641e7f0",
+  "license": {
+    "notice": "LICENSE",
+    "upstreamRepository": "MIT",
+    "packageMetadata": "ISC"
+  },
+  "patches": [
+    {
+      "name": "executablemd/caller-owned-root",
+      "files": [
+        "lib/mod.ts",
+        "lib/node.ts",
+        "lib/root.ts"
+      ]
+    },
+    {
+      "name": "executablemd/containment-aware-removal",
+      "files": [
+        "lib/focus.ts"
+      ]
+    }
+  ],
+  "files": [
+    {
+      "path": "LICENSE",
+      "kind": "license",
+      "sha256": "ff5318b9f1cbe44dec39dd306a042a50900ecfaf0d99489beb11b6a567ad21bf"
+    },
+    {
+      "path": "PROVENANCE.md",
+      "kind": "provenance",
+      "sha256": "c799cceadab7f607bb6d03c72c3a2b30a8f15bff76b6d5c098c18cc732b8f63a"
+    },
+    {
+      "path": "index.ts",
+      "kind": "source",
+      "upstream": "ffae461c16d4a1bf24c2179582ab8d5c81ad0df61e4ae2fba51ef5e5bdf90345",
+      "patched": "ffae461c16d4a1bf24c2179582ab8d5c81ad0df61e4ae2fba51ef5e5bdf90345"
+    },
+    {
+      "path": "lib/dispatch.ts",
+      "kind": "source",
+      "upstream": "c75fbd34bda9786aae58e5539ebc05bd0cf88766771cef55dfb23db55d72e5ec",
+      "patched": "c75fbd34bda9786aae58e5539ebc05bd0cf88766771cef55dfb23db55d72e5ec"
+    },
+    {
+      "path": "lib/focus.ts",
+      "kind": "source",
+      "upstream": "9e8523c0b0bd806099c0268a4ab208911c6d5022e83f3df3d41fe4cb9e91d4cd",
+      "patched": "a15373b0932e6ca46cf929bd10a691a00026480493194f63b2659927a2df6d95",
+      "patch": "executablemd/containment-aware-removal"
+    },
+    {
+      "path": "lib/mod.ts",
+      "kind": "source",
+      "upstream": "a88646ff36a1b147f02e776c7ba18d8e9ca2afb9d6ce90c6fe51932aee371c5c",
+      "patched": "a7986ae983ef513d06094dc1bf7b66634e7a567c029194c655890d33f8e73457",
+      "patch": "executablemd/caller-owned-root"
+    },
+    {
+      "path": "lib/node.ts",
+      "kind": "source",
+      "upstream": "13f285bf9540659793f263709deb1a9082e9953e7aa38d07253fa6d0bd9b39f8",
+      "patched": "ba0764792302364ab462379d748a47ef5518d3936026b59d73735b435a6417c1",
+      "patch": "executablemd/caller-owned-root"
+    },
+    {
+      "path": "lib/root.ts",
+      "kind": "source",
+      "upstream": "f92b1e942166fb38726df6c4250d93ad2d1ac8b48a36629740bb731e69c2206d",
+      "patched": "c03e096dae1f040e05628be2bb2c186f0163667abd7374085afe7a935079445f",
+      "patch": "executablemd/caller-owned-root"
+    },
+    {
+      "path": "lib/state.ts",
+      "kind": "source",
+      "upstream": "6eb73c1f8daa2d560948a52eb7e87ec91b8cd8c47cacdb4ca57e6ef70f1c4e1f",
+      "patched": "6eb73c1f8daa2d560948a52eb7e87ec91b8cd8c47cacdb4ca57e6ef70f1c4e1f"
+    },
+    {
+      "path": "lib/types.ts",
+      "kind": "source",
+      "upstream": "6f1654f4f7855e21167fd62349bf56e461ce61470ba51099382068a296b89e62",
+      "patched": "6f1654f4f7855e21167fd62349bf56e461ce61470ba51099382068a296b89e62"
+    },
+    {
+      "path": "lib/validate.ts",
+      "kind": "source",
+      "upstream": "561f3b52c1ffdc91ca1cf976aae09319d66ea982758abb6e79e2c1ad351b9c6b",
+      "patched": "561f3b52c1ffdc91ca1cf976aae09319d66ea982758abb6e79e2c1ad351b9c6b"
+    }
+  ]
+}

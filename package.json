@@ -74,7 +74,7 @@
     "test:node": "tsx scripts/runtime-tests.ts node",
     "test:bun": "bun scripts/runtime-tests.ts bun",
     "test:deno": "deno task test",
-    "lint": "oxlint -c .oxlintrc.json --ignore-pattern 'scripts/tests/fixtures/**' --ignore-pattern '**/npm/**' --ignore-pattern 'packages/workflow/vendor/cloudflare-computer-dofs/**' --ignore-pattern 'packages/acp/vendor/acpx/**' packages scripts && oxfmt --check packages scripts",
+    "lint": "oxlint -c .oxlintrc.json --ignore-pattern 'scripts/tests/fixtures/**' --ignore-pattern '**/npm/**' --ignore-pattern 'packages/workflow/vendor/cloudflare-computer-dofs/**' --ignore-pattern 'packages/acp/vendor/acpx/**' --ignore-pattern 'packages/cli/src/repl/vendor/freedom/**' packages scripts && oxfmt --check packages scripts",
     "fmt": "oxfmt --write packages scripts"
   },
   "workspaces": [

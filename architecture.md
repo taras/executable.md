@@ -5307,6 +5307,43 @@ Status is measured against main.
 `<Retry>` composes with validation by nesting: a `<Parse>` failing inside
 fails the attempt — "retry until it parses" is two existing ideas.
 
+## The private REPL composition kernel
+
+`packages/cli/src/repl/` is a private CLI feature, not a package boundary and
+not part of `@executablemd/core`'s surface. Its layers are one direction:
+
+```text
+DurableEvent[] → frozen ReplModel → resolved view → keyed descriptions
+              → one mounted Freedom tree → a frame
+                        ↑
+            typed semantic actions, target ancestry → root
+```
+
+The Journal is the only durable truth, and history terminates at `ReplModel`:
+projection detaches every value it retains and freezes it, so nothing below
+holds a `DurableEvent` and nothing above can change one. Route resolution is
+pure and answers with the exact objects that model holds.
+
+Composition is keyed. A parent describes its complete child set; the reconciler
+judges all of it before mutating any of it, adds and updates before removing,
+then sets canonical order, and acknowledges the offer only after that commit.
+Identity is parent, key and type, so redescription preserves a node and its
+running lifetime while a changed key or type replaces it. Freedom owns the one
+mounted lifetime tree and the one focus store, and a component's capabilities
+live in its own node's `NodeData` — an absent description therefore leaves no
+node, no input, no focus, no frame contribution and no output anywhere.
+
+A component is constructed synchronously inside the commit and may own ongoing
+work in its node's scope; a render body owns nothing. Normalized host input is
+decided once, at the host, which names a target and an event shape and never an
+action; the tree walks that target's own ancestry, and the first node to claim
+the event produces the typed action the root acts on. An event nothing claims
+is an explicit failure.
+
+Freedom is vendored from a pinned unpublished commit under
+`packages/cli/src/repl/vendor/freedom/`, as a pristine copy and a patched copy
+whose every difference belongs to one named patch. See its `PROVENANCE.md`.
+
 ## Changing these rules
 
 Spec, tests, and mechanics move together, in the same PR. If a workaround

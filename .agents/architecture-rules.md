@@ -15,6 +15,13 @@ the system itself; this file governs how new architecture is designed.
 6. Record adjacent debt as a proposed follow-up Story instead of expanding the feature.
 7. Each package exports its consumer-facing contextual APIs and their types from /api; consumers depend on that package and import them from /api.
 8. Feature-specific runtime APIs stay with their feature package and are not collected into a central runner context.
+9. Immutable view data flows down and typed semantic actions flow up; the root alone owns route intent, selection and rebuildable application state.
+10. A component lifetime may own a node; a render body may not create or own one.
+11. View data and placement cross the direct parent-child boundary and no other.
+12. Normalized host input is decided once and dispatched through the target's own ancestry; a host names a target and an event shape, never an action.
+13. Freedom alone owns focus; an overlay is a mounted branch, not a second tree.
+14. Keyed descriptions reconcile into one mounted tree; validate the complete desired set before mutating any of it.
+15. An absent description leaves no node, input, focus, frame contribution or output behind.
 
 The Architect applies these rules without another approval when they settle a
 design. A new concept, ambiguous fit, conflict or proposed exception returns to
