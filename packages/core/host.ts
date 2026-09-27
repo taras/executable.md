@@ -206,6 +206,16 @@ export type { IdentityClaimant, IdentityComponent } from "./src/invocation-ident
  * the way the pinned generated identities take core's definitions.
  */
 export { props as elicitProps, returns as elicitReturns } from "./src/components/Elicit.ts";
+/**
+ * What a recorded elicitation retains beside its answer, for a host that reads
+ * history back.
+ *
+ * The field name and the reader travel together so that a host displaying an
+ * answered question reads the same shape core wrote, and reads it by parsing:
+ * the description is journal data, and a schema that merely looked plausible
+ * would reach a form as one.
+ */
+export { ELICITATION_SCHEMA_FIELD, readElicitationSchema } from "./src/elicit-journal.ts";
 export { WorkflowBundleError } from "./src/components/bundle.ts";
 export type { WorkflowBundleComponent, WorkflowComponentBundle } from "./src/components/bundle.ts";
 

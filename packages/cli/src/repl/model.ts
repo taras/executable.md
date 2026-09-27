@@ -1,0 +1,865 @@
+/**
+ * The REPL's view of one execution, projected from its Journal and nothing else.
+ *
+ * The Journal is the only durable truth this feature has, so the model is a
+ * *reading* of it rather than a second copy: `projectRepl` walks the real
+ * `Yield | Close` events an ordinary execution appends, recognizes the runtime's
+ * existing vocabulary, and returns immutable structural values. No REPL record
+ * exists, nothing is cached between processes, and no component ever receives a
+ * `DurableEvent` — what leaves here is plain frozen data.
+ *
+ * Every shape it reads is parsed. A journal is data somebody else may have
+ * written, so a payload that will not read, a history this slice's one-entry
+ * invariant forbids, or a source position that cannot be attributed to exactly
+ * one scope comes back as `Err`. Attaching data to a guessed owner would put a
+ * binding in the wrong scope and a wrong answer on the screen; refusing says so.
+ *
+ * Projection is pure in both directions. Every value the model retains is
+ * *detached* from the event that carried it — copied, then frozen — so the model
+ * cannot be changed by whoever still holds the events, and the events are
+ * neither frozen nor modified by having been read. A projector that froze its
+ * input would make a caller's own data immutable as a side effect of being
+ * looked at.
+ *
+ * A marker addresses a prefix rather than a stored sequence number. It is
+ * derived from protocol identity — which coroutine, and how many durable yields
+ * that coroutine had already settled — so the same event has the same marker in
+ * every process that reads the file, with nothing extra written down to make
+ * that true.
+ */
+
+import { Err, Ok } from "effection";
+import type { Result } from "effection";
+import { readElicitationSchema } from "@executablemd/core/host";
+import type { Close, DurableEvent, Json, Yield } from "@executablemd/durable-streams";
+
+/** The authored root scope: this slice admits one entry and this is its key. */
+export const ENTRY_SCOPE = "entry-1";
+
+/** The durable name of the root document import. */
+const ROOT_IMPORT = "__root__";
+
+const SOURCE_POSITION_FIELD = "executablemd.source-position";
+
+/** What the REPL could not read, and what it was reading when it stopped. */
+export class ReplProjectionError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ReplProjectionError";
+  }
+}
+
+/** Where an authored element was written, as the journal recorded it. */
+export interface ReplPosition {
+  readonly path: string | undefined;
+  readonly offset: number;
+  readonly line: number;
+  readonly column: number;
+}
+
+/** One name a durable eval published into its scope. */
+export interface ReplBinding {
+  readonly name: string;
+  readonly value: Json;
+}
+
+/** One answered question, as history can still show it. */
+export interface ReplElicitation {
+  readonly marker: string;
+  readonly location: string;
+  readonly schema: Json;
+  readonly answer: Json;
+  readonly position: ReplPosition | undefined;
+}
+
+/** One admitted generated fragment. */
+export interface ReplGenerated {
+  readonly marker: string;
+  readonly source: string | undefined;
+  readonly decision: "admitted" | "refused";
+  readonly construct: string | undefined;
+}
+
+/**
+ * One source region the entry admitted, and what that region holds.
+ *
+ * `kind` says where the source came from: the submitted entry, a nested
+ * component occurrence the run retained, or a generated fragment an authored
+ * invocation produced. A scope exists in a model only where the projected prefix
+ * admitted it, so a selection earlier than an admission has no scope to show and
+ * needs no separate flag saying so.
+ */
+export interface ReplScope {
+  readonly key: string;
+  readonly kind: "entry" | "component" | "generated";
+  readonly name: string;
+  readonly path: string;
+  readonly source: string;
+  readonly position: ReplPosition | undefined;
+  readonly marker: string;
+  readonly bindings: readonly ReplBinding[];
+  readonly elicitations: readonly ReplElicitation[];
+  readonly generated: readonly ReplGenerated[];
+  readonly scopes: readonly ReplScope[];
+}
+
+/** One offered history position, in append order. */
+export interface ReplCheckpoint {
+  readonly marker: string;
+  readonly kind: "entry" | "scope" | "binding" | "generated" | "elicit" | "terminal";
+  readonly label: string;
+}
+
+/**
+ * What the root coroutine settled to.
+ *
+ * Three outcomes, because the protocol has three. A document that produced a
+ * result closes `ok` carrying it, and the result says whether the document
+ * succeeded. A run that failed before there was a result to produce closes
+ * `err`, and there is no rendered output to restore. A cancelled run closes
+ * with neither.
+ */
+export interface ReplTerminal {
+  readonly status: "ok" | "err" | "cancelled";
+  readonly output: string;
+  readonly message: string | undefined;
+}
+
+/** One semantic transcript row. Never a record dump. */
+export type ReplRow =
+  | {
+      readonly kind: "entry";
+      readonly marker: string;
+      readonly path: string;
+      readonly source: string;
+    }
+  | {
+      readonly kind: "scope";
+      readonly marker: string;
+      readonly scope: string;
+      readonly name: string;
+      readonly path: string;
+    }
+  | {
+      readonly kind: "binding";
+      readonly marker: string;
+      readonly scope: string;
+      readonly names: readonly string[];
+    }
+  | {
+      readonly kind: "output";
+      readonly marker: string;
+      readonly scope: string;
+      readonly text: string;
+    }
+  | {
+      readonly kind: "generated";
+      readonly marker: string;
+      readonly scope: string;
+      readonly source: string | undefined;
+      readonly decision: "admitted" | "refused";
+    }
+  | {
+      readonly kind: "elicit";
+      readonly marker: string;
+      readonly scope: string;
+      readonly location: string;
+      readonly answer: Json;
+    }
+  | {
+      readonly kind: "effect";
+      readonly marker: string;
+      readonly type: string;
+      readonly status: string;
+    }
+  | {
+      readonly kind: "terminal";
+      readonly marker: string;
+      readonly status: "ok" | "err" | "cancelled";
+      readonly output: string;
+    };
+
+/** One frozen reading of one validated Journal prefix. */
+export interface ReplModel {
+  /** The marker this model was projected at, or none for the Journal head. */
+  readonly selection: string | undefined;
+  /** Whether the projected prefix is the whole file. */
+  readonly head: boolean;
+  readonly entry: ReplScope | undefined;
+  readonly settled: boolean;
+  readonly terminal: ReplTerminal | undefined;
+  readonly checkpoints: readonly ReplCheckpoint[];
+  readonly transcript: readonly ReplRow[];
+}
+
+/**
+ * The marker for one event, given how many yields its coroutine had settled.
+ *
+ * Both spellings are total over the protocol's two events, which is what lets a
+ * selection name any position in the file without a sequence number being
+ * stored anywhere.
+ */
+function markerFor(event: DurableEvent, ordinal: number): string {
+  return event.type === "yield"
+    ? `yield:${event.coroutineId}:${ordinal}`
+    : `close:${event.coroutineId}`;
+}
+
+/**
+ * Project one Journal prefix.
+ *
+ * `selection` names the last event the model may see. Absent, the model is the
+ * whole file. A marker that names no event in this file, or names one twice,
+ * is refused rather than rounded to the head: a reader looking at history must
+ * never be shown the present instead.
+ */
+export function projectRepl(
+  events: readonly DurableEvent[],
+  selection?: string,
+): Result<ReplModel> {
+  const markers: string[] = [];
+  const ordinals = new Map<string, number>();
+  for (const event of events) {
+    if (event.type === "yield") {
+      const ordinal = ordinals.get(event.coroutineId) ?? 0;
+      ordinals.set(event.coroutineId, ordinal + 1);
+      markers.push(markerFor(event, ordinal));
+    } else {
+      markers.push(markerFor(event, 0));
+    }
+  }
+
+  const duplicated = firstDuplicate(markers);
+  if (duplicated !== undefined) {
+    return Err(
+      new ReplProjectionError(
+        `this journal records ${duplicated} twice, so one position in its history names two ` +
+          "events. A coroutine closes once.",
+      ),
+    );
+  }
+
+  let end = events.length;
+  if (selection !== undefined) {
+    const at = markers.indexOf(selection);
+    if (at === -1) {
+      return Err(
+        new ReplProjectionError(
+          "the selected history position is not in this journal. Return to the live head and " +
+            "choose a checkpoint the history offers.",
+        ),
+      );
+    }
+    end = at + 1;
+  }
+
+  return build(events.slice(0, end), markers.slice(0, end), selection, end === events.length);
+}
+
+/** The first marker that appears twice, if any. */
+function firstDuplicate(markers: readonly string[]): string | undefined {
+  const seen = new Set<string>();
+  for (const marker of markers) {
+    if (seen.has(marker)) {
+      return marker;
+    }
+    seen.add(marker);
+  }
+  return undefined;
+}
+
+/** A scope under construction, before the model is frozen. */
+interface ScopeDraft {
+  key: string;
+  kind: "entry" | "component" | "generated";
+  name: string;
+  path: string;
+  source: string;
+  position: ReplPosition | undefined;
+  marker: string;
+  bindings: ReplBinding[];
+  elicitations: ReplElicitation[];
+  generated: ReplGenerated[];
+  scopes: ScopeDraft[];
+}
+
+function build(
+  events: readonly DurableEvent[],
+  markers: readonly string[],
+  selection: string | undefined,
+  head: boolean,
+): Result<ReplModel> {
+  const transcript: ReplRow[] = [];
+  const checkpoints: ReplCheckpoint[] = [];
+  let entry: ScopeDraft | undefined;
+  let terminal: ReplTerminal | undefined;
+  /** Every scope by the source path it was admitted from, for owner lookup. */
+  const byPath = new Map<string, ScopeDraft[]>();
+  const occurrences = new Map<string, number>();
+
+  for (let index = 0; index < events.length; index++) {
+    const event = events[index];
+    const marker = markers[index];
+
+    if (terminal !== undefined) {
+      return Err(
+        new ReplProjectionError(
+          "this journal records work after the entry settled. A settled entry is the end of " +
+            "its history.",
+        ),
+      );
+    }
+
+    if (event.type === "close") {
+      if (event.coroutineId !== "root") {
+        transcript.push({ kind: "effect", marker, type: "close", status: event.result.status });
+        continue;
+      }
+      if (entry === undefined) {
+        return Err(
+          new ReplProjectionError(
+            "this journal settles an entry it never admitted. An entry's source is admitted " +
+              "before anything it does.",
+          ),
+        );
+      }
+      const settled = readTerminal(event);
+      if (settled === undefined) {
+        return Err(
+          new ReplProjectionError(
+            "the recorded outcome of this entry cannot be read by this version of the REPL.",
+          ),
+        );
+      }
+      terminal = settled;
+      transcript.push({ kind: "terminal", marker, status: settled.status, output: settled.output });
+      checkpoints.push({ marker, kind: "terminal", label: "Settled" });
+      continue;
+    }
+
+    const description = event.description;
+
+    if (description.type === "import_component" && description.name === ROOT_IMPORT) {
+      if (entry !== undefined) {
+        return Err(
+          new ReplProjectionError(
+            "this journal admits a second entry. One REPL execution holds one entry.",
+          ),
+        );
+      }
+      if (index !== 0) {
+        return Err(
+          new ReplProjectionError(
+            "this journal records work before it admitted its entry. The entry's source is the " +
+              "first thing an execution decides.",
+          ),
+        );
+      }
+      const retained = readRetainedSource(event);
+      if (retained === undefined) {
+        return Err(
+          new ReplProjectionError(
+            "the entry's recorded source cannot be read by this version of the REPL.",
+          ),
+        );
+      }
+      entry = {
+        key: ENTRY_SCOPE,
+        kind: "entry",
+        name: ENTRY_SCOPE,
+        path: retained.path,
+        source: retained.content,
+        position: undefined,
+        marker,
+        bindings: [],
+        elicitations: [],
+        generated: [],
+        scopes: [],
+      };
+      register(byPath, entry);
+      transcript.push({ kind: "entry", marker, path: retained.path, source: retained.content });
+      checkpoints.push({ marker, kind: "entry", label: "Entry 1 admitted" });
+      continue;
+    }
+
+    if (entry === undefined) {
+      return Err(
+        new ReplProjectionError(
+          "this journal records work before it admitted its entry. The entry's source is the " +
+            "first thing an execution decides.",
+        ),
+      );
+    }
+
+    const position = readPosition(event);
+    if (position === MALFORMED) {
+      return Err(
+        new ReplProjectionError(
+          "a recorded effect carries a source position this version cannot read, so nothing can " +
+            "say which part of the entry it belongs to.",
+        ),
+      );
+    }
+
+    if (description.type === "import_component") {
+      const retained = readRetainedSource(event);
+      if (retained === undefined) {
+        transcript.push({
+          kind: "effect",
+          marker,
+          type: description.type,
+          status: event.result.status,
+        });
+        continue;
+      }
+      const owner = ownerOf(byPath, position, `<${description.name} />`);
+      if (!owner.ok) {
+        return owner;
+      }
+      const ordinalKey = `${owner.value.key}/${description.name}`;
+      const ordinal = (occurrences.get(ordinalKey) ?? 0) + 1;
+      occurrences.set(ordinalKey, ordinal);
+      const scope: ScopeDraft = {
+        key: `${description.name}-${ordinal}`,
+        kind: "component",
+        name: description.name,
+        path: retained.path,
+        source: retained.content,
+        position,
+        marker,
+        bindings: [],
+        elicitations: [],
+        generated: [],
+        scopes: [],
+      };
+      owner.value.scopes.push(scope);
+      register(byPath, scope);
+      transcript.push({
+        kind: "scope",
+        marker,
+        scope: scope.key,
+        name: scope.name,
+        path: scope.path,
+      });
+      checkpoints.push({ marker, kind: "scope", label: `<${description.name} /> admitted` });
+      continue;
+    }
+
+    if (description.type === "eval") {
+      if (event.result.status !== "ok") {
+        transcript.push({ kind: "effect", marker, type: "eval", status: event.result.status });
+        continue;
+      }
+      const published = readExports(event);
+      if (published === undefined) {
+        return Err(
+          new ReplProjectionError(
+            "a recorded evaluation's published values cannot be read by this version of the REPL.",
+          ),
+        );
+      }
+      const owner = ownerOf(byPath, position, "an evaluated block");
+      if (!owner.ok) {
+        return owner;
+      }
+      for (const [name, value] of published.bindings) {
+        bind(owner.value, name, value);
+      }
+      if (published.bindings.length > 0) {
+        transcript.push({
+          kind: "binding",
+          marker,
+          scope: owner.value.key,
+          names: Object.freeze(published.bindings.map(([name]) => name)),
+        });
+        checkpoints.push({
+          marker,
+          kind: "binding",
+          label: published.bindings.map(([name]) => name).join(", "),
+        });
+      }
+      if (published.output !== undefined) {
+        transcript.push({ kind: "output", marker, scope: owner.value.key, text: published.output });
+      }
+      continue;
+    }
+
+    if (description.type === "generated_xmd") {
+      if (event.result.status !== "ok") {
+        transcript.push({
+          kind: "effect",
+          marker,
+          type: "generated_xmd",
+          status: event.result.status,
+        });
+        continue;
+      }
+      const admission = readAdmission(event);
+      if (admission === undefined) {
+        return Err(
+          new ReplProjectionError(
+            "a recorded generated fragment cannot be read by this version of the REPL.",
+          ),
+        );
+      }
+      const owner = ownerOf(byPath, position, "a generated fragment");
+      if (!owner.ok) {
+        return owner;
+      }
+      owner.value.generated.push({ marker, ...admission });
+      if (admission.decision === "admitted" && admission.source !== undefined) {
+        const ordinalKey = `${owner.value.key}/generated`;
+        const ordinal = (occurrences.get(ordinalKey) ?? 0) + 1;
+        occurrences.set(ordinalKey, ordinal);
+        owner.value.scopes.push({
+          key: `generated-${ordinal}`,
+          kind: "generated",
+          name: "generated",
+          path: owner.value.path,
+          source: admission.source,
+          position,
+          marker,
+          bindings: [],
+          elicitations: [],
+          generated: [],
+          scopes: [],
+        });
+      }
+      transcript.push({
+        kind: "generated",
+        marker,
+        scope: owner.value.key,
+        source: admission.source,
+        decision: admission.decision,
+      });
+      checkpoints.push({ marker, kind: "generated", label: "Generated XMD admitted" });
+      continue;
+    }
+
+    if (description.type === "elicit") {
+      if (event.result.status !== "ok") {
+        transcript.push({ kind: "effect", marker, type: "elicit", status: event.result.status });
+        continue;
+      }
+      const schema = readElicitationSchema(description);
+      if (schema === undefined) {
+        return Err(
+          new ReplProjectionError(
+            "a recorded question does not retain the schema it asked, so its answer cannot be " +
+              "shown as the question it answered.",
+          ),
+        );
+      }
+      const answer = event.result.value;
+      if (answer === undefined) {
+        return Err(new ReplProjectionError("a recorded question records no answer at all."));
+      }
+      const owner = ownerOf(byPath, position, "an answered question");
+      if (!owner.ok) {
+        return owner;
+      }
+      const location = description.name.startsWith("elicit:")
+        ? description.name.slice("elicit:".length)
+        : description.name;
+      const asked = detach(schema);
+      const given = detach(answer);
+      owner.value.elicitations.push({ marker, location, schema: asked, answer: given, position });
+      transcript.push({ kind: "elicit", marker, scope: owner.value.key, location, answer: given });
+      checkpoints.push({ marker, kind: "elicit", label: `Answered ${location}` });
+      continue;
+    }
+
+    transcript.push({
+      kind: "effect",
+      marker,
+      type: description.type,
+      status: event.result.status,
+    });
+  }
+
+  return Ok(
+    freeze({
+      selection,
+      head,
+      entry: entry === undefined ? undefined : freezeScope(entry),
+      settled: terminal !== undefined,
+      terminal: terminal === undefined ? undefined : freeze({ ...terminal }),
+      checkpoints: Object.freeze(checkpoints.map((checkpoint) => freeze({ ...checkpoint }))),
+      transcript: Object.freeze(transcript.map((row) => freeze({ ...row }))),
+    }),
+  );
+}
+
+/** Publish one name into a scope, replacing an earlier value for that name. */
+function bind(scope: ScopeDraft, name: string, value: Json): void {
+  const at = scope.bindings.findIndex((binding) => binding.name === name);
+  const binding = { name, value };
+  if (at === -1) {
+    scope.bindings.push(binding);
+    return;
+  }
+  scope.bindings[at] = binding;
+}
+
+function register(index: Map<string, ScopeDraft[]>, scope: ScopeDraft): void {
+  const held = index.get(scope.path);
+  if (held === undefined) {
+    index.set(scope.path, [scope]);
+    return;
+  }
+  held.push(scope);
+}
+
+/**
+ * The one scope an effect's source position belongs to.
+ *
+ * Attribution is by the path the position names, which is the path the scope's
+ * own source was admitted from. A position naming no admitted source, or naming
+ * one that this prefix admitted more than once, is refused: a binding attached
+ * to a guessed owner is a value shown in the wrong place, and there is no
+ * spelling of "probably this one" that a reader could check.
+ */
+function ownerOf(
+  index: Map<string, ScopeDraft[]>,
+  position: ReplPosition | undefined,
+  subject: string,
+): Result<ScopeDraft> {
+  if (position === undefined || position.path === undefined) {
+    return Err(
+      new ReplProjectionError(
+        `${subject} was recorded without the source position that says which part of the entry ` +
+          "it belongs to.",
+      ),
+    );
+  }
+  const held = index.get(position.path) ?? [];
+  if (held.length === 0) {
+    return Err(
+      new ReplProjectionError(
+        `${subject} names a source this entry never admitted, so nothing owns it.`,
+      ),
+    );
+  }
+  if (held.length > 1) {
+    return Err(
+      new ReplProjectionError(
+        `${subject} names a source this entry admitted more than once, so which occurrence owns ` +
+          "it cannot be decided.",
+      ),
+    );
+  }
+  return Ok(held[0]);
+}
+
+/** What a position that will not read is, as distinct from one that is absent. */
+const MALFORMED = Symbol("malformed source position");
+
+function readPosition(event: Yield): ReplPosition | undefined | typeof MALFORMED {
+  const field = event.description[SOURCE_POSITION_FIELD];
+  if (field === undefined) {
+    return undefined;
+  }
+  if (!isJsonObject(field)) {
+    return MALFORMED;
+  }
+  const path = field["path"];
+  const offset = field["offset"];
+  const line = field["line"];
+  const column = field["column"];
+  if (path !== undefined && typeof path !== "string") {
+    return MALFORMED;
+  }
+  if (!isIndex(offset) || !isOrdinal(line) || !isOrdinal(column)) {
+    return MALFORMED;
+  }
+  return { path, offset, line, column };
+}
+
+/** The exact source a recorded import retained, or none when it retained none. */
+function readRetainedSource(event: Yield): { path: string; content: string } | undefined {
+  if (event.result.status !== "ok" || !isJsonObject(event.result.value)) {
+    return undefined;
+  }
+  const record = event.result.value;
+  const path = record["path"];
+  const content = record["content"];
+  if (typeof path !== "string" || typeof content !== "string") {
+    return undefined;
+  }
+  return { path, content };
+}
+
+/**
+ * The names a recorded evaluation published, and the output it rendered.
+ *
+ * Each published value is detached as it is read, so what the model goes on to
+ * hold is never the object the event holds.
+ */
+function readExports(
+  event: Yield,
+): { bindings: [string, Json][]; output: string | undefined } | undefined {
+  if (event.result.status !== "ok" || !isJsonObject(event.result.value)) {
+    return undefined;
+  }
+  const published = event.result.value["value"];
+  if (!isJsonObject(published)) {
+    return undefined;
+  }
+  const bindings: [string, Json][] = [];
+  let output: string | undefined;
+  for (const [name, value] of Object.entries(published)) {
+    if (name === "__output") {
+      if (typeof value !== "string") {
+        return undefined;
+      }
+      output = value;
+      continue;
+    }
+    bindings.push([name, detach(value)]);
+  }
+  return { bindings, output };
+}
+
+/** What a recorded generated fragment decided. */
+function readAdmission(event: Yield): Omit<ReplGenerated, "marker"> | undefined {
+  if (event.result.status !== "ok" || !isJsonObject(event.result.value)) {
+    return undefined;
+  }
+  const record = event.result.value;
+  const decision = record["decision"];
+  if (decision === "admitted") {
+    const source = record["source"];
+    if (typeof source !== "string") {
+      return undefined;
+    }
+    return { source, decision, construct: undefined };
+  }
+  if (decision === "refused") {
+    const construct = record["construct"];
+    if (typeof construct !== "string") {
+      return undefined;
+    }
+    return { source: undefined, decision, construct };
+  }
+  return undefined;
+}
+
+/** What the root coroutine's close records, read as the document outcome. */
+function readTerminal(event: Close): ReplTerminal | undefined {
+  if (event.result.status === "cancelled") {
+    return { status: "cancelled", output: "", message: undefined };
+  }
+  if (event.result.status === "err") {
+    // The message alone. A serialized stack names host paths and the engine's
+    // own frames, and the transcript is a reader's view of their entry.
+    return { status: "err", output: "", message: event.result.error.message };
+  }
+  if (!isJsonObject(event.result.value)) {
+    return undefined;
+  }
+  const record = event.result.value;
+  const output = record["output"];
+  const status = record["status"];
+  if (typeof output !== "string") {
+    return undefined;
+  }
+  if (status === "ok") {
+    return { status, output, message: undefined };
+  }
+  if (status !== "err") {
+    return undefined;
+  }
+  const failure = record["error"];
+  if (!isJsonObject(failure) || typeof failure["message"] !== "string") {
+    return undefined;
+  }
+  return { status, output, message: failure["message"] };
+}
+
+function isJsonObject(value: Json | undefined): value is { [key: string]: Json } {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function isIndex(value: Json | undefined): value is number {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0;
+}
+
+function isOrdinal(value: Json | undefined): value is number {
+  return typeof value === "number" && Number.isInteger(value) && value >= 1;
+}
+
+/**
+ * Freeze a scope and everything reachable from it.
+ *
+ * Everything reachable is already this projection's own: a retained value was
+ * detached the moment it was read, so freezing here cannot reach an object the
+ * caller still holds. What the router hands a component is the exact object the
+ * model holds, which is what makes two readings of one prefix one reading.
+ */
+function freezeScope(draft: ScopeDraft): ReplScope {
+  return freeze({
+    key: draft.key,
+    kind: draft.kind,
+    name: draft.name,
+    path: draft.path,
+    source: draft.source,
+    position: draft.position === undefined ? undefined : freeze({ ...draft.position }),
+    marker: draft.marker,
+    bindings: Object.freeze(
+      draft.bindings.map((binding) => freeze({ name: binding.name, value: binding.value })),
+    ),
+    elicitations: Object.freeze(
+      draft.elicitations.map((elicitation) =>
+        freeze({
+          marker: elicitation.marker,
+          location: elicitation.location,
+          schema: elicitation.schema,
+          answer: elicitation.answer,
+          position:
+            elicitation.position === undefined ? undefined : freeze({ ...elicitation.position }),
+        }),
+      ),
+    ),
+    generated: Object.freeze(draft.generated.map((generated) => freeze({ ...generated }))),
+    scopes: Object.freeze(draft.scopes.map(freezeScope)),
+  });
+}
+
+function freeze<T>(value: T): Readonly<T> {
+  return Object.freeze(value);
+}
+
+/**
+ * One retained value, copied out of the event graph and frozen.
+ *
+ * Copied rather than frozen in place, because the events belong to whoever
+ * handed them over. Freezing a value inside them would reach back out of this
+ * function and silently make the caller's own data immutable — a projection
+ * that changed its input, which is the one thing a projection must not do. The
+ * copy is what the model retains, so nothing the caller does to its events
+ * afterwards can change what a reader is looking at either.
+ *
+ * `__proto__` is defined rather than assigned, for the same reason
+ * `parseDurableEvent` defines it: assignment reaches `Object.prototype`'s
+ * inherited setter and would drop the member while replacing the prototype.
+ */
+function detach(value: Json): Json {
+  if (value === null || typeof value !== "object") {
+    return value;
+  }
+  if (Array.isArray(value)) {
+    const members = value.map(detach);
+    Object.freeze(members);
+    return members;
+  }
+  const copy: { [key: string]: Json } = {};
+  for (const [key, member] of Object.entries(value)) {
+    Object.defineProperty(copy, key, {
+      value: detach(member),
+      enumerable: true,
+      writable: true,
+      configurable: true,
+    });
+  }
+  return Object.freeze(copy);
+}

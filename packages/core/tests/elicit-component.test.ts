@@ -16,11 +16,13 @@ import { ensure, race, resource, scoped, sleep, suspend, until } from "effection
 import type { Operation } from "effection";
 import { exists, rm, writeTextFile } from "@effectionx/fs";
 import { InMemoryStream } from "@executablemd/durable-streams";
+import type { Json, Yield } from "@executablemd/durable-streams";
 import { mkdtemp, realpath } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { collect } from "../src/collect.ts";
+import { ELICITATION_SCHEMA_FIELD, readElicitationSchema } from "../src/elicit-journal.ts";
 import { prepareElicitation, runPreparedElicitation } from "../src/elicit.ts";
 import { Elicitation } from "../src/elicitation-api.ts";
 import type { ElicitationRequest } from "../src/elicitation-api.ts";
@@ -563,7 +565,226 @@ describe("Elicit: durability", () => {
     expect(again.failure).toBe(undefined);
     expect(again.output).toContain("Decision: approve");
   });
+
+  /**
+   * The answer is the result; the compiled schema is description beside it.
+   *
+   * A host reading the history back — the REPL's read-only drawer is the one
+   * this exists for (#848) — has to know which fields the person was shown, and
+   * the provider that could have said so is not running any more. So the schema
+   * is retained where a position is retained: in the description, under its own
+   * namespaced field, where it cannot change what a replay matches.
+   */
+  it("retains the compiled schema in the description and the answer as the result", function* () {
+    const workspace = yield* useWorkspace();
+    const stream = new InMemoryStream();
+
+    const first = yield* run(
+      workspace,
+      document("Approve?"),
+      constant({ decision: "approve" }),
+      stream,
+    );
+
+    expect(first.failure).toBe(undefined);
+    const records = yield* elicitRecords(stream);
+    expect(records).toHaveLength(1);
+    expect(records[0].description.type).toBe("elicit");
+    expect(records[0].description[ELICITATION_SCHEMA_FIELD]).toEqual(JSON.parse(DECISION_SCHEMA));
+    expect(readElicitationSchema(records[0].description)).toEqual(JSON.parse(DECISION_SCHEMA));
+    expect(records[0].result).toEqual({ status: "ok", value: { decision: "approve" } });
+  });
+
+  /**
+   * Retaining the schema does not make it identity.
+   *
+   * `type` and `name` still decide whether an entry matches, so the guard is
+   * still what stands between a resumed run and an answer to a question nobody
+   * was asked. Reached here by changing the schema the recorded eval block
+   * published, which is the one way this run asks a different question at the
+   * same position: the root source replays from the record, so editing the file
+   * cannot.
+   */
+  it("refuses a recorded answer when the schema changed at the same position", function* () {
+    const workspace = yield* useWorkspace();
+    const stream = new InMemoryStream();
+    const source = document("Approve?");
+
+    yield* run(workspace, source, constant({ decision: "approve" }), stream);
+
+    const doctored = yield* run(
+      workspace,
+      source,
+      // deno-lint-ignore require-yield
+      function* () {
+        throw new Error("the provider was contacted");
+      },
+      yield* withRecordedSchema(stream, DECIDE_SCHEMA),
+    );
+
+    expect(doctored.failure?.message).toContain("given to a different question");
+  });
+
+  /**
+   * The same guard, reached from the other half of the fingerprint.
+   *
+   * The rendered message is what the person read, and the recorded root source
+   * is where it comes from on a resumed run. The replacement keeps the byte
+   * count, so every source position in the document is the one that was
+   * recorded and only the question changed.
+   */
+  it("refuses a recorded answer when the message changed at the same position", function* () {
+    const workspace = yield* useWorkspace();
+    const stream = new InMemoryStream();
+
+    yield* run(workspace, document("Approve?"), constant({ decision: "approve" }), stream);
+
+    const doctored = yield* run(
+      workspace,
+      document("Approve?"),
+      // deno-lint-ignore require-yield
+      function* () {
+        throw new Error("the provider was contacted");
+      },
+      yield* withRecordedSource(stream, "Approve?", "Reject!!"),
+    );
+
+    expect(doctored.failure?.message).toContain("given to a different question");
+  });
+
+  /**
+   * An answer the schema rejects binds nothing and is never restorable.
+   *
+   * What the record holds is the failure, not a value: the validation runs
+   * inside the durable executor, so the entry settles `err` and there is no
+   * answer in the journal for a later run to find. The document fails with it
+   * and nothing downstream of the question renders.
+   */
+  it("records no answer when the provider's answer fails its schema", function* () {
+    const workspace = yield* useWorkspace();
+    const stream = new InMemoryStream();
+
+    const rejected = yield* run(
+      workspace,
+      document("Approve?"),
+      constant({ decision: "maybe" }),
+      stream,
+    );
+
+    expect(rejected.output).not.toContain("Decision:");
+    const records = yield* elicitRecords(stream);
+    expect(records).toHaveLength(1);
+    expect(records[0].result.status).toBe("err");
+    expect("value" in records[0].result).toBe(false);
+  });
 });
+
+/** The recorded elicitations, in append order. */
+function* elicitRecords(stream: InMemoryStream): Operation<Yield[]> {
+  const records: Yield[] = [];
+  for (const event of yield* stream.readAll()) {
+    if (event.type === "yield" && event.description.type === "elicit") {
+      records.push(event);
+    }
+  }
+  return records;
+}
+
+/** A second schema for the same answer, so the question changes and the shape does not. */
+const DECIDE_SCHEMA =
+  '{"type":"object","properties":{"decision":{"type":"string","enum":["approve","decline"]}},' +
+  '"required":["decision"],"additionalProperties":false}';
+
+/**
+ * The same journal, with the schema the recorded eval block published replaced.
+ *
+ * A resumed run restores the eval block's exports rather than running it, so
+ * this is what "the author changed the schema" looks like from the inside — and
+ * unlike rewriting the fingerprint, the run really does compute a different
+ * question at the same position.
+ */
+function* withRecordedSchema(stream: InMemoryStream, schema: string): Operation<InMemoryStream> {
+  const events = yield* stream.readAll();
+  return new InMemoryStream(
+    events
+      .filter((event) => !(event.type === "close" && event.coroutineId === "root"))
+      .map((event) => {
+        if (event.type !== "yield" || event.description.type !== "eval") {
+          return event;
+        }
+        if (event.result.status !== "ok" || !isRecordedExports(event.result.value)) {
+          return event;
+        }
+        return {
+          ...event,
+          result: {
+            status: "ok",
+            value: { value: { ...event.result.value.value, responseSchema: JSON.parse(schema) } },
+          },
+        };
+      }),
+  );
+}
+
+/** Whether a recorded eval result carries the exports object this document publishes. */
+function isRecordedExports(value: Json | undefined): value is { value: { [key: string]: Json } } {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+  const exports = value["value"];
+  return exports !== null && typeof exports === "object" && !Array.isArray(exports);
+}
+
+/**
+ * The same journal, with one equal-length substitution inside the recorded root
+ * source.
+ *
+ * Equal length on purpose: every offset, line and column in the document stays
+ * what was recorded, so the only thing this run computes differently is the
+ * rendered message.
+ */
+function* withRecordedSource(
+  stream: InMemoryStream,
+  from: string,
+  to: string,
+): Operation<InMemoryStream> {
+  if (from.length !== to.length) {
+    throw new Error("a source substitution must preserve every position it is not about");
+  }
+  const events = yield* stream.readAll();
+  return new InMemoryStream(
+    events
+      .filter((event) => !(event.type === "close" && event.coroutineId === "root"))
+      .map((event) => {
+        if (event.type !== "yield" || event.description.type !== "import_component") {
+          return event;
+        }
+        if (event.result.status !== "ok" || !isRecordedContent(event.result.value)) {
+          return event;
+        }
+        return {
+          ...event,
+          result: {
+            status: "ok",
+            value: {
+              ...event.result.value,
+              content: event.result.value.content.split(from).join(to),
+            },
+          },
+        };
+      }),
+  );
+}
+
+/** Whether a recorded import retained the source it read. */
+function isRecordedContent(
+  value: Json | undefined,
+): value is { [key: string]: Json; content: string } {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+  return typeof value["content"] === "string";
+}
 
 /**
  * The same journal, with the elicitation's recorded question replaced.
