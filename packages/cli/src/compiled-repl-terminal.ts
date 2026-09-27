@@ -12,24 +12,32 @@
  * so an ordinary `xmd run` never touches raw mode or the terminal's modes at
  * all.
  *
+ * The capabilities are read off the host rather than named, because this package
+ * is typechecked under Node as well and a module that names `Deno` does not
+ * compile there even though nothing would ever load it.
+ *
  * Standard input is a single source, so one subscriber consumes it; a second
  * would be a second decoder racing the first for the same bytes, which is not
  * something this REPL does.
  */
 
 import type { Operation } from "effection";
-import { installReplTerminal, writeAllTo } from "./repl/terminal-host.ts";
+import { denoTerminalSurface } from "./deno-terminal-surface.ts";
+import { installReplTerminal } from "./repl/terminal-host.ts";
 import type { ReplTerminalSize } from "./repl/terminal.ts";
 
 /** Install the compiled binary's terminal for the calling scope. */
-export function useCompiledReplTerminal(): Operation<void> {
-  return installReplTerminal({
+export function* useCompiledReplTerminal(): Operation<void> {
+  const host = denoTerminalSurface();
+  if (host === undefined) {
+    throw new Error("this host is not Deno, so it has no Deno terminal to install");
+  }
+  yield* installReplTerminal({
     size(): ReplTerminalSize {
-      const { columns, rows } = Deno.consoleSize();
-      return { columns, rows };
+      return host.consoleSize();
     },
     write(bytes: Uint8Array): Promise<void> {
-      return writeAllTo((chunk) => Deno.stdout.write(chunk), bytes);
+      return writeAll(host, bytes);
     },
     writeNow(bytes: Uint8Array): void {
       let written = 0;
@@ -37,8 +45,7 @@ export function useCompiledReplTerminal(): Operation<void> {
         // Synchronous on purpose: the final reset must land as one uninterrupted
         // act, and a suspension here would let another teardown step write over
         // a half-restored terminal.
-        // oxlint-disable-next-line local/no-sync-filesystem
-        const count = Deno.stdout.writeSync(bytes.subarray(written));
+        const count = host.writeSync(bytes.subarray(written));
         if (count <= 0) {
           return;
         }
@@ -46,16 +53,35 @@ export function useCompiledReplTerminal(): Operation<void> {
       }
     },
     setRaw(raw: boolean): void {
-      Deno.stdin.setRaw(raw);
+      host.setRaw(raw);
     },
-    bytes(): AsyncIterable<Uint8Array> {
-      return Deno.stdin.readable;
-    },
-    onResize(listener: () => void): () => void {
-      Deno.addSignalListener("SIGWINCH", listener);
-      return () => {
-        Deno.removeSignalListener("SIGWINCH", listener);
-      };
-    },
+    bytes: () => host.bytes(),
+    onResize: (listener: () => void) => host.onResize(listener),
   });
+}
+
+/**
+ * Write every byte, however few one call takes.
+ *
+ * A partial write nobody continued leaves a frame half drawn, which on a
+ * terminal means escape sequences cut in the middle.
+ */
+function writeAll(
+  host: { write(bytes: Uint8Array): Promise<number> },
+  bytes: Uint8Array,
+): Promise<void> {
+  let written = 0;
+  const step = (): Promise<void> => {
+    if (written >= bytes.length) {
+      return Promise.resolve();
+    }
+    return host.write(bytes.subarray(written)).then((count) => {
+      if (count <= 0) {
+        return Promise.reject(new Error("the terminal accepted none of the bytes it was given"));
+      }
+      written += count;
+      return step();
+    });
+  };
+  return step();
 }
