@@ -93,7 +93,7 @@ function panel(journal: Journal): ReplComponent<Act> {
       node.focusable();
       node.render(`[${label(node.input)}]`);
       node.claim((event: ReplInputEvent): Act | undefined =>
-        event.kind === "pointer" || event.key === "Enter"
+        event.kind === "pointer" || (event.kind === "key" && event.key === "Enter")
           ? { kind: "activate", from: node.key }
           : undefined,
       );
@@ -144,7 +144,7 @@ function group(journal: Journal): ReplComponent<Act> {
       journal.push(`mount:${node.key}`);
       node.render(`{${label(node.input)}}`);
       node.claim((event: ReplInputEvent): Act | undefined =>
-        event.kind === "pointer" || event.key === "Enter"
+        event.kind === "pointer" || (event.kind === "key" && event.key === "Enter")
           ? { kind: "submit", from: node.key }
           : undefined,
       );
@@ -161,7 +161,7 @@ function drawer(journal: Journal): ReplComponent<Act> {
       journal.push(`mount:${node.key}`);
       node.render(`|${label(node.input)}|`);
       node.claim((event: ReplInputEvent): Act | undefined =>
-        event.kind === "pointer" || event.key === "Escape"
+        event.kind === "pointer" || (event.kind === "key" && event.key === "Escape")
           ? { kind: "close-drawer", from: node.key }
           : undefined,
       );
