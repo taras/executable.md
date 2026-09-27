@@ -5344,6 +5344,73 @@ Freedom is vendored from a pinned unpublished commit under
 `packages/cli/src/repl/vendor/freedom/`, as a pristine copy and a patched copy
 whose every difference belongs to one named patch. See its `PROVENANCE.md`.
 
+### From a frame to a terminal, and back
+
+Below the tree, one more direction:
+
+```text
+committed frame → placement → engine ops → bytes → the terminal
+                       ↓
+              element id + geometry → the live node it came from
+                       ↑
+   bytes → normalized key or position → target → the same ancestry walk
+```
+
+Placement is presentation and nothing else: it reads the committed frame and
+tells the tree nothing, so resizing moves things and changes no selection, no
+model object and no action's meaning. Four sizes are decided — wide, medium,
+narrow, and a refusal below the narrow minimum that recovers when the window
+grows — and a control the refusal hides is drawn nowhere and therefore
+targetable nowhere.
+
+Only mounted nodes are drawn. Each rendered frame carries an immutable map from
+the element the layout engine measured to the live node that asked for it, and
+that map is valid for exactly the tree revision that produced it: a pointer
+resolved against it travels with that revision's number, so a pointer from a
+frame the tree has moved past, one naming a node that has since gone, and one
+landing behind an open modal all reach nothing. A pointer that does resolve
+becomes the same normalized event a key produces and walks the same ancestry, so
+clicking a control and pressing Enter on it are one action.
+
+Text is its own member of that normalized union, not a key with a payload: a
+named key — submit, dismiss, traverse, erase — is a command whoever claims it
+recognizes, and text is content that goes wherever content goes. It carries what
+the terminal decoded, so shifted, accented and multi-byte characters arrive
+already assembled, and a newline inside a paste arrives as one. A chord carries
+a letter in its physical key code, and reading that code would type the letter
+somebody held Control with, so a chord is dropped whole — payload included.
+
+Every render input is retained as a frozen snapshot before it crosses into the
+engine, and the bytes that come back are copied immediately, because the engine
+hands out a view into its own memory that the next render invalidates. A frame
+the engine's arenas cannot hold is redrawn on an engine rebuilt for that frame's
+dimensions; recovery changes nothing above it.
+
+Placement at narrow shows the one surface the route selected. Every other
+surface stays mounted and stays off the frame, which is what makes it
+unreachable rather than merely hidden: it is in no cell, in no frame map, and no
+pointer resolves to it.
+
+Presentation time has one owner. There is a single acknowledged frame stream:
+holding a subscription is what asks for frames, an advance waits until every
+subscriber has **applied** the last timestamp — receiving one is not applying
+it, because drawing with a timestamp suspends — and a tree with no subscriber
+schedules no timer at all. A cancelled subscriber's demand goes with it and its
+acknowledgement never arrives, because it did not finish the frame it held. An animation spanning components belongs to their
+nearest common mounted ancestor, whose lifetime is the animation's; nothing
+below it keeps a clock of its own. The stream carries presentation time only —
+Journal records, model selection, routes and execution pause state are outside
+it.
+
+The terminal itself is a contextual Api, and a runtime-named adapter installs
+it. Shared code never asks which runtime it is on; it asks for the size, bytes
+in, bytes out, raw mode and resize notifications. Whoever opens the terminal
+registers the release of each of those before taking it, so a cancellation
+between the two still gives the terminal back — and every exit, whether the run
+finished, refused, failed, was cancelled or reached end of input, stops the
+reader, removes every listener, restores the modes and writes the final reset
+exactly once.
+
 ## Changing these rules
 
 Spec, tests, and mechanics move together, in the same PR. If a workaround

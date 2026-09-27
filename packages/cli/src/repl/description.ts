@@ -49,8 +49,13 @@ export type ReplViewData =
 /** Placement a parent decides for one direct child. Opaque to everyone else. */
 export type ReplPlacement = { readonly [key: string]: string | number | boolean };
 
-/** The named keys this composition layer understands. */
-export type ReplKey = "Enter" | "Escape" | "Tab" | "Backtab";
+/**
+ * The named keys this composition layer understands.
+ *
+ * Named because each one means something structural — submit, dismiss, move
+ * focus, erase — as opposed to text, which means only itself.
+ */
+export type ReplKey = "Enter" | "Escape" | "Tab" | "Backtab" | "Backspace";
 
 /**
  * One normalized event, as a host hands it over.
@@ -58,9 +63,16 @@ export type ReplKey = "Enter" | "Escape" | "Tab" | "Backtab";
  * A discriminated union, so a key event carrying a frame and a pointer event
  * carrying a key name are not values anybody can build. The host says what
  * happened and where; it never says what it means.
+ *
+ * Text is its own member rather than a key with a payload, because the two are
+ * answered differently: a named key is a command whoever claims it recognizes,
+ * and text is content that goes wherever content goes. It carries the string the
+ * terminal decoded — one grapheme as typed, or `"\n"` for a newline inside a
+ * paste — and never a raw terminal event.
  */
 export type ReplInputEvent =
   | { readonly kind: "key"; readonly key: ReplKey }
+  | { readonly kind: "text"; readonly text: string }
   | { readonly kind: "pointer"; readonly target: string; readonly frame: number };
 
 /** What a mounted child may do, for as long as it is mounted. */
