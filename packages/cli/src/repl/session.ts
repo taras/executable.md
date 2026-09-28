@@ -45,6 +45,7 @@ import {
   createScope,
   createSignal,
   ensure,
+  scoped,
   spawn,
   suspend,
   until,
@@ -53,9 +54,13 @@ import {
 } from "effection";
 import type { Operation, Result, Stream, Task } from "effection";
 import { INLINE_SOURCE_PATH, inlineSource, validateDocument } from "@executablemd/core";
-import type { DocumentValidationDiagnostic } from "@executablemd/core";
+import type { DocumentValidationDiagnostic, PermissionMode } from "@executablemd/core";
 import { executeInstalled } from "@executablemd/core/host";
-import type { ExecutionInstallation } from "@executablemd/core/host";
+import type {
+  ExecutionDeclaration,
+  ExecutionInstallation,
+  IdentityComponent,
+} from "@executablemd/core/host";
 import {
   ContinuePastCloseDivergenceError,
   DivergenceError,
@@ -66,6 +71,8 @@ import {
 } from "@executablemd/durable-streams";
 import type { DurableEvent } from "@executablemd/durable-streams";
 
+import { useReplAgent } from "./agent.ts";
+import type { ReplAgentAuthority, ReplAgentReading } from "./agent.ts";
 import { useReplElicitation } from "./elicitation.ts";
 import type { ReplElicitations, ReplQuestion } from "./elicitation.ts";
 import { useExpansionController } from "./expansion.ts";
@@ -143,6 +150,23 @@ export interface ReplSession {
    */
   readonly controller: ExpansionController | undefined;
   readonly elicitation: ReplElicitations;
+  /**
+   * What this process knows about Agent turns the Journal has not settled.
+   *
+   * Empty for an idle execution, a full replay and a document with no Agent
+   * work — a live reading describes work this process is doing, and replay does
+   * none.
+   */
+  readonly agent: ReplAgentReading;
+  /** Every change to that reading, as it changes. */
+  readonly agentChanges: Stream<ReplAgentReading, never>;
+  /**
+   * Settling a pending permission request.
+   *
+   * Separate from reading one, so a surface that draws requests does not
+   * thereby hold the capability that answers them.
+   */
+  readonly permissions: ReplAgentAuthority;
   /** Whether an execution is still running in this process. */
   readonly live: boolean;
   /** Each reprojection, as the history grows under it. */
@@ -170,6 +194,14 @@ export interface ReplSessionOptions {
   readonly installations?: readonly ExecutionInstallation[];
   /** The history position a location selected, or none for the head. */
   readonly selection?: string;
+  /**
+   * How this session answers Agent permission requests.
+   *
+   * The REPL presents interactive requests in its own surface, so it installs
+   * this policy rather than Core's readline one. Absent means `deny-all`, which
+   * is what an execution with no configured mode already does.
+   */
+  readonly permissionMode?: PermissionMode;
 }
 
 /** Submit one entry into an execution whose history is empty. */
@@ -188,7 +220,7 @@ function* start(
   options: ReplSessionOptions,
   submitted: string | undefined,
 ): Operation<Result<ReplSession>> {
-  const { execution, includes, installations = [], selection } = options;
+  const { execution, includes, installations = [], selection, permissionMode } = options;
   const stream = execution.stream;
 
   const projection = projectRepl(yield* stream.readAll(), selection);
@@ -220,9 +252,28 @@ function* start(
     // entry. There is no document to run, so there is nothing to admit either.
     return Ok(idle(execution.id, model));
   }
+  // Named again after the guard, because the execution below runs from a
+  // hoisted body and the narrowing does not reach it.
+  const entry: string = source;
 
   if (submitted !== undefined) {
-    const validation = yield* validateDocument({ ...inlineSource(submitted), includes });
+    // Validated against the vocabulary the execution will actually install, not
+    // against the bare registry: a host that declares `<Session>` to the
+    // execution would otherwise have every entry naming one refused here and
+    // run perfectly if it got past. Preflight and the run answer to one
+    // environment or preflight is describing a different document.
+    // In a scope of its own, because admitting a declaration in order to ask
+    // about it mints the durable identity domain that name answers under.
+    // Leaving that behind would have the execution resolve `<Session>` through
+    // preflight's admission while issuing its invocations under its own.
+    const validation = yield* scoped(function* () {
+      return yield* validateDocument({
+        ...inlineSource(submitted),
+        includes,
+        components: declaredComponents(installations),
+        declarations: declaredMarkdown(installations),
+      });
+    });
     if (validation.outcome === "invalid") {
       return Err(new ReplPreflightError(validation.diagnostics));
     }
@@ -257,6 +308,11 @@ function* start(
   provisional.run(function* () {
     const expansion = yield* useExpansionController();
     const elicitation = yield* useReplElicitation();
+    // Created here and installed into the execution below, so the middleware it
+    // owns belongs to this session's scope and dies with it. An execution
+    // elsewhere would otherwise inherit an observer watching for a session that
+    // is gone.
+    const agent = useReplAgent(permissionMode ?? "deny-all");
 
     function reproject(): void {
       const next = projectRepl(retained, selection);
@@ -295,6 +351,11 @@ function* start(
         return live ? expansion : undefined;
       },
       elicitation,
+      get agent() {
+        return agent.reading;
+      },
+      agentChanges: agent.changes,
+      permissions: agent.authority,
       get live() {
         return live;
       },
@@ -318,7 +379,20 @@ function* start(
     const retained = yield* stream.readAll();
     const observe = (event: DurableEvent): void => {
       retained.push(event);
+      // One transition, and nothing suspends inside it: the record joins the
+      // history, the live overlay it completed is removed, and only then does
+      // anything announce. No observable snapshot holds one turn twice, and
+      // none holds it neither way.
+      try {
+        agent.consume(event);
+      } catch {
+        // A correlation failure after admission is not a stale view to carry
+        // on with. The owner below is already being told; refusing here as
+        // well would report one failure as two.
+        return;
+      }
       reproject();
+      agent.announce();
       admit();
     };
 
@@ -334,15 +408,55 @@ function* start(
     });
     stream.onAppend = observe;
 
-    const task: Task<Result<unknown>> = yield* spawn(function* () {
+    /**
+     * How this session finished: the execution's own outcome, or the first
+     * failure that withdrew its authority.
+     *
+     * Settled once, by whichever happened first. A withdrawn session may not be
+     * left waiting on the work it withdrew authority from, so the watcher below
+     * halts the execution and waits for it before answering — which is what
+     * makes the provider turn, the held permission wait and the execution task
+     * all gone by the time `join()` returns. A later failure cannot replace the
+     * first one, because by then there is nothing left for it to describe.
+     */
+    const finished = withResolvers<Result<unknown>>();
+    let answered = false;
+    function settle(outcome: Result<unknown>): void {
+      if (!answered) {
+        answered = true;
+        finished.resolve(outcome);
+      }
+    }
+
+    const document: Task<Result<unknown>> = yield* spawn(function* () {
+      const outcome = yield* runExecution();
+      settle(outcome);
+      return outcome;
+    });
+
+    yield* spawn(function* () {
+      const error = yield* agent.failed;
+      live = false;
+      admit();
+      // Halted and joined before the failure is answered, in that order.
+      yield* document.halt();
+      settle(Err(error));
+    });
+
+    const task: Operation<Result<unknown>> = finished.operation;
+
+    function* runExecution(): Operation<Result<unknown>> {
       try {
         const running = yield* executeInstalled(
           {
-            ...inlineSource(source),
+            ...inlineSource(entry),
             stream,
             ...(includes === undefined ? {} : { includes: [...includes] }),
           },
-          installations,
+          // Installed into this exact execution, and nowhere else: the live
+          // observer and the permission policy are this session's, not the
+          // process's.
+          [...installations, agent.installation],
         );
         // Consumed as it arrives, inside this session's scope. Collecting until
         // the stream closed would leave the overlay empty for the whole of the
@@ -379,6 +493,20 @@ function* start(
         }
         return Err(raised);
       }
+    }
+
+    // A queued Agent turn is work beyond the retained prefix, exactly as a new
+    // record or a question is: replay that reached one is past what the history
+    // held, so the session is admitted rather than still provisional.
+    yield* spawn(function* () {
+      const readings = yield* agent.changes;
+      let next = yield* readings.next();
+      while (!next.done) {
+        if (next.value.turns.length > 0) {
+          admit();
+        }
+        next = yield* readings.next();
+      }
     });
 
     yield* spawn(function* () {
@@ -398,15 +526,49 @@ function* start(
     yield* suspend();
   });
 
-  const entry = yield* admission.operation;
-  if (!entry.ok) {
+  const opened = yield* admission.operation;
+  if (!opened.ok) {
     // Before the refusal is returned, not after: the caller is about to be told
     // there is no session, and everything this one started has to be gone by
     // the time it hears that.
     yield* until(dispose());
-    return entry;
+    return opened;
   }
-  return entry;
+  return opened;
+}
+
+const EMPTY_AGENT_READING: ReplAgentReading = Object.freeze({
+  turns: Object.freeze([]),
+  requests: Object.freeze([]),
+});
+
+/** No live request exists, so no key settles one. */
+const IDLE_PERMISSIONS: ReplAgentAuthority = Object.freeze({
+  choose: () => false,
+  dismiss: () => false,
+});
+
+/** Every identity component these installations declare, in installation order. */
+function declaredComponents(
+  installations: readonly ExecutionInstallation[],
+): readonly IdentityComponent[] {
+  // Copied, never the host's own values. Admitting a declaration mints the
+  // durable identity domain its implementation answers under, and preflight
+  // admits in this scope while the execution admits in its own — so handing
+  // both the same object would leave the run resolving an implementation
+  // minted for a domain its invocations were never issued under.
+  return installations.flatMap((installation) =>
+    (installation.components ?? []).map((component) => ({ ...component })),
+  );
+}
+
+/** Every exact Markdown component these installations declare, in order. */
+function declaredMarkdown(
+  installations: readonly ExecutionInstallation[],
+): readonly ExecutionDeclaration[] {
+  return installations.flatMap((installation) =>
+    (installation.declarations ?? []).map((declaration) => ({ ...declaration })),
+  );
 }
 
 /** An execution with no entry yet: a draft surface and nothing running. */
@@ -425,6 +587,10 @@ function idle(execution: string, model: ReplModel): ReplSession {
     // Nothing is expanding, so there is nothing to pause or continue.
     controller: undefined,
     elicitation,
+    // Nothing is running, so there is no live Agent work and nothing to settle.
+    agent: EMPTY_AGENT_READING,
+    agentChanges: createSignal<ReplAgentReading, never>(),
+    permissions: IDLE_PERMISSIONS,
     live: false,
     changes,
     // Nothing is running, so nothing will ever write.

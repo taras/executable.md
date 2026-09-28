@@ -323,6 +323,10 @@ export {
 } from "./src/agent/components.ts";
 export type { AgentComponentsOptions } from "./src/agent/components.ts";
 export { Agent } from "./src/agent/agent-api.ts";
+// The one deny decision, so a host writing its own permission policy reaches
+// the same rule the base handler and every built-in policy reach rather than
+// spelling "reject_once, then reject_always, otherwise cancel" again.
+export { denyPermission } from "./src/agent/agent-api.ts";
 export type {
   AgentApi,
   AgentOption,

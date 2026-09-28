@@ -151,15 +151,20 @@ export function hostAcpDependencies(stack: PlanWriterStack): AcpxProviderDepende
 }
 
 /**
- * Install the agent stack a document runs under: the registration, the
- * components with the resolved root provider, the permission mode, and the
- * terminal this command has to give away.
+ * The half of the stack that answers *who* an agent is and *how* a document
+ * reaches one: the registered provider, and the components over it.
  *
- * Nothing starts an agent — the provider validates availability on first use,
- * and an embedded adapter reaches the disk at that same point. A document that
- * asks for no agent installs no adapter.
+ * Separated because two commands need exactly this much and disagree about the
+ * rest. `xmd run` owns a terminal and a readline, so it adds the permission
+ * mode and the foreground launcher below. The REPL owns neither — it presents
+ * requests in its own surface and has no terminal to give away — so it installs
+ * this and its own private policy instead of inheriting one that would ask
+ * through a readline nobody is looking at.
+ *
+ * Nothing here starts an agent. The provider validates availability on first
+ * use, and an embedded adapter reaches the disk at that same point.
  */
-export function* installRunAgentStack(stack: AgentStack): Operation<void> {
+export function* installAgentProviderStack(stack: AgentStack): Operation<void> {
   const acpx = createAcpxProvider(hostAcpDependencies(stack));
   yield* registerAgentProvider("acpx", acpx);
 
@@ -174,7 +179,19 @@ export function* installRunAgentStack(stack: AgentStack): Operation<void> {
     permissionMode,
     rootProvider: { factory, options: { defaultAgent, permissionMode } },
   });
-  yield* installPermissionMode(permissionMode);
+}
+
+/**
+ * Install the agent stack a document runs under: the registration, the
+ * components with the resolved root provider, the permission mode, and the
+ * terminal this command has to give away.
+ *
+ * A document that asks for no agent still installs no adapter, for the reason
+ * above: nothing here starts one.
+ */
+export function* installRunAgentStack(stack: AgentStack): Operation<void> {
+  yield* installAgentProviderStack(stack);
+  yield* installPermissionMode(stack.permissionMode);
   // `xmd run` is the one command that has a terminal to give away. Help,
   // document inspection and `xmd test` install no launcher, so a document that
   // reaches <Session.Launch> under any of them refuses instead of spawning.
