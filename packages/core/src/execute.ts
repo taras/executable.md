@@ -10,7 +10,7 @@
  * See DEC-005 in specs/decisions.md.
  */
 
-import { Err, Ok, ensure, scoped, spawn, withResolvers, until } from "effection";
+import { Err, Ok, ensure, scoped, spawn, useScope, withResolvers, until } from "effection";
 import type { Operation, Result, Stream } from "effection";
 import { type Api, createApi, type Operations } from "@effectionx/context-api";
 import {
@@ -181,7 +181,7 @@ import type { RootDocumentSource } from "./root-source.ts";
 import { useEvalScope } from "@effectionx/scope-eval";
 import { declaredRouting, FOREGROUND, route, withRouting } from "./foreground.ts";
 import type { ForegroundRouting } from "./foreground.ts";
-import { checkedFailureLedger } from "./component-failures.ts";
+import { checkedFailureLedger, refuseCheckedFailure } from "./component-failures.ts";
 import { provideTestHarnessInstallers } from "./test-harness.ts";
 import type { TestHarnessInstaller } from "./test-harness.ts";
 import type { CheckedFailures } from "./component-failures.ts";
@@ -846,7 +846,7 @@ function* resolveComponentAnswers(
           ) {
             return answer;
           }
-          const asked = canonicalProvider.open(name, position);
+          const asked = canonicalProvider.open(yield* useScope(), name, position);
           try {
             return asked.request.claim(answer, { key: name, revision: CORE_REVISION });
           } finally {
@@ -866,7 +866,7 @@ function* resolveComponentAnswers(
       // One call, one result. The claim and core's copy of what was claimed
       // come back together, and the object the chain returned is not read
       // again — so nothing this run keeps was decided by a second read.
-      const resolution = imports.beginResolution(name);
+      const resolution = imports.beginResolution(name, yield* useScope());
       let identified;
       try {
         // The resolution this run opened is handed to identification rather
@@ -2073,24 +2073,6 @@ function* runValueRoot(
   return { status: "ok", output: chunks.join(""), value: selected.value };
 }
 
-/**
- * Refuse a successful outcome for a run that suffered an unauthorized checked
- * command failure.
- *
- * The failure was already raised where the command ran, and something enclosing
- * it — a `printErrors(fn)` component like `<TempDir>`, or one that caught the
- * `ContentError` its projected content raised — printed it and returned. Those
- * boundaries decide how a failure of their own is reported. Whether a command
- * that exited nonzero failed the run is not theirs to decide, and this is where
- * the run says so (#441).
- */
-function* refuseCheckedFailure(checkedFailures: CheckedFailures): Operation<void> {
-  const segment = checkedFailures.failure;
-  if (segment !== undefined) {
-    throw yield* documentationError(segment, "output");
-  }
-}
-
 function* documentWorkflow(
   props: Record<string, Json>,
   environment: ExecutionEnvironment,
@@ -2653,7 +2635,10 @@ function* executeDocument(
             // domains: not the name, not the answer that comes back, and
             // nothing a handler above this can hold (`invocation-identity.ts`).
             if (definition.kind === "function") {
-              identity.identities.select(name, definition);
+              // Recorded into the frame the scope that is resolving opened,
+              // rather than into whichever import happens to be innermost
+              // across the whole execution.
+              identity.identities.select(name, definition, yield* useScope());
               // The same record, for the other thing canonical resolution
               // decides here: which dispatcher — if any — this import selected.
               // A dispatcher a handler kept from another import reaches no body

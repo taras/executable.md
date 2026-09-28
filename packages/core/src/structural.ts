@@ -144,6 +144,27 @@ export const STRUCTURAL_DECLARATIONS: readonly EngineStructuralDeclaration[] = [
     context: null,
   },
   {
+    name: "All",
+    syntax: ["<All><Spawn>…</Spawn><Spawn>…</Spawn></All>"],
+    description:
+      "Run independent work at the same time. " +
+      "`<All><Spawn>first</Spawn><Spawn>second</Spawn></All>` waits for every spawned child, " +
+      "then renders their Markdown in authored order even when they finish in another order. " +
+      "Write at least two `<Spawn>` children directly inside it.",
+    as: null,
+    context: "The `<Spawn>` children this runs at the same time.",
+  },
+  {
+    name: "Spawn",
+    syntax: ["<Spawn>…</Spawn>"],
+    description:
+      "Mark one child for an enclosing `<All>` to run. Write `<Spawn>…</Spawn>` directly " +
+      "inside `<All>`; bindings made in its content stay in that child, and its `<Return>` " +
+      "or `<Break>` cannot target work outside it.",
+    as: null,
+    context: "Markdown expanded in its own child, beside its siblings.",
+  },
+  {
     name: "PrintErrors",
     syntax: ["<PrintErrors>…</PrintErrors>"],
     description:

@@ -158,7 +158,6 @@ function* nothing(): Operation<void> {}
  * issuances — or one the engine has already ended — are stated here, at the
  * seam, with the issuances the engine would have minted.
  */
-// deno-lint-ignore require-yield
 function* seam(): Operation<{ claim: IdentityClaimant; domain: IdentityDomain }> {
   let claim: IdentityClaimant | undefined;
   const installed = installIdentities([
@@ -182,13 +181,21 @@ function* seam(): Operation<{ claim: IdentityClaimant; domain: IdentityDomain }>
   if (claim === undefined || registration === undefined) {
     throw new Error("the seam produced no claimant");
   }
-  const frame = installed.identities.beginImport("Both");
-  installed.identities.select("Both", {
-    kind: "function",
-    name: "Both",
-    props: NO_PROPS,
-    fn: registration.fn,
-  });
+  // The seam's own scope, because this seam is not about branching: a frame
+  // belongs to the engine scope that opened it, and this one already runs in a
+  // scope its caller owns.
+  const branch = yield* useScope();
+  const frame = installed.identities.beginImport("Both", branch);
+  installed.identities.select(
+    "Both",
+    {
+      kind: "function",
+      name: "Both",
+      props: NO_PROPS,
+      fn: registration.fn,
+    },
+    branch,
+  );
   const domain = frame.settle();
   if (domain === undefined) {
     throw new Error("canonical selection produced no domain");
@@ -1027,5 +1034,58 @@ describe("Tier CIV — the authored form on the invocation", () => {
     yield* attempt(paired.invocation);
     expect(entered).toEqual(["body"]);
     expect(refusals.at(-1)).toEqual("refused:paired");
+  });
+});
+
+/**
+ * Tier PA10b — one declared component, two branches at once.
+ *
+ * `<All>` gives two `<Spawn>` children imports in flight together. What puts an
+ * invocation in this execution's identity domain is the canonical selection
+ * made inside the frame its own import opened — so these rows are the general
+ * statement of the thing an ordinary `<Session>` in each branch needs.
+ */
+describe("Tier PA10b — concurrent capability-backed identity", () => {
+  it("PA10b: two concurrent sites each claim their own identity, exactly once", function* () {
+    const seen = record();
+    yield* run(
+      ["<All>", "<Spawn><Probe /></Spawn>", "<Spawn><Probe /></Spawn>", "</All>"].join("\n"),
+      [probe(seen)],
+      nothing,
+    );
+
+    // Both claimed, neither refused, and neither received the other's.
+    expect(seen.refusals).toEqual([]);
+    expect(seen.taken).toHaveLength(2);
+    expect(new Set(seen.taken).size).toBe(2);
+    // The engine's own identity for each invocation, which is what
+    // `getExpansion()` reports when nothing has interfered.
+    expect(seen.taken).toEqual(seen.context);
+  });
+
+  it("PA10b: a nested <All> inside a spawn claims its own identities too", function* () {
+    const seen = record();
+    yield* run(
+      [
+        "<All>",
+        "<Spawn>",
+        "<All>",
+        "<Spawn><Probe /></Spawn>",
+        "<Spawn><Probe /></Spawn>",
+        "</All>",
+        "</Spawn>",
+        "<Spawn><Probe /></Spawn>",
+        "</All>",
+      ].join("\n"),
+      [probe(seen)],
+      nothing,
+    );
+
+    // Three sites, three identities, no refusal: a branch nested inside a
+    // branch owns its own frames as much as a top-level one does.
+    expect(seen.refusals).toEqual([]);
+    expect(seen.taken).toHaveLength(3);
+    expect(new Set(seen.taken).size).toBe(3);
+    expect(seen.taken).toEqual(seen.context);
   });
 });

@@ -61,6 +61,7 @@ import { readRootSource, rootSourcePath } from "./root-source.ts";
 import { composeRootDefinition } from "./root-composition.ts";
 import type { RootDocumentSource } from "./root-source.ts";
 import {
+  allStructure,
   answersViolations,
   answerViolations,
   breakViolations,
@@ -74,6 +75,7 @@ import {
   strayAnswerMessage,
   strayCaseMessage,
   strayElseMessage,
+  straySpawnMessage,
   strayStructuralMessage,
   switchStructure,
 } from "./structural-rules.ts";
@@ -315,6 +317,16 @@ interface LexicalContext {
   readonly insideIf: boolean;
   /** Whether a `<Switch>` in this source lexically encloses this point. */
   readonly insideSwitch: boolean;
+  /**
+   * Whether a `<Spawn>` in this source lexically encloses this point.
+   *
+   * A spawned child owns no value body and no loop it did not open itself, so
+   * this is what tells a `<Return>` written inside one from the ordinary
+   * `<Return>` of the body it was written in. It never clears again within one
+   * source: a definition invoked inside the child is its own source and starts
+   * the walk over.
+   */
+  readonly insideSpawn: boolean;
   /** Whether the immediate parent is an `<Answers>`. */
   readonly underAnswers: boolean;
   /**
@@ -500,6 +512,7 @@ class ValidationState {
         insideLoop: false,
         insideIf: false,
         insideSwitch: false,
+        insideSpawn: false,
         underAnswers: false,
         enclosing: undefined,
       });
@@ -1144,8 +1157,25 @@ class ValidationState {
         return switchStructure(segment).violations;
       case "Loop":
         return loopViolations(segment);
+      case "All":
+        // Every child's own source is decided here too, so a malformed
+        // `<Spawn>` — and a `<Return>` or `<Break>` that would leave one — is
+        // reported wherever it was written, before any child could start.
+        return allStructure(segment).violations;
+      case "Spawn":
+        // A well-placed `<Spawn>` is its `<All>`'s, and one placed wrongly
+        // under an `<All>` is already reported by that `<All>`'s own structure.
+        // What is left is a `<Spawn>` with no `<All>` above it at all.
+        return context.enclosing === "All"
+          ? []
+          : [{ code: "structural-usage-invalid", source: "Spawn", message: straySpawnMessage() }];
       case "Break":
-        return breakViolations(segment, context.insideLoop);
+        // A `<Break>` reaching past its spawn is already reported by that
+        // spawn's `<All>`, which says what is actually wrong with it — the loop
+        // it reached for is outside the child — rather than that no loop exists.
+        return context.insideSpawn && !context.insideLoop
+          ? []
+          : breakViolations(segment, context.insideLoop);
       case "PrintErrors":
         return printErrorsViolations(segment);
       case "Answers":
@@ -1195,7 +1225,8 @@ class ValidationState {
       default:
         // `<Return>` is the remaining case, and its whole contract belongs to
         // the body that declares — or fails to declare — `returns`, which the
-        // source's own facts already stated.
+        // source's own facts already stated. One written inside a `<Spawn>`
+        // belongs to no such body, and is reported by that spawn's `<All>`.
         return [];
     }
   }
@@ -1331,12 +1362,17 @@ function hasDynamicOperand(segment: ComponentElement): boolean {
 
 /** The lexical facts one element's children are written under. */
 function childContext(segment: ComponentElement, context: LexicalContext): LexicalContext {
+  const spawned = segment.name === "Spawn";
   return {
     entry: context.entry,
     isRoot: context.isRoot,
-    insideLoop: context.insideLoop || segment.name === "Loop",
+    // A spawn is a control-flow boundary: the loop that encloses the `<All>` is
+    // not a loop its children may break, so the outer fact stops here and only
+    // a `<Loop>` written inside the spawn opens a new one.
+    insideLoop: !spawned && (context.insideLoop || segment.name === "Loop"),
     insideIf: context.insideIf || segment.name === "If",
     insideSwitch: context.insideSwitch || segment.name === "Switch",
+    insideSpawn: context.insideSpawn || spawned,
     underAnswers: segment.name === "Answers",
     enclosing: segment.name,
   };

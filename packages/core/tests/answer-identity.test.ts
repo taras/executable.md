@@ -29,7 +29,8 @@
 
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import type { Operation } from "effection";
+import { all, race, scoped, sleep, useScope, withResolvers } from "effection";
+import type { Operation, Scope } from "effection";
 
 import {
   AnswerIdentityError,
@@ -50,6 +51,83 @@ const IDENTITY: AnswerIdentity = { origin: ORIGIN, key: "Open", revision: "1" };
 const OPEN = { key: "Open", revision: "1" } as const;
 const OTHER = { key: "Other", revision: "1" } as const;
 
+/**
+ * Where two branches wait for each other.
+ *
+ * A window belongs to the engine scope that opened it, so the rows about two
+ * branches at once are written as two operations that each own their own scope
+ * and read it from inside. Nothing hands a `Scope` out of the operation that
+ * owns it, and a window never outlives the body that opened it.
+ *
+ * What is left is the coordination: both branches have to be *open together*,
+ * which is the whole point, and neither may run ahead. Each step is a counter
+ * and one signal — the party that completes it releases everybody waiting on
+ * it, and a step that never completes is reported as a deadlock rather than
+ * waited on forever.
+ */
+function rendezvous(parties: number): (step: string) => Operation<void> {
+  const steps = new Map<string, { arrived: number; reached: Signal }>();
+  return function meet(step: string): Operation<void> {
+    let slot = steps.get(step);
+    if (slot === undefined) {
+      slot = { arrived: 0, reached: signal() };
+      steps.set(step, slot);
+    }
+    const waiting = slot;
+    return (function* () {
+      waiting.arrived += 1;
+      if (waiting.arrived >= parties) {
+        waiting.reached.publish();
+      }
+      yield* awaiting(`both branches reaching "${step}"`, waiting.reached.published);
+    })();
+  };
+}
+
+/**
+ * How long a step a correct engine completes immediately may go uncompleted
+ * before the wait is called a deadlock.
+ *
+ * Never reached by a passing run: every step below is completed by the other
+ * branch. It bounds only the failure mode, so a defect that stops one branch
+ * says which step it stopped at instead of hanging the suite.
+ */
+const DEADLOCK_MS = 10_000;
+
+interface Signal {
+  publish(): void;
+  readonly published: Operation<boolean>;
+}
+
+function signal(): Signal {
+  const resolvers = withResolvers<boolean>();
+  let settled = false;
+  return {
+    publish() {
+      if (!settled) {
+        settled = true;
+        resolvers.resolve(true);
+      }
+    },
+    get published() {
+      return resolvers.operation;
+    },
+  };
+}
+
+function* awaiting(what: string, waited: Operation<boolean>): Operation<void> {
+  const reached = yield* race([
+    waited,
+    (function* (): Operation<boolean> {
+      yield* sleep(DEADLOCK_MS);
+      return false;
+    })(),
+  ]);
+  if (!reached) {
+    throw new Error(`${what} never happened`);
+  }
+}
+
 /** One owner, activated the way canonical execution activates it. */
 function owner(): CanonicalImports {
   const imports = new CanonicalImports();
@@ -68,8 +146,9 @@ function resolving<T>(
   imports: CanonicalImports,
   name: string,
   work: (resolution: ResolutionWindow) => T,
+  scope: Scope,
 ): T {
-  const resolution = imports.beginResolution(name);
+  const resolution = imports.beginResolution(name, scope);
   try {
     return work(resolution);
   } finally {
@@ -88,8 +167,9 @@ function asking<T>(
   installation: ProviderInstallation,
   name: string,
   work: (request: ComponentAnswerRequest) => T,
+  scope: Scope,
 ): T {
-  const asked = installation.open(name);
+  const asked = installation.open(scope, name);
   try {
     return work(asked.request);
   } finally {
@@ -127,27 +207,39 @@ function refusalOf(attempt: () => unknown): unknown {
 
 describe("Tier CIV — an identity belongs to one answer of one import", () => {
   it("CIV23: an identity is stated on the exact answer and read back", function* () {
+    const here = yield* useScope();
     const imports = owner();
     const provider = imports.provider(ORIGIN);
 
-    const { resolution, supplied } = resolving(imports, "Open", (resolution) => ({
-      resolution,
-      supplied: asking(provider, "Open", (request) => request.claim(answer(), OPEN)),
-    }));
+    const { resolution, supplied } = resolving(
+      imports,
+      "Open",
+      (resolution) => ({
+        resolution,
+        supplied: asking(provider, "Open", (request) => request.claim(answer(), OPEN), here),
+      }),
+      here,
+    );
 
     expect(imports.identify(resolution, supplied)?.identity).toEqual(IDENTITY);
     expect(identityRecord(IDENTITY)).toBe("test://provider#Open@1");
   });
 
   it("CIV24: identification answers with the claim-time copy, not the answer", function* () {
+    const here = yield* useScope();
     const imports = owner();
     const provider = imports.provider(ORIGIN);
     const supplied = answer();
 
-    const resolution = resolving(imports, "Open", (resolution) => {
-      asking(provider, "Open", (request) => request.claim(supplied, OPEN));
-      return resolution;
-    });
+    const resolution = resolving(
+      imports,
+      "Open",
+      (resolution) => {
+        asking(provider, "Open", (request) => request.claim(supplied, OPEN), here);
+        return resolution;
+      },
+      here,
+    );
 
     // One call answers both halves. The definition is core's own copy, taken
     // when the claim was recorded — so a caller that keeps what identification
@@ -163,6 +255,7 @@ describe("Tier CIV — an identity belongs to one answer of one import", () => {
   });
 
   it("CIV24: an alternating answer cannot launder a copy through a second read", function* () {
+    const here = yield* useScope();
     const imports = owner();
     const provider = imports.provider(ORIGIN);
     const honest = answer();
@@ -182,10 +275,15 @@ describe("Tier CIV — an identity belongs to one answer of one import", () => {
       },
     }) as ImportedDefinition;
 
-    const resolution = resolving(imports, "Open", (resolution) => {
-      asking(provider, "Open", (request) => request.claim(alternating, OPEN));
-      return resolution;
-    });
+    const resolution = resolving(
+      imports,
+      "Open",
+      (resolution) => {
+        asking(provider, "Open", (request) => request.claim(alternating, OPEN), here);
+        return resolution;
+      },
+      here,
+    );
     const identified = imports.identify(resolution, alternating);
 
     // The claim itself was recorded from the first reading, and identification
@@ -200,53 +298,81 @@ describe("Tier CIV — an identity belongs to one answer of one import", () => {
   });
 
   it("CIV23: restating exactly the same claim is idempotent", function* () {
+    const here = yield* useScope();
     const imports = owner();
     const provider = imports.provider(ORIGIN);
     const supplied = answer();
 
-    const resolution = resolving(imports, "Open", (resolution) => {
-      asking(provider, "Open", (request) => {
-        request.claim(supplied, OPEN);
-        // A provider installed twice states the same thing twice. That is not
-        // two providers disagreeing, and it is not a conflict.
-        expect(refusalOf(() => request.claim(supplied, OPEN))).toBe(undefined);
-      });
-      return resolution;
-    });
+    const resolution = resolving(
+      imports,
+      "Open",
+      (resolution) => {
+        asking(
+          provider,
+          "Open",
+          (request) => {
+            request.claim(supplied, OPEN);
+            // A provider installed twice states the same thing twice. That is not
+            // two providers disagreeing, and it is not a conflict.
+            expect(refusalOf(() => request.claim(supplied, OPEN))).toBe(undefined);
+          },
+          here,
+        );
+        return resolution;
+      },
+      here,
+    );
     expect(imports.identify(resolution, supplied)?.identity).toEqual(IDENTITY);
   });
 
   it("CIV23: a competing claim refuses and never overwrites the first", function* () {
+    const here = yield* useScope();
     const imports = owner();
     const first = imports.provider(ORIGIN);
     const second = imports.provider("test://other");
     const held = answer();
 
-    const resolution = resolving(imports, "Open", (resolution) => {
-      asking(first, "Open", (request) => request.claim(held, OPEN));
-      // Another installation, asked in the same live resolution, cannot rename
-      // what the first stated. An overwrite would let a second provider take
-      // the first's implementation.
-      asking(second, "Open", (request) => {
-        expect(refusalOf(() => request.claim(held, OPEN))).toBeInstanceOf(AnswerIdentityError);
-      });
-      // And the first installation's *next* invocation cannot restate it
-      // differently either.
-      asking(first, "Open", (request) => {
-        expect(
-          refusalOf(() => request.claim(held, { key: "Other", revision: "1" })),
-        ).toBeInstanceOf(AnswerIdentityError);
-        expect(refusalOf(() => request.claim(held, { key: "Open", revision: "2" }))).toBeInstanceOf(
-          AnswerIdentityError,
+    const resolution = resolving(
+      imports,
+      "Open",
+      (resolution) => {
+        asking(first, "Open", (request) => request.claim(held, OPEN), here);
+        // Another installation, asked in the same live resolution, cannot rename
+        // what the first stated. An overwrite would let a second provider take
+        // the first's implementation.
+        asking(
+          second,
+          "Open",
+          (request) => {
+            expect(refusalOf(() => request.claim(held, OPEN))).toBeInstanceOf(AnswerIdentityError);
+          },
+          here,
         );
-      });
-      return resolution;
-    });
+        // And the first installation's *next* invocation cannot restate it
+        // differently either.
+        asking(
+          first,
+          "Open",
+          (request) => {
+            expect(
+              refusalOf(() => request.claim(held, { key: "Other", revision: "1" })),
+            ).toBeInstanceOf(AnswerIdentityError);
+            expect(
+              refusalOf(() => request.claim(held, { key: "Open", revision: "2" })),
+            ).toBeInstanceOf(AnswerIdentityError);
+          },
+          here,
+        );
+        return resolution;
+      },
+      here,
+    );
 
     expect(imports.identify(resolution, held)?.identity).toEqual(IDENTITY);
   });
 
   it("CIV25: a request whose handler has returned states nothing", function* () {
+    const here = yield* useScope();
     const imports = owner();
     const provider = imports.provider(ORIGIN);
     const late = answer();
@@ -257,23 +383,34 @@ describe("Tier CIV — an identity belongs to one answer of one import", () => {
     // the execution is still very much alive. What has ended is this
     // invocation, and an invocation that has returned is not supplying an
     // answer.
-    const resolution = resolving(imports, "Open", (resolution) => {
-      asking(provider, "Open", (request) => {
-        stale = request;
-      });
-      expect(refusalOf(() => stale?.claim(late, OPEN))).toBeInstanceOf(AnswerIdentityError);
-      // The positive control in the same still-open window: a fresh invocation
-      // of the same installation claims, so the refusal above is about the
-      // handler lease rather than about the window or the provider.
-      asking(provider, "Open", (request) => request.claim(answer(), OPEN));
-      return resolution;
-    });
+    const resolution = resolving(
+      imports,
+      "Open",
+      (resolution) => {
+        asking(
+          provider,
+          "Open",
+          (request) => {
+            stale = request;
+          },
+          here,
+        );
+        expect(refusalOf(() => stale?.claim(late, OPEN))).toBeInstanceOf(AnswerIdentityError);
+        // The positive control in the same still-open window: a fresh invocation
+        // of the same installation claims, so the refusal above is about the
+        // handler lease rather than about the window or the provider.
+        asking(provider, "Open", (request) => request.claim(answer(), OPEN), here);
+        return resolution;
+      },
+      here,
+    );
 
     expect(imports.identify(resolution, late)).toBe(undefined);
     expect(imports.identifying).toBe(true);
   });
 
   it("CIV25: a stale request cannot answer the next resolution of its own name", function* () {
+    const here = yield* useScope();
     const imports = owner();
     const provider = imports.provider(ORIGIN);
     const fresh = answer();
@@ -281,27 +418,47 @@ describe("Tier CIV — an identity belongs to one answer of one import", () => {
     let stale: ComponentAnswerRequest | undefined;
 
     // Resolution N of `Open`, whose handler keeps its request.
-    resolving(imports, "Open", () => {
-      asking(provider, "Open", (request) => {
-        requests.push(request);
-        stale = request;
-      });
-    });
+    resolving(
+      imports,
+      "Open",
+      () => {
+        asking(
+          provider,
+          "Open",
+          (request) => {
+            requests.push(request);
+            stale = request;
+          },
+          here,
+        );
+      },
+      here,
+    );
 
     // Resolution N+1 of the same name. The stale request names the right
     // component and belongs to an import that is over.
-    const { resolution, claimed } = resolving(imports, "Open", (resolution) => {
-      expect(refusalOf(() => stale?.claim(fresh, OPEN))).toBeInstanceOf(AnswerIdentityError);
-      // The same installation is asked again and answers this resolution: the
-      // installation is reusable, the request is not.
-      return {
-        resolution,
-        claimed: asking(provider, "Open", (request) => {
-          requests.push(request);
-          return request.claim(answer(), OPEN);
-        }),
-      };
-    });
+    const { resolution, claimed } = resolving(
+      imports,
+      "Open",
+      (resolution) => {
+        expect(refusalOf(() => stale?.claim(fresh, OPEN))).toBeInstanceOf(AnswerIdentityError);
+        // The same installation is asked again and answers this resolution: the
+        // installation is reusable, the request is not.
+        return {
+          resolution,
+          claimed: asking(
+            provider,
+            "Open",
+            (request) => {
+              requests.push(request);
+              return request.claim(answer(), OPEN);
+            },
+            here,
+          ),
+        };
+      },
+      here,
+    );
 
     expect(requests).toHaveLength(2);
     expect(requests[0]).not.toBe(requests[1]);
@@ -310,33 +467,57 @@ describe("Tier CIV — an identity belongs to one answer of one import", () => {
   });
 
   it("CIV25: a stale request cannot retag while another name is being decided", function* () {
+    const here = yield* useScope();
     const imports = owner();
     const provider = imports.provider(ORIGIN);
     const substitute = answer("Other");
     let stale: ComponentAnswerRequest | undefined;
 
-    resolving(imports, "Open", () => {
-      asking(provider, "Open", (request) => {
-        stale = request;
-      });
-    });
+    resolving(
+      imports,
+      "Open",
+      () => {
+        asking(
+          provider,
+          "Open",
+          (request) => {
+            stale = request;
+          },
+          here,
+        );
+      },
+      here,
+    );
 
     // `claim` takes no name, so the stale request cannot even ask about the
     // name being decided: it is fixed to `Open`, which this resolution is not.
-    const { resolution, claimed } = resolving(imports, "Other", (resolution) => {
-      expect(stale?.name).toBe("Open");
-      expect(refusalOf(() => stale?.claim(substitute, OTHER))).toBeInstanceOf(AnswerIdentityError);
-      return {
-        resolution,
-        claimed: asking(provider, "Other", (request) => request.claim(answer("Other"), OTHER)),
-      };
-    });
+    const { resolution, claimed } = resolving(
+      imports,
+      "Other",
+      (resolution) => {
+        expect(stale?.name).toBe("Open");
+        expect(refusalOf(() => stale?.claim(substitute, OTHER))).toBeInstanceOf(
+          AnswerIdentityError,
+        );
+        return {
+          resolution,
+          claimed: asking(
+            provider,
+            "Other",
+            (request) => request.claim(answer("Other"), OTHER),
+            here,
+          ),
+        };
+      },
+      here,
+    );
 
     expect(imports.identify(resolution, substitute)).toBe(undefined);
     expect(imports.identify(resolution, claimed)?.identity.key).toBe("Other");
   });
 
   it("CIV25: one installation answers two names through two distinct requests", function* () {
+    const here = yield* useScope();
     const imports = owner();
     // One installation owns one origin and may answer more than one admitted
     // name. Spending the installation on its first answer would break exactly
@@ -344,20 +525,40 @@ describe("Tier CIV — an identity belongs to one answer of one import", () => {
     const provider = imports.provider(ORIGIN);
     const seen: ComponentAnswerRequest[] = [];
 
-    const open = resolving(imports, "Open", (resolution) => ({
-      resolution,
-      claimed: asking(provider, "Open", (request) => {
-        seen.push(request);
-        return request.claim(answer(), OPEN);
+    const open = resolving(
+      imports,
+      "Open",
+      (resolution) => ({
+        resolution,
+        claimed: asking(
+          provider,
+          "Open",
+          (request) => {
+            seen.push(request);
+            return request.claim(answer(), OPEN);
+          },
+          here,
+        ),
       }),
-    }));
-    const other = resolving(imports, "Other", (resolution) => ({
-      resolution,
-      claimed: asking(provider, "Other", (request) => {
-        seen.push(request);
-        return request.claim(answer("Other"), OTHER);
+      here,
+    );
+    const other = resolving(
+      imports,
+      "Other",
+      (resolution) => ({
+        resolution,
+        claimed: asking(
+          provider,
+          "Other",
+          (request) => {
+            seen.push(request);
+            return request.claim(answer("Other"), OTHER);
+          },
+          here,
+        ),
       }),
-    }));
+      here,
+    );
 
     // Two invocations, two requests, each fixed to what it was asked.
     expect(seen).toHaveLength(2);
@@ -368,24 +569,45 @@ describe("Tier CIV — an identity belongs to one answer of one import", () => {
   });
 
   it("CIV25: identification takes the window it was asked about", function* () {
+    const here = yield* useScope();
     const imports = owner();
     const provider = imports.provider(ORIGIN);
     const requests: ComponentAnswerRequest[] = [];
 
-    const first = resolving(imports, "Open", (resolution) => ({
-      resolution,
-      claimed: asking(provider, "Open", (request) => {
-        requests.push(request);
-        return request.claim(answer(), OPEN);
+    const first = resolving(
+      imports,
+      "Open",
+      (resolution) => ({
+        resolution,
+        claimed: asking(
+          provider,
+          "Open",
+          (request) => {
+            requests.push(request);
+            return request.claim(answer(), OPEN);
+          },
+          here,
+        ),
       }),
-    }));
-    const second = resolving(imports, "Open", (resolution) => ({
-      resolution,
-      claimed: asking(provider, "Open", (request) => {
-        requests.push(request);
-        return request.claim(answer(), OPEN);
+      here,
+    );
+    const second = resolving(
+      imports,
+      "Open",
+      (resolution) => ({
+        resolution,
+        claimed: asking(
+          provider,
+          "Open",
+          (request) => {
+            requests.push(request);
+            return request.claim(answer(), OPEN);
+          },
+          here,
+        ),
       }),
-    }));
+      here,
+    );
 
     // Each answer belongs to the import it answered, and to no other. Nothing
     // here reads whichever window is current: the caller presents the one it
@@ -399,42 +621,54 @@ describe("Tier CIV — an identity belongs to one answer of one import", () => {
   });
 
   it("CIV25: a request shows the asked position by value", function* () {
+    const here = yield* useScope();
     const imports = owner();
     const provider = imports.provider(ORIGIN);
     // The engine's own object, which it reads again after any handler has seen
     // it. A provider is shown a copy, like everything else it is shown.
     const scanned = { path: "doc.md", offset: 12, line: 3, column: 5 };
 
-    resolving(imports, "Open", () => {
-      const asked = provider.open("Open", scanned);
-      try {
-        const shown = asked.request.position;
-        expect(shown).toEqual(scanned);
-        expect(shown).not.toBe(scanned);
-        // Editing what the handler was given reaches nothing, and the request
-        // itself cannot be re-pointed at another element.
-        expect(() => {
-          (shown as { line: number }).line = 99;
-        }).toThrow();
-        expect(() => {
-          (asked.request as { name: string }).name = "Other";
-        }).toThrow();
-      } finally {
-        asked.close();
-      }
-      // And the engine's own object is untouched by having been shown.
-      expect(scanned).toEqual({ path: "doc.md", offset: 12, line: 3, column: 5 });
-    });
+    resolving(
+      imports,
+      "Open",
+      () => {
+        const asked = provider.open(here, "Open", scanned);
+        try {
+          const shown = asked.request.position;
+          expect(shown).toEqual(scanned);
+          expect(shown).not.toBe(scanned);
+          // Editing what the handler was given reaches nothing, and the request
+          // itself cannot be re-pointed at another element.
+          expect(() => {
+            (shown as { line: number }).line = 99;
+          }).toThrow();
+          expect(() => {
+            (asked.request as { name: string }).name = "Other";
+          }).toThrow();
+        } finally {
+          asked.close();
+        }
+        // And the engine's own object is untouched by having been shown.
+        expect(scanned).toEqual({ path: "doc.md", offset: 12, line: 3, column: 5 });
+      },
+      here,
+    );
   });
 
   it("CIV23: a different object carries no claim, however alike", function* () {
+    const here = yield* useScope();
     const imports = owner();
     const provider = imports.provider(ORIGIN);
 
-    const { resolution, claimed } = resolving(imports, "Open", (resolution) => ({
-      resolution,
-      claimed: asking(provider, "Open", (request) => request.claim(answer(), OPEN)),
-    }));
+    const { resolution, claimed } = resolving(
+      imports,
+      "Open",
+      (resolution) => ({
+        resolution,
+        claimed: asking(provider, "Open", (request) => request.claim(answer(), OPEN), here),
+      }),
+      here,
+    );
 
     expect(imports.identify(resolution, claimed)?.identity).toEqual(IDENTITY);
     // The outer-replacement case: a handler further out returns its own object,
@@ -445,13 +679,19 @@ describe("Tier CIV — an identity belongs to one answer of one import", () => {
   });
 
   it("CIV23: editing the claimed answer invalidates the claim", function* () {
+    const here = yield* useScope();
     const imports = owner();
     const provider = imports.provider(ORIGIN);
 
-    const { resolution, claimed } = resolving(imports, "Open", (resolution) => ({
-      resolution,
-      claimed: asking(provider, "Open", (request) => request.claim(answer(), OPEN)),
-    }));
+    const { resolution, claimed } = resolving(
+      imports,
+      "Open",
+      (resolution) => ({
+        resolution,
+        claimed: asking(provider, "Open", (request) => request.claim(answer(), OPEN), here),
+      }),
+      here,
+    );
     expect(imports.identify(resolution, claimed)?.identity).toEqual(IDENTITY);
 
     // The same object, edited after the claim by a handler further out. What
@@ -462,21 +702,29 @@ describe("Tier CIV — an identity belongs to one answer of one import", () => {
   });
 
   it("CIV25: an installation retained past its execution opens nothing", function* () {
+    const here = yield* useScope();
     const imports = owner();
     const provider = imports.provider(ORIGIN);
-    const { resolution, before } = resolving(imports, "Open", (resolution) => ({
-      resolution,
-      before: asking(provider, "Open", (request) => request.claim(answer(), OPEN)),
-    }));
+    const { resolution, before } = resolving(
+      imports,
+      "Open",
+      (resolution) => ({
+        resolution,
+        before: asking(provider, "Open", (request) => request.claim(answer(), OPEN), here),
+      }),
+      here,
+    );
     expect(imports.identify(resolution, before)?.identity).toEqual(IDENTITY);
 
     imports.revoke();
 
     // The installation is the object a provider kept. The window it would need
     // cannot be opened, and a request minted from it states nothing.
-    expect(refusalOf(() => imports.beginResolution("Open"))).toBeInstanceOf(AnswerIdentityError);
+    expect(refusalOf(() => imports.beginResolution("Open", here))).toBeInstanceOf(
+      AnswerIdentityError,
+    );
     expect(
-      refusalOf(() => asking(provider, "Open", (request) => request.claim(answer(), OPEN))),
+      refusalOf(() => asking(provider, "Open", (request) => request.claim(answer(), OPEN), here)),
     ).toBeInstanceOf(AnswerIdentityError);
     // And what it stated while the execution was live identifies nothing now:
     // an admission may not be reconciled against a run that is over.
@@ -485,36 +733,53 @@ describe("Tier CIV — an identity belongs to one answer of one import", () => {
   });
 
   it("CIV25: an owner starts inactive, so a claim before activation refuses", function* () {
+    const here = yield* useScope();
     const imports = new CanonicalImports();
     // Canonical execution registers teardown, then activates, then installs
     // providers. A claim that landed before activation would be a claim with no
     // teardown behind it.
     expect(imports.identifying).toBe(false);
-    expect(refusalOf(() => imports.beginResolution("Open"))).toBeInstanceOf(AnswerIdentityError);
+    expect(refusalOf(() => imports.beginResolution("Open", here))).toBeInstanceOf(
+      AnswerIdentityError,
+    );
     expect(
       refusalOf(() =>
-        asking(imports.provider(ORIGIN), "Open", (request) => request.claim(answer(), OPEN)),
+        asking(imports.provider(ORIGIN), "Open", (request) => request.claim(answer(), OPEN), here),
       ),
     ).toBeInstanceOf(AnswerIdentityError);
   });
 
   it("CIV25: overlapping executions are isolated", function* () {
+    const here = yield* useScope();
     const first = owner();
     const second = owner();
     const shared = answer();
 
-    const one = resolving(first, "Open", (resolution) => {
-      asking(first.provider(ORIGIN), "Open", (request) => request.claim(shared, OPEN));
-      return resolution;
-    });
+    const one = resolving(
+      first,
+      "Open",
+      (resolution) => {
+        asking(first.provider(ORIGIN), "Open", (request) => request.claim(shared, OPEN), here);
+        return resolution;
+      },
+      here,
+    );
     // Live at the same time, and each answers only for what it recorded.
-    const two = resolving(second, "Open", (resolution) => {
-      expect(second.identify(resolution, shared)).toBe(undefined);
-      asking(second.provider(ORIGIN), "Open", (request) =>
-        request.claim(shared, { key: "Open", revision: "2" }),
-      );
-      return resolution;
-    });
+    const two = resolving(
+      second,
+      "Open",
+      (resolution) => {
+        expect(second.identify(resolution, shared)).toBe(undefined);
+        asking(
+          second.provider(ORIGIN),
+          "Open",
+          (request) => request.claim(shared, { key: "Open", revision: "2" }),
+          here,
+        );
+        return resolution;
+      },
+      here,
+    );
 
     expect(first.identify(one, shared)?.identity).toEqual(IDENTITY);
     expect(second.identify(two, shared)?.identity).toEqual({
@@ -530,20 +795,30 @@ describe("Tier CIV — an identity belongs to one answer of one import", () => {
   });
 
   it("CIV23: a provider cannot state an origin canonical execution did not give it", function* () {
+    const here = yield* useScope();
     const imports = owner();
     // The installation carries the origin; the provider states only key and
     // revision. There is no member on the claim call to put another origin in.
-    const { resolution, claimed } = resolving(imports, "Open", (resolution) => ({
-      resolution,
-      claimed: asking(imports.provider("test://assigned"), "Open", (request) =>
-        request.claim(answer(), OPEN),
-      ),
-    }));
+    const { resolution, claimed } = resolving(
+      imports,
+      "Open",
+      (resolution) => ({
+        resolution,
+        claimed: asking(
+          imports.provider("test://assigned"),
+          "Open",
+          (request) => request.claim(answer(), OPEN),
+          here,
+        ),
+      }),
+      here,
+    );
 
     expect(imports.identify(resolution, claimed)?.identity.origin).toBe("test://assigned");
   });
 
   it("CIV23: a partial identity is refused rather than recorded", function* () {
+    const here = yield* useScope();
     const imports = owner();
     const provider = imports.provider(ORIGIN);
     const attempts = [
@@ -553,14 +828,24 @@ describe("Tier CIV — an identity belongs to one answer of one import", () => {
 
     for (const attempt of attempts) {
       const supplied = answer();
-      const resolution = resolving(imports, "Open", (resolution) => {
-        asking(provider, "Open", (request) => {
-          expect(refusalOf(() => request.claim(supplied, attempt))).toBeInstanceOf(
-            AnswerIdentityError,
+      const resolution = resolving(
+        imports,
+        "Open",
+        (resolution) => {
+          asking(
+            provider,
+            "Open",
+            (request) => {
+              expect(refusalOf(() => request.claim(supplied, attempt))).toBeInstanceOf(
+                AnswerIdentityError,
+              );
+            },
+            here,
           );
-        });
-        return resolution;
-      });
+          return resolution;
+        },
+        here,
+      );
       // Refused rather than partially recorded: a half identity would compare
       // equal to a different half identity.
       expect(imports.identify(resolution, supplied)).toBe(undefined);
@@ -568,15 +853,245 @@ describe("Tier CIV — an identity belongs to one answer of one import", () => {
   });
 
   it("CIV23: an answer nobody claimed identifies nothing", function* () {
+    const here = yield* useScope();
     const imports = owner();
     // The ordinary case, and the reason this is not a permission: an unidentified
     // answer is a perfectly good answer. What it cannot be is the thing a
     // fragment runs, because a continuation would have nothing to compare.
-    resolving(imports, "Open", (resolution) => {
-      expect(imports.identify(resolution, answer())).toBe(undefined);
-      expect(imports.identify(resolution, undefined)).toBe(undefined);
-      expect(imports.identify(resolution, null)).toBe(undefined);
-      expect(imports.identify(resolution, "Open")).toBe(undefined);
+    resolving(
+      imports,
+      "Open",
+      (resolution) => {
+        expect(imports.identify(resolution, answer())).toBe(undefined);
+        expect(imports.identify(resolution, undefined)).toBe(undefined);
+        expect(imports.identify(resolution, null)).toBe(undefined);
+        expect(imports.identify(resolution, "Open")).toBe(undefined);
+      },
+      here,
+    );
+  });
+});
+
+/**
+ * Tier PA10b — two branches resolving at the same time.
+ *
+ * `<All>` lets two `<Spawn>` children have an import open together, so a
+ * resolution is no longer the only one in flight. What makes an answer this
+ * import's is the exact window it was asked in, and windows now belong to the
+ * engine scope that opened them — so these rows are written with two real
+ * scopes standing for two branches, and never with one branch's bookkeeping
+ * standing in for the other's.
+ */
+describe("Tier PA10b — concurrent resolution windows", () => {
+  it("PA10b: one installation answers two windows open at the same time", function* () {
+    const imports = owner();
+    const provider = imports.provider(ORIGIN);
+    const meet = rendezvous(2);
+    const answers = new Map<string, ImportedDefinition>();
+
+    /**
+     * One branch, resolving in a scope of its own.
+     *
+     * Everything the branch owns is opened and settled inside this operation:
+     * it reads its own scope here, keeps its window and its request for as long
+     * as the operation lasts, and hands nothing but its answer back. The two
+     * run together under `all`, held at a rendezvous so neither can finish
+     * before the other has opened — which is what makes two windows genuinely
+     * open at once rather than one after the other.
+     */
+    const resolve = (name: string) =>
+      scoped(function* (): Operation<void> {
+        const here = yield* useScope();
+        const window = imports.beginResolution("Open", here);
+        try {
+          // Both windows are open before either branch claims, which is the
+          // shape two `<Spawn>` children produce and the only arrangement in
+          // which a claim could land in the wrong one.
+          yield* meet("both open");
+          answers.set(
+            name,
+            asking(provider, "Open", (request) => request.claim(answer(), OPEN), here),
+          );
+          yield* meet("claimed");
+          // Both branches have answered and both windows are still open, so
+          // the cross-checks are made while the other one really exists.
+          const mine = answers.get(name)!;
+          const other = answers.get(name === "left" ? "right" : "left")!;
+          expect(imports.identify(window, mine)?.identity).toEqual(IDENTITY);
+          expect(imports.identify(window, other)).toBe(undefined);
+          yield* meet("checked");
+        } finally {
+          window.close();
+        }
+      });
+
+    yield* all([resolve("left"), resolve("right")]);
+    // Two distinct answers, neither overwritten by the other's claim.
+    expect(answers.size).toBe(2);
+    expect(answers.get("left")).not.toBe(answers.get("right"));
+  });
+
+  it("PA10b: a request answers its own branch and refuses the sibling's", function* () {
+    const imports = owner();
+    const provider = imports.provider(ORIGIN);
+    const meet = rendezvous(2);
+
+    const mine = scoped(function* (): Operation<void> {
+      const here = yield* useScope();
+      const window = imports.beginResolution("Open", here);
+      try {
+        const kept = provider.open(here, "Open");
+        // Held open while the sibling's window is the last one opened anywhere.
+        // Being the most recent window in the execution is not being the window
+        // this handler was asked in.
+        yield* meet("both open");
+        expect(imports.identify(window, kept.request.claim(answer(), OPEN))?.identity).toEqual(
+          IDENTITY,
+        );
+        kept.close();
+        // And once closed it answers nothing at all.
+        expect(refusalOf(() => kept.request.claim(answer(), OPEN))).toBeInstanceOf(
+          AnswerIdentityError,
+        );
+        yield* meet("done");
+      } finally {
+        window.close();
+      }
+    });
+
+    const sibling = scoped(function* (): Operation<void> {
+      const here = yield* useScope();
+      const window = imports.beginResolution("Open", here);
+      try {
+        yield* meet("both open");
+        yield* meet("done");
+      } finally {
+        window.close();
+      }
+    });
+
+    yield* all([mine, sibling]);
+  });
+
+  it("PA10b: a second different answer in one window refuses, whatever the sibling did", function* () {
+    const imports = owner();
+    const provider = imports.provider(ORIGIN);
+    const meet = rendezvous(2);
+    const refused: unknown[] = [];
+
+    const first = scoped(function* (): Operation<void> {
+      const here = yield* useScope();
+      const window = imports.beginResolution("Open", here);
+      try {
+        asking(provider, "Open", (request) => request.claim(answer(), OPEN), here);
+        // The sibling answers in between, which is what an installation that
+        // remembered only its most recent window would treat as un-spending
+        // this one.
+        yield* meet("answered once");
+        yield* meet("sibling answered");
+        refused.push(
+          refusalOf(() =>
+            asking(provider, "Open", (request) => request.claim(answer(), OPEN), here),
+          ),
+        );
+      } finally {
+        window.close();
+      }
+    });
+
+    const other = scoped(function* (): Operation<void> {
+      const here = yield* useScope();
+      const window = imports.beginResolution("Open", here);
+      try {
+        yield* meet("answered once");
+        asking(provider, "Open", (request) => request.claim(answer(), OPEN), here);
+        yield* meet("sibling answered");
+      } finally {
+        window.close();
+      }
+    });
+
+    yield* all([first, other]);
+    expect(refused).toHaveLength(1);
+    expect(refused[0]).toBeInstanceOf(AnswerIdentityError);
+  });
+
+  it("PA10b: one branch ending leaves the other live, and teardown leaves neither", function* () {
+    const imports = owner();
+    const provider = imports.provider(ORIGIN);
+    const meet = rendezvous(2);
+    const identified: unknown[] = [];
+
+    // This branch simply ends, which is what a spawn child answering, failing
+    // or being cancelled looks like from the owner's side: its scope goes, and
+    // with it every window it had open.
+    const ending = scoped(function* (): Operation<void> {
+      const here = yield* useScope();
+      const window = imports.beginResolution("Open", here);
+      try {
+        yield* meet("both open");
+      } finally {
+        window.close();
+      }
+    });
+
+    const continuing = scoped(function* (): Operation<void> {
+      const here = yield* useScope();
+      const window = imports.beginResolution("Open", here);
+      try {
+        yield* meet("both open");
+        yield* meet("the other ended");
+        // Still deciding, and still claimable: the branch that ended neither
+        // cleared this window nor authorized anything in it.
+        const still = asking(provider, "Open", (request) => request.claim(answer(), OPEN), here);
+        identified.push(imports.identify(window, still)?.identity);
+      } finally {
+        window.close();
+      }
+    });
+
+    yield* all([
+      (function* (): Operation<void> {
+        yield* ending;
+        yield* meet("the other ended");
+      })(),
+      continuing,
+    ]);
+    expect(identified).toEqual([IDENTITY]);
+
+    // And once the owner is torn down nothing may be resolved at all, in any
+    // scope — asked inside an operation that owns the scope it asks with.
+    yield* scoped(function* () {
+      const here = yield* useScope();
+      imports.revoke();
+      expect(refusalOf(() => imports.beginResolution("Open", here))).toBeInstanceOf(
+        AnswerIdentityError,
+      );
+    });
+  });
+
+  it("PA10b: a nested resolution owns the top of its own branch until it closes", function* () {
+    const imports = owner();
+    const provider = imports.provider(ORIGIN);
+
+    yield* scoped(function* () {
+      const here = yield* useScope();
+      const outer = imports.beginResolution("Open", here);
+      const held = provider.open(here, "Open");
+      // The nested resolution is for the *same* name, which is the case a check
+      // written against the name rather than the exact window would admit.
+      const inner = imports.beginResolution("Open", here);
+      // The inner resolution hides its parent: a request minted for the outer
+      // one states nothing while something nested is deciding.
+      expect(refusalOf(() => held.request.claim(answer(), OPEN))).toBeInstanceOf(
+        AnswerIdentityError,
+      );
+      inner.close();
+      // And the parent is claimable again once the nested one is over.
+      const supplied = held.request.claim(answer(), OPEN);
+      expect(imports.identify(outer, supplied)?.identity).toEqual(IDENTITY);
+      held.close();
+      outer.close();
     });
   });
 });

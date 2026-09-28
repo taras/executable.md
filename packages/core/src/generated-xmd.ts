@@ -134,6 +134,7 @@ import { RESERVED_STRUCTURAL } from "./structural.ts";
 // The ordinary source rules, read rather than reimplemented: a construct means
 // one thing whether a person wrote it or an Agent did.
 import {
+  allStructure,
   answersViolations,
   answerViolations,
   breakViolations,
@@ -2003,7 +2004,7 @@ function stated(segment: ComponentElement, scope: ReadonlySet<string>): void {
 }
 
 /** The structural names that only their own parent may consume. */
-const CONSUMED_BY_PARENT: ReadonlySet<string> = new Set(["Else", "Case", "Answer"]);
+const CONSUMED_BY_PARENT: ReadonlySet<string> = new Set(["Else", "Case", "Answer", "Spawn"]);
 
 /**
  * The structural names the generated root supplies no context for.
@@ -2102,6 +2103,22 @@ function* structural(
       ...lexical,
       insideLoop: true,
     });
+    return;
+  }
+
+  if (name === "All") {
+    const structure = allStructure(segment);
+    refuseStructure(structure.violations);
+    // Every child, before the fragment's first effect, and each from the
+    // bindings that reach the `<All>`: the children run at the same time and
+    // merge nothing back, so none of them may be proved against a binding
+    // another one makes, and nothing any of them binds is visible afterwards.
+    // The lexical facts reset with the boundary, exactly as the shared rule
+    // above already refused a `<Break>` or `<Return>` that would cross it.
+    const incoming: ReadonlySet<string> = new Set(scope);
+    for (const spawn of structure.spawns) {
+      yield* walk(spawn.element.children, table, ceilings, named, new Set(incoming), ROOT_LEXICAL);
+    }
     return;
   }
 

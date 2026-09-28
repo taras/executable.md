@@ -18,6 +18,8 @@
  * nothing a handler still holds decides what is *invoked*.
  */
 
+import type { Scope } from "effection";
+
 import type { ComponentDefinition, FunctionComponentDefinition, SourcePosition } from "../types.ts";
 
 /** A definition an import may answer with. */
@@ -300,8 +302,15 @@ export interface OpenAnswerRequest {
  * cannot revive a settled one or reach another provider's.
  */
 export interface ProviderInstallation {
-  /** Begin one handler invocation's request for one asked name. */
-  open(name: string, position?: Readonly<SourcePosition>): OpenAnswerRequest;
+  /**
+   * Begin one handler invocation's request for one asked name, under the engine
+   * scope that is resolving it.
+   *
+   * The scope is how the request finds the resolution it was asked in when
+   * several are open at once. It is a private key the caller reads from its own
+   * operation; nothing about it reaches the provider.
+   */
+  open(scope: Scope, name: string, position?: Readonly<SourcePosition>): OpenAnswerRequest;
 }
 
 /** An identity a provider stated in a shape this execution cannot record. */
@@ -335,7 +344,7 @@ export class CanonicalImports {
    */
   #active = false;
   /**
-   * The one resolution a claim may be stated during, when one is open.
+   * The resolutions each Effection scope has open, innermost last.
    *
    * A provider installation outlives every resolution it takes part in, while a
    * fresh request belongs to one handler invocation. Canonical execution asks
@@ -348,25 +357,36 @@ export class CanonicalImports {
    * belonging to a resolution other than the live one, and the name keeps a
    * handler settled for one name from recording under it while a different
    * name is being resolved.
+   *
+   * A stack per scope rather than one for the execution, because independent
+   * branches resolve at the same time. Nesting inside one scope stays LIFO —
+   * an inner resolution hides its parent until it closes — while a sibling
+   * branch has its own top, so closing or cancelling one can neither clear nor
+   * authorize the other. The scope object is a private key: never published,
+   * never read from, and never handed to a provider.
    */
-  #window: ResolutionWindow | undefined;
+  readonly #windows = new Map<Scope, ResolutionWindow[]>();
   /** How many resolutions this owner has opened, so each one is its own. */
   #occurrences = 0;
   /**
-   * The resolution each installation last stated an answer for.
+   * The resolutions each installation has already stated an answer for.
    *
    * Secondary. What proves a statement belongs to an import is the request's
    * captured window, not this; this only keeps one provider from naming two
    * different implementations for one import, where only one of them could be
    * what it resolved to.
    *
-   * Keyed by the installation's own frozen token and holding the window object,
-   * so an installation stays reusable: it answers several admitted names and
-   * the same name resolved more than once, because each of those is a different
-   * window. Spending the installation itself would break a valid multi-name
-   * provider, which the contract does not ask a host to split up.
+   * A set of windows per installation rather than the last one it answered.
+   * Two windows can be open at once now, so one installation may legitimately
+   * answer in window A and then in window B — and a second, different answer
+   * in A must still refuse, even though B was answered in between. Remembering
+   * only the most recent window would have let that second answer through.
+   *
+   * Keyed by the installation's own frozen token, so an installation stays
+   * reusable: it answers several admitted names and the same name resolved more
+   * than once, because each of those is a different window.
    */
-  readonly #spent = new WeakMap<object, ResolutionWindow>();
+  readonly #spent = new WeakMap<object, WeakSet<ResolutionWindow>>();
 
   /** Begin identifying. Called after teardown is registered. */
   activate(): void {
@@ -376,7 +396,9 @@ export class CanonicalImports {
   /** Stop. Called at teardown, on completion, failure or cancellation. */
   revoke(): void {
     this.#active = false;
-    this.#window = undefined;
+    // Every scope's stack, not only the ones that emptied themselves: a branch
+    // torn down with a resolution still open leaves nothing claimable.
+    this.#windows.clear();
   }
 
   get identifying(): boolean {
@@ -392,7 +414,7 @@ export class CanonicalImports {
    * one: there is no path from a document, a component or a provider to this
    * method.
    */
-  beginResolution(name: string): ResolutionWindow {
+  beginResolution(name: string, scope: Scope): ResolutionWindow {
     if (!this.#active) {
       throw new AnswerIdentityError(REVOKED_ANSWER_IDENTIFICATION);
     }
@@ -403,16 +425,31 @@ export class CanonicalImports {
       name,
       occurrence,
       close(): void {
-        // Only this window is closed. A nested resolution that already replaced
-        // it has its own close, and clearing another one here would settle a
-        // decision still being made. Compared by identity, so no bookkeeping
-        // value has to be trusted to say which window this is.
-        if (owner.#window === window) {
-          owner.#window = undefined;
+        // Only this window, and only out of the scope that opened it. A nested
+        // resolution above it has its own close, and a sibling branch's stack
+        // is not touched at all — clearing either would settle a decision still
+        // being made somewhere else. Removed by identity, so no bookkeeping
+        // value has to be trusted to say which window this is, and idempotent,
+        // because a close that ran twice would otherwise remove its parent.
+        const open = owner.#windows.get(scope);
+        if (open === undefined) {
+          return;
+        }
+        const index = open.lastIndexOf(window);
+        if (index >= 0) {
+          open.splice(index, 1);
+        }
+        if (open.length === 0) {
+          owner.#windows.delete(scope);
         }
       },
     };
-    this.#window = window;
+    const open = this.#windows.get(scope);
+    if (open === undefined) {
+      this.#windows.set(scope, [window]);
+    } else {
+      open.push(window);
+    }
     return window;
   }
 
@@ -434,12 +471,13 @@ export class CanonicalImports {
     const installation = Object.freeze({});
     const owner = this;
     return {
-      open(name: string, position?: Readonly<SourcePosition>): OpenAnswerRequest {
-        // Captured by identity, here, at the moment this invocation begins. A
-        // request minted while resolution N is open answers resolution N or
-        // nothing: it holds the object, so it cannot be made to describe
-        // whichever window is open later.
-        const opened = owner.#window;
+      open(scope: Scope, name: string, position?: Readonly<SourcePosition>): OpenAnswerRequest {
+        // Captured by identity, here, at the moment this invocation begins, out
+        // of the scope that is resolving. A request minted while resolution N
+        // is open answers resolution N or nothing: it holds the object, so it
+        // cannot be made to describe whichever window is open later — or a
+        // window a different branch opened in the meantime.
+        const opened = owner.#windows.get(scope)?.at(-1);
         let live = true;
         const request: ComponentAnswerRequest = Object.freeze({
           name,
@@ -452,7 +490,7 @@ export class CanonicalImports {
             return owner.#record(
               installation,
               origin,
-              { name, window: opened, live: () => live },
+              { name, window: opened, scope, live: () => live },
               answer,
               stated,
             );
@@ -471,7 +509,12 @@ export class CanonicalImports {
   #record(
     installation: object,
     origin: string,
-    asked: { name: string; window: ResolutionWindow | undefined; live: () => boolean },
+    asked: {
+      name: string;
+      window: ResolutionWindow | undefined;
+      scope: Scope;
+      live: () => boolean;
+    },
     answer: ImportedDefinition,
     stated: ClaimedIdentity,
   ): ImportedDefinition {
@@ -483,8 +526,12 @@ export class CanonicalImports {
     // was asked in the one still open, by identity; and is the name it was
     // asked the name that resolution is deciding. A stable installation handle
     // answers none of them, which is why it does not claim.
+    // Four questions, and the window one is asked of the scope that resolved:
+    // being the innermost open resolution somewhere else in the execution is
+    // not being the one this handler was asked in.
     const open = asked.window;
-    if (!asked.live() || open === undefined || open !== this.#window || open.name !== asked.name) {
+    const top = this.#windows.get(asked.scope)?.at(-1);
+    if (!asked.live() || open === undefined || open !== top || open.name !== asked.name) {
       throw new AnswerIdentityError(SETTLED_CLAIM);
     }
     const identity = complete(origin, stated);
@@ -514,7 +561,7 @@ export class CanonicalImports {
     // Secondary, and about the provider rather than the invocation: naming a
     // *different* implementation for an import this provider already answered
     // is two answers where only one could be what it resolved to.
-    if (this.#spent.get(installation) === open) {
+    if (this.#spent.get(installation)?.has(open) === true) {
       throw new AnswerIdentityError(SPENT_OPPORTUNITY);
     }
     // Copied on the way in, so a later edit of the claimed object is visible as
@@ -526,10 +573,16 @@ export class CanonicalImports {
       window: open,
       canonical: retain(answer),
     });
-    // Spent for this window and no other: the next import is a different
-    // window, which is what lets one installation answer several admitted
-    // names and the same name resolved twice.
-    this.#spent.set(installation, open);
+    // Spent for this window and no other: another import is a different window,
+    // which is what lets one installation answer several admitted names, the
+    // same name resolved twice, and two branches resolving at the same time —
+    // while a second answer in a window it already spent still refuses.
+    const spent = this.#spent.get(installation);
+    if (spent === undefined) {
+      this.#spent.set(installation, new WeakSet([open]));
+    } else {
+      spent.add(open);
+    }
     return answer;
   }
 

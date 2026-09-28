@@ -81,13 +81,20 @@ function collectOutputs(bodySegments: Segment[], minimumDepth: number): Componen
  * this walk does not see is the only thing that still cannot declare one —
  * another component's definition, and markdown produced at runtime — because
  * it reads this body's source AST and nothing else.
+ *
+ * A `<Spawn>` is the one region of this body's own source the walk stops at.
+ * The spawned child owns no value body, so a `<Return>` inside one neither
+ * satisfies this body's declaration nor is an undeclared return of it: the
+ * `<All>` rule owns that diagnostic, and counting it here would report one
+ * mistake as two while letting a spawn stand in for the return the body still
+ * has to write.
  */
 function collectReturns(bodySegments: Segment[]): ComponentElement[] {
   const declared: ComponentElement[] = [];
 
   const walk = (segments: Segment[]): void => {
     for (const segment of segments) {
-      if (segment.type !== "component") {
+      if (segment.type !== "component" || segment.name === "Spawn") {
         continue;
       }
       if (segment.name === "Return") {

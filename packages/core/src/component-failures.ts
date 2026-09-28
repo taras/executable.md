@@ -20,7 +20,7 @@
  */
 
 import { Component, raise } from "./component-api.ts";
-import { attributeCause, ErrorMode } from "./errors.ts";
+import { attributeCause, documentationError, ErrorMode } from "./errors.ts";
 import type { ComponentFailure, ErrorSegment, FunctionComponent } from "./types.ts";
 import type { Operation } from "effection";
 
@@ -90,6 +90,27 @@ export function recoveringLedger(): CheckedFailures {
  */
 export function containedLedger(inherited: CheckedFailures | undefined): CheckedFailures {
   return { authorized: inherited?.authorized ?? false };
+}
+
+/**
+ * Refuse a successful outcome for work that suffered an unauthorized checked
+ * command failure.
+ *
+ * The failure was already raised where the command ran, and something enclosing
+ * it — a `printErrors(fn)` component like `<TempDir>`, or one that caught the
+ * `ContentError` its projected content raised — printed it and returned. Those
+ * boundaries decide how a failure of their own is reported. Whether a command
+ * that exited nonzero failed the run is not theirs to decide (#441).
+ *
+ * Whoever owns the ledger says so: the execution for the run's own, and a
+ * spawned child for the one it keeps to itself, which is how a checked failure
+ * inside one `<Spawn>` fails that child rather than stopping a sibling's walk.
+ */
+export function* refuseCheckedFailure(checkedFailures: CheckedFailures): Operation<void> {
+  const segment = checkedFailures.failure;
+  if (segment !== undefined) {
+    throw yield* documentationError(segment, "output");
+  }
 }
 
 /**

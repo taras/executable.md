@@ -13,7 +13,7 @@
  * middleware installation) execute before children's code blocks.
  */
 
-import { ensure, Err, Ok, scoped, useScope, withResolvers } from "effection";
+import { all, ensure, Err, Ok, scoped, useScope, withResolvers } from "effection";
 import type { Operation, Result, Stream } from "effection";
 import type {
   FunctionComponent,
@@ -39,6 +39,7 @@ import {
   validateOutputPlacement,
 } from "./body-structure.ts";
 import {
+  allStructure,
   breakElementViolations,
   eachCaptureBinding,
   eachItemBinding,
@@ -56,10 +57,11 @@ import {
   strayBreakMessage,
   strayCaseMessage,
   strayElseMessage,
+  straySpawnMessage,
   strayStructuralMessage,
   switchStructure,
 } from "./structural-rules.ts";
-import type { StructuralViolation, SwitchCase } from "./structural-rules.ts";
+import type { SpawnRegion, StructuralViolation, SwitchCase } from "./structural-rules.ts";
 import {
   asBindingViolation,
   asExpressionViolation,
@@ -103,7 +105,7 @@ import type {
 import { regionStream } from "./expansion-region.ts";
 import { emissions } from "./render.ts";
 import { printsErrors, usePrintErrors } from "./component-failures.ts";
-import { containedLedger, recoveringLedger } from "./component-failures.ts";
+import { containedLedger, recoveringLedger, refuseCheckedFailure } from "./component-failures.ts";
 import type { CheckedFailures } from "./component-failures.ts";
 import type { ImportedDefinition } from "./components/component-resolution.ts";
 import type { ExecutionEnvironment } from "./execution-environment.ts";
@@ -129,6 +131,8 @@ import { createReturnBody, missingReturnMessage } from "./return-flow.ts";
 import type { ReturnBody } from "./return-flow.ts";
 import { unbox, useEvalScope } from "@effectionx/scope-eval";
 import type { EvalScope } from "@effectionx/scope-eval";
+import { DurableContext, durableAll, ephemeral } from "@executablemd/durable-streams";
+import type { Workflow } from "@executablemd/durable-streams";
 import { SchemaValidationError, validateProps, validateReturnValue } from "./validate.ts";
 import { parseJson } from "./json.ts";
 import { healSegment } from "./heal.ts";
@@ -1187,6 +1191,37 @@ function* expandListSegments(
 
         if (segment.name === "Break") {
           result.push(...(yield* expandBreak(segment, loop)));
+          break;
+        }
+
+        if (segment.name === "All") {
+          // No raise() here, like the branches above: expandAll reports the
+          // errors it creates, and each child settled its own (§6.9).
+          yield* expandAll(
+            segment,
+            parentMeta,
+            parentProps,
+            hideSet,
+            result,
+            elementPath,
+            checkedFailures,
+            environment,
+          );
+          break;
+        }
+
+        if (segment.name === "Spawn") {
+          // A well-placed <Spawn> is consumed by its <All> and never expanded on
+          // its own. Reaching this branch means the element sits outside any
+          // <All>, so it names no component and is diagnosed rather than
+          // resolved from the filesystem.
+          result.push(
+            yield* raise({
+              type: "error",
+              message: positioned(straySpawnMessage(), segment),
+              source: "Spawn",
+            }),
+          );
           break;
         }
 
@@ -2270,6 +2305,157 @@ function* expandBreak(
   return reported;
 }
 
+/**
+ * The environment one spawned child starts from (spec §6.5 `<Spawn>`).
+ *
+ * Shallow snapshots of both maps: the durable values the `<All>` was reached
+ * with, and the private live overlay beside them. Ordinary binding values are
+ * carried by identity — isolating what an author deliberately bound inside an
+ * object is not this construct's business — while the maps themselves are the
+ * child's own, so a name one child binds or rebinds is invisible to its
+ * siblings and to the work after `</All>`.
+ */
+function spawnEnvironment(incoming: EvalEnv | undefined): EvalEnv {
+  const child: EvalEnv = { values: { ...(incoming?.values ?? {}) } };
+  const overlay = liveEnvironment(child);
+  if (incoming !== undefined) {
+    Object.assign(overlay.values, liveEnvironment(incoming).values);
+  }
+  return child;
+}
+
+/**
+ * Expand one `<Spawn>` body into the string its child closes with.
+ *
+ * Everything mutable the ordinary walk threads is allocated here rather than
+ * inherited: the binding environment and its live overlay, an eval scope the
+ * child owns and whose resources die with it, a block counter, a private
+ * segment buffer, a checked-failure ledger and a copy of the hide set.
+ * Concurrent children therefore share immutable inputs and nothing else.
+ *
+ * The outer `<Return>` and `<Loop>` owners are cleared: several children
+ * running at once may not race to select one enclosing value or decide one
+ * enclosing loop, and the structural rule already refused the elements that
+ * would try. A `<Loop>` or value component created wholly inside the child
+ * establishes its own owner exactly as it does anywhere else.
+ */
+function spawnChild(
+  spawn: SpawnRegion,
+  incoming: EvalEnv | undefined,
+  parentMeta: Record<string, unknown>,
+  parentProps: Record<string, Json>,
+  hideSet: Set<string>,
+  path: string,
+  inherited: CheckedFailures | undefined,
+  environment: ExecutionEnvironment | undefined,
+): Operation<string> {
+  return scoped(function* () {
+    yield* provideEnv(spawnEnvironment(incoming));
+    yield* provideEvalScope(yield* useEvalScope());
+    yield* ActiveLoop.set(undefined);
+    // The `<Spawn>` is consumed by its `<All>` and never reaches dispatch, so
+    // its frame is added here — otherwise every child of one `<All>` would
+    // expand under one path (§5.6).
+    const childPath = extendPath(
+      path,
+      elementFrame(spawn.element.name, elementSite(spawn.element.position, spawn.ordinal)),
+    );
+    const segments: Segment[] = [];
+    // A fresh record with the inherited recovery, like a contained invocation's:
+    // a checked command failure inside one child fails that child, and a
+    // sibling's walk is not stopped by a ledger it does not own.
+    const ledger = containedLedger(inherited);
+    yield* expandSegmentsWithin(
+      spawn.element.children,
+      parentMeta,
+      parentProps,
+      new Set(hideSet),
+      createBlockCounter(),
+      segments,
+      childPath,
+      0,
+      ledger,
+      environment,
+      undefined,
+    );
+    yield* refuseCheckedFailure(ledger);
+    return renderSegments(segments);
+  });
+}
+
+/**
+ * Run the children of an `<All>` at the same time (spec §6.5 `<All>`).
+ *
+ * The children are durable coroutines of the one that reached the `<All>`,
+ * allocated in source order before any of them starts, so identity comes from
+ * where a `<Spawn>` was written and never from the order work was scheduled in.
+ * `durableAll()` is the whole join: it allocates those identities, returns the
+ * results in input order, reuses a completed child's recorded close on replay,
+ * and cancels unfinished siblings when one fails.
+ *
+ * Nothing is appended until the join succeeds. Each child renders into a buffer
+ * of its own, and the strings are written to the caller's region in authored
+ * order afterwards — so which child finished first may decide when its durable
+ * records append, and never what the document renders. A failed or cancelled
+ * join appends none of them.
+ *
+ * Expansion driven without a journal — a test, a tool describing a document —
+ * runs the same children on the same join without durable identities, exactly
+ * as `<Loop>` records nothing there and behaves identically otherwise.
+ */
+function* expandAll(
+  segment: ComponentElement,
+  parentMeta: Record<string, unknown>,
+  parentProps: Record<string, Json>,
+  hideSet: Set<string>,
+  /** The region this renders into, once every child has succeeded. */
+  owner: Segment[],
+  path: string,
+  /** Whether the enclosing region grants checked-failure recovery (§3.6). */
+  checkedFailures: CheckedFailures | undefined,
+  environment: ExecutionEnvironment | undefined,
+): Operation<void> {
+  // Decided from source alone and shared with validation, completely, before a
+  // child is constructed: a malformed `<All>` starts none of them.
+  const structure = allStructure(segment);
+  if (structure.violations.length > 0) {
+    for (const violation of structure.violations) {
+      owner.push(yield* raise(structuralErrorSegment(violation, segment)));
+    }
+    return;
+  }
+
+  // Read once, here: every child starts from the same incoming snapshot, and
+  // reading it inside a child would let whichever ran first decide what the
+  // others saw.
+  const incoming = yield* env;
+  const children = structure.spawns.map(
+    (spawn) => () =>
+      spawnChild(
+        spawn,
+        incoming,
+        parentMeta,
+        parentProps,
+        hideSet,
+        path,
+        checkedFailures,
+        environment,
+      ),
+  );
+
+  const scope = yield* useScope();
+  const rendered =
+    scope.get(DurableContext) === undefined
+      ? yield* all(children.map((child) => child()))
+      : yield* durableAll(children.map((child) => (): Workflow<string> => ephemeral(child())));
+
+  for (const text of rendered) {
+    if (text !== "") {
+      owner.push({ type: "text", content: text });
+    }
+  }
+}
+
 function printErrorsPropError(segment: ComponentElement, message: string): ErrorSegment {
   return { type: "error", message: positioned(message, segment), source: "PrintErrors" };
 }
@@ -2392,7 +2578,10 @@ function* expandComponent(
   // answered: what canonical resolution selected here is what decides whether
   // this invocation is in one of this execution's identity domains, and nothing
   // on the answer or in the chain carries it (`invocation-identity.ts`).
-  const selection = environment?.componentIdentity?.beginImport(name);
+  // Opened under the scope this expansion is running in, which is what makes
+  // the frame this branch's own: a sibling `<Spawn>` resolving the same name at
+  // the same time opens its own, under its own scope.
+  const selection = environment?.componentIdentity?.beginImport(name, yield* useScope());
   let selected: IdentityDomain | undefined;
   let dispatcher: FunctionComponent | undefined;
   /**

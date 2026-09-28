@@ -5496,6 +5496,20 @@ registration canonical resolution selected — recognized there by the identity 
 the implementation this execution built, carried to the issuance through the
 engine's own import frame (§5.3), and settled to nothing when resolution did not
 happen, happened twice, or answered for a name the engine did not ask.
+
+An import frame belongs to the Effection scope that opened it, and each scope
+keeps its own innermost-last stack of them. Nesting inside one scope is
+unchanged: an inner import owns the top until it closes, after which the outer
+one may be selected into again. What the ownership adds is branching. Two
+`<Spawn>` children under one `<All>` may have imports open at the same time, and
+each one's canonical selection is recorded into its own branch's frame — so an
+ordinary `<Session>` written in each child receives its own authentic identity,
+neither child can be handed the other's, and closing or cancelling one branch
+neither clears nor authorizes the other. Two selections in one frame still
+settle to nothing. The engine holds one domain per declared component per
+execution however many branches invoke it, and the same ownership governs the
+windows a provider's claim is admitted in: one installation may answer in two
+branches at once, while a second, different answer in either refuses.
 Forwarding the genuine issuance is ordinary delegation and stays supported;
 everything else refuses. None of it reads replaceable state, so middleware may
 short-circuit an import, redirect a name, replace a definition, shadow a
@@ -6742,6 +6756,84 @@ a rejected element also ending the loop.
 
 Printed errors from `<Loop>` and `<Break>` carry source locations on the same
 terms as `<If>`.
+
+#### `<All>` and `<Spawn>`: running independent work at the same time
+
+`<All>` runs its direct `<Spawn>` children at the same time and waits for every
+one of them. Both names are the engine's own syntax: neither resolves a
+component, so a repository file, a registration or a Plugin cannot supply
+either.
+
+```markdown
+<All>
+<Spawn>
+<Session name="planner">
+<Prompt>Draft the implementation plan.</Prompt>
+</Session>
+</Spawn>
+<Spawn>
+<Session name="reviewer">
+<Prompt>Review the current change.</Prompt>
+</Session>
+</Spawn>
+</All>
+```
+
+Both children can be live together, and `<All>` renders their markdown in the
+order the spawns were written even when the second one finishes first.
+
+**Form.** Both constructs are written paired and accept no props. `<All>`
+requires at least two direct `<Spawn>` children; whitespace between them is
+insignificant, and any other direct content — text, a component, a code block —
+is refused. A `<Spawn>` written anywhere but directly inside an `<All>` is
+refused too. Every one of these is read from source, so a malformed construct
+refuses before any child starts: a tripwire written inside either child never
+runs.
+
+**Bindings and resources.** Every child starts from the bindings that reached
+the `<All>`, in an environment of its own, with its own eval scope. A binding it
+makes, a binding it rebinds and a resource it retains stay available to that
+child's own later work, and reach neither a sibling nor the work after
+`</All>`. Children do not communicate through bindings, and `<All>` takes no
+`as` and produces no value. A retained resource is released when its child ends.
+
+**Output.** Each child expands into a private buffer. After every child
+succeeds, `<All>` emits their renderings in authored order; before that it emits
+none of them. Scheduling may decide when a child's durable records append, and
+never what the document renders.
+
+**Durable identity and replay.** In source order, each `<Spawn>` receives one
+child coroutine of the coroutine that reached the `<All>`, allocated before any
+child starts; nesting produces the existing hierarchical identity (§5.6, and the
+protocol's §7). Each child also gets a fresh block counter and an expansion path
+extended by its authored ordinal, so two children may derive the same local block
+id without colliding — the child coroutine namespaces it — and the work after
+`</All>` continues on the parent counter it would have had anyway. Each
+successful child closes with its rendered string. A complete replay runs no
+spawned work and rebuilds the output from those closes; a partial replay
+restores the children that closed and resumes only the unrecorded ones, under
+the same identities. Inserting, removing or reordering spawns is a definition
+change and follows the ordinary divergence contract.
+
+**Failure and cancellation.** The join is fail-fast. The first child failure
+fails the `<All>`, cancels every unfinished sibling and waits for all of them to
+finish tearing down. No child output is emitted, durable records acknowledged
+before the failure stay durable, and interrupted work is never recorded as
+complete. Cancelling the document cancels and joins every child; no task,
+subscription, retained resource or output buffer survives its spawn.
+
+**Control flow.** `<Spawn>` is a boundary. A `<Return>` inside one cannot select
+a value owned outside the `<All>`, and a `<Break>` inside one cannot exit a
+`<Loop>` written outside it; both are refused from source, before anything runs.
+A component invoked inside the child owns its own `<Return>`, and a `<Loop>`
+written wholly inside the child is ended by its own `<Break>`, exactly as
+elsewhere. A `<Return>` below a `<Spawn>` neither satisfies nor violates the
+enclosing body's own `returns` declaration: the body still owes the `<Return>`
+it declared.
+
+Generated XMD receives the same syntax and the same rules. The whole-fragment
+preflight walks every spawn — each from the bindings that reach the `<All>`, and
+merging nothing back — before the fragment performs its first effect.
 
 ### 6.6 Eval binding interpolation
 

@@ -1743,8 +1743,8 @@ component neither imports it nor grants its effects.
 Bindings and structural constructs are engine-owned language syntax and require
 no profile entry. Every built-in construct is available inside a generated
 fragment with its ordinary semantics — `Content`, `Output`, `Return`, `Let`,
-`Each`, `If`, `Else`, `Switch`, `Case`, `Loop`, `Break`, `PrintErrors`,
-`Answers` and `Answer` — decided by the same source rules ordinary validation
+`Each`, `If`, `Else`, `Switch`, `Case`, `Loop`, `Break`, `All`, `Spawn`,
+`PrintErrors`, `Answers` and `Answer` — decided by the same source rules ordinary validation
 and expansion read, so a construct means one thing whether a person or an Agent
 wrote it. Preflight dispatches a reserved name to those rules before the
 admitted table is consulted, which is why a construct is never reported as a
@@ -1766,8 +1766,10 @@ nothing it binds survives it, because that body may run no times at all — only
 `<Case>` branches of a `<Switch>` are checked from one incoming snapshot, so no
 alternative supplies a binding to another; the union of what they can produce
 becomes visible afterwards, which keeps reading a binding only one arm makes a
-runtime failure rather than a preflight refusal. `<Loop>`, `<PrintErrors>` and
-`<Let>` bodies read and write the enclosing environment. Constructs keep their
+runtime failure rather than a preflight refusal. Each `<Spawn>` under an `<All>`
+is checked from that same incoming snapshot and contributes nothing back, which
+is the binding contract the children actually run under. `<Loop>`,
+`<PrintErrors>` and `<Let>` bodies read and write the enclosing environment. Constructs keep their
 exact spelling in the retained source, never join the retained named-component
 list, and change no record version.
 
@@ -3197,6 +3199,9 @@ for the loop it exits.
 One state exists per execution of one value body. `<If>`, `<Switch>`, `<Loop>`,
 `<Each>` and `<Let>` keep the ambient one; a component invocation hides the caller's from the
 invoked body, so a component's own `<Return>` satisfies its own declaration; a
+`<Spawn>` passes none either, and the shared rule refuses the `<Return>` that
+would have reached for one, so concurrent children cannot race to claim a value
+owned outside their `<All>`; a
 nested value body installs a separate one, and both executions stand; and
 content the caller projected restores the caller's, through a Markdown
 `<Content />` and a function component's `content()` alike, with every
@@ -3278,6 +3283,60 @@ one identity. Neither construct is durable state: they append no journal event, 
 partial replay rebuilds the selection through ordinary expansion while completed
 effects in the chosen branch replay from their own records, and a completed
 document replay reuses the retained result without expanding anything.
+
+### Concurrent spawned children
+
+`<All>` and `<Spawn>` are the engine's own syntax, not components, so core owns
+what they mean and no repository file, registration, bundle or Plugin can supply
+either name. `<All>` runs its direct `<Spawn>` children at the same time and
+waits for all of them. It takes no props, produces no value, and requires at
+least two spawns — one alone is the sequential document it was already written
+as.
+
+The whole structure is decided from source before a child is constructed: the
+paired forms, the absent props, the two-spawn minimum, that only blank text sits
+between the spawns, that no `<Spawn>` is written outside its direct `<All>`, and
+that no `<Return>` or `<Break>` inside a spawn reaches for an owner outside it.
+One shared rule states all of it, and expansion, non-executing validation and
+the generated-fragment preflight read the same result — so a malformed construct
+starts no child anywhere, including in a fragment an Agent generated.
+
+**Concurrent expansion shares immutable inputs and nothing else.** Every child
+gets a binding environment and live overlay snapshotted from the one that
+reached the `<All>`, an eval scope of its own, a fresh block counter, a private
+output buffer, its own checked-failure ledger, a copied hide set and an
+expansion path extended by its authored ordinal. Nothing merges back, so a name
+one child binds or rebinds is invisible to its siblings and to the work after
+`</All>`, and a resource it retains is released when it ends. The outer
+`<Return>` and `<Loop>` owners are cleared at the boundary; a loop or value
+component created wholly inside a child establishes its own.
+
+**Durable identity comes from the source, never from the schedule.** The
+existing durable structured-concurrency substrate is the implementation: in
+source order, before any child starts, each `<Spawn>` receives one child
+coroutine of the one that reached the `<All>`, and nesting produces the existing
+hierarchical identity. Effects inside a child keep their ordinary descriptions
+under that coroutine, so two children may derive the same local block id without
+colliding, and work after `</All>` continues on the parent counter it would have
+had without any child. Each successful child closes with its rendered string.
+
+**Output is authored order; the journal is completion order.** A child emits
+into its private buffer, and `<All>` appends the renderings to its caller's
+region only after every child has succeeded. Which child finished first may
+decide when its records append and never what the document renders. A complete
+replay reads the child closes and runs no spawned work; a partial replay
+restores the children that closed and resumes only the unrecorded ones under the
+same identities. Inserting, removing or reordering spawns is a definition change
+and takes the existing divergence path rather than being reassigned by position
+or completion time.
+
+**Failure is the existing fail-fast join.** The first child failure fails the
+`<All>`, cancels every unfinished sibling and does not return until all of them
+have finished tearing down. No private buffer is emitted, records acknowledged
+before the failure stay durable, and interrupted work is never recorded as
+complete. Cancelling the parent takes the same ownership path, and no task,
+subscription, retained resource or buffer survives its spawn. No scheduler, no
+new record family and no document-visible concurrency control is introduced.
 
 ## Foreground commands
 
@@ -3930,7 +3989,7 @@ matching name says nothing about which registration answered. What settles it is
 the selection itself, recorded where it is made:
 
 - expansion opens an **execution-private import frame** before it asks the
-  public import chain anything;
+  public import chain anything, in the Effection scope that is asking;
 - canonical core resolution records, inside that frame, the exact name it was
   asked for and the exact implementation it selected — the function object this
   execution built from the host's factory, by identity;
@@ -3947,10 +4006,33 @@ provenance and no permission: what a handler decides is which implementation
 runs, and an implementation running where canonical resolution did not select it
 names nothing. Nested and re-entrant frames stay contained, because a frame is
 opened per import and settled the moment that import answers, however it
-answered; concurrent interleaving leaves more than one selection in a frame and
-so yields no domain, which is the safe direction; and a replay decides the same
-way, against this execution's own factory-created implementation rather than
-against anything a previous run recorded.
+answered; and a replay decides the same way, against this execution's own
+factory-created implementation rather than against anything a previous run
+recorded.
+
+**Frames are owned per Effection scope, not per execution.** `<All>` gives two
+`<Spawn>` children imports in flight at the same time, so "the frame this
+selection belongs to" can no longer mean "the last one anybody opened". Each
+scope keeps its own LIFO stack of open frames, and a canonical selection is
+recorded into the top frame of the scope that is resolving:
+
+- nesting inside one scope is unchanged — an inner import owns the top until it
+  closes, and the outer one may be selected into again afterwards;
+- sibling branches have independent tops, so one child's selection can never
+  land in another's frame, and closing or cancelling one branch neither clears
+  nor authorizes the other;
+- a frame is removed only by the settle that opened it, from the scope that
+  opened it, and teardown discards every remaining stack; and
+- two selections in *one* frame — a handler delegating twice — still yield no
+  domain, which remains the safe direction.
+
+The scope object is a private key. It is never published, never read from, and
+never reaches a document, a component, a provider or a handler: two frames
+belong together because they were opened under the same engine scope, not
+because of anything either of them says. The same ownership governs the
+canonical answer windows a provider claims through, where one installation may
+hold an answer open in two branches at once and a second, different answer in
+either still refuses.
 
 The engine then mints one issuance per invocation, carrying that domain — or
 none — the authored name for what a refusal says, and the frame the body is

@@ -39,6 +39,7 @@
  * do is enter an admitted fragment.
  */
 
+import { useScope } from "effection";
 import type { Operation } from "effection";
 
 import { Component } from "./component-api.ts";
@@ -114,7 +115,11 @@ export function componentAnswerRegistrar(
     *around(handler: ComponentAnswerHandler): Operation<void> {
       yield* Component.around({
         *importComponent([name, position], next) {
-          const asked = installation.open(name, position);
+          // The scope this invocation is running in, which is the branch whose
+          // resolution this request answers. Read here rather than carried on
+          // the installation: one installation serves every branch, and two of
+          // them may be resolving at the same time.
+          const asked = installation.open(yield* useScope(), name, position);
           try {
             return yield* handler(
               asked.request,

@@ -391,17 +391,20 @@ export interface ProtectedDeclaration {
  */
 export interface InvocationIdentities {
   /**
-   * Open the frame for one import the engine is about to ask for.
+   * Open the frame for one import the engine is about to ask for, under the
+   * engine scope that is asking.
    *
    * The engine settles it as soon as that import answers, whatever the answer
-   * was, so nothing a handler does in between decides what the frame holds.
+   * was, so nothing a handler does in between decides what the frame holds —
+   * including an import another branch opened while this one was in flight.
    */
-  beginImport(name: string): ImportSelection;
+  beginImport(name: string, scope: Scope): ImportSelection;
   /**
    * Record what canonical resolution selected. Only core's own resolver calls
-   * this, from inside the import the frame above was opened for.
+   * this, from inside the import the frame above was opened for, and under the
+   * same engine scope that opened it.
    */
-  select(name: string, definition: object, dispatcher?: unknown): void;
+  select(name: string, definition: object, scope: Scope): void;
   /** Answer for nothing, from here on. Called when the execution is torn down. */
   revoke(): void;
 }
@@ -414,7 +417,8 @@ export interface ImportSelection {
    *
    * Answers `undefined` unless exactly one canonical resolution happened inside
    * this frame, for the name the engine asked, selecting the implementation
-   * this execution built for that domain.
+   * this execution built for that domain. A selection made in another scope's
+   * frame is not one that happened inside this one.
    */
   settle(): IdentityDomain | undefined;
 }
@@ -1139,25 +1143,52 @@ export function installIdentities(
   }
 
   /**
-   * The import frames the engine has open, innermost last.
+   * The import frames each Effection scope has open, innermost last.
    *
-   * A stack rather than a slot, because a handler may expand something of its
-   * own while an import is in flight. Anything that leaves two selections in
-   * one frame — a handler delegating twice, or two expansions interleaving —
-   * settles to nothing, which is the safe direction.
+   * A stack per scope rather than one for the execution. Nesting inside one
+   * scope is still LIFO — a handler may expand something of its own while an
+   * import is in flight, and the inner import owns the top until it closes.
+   * What a single execution-wide stack could not express is *branching*: two
+   * `<Spawn>` children may each have an import open at the same time, and
+   * whichever pushed last would then receive the other's canonical selection.
+   * One invocation would settle with no domain and the other with a domain it
+   * never selected, which is where an ordinary `<Session>` in each branch
+   * stopped being able to name its own durable identity.
+   *
+   * The scope is a private key and nothing else. It is never published, never
+   * read from, and never reaches a document, a component or a handler; two
+   * frames belong together because they were opened under the same engine
+   * scope object, not because of anything either of them says.
+   *
+   * Anything that leaves two selections in one frame — a handler delegating
+   * twice — still settles to nothing, which is the safe direction.
    */
-  const frames: { asked: string; selected: Minted | undefined; count: number }[] = [];
+  const frames = new Map<Scope, { asked: string; selected: Minted | undefined; count: number }[]>();
 
   return {
     identities: {
-      beginImport(asked: string): ImportSelection {
+      beginImport(asked: string, scope: Scope): ImportSelection {
         const frame = { asked, selected: undefined as Minted | undefined, count: 0 };
-        frames.push(frame);
+        const open = frames.get(scope);
+        if (open === undefined) {
+          frames.set(scope, [frame]);
+        } else {
+          open.push(frame);
+        }
         return {
           settle(): IdentityDomain | undefined {
-            const index = frames.lastIndexOf(frame);
-            if (index >= 0) {
-              frames.splice(index, 1);
+            // Only this frame, and only from the scope that opened it: a
+            // sibling branch closing its own import may neither clear this one
+            // nor be cleared by it.
+            const stack = frames.get(scope);
+            if (stack !== undefined) {
+              const index = stack.lastIndexOf(frame);
+              if (index >= 0) {
+                stack.splice(index, 1);
+              }
+              if (stack.length === 0) {
+                frames.delete(scope);
+              }
             }
             return frame.count === 1 && frame.selected !== undefined
               ? frame.selected.domain
@@ -1165,8 +1196,11 @@ export function installIdentities(
           },
         };
       },
-      select(name: string, definition: FunctionComponentDefinition): void {
-        const frame = frames.at(-1);
+      select(name: string, definition: FunctionComponentDefinition, scope: Scope): void {
+        // The innermost import open in the scope that is resolving, which is
+        // the one this selection answers. A selection never reaches another
+        // branch's frame, however the two happen to interleave.
+        const frame = frames.get(scope)?.at(-1);
         if (frame === undefined) {
           return;
         }
@@ -1185,6 +1219,10 @@ export function installIdentities(
         for (const domain of minted.values()) {
           domain.revoke();
         }
+        // Every stack, not only the ones that emptied themselves: an execution
+        // torn down while a branch still had an import open leaves no frame
+        // behind for anything to select into.
+        frames.clear();
         // The route goes with the domains: a wrapper projected into it, or a
         // route narrowed from it, answers for nothing once the execution that
         // minted the bodies is gone.

@@ -377,6 +377,7 @@ describe("Tier SY: structural vocabulary", () => {
     // The reserved vocabulary in full, so a construct returning to the table
     // has to be written down here before this row can pass again.
     expect([...names(structural(catalog))].sort()).toEqual([
+      "All",
       "Answer",
       "Answers",
       "Break",
@@ -390,6 +391,7 @@ describe("Tier SY: structural vocabulary", () => {
       "Output",
       "PrintErrors",
       "Return",
+      "Spawn",
       "Switch",
     ]);
     for (const name of ["Terminal.Grid", "Terminal"]) {
