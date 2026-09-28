@@ -23,14 +23,18 @@ scopes the entry admitted, the bindings its `eval` blocks published, the source 
 generated fragment produced before that fragment was admitted, and each line the
 document rendered.
 
-When the entry asks a question, its drawer opens: the message, the one field the
-schema asks for, and exactly the values it will accept. Type one and press Enter.
-The answer is recorded, and what the document renders after it changes because of
-the recorded answer rather than because of anything this process remembered.
-Escape closes the drawer without answering; the question stays open. An answer
-the schema accepts ends the question, and the drawer goes with it: it leaves the
-screen and it leaves the location, because a URL naming a drawer nothing mounts
-describes a view nobody can be shown.
+When the entry asks a question, its drawer opens: the whole message — scrollable
+when it is longer than the drawer — and then every field the schema declares,
+with its title, its description, whether it is required, and exactly the values
+it will accept. Fill them in, or activate one of an enum's offered values, and
+press Enter from any of them to offer the whole object. The answer is recorded,
+and what the document renders after it changes because of the recorded answer
+rather than because of anything this process remembered. An answer the schema
+rejects keeps the question open and says what is wrong with it, under the field
+it belongs to. Escape closes the drawer without answering; the question stays
+open. An answer the schema accepts ends the question, and the drawer goes with
+it: it leaves the screen and it leaves the location, because a URL naming a
+drawer nothing mounts describes a view nobody can be shown.
 
 Press Enter on `[pause]` to stop expansion at its next boundary. `[continue]`
 exists only while a continuation is actually held — not while a pause is still

@@ -320,19 +320,53 @@ describe("REPL documentation: what it says is what the code does", () => {
 
   it("D1: the spec's Elicit metadata statement matches the real reader", function* () {
     const spec = yield* read(join(CLI, "..", "..", "specs", "repl-spec.md"));
-    // The spec says the drawer shows the one field the schema asks for and the
-    // values it will accept. The reader is what decides that.
-    expect(spec).toContain("the one field the\nschema asks for");
+    // The spec says the drawer shows every field the schema declares, with its
+    // annotations, whether it is required, and the values it will accept. The
+    // reader is what decides all of that.
+    expect(spec).toContain("every field the schema declares");
     const form = readQuestionForm({
       type: "object",
-      properties: { decision: { type: "string", enum: ["approve", "decline"] } },
+      properties: {
+        decision: {
+          type: "string",
+          enum: ["approve", "decline"],
+          title: "Decision",
+          description: "What to do with the draft",
+        },
+      },
       required: ["decision"],
       additionalProperties: false,
     });
-    expect(form).toEqual({ field: "decision", choices: ["approve", "decline"] });
-    // And a schema of another shape is not presentable, which is why the spec
-    // says one field rather than a form in general.
-    expect(readQuestionForm({ type: "string" })).toBeUndefined();
+    // The complete reading, member for member: a form that dropped an
+    // annotation, a required marker or the condition would be a drawer showing
+    // less than the spec says it shows.
+    expect(form).toEqual({
+      title: undefined,
+      description: undefined,
+      condition: undefined,
+      fields: [
+        {
+          name: "decision",
+          title: "Decision",
+          description: "What to do with the draft",
+          choices: ["approve", "decline"],
+          minLength: undefined,
+          required: true,
+        },
+      ],
+    });
+    // And a schema this language does not model is refused by name and path
+    // before anything is published, which is why the spec describes the fields
+    // a schema declares rather than any schema at all.
+    let refused: unknown;
+    try {
+      readQuestionForm({ type: "string" });
+    } catch (error) {
+      refused = error;
+    }
+    expect(refused).toBeInstanceOf(Error);
+    expect(refused instanceof Error ? refused.name : "").toBe("ElicitationProviderError");
+    expect(refused instanceof Error ? refused.message : "").toContain("$.type");
   });
 
   it("D1: Freedom's recorded provenance still matches its manifest", function* () {
