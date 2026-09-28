@@ -15,6 +15,8 @@
 
 /** What a Deno host offers a terminal. */
 export interface DenoTerminalSurface {
+  /** Whether both of this host's standard streams are a terminal. */
+  interactive(): boolean;
   consoleSize(): { readonly columns: number; readonly rows: number };
   /** Hand bytes over, resolving with how many it took. */
   write(bytes: Uint8Array): Promise<number>;
@@ -73,11 +75,15 @@ export function denoTerminalSurface(): DenoTerminalSurface | undefined {
   const write = callable(stdout, "write");
   const writeSync = callable(stdout, "writeSync");
   const setRaw = callable(stdin, "setRaw");
+  const readingTerminal = callable(stdin, "isTerminal");
+  const writingTerminal = callable(stdout, "isTerminal");
   const readable: unknown = Reflect.get(stdin, "readable");
   if (
     write === undefined ||
     writeSync === undefined ||
     setRaw === undefined ||
+    readingTerminal === undefined ||
+    writingTerminal === undefined ||
     typeof readable !== "object" ||
     readable === null ||
     !(Symbol.asyncIterator in readable)
@@ -87,6 +93,11 @@ export function denoTerminalSurface(): DenoTerminalSurface | undefined {
   const source = readable;
 
   return {
+    interactive(): boolean {
+      // Both ends, because the REPL reads keys from one and draws frames on
+      // the other: a redirected half is a half this product cannot run on.
+      return readingTerminal() === true && writingTerminal() === true;
+    },
     consoleSize(): { readonly columns: number; readonly rows: number } {
       const reported: unknown = consoleSize();
       if (typeof reported !== "object" || reported === null) {

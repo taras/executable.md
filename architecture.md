@@ -5402,14 +5402,68 @@ below it keeps a clock of its own. The stream carries presentation time only —
 Journal records, model selection, routes and execution pause state are outside
 it.
 
+A frame that cannot be drawn ends the screen. A refused subscription, a refused
+reconcile and a refused render all raise, because the scope that owns the
+terminal is the only thing that restores its modes: a command that kept raw mode
+and the alternate screen while showing a picture it can no longer update has
+taken the terminal and stopped saying anything.
+
 The terminal itself is a contextual Api, and a runtime-named adapter installs
-it. Shared code never asks which runtime it is on; it asks for the size, bytes
-in, bytes out, raw mode and resize notifications. Whoever opens the terminal
+it. Shared code never asks which runtime it is on; it asks whether a person is
+at it, and for the size, bytes
+in, bytes out, raw mode and resize notifications. Whether there is a terminal is
+settled before any path is formed or any history created, so a piped invocation
+refuses instead of leaving an execution nobody can open. Whoever opens the terminal
 registers the release of each of those before taking it, so a cancellation
 between the two still gives the terminal back — and every exit, whether the run
 finished, refused, failed, was cancelled or reached end of input, stops the
 reader, removes every listener, restores the modes and writes the final reset
 exactly once.
+
+### The whole of it, and where the pieces are
+
+```text
+DurableEvents -> frozen ReplModel -> resolved immutable view
+  -> keyed Freedom tree -> semantic layout -> tty frame
+  -> typed action back to the root
+```
+
+| module | what it owns |
+| --- | --- |
+| `model.ts` | projecting one validated Journal prefix into a frozen model |
+| `route.ts` | the location grammar, and resolving one against a model |
+| `journal.ts` | the retained NDJSON stream and the repository over a root |
+| `session.ts` | admitting one entry, reopening one history, and the live overlay |
+| `expansion.ts` | pausing and continuing expansion over the public seams |
+| `elicitation.ts` | the one question shape this REPL presents |
+| `description.ts` | opaque immutable descriptions and the closed action boundary |
+| `reconcile.ts` | reconciling descriptions into one mounted Freedom tree |
+| `handoff.ts` | the acknowledged commit boundary |
+| `layout.ts` | deterministic placement at four sizes |
+| `renderer.ts` | drawing the mounted tree, and the frame map |
+| `frame.ts` | the one acknowledged frame stream |
+| `input.ts` | normalizing bytes into the closed event union |
+| `terminal.ts` · `terminal-host.ts` · `screen.ts` | the terminal Api, its portable half, and the one owner of its modes |
+| `components/` · `application.ts` | the screens, and the one state transition boundary |
+| `storage.ts` · `program.ts` | where histories live, and the command as one scope |
+
+A location is resolved against the retained history before a session opens.
+Opening one starts or resumes the execution, and replay past the retained prefix
+appends — so a route naming a scope or drawer the file never held is answered
+from the records already on disk, where being wrong costs nothing. Resolution
+takes one fact the model cannot hold: whether this process is asking a question.
+A waiting question is the one thing a Journal never records, so neither
+`settled` nor the recorded elicitations distinguish a history that is about to
+ask from one that never will, and a live drawer resolved from a history alone
+would replay a whole execution to mount nothing. It defaults to *not* asking, so
+a caller that cannot say refuses. The overlay's
+output is announced on its own stream, because it is the one thing a frame shows
+that leaves no record for anything else to observe.
+
+`specs/repl-spec.md` describes the product this assembles. The runtime-named
+`{deno,node,bun,compiled}-repl.ts` modules state their own platform's data
+directory, identifier and filesystem operations; nothing under `repl/` names a
+runtime.
 
 ## Changing these rules
 

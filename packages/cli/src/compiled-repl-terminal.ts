@@ -33,6 +33,7 @@ export function* useCompiledReplTerminal(): Operation<void> {
     throw new Error("this host is not Deno, so it has no Deno terminal to install");
   }
   yield* installReplTerminal({
+    interactive: () => host.interactive(),
     size(): ReplTerminalSize {
       return host.consoleSize();
     },

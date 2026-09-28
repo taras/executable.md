@@ -44,16 +44,16 @@ function projected(events: readonly DurableEvent[], selection?: string): ReplMod
   return result.value;
 }
 
-function resolved(model: ReplModel, location: string): ReplSelection {
-  const result = resolveLocation(model, decoded(location));
+function resolved(model: ReplModel, location: string, asking = false): ReplSelection {
+  const result = resolveLocation(model, decoded(location), asking);
   if (!result.ok) {
     throw result.error;
   }
   return result.value;
 }
 
-function unresolved(model: ReplModel, location: string): string {
-  const result = resolveLocation(model, decoded(location));
+function unresolved(model: ReplModel, location: string, asking = false): string {
+  const result = resolveLocation(model, decoded(location), asking);
   if (result.ok) {
     throw new Error(`${location} resolved, and this model cannot answer it`);
   }
@@ -249,9 +249,26 @@ describe("REPL route: resolving against one model", () => {
         `xmd://repl/${EXECUTION}/repl/entry-1/+elicit?at=${answered.marker}&inspect`,
       ),
     ).toContain("live question");
-    expect(resolved(head, `xmd://repl/${EXECUTION}/repl/entry-1/+elicit`).drawers[0].kind).toBe(
-      "live-elicit",
-    );
+    // No reading of any history can mount a live question's drawer. A waiting
+    // question is the one fact a Journal never holds: it records answers. So a
+    // settled history, and an unsettled one that has already recorded this
+    // answer and merely has its root left to close, are both consistent with no
+    // question ever arriving — and `settled` cannot tell them apart from one
+    // that is really asking.
+    const live = `xmd://repl/${EXECUTION}/repl/entry-1/+elicit`;
+    expect(head.settled).toBe(true);
+    expect(unresolved(head, live)).toContain("nothing is being asked");
+
+    const unclosed = projected(events.slice(0, -1));
+    expect(unclosed.settled).toBe(false);
+    // Already answered: reopening this shape asks nobody anything and only
+    // finishes the root, so a route resolved here would replay and append
+    // before discovering that no drawer can mount.
+    expect(unclosed.entry?.elicitations[0].answer).toEqual({ decision: "approve" });
+    expect(unresolved(unclosed, live)).toContain("nothing is being asked");
+
+    // Only the process actually holding the question may open it, and it says so.
+    expect(resolved(head, live, true).drawers[0].kind).toBe("live-elicit");
   });
 
   it("R2: refuses a missing entry, scope, binding or incomplete path", function* () {

@@ -29,6 +29,15 @@
  * join the next keystroke and turn an `a` into an Alt-`a`. There is no way to
  * clear that buffer, so the decoder is replaced instead. That costs one
  * instantiation, and only when somebody actually presses Escape by itself.
+ *
+ * ## One scan is not one chunk
+ *
+ * The same scanner returns at most 128 events per call and keeps the rest of the
+ * bytes buffered, so a pasted document arrives over several scans. A host that
+ * scanned once per chunk would silently drop everything past the 128th
+ * character of a paste — which for this REPL means most of an entry. So a scan
+ * here means "scan until the buffer stops producing", and the events of all
+ * those passes are one result in the order the terminal sent them.
  */
 
 import { createInput, type Input, type InputEvent, type ScanResult } from "@bomb.sh/tty";
@@ -189,14 +198,14 @@ export function useReplDecoder(
     let input: Input = yield* until(createInput(settings));
     yield* provide({
       *scan(bytes?: Uint8Array): Operation<ReplInputScan> {
-        const scanned = scanInput(input, bytes);
+        const drained = drain(input, bytes);
         const settling =
           bytes === undefined &&
-          scanned.pendingFor !== undefined &&
-          scanned.events.length === 0 &&
-          scanned.pointers.length === 0;
+          drained.pendingFor !== undefined &&
+          drained.events.length === 0 &&
+          drained.pointers.length === 0;
         if (!settling) {
-          return scanned;
+          return drained;
         }
         // Nothing followed the held ESC, so it was the key. A fresh scanner,
         // because the spent byte is still in this one's buffer and would
@@ -205,10 +214,42 @@ export function useReplDecoder(
         return Object.freeze({
           events: Object.freeze([ESCAPE]),
           pointers: Object.freeze([]),
-          resized: scanned.resized,
+          resized: drained.resized,
           pendingFor: undefined,
         });
       },
     });
   });
+}
+
+/**
+ * Everything the scanner has, not just the first 128 of it.
+ *
+ * Each pass after the first is a scan with no new bytes, which is how the
+ * scanner hands over what it still holds. Draining stops when a pass produces
+ * nothing, and the last pass's pending report is the one that is still true.
+ */
+function drain(input: Input, bytes?: Uint8Array): ReplInputScan {
+  const events: ReplInputEvent[] = [];
+  const pointers: ReplPointerAt[] = [];
+  let resized = false;
+  let pendingFor: number | undefined;
+  let first = true;
+
+  while (true) {
+    const pass = first && bytes !== undefined ? scanInput(input, bytes) : scanInput(input);
+    first = false;
+    events.push(...pass.events);
+    pointers.push(...pass.pointers);
+    resized = resized || pass.resized;
+    pendingFor = pass.pendingFor;
+    if (pass.events.length === 0 && pass.pointers.length === 0 && !pass.resized) {
+      return Object.freeze({
+        events: Object.freeze(events),
+        pointers: Object.freeze(pointers),
+        resized,
+        pendingFor,
+      });
+    }
+  }
 }

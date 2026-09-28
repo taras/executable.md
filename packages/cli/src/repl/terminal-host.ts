@@ -32,6 +32,14 @@ import { ReplTerminal, type ReplTerminalSize } from "./terminal.ts";
  * takes a stream (Code Rule 12).
  */
 export interface ReplTerminalCapabilities {
+  /**
+   * Whether both ends of this terminal are a terminal.
+   *
+   * Required rather than assumed: a host that cannot say is a host whose
+   * answer would have to be guessed, and the guess that costs something is the
+   * optimistic one — it creates a history file and then fails on raw mode.
+   */
+  interactive(): boolean;
   /** The size right now. */
   size(): ReplTerminalSize;
   /**
@@ -60,6 +68,10 @@ export interface ReplTerminalCapabilities {
 export function installReplTerminal(host: ReplTerminalCapabilities): Operation<void> {
   return ReplTerminal.around(
     {
+      // deno-lint-ignore require-yield
+      *interactive(): Operation<boolean> {
+        return host.interactive();
+      },
       // deno-lint-ignore require-yield
       *size(): Operation<ReplTerminalSize> {
         return host.size();

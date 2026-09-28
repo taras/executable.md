@@ -136,6 +136,40 @@ interface ColumnWidths {
 const SIDEBAR: ColumnWidths = { wide: 32, medium: 28 };
 const INSPECTION: ColumnWidths = { wide: 36, medium: 28 };
 
+/**
+ * How wide the surface that carries content is, at one size.
+ *
+ * Asked by whoever has to *write* something that must fit: a row longer than the
+ * region it lands in is reflowed into rows the layout never allocated, so the
+ * width has to be a question with one answer rather than a constant each caller
+ * guesses at. Zero when there is no such surface, which is the refusal.
+ */
+export function surfaceWidth(size: ReplTerminalSize): number {
+  const profile = profileFor(size);
+  if (profile === "too-small") {
+    return 0;
+  }
+  if (profile === "narrow") {
+    return size.columns;
+  }
+  const sidebar = profile === "wide" ? SIDEBAR.wide : SIDEBAR.medium;
+  const inspection = profile === "wide" ? INSPECTION.wide : INSPECTION.medium;
+  return size.columns - sidebar - inspection;
+}
+
+/**
+ * How wide the drawer layer is, at one size.
+ *
+ * The same question for a modal: what it writes has to reach its own edges, or
+ * what it is in front of shows through from where its text stops.
+ */
+export function drawerWidth(size: ReplTerminalSize): number {
+  if (profileFor(size) === "too-small") {
+    return 0;
+  }
+  return size.columns - 2 * Math.floor(size.columns / 8);
+}
+
 /** Which profile a size gets. */
 export function profileFor(size: ReplTerminalSize): ReplProfile {
   if (size.columns < NARROW.columns || size.rows < NARROW.rows) {
