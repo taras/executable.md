@@ -2579,7 +2579,7 @@ function* expandComponent(
   // this invocation is in one of this execution's identity domains, and nothing
   // on the answer or in the chain carries it (`invocation-identity.ts`).
   // Opened under the scope this expansion is running in, which is what makes
-  // the frame this branch's own: a sibling `<Spawn>` resolving the same name at
+  // the frame this spawn's own: a sibling `<Spawn>` resolving the same name at
   // the same time opens its own, under its own scope.
   const selection = environment?.componentIdentity?.beginImport(name, yield* useScope());
   let selected: IdentityDomain | undefined;

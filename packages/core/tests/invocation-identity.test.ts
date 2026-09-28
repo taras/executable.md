@@ -181,11 +181,11 @@ function* seam(): Operation<{ claim: IdentityClaimant; domain: IdentityDomain }>
   if (claim === undefined || registration === undefined) {
     throw new Error("the seam produced no claimant");
   }
-  // The seam's own scope, because this seam is not about branching: a frame
+  // The seam's own scope, because this seam is not about spawned work: a frame
   // belongs to the engine scope that opened it, and this one already runs in a
   // scope its caller owns.
-  const branch = yield* useScope();
-  const frame = installed.identities.beginImport("Both", branch);
+  const here = yield* useScope();
+  const frame = installed.identities.beginImport("Both", here);
   installed.identities.select(
     "Both",
     {
@@ -194,7 +194,7 @@ function* seam(): Operation<{ claim: IdentityClaimant; domain: IdentityDomain }>
       props: NO_PROPS,
       fn: registration.fn,
     },
-    branch,
+    here,
   );
   const domain = frame.settle();
   if (domain === undefined) {
@@ -1038,12 +1038,12 @@ describe("Tier CIV — the authored form on the invocation", () => {
 });
 
 /**
- * Tier PA10b — one declared component, two branches at once.
+ * Tier PA10b — one declared component, two sibling spawns at once.
  *
  * `<All>` gives two `<Spawn>` children imports in flight together. What puts an
  * invocation in this execution's identity domain is the canonical selection
  * made inside the frame its own import opened — so these rows are the general
- * statement of the thing an ordinary `<Session>` in each branch needs.
+ * statement of the thing an ordinary `<Session>` in each spawn needs.
  */
 describe("Tier PA10b — concurrent capability-backed identity", () => {
   it("PA10b: two concurrent sites each claim their own identity, exactly once", function* () {
@@ -1081,8 +1081,8 @@ describe("Tier PA10b — concurrent capability-backed identity", () => {
       nothing,
     );
 
-    // Three sites, three identities, no refusal: a branch nested inside a
-    // branch owns its own frames as much as a top-level one does.
+    // Three sites, three identities, no refusal: a spawn nested inside a
+    // spawn owns its own frames as much as a top-level one does.
     expect(seen.refusals).toEqual([]);
     expect(seen.taken).toHaveLength(3);
     expect(new Set(seen.taken).size).toBe(3);

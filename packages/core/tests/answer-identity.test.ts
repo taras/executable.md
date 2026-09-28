@@ -52,14 +52,14 @@ const OPEN = { key: "Open", revision: "1" } as const;
 const OTHER = { key: "Other", revision: "1" } as const;
 
 /**
- * Where two branches wait for each other.
+ * Where two sibling spawns wait for each other.
  *
  * A window belongs to the engine scope that opened it, so the rows about two
- * branches at once are written as two operations that each own their own scope
- * and read it from inside. Nothing hands a `Scope` out of the operation that
- * owns it, and a window never outlives the body that opened it.
+ * spawns at once are written as two operations that each own their own scope and
+ * read it from inside. Nothing hands a `Scope` out of the operation that owns
+ * it, and a window never outlives the body that opened it.
  *
- * What is left is the coordination: both branches have to be *open together*,
+ * What is left is the coordination: both spawns have to be *open together*,
  * which is the whole point, and neither may run ahead. Each step is a counter
  * and one signal — the party that completes it releases everybody waiting on
  * it, and a step that never completes is reported as a deadlock rather than
@@ -79,7 +79,7 @@ function rendezvous(parties: number): (step: string) => Operation<void> {
       if (waiting.arrived >= parties) {
         waiting.reached.publish();
       }
-      yield* awaiting(`both branches reaching "${step}"`, waiting.reached.published);
+      yield* awaiting(`both spawns reaching "${step}"`, waiting.reached.published);
     })();
   };
 }
@@ -89,7 +89,7 @@ function rendezvous(parties: number): (step: string) => Operation<void> {
  * before the wait is called a deadlock.
  *
  * Never reached by a passing run: every step below is completed by the other
- * branch. It bounds only the failure mode, so a defect that stops one branch
+ * spawn. It bounds only the failure mode, so a defect that stops one spawn
  * says which step it stopped at instead of hanging the suite.
  */
 const DEADLOCK_MS = 10_000;
@@ -873,13 +873,13 @@ describe("Tier CIV — an identity belongs to one answer of one import", () => {
 });
 
 /**
- * Tier PA10b — two branches resolving at the same time.
+ * Tier PA10b — two sibling spawns resolving at the same time.
  *
  * `<All>` lets two `<Spawn>` children have an import open together, so a
  * resolution is no longer the only one in flight. What makes an answer this
  * import's is the exact window it was asked in, and windows now belong to the
  * engine scope that opened them — so these rows are written with two real
- * scopes standing for two branches, and never with one branch's bookkeeping
+ * scopes standing for two spawns, and never with one spawn's bookkeeping
  * standing in for the other's.
  */
 describe("Tier PA10b — concurrent resolution windows", () => {
@@ -890,9 +890,9 @@ describe("Tier PA10b — concurrent resolution windows", () => {
     const answers = new Map<string, ImportedDefinition>();
 
     /**
-     * One branch, resolving in a scope of its own.
+     * One spawned child, resolving in a scope of its own.
      *
-     * Everything the branch owns is opened and settled inside this operation:
+     * Everything the spawn owns is opened and settled inside this operation:
      * it reads its own scope here, keeps its window and its request for as long
      * as the operation lasts, and hands nothing but its answer back. The two
      * run together under `all`, held at a rendezvous so neither can finish
@@ -904,7 +904,7 @@ describe("Tier PA10b — concurrent resolution windows", () => {
         const here = yield* useScope();
         const window = imports.beginResolution("Open", here);
         try {
-          // Both windows are open before either branch claims, which is the
+          // Both windows are open before either spawn claims, which is the
           // shape two `<Spawn>` children produce and the only arrangement in
           // which a claim could land in the wrong one.
           yield* meet("both open");
@@ -913,7 +913,7 @@ describe("Tier PA10b — concurrent resolution windows", () => {
             asking(provider, "Open", (request) => request.claim(answer(), OPEN), here),
           );
           yield* meet("claimed");
-          // Both branches have answered and both windows are still open, so
+          // Both spawns have answered and both windows are still open, so
           // the cross-checks are made while the other one really exists.
           const mine = answers.get(name)!;
           const other = answers.get(name === "left" ? "right" : "left")!;
@@ -931,7 +931,7 @@ describe("Tier PA10b — concurrent resolution windows", () => {
     expect(answers.get("left")).not.toBe(answers.get("right"));
   });
 
-  it("PA10b: a request answers its own branch and refuses the sibling's", function* () {
+  it("PA10b: a request answers its own spawn and refuses the sibling's", function* () {
     const imports = owner();
     const provider = imports.provider(ORIGIN);
     const meet = rendezvous(2);
@@ -1016,13 +1016,13 @@ describe("Tier PA10b — concurrent resolution windows", () => {
     expect(refused[0]).toBeInstanceOf(AnswerIdentityError);
   });
 
-  it("PA10b: one branch ending leaves the other live, and teardown leaves neither", function* () {
+  it("PA10b: one spawn ending leaves the other live, and teardown leaves neither", function* () {
     const imports = owner();
     const provider = imports.provider(ORIGIN);
     const meet = rendezvous(2);
     const identified: unknown[] = [];
 
-    // This branch simply ends, which is what a spawn child answering, failing
+    // This spawn simply ends, which is what a spawned child answering, failing
     // or being cancelled looks like from the owner's side: its scope goes, and
     // with it every window it had open.
     const ending = scoped(function* (): Operation<void> {
@@ -1041,7 +1041,7 @@ describe("Tier PA10b — concurrent resolution windows", () => {
       try {
         yield* meet("both open");
         yield* meet("the other ended");
-        // Still deciding, and still claimable: the branch that ended neither
+        // Still deciding, and still claimable: the spawn that ended neither
         // cleared this window nor authorized anything in it.
         const still = asking(provider, "Open", (request) => request.claim(answer(), OPEN), here);
         identified.push(imports.identify(window, still)?.identity);
@@ -1070,7 +1070,7 @@ describe("Tier PA10b — concurrent resolution windows", () => {
     });
   });
 
-  it("PA10b: a nested resolution owns the top of its own branch until it closes", function* () {
+  it("PA10b: a nested resolution owns the top of its own spawn until it closes", function* () {
     const imports = owner();
     const provider = imports.provider(ORIGIN);
 
@@ -1095,3 +1095,234 @@ describe("Tier PA10b — concurrent resolution windows", () => {
     });
   });
 });
+
+/**
+ * Tier PA10c — one reusable provider, one definition, several imports.
+ *
+ * A provider that holds an immutable definition hands back the exact same object
+ * every time it answers. What that object *is* was settled once; which import it
+ * answered is settled per resolution. These rows use one shared reference,
+ * created once, so a ledger that made the first window part of the object's
+ * permanent claim refuses the second — which is the defect they exist to catch.
+ */
+describe("Tier PA10c — one definition answering more than one import", () => {
+  it("PA10c: the same definition answers a later import after the first window closed", function* () {
+    const imports = owner();
+    const provider = imports.provider(ORIGIN);
+    const here = yield* useScope();
+    // One object, created once and never copied: this is what a provider that
+    // owns its definition hands to everybody who asks.
+    const shared = answer();
+
+    const first = resolving(
+      imports,
+      "Open",
+      (resolution) => {
+        const supplied = asking(provider, "Open", (request) => request.claim(shared, OPEN), here);
+        expect(supplied).toBe(shared);
+        expect(imports.identify(resolution, shared)?.identity).toEqual(IDENTITY);
+        return resolution;
+      },
+      here,
+    );
+
+    // The second import is a new resolution of the same name, after the first is
+    // over. The definition is the same object, and it is still this provider's
+    // answer to say.
+    resolvingLater(imports, provider, here, shared);
+    // And the closed window still reads the claim it recorded, unchanged by the
+    // later one: each resolution keeps its own.
+    expect(imports.identify(first, shared)?.identity).toEqual(IDENTITY);
+  });
+
+  it("PA10c: an edited definition cannot be claimed again, and identifies nowhere", function* () {
+    const imports = owner();
+    const provider = imports.provider(ORIGIN);
+    const here = yield* useScope();
+    const shared = answer();
+
+    const first = resolving(
+      imports,
+      "Open",
+      (resolution) => {
+        asking(provider, "Open", (request) => request.claim(shared, OPEN), here);
+        expect(imports.identify(resolution, shared)?.identity).toEqual(IDENTITY);
+        return resolution;
+      },
+      here,
+    );
+
+    // One member of the definition, edited after it was claimed and while the
+    // stated identity says nothing changed. This is a different implementation
+    // wearing the first one's revision.
+    shared.props = { type: "object", properties: {}, additionalProperties: true };
+
+    resolving(
+      imports,
+      "Open",
+      (resolution) => {
+        asking(
+          provider,
+          "Open",
+          (request) => {
+            // Refused before anything is recorded: the identity was stated about
+            // the definition core retained, and this object is no longer it.
+            expect(refusalOf(() => request.claim(shared, OPEN))).toBeInstanceOf(
+              AnswerIdentityError,
+            );
+            return undefined;
+          },
+          here,
+        );
+        // So the new window vouches for nothing.
+        expect(imports.identify(resolution, shared)).toBe(undefined);
+      },
+      here,
+    );
+    // And the window that did claim it cannot identify the changed object
+    // either, which is the change detection that was already there.
+    expect(imports.identify(first, shared)).toBe(undefined);
+  });
+
+  it("PA10c: the same definition answers two imports open at the same time", function* () {
+    const imports = owner();
+    const provider = imports.provider(ORIGIN);
+    const meet = rendezvous(2);
+    const shared = answer();
+    const identified = new Map<string, AnswerIdentity | undefined>();
+
+    /** One spawned child's import, opened and settled inside its own operation. */
+    const resolve = (name: string) =>
+      scoped(function* (): Operation<void> {
+        const here = yield* useScope();
+        const window = imports.beginResolution("Open", here);
+        try {
+          // Both windows are open before either claims, so neither claim can be
+          // the other's: this is the arrangement sibling spawns produce.
+          yield* meet("both open");
+          const supplied = asking(provider, "Open", (request) => request.claim(shared, OPEN), here);
+          // The provider handed back its own object, not a copy of it.
+          expect(supplied).toBe(shared);
+          yield* meet("claimed");
+          // Read while the sibling's window is still open, which is the only
+          // arrangement in which a shared ledger entry could answer for the
+          // wrong import.
+          identified.set(name, imports.identify(window, shared)?.identity);
+          yield* meet("checked");
+        } finally {
+          window.close();
+        }
+      });
+
+    yield* all([resolve("left"), resolve("right")]);
+    expect(identified.get("left")).toEqual(IDENTITY);
+    expect(identified.get("right")).toEqual(IDENTITY);
+  });
+
+  it("PA10c: reuse spends each window, so a different answer in one still refuses", function* () {
+    const imports = owner();
+    const provider = imports.provider(ORIGIN);
+    const here = yield* useScope();
+    const shared = answer();
+
+    resolvingLater(imports, provider, here, shared);
+    // The same definition again in a fresh window is reuse; a *second* answer in
+    // that same window is two answers to one import, and that still refuses.
+    resolving(
+      imports,
+      "Open",
+      (resolution) => {
+        asking(
+          provider,
+          "Open",
+          (request) => {
+            expect(request.claim(shared, OPEN)).toBe(shared);
+            expect(refusalOf(() => request.claim(answer(), OPEN))).toBeInstanceOf(
+              AnswerIdentityError,
+            );
+            return undefined;
+          },
+          here,
+        );
+        expect(imports.identify(resolution, shared)?.identity).toEqual(IDENTITY);
+      },
+      here,
+    );
+  });
+
+  it("PA10c: a new window cannot rename the definition or take it for another provider", function* () {
+    const imports = owner();
+    const provider = imports.provider(ORIGIN);
+    const other = imports.provider("test://other");
+    const here = yield* useScope();
+    const shared = answer();
+
+    resolvingLater(imports, provider, here, shared);
+    // What this object is was settled by its first claim. A new resolution is a
+    // new question about which import it answered, never a chance to restate it.
+    resolving(
+      imports,
+      "Other",
+      (resolution) => {
+        asking(
+          provider,
+          "Other",
+          (request) => {
+            expect(refusalOf(() => request.claim(shared, OTHER))).toBeInstanceOf(
+              AnswerIdentityError,
+            );
+            return undefined;
+          },
+          here,
+        );
+        expect(imports.identify(resolution, shared)).toBe(undefined);
+      },
+      here,
+    );
+    resolving(
+      imports,
+      "Open",
+      (resolution) => {
+        asking(
+          other,
+          "Open",
+          (request) => {
+            expect(refusalOf(() => request.claim(shared, OPEN))).toBeInstanceOf(
+              AnswerIdentityError,
+            );
+            return undefined;
+          },
+          here,
+        );
+        expect(imports.identify(resolution, shared)).toBe(undefined);
+      },
+      here,
+    );
+  });
+});
+
+/**
+ * Claim one shared definition in a resolution of its own, and read it back.
+ *
+ * Written once because three rows need the same second import: a fresh window,
+ * the same object, and the same provider saying the same thing about it. All of
+ * it is synchronous bookkeeping, so it is a plain function — there is nothing
+ * here for an operation to wait on.
+ */
+function resolvingLater(
+  imports: CanonicalImports,
+  provider: ProviderInstallation,
+  scope: Scope,
+  shared: ImportedDefinition,
+): void {
+  resolving(
+    imports,
+    "Open",
+    (resolution) => {
+      const supplied = asking(provider, "Open", (request) => request.claim(shared, OPEN), scope);
+      expect(supplied).toBe(shared);
+      expect(imports.identify(resolution, shared)?.identity).toEqual(IDENTITY);
+    },
+    scope,
+  );
+}

@@ -396,7 +396,7 @@ export interface InvocationIdentities {
    *
    * The engine settles it as soon as that import answers, whatever the answer
    * was, so nothing a handler does in between decides what the frame holds —
-   * including an import another branch opened while this one was in flight.
+   * including an import a sibling spawn opened while this one was in flight.
    */
   beginImport(name: string, scope: Scope): ImportSelection;
   /**
@@ -1148,11 +1148,12 @@ export function installIdentities(
    * A stack per scope rather than one for the execution. Nesting inside one
    * scope is still LIFO — a handler may expand something of its own while an
    * import is in flight, and the inner import owns the top until it closes.
-   * What a single execution-wide stack could not express is *branching*: two
-   * `<Spawn>` children may each have an import open at the same time, and
-   * whichever pushed last would then receive the other's canonical selection.
+   * What a single execution-wide stack could not express is *spawned
+   * concurrency*: two `<Spawn>` children may each have an import open at the
+   * same time, and whichever pushed last would then receive the other's
+   * canonical selection.
    * One invocation would settle with no domain and the other with a domain it
-   * never selected, which is where an ordinary `<Session>` in each branch
+   * never selected, which is where an ordinary `<Session>` in each spawned child
    * stopped being able to name its own durable identity.
    *
    * The scope is a private key and nothing else. It is never published, never
@@ -1177,9 +1178,9 @@ export function installIdentities(
         }
         return {
           settle(): IdentityDomain | undefined {
-            // Only this frame, and only from the scope that opened it: a
-            // sibling branch closing its own import may neither clear this one
-            // nor be cleared by it.
+            // Only this frame, and only from the scope that opened it: a sibling
+            // spawn closing its own import may neither clear this one nor be
+            // cleared by it.
             const stack = frames.get(scope);
             if (stack !== undefined) {
               const index = stack.lastIndexOf(frame);
@@ -1199,7 +1200,7 @@ export function installIdentities(
       select(name: string, definition: FunctionComponentDefinition, scope: Scope): void {
         // The innermost import open in the scope that is resolving, which is
         // the one this selection answers. A selection never reaches another
-        // branch's frame, however the two happen to interleave.
+        // spawn's frame, however the two happen to interleave.
         const frame = frames.get(scope)?.at(-1);
         if (frame === undefined) {
           return;
@@ -1220,7 +1221,7 @@ export function installIdentities(
           domain.revoke();
         }
         // Every stack, not only the ones that emptied themselves: an execution
-        // torn down while a branch still had an import open leaves no frame
+        // torn down while a spawn still had an import open leaves no frame
         // behind for anything to select into.
         frames.clear();
         // The route goes with the domains: a wrapper projected into it, or a

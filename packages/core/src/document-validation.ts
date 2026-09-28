@@ -318,6 +318,16 @@ interface LexicalContext {
   /** Whether a `<Switch>` in this source lexically encloses this point. */
   readonly insideSwitch: boolean;
   /**
+   * Whether an `<All>` in this source lexically encloses this point.
+   *
+   * Not the immediate parent: a `<Spawn>` written anywhere below an `<All>` is
+   * that `<All>`'s to report, because the shared structure analysis walks the
+   * whole region and anchors the diagnostic at the element. This is what tells
+   * such a spawn from one written with no `<All>` above it at all, which is the
+   * only case the element's own rule owns.
+   */
+  readonly insideAll: boolean;
+  /**
    * Whether a `<Spawn>` in this source lexically encloses this point.
    *
    * A spawned child owns no value body and no loop it did not open itself, so
@@ -510,6 +520,7 @@ class ValidationState {
         entry,
         isRoot: entry.ordinal === 0,
         insideLoop: false,
+        insideAll: false,
         insideIf: false,
         insideSwitch: false,
         insideSpawn: false,
@@ -1163,10 +1174,12 @@ class ValidationState {
         // reported wherever it was written, before any child could start.
         return allStructure(segment).violations;
       case "Spawn":
-        // A well-placed `<Spawn>` is its `<All>`'s, and one placed wrongly
-        // under an `<All>` is already reported by that `<All>`'s own structure.
-        // What is left is a `<Spawn>` with no `<All>` above it at all.
-        return context.enclosing === "All"
+        // Every `<Spawn>` below an `<All>` belongs to that `<All>`, wherever it
+        // was written: `allStructure()` walks the whole region and reports a
+        // misplaced one at the element it found, so a second report here would
+        // be the same sentence twice about one mistake. What is left is a
+        // `<Spawn>` with no `<All>` above it at all.
+        return context.insideAll
           ? []
           : [{ code: "structural-usage-invalid", source: "Spawn", message: straySpawnMessage() }];
       case "Break":
@@ -1372,6 +1385,9 @@ function childContext(segment: ComponentElement, context: LexicalContext): Lexic
     insideLoop: !spawned && (context.insideLoop || segment.name === "Loop"),
     insideIf: context.insideIf || segment.name === "If",
     insideSwitch: context.insideSwitch || segment.name === "Switch",
+    // Never cleared by a spawn: a nested `<All>` owns its own descendants, and
+    // everything below the outermost one already has an owner.
+    insideAll: context.insideAll || segment.name === "All",
     insideSpawn: context.insideSpawn || spawned,
     underAnswers: segment.name === "Answers",
     enclosing: segment.name,

@@ -5500,16 +5500,17 @@ happen, happened twice, or answered for a name the engine did not ask.
 An import frame belongs to the Effection scope that opened it, and each scope
 keeps its own innermost-last stack of them. Nesting inside one scope is
 unchanged: an inner import owns the top until it closes, after which the outer
-one may be selected into again. What the ownership adds is branching. Two
-`<Spawn>` children under one `<All>` may have imports open at the same time, and
-each one's canonical selection is recorded into its own branch's frame — so an
+one may be selected into again. What the ownership adds is spawned concurrency.
+Two `<Spawn>` children under one `<All>` may have imports open at the same time,
+and each one's canonical selection is recorded into its own spawn's frame — so an
 ordinary `<Session>` written in each child receives its own authentic identity,
-neither child can be handed the other's, and closing or cancelling one branch
+neither child can be handed the other's, and closing or cancelling one spawn
 neither clears nor authorizes the other. Two selections in one frame still
 settle to nothing. The engine holds one domain per declared component per
-execution however many branches invoke it, and the same ownership governs the
+execution however many spawns invoke it, and the same ownership governs the
 windows a provider's claim is admitted in: one installation may answer in two
-branches at once, while a second, different answer in either refuses.
+sibling spawns at once, and may answer with the exact same definition in each,
+while a second, *different* answer in either refuses.
 Forwarding the genuine issuance is ordinary delegation and stays supported;
 everything else refuses. None of it reads replaceable state, so middleware may
 short-circuit an import, redirect a name, replace a definition, shadow a

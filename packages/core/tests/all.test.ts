@@ -927,6 +927,33 @@ describe("Tier ALL — PA7: malformed structure refuses before any child starts"
     });
   }
 
+  it("ALL19b: non-executing validation reports one nested misplaced <Spawn> once", function* () {
+    const shared = harness();
+    const source = [
+      "<All>",
+      '<Spawn><If condition={true}><Spawn><Probe name="t1" /></Spawn></If></Spawn>',
+      '<Spawn><Probe name="t2" /></Spawn>',
+      "</All>",
+    ].join("\n");
+    yield* useComponents(shared);
+    // Validation rather than a run, because a refusal reports the first thing
+    // wrong and this row is about how many things are reported.
+    const validation = yield* validateDocument(inlineSource(source));
+    const misplaced = validation.diagnostics.filter((diagnostic) =>
+      diagnostic.message.includes("must be a direct child of <All>"),
+    );
+    // One owner, one diagnostic. The `<All>` walks its whole region, so the
+    // element's own rule has nothing left to say about a spawn below an `<All>`
+    // — and a reader told the same thing twice about one mistake looks for two.
+    expect(misplaced).toHaveLength(1);
+    // Anchored where it was written: the inner `<Spawn>`, not the `<All>` that
+    // found it and not the `<Spawn>` it was written inside.
+    expect(misplaced[0]?.position?.line).toBe(2);
+    expect(misplaced[0]?.position?.column).toBe(29);
+    // Nothing ran to decide any of it.
+    expect(shared.ran).toEqual([]);
+  });
+
   it("ALL20: a repository file cannot supply <All> or <Spawn>", function* () {
     const shared = harness();
     const result = yield* run("<Spawn>from a file</Spawn>", {
@@ -1164,7 +1191,7 @@ describe("Tier ALL — PA9: the construct exists everywhere the language does", 
 });
 
 /**
- * Tier PA10a/c — the Story's own example: ordinary `<Session>` in each branch.
+ * Tier PA10a/c — the Story's own example: an ordinary `<Session>` in each spawn.
  *
  * `<Session>` is a capability-backed identity component, so two of them running
  * at once is the case where canonical resolution has to attribute each answer
@@ -1206,7 +1233,7 @@ function conversations(options: { gated?: boolean } = {}): Conversation {
     ...component,
     factory: (claim: Parameters<typeof component.factory>[0]) => {
       // One implementation per declared component per execution, however many
-      // branches invoke it. A domain minted per `<Spawn>` would show up here.
+      // spawns invoke it. A domain minted per `<Spawn>` would show up here.
       built += 1;
       return component.factory(claim);
     },
@@ -1384,7 +1411,7 @@ describe("Tier PA10a — two ordinary Sessions at the same time", () => {
 
     expect(result.ok).toBe(true);
     // One declared component, one implementation, one provider installation
-    // serving both branches — not a domain per spawn.
+    // serving both spawns — not a domain per spawn.
     expect(held.sessions()).toBe(1);
     expect(held.activations()).toBe(1);
 
@@ -1426,7 +1453,7 @@ describe("Tier PA10c — nesting and replay with ordinary Sessions", () => {
     expect(held.sessions()).toBe(1);
     const recorded = prompts(result.events);
     expect(recorded).toHaveLength(3);
-    // Hierarchical child identity, source-ordered: a branch inside a branch
+    // Hierarchical child identity, source-ordered: a spawn inside a spawn
     // owns its own frames as much as a top-level one does.
     expect(new Set(recorded.map((entry) => entry.coroutineId))).toEqual(
       new Set(["root.0.0", "root.0.1", "root.1"]),

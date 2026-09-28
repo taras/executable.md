@@ -4018,9 +4018,9 @@ recorded into the top frame of the scope that is resolving:
 
 - nesting inside one scope is unchanged — an inner import owns the top until it
   closes, and the outer one may be selected into again afterwards;
-- sibling branches have independent tops, so one child's selection can never
-  land in another's frame, and closing or cancelling one branch neither clears
-  nor authorizes the other;
+- sibling spawns have independent tops, so one spawned child's selection can
+  never land in another's frame, and closing or cancelling one spawn neither
+  clears nor authorizes the other;
 - a frame is removed only by the settle that opened it, from the scope that
   opened it, and teardown discards every remaining stack; and
 - two selections in *one* frame — a handler delegating twice — still yield no
@@ -4031,8 +4031,9 @@ never reaches a document, a component, a provider or a handler: two frames
 belong together because they were opened under the same engine scope, not
 because of anything either of them says. The same ownership governs the
 canonical answer windows a provider claims through, where one installation may
-hold an answer open in two branches at once and a second, different answer in
-either still refuses.
+hold an answer open in two sibling spawns at once — the exact same definition
+included, because a reusable provider owns one object and a claim is per
+window — and a second, *different* answer in either still refuses.
 
 The engine then mints one issuance per invocation, carrying that domain — or
 none — the authored name for what a refusal says, and the frame the body is

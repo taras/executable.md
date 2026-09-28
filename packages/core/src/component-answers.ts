@@ -115,9 +115,9 @@ export function componentAnswerRegistrar(
     *around(handler: ComponentAnswerHandler): Operation<void> {
       yield* Component.around({
         *importComponent([name, position], next) {
-          // The scope this invocation is running in, which is the branch whose
+          // The scope this invocation is running in, which is the spawn whose
           // resolution this request answers. Read here rather than carried on
-          // the installation: one installation serves every branch, and two of
+          // the installation: one installation serves every spawn, and two of
           // them may be resolving at the same time.
           const asked = installation.open(yield* useScope(), name, position);
           try {
