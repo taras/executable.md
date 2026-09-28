@@ -15,10 +15,17 @@
 import type { ReplDrawerRef, ReplSurface } from "../route.ts";
 
 export type ReplAction =
-  /** Text for whichever field has focus. */
-  | { readonly kind: "type"; readonly text: string }
-  /** Remove the last decoded text unit from whichever field has focus. */
-  | { readonly kind: "erase" }
+  /**
+   * Text for one named field, or for the entry draft when it names none.
+   *
+   * The name travels with the text because focus belongs to the mounted tree
+   * and this vocabulary does not: a control that emitted bare text would have
+   * its characters delivered to whichever field the application last recorded,
+   * which is not necessarily the one under the cursor.
+   */
+  | { readonly kind: "type"; readonly text: string; readonly field?: string }
+  /** Remove the last Unicode scalar value from one named field, or the draft. */
+  | { readonly kind: "erase"; readonly field?: string }
   /** Admit the draft as this execution's one entry. */
   | { readonly kind: "submit" }
   | { readonly kind: "select-surface"; readonly surface: ReplSurface }
@@ -33,5 +40,17 @@ export type ReplAction =
   | { readonly kind: "go-live" }
   | { readonly kind: "pause" }
   | { readonly kind: "continue" }
-  /** Answer the question waiting right now. */
-  | { readonly kind: "answer" };
+  /** Answer the question waiting right now, from the form as it stands. */
+  | { readonly kind: "answer" }
+  /** Give this form field the focus that text and Backspace act on. */
+  | { readonly kind: "select-field"; readonly field: string }
+  /** Put one offered enum value into one field. */
+  | { readonly kind: "choose"; readonly field: string; readonly option: string }
+  /**
+   * Move the read-only message region by whole lines.
+   *
+   * A delta rather than a position, because the control that emits it knows
+   * which way it points and nothing else: how far the region can go is the
+   * frame's to decide, and clamping belongs where the height is known.
+   */
+  | { readonly kind: "scroll"; readonly delta: number };

@@ -44,6 +44,7 @@ import type { ExecutionInstallation } from "@executablemd/core/host";
 import {
   admitted,
   answered,
+  focusSettled,
   describeApplication,
   initialState,
   reduceRepl,
@@ -52,7 +53,15 @@ import {
   stateFor,
   viewFor,
 } from "./application.ts";
-import type { ReplAction, ReplIntent, ReplLive, ReplState, ReplView } from "./application.ts";
+import type { Json, NormalizedIssue } from "@executablemd/core";
+import type {
+  ReplAction,
+  ReplFormMessage,
+  ReplIntent,
+  ReplLive,
+  ReplState,
+  ReplView,
+} from "./application.ts";
 import { decodeLocation, encodeLocation, resolveLocation } from "./route.ts";
 import { replRepository } from "./journal.ts";
 import type { ReplExecution } from "./journal.ts";
@@ -396,7 +405,13 @@ function* drive(
           if (aimed !== undefined) {
             const dispatched = yield* tree.dispatch(aimed);
             if (dispatched.ok && dispatched.value.outcome === "action") {
-              const transition = reduceRepl(state, dispatched.value.action, model, liveOf(current));
+              const transition = reduceRepl(
+                state,
+                dispatched.value.action,
+                model,
+                liveOf(current),
+                yield* screen.size(),
+              );
               state = transition.state;
               const performed = yield* perform(
                 transition.intent,
@@ -411,9 +426,22 @@ function* drive(
                 // The entry exists now, so the draft that became it is finished.
                 state = admitted(state);
               }
-              if (performed.answered === true) {
+              if (performed.answered !== undefined) {
                 // The question took it, so the drawer that was asking is over.
-                state = answered(state);
+                // The model here is the history without this answer in it yet,
+                // which is what makes the record it adds recognisable.
+                state = answered(state, model, performed.answered);
+              }
+              if (performed.messages !== undefined) {
+                // Still the same question. What the schema said goes under the
+                // form, and every value stays where it was typed.
+                state = Object.freeze({
+                  ...state,
+                  form: Object.freeze({
+                    ...state.form,
+                    messages: Object.freeze([...performed.messages]),
+                  }),
+                });
               }
               if (performed.refusal !== undefined) {
                 state = Object.freeze({ ...state, refusal: performed.refusal });
@@ -425,7 +453,13 @@ function* drive(
           if (delivered !== undefined) {
             const dispatched = yield* tree.dispatch(delivered);
             if (dispatched.ok && dispatched.value.outcome === "action") {
-              const transition = reduceRepl(state, dispatched.value.action, model, liveOf(current));
+              const transition = reduceRepl(
+                state,
+                dispatched.value.action,
+                model,
+                liveOf(current),
+                yield* screen.size(),
+              );
               state = transition.state;
               const performed = yield* perform(
                 transition.intent,
@@ -440,9 +474,22 @@ function* drive(
                 // The entry exists now, so the draft that became it is finished.
                 state = admitted(state);
               }
-              if (performed.answered === true) {
+              if (performed.answered !== undefined) {
                 // The question took it, so the drawer that was asking is over.
-                state = answered(state);
+                // The model here is the history without this answer in it yet,
+                // which is what makes the record it adds recognisable.
+                state = answered(state, model, performed.answered);
+              }
+              if (performed.messages !== undefined) {
+                // Still the same question. What the schema said goes under the
+                // form, and every value stays where it was typed.
+                state = Object.freeze({
+                  ...state,
+                  form: Object.freeze({
+                    ...state.form,
+                    messages: Object.freeze([...performed.messages]),
+                  }),
+                });
               }
               if (performed.refusal !== undefined) {
                 state = Object.freeze({ ...state, refusal: performed.refusal });
@@ -499,16 +546,18 @@ function* drive(
       // moved, draw once more with where it actually is. Otherwise the marker is
       // always one keystroke behind, and a person reaching for a control would be
       // acting on the one after it.
-      const settledFocus = keyOfFocus(tree);
+      let settledFocus = keyOfFocus(tree);
+      // A focus claim this commit satisfied is spent here, at the commit that
+      // satisfied it: what the tree answers is the only thing that says whether
+      // the control a claim named actually took it.
+      state = focusSettled(view, settledFocus);
       if (settledFocus !== focused) {
         focused = settledFocus;
-        rendered = yield* paint(
-          frames,
-          tree,
-          renderer,
-          screen,
-          yield* build(state, model, current, yield* screen.size(), focused),
-        );
+        const redrawn = yield* build(state, model, current, yield* screen.size(), focused);
+        rendered = yield* paint(frames, tree, renderer, screen, redrawn);
+        settledFocus = keyOfFocus(tree);
+        state = focusSettled(redrawn, settledFocus);
+        focused = settledFocus;
       }
       if (ended) {
         // End of input is a lifecycle outcome: the last frame is drawn, and then
@@ -620,12 +669,47 @@ function* watch(session: ReplSession, wakes: Wakes): Operation<void> {
   });
 }
 
+/**
+ * One normalized issue as a form message.
+ *
+ * The field is read from the issue's own instance path, so a message sits under
+ * the field it is about. An issue about the object as a whole — a missing
+ * required name — carries no field and is shown against the form.
+ */
+function reported(outcome: { readonly issues: readonly NormalizedIssue[] }): ReplFormMessage[] {
+  return outcome.issues.map((issue) => {
+    const named = /^\/([^/]+)/.exec(issue.instancePath)?.[1];
+    const missing =
+      issue.keyword === "required" && isObject(issue.params)
+        ? issue.params["missingProperty"]
+        : undefined;
+    const field = named ?? (typeof missing === "string" ? missing : undefined);
+    return { ...(field === undefined ? { field: undefined } : { field }), message: issue.message };
+  });
+}
+
+function isObject(value: Json): value is { [key: string]: Json } {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
 /** What performing one intent produced. */
 interface Performed {
   /** The session that stands now, when submitting produced a different one. */
   readonly session?: ReplSession;
-  /** Whether a question took the answer it was given and is now over. */
-  readonly answered?: boolean;
+  /**
+   * The exact object a question took, when one did and is now over.
+   *
+   * The object rather than a flag: the record it causes appends later, and this
+   * is what will tell that record apart from every other answer in the history.
+   */
+  readonly answered?: Json;
+  /**
+   * Why the object it was given is not yet an answer.
+   *
+   * The question is untouched and still pending; these go back into application
+   * state so the form a person is looking at can say what is wrong with it.
+   */
+  readonly messages?: readonly ReplFormMessage[];
   /** Why it could not be done, for the screen to say. */
   readonly refusal?: string;
 }
@@ -657,13 +741,21 @@ function* perform(
       wakes.send({ kind: "session" });
       return {};
     case "answer": {
-      // A choice the form does not offer is not an answer: the question stays
-      // open, nothing is appended, and the drawer stays up holding what was
-      // typed so it can be corrected. Only an accepted answer ends the
-      // question, and the route has to end with it.
-      const accepted = session.overlay.question?.answer(intent.choice) ?? false;
+      // An object the schema rejects is not an answer: the question stays open,
+      // nothing is appended, and the drawer stays up holding what was filled in
+      // so it can be corrected. Only a valid object ends the question, and the
+      // route has to end with it.
+      //
+      // The schema decides, through the same compiled validator the request
+      // carries. Nothing here reads the form or judges a value.
+      const outcome = session.overlay.question?.submit(intent.values);
       wakes.send({ kind: "session" });
-      return accepted ? { answered: true } : {};
+      if (outcome === undefined) {
+        return {};
+      }
+      return outcome.kind === "answered"
+        ? { answered: outcome.answer }
+        : { messages: reported(outcome) };
     }
     case "submit": {
       const submitted = yield* submitReplEntry({
