@@ -290,6 +290,7 @@ describe("REPL documentation: what it says is what the code does", () => {
       at: undefined,
       inspect: false,
       draft: undefined,
+      session: undefined,
     });
     expect(encoded).toBe("xmd://repl/kf39sla2/repl");
     const decoded = decodeLocation(encoded);
@@ -312,6 +313,7 @@ describe("REPL documentation: what it says is what the code does", () => {
         at: undefined,
         inspect: false,
         draft: undefined,
+        session: undefined,
       }),
     ).not.toBe("xmd://repl/kf39sla2/entries");
   });

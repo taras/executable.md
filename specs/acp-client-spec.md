@@ -498,13 +498,46 @@ boundary runs after the component has returned.
 Each prompt is one durable operation (`agent_prompt`). The record carries the
 prompt's identity and input, the agent and session identity, terminal status,
 stop reason, text (including partial text on failure), any structured failure,
-and one optional canonical `configuration`. The configuration is retained only
+one optional canonical `configuration`, and one optional list of `permissions`.
+The configuration is retained only
 after the provider emits `started`: a turn that started is one the provider put
 under exactly those settings, while a configuration refusal started no turn
 and retains none. A prompt that starts and later fails or is cancelled retains
 the configuration it ran under. An unconfigured prompt omits it. A `sequence`
 records execution order explicitly, and per-location
 ordinals keep durable identities stable across `<Each>` loops.
+
+### The permission audit a turn retains
+
+`permissions` is the account of what the agent was allowed to do while this turn
+ran. Each member describes one request that was decided:
+
+| Member | Meaning |
+| --- | --- |
+| `toolCallId` | the tool call the agent asked about |
+| `title`, `kind` | the provider's own words for it, where it supplied them |
+| `options` | the choices offered, each `optionId`, `name` and permission-option `kind`, in the order the provider offered them |
+| `outcome` | `{ outcome: "selected", optionId }` or `{ outcome: "cancelled" }` |
+
+Members appear in the order the requests **arrived**, not the order they were
+answered: two overlapping requests settle whenever their policies finish, and an
+order taken from that would report an order the agent did not ask in.
+
+Nothing else crosses the durable boundary. The request's `rawInput`, its
+`Session`, the provider's callbacks and waiters, and any error are absent by
+construction — the record is assembled field by named field from the request as
+it arrives, and the decision is added when it is made. A request that raised
+instead of returning was decided by nothing and has no member.
+
+The list is **closed**: a member this specification does not define, an option
+`kind` outside the four, or an outcome that is neither of the two refuses the
+whole prompt record rather than being read past. A turn that answered no request
+omits the member entirely, which is also how every record written before this
+member existed reads. Parsing an older record is unchanged, and nothing rewrites
+one.
+
+Observing a request changes no decision. The installed `PermissionMode` policy
+still answers it, and these records describe decisions rather than making them.
 
 On a **full replay** (the journal already holds the root `Close`), completed
 records are restored from the journal without contacting any provider —

@@ -26,11 +26,23 @@
  * that coroutine had already settled — so the same event has the same marker in
  * every process that reads the file, with nothing extra written down to make
  * that true.
+ *
+ * ## Agent conversations
+ *
+ * A retained `agent_prompt` is one Agent turn, read through Core's own record
+ * parser rather than through a second spelling of that shape here. Turns are
+ * ordered by the sequence the record states, because a Journal's append order
+ * is the order turns *finished* and a chronology built from it would reorder a
+ * conversation whenever one turn took longer than the next. Conversations are
+ * grouped by the `sessionKey` the provider named and by nothing else — not the
+ * agent, the authored name, the native id, or the text — and a turn that never
+ * reached a provider has no conversation to join rather than a guessed one.
  */
 
 import { Err, Ok } from "effection";
 import type { Result } from "effection";
-import { readElicitationSchema } from "@executablemd/core/host";
+import { AGENT_PROMPT, parsePromptRecord, readElicitationSchema } from "@executablemd/core/host";
+import type { PromptRecord } from "@executablemd/core/host";
 import type { Close, DurableEvent, Json, Yield } from "@executablemd/durable-streams";
 
 /** The authored root scope: this slice admits one entry and this is its key. */
@@ -103,10 +115,85 @@ export interface ReplScope {
   readonly scopes: readonly ReplScope[];
 }
 
+/** One provider choice a retained permission request offered. */
+export interface ReplAgentOption {
+  readonly optionId: string;
+  readonly name: string;
+  readonly kind: "allow_once" | "allow_always" | "reject_once" | "reject_always";
+}
+
+/**
+ * One permission request a retained turn answered.
+ *
+ * A fact about a decision already made. It has no action and no authority: the
+ * request it describes was answered while that turn ran, by a process that may
+ * no longer exist.
+ */
+export interface ReplAgentPermission {
+  readonly toolCallId: string;
+  readonly title: string | undefined;
+  readonly kind: string | undefined;
+  readonly options: readonly ReplAgentOption[];
+  readonly outcome: "selected" | "cancelled";
+  /** The choice that answered it, or none where it was cancelled. */
+  readonly selected: string | undefined;
+}
+
+/** What one conversation was running under, where it said. */
+export interface ReplAgentConfiguration {
+  readonly model: string | undefined;
+  readonly effort: string | undefined;
+}
+
+/**
+ * One retained Agent turn, at the position its record was appended.
+ *
+ * Everything a reader can be shown about a Prompt that has settled, and nothing
+ * about the process that ran it. A provider checkpoint a host retained beside
+ * the record is not here: it names a turn something could be *continued* from,
+ * which is durable identity rather than something to read.
+ */
+export interface ReplAgentTurn {
+  readonly marker: string;
+  /** The order this turn ran in, as its record states it. */
+  readonly sequence: number;
+  /** The durable name the Prompt was journaled under. */
+  readonly name: string;
+  /** The text the Prompt was asked. */
+  readonly input: string;
+  /** The key of the one scope whose source this Prompt was written in. */
+  readonly scope: string;
+  readonly position: ReplPosition;
+  readonly agent: string;
+  /** The provider's name for the conversation, empty where none was reached. */
+  readonly sessionKey: string;
+  readonly agentSessionId: string | undefined;
+  readonly status: "completed" | "failed" | "cancelled";
+  readonly stopReason: string | undefined;
+  /** Whatever the turn produced, including partial text on a failure. */
+  readonly text: string;
+  /**
+   * What went wrong, as one line a reader can act on.
+   *
+   * The message alone, for the reason the entry's own outcome keeps only the
+   * message: a serialized failure names host paths and engine frames, and a
+   * transcript is a reader's view of their own entry.
+   */
+  readonly failure: string | undefined;
+  readonly configuration: ReplAgentConfiguration | undefined;
+  readonly permissions: readonly ReplAgentPermission[];
+}
+
+/** One retained conversation: a non-empty session key and the turns it held. */
+export interface ReplAgentSession {
+  readonly sessionKey: string;
+  readonly turns: readonly ReplAgentTurn[];
+}
+
 /** One offered history position, in append order. */
 export interface ReplCheckpoint {
   readonly marker: string;
-  readonly kind: "entry" | "scope" | "binding" | "generated" | "elicit" | "terminal";
+  readonly kind: "entry" | "scope" | "binding" | "generated" | "elicit" | "agent" | "terminal";
   readonly label: string;
 }
 
@@ -167,6 +254,13 @@ export type ReplRow =
       readonly answer: Json;
     }
   | {
+      readonly kind: "agent";
+      readonly marker: string;
+      readonly scope: string;
+      /** The exact turn the chronology and its conversation also hold. */
+      readonly turn: ReplAgentTurn;
+    }
+  | {
       readonly kind: "effect";
       readonly marker: string;
       readonly type: string;
@@ -190,6 +284,16 @@ export interface ReplModel {
   readonly terminal: ReplTerminal | undefined;
   readonly checkpoints: readonly ReplCheckpoint[];
   readonly transcript: readonly ReplRow[];
+  /** Every retained turn, in Prompt sequence order. */
+  readonly turns: readonly ReplAgentTurn[];
+  /**
+   * The conversations those turns belong to.
+   *
+   * One per non-empty `sessionKey`, in the order each group's earliest turn
+   * appears in the chronology. A turn whose key is empty reached no provider,
+   * so it belongs to no conversation and appears only in `turns`.
+   */
+  readonly sessions: readonly ReplAgentSession[];
 }
 
 /**
@@ -291,6 +395,8 @@ function build(
 ): Result<ReplModel> {
   const transcript: ReplRow[] = [];
   const checkpoints: ReplCheckpoint[] = [];
+  /** Every retained turn, in append order, before the chronology is ordered. */
+  const turns: ReplAgentTurn[] = [];
   let entry: ScopeDraft | undefined;
   let terminal: ReplTerminal | undefined;
   /** Every scope by the source path it was admitted from, for owner lookup. */
@@ -416,7 +522,7 @@ function build(
       if (!owner.ok) {
         return owner;
       }
-      const ordinalKey = `${owner.value.key}/${description.name}`;
+      const ordinalKey = `${owner.value.scope.key}/${description.name}`;
       const ordinal = (occurrences.get(ordinalKey) ?? 0) + 1;
       occurrences.set(ordinalKey, ordinal);
       const scope: ScopeDraft = {
@@ -432,7 +538,7 @@ function build(
         generated: [],
         scopes: [],
       };
-      owner.value.scopes.push(scope);
+      owner.value.scope.scopes.push(scope);
       register(byPath, scope);
       transcript.push({
         kind: "scope",
@@ -463,13 +569,13 @@ function build(
         return owner;
       }
       for (const [name, value] of published.bindings) {
-        bind(owner.value, name, value);
+        bind(owner.value.scope, name, value);
       }
       if (published.bindings.length > 0) {
         transcript.push({
           kind: "binding",
           marker,
-          scope: owner.value.key,
+          scope: owner.value.scope.key,
           names: Object.freeze(published.bindings.map(([name]) => name)),
         });
         checkpoints.push({
@@ -479,7 +585,12 @@ function build(
         });
       }
       if (published.output !== undefined) {
-        transcript.push({ kind: "output", marker, scope: owner.value.key, text: published.output });
+        transcript.push({
+          kind: "output",
+          marker,
+          scope: owner.value.scope.key,
+          text: published.output,
+        });
       }
       continue;
     }
@@ -506,16 +617,16 @@ function build(
       if (!owner.ok) {
         return owner;
       }
-      owner.value.generated.push({ marker, ...admission });
+      owner.value.scope.generated.push({ marker, ...admission });
       if (admission.decision === "admitted" && admission.source !== undefined) {
-        const ordinalKey = `${owner.value.key}/generated`;
+        const ordinalKey = `${owner.value.scope.key}/generated`;
         const ordinal = (occurrences.get(ordinalKey) ?? 0) + 1;
         occurrences.set(ordinalKey, ordinal);
-        owner.value.scopes.push({
+        owner.value.scope.scopes.push({
           key: `generated-${ordinal}`,
           kind: "generated",
           name: "generated",
-          path: owner.value.path,
+          path: owner.value.scope.path,
           source: admission.source,
           position,
           marker,
@@ -528,7 +639,7 @@ function build(
       transcript.push({
         kind: "generated",
         marker,
-        scope: owner.value.key,
+        scope: owner.value.scope.key,
         source: admission.source,
         decision: admission.decision,
       });
@@ -563,9 +674,67 @@ function build(
         : description.name;
       const asked = detach(schema);
       const given = detach(answer);
-      owner.value.elicitations.push({ marker, location, schema: asked, answer: given, position });
-      transcript.push({ kind: "elicit", marker, scope: owner.value.key, location, answer: given });
+      owner.value.scope.elicitations.push({
+        marker,
+        location,
+        schema: asked,
+        answer: given,
+        position,
+      });
+      transcript.push({
+        kind: "elicit",
+        marker,
+        scope: owner.value.scope.key,
+        location,
+        answer: given,
+      });
       checkpoints.push({ marker, kind: "elicit", label: `Answered ${location}` });
+      continue;
+    }
+
+    if (description.type === AGENT_PROMPT) {
+      if (event.result.status !== "ok") {
+        transcript.push({
+          kind: "effect",
+          marker,
+          type: AGENT_PROMPT,
+          status: event.result.status,
+        });
+        continue;
+      }
+      // Core's own parser, because the record is core's. Restating its shape
+      // here would be a second reader that could disagree with the one the
+      // runtime writes through, and the audits are the half of it that must not
+      // be read loosely.
+      const record = parsePromptRecord(event.result.value);
+      if (record === undefined) {
+        return Err(
+          new ReplProjectionError(
+            "a recorded Agent prompt cannot be read by this version of the REPL.",
+          ),
+        );
+      }
+      const input = description["input"];
+      if (typeof input !== "string") {
+        return Err(
+          new ReplProjectionError("a recorded Agent prompt does not retain the text it asked."),
+        );
+      }
+      const owner = ownerOf(byPath, position, "an Agent prompt");
+      if (!owner.ok) {
+        return owner;
+      }
+      const turn = agentTurn(
+        marker,
+        owner.value.scope.key,
+        owner.value.position,
+        description.name,
+        input,
+        record,
+      );
+      turns.push(turn);
+      transcript.push({ kind: "agent", marker, scope: owner.value.scope.key, turn });
+      checkpoints.push({ marker, kind: "agent", label: `Agent prompt ${record.status}` });
       continue;
     }
 
@@ -577,6 +746,11 @@ function build(
     });
   }
 
+  // By the sequence each record states, not by where its event landed: a
+  // Journal appends a turn when it finished, and two conversations running
+  // beside each other finish in whatever order their providers answered.
+  const chronology = [...turns].sort((left, right) => left.sequence - right.sequence);
+
   return Ok(
     freeze({
       selection,
@@ -586,7 +760,92 @@ function build(
       terminal: terminal === undefined ? undefined : freeze({ ...terminal }),
       checkpoints: Object.freeze(checkpoints.map((checkpoint) => freeze({ ...checkpoint }))),
       transcript: Object.freeze(transcript.map((row) => freeze({ ...row }))),
+      turns: Object.freeze(chronology),
+      sessions: conversationsOf(chronology),
     }),
+  );
+}
+
+/**
+ * One retained turn, copied out of the parsed record and frozen all the way
+ * down.
+ *
+ * Copied again rather than kept: the parser's record is a reading of the event,
+ * and what a component is handed has to be this model's own object — frozen, so
+ * one reader cannot change what every other reader sees, and unshared, so
+ * nothing the model holds is reachable from the events.
+ */
+function agentTurn(
+  marker: string,
+  scope: string,
+  position: ReplPosition,
+  name: string,
+  input: string,
+  record: PromptRecord,
+): ReplAgentTurn {
+  return freeze({
+    marker,
+    sequence: record.sequence,
+    name,
+    input,
+    scope,
+    position: freeze({ ...position }),
+    agent: record.agent,
+    sessionKey: record.sessionKey,
+    agentSessionId: record.agentSessionId,
+    status: record.status,
+    stopReason: record.stopReason,
+    text: record.text,
+    failure: record.error?.message,
+    configuration:
+      record.configuration === undefined
+        ? undefined
+        : freeze({ model: record.configuration.model, effort: record.configuration.effort }),
+    permissions: Object.freeze((record.permissions ?? []).map(agentPermission)),
+  });
+}
+
+function agentPermission(permission: NonNullable<PromptRecord["permissions"]>[number]) {
+  return freeze({
+    toolCallId: permission.toolCallId,
+    title: permission.title,
+    kind: permission.kind,
+    options: Object.freeze(
+      permission.options.map((option) =>
+        freeze({ optionId: option.optionId, name: option.name, kind: option.kind }),
+      ),
+    ),
+    outcome: permission.outcome.outcome,
+    selected: permission.outcome.outcome === "selected" ? permission.outcome.optionId : undefined,
+  });
+}
+
+/**
+ * The conversations one chronology holds.
+ *
+ * Grouped by the session key the provider named, and by nothing else: an agent
+ * name, an authored Prompt name and a native session id all describe something
+ * other than which conversation this was, and grouping by one of them would
+ * merge two conversations or split one. A turn that reached no provider has an
+ * empty key and joins nothing — inventing a conversation for it would put a
+ * failure in a history it was never part of.
+ */
+function conversationsOf(chronology: readonly ReplAgentTurn[]): readonly ReplAgentSession[] {
+  const grouped = new Map<string, ReplAgentTurn[]>();
+  for (const turn of chronology) {
+    if (turn.sessionKey.length === 0) {
+      continue;
+    }
+    const held = grouped.get(turn.sessionKey);
+    if (held === undefined) {
+      grouped.set(turn.sessionKey, [turn]);
+      continue;
+    }
+    held.push(turn);
+  }
+  // Insertion order, so a conversation appears where its earliest turn does.
+  return Object.freeze(
+    [...grouped].map(([sessionKey, held]) => freeze({ sessionKey, turns: Object.freeze(held) })),
   );
 }
 
@@ -623,7 +882,7 @@ function ownerOf(
   index: Map<string, ScopeDraft[]>,
   position: ReplPosition | undefined,
   subject: string,
-): Result<ScopeDraft> {
+): Result<{ scope: ScopeDraft; position: ReplPosition }> {
   if (position === undefined || position.path === undefined) {
     return Err(
       new ReplProjectionError(
@@ -648,7 +907,10 @@ function ownerOf(
       ),
     );
   }
-  return Ok(held[0]);
+  // The position travels back with the scope: an effect that has an owner has a
+  // readable position by construction, and saying so here is what lets a caller
+  // retain it without asking again whether it was there.
+  return Ok({ scope: held[0], position });
 }
 
 /** What a position that will not read is, as distinct from one that is absent. */

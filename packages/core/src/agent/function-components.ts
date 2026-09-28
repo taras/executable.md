@@ -54,7 +54,7 @@ import { installApproveAll, installAskPermission } from "./permission.ts";
 import { AgentInternal, formatLocation } from "./internal.ts";
 import { serializePromptFailure } from "./errors.ts";
 import type { SerializedPromptFailure } from "./errors.ts";
-import { persistPrompt, promptFailureFromRecord } from "./journal.ts";
+import { persistPrompt, promptFailureFromRecord, promptPermissionAudit } from "./journal.ts";
 import type { PromptRecord } from "./journal.ts";
 import { checkpointOf } from "./checkpoint.ts";
 import type { AgentPromptCheckpoint } from "./checkpoint.ts";
@@ -392,6 +392,9 @@ function* runPrompt(
   carried: { association?: AgentPromptAssociation },
 ): Operation<PromptRecord> {
   let consumed: ConsumedTurn = { text: "" };
+  // Held out here because the audit outlives the turn's own scope: a turn that
+  // failed still answered whatever it was asked before it did.
+  const permissions = promptPermissionAudit();
   // What this turn was authored to run under, and — once the provider has been
   // reached — the exact value it was reached with. The record below is written
   // from the second, so the journal describes the turn that actually ran.
@@ -402,6 +405,9 @@ function* runPrompt(
     // document teardown.
     consumed = yield* scoped(function* (): Operation<ConsumedTurn> {
       const result: ConsumedTurn = { text: "" };
+      // Installed before the turn is asked for, so a provider that requests
+      // permission the moment it is subscribed is already being watched.
+      yield* permissions.observe();
       const stream = yield* Agent.operations.prompt(text, options);
       const subscription = yield* stream;
       let next = yield* subscription.next();
@@ -483,6 +489,12 @@ function* runPrompt(
   }
   if (failure !== undefined) {
     record.error = failure;
+  }
+  // Written once the turn is over, with the rest of the result: a decision is
+  // part of the account of this turn, not an event of its own.
+  const answered = permissions.completed();
+  if (answered.length > 0) {
+    record.permissions = answered;
   }
   if (throwOnError && status !== "completed") {
     record.raised = true;
