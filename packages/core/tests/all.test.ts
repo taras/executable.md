@@ -583,7 +583,10 @@ describe("Tier ALL — PA3: counters, paths and the parent's own numbering", () 
     expect(onParent.map((entry) => entry.name)).toEqual(["eval:eval:root:0", "eval:eval:root:1"]);
 
     const inChildren = entries.filter((entry) => entry.coroutineId !== "root");
-    expect(inChildren.map((entry) => entry.coroutineId).toSorted()).toEqual(["root.0", "root.1"]);
+    // `sort()` rather than `toSorted()`: the Node typecheck targets ES2022, where
+    // the latter does not exist, and the array being sorted is the one `map` just
+    // made — so there is nothing of anyone else's to mutate.
+    expect(inChildren.map((entry) => entry.coroutineId).sort()).toEqual(["root.0", "root.1"]);
     // Both children number their own first block the same way and collide with
     // nothing, because the child coroutine namespaces it.
     expect(new Set(inChildren.map((entry) => entry.name))).toEqual(new Set(["eval:eval:root:0"]));
@@ -605,8 +608,9 @@ describe("Tier ALL — PA3: counters, paths and the parent's own numbering", () 
     // which child appends first is exactly what scheduling is allowed to
     // decide — the contract fixes what a block is called and where, never the
     // order two independent children reach the journal.
+    // `sort()` for the same reason, on the array `map` just made.
     const identify = (found: EvalEntry[]): string[] =>
-      found.map((entry) => `${entry.coroutineId}/${entry.name}`).toSorted();
+      found.map((entry) => `${entry.coroutineId}/${entry.name}`).sort();
     expect(identify(evalEntries(rerun.events))).toEqual(identify(entries));
 
     // And a replay reproduces the rendering without running any of it.
