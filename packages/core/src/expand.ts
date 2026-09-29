@@ -95,7 +95,7 @@ import {
   SegmentCauses,
   useSegmentCauses,
 } from "./errors.ts";
-import type { InvocationForm } from "./invocation-identity.ts";
+import type { ImportSelection, InvocationForm } from "./invocation-identity.ts";
 import { structuralPlacement } from "./execution-declarations.ts";
 import type {
   AdmittedStructural,
@@ -171,6 +171,35 @@ export { validateBindingName } from "./live-env.ts";
 export interface BlockCounter {
   next(): number;
 }
+
+/**
+ * How expansion reaches the resolution its execution performs for one import.
+ *
+ * Execution owns the resolver and hands it to expansion by hand, as an argument
+ * beside the environment and never on it: the environment is the architecture
+ * boundary a host's installation and a fragment's narrowed table are described
+ * against, and an execution-private terminal belongs in neither. It is not
+ * exported from a package entry point, installed in no Context or contextual Api,
+ * and stored in no module-scoped table — the only way to have it is to be handed
+ * it.
+ *
+ * Every internal expansion function carries it beside the environment, so a
+ * recursion that forgot it would fail to compile rather than quietly expanding a
+ * component body, a branch or a spawned child without the execution's resolution.
+ * Two callers legitimately pass none: expansion driven directly, which resolves
+ * through the ordinary public Component Api, and a generated fragment, whose
+ * narrowed provider answers its imports and which inherits nothing from the
+ * document execution that admitted it.
+ *
+ * The `selection` is the asking import's own frame (`invocation-identity.ts`).
+ * Resolution records what it selected there, which is what makes the answer this
+ * element's rather than whichever import resolved last.
+ */
+export type ComponentImportTerminal = (
+  name: string,
+  position: Readonly<SourcePosition> | undefined,
+  selection: ImportSelection | undefined,
+) => Operation<ComponentDefinition | FunctionComponentDefinition>;
 
 export function createBlockCounter(): BlockCounter {
   let id = 0;
@@ -257,6 +286,7 @@ function expandChildrenScoped(
   /** Whether the region that caused this expansion grants recovery (§3.6). */
   checkedFailures: CheckedFailures | undefined,
   environment: ExecutionEnvironment | undefined,
+  imports: ComponentImportTerminal | undefined,
   returnBody: ReturnBody | undefined,
 ): Operation<Segment[]> {
   return scoped(function* () {
@@ -280,6 +310,7 @@ function expandChildrenScoped(
       0,
       checkedFailures,
       environment,
+      imports,
       returnBody,
     );
   });
@@ -336,6 +367,7 @@ interface ProjectionState {
    */
   checkedFailures: CheckedFailures | undefined;
   environment: ExecutionEnvironment | undefined;
+  imports: ComponentImportTerminal | undefined;
 }
 
 interface ProjectionFrame {
@@ -480,6 +512,7 @@ function createProjectionHandle(state: ProjectionState): ProjectionHandle {
             0,
             state.checkedFailures,
             state.environment,
+            state.imports,
             options.returnFrame,
           );
           outcome.resolve({ segments: rendered });
@@ -589,6 +622,7 @@ function createProjectionHandle(state: ProjectionState): ProjectionHandle {
               0,
               state.checkedFailures,
               state.environment,
+              state.imports,
               request.kind === "markdown" ? undefined : state.callerReturn,
             );
             outcome.resolve({ segments: [...errors, ...rendered] });
@@ -794,6 +828,9 @@ export function expandSegments(
     indexBase,
     checkedFailures,
     environment,
+    // No execution terminal: an expansion driven directly resolves its imports
+    // through the ordinary public Component Api, exactly as it always has.
+    undefined,
     undefined,
   );
 }
@@ -873,6 +910,7 @@ function* expandListSegments(
    */
   checkedFailures: CheckedFailures | undefined,
   environment: ExecutionEnvironment | undefined,
+  imports: ComponentImportTerminal | undefined,
   returnBody: ReturnBody | undefined,
 ): Operation<Segment[]> {
   // An execution opens the table its printed errors record their causes in.
@@ -896,6 +934,7 @@ function* expandListSegments(
         indexBase,
         checkedFailures,
         environment,
+        imports,
         returnBody,
       );
     });
@@ -1017,6 +1056,7 @@ function* expandListSegments(
               elementPath,
               checkedFailures,
               environment,
+              imports,
               returnBody,
             )),
           );
@@ -1037,6 +1077,7 @@ function* expandListSegments(
               elementPath,
               checkedFailures,
               environment,
+              imports,
               returnBody,
             )),
           );
@@ -1058,6 +1099,7 @@ function* expandListSegments(
             elementPath,
             checkedFailures,
             environment,
+            imports,
             returnBody,
           );
           break;
@@ -1091,6 +1133,7 @@ function* expandListSegments(
             elementPath,
             checkedFailures,
             environment,
+            imports,
             returnBody,
           );
           break;
@@ -1109,6 +1152,7 @@ function* expandListSegments(
             elementPath,
             checkedFailures,
             environment,
+            imports,
             returnBody,
           );
           break;
@@ -1130,6 +1174,7 @@ function* expandListSegments(
               0,
               checkedFailures,
               environment,
+              imports,
               returnBody,
             );
           // Which placement this is, answered by identity rather than by name:
@@ -1176,6 +1221,7 @@ function* expandListSegments(
             elementPath,
             checkedFailures,
             environment,
+            imports,
             returnBody,
           );
           break;
@@ -1213,6 +1259,7 @@ function* expandListSegments(
             elementPath,
             checkedFailures,
             environment,
+            imports,
           );
           break;
         }
@@ -1265,6 +1312,7 @@ function* expandListSegments(
             elementPath,
             checkedFailures,
             environment,
+            imports,
             returnBody,
           );
           break;
@@ -1287,6 +1335,7 @@ function* expandListSegments(
           elementPath,
           checkedFailures,
           environment,
+          imports,
           returnBody,
         );
         // A printed error the callee produced is data, and stays data here: it
@@ -1431,6 +1480,7 @@ function* expandListSegments(
                 },
                 checkedFailures,
                 environment,
+                imports,
                 returnBody,
               ),
             );
@@ -1493,6 +1543,7 @@ function* checkedCommandFailure(
   segment: ErrorSegment,
   checkedFailures: CheckedFailures | undefined,
   environment: ExecutionEnvironment | undefined,
+  imports: ComponentImportTerminal | undefined,
   returnBody: ReturnBody | undefined,
 ): Operation<ErrorSegment> {
   // Written down before it is raised or projected, and before the error mode is
@@ -1598,6 +1649,7 @@ function* expandLet(
   /** Whether the enclosing region grants checked-failure recovery (§3.6). */
   checkedFailures: CheckedFailures | undefined,
   environment: ExecutionEnvironment | undefined,
+  imports: ComponentImportTerminal | undefined,
   returnBody: ReturnBody | undefined,
 ): Operation<ErrorSegment[]> {
   // Every one of these is decided from what the author wrote, so the whole
@@ -1630,6 +1682,7 @@ function* expandLet(
       0,
       checkedFailures,
       environment,
+      imports,
       returnBody,
     ),
   );
@@ -1741,6 +1794,7 @@ function* expandEach(
   /** Whether the region that caused this expansion grants recovery (§3.6). */
   checkedFailures: CheckedFailures | undefined,
   environment: ExecutionEnvironment | undefined,
+  imports: ComponentImportTerminal | undefined,
   returnBody: ReturnBody | undefined,
 ): Operation<Segment[]> {
   // Decided from source alone, so the catalog is shared with validation. A
@@ -1800,6 +1854,7 @@ function* expandEach(
       extendPath(path, { f: "item", i: iteration }),
       checkedFailures,
       environment,
+      imports,
       returnBody,
     );
     // A `<Break>` in the body exits the enclosing `<Loop>`, so the remaining
@@ -1895,6 +1950,7 @@ function* expandIf(
   /** Whether the enclosing region grants checked-failure recovery (§3.6). */
   checkedFailures: CheckedFailures | undefined,
   environment: ExecutionEnvironment | undefined,
+  imports: ComponentImportTerminal | undefined,
   returnBody: ReturnBody | undefined,
 ): Operation<void> {
   // Decided from source alone and shared with validation: which props were
@@ -1966,6 +2022,7 @@ function* expandIf(
     0,
     checkedFailures,
     environment,
+    imports,
     returnBody,
   );
 }
@@ -2035,6 +2092,7 @@ function* expandSwitch(
   /** Whether the enclosing region grants checked-failure recovery (§3.6). */
   checkedFailures: CheckedFailures | undefined,
   environment: ExecutionEnvironment | undefined,
+  imports: ComponentImportTerminal | undefined,
   returnBody: ReturnBody | undefined,
 ): Operation<void> {
   // Decided from source alone and shared with validation: which props were
@@ -2101,6 +2159,7 @@ function* expandSwitch(
     0,
     checkedFailures,
     environment,
+    imports,
     returnBody,
   );
 }
@@ -2176,6 +2235,7 @@ function* expandLoop(
   /** Whether the enclosing region grants checked-failure recovery (§3.6). */
   checkedFailures: CheckedFailures | undefined,
   environment: ExecutionEnvironment | undefined,
+  imports: ComponentImportTerminal | undefined,
   returnBody: ReturnBody | undefined,
 ): Operation<void> {
   const unknownProp = loopPropsViolation(segment);
@@ -2233,6 +2293,7 @@ function* expandLoop(
           0,
           checkedFailures,
           environment,
+          imports,
           returnBody,
         );
         if (frame.broken) {
@@ -2355,6 +2416,7 @@ function spawnChild(
   path: string,
   inherited: CheckedFailures | undefined,
   environment: ExecutionEnvironment | undefined,
+  imports: ComponentImportTerminal | undefined,
 ): Operation<Emission[]> {
   return scoped(function* () {
     yield* provideEnv(spawnEnvironment(incoming));
@@ -2383,6 +2445,7 @@ function spawnChild(
       0,
       ledger,
       environment,
+      imports,
       undefined,
     );
     yield* refuseCheckedFailure(ledger);
@@ -2427,6 +2490,7 @@ function* expandAll(
   /** Whether the enclosing region grants checked-failure recovery (§3.6). */
   checkedFailures: CheckedFailures | undefined,
   environment: ExecutionEnvironment | undefined,
+  imports: ComponentImportTerminal | undefined,
 ): Operation<void> {
   // Decided from source alone and shared with validation, completely, before a
   // child is constructed: a malformed `<All>` starts none of them.
@@ -2453,6 +2517,7 @@ function* expandAll(
         path,
         checkedFailures,
         environment,
+        imports,
       ),
   );
 
@@ -2554,6 +2619,7 @@ function* expandPrintErrors(
   /** The ledger this region grants recovery on top of (§3.6). */
   checkedFailures: CheckedFailures | undefined,
   environment: ExecutionEnvironment | undefined,
+  imports: ComponentImportTerminal | undefined,
   returnBody: ReturnBody | undefined,
 ): Operation<void> {
   const refusal = printErrorsViolations(segment)[0];
@@ -2580,6 +2646,7 @@ function* expandPrintErrors(
       // recovers is not one the run suffered.
       recoveringLedger(),
       environment,
+      imports,
       returnBody,
     );
   });
@@ -2618,6 +2685,7 @@ function* expandComponent(
    */
   checkedFailures: CheckedFailures | undefined,
   environment: ExecutionEnvironment | undefined,
+  imports: ComponentImportTerminal | undefined,
   returnBody: ReturnBody | undefined,
 ): Operation<Segment[]> {
   // Cycle detection — Prosser's algorithm
@@ -2677,18 +2745,18 @@ function* expandComponent(
     // whatever asks first, and authorizes only the answer it produced itself.
     const offered = environment?.installedComponents?.offer(environment.componentBodyScope, name);
     let answered: ImportedDefinition;
-    const canonical = environment?.canonicalImport;
     try {
-      // Through this import's own terminal when the execution has one: the
-      // public middleware chain composes around it by name, and `next`
-      // terminates in the continuation that carries this frame. Without an
-      // execution — inspection, a tool describing a document — the ordinary
-      // public operation answers exactly as it always did.
+      // Through this import's own terminal when the execution handed expansion
+      // one: the public middleware chain composes around it by name, and `next`
+      // terminates in the continuation that carries this frame. Where expansion
+      // was handed none — driven directly, or a generated fragment answering
+      // through its own narrowed provider — the ordinary public operation answers
+      // exactly as it always did.
       answered =
-        canonical === undefined
+        imports === undefined
           ? yield* importComponent(name, position)
           : yield* importThroughTerminal(name, position, (asked, at) =>
-              canonical(asked, at, selection),
+              imports(asked, at, selection),
             );
     } finally {
       offered?.close();
@@ -2787,6 +2855,7 @@ function* expandComponent(
       path,
       checkedFailures,
       environment,
+      imports,
       returnBody,
       selected,
       dispatcher,
@@ -2933,6 +3002,7 @@ function* expandComponent(
       printedErrors: bodyContentErrors,
       checkedFailures,
       environment,
+      imports,
     });
     // Published on the eval scope, which every task the invocation owns
     // descends from — including its persist-eval blocks and its content.
@@ -3007,6 +3077,7 @@ function* expandComponent(
           path,
           checkedFailures,
           bodyEnvironment,
+          imports,
           returnBody,
         );
       });
@@ -3055,6 +3126,7 @@ function* expandComponent(
       path,
       checkedFailures,
       bodyEnvironment,
+      imports,
       returnBody,
     );
   });
@@ -3224,6 +3296,7 @@ function* expandFunctionComponent(
   /** This work's checked-failure ledger, inherited from the invoking element. */
   inherited: CheckedFailures | undefined,
   environment: ExecutionEnvironment | undefined,
+  imports: ComponentImportTerminal | undefined,
   returnBody: ReturnBody | undefined,
   /**
    * The identity domain canonical resolution selected for this invocation.
@@ -3437,6 +3510,7 @@ function* expandFunctionComponent(
           ownPath: path,
           checkedFailures,
           environment,
+          imports,
         };
         // Only the ordinary handle is published. The richer projection a
         // protected body may reach stays a closure at the dispatch below, so
@@ -4297,6 +4371,7 @@ export function* expandBody(
   /** Whether the invoking element sits inside a `<PrintErrors>` region. */
   checkedFailures: CheckedFailures | undefined,
   environment: ExecutionEnvironment | undefined,
+  imports: ComponentImportTerminal | undefined,
   returnBody: ReturnBody | undefined,
 ): Operation<Segment[]> {
   if (!bodyHasOutput(bodySegments)) {
@@ -4312,6 +4387,7 @@ export function* expandBody(
       0,
       checkedFailures,
       environment,
+      imports,
       returnBody,
     );
   }
@@ -4334,6 +4410,7 @@ export function* expandBody(
         0,
         checkedFailures,
         environment,
+        imports,
         returnBody,
       );
     } else if (chunk.output) {
@@ -4350,6 +4427,7 @@ export function* expandBody(
           0,
           checkedFailures,
           environment,
+          imports,
           returnBody,
         );
       });
@@ -4368,6 +4446,7 @@ export function* expandBody(
           chunkBase,
           checkedFailures,
           environment,
+          imports,
           returnBody,
         );
       });
@@ -4396,6 +4475,7 @@ function runDocumentation(
   /** Whether the region that caused this expansion grants recovery (§3.6). */
   checkedFailures: CheckedFailures | undefined,
   environment: ExecutionEnvironment | undefined,
+  imports: ComponentImportTerminal | undefined,
   returnBody: ReturnBody | undefined,
 ): Operation<Segment[]> {
   return scoped(function* () {
@@ -4411,6 +4491,7 @@ function runDocumentation(
       indexBase,
       checkedFailures,
       environment,
+      imports,
       returnBody,
     );
   });
@@ -4463,6 +4544,7 @@ function* expandValueBody(
   /** Whether the invoking element sits inside a `<PrintErrors>` region. */
   checkedFailures: CheckedFailures | undefined,
   environment: ExecutionEnvironment | undefined,
+  imports: ComponentImportTerminal | undefined,
   returnBody: ReturnBody | undefined,
 ): Operation<Json> {
   const slots = partitionBySlot(children);
@@ -4489,6 +4571,7 @@ function* expandValueBody(
       index,
       checkedFailures,
       environment,
+      imports,
       ownBody,
     );
   }
@@ -4530,6 +4613,7 @@ function* expandInstalledStructural(
   path: string,
   checkedFailures: CheckedFailures | undefined,
   environment: ExecutionEnvironment,
+  imports: ComponentImportTerminal | undefined,
   returnBody: ReturnBody | undefined,
 ): Operation<void> {
   const name = segment.name;
@@ -4631,6 +4715,7 @@ function* expandInstalledStructural(
     path,
     checkedFailures,
     environment,
+    imports,
     returnBody,
     children: segment.children,
   });
@@ -4683,6 +4768,7 @@ interface RegionContext {
   readonly path: string;
   readonly checkedFailures: CheckedFailures | undefined;
   readonly environment: ExecutionEnvironment;
+  readonly imports: ComponentImportTerminal | undefined;
   readonly returnBody: ReturnBody | undefined;
   readonly children: Segment[];
 }
@@ -4847,6 +4933,7 @@ function* produceRegion(
         index,
         context.checkedFailures,
         context.environment,
+        context.imports,
         context.returnBody,
       );
     } catch (error) {

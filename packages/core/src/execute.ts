@@ -83,7 +83,7 @@ import {
   createBlockCounter,
 } from "./expand.ts";
 import { createReturnBody, missingReturnMessage } from "./return-flow.ts";
-import type { BlockCounter } from "./expand.ts";
+import type { BlockCounter, ComponentImportTerminal } from "./expand.ts";
 import {
   DocumentationError,
   documentationError,
@@ -2022,6 +2022,8 @@ function* runValueRoot(
   /** This run's record of an unauthorized checked command failure (#441). */
   checkedFailures: CheckedFailures,
   environment: ExecutionEnvironment,
+  /** This execution's own import resolution, for the expansions below. */
+  importTerminal: ComponentImportTerminal,
 ): Operation<DocumentResult> {
   // Created outside the scope the body runs in, so the value it selected is
   // still readable after that scope — and its teardown — has finished.
@@ -2051,6 +2053,7 @@ function* runValueRoot(
         0,
         checkedFailures,
         environment,
+        importTerminal,
         ownBody,
       );
       const exactRecord = environment.sourceSegments;
@@ -2076,6 +2079,16 @@ function* runValueRoot(
 function* documentWorkflow(
   props: Record<string, Json>,
   environment: ExecutionEnvironment,
+  /**
+   * How this execution resolves one component import, handed to every expansion
+   * this root causes.
+   *
+   * By hand, beside the environment rather than on it: what a host installed and
+   * what a fragment narrowed are described by the environment, and this is
+   * neither — it is the execution's own resolution, reachable only by having been
+   * given it (`expand.ts`).
+   */
+  importTerminal: ComponentImportTerminal,
 ): Workflow<DocumentResult> {
   // This run's memory of a checked command failure it never authorized. Passed
   // by value into core's own expansion and reachable from nowhere else, so no
@@ -2185,6 +2198,7 @@ function* documentWorkflow(
         rootPath,
         checkedFailures,
         environment,
+        importTerminal,
       );
     }
 
@@ -2208,6 +2222,7 @@ function* documentWorkflow(
         rootPath,
         checkedFailures,
         environment,
+        importTerminal,
         undefined,
       );
       // An empty buffered root emits no output event.
@@ -2236,6 +2251,7 @@ function* documentWorkflow(
         0,
         checkedFailures,
         environment,
+        importTerminal,
         undefined,
       );
 
@@ -2574,17 +2590,20 @@ function* executeDocument(
             );
 
       /**
-       * Canonical resolution for one import, and the only thing that puts an
-       * invocation in one of this execution's identity domains.
+       * Resolve one component import the way this execution resolves them, and
+       * the only thing that puts an invocation in one of its identity domains.
        *
-       * Held by the execution and handed to expansion by value. Expansion calls
-       * it as the terminal of a descriptor it created for one authored import,
-       * passing that import's own frame; the ordinary provider below calls it
-       * with no frame, for a direct `importComponent()` an invocation started
-       * itself. Neither path publishes the frame, and nothing outside core can
-       * name this operation.
+       * Owned by the execution and handed to expansion **as an argument**, never
+       * on the environment: `ExecutionEnvironment` is the boundary a host's
+       * installation and a fragment's narrowed table are described against, and
+       * an execution-private terminal belongs in neither. Expansion calls this as
+       * the terminal of a descriptor it created for one authored import, passing
+       * that import's own frame; the ordinary provider below calls it with no
+       * frame, for a direct `importComponent()` an invocation started itself.
+       * Neither path publishes the frame, and nothing outside core can name this
+       * operation.
        */
-      function* resolveCanonicalImport(
+      function* resolveComponentImport(
         name: string,
         position: Readonly<SourcePosition> | undefined,
         selection: ImportSelection | undefined,
@@ -2625,8 +2644,6 @@ function* executeDocument(
 
       const environment: ExecutionEnvironment = {
         componentResolution: imports,
-        // Canonical resolution, for the terminal expansion builds per import.
-        canonicalImport: resolveCanonicalImport,
         // Everything this host declared, admitted above. Expansion asks it
         // about every name it reaches, which is how an installed construct is
         // dispatched without core holding a branch for its name.
@@ -2688,7 +2705,7 @@ function* executeDocument(
               if (!isMissingImportProvider(error, name)) {
                 throw error;
               }
-              return yield* resolveCanonicalImport(name, position, undefined);
+              return yield* resolveComponentImport(name, position, undefined);
             }
           },
           *applyModifiers([modifiers, context], _next) {
@@ -2725,7 +2742,7 @@ function* executeDocument(
       const returned = yield* durableRun(
         function* (): Operation<DocumentResult> {
           const issued = issueDocument<DocumentResult>(props, (claimed) =>
-            documentWorkflow(claimed, environment),
+            documentWorkflow(claimed, environment, resolveComponentImport),
           );
           try {
             return yield* beforeAnyImport(issued);

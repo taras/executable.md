@@ -1436,6 +1436,33 @@ function answeringOpenName(definition: ImportedDefinition): ExecutionInstallatio
 }
 
 /**
+ * The `{ text, exact }` runs one child's close retained, read rather than
+ * asserted.
+ *
+ * A row about what a durable value *is* cannot cast it into the shape it claims,
+ * so every member is parsed here and anything else throws — naming what it found —
+ * instead of arriving at the expectation as a plausible shape nobody checked.
+ */
+function retainedRuns(event: DurableEvent): { text: string; exact: boolean }[] {
+  if (event.type !== "close" || event.result.status !== "ok") {
+    return [];
+  }
+  const value = event.result.value;
+  if (!Array.isArray(value)) {
+    throw new Error(`the close of ${event.coroutineId} retained no runs: ${JSON.stringify(value)}`);
+  }
+  return value.map((entry) => {
+    if (typeof entry === "object" && entry !== null && !Array.isArray(entry)) {
+      const { text, exact } = entry;
+      if (typeof text === "string" && typeof exact === "boolean") {
+        return { text, exact };
+      }
+    }
+    throw new Error(`the close of ${event.coroutineId} retained ${JSON.stringify(entry)}`);
+  });
+}
+
+/**
  * One replay that is expected to refuse, with whatever it published on the way.
  *
  * The chunks are the caller's array, so what this reports is what the run
@@ -1646,11 +1673,7 @@ describe("Tier DM — exact source is a provenance, not a field", () => {
     // What each child retained says what its bytes were, not only what they
     // said. Read as a set: children close in whatever order they finished, and
     // which one finished first is exactly what this must not depend on.
-    const runs = children.flatMap((event) =>
-      event.type === "close" && event.result.status === "ok" && Array.isArray(event.result.value)
-        ? (event.result.value as { text: string; exact: boolean }[])
-        : [],
-    );
+    const runs = children.flatMap((event) => retainedRuns(event));
     expect(runs.filter((run) => run.exact)).toEqual([{ text: PRESENTABLE, exact: true }]);
     expect(runs.some((run) => !run.exact && run.text.includes("ordinary prose"))).toBe(true);
 
@@ -1691,10 +1714,11 @@ describe("Tier DM — exact source is a provenance, not a field", () => {
     ];
 
     for (const value of damaged) {
-      const history = complete.map((event) =>
-        event.type === "close" && event.coroutineId.endsWith(".0")
-          ? { ...event, result: { status: "ok" as const, value } }
-          : event,
+      const history = complete.map(
+        (event): DurableEvent =>
+          event.type === "close" && event.coroutineId.endsWith(".0")
+            ? { ...event, result: { status: "ok", value } }
+            : event,
       );
       const attempt = yield* refusalOfRun(source, declarations, history);
       const which = JSON.stringify(value);

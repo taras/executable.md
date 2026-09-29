@@ -134,6 +134,39 @@ function foreignTerminalReport(asked: string): Error {
   return foreign;
 }
 
+/**
+ * The same report, with a payload that reads as one member and is not.
+ *
+ * The mark's own key is found structurally rather than written out — the payload
+ * is the object under it carrying `asked` — so this stays a statement about the
+ * shape a reader has to parse, not a copy of a constant. The extras are hidden
+ * exactly the way a reader looking at enumerable string keys alone would miss
+ * them: one non-enumerable member, one symbol.
+ */
+function hiddenMemberReport(asked: string): Error {
+  const authentic = new MissingImportProvider(asked);
+  const report = new ForeignTerminalReport(authentic.message);
+  for (const [key, descriptor] of Object.entries(Object.getOwnPropertyDescriptors(authentic))) {
+    if (key === "stack" || key === "message") {
+      continue;
+    }
+    const marked: unknown = descriptor.value;
+    const names =
+      typeof marked === "object" && marked !== null
+        ? Object.getOwnPropertyDescriptor(marked, "asked") !== undefined
+        : false;
+    if (!names) {
+      Object.defineProperty(report, key, descriptor);
+      continue;
+    }
+    const payload: Record<string, unknown> = { asked };
+    Object.defineProperty(payload, "hidden", { value: "not enumerable", enumerable: false });
+    Object.defineProperty(payload, Symbol("also hidden"), { value: "not a string key" });
+    Object.defineProperty(report, key, { ...descriptor, value: payload });
+  }
+  return report;
+}
+
 /** One execution of `source`, with `components` declared to it. */
 function run(
   source: string,
@@ -886,7 +919,8 @@ describe("Tier CIV — the import's own terminal is the association", () => {
     // Each of these reaches this import's terminal — that is not the failure.
     // What fails is what the frame then holds: two selections, or one for a
     // component the element never wrote.
-    for (const what of ["twice", "another name"] as const) {
+    const ways: readonly ("twice" | "another name")[] = ["twice", "another name"];
+    for (const what of ways) {
       const seen = record();
       yield* run("<Probe />\n", [probe(seen), probe(seen, "Other")], function* () {
         yield* Component.around(
@@ -960,42 +994,66 @@ describe("Tier CIV — the import's own terminal is the association", () => {
     expect(seen.taken).toEqual(direct.taken);
   });
 
-  it("CIV29: a report naming another import is somebody else's failure", function* () {
-    // The same arrangement, with the foreign terminal reporting that nothing
-    // answered a *different* name. Ordinary resolution answers unanswered
-    // imports, not unrelated failures that happen to carry the mark, so this one
-    // propagates — and the element that asked says so rather than quietly
-    // resolving something nobody asked for.
-    const seen = record();
-    let failure = "";
-    try {
-      yield* run("<Probe />\n", [probe(seen), probe(seen, "Other")], function* () {
-        yield* Component.around(
-          {
-            *importComponent([name, position], next) {
-              if (name !== "Probe") {
-                return yield* next(name, position);
-              }
-              return yield* importThroughTerminal(
-                "Other",
-                position,
-                // deno-lint-ignore require-yield
-                function* () {
-                  throw foreignTerminalReport("Elsewhere");
-                },
-              );
-            },
-          },
-          { at: "max" },
-        );
-      });
-    } catch (error) {
-      failure = error instanceof Error ? error.message : String(error);
-    }
+  /**
+   * Reports that carry the mark and are still not this call's: one about another
+   * import, and one whose payload only *looks* like the single member the mark
+   * is. Each names the fragment its failure has to reach the document with.
+   */
+  const NOT_THIS_CALL: ReadonlyArray<{
+    what: string;
+    report: (asked: string) => Error;
+    says: string;
+  }> = [
+    {
+      what: "a report about another import",
+      report: () => foreignTerminalReport("Elsewhere"),
+      says: "Elsewhere",
+    },
+    {
+      what: "a mark carrying hidden members",
+      report: (asked: string) => hiddenMemberReport(asked),
+      says: "Other",
+    },
+  ];
 
-    expect(failure).toContain("Elsewhere");
-    expect(seen.taken).toEqual([]);
-  });
+  for (const { what, report, says } of NOT_THIS_CALL) {
+    it(`CIV29: ${what} is somebody else's failure`, function* () {
+      // The same arrangement, with the foreign terminal raising something that
+      // carries the mark without being this call's report of it. Ordinary
+      // resolution answers imports nothing answered, not unrelated failures, so
+      // these propagate — and the element that asked says so rather than quietly
+      // resolving something nobody asked for.
+      const seen = record();
+      let failure = "";
+      try {
+        yield* run("<Probe />\n", [probe(seen), probe(seen, "Other")], function* () {
+          yield* Component.around(
+            {
+              *importComponent([name, position], next) {
+                if (name !== "Probe") {
+                  return yield* next(name, position);
+                }
+                return yield* importThroughTerminal(
+                  "Other",
+                  position,
+                  // deno-lint-ignore require-yield
+                  function* (asked: string) {
+                    throw report(asked);
+                  },
+                );
+              },
+            },
+            { at: "max" },
+          );
+        });
+      } catch (error) {
+        failure = error instanceof Error ? error.message : String(error);
+      }
+
+      expect([what, failure.includes(says)]).toEqual([what, true]);
+      expect([what, seen.taken]).toEqual([what, []]);
+    });
+  }
 });
 
 /**
@@ -1069,6 +1127,79 @@ function heldImports(names: readonly string[], order: readonly number[]): () => 
     );
   };
 }
+
+/**
+ * One source file of core's own, read for what it declares.
+ *
+ * A boundary is a declaration, so the row about where the execution's import
+ * resolution may live reads the declarations rather than a runtime object: an
+ * object says what one execution happened to build, while the interface says what
+ * every host's installation and every fragment's narrowed table are described
+ * against.
+ */
+function sourceOf(file: string): Operation<string> {
+  return readTextFile(fileURLToPath(new URL(`../${file}`, import.meta.url)));
+}
+
+/** The body of the `ExecutionEnvironment` declaration, as written. */
+function* environmentDeclaration(): Operation<string> {
+  const source = yield* sourceOf("src/execution-environment.ts");
+  const opened = source.indexOf("export interface ExecutionEnvironment {");
+  if (opened < 0) {
+    throw new Error("ExecutionEnvironment is no longer declared where this row reads it");
+  }
+  const closed = source.indexOf("\n}\n", opened);
+  if (closed < 0) {
+    throw new Error("the ExecutionEnvironment declaration does not end");
+  }
+  return source.slice(opened, closed);
+}
+
+describe("Tier CIV — where the execution's import resolution lives", () => {
+  it("CIV30: the environment boundary carries no import terminal", function* () {
+    const declared = yield* environmentDeclaration();
+    // Read as members rather than as text, so this is about what the interface
+    // offers a holder and not about a word appearing in a comment.
+    const members = [...declared.matchAll(/^ {2}(?:readonly )?([A-Za-z]+)\??[:(]/gm)].map(
+      (match) => match[1],
+    );
+    // The row can see the boundary at all: it is the interface with the members
+    // canonical execution hands expansion, and it still has them.
+    expect(members).toContain("componentResolution");
+    expect(members).toContain("componentIdentity");
+
+    expect(members).not.toContain("canonicalImport");
+    expect(members).not.toContain("resolveComponentImport");
+    expect(members).not.toContain("importTerminal");
+    // And no member of it accepts an import's own frame or answers with a
+    // definition, whatever it might be called: that shape *is* an import
+    // terminal, and naming it something else would not move it off the boundary.
+    expect(declared).not.toContain("ImportSelection");
+    expect(declared).not.toMatch(/=>\s*Operation<\s*\n?\s*ComponentDefinition/);
+  });
+
+  it("CIV30: the terminal reaches expansion by hand, and leaves no other way", function* () {
+    const expansion = yield* sourceOf("src/expand.ts");
+    // Declared where it is consumed, and carried as a required parameter beside
+    // the environment: a recursion that dropped it would not compile, which is
+    // what the CIV26–CIV29 rows depend on for every nested body, branch and
+    // spawned child.
+    expect(expansion).toContain("export type ComponentImportTerminal = (");
+    expect(expansion).toContain("imports: ComponentImportTerminal | undefined,");
+    // No contextual route to the same value: it is not published under a context
+    // name and not the core of an Api, so nothing can read it by knowing a name.
+    expect(expansion).not.toMatch(/createContext<[^>]*ComponentImportTerminal/);
+    expect(expansion).not.toMatch(/createApi<[^>]*ComponentImportTerminal/);
+
+    // And no package entry point re-exports the type or the identifier, so a
+    // host, a middleware package and a repository component have no name for it.
+    for (const entry of ["mod.ts", "api.ts", "host.ts"]) {
+      const published = yield* sourceOf(entry);
+      expect([entry, published.includes("ComponentImportTerminal")]).toEqual([entry, false]);
+      expect([entry, published.includes("resolveComponentImport")]).toEqual([entry, false]);
+    }
+  });
+});
 
 describe("Tier CIV — two canonical imports live at the same time", () => {
   const CONCURRENT = [

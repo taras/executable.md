@@ -224,10 +224,12 @@ export class MissingImportProvider extends Error {
  * import of exactly `asked`.
  *
  * The whole mark is parsed rather than trusted: an own, non-enumerable property
- * under the namespaced name, holding an object with exactly one member, `asked`,
- * whose value is the name this call asked for. Nothing is cast, and a mark that
- * names another component — a foreign terminal's report about a *different*
- * import, arriving here on some other failure — is not this call's.
+ * under the namespaced name, holding an object whose complete own-key set is one
+ * member, `asked`, whose value is the name this call asked for. Nothing is cast;
+ * a payload carrying anything besides that member, however hidden, is not the
+ * mark; and a mark that names another component — a foreign terminal's report
+ * about a *different* import, arriving here on some other failure — is not this
+ * call's.
  */
 export function isMissingImportProvider(error: unknown, asked: string): boolean {
   if (typeof error !== "object" || error === null) {
@@ -238,7 +240,10 @@ export function isMissingImportProvider(error: unknown, asked: string): boolean 
     return false;
   }
   const value: unknown = mark.value;
-  if (typeof value !== "object" || value === null || Object.keys(value).length !== 1) {
+  // The complete own-key set, so "one member" means one: `Object.keys()` would
+  // report a payload carrying hidden extras — a non-enumerable member, a symbol —
+  // as the single-member mark it is not.
+  if (typeof value !== "object" || value === null || Reflect.ownKeys(value).length !== 1) {
     return false;
   }
   return Object.getOwnPropertyDescriptor(value, "asked")?.value === asked;

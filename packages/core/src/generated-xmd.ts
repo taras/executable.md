@@ -2475,6 +2475,10 @@ function expand(
         ...(componentRouting === undefined ? {} : { componentRouting }),
         ...(syntax === undefined ? {} : { syntax }),
       },
+      // No execution terminal: this fragment's imports are answered by the
+      // narrowed provider installed above, and it inherits nothing of the
+      // document execution that admitted it.
+      undefined,
       // A generated fragment is the engine's own text, so it owns no value body
       // and a <Return> written into it satisfies no declaration.
       undefined,
