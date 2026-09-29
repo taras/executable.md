@@ -54,7 +54,11 @@ import {
   SESSION_PROPS,
   SessionLaunch,
 } from "./function-components.ts";
-import { promptFailureFromRecord, readCompletedPrompts } from "./journal.ts";
+import {
+  observePermissionDecisions,
+  promptFailureFromRecord,
+  readCompletedPrompts,
+} from "./journal.ts";
 
 export interface AgentComponentsOptions {
   /** Default agent seeded for `<AgentProvider>` inheritance. */
@@ -228,6 +232,15 @@ export function* installAgentComponents(options?: AgentComponentsOptions): Opera
   }
 
   yield* useAgentComponents();
+
+  // One observer for this installation, outside every policy installed after it.
+  // A policy decides without delegating — that is what deciding means — so an
+  // observer anywhere inside one never sees the decision it makes. Installed
+  // here, in the Agent installation itself, it wraps the host's own policy and
+  // the REPL's authority alike. Each Prompt puts its own ledger where its
+  // requests will find it, and this copies the outcome into the place the
+  // request reserved on the way in.
+  yield* observePermissionDecisions();
 
   const rootProvider = options?.rootProvider;
 

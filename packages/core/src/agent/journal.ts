@@ -55,6 +55,7 @@ import type {
   Result as DurableResult,
   Workflow,
 } from "@executablemd/durable-streams";
+import { createContext } from "effection";
 import type { Operation } from "effection";
 import { Agent } from "./agent-api.ts";
 import type {
@@ -151,47 +152,109 @@ interface PermissionDraft {
   outcome?: PermissionOutcome;
 }
 
+/**
+ * Where one Prompt's audit goes, for whoever answers a request it made.
+ *
+ * A destination and nothing else: holding it says which turn a decision belongs
+ * to, and grants no authority to make one. Private to this module — no caller
+ * outside it can reach the context, the ledger or a reserved place.
+ *
+ * Scope is the correlation. A permission request raised while a Prompt's
+ * provider stream is being consumed runs inside that Prompt's own scope, so it
+ * inherits that Prompt's ledger and no other — never the newest turn, the turn
+ * with matching text, or whichever decision settled first.
+ */
+const PromptAudit = createContext<PromptAuditLedger>("xmd.agent.prompt-permission-audit");
+
+/** One Prompt's ledger: reserve a place, then complete that same place. */
+interface PromptAuditLedger {
+  /**
+   * Take this request's place in the order, and hand back the one way to
+   * complete it.
+   *
+   * None when the request's safe fields do not read as the closed shape a record
+   * holds: retaining a half-read audit would make the record unparseable, which
+   * would fail a turn over how it was watched.
+   */
+  reserve(request: PermissionRequest): ((outcome: PermissionOutcome) => void) | undefined;
+}
+
 /** What one turn observed of the permission requests made while it ran. */
 export interface PromptPermissionAudit {
-  /** Observe permission requests for as long as the installing scope lives. */
-  observe(): Operation<void>;
+  /**
+   * Put this ledger where a request made by this Prompt will find it.
+   *
+   * For the lifetime of the scope that calls it, which is the scope the provider
+   * stream is consumed in.
+   */
+  place(): Operation<void>;
   /** The requests that were decided, in the order they arrived. */
   completed(): readonly PromptPermission[];
 }
 
 /**
- * Observe the permission requests one prompt turn answers.
+ * Observe every permission decision, from outside every policy that makes one.
  *
- * Ordinary middleware around the existing `Agent.requestPermission()`, so it
- * sits outside every installed policy and inside whatever a document composed:
- * it sees the request on its way to being decided and the decision on its way
- * back, and it delegates both unchanged. It decides nothing, substitutes
- * nothing, and swallows nothing — a policy that raises raises through here, and
- * the request it was answering is simply never completed.
+ * At `max`, which is the outermost position there is: a policy decides without
+ * delegating — that is what deciding means — so an observer anywhere inside one
+ * never sees the call it exists to record. The REPL's own authority is installed
+ * at the ordinary position and is therefore inside this, which is the whole
+ * point: its outcome is the one this copies.
  *
- * The subject is copied when the call begins rather than when it ends, because
- * a caller is free to reuse or rewrite the request object it passed once the
- * answer is in hand. A request whose safe fields do not read as this closed
- * shape is observed as nothing at all: retaining a half-read audit would make
- * the record unparseable, which would fail a turn over how it was watched.
+ * It decides nothing, substitutes nothing and swallows nothing. A policy that
+ * raises raises through here, and the place it was answering is simply never
+ * completed.
+ */
+export function* observePermissionDecisions(): Operation<void> {
+  yield* Agent.around(
+    {
+      *requestPermission([request], next) {
+        const ledger = yield* PromptAudit.get();
+        // Reserved on the way in, because a caller is free to reuse or rewrite the
+        // request object it passed once the answer is in hand.
+        const complete = ledger?.reserve(request);
+        const outcome = yield* next(request);
+        complete?.(outcome);
+        return outcome;
+      },
+    },
+    { at: "max" },
+  );
+}
+
+/**
+ * The audit one prompt turn keeps of the permission requests made while it ran.
+ *
+ * The turn owns the ledger and the observer is somewhere else entirely — outside
+ * every policy, installed once for the execution. What connects them is scope:
+ * this ledger is placed where the provider's stream is consumed, and a request
+ * raised from in there finds it.
+ *
+ * Only completed places are published. A decision still being made, and one
+ * whose policy was cancelled before it answered, are both absent — an audit
+ * naming an outcome nobody reached would be a record of something that did not
+ * happen.
  */
 export function promptPermissionAudit(): PromptPermissionAudit {
   const drafts: PermissionDraft[] = [];
+  const ledger: PromptAuditLedger = {
+    reserve(request: PermissionRequest) {
+      const subject = permissionSubject(request);
+      if (subject === undefined) {
+        return undefined;
+      }
+      // The place is taken now and completed later, so two requests from one
+      // turn keep the order they arrived in however their answers interleave.
+      const draft: PermissionDraft = { subject };
+      drafts.push(draft);
+      return (outcome: PermissionOutcome) => {
+        draft.outcome = permissionDecision(outcome);
+      };
+    },
+  };
   return {
-    observe() {
-      return Agent.around({
-        *requestPermission([request], next) {
-          const subject = permissionSubject(request);
-          if (subject === undefined) {
-            return yield* next(request);
-          }
-          const draft: PermissionDraft = { subject };
-          drafts.push(draft);
-          const outcome = yield* next(request);
-          draft.outcome = permissionDecision(outcome);
-          return outcome;
-        },
-      });
+    *place() {
+      yield* PromptAudit.set(ledger);
     },
     completed() {
       return drafts.flatMap((draft) => {

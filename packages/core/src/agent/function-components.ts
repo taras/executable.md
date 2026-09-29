@@ -405,9 +405,11 @@ function* runPrompt(
     // document teardown.
     consumed = yield* scoped(function* (): Operation<ConsumedTurn> {
       const result: ConsumedTurn = { text: "" };
-      // Installed before the turn is asked for, so a provider that requests
-      // permission the moment it is subscribed is already being watched.
-      yield* permissions.observe();
+      // Placed before the turn is asked for, so a provider that requests
+      // permission the moment it is subscribed already finds this turn's ledger.
+      // What observes the decision is installed for the whole execution, outside
+      // every policy; this says only which turn a decision it sees belongs to.
+      yield* permissions.place();
       const stream = yield* Agent.operations.prompt(text, options);
       const subscription = yield* stream;
       let next = yield* subscription.next();

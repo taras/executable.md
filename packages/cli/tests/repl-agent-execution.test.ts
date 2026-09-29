@@ -17,9 +17,23 @@
 
 import { beforeAll, describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { createScope, race, scoped, sleep, spawn, until, useScope, withResolvers } from "effection";
+import {
+  all,
+  createScope,
+  race,
+  scoped,
+  sleep,
+  spawn,
+  until,
+  useScope,
+  withResolvers,
+} from "effection";
 import type { Operation, Result, Stream } from "effection";
-import { DurableContext, InMemoryStream } from "@executablemd/durable-streams";
+import {
+  DurableContext,
+  InMemoryStream,
+  serializeDurableEvent,
+} from "@executablemd/durable-streams";
 import type { DurableEvent } from "@executablemd/durable-streams";
 import {
   Agent,
@@ -40,10 +54,14 @@ import type {
 import type { AgentProviderFactory } from "@executablemd/core";
 import type { ExecutionInstallation } from "@executablemd/core/host";
 
+import { API } from "@executablemd/runtime";
+
 import { ordinaryEvaluationProfile } from "../src/evaluation-profile.ts";
+import { REFERENCE_DIRECTORY } from "./fixtures/repl/reference.ts";
 import { openReplSession, submitReplEntry } from "../src/repl/session.ts";
 import type { ReplSession } from "../src/repl/session.ts";
 import type { ReplAgentReading } from "../src/repl/agent.ts";
+import type { ReplAgentPermission } from "../src/repl/model.ts";
 import type { ReplExecution } from "../src/repl/journal.ts";
 
 /**
@@ -98,6 +116,31 @@ interface Scripted {
     readonly kind?: string;
     readonly title?: string;
     readonly options?: readonly PermissionOption[];
+    /** Provider-owned input nothing durable may hold, for the canary row. */
+    readonly rawInput?: unknown;
+  };
+  /**
+   * Two requests from one turn, both raised before either is answered.
+   *
+   * Concurrent on purpose: the order they are *answered* in is then the test's
+   * to choose, which is what proves a retained audit keeps the order they
+   * arrived in instead.
+   */
+  readonly permissions?: readonly {
+    readonly toolCallId: string;
+    readonly kind?: string;
+    readonly title?: string;
+  }[];
+  /**
+   * One more request, raised after this turn's first delta.
+   *
+   * By then a sibling turn has placed its own ledger, so a record correlated by
+   * whichever ledger was placed most recently puts this audit on the wrong turn.
+   */
+  readonly late?: {
+    readonly toolCallId: string;
+    readonly kind?: string;
+    readonly title?: string;
   };
   readonly status?: "completed" | "failed" | "cancelled";
   /**
@@ -284,6 +327,7 @@ function turn(
       // terminal event needs it too.
       let where = "";
       let released = false;
+      let lateAsked = false;
       return {
         *next() {
           if (!announced) {
@@ -314,12 +358,34 @@ function turn(
                   toolCallId: wanted.toolCallId,
                   ...(wanted.title === undefined ? {} : { title: wanted.title }),
                   ...(wanted.kind === undefined ? {} : { kind: wanted.kind }),
+                  ...(wanted.rawInput === undefined ? {} : { rawInput: wanted.rawInput }),
                 },
                 options: wanted.options ?? ALL_KINDS,
               };
               stub.outcomes.set(
                 wanted.toolCallId,
                 yield* Agent.operations.requestPermission(request),
+              );
+            }
+            const pair = scripted.permissions;
+            if (pair !== undefined) {
+              // Both raised before either is answered, so the turn is holding two
+              // decisions at once.
+              yield* all(
+                pair.map((one) =>
+                  (function* (): Operation<void> {
+                    const outcome = yield* Agent.operations.requestPermission({
+                      session,
+                      toolCall: {
+                        toolCallId: one.toolCallId,
+                        ...(one.title === undefined ? {} : { title: one.title }),
+                        ...(one.kind === undefined ? {} : { kind: one.kind }),
+                      },
+                      options: ALL_KINDS,
+                    });
+                    stub.outcomes.set(one.toolCallId, outcome);
+                  })(),
+                ),
               );
             }
           }
@@ -334,6 +400,22 @@ function turn(
             stage += 1;
             produced.push(event);
             return { done: false, value: event };
+          }
+          if (stage === deltas.length + 1 && scripted.late !== undefined && !lateAsked) {
+            lateAsked = true;
+            const one = scripted.late;
+            stub.outcomes.set(
+              one.toolCallId,
+              yield* Agent.operations.requestPermission({
+                session,
+                toolCall: {
+                  toolCallId: one.toolCallId,
+                  ...(one.title === undefined ? {} : { title: one.title }),
+                  ...(one.kind === undefined ? {} : { kind: one.kind }),
+                },
+                options: ALL_KINDS,
+              }),
+            );
           }
           if (stage === deltas.length + 1) {
             stage += 1;
@@ -399,13 +481,63 @@ function start(
   holder: ReplExecution,
   source: string,
   permissionMode: PermissionMode = "deny-all",
+  includes?: readonly string[],
 ): Operation<Result<ReplSession>> {
   return submitReplEntry({
     execution: holder,
     installations: installations(),
     permissionMode,
     source,
+    ...(includes === undefined ? {} : { includes }),
   });
+}
+
+/**
+ * What a run actually performed, counted where the work happens.
+ *
+ * Outside the engine's own handlers, so what these count is the read and the
+ * compilation themselves rather than the records of them: a replay that restored
+ * a completed effect reads no source and compiles nothing, and that is the
+ * difference between restoring and doing again.
+ */
+interface Performed {
+  /** Component sources actually read from disk. */
+  readonly reads: string[];
+  /** Eval blocks actually compiled, which is where a block really runs. */
+  compiles: number;
+}
+
+function* countPerformed(): Operation<Performed> {
+  const performed: Performed = { reads: [], compiles: 0 };
+  yield* API.Fs.around({
+    *readTextFile([path], next) {
+      performed.reads.push(path);
+      return yield* next(path);
+    },
+  });
+  yield* API.Env.around({
+    *compile([source, options], next) {
+      performed.compiles++;
+      return yield* next(source, options);
+    },
+  });
+  return performed;
+}
+
+/** One document that really reads a component and really compiles an eval block. */
+const READS_AND_COMPILES = [
+  "```js eval",
+  'const plan = { title: "Ship the audit", steps: 2 };',
+  "```",
+  "",
+  "<Checklist title={plan.title} steps={plan.steps} />",
+  "",
+  '<Prompt text="one" />',
+].join("\n");
+
+/** The exact bytes a journal holds, for a comparison that is about bytes. */
+function serialized(events: readonly DurableEvent[]): string[] {
+  return events.map((event) => serializeDurableEvent(event));
 }
 
 /** Wait until the live reading satisfies `holds`, or say it never did. */
@@ -474,6 +606,17 @@ function watchAppends(holder: ReplExecution): (count: number) => Operation<void>
     }
     return awaiting(`${count} agent turn(s) recorded`, slot(count).published);
   };
+}
+
+/**
+ * Every permission this session's retained turns hold, turn by turn.
+ *
+ * Read from the projected model rather than from the ledger: what a row about a
+ * durable audit is entitled to is what the Journal says, after core parsed it
+ * back.
+ */
+function audited(session: ReplSession): readonly ReplAgentPermission[] {
+  return session.model.turns.flatMap((turn) => turn.permissions);
 }
 
 /** Every appended `agent_prompt`, in journal order, with its coroutine. */
@@ -1023,6 +1166,18 @@ describe("P2 — one live request, one direct settlement", () => {
     const outcome = yield* session.join();
     expect(outcome.ok).toBe(true);
     expect(stub.outcomes.get("call-1")).toEqual({ outcome: "selected", optionId: "always" });
+    // And the turn that asked retains exactly that decision, once: the outcome
+    // the REPL's own authority returned, copied into the place the request
+    // reserved on its way in.
+    expect(audited(session)).toEqual([
+      {
+        toolCallId: "call-1",
+        kind: "execute",
+        options: ALL_KINDS,
+        outcome: "selected",
+        selected: "always",
+      },
+    ]);
   });
 
   it("P2: dismissal while live denies once and the turn resumes", function* () {
@@ -1042,33 +1197,82 @@ describe("P2 — one live request, one direct settlement", () => {
     expect(session.agent.requests).toEqual([]);
     expect(session.model.turns).toHaveLength(1);
     expect(session.model.turns[0]!.text).toBe("resumed");
+    // Retained once, as the denial it was — not as a cancellation, and not twice.
+    expect(audited(session)).toEqual([
+      {
+        toolCallId: "call-1",
+        kind: "execute",
+        options: ALL_KINDS,
+        outcome: "selected",
+        selected: "no",
+      },
+    ]);
   });
 
   it("P2: a cold retained audit has no pending reading and no authority", function* () {
+    const AUDIT = [
+      {
+        toolCallId: "call-1",
+        kind: "read",
+        options: ALL_KINDS,
+        outcome: "selected",
+        selected: "once",
+      },
+    ];
     const golden = execution();
+    let written: string[] = [];
     yield* scoped(function* () {
       const stub = createStub({
         one: { permission: { toolCallId: "call-1", kind: "read" }, deltas: ["reply"] },
       });
       yield* useStub(stub);
-      yield* opened(yield* start(golden, ONE_PROMPT, "approve-reads")).join();
+      // Counted where the work happens: this run really reads a component's
+      // source and really compiles an eval block, so "nothing again" has
+      // something to be measured against.
+      const performed = yield* countPerformed();
+      const live = opened(
+        yield* start(golden, READS_AND_COMPILES, "approve-reads", [REFERENCE_DIRECTORY]),
+      );
+      yield* live.join();
       expect(stub.outcomes.has("call-1")).toBe(true);
+      // The policy answered this one itself, and the record says exactly what it
+      // answered: the safe fields and the outcome, and nothing of the request.
+      expect(audited(live)).toEqual(AUDIT);
+      expect(
+        performed.reads.filter((path) => path.endsWith("Checklist.md")).length,
+      ).toBeGreaterThan(0);
+      expect(performed.compiles).toBeGreaterThan(0);
+      written = serialized(yield* golden.stream.readAll());
     });
 
     yield* scoped(function* () {
       const stub = createStub();
       yield* useStub(stub);
+      const performed = yield* countPerformed();
+      // The cold process's own execution, held so the bytes it ends with can be
+      // compared with the bytes the live run left.
+      const cold = execution(yield* golden.stream.readAll());
       const reopened = opened(
         yield* openReplSession({
-          execution: execution(yield* golden.stream.readAll()),
+          execution: cold,
+          includes: [REFERENCE_DIRECTORY],
           installations: installations(),
         }),
       );
       yield* reopened.join();
+      // The same audit, read from the history rather than observed again.
+      expect(audited(reopened)).toEqual(AUDIT);
       // The audit is retained model data; replay recreates no wait from it.
       expect(reopened.agent.requests).toEqual([]);
       expect(reopened.permissions.choose("request-1", "once")).toBe(false);
       expect(stub.asked).toEqual([]);
+      // Nothing was performed again: the component's source was not read and the
+      // eval block was not compiled, which is what "restored" has to mean.
+      expect(performed.reads.filter((path) => path.endsWith("Checklist.md"))).toEqual([]);
+      expect(performed.compiles).toBe(0);
+      // And reconstructing wrote nothing: this execution ends with the exact
+      // bytes the live run left, event for event.
+      expect(serialized(yield* cold.stream.readAll())).toEqual(written);
     });
   });
 });
@@ -1102,6 +1306,10 @@ describe("P3 — whole-session teardown is structured cancellation", () => {
     // A late choice acts on nothing, and settles nothing afterwards either.
     expect(session.permissions.choose(pending.key, "once")).toBe(false);
     expect(stub.outcomes.has("call-1")).toBe(false);
+    // And no audit was published for a decision nobody made: the place the
+    // request reserved was never completed, so nothing names an outcome.
+    expect(session.model.turns).toEqual([]);
+    expect(audited(session)).toEqual([]);
   });
 });
 
@@ -1166,5 +1374,164 @@ describe("P4 — a request without one live owner fails the session", () => {
     expect(answered).toEqual([]);
     // No invented audit: the journal holds only what actually happened.
     expect(appends(yield* holder.stream.readAll())).toEqual([]);
+  });
+});
+
+/** Two spawned turns, each asking its own question. */
+const TWO_ASKS = [
+  "<All>",
+  '<Spawn><Session name="planner"><Prompt text="first" /></Session></Spawn>',
+  '<Spawn><Session name="reviewer"><Prompt text="second" /></Session></Spawn>',
+  "</All>",
+].join("\n");
+
+describe("P5 — the durable audit of a live REPL turn", () => {
+  beforeAll(() => useTempFileCompiler());
+
+  it("P5: two live turns settle in reverse order, and each record holds only its own", function* () {
+    const stub = createStub({
+      first: { permission: { toolCallId: "call-first", kind: "execute" }, deltas: ["a"] },
+      second: { permission: { toolCallId: "call-second", kind: "execute" }, deltas: ["b"] },
+    });
+    yield* useStub(stub);
+    const holder = execution();
+    const session = opened(yield* start(holder, TWO_ASKS, "approve-reads"));
+    yield* spawn(function* () {
+      // Both waiting at once, which is what makes ownership a question at all.
+      yield* reported(session, "two pending requests", (reading) => reading.requests.length === 2);
+      const asked = session.agent.requests;
+      const first = asked.find((request) => request.toolCallId === "call-first");
+      const second = asked.find((request) => request.toolCallId === "call-second");
+      expect(first).toBeDefined();
+      expect(second).toBeDefined();
+      // Different turns, so neither decision could belong to the other.
+      expect(first?.turn).not.toBe(second?.turn);
+      // Answered in the opposite order to the one they arrived in.
+      expect(session.permissions.choose(second?.key ?? "", "always")).toBe(true);
+      expect(session.permissions.choose(first?.key ?? "", "once")).toBe(true);
+    });
+    const outcome = yield* session.join();
+    expect(outcome.ok).toBe(true);
+
+    // One audit each, and each on the turn that asked it: nothing correlated by
+    // which turn was newest or which decision settled first.
+    const turns = session.model.turns;
+    expect(turns).toHaveLength(2);
+    const asking = (text: string): readonly ReplAgentPermission[] =>
+      turns.find((turn) => turn.input === text)?.permissions ?? [];
+    expect(asking("first").map((one) => one.toolCallId)).toEqual(["call-first"]);
+    expect(asking("second").map((one) => one.toolCallId)).toEqual(["call-second"]);
+    expect(asking("first")[0]?.selected).toBe("once");
+    expect(asking("second")[0]?.selected).toBe("always");
+  });
+
+  it("P5: a later request from an earlier turn is still that turn's", function* () {
+    const stub = createStub({
+      first: {
+        // Held until its sibling has asked, so the sibling's ledger is the most
+        // recently placed one when this turn finally asks anything at all.
+        gated: "each",
+        permission: { toolCallId: "call-first", kind: "execute" },
+        // And asked again once it is running, with the sibling still waiting.
+        late: { toolCallId: "call-later", kind: "execute" },
+        deltas: ["a"],
+      },
+      second: { permission: { toolCallId: "call-second", kind: "execute" }, deltas: ["b"] },
+    });
+    yield* useStub(stub);
+    const session = opened(yield* start(execution(), TWO_ASKS, "approve-reads"));
+    yield* spawn(function* () {
+      yield* reported(session, "the sibling's request", (reading) =>
+        reading.requests.some((request) => request.toolCallId === "call-second"),
+      );
+      stub.let_("root.0");
+      yield* reported(session, "two pending requests", (reading) => reading.requests.length === 2);
+      const held = (id: string): string =>
+        session.agent.requests.find((request) => request.toolCallId === id)?.key ?? "";
+      // The first turn is released and asks again while the second still waits.
+      expect(session.permissions.choose(held("call-first"), "once")).toBe(true);
+      yield* reported(session, "the later request", (reading) =>
+        reading.requests.some((request) => request.toolCallId === "call-later"),
+      );
+      expect(session.permissions.choose(held("call-later"), "always")).toBe(true);
+      expect(session.permissions.choose(held("call-second"), "no")).toBe(true);
+    });
+    const outcome = yield* session.join();
+    expect(outcome.ok).toBe(true);
+    const asking = (text: string): string[] =>
+      session.model.turns
+        .find((turn) => turn.input === text)
+        ?.permissions.map((one) => one.toolCallId) ?? [];
+    // Both of the first turn's requests are the first turn's, including the one
+    // it asked after its sibling had placed a ledger of its own.
+    expect(asking("first")).toEqual(["call-first", "call-later"]);
+    expect(asking("second")).toEqual(["call-second"]);
+  });
+
+  it("P5: two requests from one turn keep the order they were asked, not the order they settled", function* () {
+    const stub = createStub({
+      one: {
+        permissions: [
+          { toolCallId: "call-a", title: "Asked first", kind: "execute" },
+          { toolCallId: "call-b", title: "Asked second", kind: "execute" },
+        ],
+        deltas: ["reply"],
+      },
+    });
+    yield* useStub(stub);
+    const session = opened(yield* start(execution(), ONE_PROMPT, "approve-reads"));
+    yield* spawn(function* () {
+      yield* reported(session, "two pending requests", (reading) => reading.requests.length === 2);
+      const asked = session.agent.requests;
+      const a = asked.find((request) => request.toolCallId === "call-a");
+      const b = asked.find((request) => request.toolCallId === "call-b");
+      // One turn, both places already reserved, and the second one answered
+      // first — which is exactly what a record sorted by completion would show
+      // the wrong way round.
+      expect(a?.turn).toBe(b?.turn);
+      expect(session.permissions.choose(b?.key ?? "", "always")).toBe(true);
+      expect(session.permissions.choose(a?.key ?? "", "once")).toBe(true);
+    });
+    const outcome = yield* session.join();
+    expect(outcome.ok).toBe(true);
+    expect(audited(session).map((one) => one.toolCallId)).toEqual(["call-a", "call-b"]);
+    expect(audited(session).map((one) => one.selected)).toEqual(["once", "always"]);
+  });
+
+  it("P5: provider-owned input reaches neither the journal nor the model", function* () {
+    const canary = "canary-9f3b7c1e-only-in-rawInput";
+    const stub = createStub({
+      one: {
+        // A read, so the policy answers it without anybody being asked — and the
+        // request carries something no record may ever hold.
+        permission: {
+          toolCallId: "call-1",
+          kind: "read",
+          title: "Read a file",
+          rawInput: { path: "/etc/passwd", secret: canary },
+        },
+        deltas: ["reply"],
+      },
+    });
+    yield* useStub(stub);
+    const holder = execution();
+    const session = opened(yield* start(holder, ONE_PROMPT, "approve-reads"));
+    const outcome = yield* session.join();
+    expect(outcome.ok).toBe(true);
+    // The decision was made and retained.
+    expect(audited(session)).toHaveLength(1);
+    // And what the provider owned stayed the provider's: not in the bytes, not
+    // in the model, not under any name.
+    const written = yield* holder.stream.readAll();
+    expect(written.map((event) => serializeDurableEvent(event)).join("\n")).not.toContain(canary);
+    expect(JSON.stringify(session.model)).not.toContain(canary);
+    expect(Object.keys(audited(session)[0] ?? {}).sort()).toEqual([
+      "kind",
+      "options",
+      "outcome",
+      "selected",
+      "title",
+      "toolCallId",
+    ]);
   });
 });
