@@ -94,6 +94,16 @@ export interface ScriptedTurn {
    */
   readonly stopReason?: string;
   /**
+   * Whether the backend reports this turn cancelled after it has streamed.
+   *
+   * Distinct from `manual`: that turn never settles and is the one a test
+   * interrupts, while this one settles the way an adapter reports a turn the
+   * backend cancelled — keeping whatever text it had already streamed. It is how
+   * a cancelled Prompt *record* is produced, which teardown cannot do: a run
+   * that is being torn down appends nothing.
+   */
+  readonly cancelled?: boolean;
+  /**
    * The App Server turn this reply is, as an adapter that names its turns says
    * it: on this exact response's own `_meta`.
    *
@@ -387,12 +397,21 @@ export function createFakeAcp(): FakeAcp {
           const asked = permissionAsked(options, input, turn, (outcome) => {
             decisions.push(outcome);
           });
+          // Observed here, as the provider's own deferreds are: a host that is
+          // torn down while a request is pending rejects the operation behind
+          // this promise, and an unobserved rejection would fail the runner
+          // instead of being the ending the case is about.
+          asked.catch(() => {});
 
           if (turn.manual) {
             // Nothing settles it. `cancel()` is the only way out.
             released.resolve();
           } else {
             void asked.then(() => {
+              if (turn.cancelled === true) {
+                settled.resolve({ status: "cancelled" });
+                return;
+              }
               settled.resolve({
                 status: "completed",
                 stopReason: turn.stopReason ?? "end_turn",

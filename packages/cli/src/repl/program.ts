@@ -39,7 +39,7 @@ import {
   type Subscription,
   withResolvers,
 } from "effection";
-import type { ExecutionInstallation } from "@executablemd/core/host";
+import type { ReplExecutionProfile } from "../repl-profile.ts";
 
 import {
   admitted,
@@ -55,7 +55,7 @@ import {
   stateFor,
   viewFor,
 } from "./application.ts";
-import type { Json, NormalizedIssue, PermissionMode } from "@executablemd/core";
+import type { Json, NormalizedIssue } from "@executablemd/core";
 import type {
   ReplAction,
   ReplFormMessage,
@@ -84,24 +84,22 @@ import { useReplRoot } from "./storage.ts";
 import { ReplTerminal } from "./terminal.ts";
 import type { ReplTerminalSize } from "./terminal.ts";
 
-/** What one `xmd repl` invocation was asked to do. */
+/**
+ * What one `xmd repl` invocation was asked to do.
+ *
+ * Two invocation facts and one profile. What a REPL execution may resolve, the
+ * ceiling a generated fragment runs under and how a permission request is
+ * answered are decided by the command before this runs, and are read here rather
+ * than assembled again: one profile means the second entry of a session cannot
+ * run under different rules from the first.
+ */
 export interface ReplProgramOptions {
   /** The location to reopen, or none to start a fresh execution. */
   readonly location?: string;
-  /** Where components are looked for. */
-  readonly includes?: readonly string[];
-  /** What this host installs around the document. */
-  readonly installations?: readonly ExecutionInstallation[];
   /** The repository root. Defaults to this host's per-user data directory. */
   readonly root?: string;
-  /**
-   * How this REPL answers Agent permission requests.
-   *
-   * Passed through to the session, which installs the policy. Absent means
-   * `deny-all`, which is what an execution with no configured mode already does —
-   * so a REPL that nobody configured asks nobody anything.
-   */
-  readonly permissionMode?: PermissionMode;
+  /** Everything this command settled before it opened a terminal. */
+  readonly profile: ReplExecutionProfile;
 }
 
 /** What the command reports when it ends. */
@@ -120,7 +118,7 @@ export interface ReplOutcome {
  * something this command cannot show, and the difference decides whether a
  * terminal was ever opened.
  */
-export function* runReplProgram(options: ReplProgramOptions = {}): Operation<Result<ReplOutcome>> {
+export function* runReplProgram(options: ReplProgramOptions): Operation<Result<ReplOutcome>> {
   // Before a path is formed, a file is opened or a terminal is touched: what the
   // caller named has to be a location this grammar defines.
   if (options.location !== undefined) {
@@ -185,9 +183,9 @@ export function* runReplProgram(options: ReplProgramOptions = {}): Operation<Res
 
   const opened = yield* openReplSession({
     execution,
-    ...(options.includes === undefined ? {} : { includes: options.includes }),
-    ...(options.installations === undefined ? {} : { installations: options.installations }),
-    ...(options.permissionMode === undefined ? {} : { permissionMode: options.permissionMode }),
+    includes: options.profile.includes,
+    installations: options.profile.installations,
+    permissionMode: options.profile.permissionMode,
     ...(state.route.at === undefined ? {} : { selection: state.route.at }),
   });
 
@@ -655,11 +653,15 @@ function* build(
 
 /** Wake the loop whenever this session's history or overlay moves. */
 function* watch(session: ReplSession, wakes: Wakes): Operation<void> {
+  // How far an Agent turn has got is a fact no record carries until the turn
+  // has ended: a queued turn, the text streaming into one, and a permission
+  // request waiting on somebody are all live-only. Without this the surface
+  // showing them is drawn only when something else happens to wake the loop, so
+  // a turn a person is watching appears already finished.
+  //
   // Subscribed here, in the scope that outlives the spawn, and drained there.
   // A spawned body starts a turn after the spawn returns, and a turn is long
-  // enough for a queued turn, a delta or a permission request to be sent to
-  // nobody: the Agent reading moves while the document is doing nothing else,
-  // so there is no other event to draw the frame that would have shown it.
+  // enough for the first of those changes to be sent to nobody.
   const agents = yield* session.agentChanges;
   yield* spawn(function* conversations(): Operation<void> {
     while (true) {
@@ -833,9 +835,9 @@ function* perform(
       const submitted = yield* submitReplEntry({
         execution,
         source: intent.source,
-        ...(options.includes === undefined ? {} : { includes: options.includes }),
-        ...(options.installations === undefined ? {} : { installations: options.installations }),
-        ...(options.permissionMode === undefined ? {} : { permissionMode: options.permissionMode }),
+        includes: options.profile.includes,
+        installations: options.profile.installations,
+        permissionMode: options.profile.permissionMode,
       });
       if (!submitted.ok) {
         // A preflight refusal leaves the draft exactly as it was and the history

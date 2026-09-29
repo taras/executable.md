@@ -149,6 +149,7 @@ export {
   fileDeleteEntry,
   fileReadEntry,
   fileWriteEntry,
+  elicitWriteEntry,
   globReadEntry,
   syntaxReadEntry,
 } from "./src/evaluation-profile.ts";

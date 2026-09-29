@@ -20,13 +20,18 @@ import { installIdentities } from "../src/invocation-identity.ts";
 import type { ComponentRouting, ProtectedSite } from "../src/invocation-identity.ts";
 
 import {
+  CANONICAL_PROFILE_ANSWERS,
+  elicitWriteEntry,
   fileReadEntry,
   globReadEntry,
   prepareEvaluationProfile,
   syntaxReadEntry,
 } from "../src/evaluation-profile.ts";
 import { CORE_ORIGIN } from "../src/components/registry.ts";
+import { CORE_REVISION } from "../src/generated-xmd.ts";
 import { props as globProps } from "../src/components/Glob.ts";
+import { props as elicitProps } from "../src/components/Elicit.ts";
+import { capabilityReturns } from "../src/fragment-capabilities.ts";
 import type {
   CapabilityEntry,
   EvaluationProfile,
@@ -639,5 +644,49 @@ describe("Tier EP — a provider-backed name states one identity", () => {
     });
 
     expect(failed).toContain("different grants");
+  });
+});
+
+describe("Tier EP — the entry that admits canonical `<Elicit>`", () => {
+  it("EL1: the factory pins core's own body under core's identity, paired only", function* () {
+    const entry = elicitWriteEntry();
+
+    // A capability rather than a component answer: what core owns here is the
+    // behavior, so the body is pinned the way `<File>`'s is. Resolving the name
+    // instead would hand a generated fragment whatever legitimately shadows
+    // `Elicit` — a repository file, a registration, the workflow's own
+    // suspension replacement — and would resolve it for every execution the
+    // profile belongs to, including ones that ask nothing.
+    expect(entry.kind).toBe("capability");
+    expect(entry.capability).toBe("elicit:ask");
+    expect(entry.name).toBe("Elicit");
+    expect(entry.identity).toEqual({
+      origin: CORE_ORIGIN,
+      key: "Elicit",
+      revision: CORE_REVISION,
+    });
+    // Paired only. The question is the content, so a self-closing spelling
+    // would be a request with nothing in it.
+    expect(entry.forms).toEqual(["paired"]);
+    // It declares `<Elicit>`'s own contract, read from the component rather than
+    // restated, and binds a value — so a generated question written without
+    // `as` is refused for the ordinary reason, before anybody is asked.
+    expect(entry.props).toEqual(elicitProps);
+    expect(capabilityReturns("elicit:ask")).toBeDefined();
+
+    // And it is not a name anything resolves. `Elicit` left the set canonical
+    // execution resolves eagerly, which is what stops an execution that never
+    // asks anything from depending on what `Elicit` resolves to.
+    expect(CANONICAL_PROFILE_ANSWERS.has("Elicit")).toBe(false);
+    // A new grant: no version-1 record ever admitted a generated question, so
+    // there is no older string this says it authorizes no more than.
+    expect(entry.legacy).toBe(undefined);
+
+    // Two factories state the same entry and share nothing: a host that edited
+    // what it was given would be editing its own copy.
+    const second = elicitWriteEntry();
+    expect(second).toEqual(entry);
+    expect(second).not.toBe(entry);
+    yield* useScope();
   });
 });

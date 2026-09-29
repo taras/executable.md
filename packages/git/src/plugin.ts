@@ -39,8 +39,12 @@ import { gitHostIdentityAdmission, issueIdentityAdmission } from "./identities.t
  * `xmd workflow list` would advertise components nothing there can expand.
  * Which workflow *action* was asked for decides it, and
  * {@link executesDocument} is what reads that off the argv.
+ *
+ * `repl` is one of them: it runs an entry a person typed, under the same
+ * ordinary profile `run` uses, so a document opened there can write the same
+ * Git vocabulary a document run anywhere else can.
  */
-const DOCUMENT_COMMANDS: ReadonlySet<string> = new Set(["run", "plan", "syntax"]);
+const DOCUMENT_COMMANDS: ReadonlySet<string> = new Set(["run", "plan", "syntax", "repl"]);
 
 /** The workflow actions that execute a document. */
 const EXECUTING_ACTIONS: ReadonlySet<string> = new Set(["start", "resume", "fork"]);

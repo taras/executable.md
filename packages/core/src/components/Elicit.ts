@@ -47,7 +47,7 @@ import {
   refuseChangedQuestion,
 } from "../elicit-journal.ts";
 import { prepareElicitation, runPreparedElicitation } from "../elicit.ts";
-import type { Json } from "../types.ts";
+import type { Json, PropsSchema, ReturnsSchema } from "../types.ts";
 import type { Expansion } from "../expansion.ts";
 
 export const props = {
@@ -59,7 +59,7 @@ export const props = {
   },
   required: ["schema"],
   additionalProperties: false,
-};
+} satisfies PropsSchema;
 
 /**
  * Any JSON value, because the author's `schema` is the real contract and core
@@ -70,7 +70,9 @@ export const props = {
  * object's properties (§5.1.1), so a bare `{}` would declare an object with no
  * properties — the opposite of any value.
  */
-export const returns = { $schema: "http://json-schema.org/draft-07/schema#" };
+export const returns = {
+  $schema: "http://json-schema.org/draft-07/schema#",
+} satisfies ReturnsSchema;
 
 export default function* Elicit(props: Record<string, Json>): Operation<Json> {
   const prepared = yield* prepareElicitation(props.schema);

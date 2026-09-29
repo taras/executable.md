@@ -25,6 +25,12 @@ const COMMANDS: ReadonlySet<string> = new Set([
   "syntax",
   "upgrade",
   "workflow",
+  // `repl` runs a document, so a Plugin has to be told it is the command that
+  // did. Left out, a REPL invocation normalizes to `run` and its own name
+  // arrives as a positional — which tells every Plugin that something it was
+  // written for is happening when it is not, and tells none of them that the
+  // REPL is.
+  "repl",
 ]);
 
 /**

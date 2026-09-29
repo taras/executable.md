@@ -80,6 +80,20 @@ export interface ComponentElement {
 export interface SourcePosition {
   /** Workspace-relative file path. Undefined for dynamically scanned text. */
   path?: string;
+  /**
+   * The generated fragment this position belongs to, when it belongs to one.
+   *
+   * Generated source is not a file: an Agent's fragment arrived as text, so
+   * there is no path for the effects inside it to name. What they name instead
+   * is the admission that decided that text — the request id canonical
+   * `<Evaluate>` already derives from its own deterministic expansion — so a
+   * reader of the history can say which fragment performed a given effect
+   * without inferring it from order, from a name, or from anything live.
+   *
+   * Closed against `path`: a position carries one of the two, or neither for
+   * dynamic text that has no durable source at all. Both together is malformed.
+   */
+  generatedSource?: string;
   /** Character offset in the original file. */
   offset: number;
   line: number;

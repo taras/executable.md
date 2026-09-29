@@ -46,6 +46,7 @@ import { CORE_REGISTRY } from "../src/components/registry.ts";
 import { collect } from "../src/collect.ts";
 import { retainedSource } from "../src/root-source.ts";
 import { useTempFileCompiler } from "../src/temp-file-compiler.ts";
+import { SOURCE_POSITION_FIELD } from "../src/source-position.ts";
 import { useSecretScannerFactory } from "../src/secrets/policy.ts";
 import { createSecretScanner } from "../src/secrets/scanner.ts";
 import type { SecretScanner } from "../src/secrets/scanner.ts";
@@ -3609,4 +3610,74 @@ describe("Tier GXC — the authored form survives the public content chain", () 
       },
     };
   }
+});
+
+/**
+ * Tier GS — which fragment an effect inside generated source belongs to.
+ *
+ * Generated source is not a file, so an effect inside it has no path to name.
+ * What it names instead is the admission that decided that source, stamped by
+ * the scan whole-fragment preflight performs — so a reader of the history can
+ * say which fragment performed which effect without inferring it from order or
+ * from anything live.
+ */
+describe("Tier GS — generated work names its own admission", () => {
+  beforeAll(() => useTempFileCompiler());
+
+  /** The position one recorded effect retained, exactly as the journal holds it. */
+  function positionOf(events: DurableEvent[], type: string): Json | undefined {
+    const found = events.find((event) => event.type === "yield" && event.description.type === type);
+    if (found === undefined || found.type !== "yield") {
+      throw new Error(`no ${type} event was journaled`);
+    }
+    return found.description[SOURCE_POSITION_FIELD];
+  }
+
+  it("GS1: the effect inside a fragment carries that fragment's id and no path", function* () {
+    const transport = yield* useTransport(() => ({ status: 200, body: "body" }));
+    const attempt = yield* evaluate(
+      request(`<Fetch url="${URL_ONE}" />\n`, [pinnedFetch([ADMITTED_REQUEST])]),
+    );
+
+    expect(attempt.failure).toBe(undefined);
+    expect(transport.performed).toHaveLength(1);
+    // The admission is the caller's own effect, so it carries whatever position
+    // the caller had. The read inside the fragment carries the fragment.
+    expect(positionOf(attempt.events, "fetch")).toEqual({
+      generatedSource: "turn-1",
+      offset: 0,
+      line: 1,
+      column: 1,
+    });
+  });
+
+  it("GS2: two fragments in one run stamp their own ids on identical places", function* () {
+    const transport = yield* useTransport(() => ({ status: 200, body: "body" }));
+    const second: GeneratedXmdRequest = {
+      ...request(`<Fetch url="${URL_ONE}" />\n`, [pinnedFetch([ADMITTED_REQUEST])]),
+      id: "turn-2",
+    };
+    const attempt = yield* evaluate(
+      request(`<Fetch url="${URL_ONE}" />\n`, [pinnedFetch([ADMITTED_REQUEST])]),
+      {
+        *after(): Operation<void> {
+          yield* evaluateGeneratedXmd(second);
+        },
+      },
+    );
+
+    expect(attempt.failure).toBe(undefined);
+    expect(transport.performed).toHaveLength(2);
+    // Both fragments asked at their own 1:1 — the same line, the same column,
+    // the same effect name — and the ids are what tell the two reads apart.
+    const reads = attempt.events.flatMap((event) =>
+      event.type === "yield" && event.description.type === "fetch"
+        ? [event.description[SOURCE_POSITION_FIELD]]
+        : [],
+    );
+    expect(reads).toEqual([
+      { generatedSource: "turn-1", offset: 0, line: 1, column: 1 },
+      { generatedSource: "turn-2", offset: 0, line: 1, column: 1 },
+    ]);
+  });
 });

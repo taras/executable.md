@@ -5640,6 +5640,60 @@ that leaves no record for anything else to observe.
 directory, identifier and filesystem operations; nothing under `repl/` names a
 runtime.
 
+### What one REPL command settles before it draws
+
+The command line is read, the Agent configuration is settled, and then one
+immutable profile is assembled in the command's own scope: the selected Plugins,
+the Agent identity components, the packaged `<Plan>` declaration and the ordinary
+evaluation ceiling, with the settled permission mode beside them. The program
+takes that one profile and nothing else, so what an entry may resolve, what
+ceiling a generated fragment runs under and how a permission request is answered
+are facts about the command a person invoked rather than about the entry they
+typed. The profile carries data and installations, never authority: no stack,
+provider, Plan writer, live request or scope reaches the application model, the
+route or the Journal through it.
+
+The `<Plan>` the REPL declares is the packaged Component `xmd plan` runs, and the
+ceiling around a returned program is the shared ordinary profile — whose write
+table holds paired canonical `<Elicit>` beside `<File>` and `<File.Delete>`, so a
+generated program may ask before it writes. That entry is a pinned capability
+rather than a name the fragment resolves: preflight selects it where an
+`<Elicit>` occurrence appears under a `write` selection, and the body it selects
+is core's own `<Elicit>`, closed over before any document code runs. No component
+name is resolved for it, so a same-name repository, registered, declared,
+middleware or separately loaded definition inherits no grant and never runs, and
+an execution that never writes the element resolves nothing. Only the interaction
+is contextual: the pinned body asks through the Elicitation Api lexically in
+scope, which is what lets the REPL drawer answer a generated question and an
+`<Answers>` region answer it without anybody being asked.
+
+Permission composes outermost-first: Core's own audit observer, then this
+session's authoritative policy, then whatever the document and provider
+installed, then the base denial. One private ledger per inherited Prompt scope
+holds what was granted, and a retained audit is read rather than answered. The
+live overlay, the application and the terminal have one owner each — the session,
+the root transition boundary and the screen — and every ending cancels and joins
+that owner rather than appending on its way out.
+
+Ownership in the model is read from the Journal and from nothing else. An
+import's retained selection says where its scope's source came from — a path for
+a component read from somewhere, the retained origin for one the host declared —
+and that origin is the path the effects inside it are recorded against. A
+generated fragment has no file, so the work inside it names the admission it was
+decided under, and the scope that admission created is what owns it: the
+identity chooses the candidate, and journal order and coroutine ancestry only
+say whether that candidate could be its owner — an admission that happened afterwards,
+or on work the effect is not part of, owns nothing however recently it ran. Two
+sequential fragments are therefore sibling scopes, work in a fragment's spawned
+descendants belongs to that fragment, and concurrent siblings are independent of
+which finished first. A record naming a source this prefix never admitted, one it
+admitted twice, or two sources at once is refused rather than attached to a
+guessed owner.
+
+This command installs no foreground launcher, no browser elicitation and no
+readline permission handling, reads no runtime global, and adds no durable record
+family of its own: what it retains is the ordinary events any other run writes.
+
 ## Changing these rules
 
 Spec, tests, and mechanics move together, in the same PR. If a workaround

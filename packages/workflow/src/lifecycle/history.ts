@@ -8,7 +8,8 @@
  *
  * The authored source is the one optional part. A durable operation written by
  * an author carries its normalized position under the stable namespaced
- * description field, so history parses that field and never derives a location
+ * description field — a file's path, or the generated fragment's own id for an
+ * operation inside admitted generated source — so history parses that field and never derives a location
  * from an expansion id, an effect name or the current source. A field that is
  * present and does not parse makes the entry unreadable — reporting it as
  * source-less would describe history the run does not hold — and the diagnostic
@@ -42,7 +43,7 @@ export interface InheritedEventProvenance {
   readonly sourceEventId: string;
 }
 
-const MEMBERS = ["path", "offset", "line", "column"];
+const MEMBERS = ["path", "generatedSource", "offset", "line", "column"];
 
 /**
  * The authored position an event retained, or none when it retained none.
@@ -69,9 +70,21 @@ function parseSourcePosition(value: unknown): Readonly<SourcePosition> {
   if (path !== undefined && (typeof path !== "string" || path === "")) {
     throw fail(`expected a non-empty string, found ${describe(path)}`, "$.path");
   }
+  // The generated fragment an operation inside admitted generated source belongs
+  // to. Closed against `path`: one source, or neither for dynamic text, because
+  // a row naming two of them says two different things about where it was
+  // written.
+  const generated = members.get("generatedSource");
+  if (generated !== undefined && (typeof generated !== "string" || generated === "")) {
+    throw fail(`expected a non-empty string, found ${describe(generated)}`, "$.generatedSource");
+  }
+  if (path !== undefined && generated !== undefined) {
+    throw fail("expected one source, found both a path and a generated source", "$");
+  }
 
   return Object.freeze({
     ...(path === undefined ? {} : { path }),
+    ...(generated === undefined ? {} : { generatedSource: generated }),
     offset: coordinate(members.get("offset"), "$.offset", 0),
     line: coordinate(members.get("line"), "$.line", 1),
     column: coordinate(members.get("column"), "$.column", 1),

@@ -32,10 +32,17 @@
  *
  * ## What is deliberately absent
  *
- * No temporary directory, no environment, no process, no elicitation and no
- * agent. Those are operations the ordinary components have and an admitted
- * fragment does not, and leaving them out here is what makes that true rather
- * than a claim about what a host will remember not to admit.
+ * No temporary directory, no environment, no process and no agent. Those are
+ * operations the ordinary components have and an admitted fragment does not,
+ * and leaving them out here is what makes that true rather than a claim about
+ * what a host will remember not to admit.
+ *
+ * Asking a person is here, and is the one capability whose body is not closed
+ * over a captured operation: `elicit:ask` *is* canonical core's `<Elicit>`, and
+ * what reaches a person is the Elicitation Api lexically in scope where the
+ * fragment runs. That is the one contextual thing about it — a host chooses
+ * whether a fragment may ask at all, and the provider already in place decides
+ * how. Nothing about which implementation asks is resolved by name.
  */
 
 import type { Operation, Result } from "effection";
@@ -47,6 +54,7 @@ import { getExpansion } from "./expansion.ts";
 import { persistFetch } from "./fetch-journal.ts";
 import { parseResponseRecord } from "./fetch-response.ts";
 import type { FetchResponseRecord } from "./fetch-response.ts";
+import Elicit, { props as ELICIT_PROPS, returns as ELICIT_RETURNS } from "./components/Elicit.ts";
 import { GLOB_PROPS, GLOB_RETURNS, globFailure, globPatterns } from "./glob-source.ts";
 import { markGeneratedRequestRefusal } from "./generated-request-refusal.ts";
 import { formDispatcher } from "./invocation-identity.ts";
@@ -267,6 +275,13 @@ export function capabilityProps(capability: FragmentCapability): PropsSchema {
   if (capability === "fetch") {
     return FETCH_PROPS;
   }
+  if (capability === "elicit:ask") {
+    // The component's own declaration, not a copy of it: the admitted element
+    // and the authored one cannot come to describe different contracts, and
+    // nothing here asserts that — `components/Elicit.ts` types both schemas
+    // where it declares them.
+    return ELICIT_PROPS;
+  }
   // The ordinary component's own schema, not a copy of it: a fragment writes
   // the same element an author does.
   return capability === "files:glob" ? GLOB_PROPS : PATH_PROPS;
@@ -282,6 +297,12 @@ export function capabilityProps(capability: FragmentCapability): PropsSchema {
  * asked to traverse anything.
  */
 export function capabilityReturns(capability: FragmentCapability): ReturnsSchema | undefined {
+  if (capability === "elicit:ask") {
+    // The author's `schema` is the contract core enforces against the answer, so
+    // what this binds is any JSON value — and declaring it is what makes `as`
+    // required, exactly as it is for the authored element.
+    return ELICIT_RETURNS;
+  }
   return capability === "files:glob" ? GLOB_RETURNS : undefined;
 }
 
@@ -292,7 +313,8 @@ export type FragmentCapability =
   | "file:write"
   | "file:delete"
   | "directory:ensure"
-  | "fetch";
+  | "fetch"
+  | "elicit:ask";
 
 /** The authored forms each capability is written in. */
 export const CAPABILITY_FORMS: Readonly<
@@ -304,6 +326,9 @@ export const CAPABILITY_FORMS: Readonly<
   "file:delete": ["self-closing"],
   "directory:ensure": ["paired"],
   fetch: ["self-closing"],
+  // The question is the content, so there is nothing a self-closing spelling
+  // could be asking.
+  "elicit:ask": ["paired"],
 });
 
 /**
@@ -432,6 +457,20 @@ function body(
 ) {
   if (capability === "fetch") {
     return fetchBody(capabilities, requests);
+  }
+  if (capability === "elicit:ask") {
+    // Canonical core's own body, not a copy of its behavior and not a lookup of
+    // its name: a generated question compiles the same schema, renders the same
+    // message, is identified in the journal the same way, and reaches a person
+    // through the same contextual Elicitation Api — so a REPL drawer answers it,
+    // a surrounding `<Answers>` region answers it without anybody being asked,
+    // and a replay restores the retained answer and contacts no provider.
+    //
+    // Which implementation this is cannot be chosen at document time. It is
+    // closed over here, like every other pinned body, so a same-named
+    // repository file, registration, declaration, middleware or separately
+    // loaded definition is never what a fragment runs.
+    return Elicit;
   }
   const files = capabilities.files;
   if (files === undefined) {

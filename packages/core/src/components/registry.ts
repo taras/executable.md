@@ -15,7 +15,7 @@
  * having to install them.
  */
 
-import type { ComponentRegistry, RegistryEntry } from "../types.ts";
+import type { ComponentRegistry, FunctionComponentDefinition, RegistryEntry } from "../types.ts";
 import { form as codeBlockForm, props as codeBlockProps } from "./CodeBlock.ts";
 import Elicit, { props as elicitProps, returns as elicitReturns } from "./Elicit.ts";
 import TempDir, { props as tempDirProps } from "./TempDir.ts";
@@ -110,9 +110,32 @@ function core(
   ];
 }
 
+/**
+ * The one name canonical core registers `<Elicit>` under.
+ *
+ * Stated here rather than spelled at each use, because two places depend on it
+ * being exactly this: the registration below, and the evaluation-profile entry
+ * that admits core's own answer for it to a generated fragment.
+ */
+export const ELICIT_COMPONENT = "Elicit";
+
+/**
+ * The exact definition canonical core registered for this name.
+ *
+ * Read by evaluation-profile capture, and by nothing else: a component-answer
+ * entry naming core's own identity is admitted only when what the import chain
+ * produced *is* this object. A registration a nested scope layered over, a
+ * repository component of the same name and a middleware's replacement are all
+ * other objects, so none of them receives the grant.
+ */
+export function coreComponentDefinition(name: string): FunctionComponentDefinition | undefined {
+  const entry = CORE_REGISTRY.get(name)?.default;
+  return entry === undefined ? undefined : entry.definition;
+}
+
 export const CORE_REGISTRY: ComponentRegistry = new Map<string, RegistryEntry>([
   core(
-    "Elicit",
+    ELICIT_COMPONENT,
     Elicit,
     parseJsonObject(elicitProps),
     {

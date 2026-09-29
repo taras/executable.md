@@ -785,3 +785,429 @@ describe("REPL model: the Agent histories it refuses", () => {
     expect(projected(events).turns).toHaveLength(4);
   });
 });
+
+/**
+ * Tier M3 — the scopes a declared component and its generated program own.
+ *
+ * Hand-built journals rather than executed ones, because what is under test is
+ * the reader: these rows state the exact records a run writes for a host-declared
+ * Markdown component and for the fragment it produced, and then doctor one member
+ * at a time. A model assembled from a guess would show a Plan's own turns and
+ * questions inside the entry that never asked them.
+ */
+const POSITION = "executablemd.source-position";
+const SCHEMA_FIELD = "executablemd.elicitation-schema";
+const PLAN_ORIGIN = "@executablemd/cli/Plan.md";
+const PLAN_SOURCE = "# Plan\n\nThe packaged Plan's own bytes.\n";
+const ENTRY_SOURCE = "<Plan>do the thing</Plan>\n";
+
+/** One recorded effect, as the runtime writes it. */
+function yielded(
+  description: { [key: string]: Json },
+  value: Json,
+  position?: { [key: string]: Json },
+  coroutine = "root",
+): DurableEvent {
+  return {
+    type: "yield",
+    coroutineId: coroutine,
+    description: position === undefined ? description : { ...description, [POSITION]: position },
+    result: { status: "ok", value },
+  } as DurableEvent;
+}
+
+/** Where an effect inside the packaged Plan's own source is recorded. */
+function insidePlan(): { [key: string]: Json } {
+  return { path: PLAN_ORIGIN, offset: 12, line: 4, column: 1 };
+}
+
+/** Where an effect inside generated source is recorded: a place, and no path. */
+function insideGenerated(): { [key: string]: Json } {
+  return { offset: 58, line: 4, column: 1 };
+}
+
+/** The closed `declared-markdown` selection a host's own component records. */
+function declared(overrides: { [key: string]: Json } = {}): Json {
+  return {
+    kind: "declared-markdown",
+    origin: PLAN_ORIGIN,
+    digest: "b2c3",
+    content: PLAN_SOURCE,
+    ...overrides,
+  };
+}
+
+/**
+ * One entry that admits `<Plan />`, which then asks one question of its own.
+ *
+ * The shape every row below starts from: the entry's own source, the import that
+ * admitted the declared component, and an effect recorded inside that
+ * component's source.
+ */
+function planJournal(
+  selection: Json = declared(),
+  options: { readonly twice?: boolean } = {},
+): DurableEvent[] {
+  const admission = yielded({ type: "import_component", name: "Plan" }, selection, {
+    path: "<eval>",
+    offset: 0,
+    line: 1,
+    column: 1,
+  });
+  return [
+    yielded(
+      { type: "import_component", name: "__root__" },
+      {
+        kind: "file",
+        path: "<eval>",
+        content: ENTRY_SOURCE,
+      },
+    ),
+    admission,
+    ...(options.twice === true ? [admission] : []),
+    yielded(
+      { type: "elicit", name: `elicit:${PLAN_ORIGIN}:4:1`, [SCHEMA_FIELD]: { type: "object" } },
+      { decision: "Approve" },
+      insidePlan(),
+    ),
+  ];
+}
+
+describe("REPL model: the declared sources it owns", () => {
+  it("M3: a declared component's retained origin and bytes become its scope", function* () {
+    const model = projected(planJournal());
+    const entry = model.entry;
+    if (entry === undefined) {
+      throw new Error("the journal admits one entry");
+    }
+
+    // The scope the import created, under the origin the record retained — the
+    // path every effect inside that component is recorded at — holding the exact
+    // bytes the record carried.
+    const plan = child(entry, "Plan-1");
+    expect(plan.kind).toBe("component");
+    expect(plan.path).toBe(PLAN_ORIGIN);
+    expect(plan.source).toBe(PLAN_SOURCE);
+    // And the question asked inside it belongs to it, not to the entry.
+    expect(plan.elicitations.map((one) => one.location)).toEqual([`${PLAN_ORIGIN}:4:1`]);
+    expect(entry.elicitations).toEqual([]);
+    yield* useTempFileCompiler();
+  });
+
+  it("M3: the optional exact disposition is read, and only as `true`", function* () {
+    const exact = projected(planJournal(declared({ exact: true })));
+    const entry = exact.entry;
+    if (entry === undefined) {
+      throw new Error("the journal admits one entry");
+    }
+    expect(child(entry, "Plan-1").source).toBe(PLAN_SOURCE);
+
+    // Anything else under that name is a record this version cannot read, so
+    // nothing owns what was recorded inside it.
+    expect(refusal(planJournal(declared({ exact: false })))).toContain("never admitted");
+    expect(refusal(planJournal(declared({ exact: "yes" })))).toContain("never admitted");
+    yield* useTempFileCompiler();
+  });
+
+  it("M3: a missing, malformed, repointed or duplicated source owns nothing", function* () {
+    // Missing: the selection retains no bytes at all.
+    expect(refusal(planJournal({ kind: "declared-markdown", origin: PLAN_ORIGIN }))).toContain(
+      "never admitted",
+    );
+    // Malformed: a member this version does not know, beside the four it does.
+    expect(refusal(planJournal(declared({ mode: "loose" })))).toContain("never admitted");
+    // Malformed: a member it knows, written as something else.
+    expect(refusal(planJournal(declared({ digest: 3 })))).toContain("never admitted");
+    // Repointed: the component admitted under one origin, and the effect
+    // recorded under another.
+    expect(refusal(planJournal(declared({ origin: "@executablemd/cli/Other.md" })))).toContain(
+      "never admitted",
+    );
+    // Duplicated: two admissions of the same origin, so which one owns the
+    // question cannot be decided.
+    expect(refusal(planJournal(declared(), { twice: true }))).toContain("more than once");
+    yield* useTempFileCompiler();
+  });
+
+  it("M3: a position naming both a path and a generated fragment is malformed", function* () {
+    // Two answers to "where was this written". A record carrying both is damage,
+    // and reading either of them would be choosing which damage to believe.
+    expect(
+      refusal([
+        ...planJournal(),
+        yielded(
+          { type: "elicit", name: "elicit:4:1", [SCHEMA_FIELD]: { type: "object" } },
+          { a: "x" },
+          { path: PLAN_ORIGIN, generatedSource: "gen-1", offset: 1, line: 4, column: 1 },
+        ),
+      ]),
+    ).toContain("cannot read");
+    yield* useTempFileCompiler();
+  });
+});
+
+/**
+ * Tier GS — the generated fragment a pathless effect belongs to.
+ *
+ * Generated source is not a file, so the work inside it is recorded with the
+ * identity of the admission that decided that source. These rows state that
+ * identity's exact behaviour: which candidate it chooses, and every way a history
+ * can fail to name one.
+ */
+
+/** One admitted fragment, as its own record and its own scope. */
+function admission(
+  id: string,
+  source: string,
+  coroutine = "root",
+  position: { [key: string]: Json } = insidePlan(),
+): DurableEvent {
+  return yielded(
+    { type: "generated_xmd", name: `generated:${id}` },
+    { decision: "admitted", source },
+    position,
+    coroutine,
+  );
+}
+
+/** One question asked inside generated source, which names its own fragment. */
+function askedInside(
+  id: string,
+  where: { readonly line: number; readonly coroutine?: string } = { line: 4 },
+): DurableEvent {
+  return yielded(
+    { type: "elicit", name: `elicit:${where.line}:1`, [SCHEMA_FIELD]: { type: "object" } },
+    { a: "x" },
+    { generatedSource: id, offset: 58, line: where.line, column: 1 },
+    where.coroutine ?? "root",
+  );
+}
+
+/** The entry, and the Plan scope every fragment below is admitted inside. */
+function scopes(model: ReplModel): ReplScope {
+  const entry = model.entry;
+  if (entry === undefined) {
+    throw new Error("the journal admits one entry");
+  }
+  return child(entry, "Plan-1");
+}
+
+describe("REPL model: which generated fragment owns pathless work", () => {
+  it("GS1: one fragment's own work projects under it", function* () {
+    const model = projected([
+      ...planJournal(),
+      admission("gen-a", "<Elicit>ask</Elicit>\n"),
+      askedInside("gen-a"),
+    ]);
+
+    const fragment = child(scopes(model), "generated-1");
+    expect(fragment.kind).toBe("generated");
+    expect(fragment.source).toBe("<Elicit>ask</Elicit>\n");
+    expect(fragment.elicitations.map((one) => one.location)).toEqual(["4:1"]);
+    yield* useTempFileCompiler();
+  });
+
+  it("GS2: two sequential fragments become the scopes their own ids name", function* () {
+    // Both asked at their own 4:1, so the effect names and the line and column
+    // collide exactly. What tells them apart is the identity each carries.
+    const model = projected([
+      ...planJournal(),
+      admission("gen-a", "first\n"),
+      askedInside("gen-a"),
+      admission("gen-b", "second\n"),
+      askedInside("gen-b"),
+    ]);
+
+    const plan = scopes(model);
+    const first = child(plan, "generated-1");
+    const second = child(plan, "generated-2");
+    expect([first.source, second.source]).toEqual(["first\n", "second\n"]);
+    expect(first.elicitations.map((one) => one.answer)).toEqual([{ a: "x" }]);
+    expect(second.elicitations.map((one) => one.answer)).toEqual([{ a: "x" }]);
+    expect(first.elicitations).toHaveLength(1);
+    expect(second.elicitations).toHaveLength(1);
+
+    // And the second fragment's work does not belong to the first even though
+    // the first was admitted earlier on the same coroutine.
+    const crossed = projected([
+      ...planJournal(),
+      admission("gen-a", "first\n"),
+      admission("gen-b", "second\n"),
+      askedInside("gen-b"),
+      askedInside("gen-a"),
+    ]);
+    const plans = scopes(crossed);
+    expect(child(plans, "generated-1").elicitations).toHaveLength(1);
+    expect(child(plans, "generated-2").elicitations).toHaveLength(1);
+    yield* useTempFileCompiler();
+  });
+
+  it("GS3: sibling admissions keep their own work whatever order they settle in", function* () {
+    // Two spawned children, each admitting its own fragment, and the second one
+    // finishing first.
+    const model = projected([
+      ...planJournal(),
+      admission("gen-left", "left\n", "root.0"),
+      admission("gen-right", "right\n", "root.1"),
+      askedInside("gen-right", { line: 4, coroutine: "root.1" }),
+      askedInside("gen-left", { line: 4, coroutine: "root.0" }),
+    ]);
+
+    const plan = scopes(model);
+    expect(child(plan, "generated-1").source).toBe("left\n");
+    expect(child(plan, "generated-2").source).toBe("right\n");
+    expect(child(plan, "generated-1").elicitations).toHaveLength(1);
+    expect(child(plan, "generated-2").elicitations).toHaveLength(1);
+
+    // Neither sibling's work reaches the other's scope, so a coroutine that is
+    // not the admission's and not beneath it owns nothing.
+    expect(
+      refusal([
+        ...planJournal(),
+        admission("gen-left", "left\n", "root.0"),
+        askedInside("gen-left", { line: 4, coroutine: "root.1" }),
+      ]),
+    ).toContain("is not part of");
+    yield* useTempFileCompiler();
+  });
+
+  it("GS4: a fragment that spawns keeps the work its descendants performed", function* () {
+    const model = projected([
+      ...planJournal(),
+      admission("gen-a", "<All>…</All>\n"),
+      askedInside("gen-a", { line: 4, coroutine: "root.0" }),
+      askedInside("gen-a", { line: 7, coroutine: "root.1.0" }),
+    ]);
+
+    const fragment = child(scopes(model), "generated-1");
+    expect(fragment.elicitations.map((one) => one.location)).toEqual(["4:1", "7:1"]);
+
+    // Ancestry is by segment, not by prefix: `root.1` encloses `root.1.0` and
+    // has nothing to do with `root.10`.
+    expect(
+      refusal([
+        ...planJournal(),
+        admission("gen-a", "spawned\n", "root.1"),
+        askedInside("gen-a", { line: 4, coroutine: "root.10" }),
+      ]),
+    ).toContain("is not part of");
+    const nested = projected([
+      ...planJournal(),
+      admission("gen-a", "spawned\n", "root.1"),
+      askedInside("gen-a", { line: 4, coroutine: "root.1.0" }),
+    ]);
+    expect(child(scopes(nested), "generated-1").elicitations).toHaveLength(1);
+    yield* useTempFileCompiler();
+  });
+
+  it("GS5: every way a history names no one fragment refuses whole", function* () {
+    // No admission at all.
+    expect(refusal([...planJournal(), askedInside("gen-a")])).toContain("never admitted");
+
+    // An identity that is present and empty, and one that is not a string.
+    const malformed: readonly Json[] = ["", 3];
+    for (const identity of malformed) {
+      expect(
+        refusal([
+          ...planJournal(),
+          admission("gen-a", "first\n"),
+          yielded(
+            { type: "elicit", name: "elicit:4:1", [SCHEMA_FIELD]: { type: "object" } },
+            { a: "x" },
+            { generatedSource: identity, offset: 58, line: 4, column: 1 },
+          ),
+        ]),
+      ).toContain("cannot read");
+    }
+
+    // Neither a path nor an identity, where an owned effect needs one.
+    expect(
+      refusal([
+        ...planJournal(),
+        admission("gen-a", "first\n"),
+        yielded(
+          { type: "elicit", name: "elicit:4:1", [SCHEMA_FIELD]: { type: "object" } },
+          { a: "x" },
+          { offset: 58, line: 4, column: 1 },
+        ),
+      ]),
+    ).toContain("neither a source path nor the generated fragment");
+
+    // Two admissions under one identity.
+    expect(
+      refusal([
+        ...planJournal(),
+        admission("gen-a", "first\n"),
+        admission("gen-a", "again\n"),
+        askedInside("gen-a"),
+      ]),
+    ).toContain("more than once");
+
+    // An admission that happens afterwards owns nothing that ran before it.
+    expect(
+      refusal([...planJournal(), askedInside("gen-a"), admission("gen-a", "first\n")]),
+    ).toContain("only afterwards");
+
+    // A refused admission creates no scope, so its id owns nothing.
+    expect(
+      refusal([
+        ...planJournal(),
+        yielded(
+          { type: "generated_xmd", name: "generated:gen-a" },
+          { decision: "refused", construct: "block" },
+          insidePlan(),
+        ),
+        askedInside("gen-a"),
+      ]),
+    ).toContain("never admitted");
+
+    // An admission this version cannot read refuses before anything is owned.
+    expect(
+      refusal([
+        ...planJournal(),
+        yielded(
+          { type: "generated_xmd", name: "generated:gen-a" },
+          { decision: "maybe" },
+          insidePlan(),
+        ),
+        askedInside("gen-a"),
+      ]),
+    ).toContain("generated fragment cannot be read");
+
+    // An admission whose durable name carries no identity owns nothing either.
+    expect(
+      refusal([
+        ...planJournal(),
+        yielded(
+          { type: "generated_xmd", name: "generated:" },
+          { decision: "admitted", source: "first\n" },
+          insidePlan(),
+        ),
+        askedInside("gen-a"),
+      ]),
+    ).toContain("does not name the admission it is");
+    yield* useTempFileCompiler();
+  });
+
+  it("GS6: projecting the same history twice reproduces the same hierarchy", function* () {
+    const events = [
+      ...planJournal(),
+      admission("gen-a", "first\n"),
+      askedInside("gen-a"),
+      admission("gen-b", "second\n"),
+      askedInside("gen-b", { line: 9 }),
+    ];
+    // The protocol's own text form, so what a cold process reads is what this
+    // read: the same ownership from the same bytes, with nothing live involved.
+    const one = projected(events);
+    const two = projected(copied(events));
+
+    expect(two.transcript).toEqual(one.transcript);
+    expect(two.checkpoints).toEqual(one.checkpoints);
+    expect(scopes(two).scopes.map((scope) => [scope.key, scope.source])).toEqual(
+      scopes(one).scopes.map((scope) => [scope.key, scope.source]),
+    );
+    expect(scopes(two).scopes.map((scope) => scope.elicitations.length)).toEqual([1, 1]);
+    yield* useTempFileCompiler();
+  });
+});

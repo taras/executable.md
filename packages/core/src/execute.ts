@@ -151,7 +151,7 @@ import {
 import type { AnswerIdentity, ImportTier } from "./components/component-resolution.ts";
 import type { ExecutionEnvironment } from "./execution-environment.ts";
 import { PROTECTED_COMPONENTS, ProtectedImports } from "./components/protected.ts";
-import { CORE_ORIGIN } from "./components/registry.ts";
+import { coreComponentDefinition, CORE_ORIGIN } from "./components/registry.ts";
 import { CORE_REVISION } from "./generated-xmd.ts";
 import { rootSyntaxReference } from "./syntax-reference.ts";
 import { capturedDocumentation } from "./documentation-api.ts";
@@ -779,6 +779,20 @@ function differentAnswer(name: string, expected: FragmentIdentity, stated: Answe
 }
 
 /**
+ * What canonical core itself holds for this name, or nothing.
+ *
+ * A protected component's implementation is the one this execution built; an
+ * ordinary core component's is the definition core registered. Both are core's
+ * own object, and the identity comparison is the whole check: an answer that is
+ * anything else — a repository component of the same name, a registration a
+ * nested scope layered over, a middleware's replacement — is not this, so it
+ * receives no canonical claim and the entry refuses it.
+ */
+function sealedByCore(inputs: ImportInputs, name: string): FunctionComponentDefinition | undefined {
+  return inputs.guarded.get(name) ?? coreComponentDefinition(name);
+}
+
+/**
  * Resolve every provider-backed name this profile admits, once, before the root
  * import and before any document code exists.
  *
@@ -842,7 +856,7 @@ function* resolveComponentAnswers(
           if (
             canonicalProvider === undefined ||
             !canonical.has(name) ||
-            answer !== inputs.guarded.get(name)
+            answer !== sealedByCore(inputs, name)
           ) {
             return answer;
           }

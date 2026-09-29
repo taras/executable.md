@@ -4232,9 +4232,38 @@ capture.
 **The ordinary read table is File, Glob and canonical Syntax.** `xmd run` and
 every `host="run"` child state one profile: `read` holds the self-closing
 `<File />`, the self-closing `<Glob />` and canonical `<Syntax />`, and `write`
-holds the paired `<File>…</File>` and the self-closing `<File.Delete />`
-unchanged. A `read` selection therefore never reaches a write form, and
-`<Fetch>` remains absent rather than admitted with an empty ceiling.
+holds the paired `<File>…</File>`, the self-closing `<File.Delete />` and paired
+canonical `<Elicit>`. A `read` selection therefore never reaches a write form,
+and `<Fetch>` remains absent rather than admitted with an empty ceiling.
+
+`<Elicit>` is in the write table because asking is not reading. A fragment that
+may change something may also ask the person first — which is what makes
+"preview this, then confirm it" a program an Agent can write — while a `read`
+selection promises nobody will be interrupted. It is admitted at canonical core's
+own origin, key and revision, in its paired spelling only: the question is the
+content, so a self-closing one would be a request with nothing in it.
+
+It is a *pinned capability*, not a name the fragment resolves. Preflight selects
+it where it finds an `<Elicit>` occurrence under a `write` selection, and the body
+it selects is canonical core's own `<Elicit>` — closed over before any document
+code runs, exactly as the body behind `<File>` is. No component name is resolved
+for it at any point: nothing is looked up before the root import, nothing is
+looked up at invocation, and middleware answering a generated import with a body
+of its own is refused, because only canonical execution answers one. A same-name
+repository, registered, declared, middleware or separately loaded `Elicit`
+therefore receives no generated permission and never runs — including the
+workflow host's own suspension replacement, which continues to answer *authored*
+`<Elicit>` in a run exactly as it did. An execution whose fragment never writes
+the element resolves nothing and is unaffected by any of them.
+
+What stays contextual is the interaction and only the interaction. The pinned
+body reaches the Elicitation Api lexically in scope where the fragment runs, so
+the host, an enclosing `<Answers>` region or the established missing-provider
+refusal owns how a person is asked — exactly as for an authored `<Elicit>`. Its
+validated answer is retained by the ordinary `elicit` durable operation, may drive
+a following write through ordinary bindings, and is restored on replay without
+contacting a provider. The `generated_xmd` record keeps the component identity and
+the admitted form and nothing about the answer.
 
 An admitted `<Glob />` is the same element an author writes. Its props, return
 contract, source rules and sanitized failure sentence are one shared definition
@@ -5324,10 +5353,11 @@ function* getExpansion(): Operation<Expansion>;
 `getExpansion()` answers with a detached, frozen snapshot, and answers with the
 same object throughout one live expansion. `name` is the authored tag name,
 independent of which repository, registered or built-in component resolved it.
-`position` is the opening tag's source position, carrying `path`, `offset`,
-`line` and `column`; `path` is absent for markdown scanned at runtime, which
-belongs to no file, and `position` itself is absent for an element that carries
-none. A nested expansion covers the enclosing one, and leaving it uncovers that
+`position` is the opening tag's source position, carrying `offset`, `line`,
+`column` and the one source it names — `path` for a file, or `generatedSource`
+for an element inside admitted generated source. Both are absent for markdown
+scanned at runtime, which belongs to no durable source, and `position` itself is
+absent for an element that carries none. A nested expansion covers the enclosing one, and leaving it uncovers that
 one again. Nothing else about the expansion is reachable — not the element, its
 props, its bindings, its projected content, the definition resolution selected,
 or any live scope.
@@ -9905,8 +9935,8 @@ interface PluginInstallation {
 
 `Plugin(input)` is the canonical constructor and preserves the value it is
 given. A selected module's default export is its Plugin. `command` is the
-normalized public top-level command — `run`, `plan`, `test`, `syntax`, `upgrade`
-or `workflow`, with the shorthand document form reported as `run` — and `args`
+normalized public top-level command — `run`, `plan`, `test`, `syntax`, `upgrade`,
+`workflow` or `repl`, with the shorthand document form reported as `run` — and `args`
 is a frozen copy of the original argv, taken before `--plugin` extraction or any
 other scanner changed it. The internal `test-agent` worker mode, `--help` and
 `--version` install no Plugin and load no module.
@@ -10746,6 +10776,23 @@ replay. The complete description crosses the journal's security filter.
 Workflow history parses the optional field as a `SourcePosition` and never
 reconstructs it from an expansion ID or current source. Root, Close and
 trusted-host events may have no authored source.
+
+A position names **one** source. A file states `path`. An operation inside
+admitted generated source states `generatedSource`: the id that fragment was
+admitted under, which is the `generated_xmd` record's own `generated:{id}` name.
+Generated text is not a file, so there is no path for it to name, and the
+identity is what lets a reader say which fragment performed a given effect
+without inferring it from journal order, from an effect's name or from anything
+live. Dynamic text that belongs to no durable source states neither member. Both
+members together is malformed history, and a reader refuses the record rather
+than choosing between them; `offset`, `line` and `column` are unchanged and are
+relative to the source the position names.
+
+Whole-fragment preflight is where the member is decided: the scan it performs
+over the candidate text stamps the request id on every executable position in
+that fragment, before the fragment performs anything. Nothing watches the
+expansion to attribute effects afterwards, and the stamp ends with the
+fragment's own scanned positions.
 
 | Operation | Effect type | Effect name | Notes |
 |-----------|------------|-------------|-------|
@@ -12667,6 +12714,7 @@ Defined in [Workflow workspaces](./workflow-workspace-spec.md) §8.4.
 | WGAC11 | Explicit composition | A fragment binds read results locally, composes selected values through Json, and renders no value or mutation receipt it did not explicitly render |
 | WGAC12 | Committed mutations | A completed replay of a write-enabled document journals nothing new, performs no second mutation, and leaves the retained content |
 | WGAC16 | Bundled continuation | `<Evaluate>` inside a committed bundled Markdown component, then a parent `<File>` write and the real `<Elicit>` outside it, for a generated read and a generated write alike: the real start suspends holding the exactly ordered `generated_xmd → nested workspace_file → parent workspace_file → suspension_request` subsequence; answer delivery and the completed resume leave the journal counts, that subsequence, the Workspace root-publication count and the authoritative current root unchanged; and the delivered value reaches the document after the wait. `API.Files` component calls are not evidence here — re-expansion legitimately enters that boundary before the durable effect restores |
+| WGAC18 | A generated question is the host's to admit | This host's generated write table states no question, so a fragment writing `<Elicit>` under `allow={["write"]}` is refused for a component it did not admit, with nothing asked and nothing performed; a host that states the entry admits the same fragment. The workflow's own suspension replacement for the authored element is unaffected either way — it answers an authored `<Elicit>` in a run, and a generated one never resolves a name for it to shadow |
 | WGAC17 | Directory mutation permission | `allow={["write"]}` admits the versioned paired `<Dir>` and intentionally authorizes its persistent recursive creation; a continuation retaining the former `@executablemd/workflow/composition#Dir` refuses before generated execution and creates nothing, while an unchanged current admission replays without a second ensure |
 
 ### Tier WAL — The workflow Agent observation loop
@@ -13411,7 +13459,7 @@ Plugin is the run it always was.
 | PL2 | Module admission | An object with a non-empty `name` and an absent or callable `install` is admitted; a non-object, a missing, empty or non-string name, and a non-callable `install` each refuse naming the specifier and the member that failed |
 | PL2a | Admission returns the value | What comes back is the admitted object itself: members outside the contract survive, `install` is the same function the module exported, and calling it through admission gives it the receiver its own module gave it |
 | PL3 | The flag grammar | Both spellings are read in occurrence order, only those tokens are removed, the scan stops at `--`, the original argv is retained frozen, and a missing or option-shaped value refuses before anything loads |
-| PL4 | The command a Plugin is told | Each public command reports its own name and the shorthand document form reports `run`; help, `--version` and the internal worker mode install no Plugin and load no module |
+| PL4 | The command a Plugin is told | Each public command reports its own name — `repl` included — and the shorthand document form reports `run`; help, `--version` and the internal worker mode install no Plugin and load no module |
 | PL5 | Order composes | The bundled Plugin comes first where the command's profile carries it, then the repeated `--plugin` occurrences in written order; the first Plugin installed is the outermost `Document` wrapper, and reversing the selection reverses the composition behind the prefix |
 | PL6 | One name, one Plugin | Two selections claiming one Plugin name refuse before the first `install()` runs, whichever modules they came from |
 | PL7 | The active list | Every Plugin, including the first, reads the complete frozen list — bundled value first where the profile carries it — and a snapshot is not the installed array |
@@ -13426,7 +13474,7 @@ Plugin is the run it always was.
 | PL14 | The key, not the name | An Api built under the bare names `Document`, `RootMetadata` or `ActivePlugins` composes nothing and observes nothing; one built under the published key composes, including from a second loaded copy inside the compiled binary |
 | PL15 | Selection by package | A bare specifier resolves in the invocation directory's package environment, and the Plugin's own name is what identifies it — not the package or module it came from |
 | PL16 | Cancellation | A command halted while a Plugin is still installing releases what the Plugins before it acquired, installs nothing after it, and stays a cancellation; a scope whose body and teardown both fail reports exactly what it reported before Plugins existed |
-| PL17 | One bundled Plugin, and nothing else by default | A command that names no `--plugin` installs exactly the bundled `@executablemd/git` where its profile carries it — `run`, `plan`, `syntax` and workflow `start`/`resume`/`fork` — and nothing at all for `xmd test`, `upgrade` and a workflow management action; an unselected Plugin such as the review graph is absent from the symbols and from a run until it is named, and present in both once it is |
+| PL17 | One bundled Plugin, and nothing else by default | A command that names no `--plugin` installs exactly the bundled `@executablemd/git` where its profile carries it — `run`, `plan`, `syntax`, `repl` and workflow `start`/`resume`/`fork` — and nothing at all for `xmd test`, `upgrade` and a workflow management action; an unselected Plugin such as the review graph is absent from the symbols and from a run until it is named, and present in both once it is |
 | PL19 | The reserved selector | `--plugin git` names the bundled value rather than a module: it loads nothing, and writing it once or repeatedly leaves one `@executablemd/git` first in the active list. It cannot give a command a profile it does not have — `--plugin git` before a workflow management action or `xmd test` still installs none |
 | PL20 | The selector is not the name | `--plugin @executablemd/git` is an ordinary specifier: it loads, and a module claiming the bundled Plugin's name is refused as a duplicate like any other collision. Identity-based idempotence belongs to the host's own selector for its own value, and a nested run child prefixing the bundled value drops it by identity so an impostor still collides |
 | PL21 | Test isolation | The outer `xmd test` root carries no bundled Plugin and resolves none of its names; a nested `<Execution host="run">` child assembles the run profile in its own scope and resolves all of them, and does not inherit what its parent declined |

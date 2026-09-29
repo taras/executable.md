@@ -3,6 +3,7 @@ import { expect } from "@executablemd/test-support/expect";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import { useStubFs } from "@executablemd/runtime/test";
 import { scanSegments } from "../src/scanner.ts";
+import { SOURCE_POSITION_FIELD, sourceDescription } from "../src/source-position.ts";
 import { getExpansion } from "../src/expansion.ts";
 import { registerComponents } from "../src/components/registration.ts";
 import { execute } from "../src/execute.ts";
@@ -135,5 +136,65 @@ describe("source positions", () => {
       line: 5,
       column: 1,
     });
+  });
+});
+
+/**
+ * Tier GS — a position that names a generated fragment instead of a file.
+ *
+ * Generated source has no path, so the scanner stamps the admission the text was
+ * decided under. These rows are about the two shapes a position may have and the
+ * one it may not.
+ */
+describe("generated source positions", () => {
+  it("GS1: a generated scan stamps the fragment, and no path", function* () {
+    const [ask] = componentsOf(
+      scanSegments("<Elicit>ask</Elicit>\n", {
+        generatedSource: "gen-a",
+        baseOffset: 0,
+        baseLine: 1,
+      }),
+    );
+
+    expect(ask?.position).toEqual({
+      path: undefined,
+      generatedSource: "gen-a",
+      offset: 0,
+      line: 1,
+      column: 1,
+    });
+    yield* useStubFs({});
+  });
+
+  it("GS1: a file scan stamps a path and no fragment, and a dynamic scan neither", function* () {
+    const [named] = componentsOf(
+      scanSegments("<Greeting />\n", { path: "Doc.md", baseOffset: 0, baseLine: 1 }),
+    );
+    expect(named?.position?.generatedSource).toBe(undefined);
+    expect(named?.position?.path).toBe("Doc.md");
+
+    const [dynamic] = componentsOf(scanSegments("<Greeting />\n"));
+    expect(dynamic?.position?.generatedSource).toBe(undefined);
+    expect(dynamic?.position?.path).toBe(undefined);
+    yield* useStubFs({});
+  });
+
+  it("GS1: the description an effect carries holds whichever source it has", function* () {
+    // The durable field is the whole of what a later reader gets, so it carries
+    // the fragment exactly as the position does — and omits the member the
+    // position does not have.
+    expect(sourceDescription({ generatedSource: "gen-a", offset: 58, line: 4, column: 1 })).toEqual(
+      {
+        [SOURCE_POSITION_FIELD]: { generatedSource: "gen-a", offset: 58, line: 4, column: 1 },
+      },
+    );
+    expect(sourceDescription({ path: "Doc.md", offset: 1, line: 1, column: 1 })).toEqual({
+      [SOURCE_POSITION_FIELD]: { path: "Doc.md", offset: 1, line: 1, column: 1 },
+    });
+    expect(sourceDescription({ offset: 1, line: 1, column: 1 })).toEqual({
+      [SOURCE_POSITION_FIELD]: { offset: 1, line: 1, column: 1 },
+    });
+    expect(sourceDescription(undefined)).toEqual({});
+    yield* useStubFs({});
   });
 });
