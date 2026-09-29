@@ -136,7 +136,7 @@ and categorization rather than clarify them, so both stay exactly as written.
 | `JournalProvenance` | a non-operational, equality-only witness that a live publication stream descends from the exact journal backend a provider selected for one workflow run; it grants no append, read, execution, publication or reconciliation capability, and is meaningful only because the provider retains the witness it established and later requires exact equality |
 | result object | the value a component binds instead of failing: `{ok: true, value}` or `{ok: false, …}`, whose failure members the component declares |
 | syntax symbols | the complete, versioned description of what a document may write in one directory under one host profile: every structural construct the engine reserves, and the one implementation selection chooses for every other name. It is observation — describing an environment installs no operational state, runs nothing and journals nothing — and it is produced once per request and projected, never rediscovered per format. `xmd syntax` prints one for an environment nobody is running; canonical `<Syntax />` renders one for the site an element was written at, from the same construction and the same Markdown renderer |
-| execution environment | the private bundle of services and records one execution supplies while its document expands: what resolves a name, what routes it to a retained implementation, what the execution declared, and the records it keeps about its own identities, forms, vocabulary and source output. The execution builds it from what it captured and admitted, owns it, and passes it by value through canonical expansion — never through a context, because a context resolves by name and a name is not a secret. An expansion driven directly is handed none at all, which is what "nothing is installed here" means; there is no partial one. Its shape is an architecture and product boundary |
+| execution environment | the private bundle of services and records one execution supplies while its document expands: what resolves a name, what routes it to a retained implementation, what the execution declared, and the records it keeps about its own identities, forms, vocabulary and source output. The execution builds it from what it captured and admitted, owns it, and passes it by value through canonical expansion — never through a context, because a context resolves by name and a name is not a secret. An expansion driven directly is handed none at all, which is what "nothing is installed here" means; there is no partial one. Its shape is an architecture and product boundary, which is why the resolution an execution performs for one *import* is not on it: that terminal is handed to expansion by hand, as an internal argument beside this bundle, named by no entry point and reachable only by having been given it |
 | syntax reference | the engine-owned lexical answer to "what may a document write here", carried by value on canonical core's execution environment beside what resolves an import. The execution builds one at its root from the selection inputs it captured before any installation, middleware or document code ran, or from the one set of symbols a trusted host stated for its profile; a trusted canonical evaluation boundary replaces it for the subtree it evaluates. It answers with text and decides nothing: a component the symbols name is not a component anything may run |
 | run profile declarations | the component registrations a first-party package makes, held as plain values apart from the middleware, providers, activation and launchers its installer also arranges. The installer registers exactly those values and inspection reads exactly those values, so what a run installs and what the symbols report cannot drift |
 | Plugin | trusted code installed once before an execution imports a root document. XMD bundles exactly one — `@executablemd/git` — and activates it for the run-profile commands: `run`, `plan`, `syntax`, and `workflow start`, `resume` and `fork`. The `xmd test` root is not one of them, because a harness that quietly gained the repository vocabulary would be claiming names its children are entitled to shadow; a nested `<Execution host="run">` child assembles the profile for itself rather than inheriting what its parent declined. Everything else an operator selects with `--plugin`, and a package that happens to be installed stays inert until it is named. A plain structural value carrying a name and one optional `install`; what it contributes is the existing `ExecutionInstallation` members, and what it composes through are the three stable contextual APIs below. Selecting one runs its module, and selected Plugin code can execute whatever the surrounding runtime permits: it is trusted, and it is not sandboxed |
@@ -1743,8 +1743,8 @@ component neither imports it nor grants its effects.
 Bindings and structural constructs are engine-owned language syntax and require
 no profile entry. Every built-in construct is available inside a generated
 fragment with its ordinary semantics — `Content`, `Output`, `Return`, `Let`,
-`Each`, `If`, `Else`, `Switch`, `Case`, `Loop`, `Break`, `PrintErrors`,
-`Answers` and `Answer` — decided by the same source rules ordinary validation
+`Each`, `If`, `Else`, `Switch`, `Case`, `Loop`, `Break`, `All`, `Spawn`,
+`PrintErrors`, `Answers` and `Answer` — decided by the same source rules ordinary validation
 and expansion read, so a construct means one thing whether a person or an Agent
 wrote it. Preflight dispatches a reserved name to those rules before the
 admitted table is consulted, which is why a construct is never reported as a
@@ -1766,8 +1766,10 @@ nothing it binds survives it, because that body may run no times at all — only
 `<Case>` branches of a `<Switch>` are checked from one incoming snapshot, so no
 alternative supplies a binding to another; the union of what they can produce
 becomes visible afterwards, which keeps reading a binding only one arm makes a
-runtime failure rather than a preflight refusal. `<Loop>`, `<PrintErrors>` and
-`<Let>` bodies read and write the enclosing environment. Constructs keep their
+runtime failure rather than a preflight refusal. Each `<Spawn>` under an `<All>`
+is checked from that same incoming snapshot and contributes nothing back, which
+is the binding contract the children actually run under. `<Loop>`,
+`<PrintErrors>` and `<Let>` bodies read and write the enclosing environment. Constructs keep their
 exact spelling in the retained source, never join the retained named-component
 list, and change no record version.
 
@@ -3197,6 +3199,9 @@ for the loop it exits.
 One state exists per execution of one value body. `<If>`, `<Switch>`, `<Loop>`,
 `<Each>` and `<Let>` keep the ambient one; a component invocation hides the caller's from the
 invoked body, so a component's own `<Return>` satisfies its own declaration; a
+`<Spawn>` passes none either, and the shared rule refuses the `<Return>` that
+would have reached for one, so concurrent children cannot race to claim a value
+owned outside their `<All>`; a
 nested value body installs a separate one, and both executions stand; and
 content the caller projected restores the caller's, through a Markdown
 `<Content />` and a function component's `content()` alike, with every
@@ -3278,6 +3283,64 @@ one identity. Neither construct is durable state: they append no journal event, 
 partial replay rebuilds the selection through ordinary expansion while completed
 effects in the chosen branch replay from their own records, and a completed
 document replay reuses the retained result without expanding anything.
+
+### Concurrent spawned children
+
+`<All>` and `<Spawn>` are the engine's own syntax, not components, so core owns
+what they mean and no repository file, registration, bundle or Plugin can supply
+either name. `<All>` runs its direct `<Spawn>` children at the same time and
+waits for all of them. It takes no props, produces no value, and requires at
+least two spawns — one alone is the sequential document it was already written
+as.
+
+The whole structure is decided from source before a child is constructed: the
+paired forms, the absent props, the two-spawn minimum, that only blank text sits
+between the spawns, that no `<Spawn>` is written outside its direct `<All>`, and
+that no `<Return>` or `<Break>` inside a spawn reaches for an owner outside it.
+One shared rule states all of it, and expansion, non-executing validation and
+the generated-fragment preflight read the same result — so a malformed construct
+starts no child anywhere, including in a fragment an Agent generated.
+
+**Concurrent expansion shares immutable inputs and nothing else.** Every child
+gets a binding environment and live overlay snapshotted from the one that
+reached the `<All>`, an eval scope of its own, a fresh block counter, a private
+output buffer, its own checked-failure ledger, a copied hide set and an
+expansion path extended by its authored ordinal. Nothing merges back, so a name
+one child binds or rebinds is invisible to its siblings and to the work after
+`</All>`, and a resource it retains is released when it ends. The outer
+`<Return>` and `<Loop>` owners are cleared at the boundary; a loop or value
+component created wholly inside a child establishes its own.
+
+**Durable identity comes from the source, never from the schedule.** The
+existing durable structured-concurrency substrate is the implementation: in
+source order, before any child starts, each `<Spawn>` receives one child
+coroutine of the one that reached the `<All>`, and nesting produces the existing
+hierarchical identity. Effects inside a child keep their ordinary descriptions
+under that coroutine, so two children may derive the same local block id without
+colliding, and work after `</All>` continues on the parent counter it would have
+had without any child. Each successful child closes with the ordered `{ text, exact }` runs it
+rendered. Exact presentation is a provenance recorded against the segment
+objects expansion marked, and those segments do not cross the join — so the runs
+are what carries it, live and on replay alike, and a retained close that does
+not read as that shape fails the run instead of rebuilding part of a document.
+
+**Output is authored order; the journal is completion order.** A child emits
+into its private buffer, and `<All>` appends the renderings to its caller's
+region only after every child has succeeded. Which child finished first may
+decide when its records append and never what the document renders. A complete
+replay reads the child closes and runs no spawned work; a partial replay
+restores the children that closed and resumes only the unrecorded ones under the
+same identities. Inserting, removing or reordering spawns is a definition change
+and takes the existing divergence path rather than being reassigned by position
+or completion time.
+
+**Failure is the existing fail-fast join.** The first child failure fails the
+`<All>`, cancels every unfinished sibling and does not return until all of them
+have finished tearing down. No private buffer is emitted, records acknowledged
+before the failure stay durable, and interrupted work is never recorded as
+complete. Cancelling the parent takes the same ownership path, and no task,
+subscription, retained resource or buffer survives its spawn. No scheduler, no
+new record family and no document-visible concurrency control is introduced.
 
 ## Foreground commands
 
@@ -3930,7 +3993,8 @@ matching name says nothing about which registration answered. What settles it is
 the selection itself, recorded where it is made:
 
 - expansion opens an **execution-private import frame** before it asks the
-  public import chain anything;
+  public import chain anything, and hands it to the terminal it builds for that
+  one import;
 - canonical core resolution records, inside that frame, the exact name it was
   asked for and the exact implementation it selected — the function object this
   execution built from the host's factory, by identity;
@@ -3947,10 +4011,62 @@ provenance and no permission: what a handler decides is which implementation
 runs, and an implementation running where canonical resolution did not select it
 names nothing. Nested and re-entrant frames stay contained, because a frame is
 opened per import and settled the moment that import answers, however it
-answered; concurrent interleaving leaves more than one selection in a frame and
-so yields no domain, which is the safe direction; and a replay decides the same
-way, against this execution's own factory-created implementation rather than
-against anything a previous run recorded.
+answered; and a replay decides the same way, against this execution's own
+factory-created implementation rather than against anything a previous run
+recorded.
+
+**A frame is owned by the import's own terminal, not by an Effection scope and
+not by the execution.** `<All>` gives two `<Spawn>` children imports in flight at
+the same time, so "the frame this selection belongs to" can be neither "the last
+one anybody opened" nor "the one opened where this code happens to be running".
+Each import creates its own frame and its own `Component` Api descriptor whose
+core `importComponent` handler closes over that frame; the engine asks through
+that descriptor, and the selection is recorded by the terminal `next` reaches:
+
+- the descriptor carries the same stable Api name as the public one, so it
+  receives the same installed middleware in the same order — **a stable name
+  shares middleware, and shares no terminal authority**;
+- the resolution that terminal performs is the execution's own, handed to
+  expansion as an internal argument beside the execution environment rather than
+  on it, and carried by every recursion that can invoke a component — so a
+  component body, a branch and a spawned child resolve the way their execution
+  does, while an expansion driven directly and a generated fragment are handed
+  none and answer through the ordinary public chain;
+- middleware may observe, delegate, replace or refuse the answer, and may run
+  `next` in any descendant scope: `next` still terminates in the terminal that
+  dispatch was created with, so delegating through a scope of its own keeps the
+  identity;
+- sibling spawns resolve through different descriptors, so one spawned child's
+  selection cannot land in another's frame, and closing or cancelling one
+  neither clears nor authorizes the other;
+- nesting is unchanged and needs no stack: an inner authored import is its own
+  dispatch with its own terminal, so the outer one is neither shadowed nor
+  inferred from scheduling;
+- a handler that starts an import of its own by calling the public operation is
+  making a **separate** import, not delegating the authored one — it may resolve
+  normally, and it grants the authored import no identity; and
+- two selections in *one* frame — a handler delegating twice — still yield no
+  domain, which remains the safe direction.
+
+The frame is a closure and nothing else: it is in no map, under no key, and
+reachable only from the dispatch that opened it. Nothing is published, keyed or
+read from — not a scope, not a context, not a token, and not a durable coroutine
+id, which non-journaled expansion does not have. A counterfeit descriptor made
+with the same Api name changes only what is asked through that counterfeit; it
+cannot become the terminal of the engine's own call. Live expansion and replay
+decide this the same way.
+
+Canonical answer windows are owned the same way and by the same kind of value —
+an explicit object rather than a scope — but serially: component answers are
+resolved in one capture phase before any document expands, so one window is open
+at a time. Each provider request captures that window object before its handler
+runs, a claim states it back explicitly, and a handler delegating through a
+descendant scope answers the resolution it was opened in. One installation may
+answer more than one import with the same definition — a reusable provider owns
+one object and a claim is per window — and a second, *different* answer in
+either still refuses. Concurrent document imports happen after capture, with no
+window open at all: such an import may be answered as ordinary middleware, and
+acquires no profile identity.
 
 The engine then mints one issuance per invocation, carrying that domain — or
 none — the authored name for what a refusal says, and the frame the body is

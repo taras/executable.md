@@ -13,7 +13,7 @@
  * middleware installation) execute before children's code blocks.
  */
 
-import { ensure, Err, Ok, scoped, useScope, withResolvers } from "effection";
+import { all, ensure, Err, Ok, scoped, useScope, withResolvers } from "effection";
 import type { Operation, Result, Stream } from "effection";
 import type {
   FunctionComponent,
@@ -39,6 +39,7 @@ import {
   validateOutputPlacement,
 } from "./body-structure.ts";
 import {
+  allStructure,
   breakElementViolations,
   eachCaptureBinding,
   eachItemBinding,
@@ -56,10 +57,11 @@ import {
   strayBreakMessage,
   strayCaseMessage,
   strayElseMessage,
+  straySpawnMessage,
   strayStructuralMessage,
   switchStructure,
 } from "./structural-rules.ts";
-import type { StructuralViolation, SwitchCase } from "./structural-rules.ts";
+import type { SpawnRegion, StructuralViolation, SwitchCase } from "./structural-rules.ts";
 import {
   asBindingViolation,
   asExpressionViolation,
@@ -77,6 +79,7 @@ import {
   evalScope,
   handleFailure,
   importComponent,
+  importThroughTerminal,
   raise,
 } from "./component-api.ts";
 import {
@@ -92,7 +95,7 @@ import {
   SegmentCauses,
   useSegmentCauses,
 } from "./errors.ts";
-import type { InvocationForm } from "./invocation-identity.ts";
+import type { ImportSelection, InvocationForm } from "./invocation-identity.ts";
 import { structuralPlacement } from "./execution-declarations.ts";
 import type {
   AdmittedStructural,
@@ -102,8 +105,9 @@ import type {
 } from "./execution-declarations.ts";
 import { regionStream } from "./expansion-region.ts";
 import { emissions } from "./render.ts";
+import type { Emission } from "./render.ts";
 import { printsErrors, usePrintErrors } from "./component-failures.ts";
-import { containedLedger, recoveringLedger } from "./component-failures.ts";
+import { containedLedger, recoveringLedger, refuseCheckedFailure } from "./component-failures.ts";
 import type { CheckedFailures } from "./component-failures.ts";
 import type { ImportedDefinition } from "./components/component-resolution.ts";
 import type { ExecutionEnvironment } from "./execution-environment.ts";
@@ -129,8 +133,15 @@ import { createReturnBody, missingReturnMessage } from "./return-flow.ts";
 import type { ReturnBody } from "./return-flow.ts";
 import { unbox, useEvalScope } from "@effectionx/scope-eval";
 import type { EvalScope } from "@effectionx/scope-eval";
+import {
+  DurableContext,
+  durableAll,
+  ephemeral,
+  StaleInputError,
+} from "@executablemd/durable-streams";
+import type { Workflow } from "@executablemd/durable-streams";
 import { SchemaValidationError, validateProps, validateReturnValue } from "./validate.ts";
-import { parseJson } from "./json.ts";
+import { isJsonObject, parseJson } from "./json.ts";
 import { healSegment } from "./heal.ts";
 import { scanSegments } from "./scanner.ts";
 import { declareChildAnswers, expandAnswers, strayAnswerError } from "./answers.ts";
@@ -160,6 +171,35 @@ export { validateBindingName } from "./live-env.ts";
 export interface BlockCounter {
   next(): number;
 }
+
+/**
+ * How expansion reaches the resolution its execution performs for one import.
+ *
+ * Execution owns the resolver and hands it to expansion by hand, as an argument
+ * beside the environment and never on it: the environment is the architecture
+ * boundary a host's installation and a fragment's narrowed table are described
+ * against, and an execution-private terminal belongs in neither. It is not
+ * exported from a package entry point, installed in no Context or contextual Api,
+ * and stored in no module-scoped table — the only way to have it is to be handed
+ * it.
+ *
+ * Every internal expansion function carries it beside the environment, so a
+ * recursion that forgot it would fail to compile rather than quietly expanding a
+ * component body, a branch or a spawned child without the execution's resolution.
+ * Two callers legitimately pass none: expansion driven directly, which resolves
+ * through the ordinary public Component Api, and a generated fragment, whose
+ * narrowed provider answers its imports and which inherits nothing from the
+ * document execution that admitted it.
+ *
+ * The `selection` is the asking import's own frame (`invocation-identity.ts`).
+ * Resolution records what it selected there, which is what makes the answer this
+ * element's rather than whichever import resolved last.
+ */
+export type ComponentImportTerminal = (
+  name: string,
+  position: Readonly<SourcePosition> | undefined,
+  selection: ImportSelection | undefined,
+) => Operation<ComponentDefinition | FunctionComponentDefinition>;
 
 export function createBlockCounter(): BlockCounter {
   let id = 0;
@@ -246,6 +286,7 @@ function expandChildrenScoped(
   /** Whether the region that caused this expansion grants recovery (§3.6). */
   checkedFailures: CheckedFailures | undefined,
   environment: ExecutionEnvironment | undefined,
+  imports: ComponentImportTerminal | undefined,
   returnBody: ReturnBody | undefined,
 ): Operation<Segment[]> {
   return scoped(function* () {
@@ -269,6 +310,7 @@ function expandChildrenScoped(
       0,
       checkedFailures,
       environment,
+      imports,
       returnBody,
     );
   });
@@ -325,6 +367,7 @@ interface ProjectionState {
    */
   checkedFailures: CheckedFailures | undefined;
   environment: ExecutionEnvironment | undefined;
+  imports: ComponentImportTerminal | undefined;
 }
 
 interface ProjectionFrame {
@@ -469,6 +512,7 @@ function createProjectionHandle(state: ProjectionState): ProjectionHandle {
             0,
             state.checkedFailures,
             state.environment,
+            state.imports,
             options.returnFrame,
           );
           outcome.resolve({ segments: rendered });
@@ -578,6 +622,7 @@ function createProjectionHandle(state: ProjectionState): ProjectionHandle {
               0,
               state.checkedFailures,
               state.environment,
+              state.imports,
               request.kind === "markdown" ? undefined : state.callerReturn,
             );
             outcome.resolve({ segments: [...errors, ...rendered] });
@@ -783,6 +828,9 @@ export function expandSegments(
     indexBase,
     checkedFailures,
     environment,
+    // No execution terminal: an expansion driven directly resolves its imports
+    // through the ordinary public Component Api, exactly as it always has.
+    undefined,
     undefined,
   );
 }
@@ -862,6 +910,7 @@ function* expandListSegments(
    */
   checkedFailures: CheckedFailures | undefined,
   environment: ExecutionEnvironment | undefined,
+  imports: ComponentImportTerminal | undefined,
   returnBody: ReturnBody | undefined,
 ): Operation<Segment[]> {
   // An execution opens the table its printed errors record their causes in.
@@ -885,6 +934,7 @@ function* expandListSegments(
         indexBase,
         checkedFailures,
         environment,
+        imports,
         returnBody,
       );
     });
@@ -1006,6 +1056,7 @@ function* expandListSegments(
               elementPath,
               checkedFailures,
               environment,
+              imports,
               returnBody,
             )),
           );
@@ -1026,6 +1077,7 @@ function* expandListSegments(
               elementPath,
               checkedFailures,
               environment,
+              imports,
               returnBody,
             )),
           );
@@ -1047,6 +1099,7 @@ function* expandListSegments(
             elementPath,
             checkedFailures,
             environment,
+            imports,
             returnBody,
           );
           break;
@@ -1080,6 +1133,7 @@ function* expandListSegments(
             elementPath,
             checkedFailures,
             environment,
+            imports,
             returnBody,
           );
           break;
@@ -1098,6 +1152,7 @@ function* expandListSegments(
             elementPath,
             checkedFailures,
             environment,
+            imports,
             returnBody,
           );
           break;
@@ -1119,6 +1174,7 @@ function* expandListSegments(
               0,
               checkedFailures,
               environment,
+              imports,
               returnBody,
             );
           // Which placement this is, answered by identity rather than by name:
@@ -1165,6 +1221,7 @@ function* expandListSegments(
             elementPath,
             checkedFailures,
             environment,
+            imports,
             returnBody,
           );
           break;
@@ -1187,6 +1244,38 @@ function* expandListSegments(
 
         if (segment.name === "Break") {
           result.push(...(yield* expandBreak(segment, loop)));
+          break;
+        }
+
+        if (segment.name === "All") {
+          // No raise() here, like the branches above: expandAll reports the
+          // errors it creates, and each child settled its own (§6.9).
+          yield* expandAll(
+            segment,
+            parentMeta,
+            parentProps,
+            hideSet,
+            result,
+            elementPath,
+            checkedFailures,
+            environment,
+            imports,
+          );
+          break;
+        }
+
+        if (segment.name === "Spawn") {
+          // A well-placed <Spawn> is consumed by its <All> and never expanded on
+          // its own. Reaching this branch means the element sits outside any
+          // <All>, so it names no component and is diagnosed rather than
+          // resolved from the filesystem.
+          result.push(
+            yield* raise({
+              type: "error",
+              message: positioned(straySpawnMessage(), segment),
+              source: "Spawn",
+            }),
+          );
           break;
         }
 
@@ -1223,6 +1312,7 @@ function* expandListSegments(
             elementPath,
             checkedFailures,
             environment,
+            imports,
             returnBody,
           );
           break;
@@ -1245,6 +1335,7 @@ function* expandListSegments(
           elementPath,
           checkedFailures,
           environment,
+          imports,
           returnBody,
         );
         // A printed error the callee produced is data, and stays data here: it
@@ -1389,6 +1480,7 @@ function* expandListSegments(
                 },
                 checkedFailures,
                 environment,
+                imports,
                 returnBody,
               ),
             );
@@ -1451,6 +1543,7 @@ function* checkedCommandFailure(
   segment: ErrorSegment,
   checkedFailures: CheckedFailures | undefined,
   environment: ExecutionEnvironment | undefined,
+  imports: ComponentImportTerminal | undefined,
   returnBody: ReturnBody | undefined,
 ): Operation<ErrorSegment> {
   // Written down before it is raised or projected, and before the error mode is
@@ -1556,6 +1649,7 @@ function* expandLet(
   /** Whether the enclosing region grants checked-failure recovery (§3.6). */
   checkedFailures: CheckedFailures | undefined,
   environment: ExecutionEnvironment | undefined,
+  imports: ComponentImportTerminal | undefined,
   returnBody: ReturnBody | undefined,
 ): Operation<ErrorSegment[]> {
   // Every one of these is decided from what the author wrote, so the whole
@@ -1588,6 +1682,7 @@ function* expandLet(
       0,
       checkedFailures,
       environment,
+      imports,
       returnBody,
     ),
   );
@@ -1699,6 +1794,7 @@ function* expandEach(
   /** Whether the region that caused this expansion grants recovery (§3.6). */
   checkedFailures: CheckedFailures | undefined,
   environment: ExecutionEnvironment | undefined,
+  imports: ComponentImportTerminal | undefined,
   returnBody: ReturnBody | undefined,
 ): Operation<Segment[]> {
   // Decided from source alone, so the catalog is shared with validation. A
@@ -1758,6 +1854,7 @@ function* expandEach(
       extendPath(path, { f: "item", i: iteration }),
       checkedFailures,
       environment,
+      imports,
       returnBody,
     );
     // A `<Break>` in the body exits the enclosing `<Loop>`, so the remaining
@@ -1853,6 +1950,7 @@ function* expandIf(
   /** Whether the enclosing region grants checked-failure recovery (§3.6). */
   checkedFailures: CheckedFailures | undefined,
   environment: ExecutionEnvironment | undefined,
+  imports: ComponentImportTerminal | undefined,
   returnBody: ReturnBody | undefined,
 ): Operation<void> {
   // Decided from source alone and shared with validation: which props were
@@ -1924,6 +2022,7 @@ function* expandIf(
     0,
     checkedFailures,
     environment,
+    imports,
     returnBody,
   );
 }
@@ -1993,6 +2092,7 @@ function* expandSwitch(
   /** Whether the enclosing region grants checked-failure recovery (§3.6). */
   checkedFailures: CheckedFailures | undefined,
   environment: ExecutionEnvironment | undefined,
+  imports: ComponentImportTerminal | undefined,
   returnBody: ReturnBody | undefined,
 ): Operation<void> {
   // Decided from source alone and shared with validation: which props were
@@ -2059,6 +2159,7 @@ function* expandSwitch(
     0,
     checkedFailures,
     environment,
+    imports,
     returnBody,
   );
 }
@@ -2134,6 +2235,7 @@ function* expandLoop(
   /** Whether the enclosing region grants checked-failure recovery (§3.6). */
   checkedFailures: CheckedFailures | undefined,
   environment: ExecutionEnvironment | undefined,
+  imports: ComponentImportTerminal | undefined,
   returnBody: ReturnBody | undefined,
 ): Operation<void> {
   const unknownProp = loopPropsViolation(segment);
@@ -2191,6 +2293,7 @@ function* expandLoop(
           0,
           checkedFailures,
           environment,
+          imports,
           returnBody,
         );
         if (frame.broken) {
@@ -2270,6 +2373,222 @@ function* expandBreak(
   return reported;
 }
 
+/**
+ * The environment one spawned child starts from (spec §6.5 `<Spawn>`).
+ *
+ * Shallow snapshots of both maps: the durable values the `<All>` was reached
+ * with, and the private live overlay beside them. Ordinary binding values are
+ * carried by identity — isolating what an author deliberately bound inside an
+ * object is not this construct's business — while the maps themselves are the
+ * child's own, so a name one child binds or rebinds is invisible to its
+ * siblings and to the work after `</All>`.
+ */
+function spawnEnvironment(incoming: EvalEnv | undefined): EvalEnv {
+  const child: EvalEnv = { values: { ...(incoming?.values ?? {}) } };
+  const overlay = liveEnvironment(child);
+  if (incoming !== undefined) {
+    Object.assign(overlay.values, liveEnvironment(incoming).values);
+  }
+  return child;
+}
+
+/**
+ * Expand one `<Spawn>` body into the emission runs its child closes with.
+ *
+ * Everything mutable the ordinary walk threads is allocated here rather than
+ * inherited: the binding environment and its live overlay, an eval scope the
+ * child owns and whose resources die with it, a block counter, a private
+ * segment buffer, a checked-failure ledger and a copy of the hide set.
+ * Concurrent children therefore share immutable inputs and nothing else.
+ *
+ * The outer `<Return>` and `<Loop>` owners are cleared: several children
+ * running at once may not race to select one enclosing value or decide one
+ * enclosing loop, and the structural rule already refused the elements that
+ * would try. A `<Loop>` or value component created wholly inside the child
+ * establishes its own owner exactly as it does anywhere else.
+ */
+function spawnChild(
+  spawn: SpawnRegion,
+  incoming: EvalEnv | undefined,
+  parentMeta: Record<string, unknown>,
+  parentProps: Record<string, Json>,
+  hideSet: Set<string>,
+  path: string,
+  inherited: CheckedFailures | undefined,
+  environment: ExecutionEnvironment | undefined,
+  imports: ComponentImportTerminal | undefined,
+): Operation<Emission[]> {
+  return scoped(function* () {
+    yield* provideEnv(spawnEnvironment(incoming));
+    yield* provideEvalScope(yield* useEvalScope());
+    yield* ActiveLoop.set(undefined);
+    // The `<Spawn>` is consumed by its `<All>` and never reaches dispatch, so
+    // its frame is added here — otherwise every child of one `<All>` would
+    // expand under one path (§5.6).
+    const childPath = extendPath(
+      path,
+      elementFrame(spawn.element.name, elementSite(spawn.element.position, spawn.ordinal)),
+    );
+    const segments: Segment[] = [];
+    // A fresh record with the inherited recovery, like a contained invocation's:
+    // a checked command failure inside one child fails that child, and a
+    // sibling's walk is not stopped by a ledger it does not own.
+    const ledger = containedLedger(inherited);
+    yield* expandSegmentsWithin(
+      spawn.element.children,
+      parentMeta,
+      parentProps,
+      new Set(hideSet),
+      createBlockCounter(),
+      segments,
+      childPath,
+      0,
+      ledger,
+      environment,
+      imports,
+      undefined,
+    );
+    yield* refuseCheckedFailure(ledger);
+    // Runs rather than one joined string. What a child produced is prose, or a
+    // program's approved source, or both in order — and exact presentation is a
+    // provenance this execution recorded against the segments it marked. Those
+    // segments do not leave the child, so the child states what they were: a
+    // string would arrive in the caller as prose, and a durable close holding
+    // one could not say otherwise on a replay either.
+    return emissions(environment?.sourceSegments, segments);
+  });
+}
+
+/**
+ * Run the children of an `<All>` at the same time (spec §6.5 `<All>`).
+ *
+ * The children are durable coroutines of the one that reached the `<All>`,
+ * allocated in source order before any of them starts, so identity comes from
+ * where a `<Spawn>` was written and never from the order work was scheduled in.
+ * `durableAll()` is the whole join: it allocates those identities, returns the
+ * results in input order, reuses a completed child's recorded close on replay,
+ * and cancels unfinished siblings when one fails.
+ *
+ * Nothing is appended until the join succeeds. Each child renders into a buffer
+ * of its own, and the strings are written to the caller's region in authored
+ * order afterwards — so which child finished first may decide when its durable
+ * records append, and never what the document renders. A failed or cancelled
+ * join appends none of them.
+ *
+ * Expansion driven without a journal — a test, a tool describing a document —
+ * runs the same children on the same join without durable identities, exactly
+ * as `<Loop>` records nothing there and behaves identically otherwise.
+ */
+function* expandAll(
+  segment: ComponentElement,
+  parentMeta: Record<string, unknown>,
+  parentProps: Record<string, Json>,
+  hideSet: Set<string>,
+  /** The region this renders into, once every child has succeeded. */
+  owner: Segment[],
+  path: string,
+  /** Whether the enclosing region grants checked-failure recovery (§3.6). */
+  checkedFailures: CheckedFailures | undefined,
+  environment: ExecutionEnvironment | undefined,
+  imports: ComponentImportTerminal | undefined,
+): Operation<void> {
+  // Decided from source alone and shared with validation, completely, before a
+  // child is constructed: a malformed `<All>` starts none of them.
+  const structure = allStructure(segment);
+  if (structure.violations.length > 0) {
+    for (const violation of structure.violations) {
+      owner.push(yield* raise(structuralErrorSegment(violation, segment)));
+    }
+    return;
+  }
+
+  // Read once, here: every child starts from the same incoming snapshot, and
+  // reading it inside a child would let whichever ran first decide what the
+  // others saw.
+  const incoming = yield* env;
+  const children = structure.spawns.map(
+    (spawn) => () =>
+      spawnChild(
+        spawn,
+        incoming,
+        parentMeta,
+        parentProps,
+        hideSet,
+        path,
+        checkedFailures,
+        environment,
+        imports,
+      ),
+  );
+
+  const scope = yield* useScope();
+  const rendered =
+    scope.get(DurableContext) === undefined
+      ? yield* all(children.map((child) => child()))
+      : (yield* durableAll(
+          children.map((child) => (): Workflow<Json> => ephemeral(retained(child()))),
+        )).map(readEmissions);
+
+  for (const runs of rendered) {
+    for (const run of runs) {
+      if (run.text === "") {
+        continue;
+      }
+      // One segment per run, and the exact ones are marked again here: the
+      // record is keyed by segment identity, and these segments are this
+      // region's, not the child's. A child that ran on a previous attempt says
+      // what its runs were through its own durable close, so a replay marks
+      // exactly what the live run marked.
+      const segment: Segment = { type: "text", content: run.text };
+      owner.push(segment);
+      if (run.exact) {
+        markExactSource(environment?.sourceSegments, [segment]);
+      }
+    }
+  }
+}
+
+/** One child's runs, as its durable close retains them. */
+function retained(child: Operation<Emission[]>): Operation<Json> {
+  return (function* (): Operation<Json> {
+    return (yield* child).map((run) => ({ text: run.text, exact: run.exact }));
+  })();
+}
+
+/** What a child's retained close is refused with when it will not read. */
+const UNREADABLE_RUNS =
+  "a spawned child's retained close cannot be read as what it rendered, so this run cannot " +
+  "rebuild the document that child produced. A history is read whole or not at all.";
+
+/**
+ * The runs a child closed with, read back from what the journal holds.
+ *
+ * Parsed whole, and refused whole. A replay hands back whatever the history has;
+ * skipping a member it cannot read, or reading a value that is not a list of
+ * runs as an empty one, would publish a document missing exactly the part that
+ * could not be read — and it would look like a document that rendered nothing
+ * there. So every member is checked, the shape is closed at the two members a
+ * run has, and anything else fails this run rather than shortening its output.
+ */
+function readEmissions(value: Json): Emission[] {
+  if (!Array.isArray(value)) {
+    throw new StaleInputError(UNREADABLE_RUNS);
+  }
+  const runs: Emission[] = [];
+  for (const entry of value) {
+    if (!isJsonObject(entry)) {
+      throw new StaleInputError(UNREADABLE_RUNS);
+    }
+    const text = entry["text"];
+    const exact = entry["exact"];
+    if (Object.keys(entry).length !== 2 || typeof text !== "string" || typeof exact !== "boolean") {
+      throw new StaleInputError(UNREADABLE_RUNS);
+    }
+    runs.push({ text, exact });
+  }
+  return runs;
+}
+
 function printErrorsPropError(segment: ComponentElement, message: string): ErrorSegment {
   return { type: "error", message: positioned(message, segment), source: "PrintErrors" };
 }
@@ -2300,6 +2619,7 @@ function* expandPrintErrors(
   /** The ledger this region grants recovery on top of (§3.6). */
   checkedFailures: CheckedFailures | undefined,
   environment: ExecutionEnvironment | undefined,
+  imports: ComponentImportTerminal | undefined,
   returnBody: ReturnBody | undefined,
 ): Operation<void> {
   const refusal = printErrorsViolations(segment)[0];
@@ -2326,6 +2646,7 @@ function* expandPrintErrors(
       // recovers is not one the run suffered.
       recoveringLedger(),
       environment,
+      imports,
       returnBody,
     );
   });
@@ -2364,6 +2685,7 @@ function* expandComponent(
    */
   checkedFailures: CheckedFailures | undefined,
   environment: ExecutionEnvironment | undefined,
+  imports: ComponentImportTerminal | undefined,
   returnBody: ReturnBody | undefined,
 ): Operation<Segment[]> {
   // Cycle detection — Prosser's algorithm
@@ -2392,6 +2714,12 @@ function* expandComponent(
   // answered: what canonical resolution selected here is what decides whether
   // this invocation is in one of this execution's identity domains, and nothing
   // on the answer or in the chain carries it (`invocation-identity.ts`).
+  //
+  // The frame is this dispatch's closure, and the terminal built for this one
+  // import is the only thing that can select into it. That is what makes it this
+  // invocation's own: a sibling `<Spawn>` resolving the same name at the same
+  // time has its own frame behind its own terminal, and a handler delegating
+  // through any number of descendant scopes still arrives at this one.
   const selection = environment?.componentIdentity?.beginImport(name);
   let selected: IdentityDomain | undefined;
   let dispatcher: FunctionComponent | undefined;
@@ -2418,7 +2746,18 @@ function* expandComponent(
     const offered = environment?.installedComponents?.offer(environment.componentBodyScope, name);
     let answered: ImportedDefinition;
     try {
-      answered = yield* importComponent(name, position);
+      // Through this import's own terminal when the execution handed expansion
+      // one: the public middleware chain composes around it by name, and `next`
+      // terminates in the continuation that carries this frame. Where expansion
+      // was handed none — driven directly, or a generated fragment answering
+      // through its own narrowed provider — the ordinary public operation answers
+      // exactly as it always did.
+      answered =
+        imports === undefined
+          ? yield* importComponent(name, position)
+          : yield* importThroughTerminal(name, position, (asked, at) =>
+              imports(asked, at, selection),
+            );
     } finally {
       offered?.close();
     }
@@ -2516,6 +2855,7 @@ function* expandComponent(
       path,
       checkedFailures,
       environment,
+      imports,
       returnBody,
       selected,
       dispatcher,
@@ -2662,6 +3002,7 @@ function* expandComponent(
       printedErrors: bodyContentErrors,
       checkedFailures,
       environment,
+      imports,
     });
     // Published on the eval scope, which every task the invocation owns
     // descends from — including its persist-eval blocks and its content.
@@ -2736,6 +3077,7 @@ function* expandComponent(
           path,
           checkedFailures,
           bodyEnvironment,
+          imports,
           returnBody,
         );
       });
@@ -2784,6 +3126,7 @@ function* expandComponent(
       path,
       checkedFailures,
       bodyEnvironment,
+      imports,
       returnBody,
     );
   });
@@ -2953,6 +3296,7 @@ function* expandFunctionComponent(
   /** This work's checked-failure ledger, inherited from the invoking element. */
   inherited: CheckedFailures | undefined,
   environment: ExecutionEnvironment | undefined,
+  imports: ComponentImportTerminal | undefined,
   returnBody: ReturnBody | undefined,
   /**
    * The identity domain canonical resolution selected for this invocation.
@@ -3166,6 +3510,7 @@ function* expandFunctionComponent(
           ownPath: path,
           checkedFailures,
           environment,
+          imports,
         };
         // Only the ordinary handle is published. The richer projection a
         // protected body may reach stays a closure at the dispatch below, so
@@ -4026,6 +4371,7 @@ export function* expandBody(
   /** Whether the invoking element sits inside a `<PrintErrors>` region. */
   checkedFailures: CheckedFailures | undefined,
   environment: ExecutionEnvironment | undefined,
+  imports: ComponentImportTerminal | undefined,
   returnBody: ReturnBody | undefined,
 ): Operation<Segment[]> {
   if (!bodyHasOutput(bodySegments)) {
@@ -4041,6 +4387,7 @@ export function* expandBody(
       0,
       checkedFailures,
       environment,
+      imports,
       returnBody,
     );
   }
@@ -4063,6 +4410,7 @@ export function* expandBody(
         0,
         checkedFailures,
         environment,
+        imports,
         returnBody,
       );
     } else if (chunk.output) {
@@ -4079,6 +4427,7 @@ export function* expandBody(
           0,
           checkedFailures,
           environment,
+          imports,
           returnBody,
         );
       });
@@ -4097,6 +4446,7 @@ export function* expandBody(
           chunkBase,
           checkedFailures,
           environment,
+          imports,
           returnBody,
         );
       });
@@ -4125,6 +4475,7 @@ function runDocumentation(
   /** Whether the region that caused this expansion grants recovery (§3.6). */
   checkedFailures: CheckedFailures | undefined,
   environment: ExecutionEnvironment | undefined,
+  imports: ComponentImportTerminal | undefined,
   returnBody: ReturnBody | undefined,
 ): Operation<Segment[]> {
   return scoped(function* () {
@@ -4140,6 +4491,7 @@ function runDocumentation(
       indexBase,
       checkedFailures,
       environment,
+      imports,
       returnBody,
     );
   });
@@ -4192,6 +4544,7 @@ function* expandValueBody(
   /** Whether the invoking element sits inside a `<PrintErrors>` region. */
   checkedFailures: CheckedFailures | undefined,
   environment: ExecutionEnvironment | undefined,
+  imports: ComponentImportTerminal | undefined,
   returnBody: ReturnBody | undefined,
 ): Operation<Json> {
   const slots = partitionBySlot(children);
@@ -4218,6 +4571,7 @@ function* expandValueBody(
       index,
       checkedFailures,
       environment,
+      imports,
       ownBody,
     );
   }
@@ -4259,6 +4613,7 @@ function* expandInstalledStructural(
   path: string,
   checkedFailures: CheckedFailures | undefined,
   environment: ExecutionEnvironment,
+  imports: ComponentImportTerminal | undefined,
   returnBody: ReturnBody | undefined,
 ): Operation<void> {
   const name = segment.name;
@@ -4360,6 +4715,7 @@ function* expandInstalledStructural(
     path,
     checkedFailures,
     environment,
+    imports,
     returnBody,
     children: segment.children,
   });
@@ -4412,6 +4768,7 @@ interface RegionContext {
   readonly path: string;
   readonly checkedFailures: CheckedFailures | undefined;
   readonly environment: ExecutionEnvironment;
+  readonly imports: ComponentImportTerminal | undefined;
   readonly returnBody: ReturnBody | undefined;
   readonly children: Segment[];
 }
@@ -4576,6 +4933,7 @@ function* produceRegion(
         index,
         context.checkedFailures,
         context.environment,
+        context.imports,
         context.returnBody,
       );
     } catch (error) {

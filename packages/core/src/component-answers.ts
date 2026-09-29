@@ -114,6 +114,11 @@ export function componentAnswerRegistrar(
     *around(handler: ComponentAnswerHandler): Operation<void> {
       yield* Component.around({
         *importComponent([name, position], next) {
+          // One request for this handler invocation, capturing the resolution
+          // window that is open right now. Minted here rather than carried on
+          // the installation: one installation serves every name it registered,
+          // and a retained handle states nothing about which resolution is
+          // being decided.
           const asked = installation.open(name, position);
           try {
             return yield* handler(

@@ -5496,6 +5496,38 @@ registration canonical resolution selected — recognized there by the identity 
 the implementation this execution built, carried to the issuance through the
 engine's own import frame (§5.3), and settled to nothing when resolution did not
 happen, happened twice, or answered for a name the engine did not ask.
+
+An import frame belongs to the import that opened it, and the association is
+that import's own **terminal**: expansion asks through a `Component` Api
+descriptor it creates for this one import, whose core `importComponent` handler
+closes over the frame. The descriptor carries the stable `Component` Api name, so
+it receives the same installed middleware in the same order — a stable name
+shares middleware and shares no terminal authority. Middleware may observe,
+delegate, replace or refuse, and may run `next` in a scope of its own: `next`
+terminates in the terminal that dispatch was created with, so the invocation
+keeps its identity. A handler that calls the public import operation itself is
+making a separate import rather than delegating the authored one, and that
+separate import grants the authored one no identity. Nothing about an Effection
+scope, a context, a token or a durable coroutine takes part.
+
+What this ownership adds is spawned concurrency. Two `<Spawn>` children under one
+`<All>` may have imports open at the same time; each has its own frame behind its
+own terminal, so an ordinary `<Session>` written in each child receives its own
+authentic identity, neither child can be handed the other's, and closing or
+cancelling one spawn neither clears nor authorizes the other. Nesting needs no
+stack, because an inner authored import is its own dispatch with its own
+terminal. Two selections in one frame still settle to nothing. The engine holds
+one domain per declared component per execution however many spawns invoke it.
+
+The windows a provider's claim is admitted in are owned the same way and by the
+same kind of value — the explicit window object, captured by the request before
+its handler runs — and serially: component answers are resolved in one capture
+phase before any document expands, so one window is open at a time and a handler
+delegating through a descendant scope answers the resolution it was opened in.
+One installation may answer more than one import with the exact same definition,
+while a second, *different* answer in either refuses. A concurrent document
+import happens after capture, with no window open, so it may be answered as
+ordinary middleware and acquires no profile identity.
 Forwarding the genuine issuance is ordinary delegation and stays supported;
 everything else refuses. None of it reads replaceable state, so middleware may
 short-circuit an import, redirect a name, replace a definition, shadow a
@@ -6742,6 +6774,91 @@ a rejected element also ending the loop.
 
 Printed errors from `<Loop>` and `<Break>` carry source locations on the same
 terms as `<If>`.
+
+#### `<All>` and `<Spawn>`: running independent work at the same time
+
+`<All>` runs its direct `<Spawn>` children at the same time and waits for every
+one of them. Both names are the engine's own syntax: neither resolves a
+component, so a repository file, a registration or a Plugin cannot supply
+either.
+
+```markdown
+<All>
+<Spawn>
+<Session name="planner">
+<Prompt>Draft the implementation plan.</Prompt>
+</Session>
+</Spawn>
+<Spawn>
+<Session name="reviewer">
+<Prompt>Review the current change.</Prompt>
+</Session>
+</Spawn>
+</All>
+```
+
+Both children can be live together, and `<All>` renders their markdown in the
+order the spawns were written even when the second one finishes first.
+
+**Form.** Both constructs are written paired and accept no props. `<All>`
+requires at least two direct `<Spawn>` children; whitespace between them is
+insignificant, and any other direct content — text, a component, a code block —
+is refused. A `<Spawn>` written anywhere but directly inside an `<All>` is
+refused too. Every one of these is read from source, so a malformed construct
+refuses before any child starts: a tripwire written inside either child never
+runs.
+
+**Bindings and resources.** Every child starts from the bindings that reached
+the `<All>`, in an environment of its own, with its own eval scope. A binding it
+makes, a binding it rebinds and a resource it retains stay available to that
+child's own later work, and reach neither a sibling nor the work after
+`</All>`. Children do not communicate through bindings, and `<All>` takes no
+`as` and produces no value. A retained resource is released when its child ends.
+
+**Output.** Each child expands into a private buffer. After every child
+succeeds, `<All>` emits their renderings in authored order; before that it emits
+none of them. Scheduling may decide when a child's durable records append, and
+never what the document renders.
+
+**Durable identity and replay.** In source order, each `<Spawn>` receives one
+child coroutine of the coroutine that reached the `<All>`, allocated before any
+child starts; nesting produces the existing hierarchical identity (§5.6, and the
+protocol's §7). Each child also gets a fresh block counter and an expansion path
+extended by its authored ordinal, so two children may derive the same local block
+id without colliding — the child coroutine namespaces it — and the work after
+`</All>` continues on the parent counter it would have had anyway. Each
+successful child closes with the ordered runs it rendered: consecutive segments
+of one disposition, each `{ text, exact }`, where `exact` says whether those
+bytes are a program's approved source rather than prose (§5.3). The segments a
+child marked never leave it, so the run is where that provenance crosses the
+join — a close holding only text could not say what its bytes were, and a
+replayed child's source would be published as prose. A complete replay runs no
+spawned work and rebuilds the output from those closes; a partial replay
+restores the children that closed and resumes only the unrecorded ones, under
+the same identities. A retained close that does not read as that exact shape —
+not a list, a member that is not a run, a run missing or exceeding its two
+members — fails the run rather than contributing part of a document. Inserting, removing or reordering spawns is a definition
+change and follows the ordinary divergence contract.
+
+**Failure and cancellation.** The join is fail-fast. The first child failure
+fails the `<All>`, cancels every unfinished sibling and waits for all of them to
+finish tearing down. No child output is emitted, durable records acknowledged
+before the failure stay durable, and interrupted work is never recorded as
+complete. Cancelling the document cancels and joins every child; no task,
+subscription, retained resource or output buffer survives its spawn.
+
+**Control flow.** `<Spawn>` is a boundary. A `<Return>` inside one cannot select
+a value owned outside the `<All>`, and a `<Break>` inside one cannot exit a
+`<Loop>` written outside it; both are refused from source, before anything runs.
+A component invoked inside the child owns its own `<Return>`, and a `<Loop>`
+written wholly inside the child is ended by its own `<Break>`, exactly as
+elsewhere. A `<Return>` below a `<Spawn>` neither satisfies nor violates the
+enclosing body's own `returns` declaration: the body still owes the `<Return>`
+it declared.
+
+Generated XMD receives the same syntax and the same rules. The whole-fragment
+preflight walks every spawn — each from the bindings that reach the `<All>`, and
+merging nothing back — before the fragment performs its first effect.
 
 ### 6.6 Eval binding interpolation
 
@@ -13161,6 +13278,9 @@ Defined in §5.6, with the selection rule in §5.3.
 | CIV23 | The identity a provider states for its answer | A request states a claim on the exact object its handler returns, under the name and provider origin canonical execution fixed when it minted that request. A different object, a copy, an object edited after the claim, a competing provider installation, another key and another revision each identify nothing, and the first statement stands after every one of them. The provider states only key and revision, and a partial identity is refused rather than half-recorded. Backs FE14 |
 | CIV24 | Identification is one atomic answer | The claim and core's own claim-time copy of what was claimed come back from one call, so nothing downstream reads the chain's object again: an answer whose member alternates between the claimed value and a substitution is sealed as the claimed one, with the plant proven live by the next read. At execution scale, an answer whose props schema alternates validates the fragment against the claimed contract. Backs FE14 |
 | CIV25 | A request belongs to one resolution occurrence | Provider installation and the right to answer one occurrence are separate. An installation receives a registrar and installs import middleware once; every middleware invocation receives a fresh request with readonly name and position, plus `next`. The request captures the exact resolution-window object, provider-installation token, origin and name, and `claim` accepts only the answer plus key and revision. Its handler closes the request synchronously in `finally` on return, failure or cancellation, while an outer request stays live across `yield* next()` and may claim its replacement after the delegated handler returns. The enclosing resolution closes in its existing `finally`. A claim succeeds only during active execution, through an open request whose captured window is the exact current object and whose fixed name matches it, with no different statement by that provider in the window. Identification takes the expected window explicitly and accepts only that exact window and name. Thus a stale request from resolution N refuses during N+1 of the same name, a stale `Open` request cannot retag while `Other` is live, and a losing inner request refuses after its handler returns while the still-live outer request may claim after delegation. One installation answers several names and repeated same-name resolutions through distinct requests; unidentified replacements remain ordinary valid middleware answers outside fragment evaluation. Two owners live at once each answer only for what they recorded, and tearing one down leaves the other working. No Context, shared symbol, public brand or module-global registry participates. Backs FE15 |
+| CIV26 | The terminal is the association | Import middleware that delegates the same name once from inside `scoped()` keeps the invocation's identity, and names the same one an undelegated import does. Two nested authored imports each own their terminal, so both are identified without a stack. Delegating twice, or delegating another name, reaches this import's own terminal and settles it to nothing |
+| CIV27 | Two imports live at once | Two `<Spawn>` children are each suspended inside their own import before either resolves. Each dispatch selects into the frame its terminal carries, so both invocations are identified exactly once, their identities differ, and they are the identities the same two sites name when nothing holds their imports — in either release order |
+| CIV28 | A cancelled import closes only its own frame | With two imports live, one is released and claims while the other is still suspended and is cancelled by a failing sibling. The survivor is refused nothing and names exactly what that site names when nothing is torn down beside it; the cancelled branch claims nothing, and nothing it left behind lends or withholds an identity afterwards |
 
 ### Tier NEX — Nested document executions (`specs/testing-spec.md`)
 
@@ -13216,6 +13336,10 @@ what they observe is what a person's terminal would show.
 | DM50 | An ordinary declaration is prose | The same bytes from a declaration the host did not call exact are stripped, collapsed and formatted |
 | DM51 | A middleware answer cannot claim it | `Component.importComponent` middleware answering an open name with a definition carrying the disposition gets prose; nothing admitted that definition, so nothing about it is exact |
 | DM52 | A mark this engine did not make is nothing | A segment carrying the disposition as a field is not exact, whoever supplied it; expansion also rebuilds text segments, so such a field never reaches emission in the first place |
+| DM53 | The record is not reachable by name | A component that builds a context with the record's name and writes to it publishes prose |
+| DM54 | A spawned child's source is still source | A declared exact component rendered inside `<All>`/`<Spawn>` keeps its bytes unpresented, and a prose sibling stays prose |
+| DM55 | A replayed child restores what its bytes were | Each child's retained close holds its ordered `{ text, exact }` runs, and replaying that history reproduces the live output with the same provenance |
+| DM56 | A close that will not read fails the run | A retained child close that is not a list of runs, or holds a member that is not one, refuses atomically and publishes nothing |
 
 ### Tier MDK — Declaring exact Markdown with `Markdown({…})` (§5.3)
 

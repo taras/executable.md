@@ -10,7 +10,7 @@
  * See DEC-005 in specs/decisions.md.
  */
 
-import { Err, Ok, ensure, scoped, spawn, withResolvers, until } from "effection";
+import { Err, Ok, ensure, scoped, spawn, useScope, withResolvers, until } from "effection";
 import type { Operation, Result, Stream } from "effection";
 import { type Api, createApi, type Operations } from "@effectionx/context-api";
 import {
@@ -83,7 +83,7 @@ import {
   createBlockCounter,
 } from "./expand.ts";
 import { createReturnBody, missingReturnMessage } from "./return-flow.ts";
-import type { BlockCounter } from "./expand.ts";
+import type { BlockCounter, ComponentImportTerminal } from "./expand.ts";
 import {
   DocumentationError,
   documentationError,
@@ -93,7 +93,7 @@ import {
   filesFatalFailure,
   useSegmentCauses,
 } from "./errors.ts";
-import { Component, importComponent, raise } from "./component-api.ts";
+import { Component, importComponent, isMissingImportProvider, raise } from "./component-api.ts";
 import { sourceDescription } from "./source-position.ts";
 import { emissions, exactly, renderSegment } from "./render.ts";
 import { createExactSource } from "./output/exact-source.ts";
@@ -142,7 +142,7 @@ import {
   installIdentities,
   parseFormDeclaration,
 } from "./invocation-identity.ts";
-import type { IdentityComponent } from "./invocation-identity.ts";
+import type { IdentityComponent, ImportSelection } from "./invocation-identity.ts";
 import {
   CanonicalImports,
   ExecutionImports,
@@ -181,7 +181,7 @@ import type { RootDocumentSource } from "./root-source.ts";
 import { useEvalScope } from "@effectionx/scope-eval";
 import { declaredRouting, FOREGROUND, route, withRouting } from "./foreground.ts";
 import type { ForegroundRouting } from "./foreground.ts";
-import { checkedFailureLedger } from "./component-failures.ts";
+import { checkedFailureLedger, refuseCheckedFailure } from "./component-failures.ts";
 import { provideTestHarnessInstallers } from "./test-harness.ts";
 import type { TestHarnessInstaller } from "./test-harness.ts";
 import type { CheckedFailures } from "./component-failures.ts";
@@ -2022,6 +2022,8 @@ function* runValueRoot(
   /** This run's record of an unauthorized checked command failure (#441). */
   checkedFailures: CheckedFailures,
   environment: ExecutionEnvironment,
+  /** This execution's own import resolution, for the expansions below. */
+  importTerminal: ComponentImportTerminal,
 ): Operation<DocumentResult> {
   // Created outside the scope the body runs in, so the value it selected is
   // still readable after that scope — and its teardown — has finished.
@@ -2051,6 +2053,7 @@ function* runValueRoot(
         0,
         checkedFailures,
         environment,
+        importTerminal,
         ownBody,
       );
       const exactRecord = environment.sourceSegments;
@@ -2073,27 +2076,19 @@ function* runValueRoot(
   return { status: "ok", output: chunks.join(""), value: selected.value };
 }
 
-/**
- * Refuse a successful outcome for a run that suffered an unauthorized checked
- * command failure.
- *
- * The failure was already raised where the command ran, and something enclosing
- * it — a `printErrors(fn)` component like `<TempDir>`, or one that caught the
- * `ContentError` its projected content raised — printed it and returned. Those
- * boundaries decide how a failure of their own is reported. Whether a command
- * that exited nonzero failed the run is not theirs to decide, and this is where
- * the run says so (#441).
- */
-function* refuseCheckedFailure(checkedFailures: CheckedFailures): Operation<void> {
-  const segment = checkedFailures.failure;
-  if (segment !== undefined) {
-    throw yield* documentationError(segment, "output");
-  }
-}
-
 function* documentWorkflow(
   props: Record<string, Json>,
   environment: ExecutionEnvironment,
+  /**
+   * How this execution resolves one component import, handed to every expansion
+   * this root causes.
+   *
+   * By hand, beside the environment rather than on it: what a host installed and
+   * what a fragment narrowed are described by the environment, and this is
+   * neither — it is the execution's own resolution, reachable only by having been
+   * given it (`expand.ts`).
+   */
+  importTerminal: ComponentImportTerminal,
 ): Workflow<DocumentResult> {
   // This run's memory of a checked command failure it never authorized. Passed
   // by value into core's own expansion and reachable from nowhere else, so no
@@ -2203,6 +2198,7 @@ function* documentWorkflow(
         rootPath,
         checkedFailures,
         environment,
+        importTerminal,
       );
     }
 
@@ -2226,6 +2222,7 @@ function* documentWorkflow(
         rootPath,
         checkedFailures,
         environment,
+        importTerminal,
         undefined,
       );
       // An empty buffered root emits no output event.
@@ -2254,6 +2251,7 @@ function* documentWorkflow(
         0,
         checkedFailures,
         environment,
+        importTerminal,
         undefined,
       );
 
@@ -2591,6 +2589,59 @@ function* executeDocument(
               identity.componentRouting.project,
             );
 
+      /**
+       * Resolve one component import the way this execution resolves them, and
+       * the only thing that puts an invocation in one of its identity domains.
+       *
+       * Owned by the execution and handed to expansion **as an argument**, never
+       * on the environment: `ExecutionEnvironment` is the boundary a host's
+       * installation and a fragment's narrowed table are described against, and
+       * an execution-private terminal belongs in neither. Expansion calls this as
+       * the terminal of a descriptor it created for one authored import, passing
+       * that import's own frame; the ordinary provider below calls it with no
+       * frame, for a direct `importComponent()` an invocation started itself.
+       * Neither path publishes the frame, and nothing outside core can name this
+       * operation.
+       */
+      function* resolveComponentImport(
+        name: string,
+        position: Readonly<SourcePosition> | undefined,
+        selection: ImportSelection | undefined,
+      ): Operation<ComponentDefinition | FunctionComponentDefinition> {
+        // Read per import, in the invoking scope, so a component registered
+        // by a nested scope is visible to what that scope expands.
+        const registered = yield* Component.operations.registry;
+        const definition = yield* durableImportComponent(
+          name,
+          name === "__root__" ? root : undefined,
+          position,
+          {
+            searchPaths: includes,
+            registry: registered,
+            bundle,
+            declared: installedComponents,
+            catalog,
+            guarded: identity.protected,
+          },
+        );
+        // Canonical selection, recorded into the frame of the import that asked
+        // for it. This is the only thing that puts an invocation in one of this
+        // execution's identity domains: not the name, not the answer that comes
+        // back, and nothing a handler above this can hold
+        // (`invocation-identity.ts`).
+        if (definition.kind === "function") {
+          selection?.select(name, definition);
+          // The same record, for the other thing canonical resolution decides
+          // here: which dispatcher — if any — this import selected. A dispatcher
+          // a handler kept from another import reaches no body without it.
+          forms.select(name, definition);
+        }
+        // The witness for this answer. It is issued where the answer is
+        // produced and verified where it is invoked, so what a handler does to
+        // the value in between is visible rather than authoritative.
+        return imports === undefined ? definition : imports.issue(name, definition);
+      }
+
       const environment: ExecutionEnvironment = {
         componentResolution: imports,
         // Everything this host declared, admitted above. Expansion asks it
@@ -2631,39 +2682,31 @@ function* executeDocument(
       // and the root eval scope.
       yield* Component.around(
         {
-          *importComponent([name, position], _next) {
-            // Read per import, in the invoking scope, so a component registered
-            // by a nested scope is visible to what that scope expands.
-            const registered = yield* Component.operations.registry;
-            const definition = yield* durableImportComponent(
-              name,
-              name === "__root__" ? root : undefined,
-              position,
-              {
-                searchPaths: includes,
-                registry: registered,
-                bundle,
-                declared: installedComponents,
-                catalog,
-                guarded: identity.protected,
-              },
-            );
-            // Canonical selection, recorded where it is made. This is the only
-            // thing that puts an invocation in one of this execution's identity
-            // domains: not the name, not the answer that comes back, and
-            // nothing a handler above this can hold (`invocation-identity.ts`).
-            if (definition.kind === "function") {
-              identity.identities.select(name, definition);
-              // The same record, for the other thing canonical resolution
-              // decides here: which dispatcher — if any — this import selected.
-              // A dispatcher a handler kept from another import reaches no body
-              // without it.
-              forms.select(name, definition);
+          *importComponent([name, position], next) {
+            // Delegation first. An authored import is asked through a descriptor
+            // that supplied a terminal of its own, so `next` answers it there —
+            // in that import's frame — and this provider is the middleware it
+            // composed through rather than the thing that resolved it.
+            try {
+              return yield* next(name, position);
+            } catch (error) {
+              // Only an empty public terminal reporting *this* name: nothing
+              // answered this call, so it is a direct `importComponent()` an
+              // invocation started for itself. It resolves ordinarily and names
+              // no frame, which is what makes it a separate import rather than a
+              // delegation of the authored one. Every other failure is somebody
+              // else's and propagates unchanged.
+              //
+              // The mark is parsed rather than the class compared: the terminal
+              // that raised it belongs to whichever copy of core built the
+              // descriptor that was asked, and a component loaded with
+              // `--include` or a middleware package holding its own copy is an
+              // ordinary arrangement, not a hypothetical.
+              if (!isMissingImportProvider(error, name)) {
+                throw error;
+              }
+              return yield* resolveComponentImport(name, position, undefined);
             }
-            // The witness for this answer. It is issued where the answer is
-            // produced and verified where it is invoked, so what a handler does
-            // to the value in between is visible rather than authoritative.
-            return imports === undefined ? definition : imports.issue(name, definition);
           },
           *applyModifiers([modifiers, context], _next) {
             const chain = composeModifierChain(modifiers, context, registry);
@@ -2699,7 +2742,7 @@ function* executeDocument(
       const returned = yield* durableRun(
         function* (): Operation<DocumentResult> {
           const issued = issueDocument<DocumentResult>(props, (claimed) =>
-            documentWorkflow(claimed, environment),
+            documentWorkflow(claimed, environment, resolveComponentImport),
           );
           try {
             return yield* beforeAnyImport(issued);

@@ -144,6 +144,28 @@ export const STRUCTURAL_DECLARATIONS: readonly EngineStructuralDeclaration[] = [
     context: null,
   },
   {
+    name: "All",
+    syntax: ["<All><Spawn>…</Spawn><Spawn>…</Spawn></All>"],
+    description:
+      "Run tasks in parallel. " +
+      "`<All><Spawn>first</Spawn><Spawn>second</Spawn></All>` expands every task at the same " +
+      "time, waits for them all to succeed, and preserves their Markdown order. Write at least " +
+      "two `<Spawn>` children directly inside it; if one fails, unfinished tasks are cancelled " +
+      "and `<All>` produces no output.",
+    as: null,
+    context: "The `<Spawn>` children this runs at the same time.",
+  },
+  {
+    name: "Spawn",
+    syntax: ["<Spawn>…</Spawn>"],
+    description:
+      "Run a task in parallel inside of `<All>`. Write `<Spawn>…</Spawn>` directly inside " +
+      "`<All>`; bindings made in its content stay with that task, and `<Return>` or `<Break>` " +
+      "cannot affect work outside it.",
+    as: null,
+    context: "Markdown expanded in its own child, beside its siblings.",
+  },
+  {
     name: "PrintErrors",
     syntax: ["<PrintErrors>…</PrintErrors>"],
     description:

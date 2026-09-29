@@ -326,6 +326,7 @@ describe("Tier SX — the run profile the command describes", () => {
     // The whole structural vocabulary this profile publishes, so a construct
     // returning to it has to be written down here.
     expect([...names(structural.entries)].sort()).toEqual([
+      "All",
       "Answer",
       "Answers",
       "Break",
@@ -339,6 +340,7 @@ describe("Tier SX — the run profile the command describes", () => {
       "Output",
       "PrintErrors",
       "Return",
+      "Spawn",
       "Switch",
     ]);
     for (const name of ["Terminal.Grid", "Terminal"]) {

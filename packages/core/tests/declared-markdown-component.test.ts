@@ -36,7 +36,7 @@ import { API } from "@executablemd/runtime";
 import { mkdir, mkdtemp, realpath } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { InMemoryStream } from "@executablemd/durable-streams";
+import { InMemoryStream, StaleInputError } from "@executablemd/durable-streams";
 import type { DurableEvent, Json } from "@executablemd/durable-streams";
 import { Component } from "../src/component-api.ts";
 import { collect } from "../src/collect.ts";
@@ -1389,8 +1389,10 @@ function* published(
   source: string,
   declarations: readonly MarkdownComponent[],
   extra: readonly ExecutionInstallation[],
+  stream: InMemoryStream = new InMemoryStream(),
+  /** Where each published chunk lands, so a failed run's output is still readable. */
+  chunks: string[] = [],
 ): Operation<string> {
-  const chunks: string[] = [];
   return yield* scoped(function* () {
     yield* useNormalizedOutput();
     yield* useTerminalOutput();
@@ -1404,7 +1406,7 @@ function* published(
       yield* executeInstalled(
         {
           ...retainedSource(ROOT_PATH, source),
-          stream: new InMemoryStream(),
+          stream,
           includes: [],
         },
         [installation(declarations), ...extra],
@@ -1431,6 +1433,55 @@ function answeringOpenName(definition: ImportedDefinition): ExecutionInstallatio
       );
     },
   };
+}
+
+/**
+ * The `{ text, exact }` runs one child's close retained, read rather than
+ * asserted.
+ *
+ * A row about what a durable value *is* cannot cast it into the shape it claims,
+ * so every member is parsed here and anything else throws — naming what it found —
+ * instead of arriving at the expectation as a plausible shape nobody checked.
+ */
+function retainedRuns(event: DurableEvent): { text: string; exact: boolean }[] {
+  if (event.type !== "close" || event.result.status !== "ok") {
+    return [];
+  }
+  const value = event.result.value;
+  if (!Array.isArray(value)) {
+    throw new Error(`the close of ${event.coroutineId} retained no runs: ${JSON.stringify(value)}`);
+  }
+  return value.map((entry) => {
+    if (typeof entry === "object" && entry !== null && !Array.isArray(entry)) {
+      const { text, exact } = entry;
+      if (typeof text === "string" && typeof exact === "boolean") {
+        return { text, exact };
+      }
+    }
+    throw new Error(`the close of ${event.coroutineId} retained ${JSON.stringify(entry)}`);
+  });
+}
+
+/**
+ * One replay that is expected to refuse, with whatever it published on the way.
+ *
+ * The chunks are the caller's array, so what this reports is what the run
+ * actually handed the Output Api before it failed — not an empty string this
+ * helper decided on. A row asserting "published nothing" has to be able to see
+ * something.
+ */
+function* refusalOfRun(
+  source: string,
+  declarations: readonly MarkdownComponent[],
+  history: readonly DurableEvent[],
+): Operation<{ failure: unknown; output: string }> {
+  const chunks: string[] = [];
+  try {
+    yield* published(source, declarations, [], new InMemoryStream([...history]), chunks);
+    return { failure: undefined, output: chunks.join("") };
+  } catch (error) {
+    return { failure: error, output: chunks.join("") };
+  }
 }
 
 describe("Tier DM — exact source is a provenance, not a field", () => {
@@ -1559,6 +1610,125 @@ describe("Tier DM — exact source is a provenance, not a field", () => {
 
     expect(unpresented(output)).toBe(false);
     expect(output).not.toContain("**these**");
+  });
+
+  it("DM54: a spawned child's exact source is still source", function* () {
+    // `<All>` joins its children by value, so what crosses the join says what
+    // it is. A child that reduced its region to one string would hand the
+    // caller prose, and the approved bytes a `<Spawn>` rendered would be
+    // presented — reflowed, its markers eaten — as if a person had written them.
+    const inside = yield* published(
+      [
+        "<All>",
+        "<Spawn>",
+        "<Policy />",
+        "</Spawn>",
+        "<Spawn>",
+        "ordinary prose",
+        "</Spawn>",
+        "</All>",
+        "",
+      ].join("\n"),
+      [declared(PRESENTABLE, { exact: true })],
+      [],
+    );
+
+    expect(unpresented(inside)).toBe(true);
+    // And the sibling that rendered prose is still prose: the join does not
+    // make one child's disposition the other's.
+    expect(inside).toContain("ordinary prose");
+  });
+
+  it("DM55: a replayed child restores what its bytes were", function* () {
+    // The disposition is a fact about what canonical expansion produced, and
+    // the segments it marked do not survive the process. A replay therefore
+    // reads it from the child's own durable close — and a close that retained
+    // only text could not answer at all.
+    const source = [
+      "<All>",
+      "<Spawn>",
+      "<Policy />",
+      "</Spawn>",
+      "<Spawn>",
+      "ordinary prose",
+      "</Spawn>",
+      "</All>",
+      "",
+    ].join("\n");
+    const declarations = [declared(PRESENTABLE, { exact: true })];
+    const stream = new InMemoryStream();
+    const live = yield* published(source, declarations, [], stream);
+    expect(unpresented(live)).toBe(true);
+
+    // The children's own closes, without the root's: the parent runs again and
+    // restores each child from what it recorded, which is the state a resumed
+    // run is actually in.
+    const history = (yield* stream.readAll()).filter(
+      (event) => !(event.type === "close" && event.coroutineId === "root"),
+    );
+    const children = history.filter(
+      (event) => event.type === "close" && event.coroutineId.includes("."),
+    );
+    expect(children).toHaveLength(2);
+    // What each child retained says what its bytes were, not only what they
+    // said. Read as a set: children close in whatever order they finished, and
+    // which one finished first is exactly what this must not depend on.
+    const runs = children.flatMap((event) => retainedRuns(event));
+    expect(runs.filter((run) => run.exact)).toEqual([{ text: PRESENTABLE, exact: true }]);
+    expect(runs.some((run) => !run.exact && run.text.includes("ordinary prose"))).toBe(true);
+
+    const replayed = yield* published(source, declarations, [], new InMemoryStream(history));
+
+    expect(replayed).toBe(live);
+    expect(unpresented(replayed)).toBe(true);
+  });
+
+  it("DM56: a child's close this version cannot read fails the run, and publishes nothing", function* () {
+    const source = [
+      "<All>",
+      "<Spawn>",
+      "<Policy />",
+      "</Spawn>",
+      "<Spawn>",
+      "ordinary prose",
+      "</Spawn>",
+      "</All>",
+      "",
+    ].join("\n");
+    const declarations = [declared(PRESENTABLE, { exact: true })];
+    const stream = new InMemoryStream();
+    yield* published(source, declarations, [], stream);
+    const complete = (yield* stream.readAll()).filter(
+      (event) => !(event.type === "close" && event.coroutineId === "root"),
+    );
+
+    // Every way a retained close can stop being a list of runs: a value that is
+    // not a list, a member that is not a run, a member missing one of the two
+    // things a run is, and a member carrying something else besides.
+    const damaged: Json[] = [
+      "not emission runs",
+      [{ text: PRESENTABLE }],
+      [{ text: PRESENTABLE, exact: "yes" }],
+      [{ text: PRESENTABLE, exact: true, presented: false }],
+      [PRESENTABLE],
+    ];
+
+    for (const value of damaged) {
+      const history = complete.map(
+        (event): DurableEvent =>
+          event.type === "close" && event.coroutineId.endsWith(".0")
+            ? { ...event, result: { status: "ok", value } }
+            : event,
+      );
+      const attempt = yield* refusalOfRun(source, declarations, history);
+      const which = JSON.stringify(value);
+
+      // Refused as the stale input it is, and nothing published on the way: a
+      // document rebuilt without the part it could not read is a document that
+      // never existed. The chunks are the run's own, collected before it failed.
+      expect([which, attempt.failure instanceof StaleInputError]).toEqual([which, true]);
+      expect([which, attempt.output]).toEqual([which, ""]);
+    }
   });
 });
 

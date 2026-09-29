@@ -716,6 +716,207 @@ export function switchStructure(segment: ComponentElement): SwitchStructure {
   return { violations, matching, ...(fallback === undefined ? {} : { fallback }) };
 }
 
+/** What a `<Spawn>` written outside the `<All>` that runs it says. */
+export function straySpawnMessage(): string {
+  return (
+    "<Spawn> must be a direct child of <All>. <Spawn> is reserved: it never resolves a " +
+    "component, and only the <All> it belongs to can run it."
+  );
+}
+
+/** What a `<Return>` written inside a spawned child says. */
+export function spawnReturnMessage(): string {
+  return (
+    "<Return> cannot cross <Spawn>. A spawned child owns no value body, so a <Return> " +
+    "written inside one would have to select a value owned outside <All> — which several " +
+    "children running at once may not race to claim. A component invoked inside the spawn " +
+    "still owns its own <Return>."
+  );
+}
+
+/** What a `<Break>` written inside a spawned child with no loop of its own says. */
+export function spawnBreakMessage(): string {
+  return (
+    "<Break> cannot cross <Spawn>. A spawned child cannot exit a <Loop> written outside " +
+    "<All>, because several children running at once may not race to decide one loop. A " +
+    "<Loop> written wholly inside the spawn is broken by its own <Break> as usual."
+  );
+}
+
+/**
+ * One `<Spawn>` `<All>` runs, and where it was written.
+ *
+ * `index` is the child index the element sits at, which is what its expansion
+ * frame is derived from (§5.6); `ordinal` is its place among the spawns, which
+ * is the order its durable child identity and its rendered output follow.
+ */
+export interface SpawnRegion {
+  readonly element: ComponentElement;
+  readonly index: number;
+  readonly ordinal: number;
+}
+
+/** How an `<All>` body divides into spawned children, and what it got wrong. */
+export interface AllStructure {
+  readonly violations: StructuralViolation[];
+  /** The direct `<Spawn>` children, in authored order. */
+  readonly spawns: SpawnRegion[];
+}
+
+/** Everything one `<Spawn>` element decides from what the author wrote. */
+function spawnElementViolations(segment: ComponentElement): StructuralViolation[] {
+  const found: StructuralViolation[] = [];
+  const names = authoredPropNames(segment);
+  if (names.length > 0) {
+    found.push(
+      violation(
+        "structural-usage-invalid",
+        "Spawn",
+        `<Spawn> accepts no props. Got: "${names[0]}".`,
+        segment,
+      ),
+    );
+  }
+  if (segment.selfClosing) {
+    found.push(
+      violation(
+        "structural-usage-invalid",
+        "Spawn",
+        "<Spawn> holds the markdown its child expands, so it is written paired: " +
+          "<Spawn>...</Spawn>.",
+        segment,
+      ),
+    );
+  }
+  return found;
+}
+
+/**
+ * Every `<Spawn>` below an `<All>` that is not one of its direct children. The
+ * walk stops at a nested `<All>`, which owns the spawns beneath it.
+ */
+function misplacedSpawnViolations(children: Segment[]): StructuralViolation[] {
+  const found: StructuralViolation[] = [];
+
+  const walk = (segments: Segment[], depth: number): void => {
+    for (const segment of segments) {
+      if (segment.type !== "component" || segment.name === "All") {
+        continue;
+      }
+      if (segment.name === "Spawn" && depth > 0) {
+        found.push(violation("structural-usage-invalid", "Spawn", straySpawnMessage(), segment));
+      }
+      walk(segment.children, depth + 1);
+    }
+  };
+
+  walk(children, 0);
+  return found;
+}
+
+/**
+ * What one spawned child's own body says about control flow leaving it.
+ *
+ * Lexical, like every other placement rule here: a `<Break>` is legal because a
+ * `<Loop>` written inside the same spawn encloses it, and a `<Return>` has no
+ * owner to select at all, because `<All>` produces no value and a spawn is not
+ * a value body. A definition invoked inside the child is its own source and is
+ * not reached from here, so its `<Return>` keeps its ordinary meaning.
+ *
+ * The walk stops at a nested `<All>`, whose own structure owns the spawns
+ * beneath it, so one misplaced element is reported once.
+ */
+function spawnFlowViolations(spawn: ComponentElement): StructuralViolation[] {
+  const found: StructuralViolation[] = [];
+
+  const walk = (segments: Segment[], insideLoop: boolean): void => {
+    for (const segment of segments) {
+      if (segment.type !== "component" || segment.name === "All") {
+        continue;
+      }
+      if (segment.name === "Return") {
+        found.push(violation("return-usage-invalid", "Return", spawnReturnMessage(), segment));
+        continue;
+      }
+      if (segment.name === "Break" && !insideLoop) {
+        found.push(violation("structural-usage-invalid", "Break", spawnBreakMessage(), segment));
+        continue;
+      }
+      walk(segment.children, insideLoop || segment.name === "Loop");
+    }
+  };
+
+  walk(spawn.children, false);
+  return found;
+}
+
+/**
+ * Divide an `<All>` body into the children it runs and validate the division
+ * (spec §6.5). Everything here is read from source, before any child starts, so
+ * a malformed construct refuses the whole `<All>` rather than being discovered
+ * once one child is already running.
+ *
+ * Two spawns is the smallest thing worth running at the same time: one alone is
+ * the sequential document it was already written as, and saying so is a fact
+ * about the source rather than a scheduling decision.
+ */
+export function allStructure(segment: ComponentElement): AllStructure {
+  const violations: StructuralViolation[] = [];
+  const spawns: SpawnRegion[] = [];
+
+  const names = authoredPropNames(segment);
+  if (names.length > 0) {
+    violations.push(
+      violation("structural-usage-invalid", "All", `<All> accepts no props. Got: "${names[0]}".`),
+    );
+  }
+  if (segment.selfClosing) {
+    violations.push(
+      violation(
+        "structural-usage-invalid",
+        "All",
+        "<All> holds the <Spawn> children it runs, so it is written paired: " +
+          "<All><Spawn>...</Spawn><Spawn>...</Spawn></All>.",
+      ),
+    );
+  }
+
+  for (const [index, child] of segment.children.entries()) {
+    if (isBlankText(child)) {
+      continue;
+    }
+    if (child.type !== "component" || child.name !== "Spawn") {
+      violations.push(
+        violation(
+          "structural-usage-invalid",
+          "All",
+          `<All> holds only <Spawn> children. Found ${describeSegment(child)} directly inside ` +
+            "it.",
+          child.type === "component" ? child : undefined,
+        ),
+      );
+      continue;
+    }
+    violations.push(...spawnElementViolations(child));
+    violations.push(...spawnFlowViolations(child));
+    spawns.push({ element: child, index, ordinal: spawns.length });
+  }
+
+  if (!segment.selfClosing && spawns.length < 2) {
+    violations.push(
+      violation(
+        "structural-usage-invalid",
+        "All",
+        "<All> runs at least two <Spawn> children at the same time. Write the second one, " +
+          `or write the work inline. Found ${spawns.length}.`,
+      ),
+    );
+  }
+
+  violations.push(...misplacedSpawnViolations(segment.children));
+  return { violations, spawns };
+}
+
 const LOOP_PROPS = new Set(["max", "name"]);
 
 /** How a `<Loop>` names itself in its own printed errors. */
