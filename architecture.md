@@ -3318,7 +3318,11 @@ coroutine of the one that reached the `<All>`, and nesting produces the existing
 hierarchical identity. Effects inside a child keep their ordinary descriptions
 under that coroutine, so two children may derive the same local block id without
 colliding, and work after `</All>` continues on the parent counter it would have
-had without any child. Each successful child closes with its rendered string.
+had without any child. Each successful child closes with the ordered `{ text, exact }` runs it
+rendered. Exact presentation is a provenance recorded against the segment
+objects expansion marked, and those segments do not cross the join — so the runs
+are what carries it, live and on replay alike, and a retained close that does
+not read as that shape fails the run instead of rebuilding part of a document.
 
 **Output is authored order; the journal is completion order.** A child emits
 into its private buffer, and `<All>` appends the renderings to its caller's

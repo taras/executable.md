@@ -6810,10 +6810,17 @@ protocol's §7). Each child also gets a fresh block counter and an expansion pat
 extended by its authored ordinal, so two children may derive the same local block
 id without colliding — the child coroutine namespaces it — and the work after
 `</All>` continues on the parent counter it would have had anyway. Each
-successful child closes with its rendered string. A complete replay runs no
+successful child closes with the ordered runs it rendered: consecutive segments
+of one disposition, each `{ text, exact }`, where `exact` says whether those
+bytes are a program's approved source rather than prose (§5.3). The segments a
+child marked never leave it, so the run is where that provenance crosses the
+join — a close holding only text could not say what its bytes were, and a
+replayed child's source would be published as prose. A complete replay runs no
 spawned work and rebuilds the output from those closes; a partial replay
 restores the children that closed and resumes only the unrecorded ones, under
-the same identities. Inserting, removing or reordering spawns is a definition
+the same identities. A retained close that does not read as that exact shape —
+not a list, a member that is not a run, a run missing or exceeding its two
+members — fails the run rather than contributing part of a document. Inserting, removing or reordering spawns is a definition
 change and follows the ordinary divergence contract.
 
 **Failure and cancellation.** The join is fail-fast. The first child failure
@@ -13309,6 +13316,10 @@ what they observe is what a person's terminal would show.
 | DM50 | An ordinary declaration is prose | The same bytes from a declaration the host did not call exact are stripped, collapsed and formatted |
 | DM51 | A middleware answer cannot claim it | `Component.importComponent` middleware answering an open name with a definition carrying the disposition gets prose; nothing admitted that definition, so nothing about it is exact |
 | DM52 | A mark this engine did not make is nothing | A segment carrying the disposition as a field is not exact, whoever supplied it; expansion also rebuilds text segments, so such a field never reaches emission in the first place |
+| DM53 | The record is not reachable by name | A component that builds a context with the record's name and writes to it publishes prose |
+| DM54 | A spawned child's source is still source | A declared exact component rendered inside `<All>`/`<Spawn>` keeps its bytes unpresented, and a prose sibling stays prose |
+| DM55 | A replayed child restores what its bytes were | Each child's retained close holds its ordered `{ text, exact }` runs, and replaying that history reproduces the live output with the same provenance |
+| DM56 | A close that will not read fails the run | A retained child close that is not a list of runs, or holds a member that is not one, refuses atomically and publishes nothing |
 
 ### Tier MDK — Declaring exact Markdown with `Markdown({…})` (§5.3)
 

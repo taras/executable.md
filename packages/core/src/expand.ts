@@ -132,10 +132,15 @@ import { createReturnBody, missingReturnMessage } from "./return-flow.ts";
 import type { ReturnBody } from "./return-flow.ts";
 import { unbox, useEvalScope } from "@effectionx/scope-eval";
 import type { EvalScope } from "@effectionx/scope-eval";
-import { DurableContext, durableAll, ephemeral } from "@executablemd/durable-streams";
+import {
+  DurableContext,
+  durableAll,
+  ephemeral,
+  StaleInputError,
+} from "@executablemd/durable-streams";
 import type { Workflow } from "@executablemd/durable-streams";
 import { SchemaValidationError, validateProps, validateReturnValue } from "./validate.ts";
-import { parseJson } from "./json.ts";
+import { isJsonObject, parseJson } from "./json.ts";
 import { healSegment } from "./heal.ts";
 import { scanSegments } from "./scanner.ts";
 import { declareChildAnswers, expandAnswers, strayAnswerError } from "./answers.ts";
@@ -2484,27 +2489,34 @@ function retained(child: Operation<Emission[]>): Operation<Json> {
   })();
 }
 
+/** What a child's retained close is refused with when it will not read. */
+const UNREADABLE_RUNS =
+  "a spawned child's retained close cannot be read as what it rendered, so this run cannot " +
+  "rebuild the document that child produced. A history is read whole or not at all.";
+
 /**
  * The runs a child closed with, read back from what the journal holds.
  *
- * Parsed rather than trusted: a replay hands back whatever the history has, and
- * a record that is not a list of runs is a record this version cannot read. A
- * run it cannot read is not presented as source — the safe answer, and the same
- * one an unmarked segment gets.
+ * Parsed whole, and refused whole. A replay hands back whatever the history has;
+ * skipping a member it cannot read, or reading a value that is not a list of
+ * runs as an empty one, would publish a document missing exactly the part that
+ * could not be read — and it would look like a document that rendered nothing
+ * there. So every member is checked, the shape is closed at the two members a
+ * run has, and anything else fails this run rather than shortening its output.
  */
 function readEmissions(value: Json): Emission[] {
   if (!Array.isArray(value)) {
-    return [];
+    throw new StaleInputError(UNREADABLE_RUNS);
   }
   const runs: Emission[] = [];
   for (const entry of value) {
-    if (entry === null || typeof entry !== "object" || Array.isArray(entry)) {
-      continue;
+    if (!isJsonObject(entry)) {
+      throw new StaleInputError(UNREADABLE_RUNS);
     }
-    const text = (entry as { [key: string]: Json })["text"];
-    const exact = (entry as { [key: string]: Json })["exact"];
-    if (typeof text !== "string" || typeof exact !== "boolean") {
-      continue;
+    const text = entry["text"];
+    const exact = entry["exact"];
+    if (Object.keys(entry).length !== 2 || typeof text !== "string" || typeof exact !== "boolean") {
+      throw new StaleInputError(UNREADABLE_RUNS);
     }
     runs.push({ text, exact });
   }

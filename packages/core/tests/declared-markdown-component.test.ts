@@ -1434,6 +1434,20 @@ function answeringOpenName(definition: ImportedDefinition): ExecutionInstallatio
   };
 }
 
+/** One replay that is expected to refuse, with whatever it managed to publish. */
+function* refusalOfRun(
+  source: string,
+  declarations: readonly MarkdownComponent[],
+  history: readonly DurableEvent[],
+): Operation<{ failed: boolean; output: string }> {
+  try {
+    const output = yield* published(source, declarations, [], new InMemoryStream([...history]));
+    return { failed: false, output };
+  } catch {
+    return { failed: true, output: "" };
+  }
+}
+
 describe("Tier DM — exact source is a provenance, not a field", () => {
   it("DM49: a declared component the host called exact emits its bytes unpresented", function* () {
     // The positive control. Without it the two refusals below would pass for a
@@ -1589,7 +1603,7 @@ describe("Tier DM — exact source is a provenance, not a field", () => {
     expect(inside).toContain("ordinary prose");
   });
 
-  it("DM54: a replayed child restores what its bytes were", function* () {
+  it("DM55: a replayed child restores what its bytes were", function* () {
     // The disposition is a fact about what canonical expansion produced, and
     // the segments it marked do not survive the process. A replay therefore
     // reads it from the child's own durable close — and a close that retained
@@ -1636,6 +1650,51 @@ describe("Tier DM — exact source is a provenance, not a field", () => {
 
     expect(replayed).toBe(live);
     expect(unpresented(replayed)).toBe(true);
+  });
+
+  it("DM56: a child's close this version cannot read fails the run, and publishes nothing", function* () {
+    const source = [
+      "<All>",
+      "<Spawn>",
+      "<Policy />",
+      "</Spawn>",
+      "<Spawn>",
+      "ordinary prose",
+      "</Spawn>",
+      "</All>",
+      "",
+    ].join("\n");
+    const declarations = [declared(PRESENTABLE, { exact: true })];
+    const stream = new InMemoryStream();
+    yield* published(source, declarations, [], stream);
+    const complete = (yield* stream.readAll()).filter(
+      (event) => !(event.type === "close" && event.coroutineId === "root"),
+    );
+
+    // Every way a retained close can stop being a list of runs: a value that is
+    // not a list, a member that is not a run, a member missing one of the two
+    // things a run is, and a member carrying something else besides.
+    const damaged: Json[] = [
+      "not emission runs",
+      [{ text: PRESENTABLE }],
+      [{ text: PRESENTABLE, exact: "yes" }],
+      [{ text: PRESENTABLE, exact: true, presented: false }],
+      [PRESENTABLE],
+    ];
+
+    for (const value of damaged) {
+      const history = complete.map((event) =>
+        event.type === "close" && event.coroutineId.endsWith(".0")
+          ? { ...event, result: { status: "ok" as const, value } }
+          : event,
+      );
+      const published_ = yield* refusalOfRun(source, declarations, history);
+
+      // Refused, and nothing published: a document rebuilt without the part it
+      // could not read is a document that never existed.
+      expect([JSON.stringify(value), published_.failed]).toEqual([JSON.stringify(value), true]);
+      expect([JSON.stringify(value), published_.output]).toEqual([JSON.stringify(value), ""]);
+    }
   });
 });
 
