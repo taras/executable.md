@@ -702,6 +702,8 @@ describe("REPL model: the Agent histories it refuses", () => {
 
     for (const change of [
       (record: { [key: string]: Json }) => ({ ...record, sequence: "second" }),
+      (record: { [key: string]: Json }) => ({ ...record, sequence: -1 }),
+      (record: { [key: string]: Json }) => ({ ...record, sequence: 0.5 }),
       (record: { [key: string]: Json }) => ({ ...record, status: "nearly" }),
       (record: { [key: string]: Json }) => ({ ...record, sessionKey: 7 }),
     ]) {
@@ -711,6 +713,16 @@ describe("REPL model: the Agent histories it refuses", () => {
     const projection = projectRepl(
       withPrompt(events, 0, (record) => ({ ...record, sequence: "second" })),
     );
+    expect(projection.ok).toBe(false);
+    expect("value" in projection).toBe(false);
+  });
+
+  it("M2: refuses duplicate Prompt sequences instead of guessing from append order", function* () {
+    const events = yield* agentReferenceEvents();
+    const duplicate = withPrompt(events, 1, (record) => ({ ...record, sequence: 0 }));
+
+    expect(refusal(duplicate)).toContain("two recorded Agent prompts claim sequence 0");
+    const projection = projectRepl(duplicate);
     expect(projection.ok).toBe(false);
     expect("value" in projection).toBe(false);
   });

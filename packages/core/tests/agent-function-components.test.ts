@@ -994,6 +994,21 @@ describe("Tier AF — Session configuration", () => {
     expect(parsed?.configuration).toBe(undefined);
   });
 
+  it("AF32a: a prompt sequence is a non-negative integer", function* () {
+    const complete = {
+      sequence: 0,
+      agent: "codex",
+      sessionKey: "xmd:v1:a",
+      status: "completed",
+      text: "hello",
+    };
+
+    expect(parsePromptRecord(complete)?.sequence).toBe(0);
+    for (const sequence of [-1, 0.5]) {
+      expect(parsePromptRecord({ ...complete, sequence })).toBe(undefined);
+    }
+  });
+
   it("AF33: a configuration member that names no choice refuses the record", function* () {
     const complete = {
       sequence: 0,

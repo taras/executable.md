@@ -746,6 +746,16 @@ function build(
     });
   }
 
+  const sequences = new Set<number>();
+  for (const turn of turns) {
+    if (sequences.has(turn.sequence)) {
+      return Err(
+        new ReplProjectionError(`two recorded Agent prompts claim sequence ${turn.sequence}.`),
+      );
+    }
+    sequences.add(turn.sequence);
+  }
+
   // By the sequence each record states, not by where its event landed: a
   // Journal appends a turn when it finished, and two conversations running
   // beside each other finish in whatever order their providers answered.

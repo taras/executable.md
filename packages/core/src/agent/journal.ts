@@ -618,7 +618,12 @@ export function parsePromptRecord(value: unknown): PromptRecord | undefined {
     raised,
     checkpoint,
   } = value;
-  if (typeof sequence !== "number" || typeof agent !== "string") {
+  if (
+    typeof sequence !== "number" ||
+    !Number.isInteger(sequence) ||
+    sequence < 0 ||
+    typeof agent !== "string"
+  ) {
     return undefined;
   }
   if (typeof sessionKey !== "string" || typeof text !== "string") {
