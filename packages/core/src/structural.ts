@@ -147,10 +147,11 @@ export const STRUCTURAL_DECLARATIONS: readonly EngineStructuralDeclaration[] = [
     name: "All",
     syntax: ["<All><Spawn>…</Spawn><Spawn>…</Spawn></All>"],
     description:
-      "Run independent work at the same time. " +
-      "`<All><Spawn>first</Spawn><Spawn>second</Spawn></All>` waits for every spawned child, " +
-      "then renders their Markdown in authored order even when they finish in another order. " +
-      "Write at least two `<Spawn>` children directly inside it.",
+      "Run tasks in parallel. " +
+      "`<All><Spawn>first</Spawn><Spawn>second</Spawn></All>` expands every task at the same " +
+      "time, waits for them all to succeed, and preserves their Markdown order. Write at least " +
+      "two `<Spawn>` children directly inside it; if one fails, unfinished tasks are cancelled " +
+      "and `<All>` produces no output.",
     as: null,
     context: "The `<Spawn>` children this runs at the same time.",
   },
@@ -158,9 +159,9 @@ export const STRUCTURAL_DECLARATIONS: readonly EngineStructuralDeclaration[] = [
     name: "Spawn",
     syntax: ["<Spawn>…</Spawn>"],
     description:
-      "Mark one child for an enclosing `<All>` to run. Write `<Spawn>…</Spawn>` directly " +
-      "inside `<All>`; bindings made in its content stay in that child, and its `<Return>` " +
-      "or `<Break>` cannot target work outside it.",
+      "Run a task in parallel inside of `<All>`. Write `<Spawn>…</Spawn>` directly inside " +
+      "`<All>`; bindings made in its content stay with that task, and `<Return>` or `<Break>` " +
+      "cannot affect work outside it.",
     as: null,
     context: "Markdown expanded in its own child, beside its siblings.",
   },
