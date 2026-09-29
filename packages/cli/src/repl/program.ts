@@ -45,6 +45,8 @@ import {
   admitted,
   answered,
   focusSettled,
+  permissionSettled,
+  permissionWithdrawn,
   describeApplication,
   initialState,
   reduceRepl,
@@ -53,7 +55,7 @@ import {
   stateFor,
   viewFor,
 } from "./application.ts";
-import type { Json, NormalizedIssue } from "@executablemd/core";
+import type { Json, NormalizedIssue, PermissionMode } from "@executablemd/core";
 import type {
   ReplAction,
   ReplFormMessage,
@@ -92,6 +94,14 @@ export interface ReplProgramOptions {
   readonly installations?: readonly ExecutionInstallation[];
   /** The repository root. Defaults to this host's per-user data directory. */
   readonly root?: string;
+  /**
+   * How this REPL answers Agent permission requests.
+   *
+   * Passed through to the session, which installs the policy. Absent means
+   * `deny-all`, which is what an execution with no configured mode already does —
+   * so a REPL that nobody configured asks nobody anything.
+   */
+  readonly permissionMode?: PermissionMode;
 }
 
 /** What the command reports when it ends. */
@@ -177,6 +187,7 @@ export function* runReplProgram(options: ReplProgramOptions = {}): Operation<Res
     execution,
     ...(options.includes === undefined ? {} : { includes: options.includes }),
     ...(options.installations === undefined ? {} : { installations: options.installations }),
+    ...(options.permissionMode === undefined ? {} : { permissionMode: options.permissionMode }),
     ...(state.route.at === undefined ? {} : { selection: state.route.at }),
   });
 
@@ -432,6 +443,11 @@ function* drive(
                 // which is what makes the record it adds recognisable.
                 state = answered(state, model, performed.answered);
               }
+              if (performed.settled !== undefined) {
+                // The authority answered it, so the request is gone and the
+                // drawer over it goes too.
+                state = permissionSettled(state, performed.settled);
+              }
               if (performed.messages !== undefined) {
                 // Still the same question. What the schema said goes under the
                 // form, and every value stays where it was typed.
@@ -480,6 +496,11 @@ function* drive(
                 // which is what makes the record it adds recognisable.
                 state = answered(state, model, performed.answered);
               }
+              if (performed.settled !== undefined) {
+                // The authority answered it, so the request is gone and the
+                // drawer over it goes too.
+                state = permissionSettled(state, performed.settled);
+              }
               if (performed.messages !== undefined) {
                 // Still the same question. What the schema said goes under the
                 // form, and every value stays where it was typed.
@@ -497,6 +518,18 @@ function* drive(
             }
           }
         }
+      }
+
+      // A request nobody answered can still stop existing: the turn that was
+      // waiting was torn down, or it published. The drawer over it can then
+      // resolve to nothing, so it is withdrawn here rather than left to fail
+      // resolution — and nothing claims a choice or a denial, because none was
+      // made.
+      if (
+        state.permission !== undefined &&
+        !current.agent.requests.some((request) => request.key === state.permission)
+      ) {
+        state = permissionWithdrawn(state);
       }
 
       // A question is the interaction, not a place to go looking for one: when
@@ -604,6 +637,7 @@ function liveOf(session: ReplSession): ReplLive {
     question: session.overlay.question,
     expansion: session.expansion.state,
     pausable: session.controller !== undefined,
+    agent: session.agent,
   };
 }
 
@@ -710,6 +744,14 @@ interface Performed {
    * state so the form a person is looking at can say what is wrong with it.
    */
   readonly messages?: readonly ReplFormMessage[];
+  /**
+   * The turn a permission request was really settled for, when one was.
+   *
+   * Only a successful authority call reports one: the drawer closes because the
+   * request it was opened over is gone, and focus returns to the turn that was
+   * waiting.
+   */
+  readonly settled?: string;
   /** Why it could not be done, for the screen to say. */
   readonly refusal?: string;
 }
@@ -757,12 +799,28 @@ function* perform(
         ? { answered: outcome.answer }
         : { messages: reported(outcome) };
     }
+    case "settle-permission": {
+      // The authority's answer, once. It is asked here and nowhere else: a
+      // surface that could settle a request would hold the capability that
+      // denies one, and this is the only thing that has it.
+      //
+      // An unknown, stale or already-settled key settles nothing and says so by
+      // answering false, and the drawer stays exactly as it is — a screen that
+      // closed on a call that did nothing would be claiming a decision.
+      const settled =
+        intent.option === undefined
+          ? session.permissions.dismiss(intent.request)
+          : session.permissions.choose(intent.request, intent.option);
+      wakes.send({ kind: "session" });
+      return settled ? { settled: intent.turn } : {};
+    }
     case "submit": {
       const submitted = yield* submitReplEntry({
         execution,
         source: intent.source,
         ...(options.includes === undefined ? {} : { includes: options.includes }),
         ...(options.installations === undefined ? {} : { installations: options.installations }),
+        ...(options.permissionMode === undefined ? {} : { permissionMode: options.permissionMode }),
       });
       if (!submitted.ok) {
         // A preflight refusal leaves the draft exactly as it was and the history

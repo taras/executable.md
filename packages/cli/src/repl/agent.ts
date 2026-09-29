@@ -126,11 +126,50 @@ export interface ReplLivePermission {
   readonly choices: readonly ReplLiveChoice[];
 }
 
+/**
+ * Where one observed Prompt sits, and what it became.
+ *
+ * A slot outlives the live turn it began as. Publication changes where a turn's
+ * facts come from — the record, rather than this process's observation — and it
+ * is the same turn a person was already looking at, so the slot keeps one
+ * position and one identity across that change. Without it a reader has only
+ * two disjoint lists and has to guess which durable row replaced which live one.
+ *
+ * `order` is observation order, which is the order Prompts were scheduled in;
+ * `durable` is the name the record was journaled under, once the append that
+ * replaced this turn has been accounted for. Everything here is process-local:
+ * no slot, key or order reaches a location, the model or the Journal.
+ */
+export interface ReplAgentSlot {
+  /** The live key this Prompt was observed under, and stays mounted as. */
+  readonly key: string;
+  /** Where this Prompt sits among the ones this process observed. */
+  readonly order: number;
+  /** The durable name its record was journaled under, or none while it is live. */
+  readonly durable: string | undefined;
+  /**
+   * The facts this turn had when it published, or none while it is still live.
+   *
+   * Kept so the row can never blank: the append is accounted for here and the
+   * record is projected by whoever owns the transition, and a reader that had
+   * only the two lists would show nothing for this turn in between.
+   */
+  readonly last: ReplLiveTurn | undefined;
+}
+
 /** Everything this process knows about live Agent work right now. */
 export interface ReplAgentReading {
   /** Live turns in the order their Prompts were observed. */
   readonly turns: readonly ReplLiveTurn[];
   readonly requests: readonly ReplLivePermission[];
+  /**
+   * Every Prompt this process observed, live or since published.
+   *
+   * In observation order. A reader presents these rather than concatenating the
+   * live turns with the retained ones, because a turn that has published is
+   * still in the same place it was.
+   */
+  readonly slots: readonly ReplAgentSlot[];
 }
 
 /**
@@ -211,6 +250,14 @@ interface LiveTurn {
   failure: string | undefined;
 }
 
+/** Mutable bookkeeping for one observed Prompt's place in the reading. */
+interface Slot {
+  readonly key: string;
+  readonly order: number;
+  durable: string | undefined;
+  last: ReplLiveTurn | undefined;
+}
+
 interface LiveRequest {
   readonly key: string;
   readonly turn: string;
@@ -235,6 +282,15 @@ function frozenTurn(turn: LiveTurn): ReplLiveTurn {
     status: turn.status,
     stopReason: turn.stopReason,
     failure: turn.failure,
+  });
+}
+
+function frozenSlot(slot: Slot): ReplAgentSlot {
+  return Object.freeze({
+    key: slot.key,
+    order: slot.order,
+    durable: slot.durable,
+    last: slot.last,
   });
 }
 
@@ -302,6 +358,8 @@ export function useReplAgent(mode: PermissionMode): Operation<ReplAgentKernel> {
     const changes = createSignal<ReplAgentReading, never>();
     const turns: LiveTurn[] = [];
     const requests: LiveRequest[] = [];
+    /** One per Prompt this process observed, kept after publication. */
+    const slots: Slot[] = [];
     /** The live turn core began in a scope, until that scope's prompt claims it. */
     const begun = new Map<Scope, LiveTurn>();
     /**
@@ -325,6 +383,7 @@ export function useReplAgent(mode: PermissionMode): Operation<ReplAgentKernel> {
     let reading: ReplAgentReading = Object.freeze({
       turns: Object.freeze([]),
       requests: Object.freeze([]),
+      slots: Object.freeze([]),
     });
     let keys = 0;
     let failure: Error | undefined;
@@ -339,6 +398,7 @@ export function useReplAgent(mode: PermissionMode): Operation<ReplAgentKernel> {
       reading = Object.freeze({
         turns: Object.freeze(turns.map(frozenTurn)),
         requests: Object.freeze(requests.map(frozenRequest)),
+        slots: Object.freeze(slots.map(frozenSlot)),
       });
     }
 
@@ -388,6 +448,9 @@ export function useReplAgent(mode: PermissionMode): Operation<ReplAgentKernel> {
         failure: undefined,
       };
       turns.push(turn);
+      // Its place, taken when the Prompt was scheduled rather than when it
+      // finished: a turn that publishes first did not thereby happen first.
+      slots.push({ key: turn.key, order: slots.length + 1, durable: undefined, last: undefined });
       announce();
       return turn;
     }
@@ -652,6 +715,14 @@ export function useReplAgent(mode: PermissionMode): Operation<ReplAgentKernel> {
             ),
           );
         }
+        // The live facts are gone, and the record holds them now — but this is
+        // the same turn, in the same place. The slot says which record that is,
+        // by the durable name the journal wrote it under.
+        const slot = slots.find((candidate) => candidate.key === turn.key);
+        if (slot !== undefined) {
+          slot.durable = event.description.name;
+          slot.last = frozenTurn(turn);
+        }
         retire(turn);
         project();
       },
@@ -685,6 +756,7 @@ export function useReplAgent(mode: PermissionMode): Operation<ReplAgentKernel> {
       requests.length = 0;
       failures.length = 0;
       turns.length = 0;
+      slots.length = 0;
       begun.clear();
       publishing.clear();
       // Projected, not announced. A reader still holding this owner sees a

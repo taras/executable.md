@@ -30,7 +30,7 @@ import { installReplTerminal } from "../src/repl/terminal-host.ts";
 import type { ReplTerminalCapabilities } from "../src/repl/terminal-host.ts";
 import type { ReplTerminalSize } from "../src/repl/terminal.ts";
 import { ReplClock } from "../src/repl/frame.ts";
-import { initialState, reduceRepl } from "../src/repl/application.ts";
+import { initialState, NO_AGENT, reduceRepl } from "../src/repl/application.ts";
 import { runReplProgram } from "../src/repl/program.ts";
 import type { ReplOutcome } from "../src/repl/program.ts";
 import { parseDurableEvent, serializeDurableEvent } from "@executablemd/durable-streams";
@@ -2259,6 +2259,7 @@ describe("REPL journey: what it settles before it acts", () => {
       question: undefined,
       expansion: "pausing",
       pausable: true,
+      agent: NO_AGENT,
     });
     expect(pausing.intent.kind).toBe("none");
     expect(pausing.state.refusal).toContain("not paused");
@@ -2268,6 +2269,7 @@ describe("REPL journey: what it settles before it acts", () => {
       question: undefined,
       expansion: "paused",
       pausable: true,
+      agent: NO_AGENT,
     });
     expect(held.intent.kind).toBe("continue");
     expect(held.state.refusal).toBe(undefined);

@@ -30,7 +30,14 @@ import type { Json } from "@executablemd/durable-streams";
 
 import { describe as describeNode } from "./description.ts";
 import type { ReplDescription } from "./description.ts";
-import { drawerHeight, drawerWidth, HISTORY_ROWS, NARROW, surfaceWidth } from "./layout.ts";
+import {
+  drawerHeight,
+  drawerWidth,
+  HISTORY_ROWS,
+  NARROW,
+  profileFor,
+  surfaceWidth,
+} from "./layout.ts";
 import type { ReplSurface as ReplPlacedSurface, ReplSurfaceCell } from "./layout.ts";
 import type { ReplTerminalSize } from "./terminal.ts";
 import { decodeLocation, encodeLocation, NO_LIVE, resolveLocation } from "./route.ts";
@@ -41,8 +48,16 @@ import type {
   ReplSelection,
   ReplSurface,
 } from "./route.ts";
-import type { ReplModel, ReplRow, ReplScope } from "./model.ts";
+import type { ReplAgentPermission, ReplAgentTurn, ReplModel, ReplRow, ReplScope } from "./model.ts";
 import type { ReplFormField, ReplQuestion, ReplQuestionForm } from "./elicitation.ts";
+import type {
+  ReplAgentReading,
+  ReplAgentSlot,
+  ReplLiveChoice,
+  ReplLivePermission,
+  ReplLiveTurn,
+  ReplLiveTurnState,
+} from "./agent.ts";
 import type { ExpansionState } from "./expansion.ts";
 import type { ReplTree } from "./reconcile.ts";
 import { DRAWER, FIELD, LINE, REFUSAL, SELECT_ROW } from "./components/rows.ts";
@@ -59,7 +74,165 @@ export interface ReplLive {
   readonly expansion: ExpansionState;
   /** Whether this process holds the continuations, and so may pause at all. */
   readonly pausable: boolean;
+  /**
+   * What this process knows about Agent work no record holds yet.
+   *
+   * Empty for a replay, a document with no Agent work and a frozen prefix — a
+   * live reading describes work this process is doing, and none of those is.
+   */
+  readonly agent: ReplAgentReading;
 }
+
+/**
+ * One turn as the Sessions surface shows it, live or retained.
+ *
+ * One type for both, because a person is looking at one turn either way: what
+ * publication changes is where a turn's facts come from, not which turn it is.
+ * `key` is its mounted identity and survives that change, so the row a person
+ * had focus on is the same row afterwards.
+ */
+export interface ReplSessionTurn {
+  /** The mounted identity: this process's slot, or a record's own marker. */
+  readonly key: string;
+  readonly prompt: string;
+  /** `retained` once a record holds it, and the live states until then. */
+  readonly state: ReplLiveTurnState | "retained";
+  readonly text: string;
+  readonly agent: string | undefined;
+  /**
+   * The conversation this turn joined, or none.
+   *
+   * None means the provider has not said yet — a queued turn — or never did.
+   * Either way there is no conversation to filter it by, and the authored
+   * Session name is not one.
+   */
+  readonly sessionKey: string | undefined;
+  readonly status: "completed" | "failed" | "cancelled" | undefined;
+  readonly stopReason: string | undefined;
+  readonly failure: string | undefined;
+  /** The history position this turn is recorded at, once it has one. */
+  readonly marker: string | undefined;
+  /** The request waiting on this turn right now, when one is. */
+  readonly request: ReplLivePermission | undefined;
+  /** What this turn was granted, once its record holds the audit. */
+  readonly audits: readonly ReplAgentPermission[];
+}
+
+/**
+ * Every turn this screen can show, in the order their Prompts were scheduled.
+ *
+ * Not a concatenation of the retained turns and the live ones. Prompts running
+ * beside each other publish in whatever order their providers answer, so an
+ * earlier Prompt can still be live while a later one is already durable — and
+ * appending the live list to the retained one would put it second.
+ *
+ * The turns this process observed carry their own place, taken when each Prompt
+ * was scheduled. Turns it did not observe are in the prefix it replayed, which
+ * is entirely earlier than anything it went on to run, so they come first in the
+ * order their records state.
+ */
+function chronology(model: ReplModel, live: ReplLive): readonly ReplSessionTurn[] {
+  const observed = new Set<string>();
+  for (const slot of live.agent.slots) {
+    if (slot.durable !== undefined) {
+      observed.add(slot.durable);
+    }
+  }
+  const shown: ReplSessionTurn[] = [];
+  for (const turn of model.turns) {
+    if (!observed.has(turn.name)) {
+      shown.push(retainedTurn(turn.marker, turn));
+    }
+  }
+  for (const slot of [...live.agent.slots].sort((left, right) => left.order - right.order)) {
+    const turn = resolved(slot, model, live);
+    if (turn !== undefined) {
+      shown.push(turn);
+    }
+  }
+  return Object.freeze(shown);
+}
+
+/** What one observed slot shows now: its record, or the turn as it still stands. */
+function resolved(
+  slot: ReplAgentSlot,
+  model: ReplModel,
+  live: ReplLive,
+): ReplSessionTurn | undefined {
+  if (slot.durable === undefined) {
+    const turn = live.agent.turns.find((candidate) => candidate.key === slot.key);
+    return turn === undefined ? undefined : liveTurn(slot.key, turn, live);
+  }
+  const record = model.turns.find((candidate) => candidate.name === slot.durable);
+  if (record !== undefined) {
+    // Keyed by the slot, not by the marker: this is the row it already was.
+    return retainedTurn(slot.key, record);
+  }
+  // Accounted for here before the history it belongs to was projected. The facts
+  // it had are still the facts, and a row that vanished for this one frame is
+  // the turn a person was reading disappearing under them.
+  return slot.last === undefined ? undefined : liveTurn(slot.key, slot.last, live);
+}
+
+function liveTurn(key: string, turn: ReplLiveTurn, live: ReplLive): ReplSessionTurn {
+  return Object.freeze({
+    key,
+    prompt: turn.prompt,
+    state: turn.state,
+    text: turn.text,
+    agent: turn.agent,
+    sessionKey: turn.sessionKey,
+    status: turn.status,
+    stopReason: turn.stopReason,
+    failure: turn.failure,
+    marker: undefined,
+    request: live.agent.requests.find((request) => request.turn === turn.key),
+    audits: Object.freeze([]),
+  });
+}
+
+function retainedTurn(key: string, turn: ReplAgentTurn): ReplSessionTurn {
+  return Object.freeze({
+    key,
+    prompt: turn.input,
+    state: "retained",
+    text: turn.text,
+    agent: turn.agent,
+    sessionKey: turn.sessionKey.length === 0 ? undefined : turn.sessionKey,
+    status: turn.status,
+    stopReason: turn.stopReason,
+    failure: turn.failure,
+    marker: turn.marker,
+    // A record cannot be waiting on anybody: what it holds is what it was
+    // granted, and it is read rather than answered.
+    request: undefined,
+    audits: turn.permissions,
+  });
+}
+
+/**
+ * The conversations this screen offers to filter by, earliest turn first.
+ *
+ * Earliest, never latest activity: a list that reordered itself when a provider
+ * streamed would move the control somebody was reaching for.
+ */
+function conversations(turns: readonly ReplSessionTurn[]): readonly string[] {
+  const keys: string[] = [];
+  for (const turn of turns) {
+    const key = turn.sessionKey;
+    if (key !== undefined && key.length > 0 && !keys.includes(key)) {
+      keys.push(key);
+    }
+  }
+  return Object.freeze(keys);
+}
+
+/** A process running no Agent work, which is what a frozen view also shows. */
+export const NO_AGENT: ReplAgentReading = Object.freeze({
+  turns: Object.freeze([]),
+  requests: Object.freeze([]),
+  slots: Object.freeze([]),
+});
 
 /** One thing the last submission said was wrong, as a reader sees it. */
 export interface ReplFormMessage {
@@ -120,7 +293,15 @@ export type ReplFocusRestore =
       readonly answer: Json;
     }
   /** The invocation still asking, now that its drawer is not up. */
-  | { readonly kind: "asked" };
+  | { readonly kind: "asked" }
+  /**
+   * The turn a permission drawer was answering for.
+   *
+   * The turn rather than the request: the request is gone — that is what
+   * answering it means — and the turn it was waiting on is the thing still on
+   * screen to come back to.
+   */
+  | { readonly kind: "turn"; readonly turn: string };
 
 /** Everything typed and not yet committed anywhere. */
 export interface ReplState {
@@ -131,6 +312,14 @@ export interface ReplState {
   readonly form: ReplFormState;
   /** Why the last action changed nothing, or none. */
   readonly refusal: string | undefined;
+  /**
+   * The pending permission request this screen has selected, or none.
+   *
+   * This process's own opaque key, never a location: which request is being
+   * answered is a fact about the process holding it, and a key in a URL would
+   * publish a live identity nothing else can use.
+   */
+  readonly permission: string | undefined;
   /**
    * Where focus starts again, for the one commit after a drawer went.
    *
@@ -147,7 +336,20 @@ export type ReplIntent =
   | { readonly kind: "submit"; readonly source: string }
   | { readonly kind: "pause" }
   | { readonly kind: "continue" }
-  | { readonly kind: "answer"; readonly values: Readonly<Record<string, string>> };
+  | { readonly kind: "answer"; readonly values: Readonly<Record<string, string>> }
+  /**
+   * Answer one pending permission request with one option it offered.
+   *
+   * Scalars only, and the turn it belongs to comes along because the root needs
+   * it after the request is gone: answering removes the request, and focus has
+   * to land on the turn that was waiting.
+   */
+  | {
+      readonly kind: "settle-permission";
+      readonly request: string;
+      readonly option: string | undefined;
+      readonly turn: string;
+    };
 
 /** One reduction: the state that stands now, and what the root owes. */
 export interface ReplTransition {
@@ -237,6 +439,48 @@ export function answered(state: ReplState, model: ReplModel, answer: Json): Repl
   });
 }
 
+/**
+ * The state after a permission request was really settled.
+ *
+ * Only a successful authority call reaches this: the drawer goes because the
+ * request it was opened over is gone, and focus returns to the turn that was
+ * waiting rather than to wherever the drawer was opened from.
+ */
+export function permissionSettled(state: ReplState, turn: string): ReplState {
+  return Object.freeze({
+    ...state,
+    permission: undefined,
+    route: Object.freeze({
+      ...state.route,
+      drawers: Object.freeze(
+        state.route.drawers.filter((drawer) => drawer.kind !== "live-permission"),
+      ),
+    }),
+    restore: Object.freeze({ kind: "turn", turn }),
+    refusal: undefined,
+  });
+}
+
+/**
+ * The state after the request a drawer was opened over stopped existing.
+ *
+ * Teardown and publication can both remove a request nobody answered. The drawer
+ * it left behind can resolve to nothing, so it is withdrawn — and nothing here
+ * claims a choice or a denial, because none was made.
+ */
+export function permissionWithdrawn(state: ReplState): ReplState {
+  return Object.freeze({
+    ...state,
+    permission: undefined,
+    route: Object.freeze({
+      ...state.route,
+      drawers: Object.freeze(
+        state.route.drawers.filter((drawer) => drawer.kind !== "live-permission"),
+      ),
+    }),
+  });
+}
+
 /** The empty route one fresh execution starts at. */
 export function initialRoute(execution: string): ReplRoute {
   return Object.freeze({
@@ -258,6 +502,7 @@ export function initialState(execution: string): ReplState {
     draft: "",
     form: EMPTY_FORM,
     refusal: undefined,
+    permission: undefined,
     restore: undefined,
   });
 }
@@ -274,6 +519,7 @@ export function stateFor(location: string): Result<ReplState> {
       draft: decoded.value.draft ?? "",
       form: EMPTY_FORM,
       refusal: undefined,
+      permission: undefined,
       restore: undefined,
     }),
   );
@@ -296,7 +542,7 @@ export function viewFor(
   // This process is the only thing that can say a question is waiting, so it
   // says so here rather than leaving resolution to infer it from a history that
   // does not record it.
-  const resolved = resolveLocation(model, state.route, availabilityOf(live));
+  const resolved = resolveLocation(model, state.route, availabilityOf(state, live));
   if (!resolved.ok) {
     return resolved;
   }
@@ -310,6 +556,7 @@ export function viewFor(
           question: undefined,
           expansion: live.expansion,
           pausable: false,
+          agent: NO_AGENT,
         };
   return Ok(
     Object.freeze({
@@ -350,6 +597,7 @@ export function refusedView(
       question: undefined,
       expansion: "playing",
       pausable: false,
+      agent: NO_AGENT,
     }),
     location: encodeLocation(state.route),
     refusal: reason,
@@ -365,11 +613,33 @@ export function refusedView(
  * in the REPL yet, so there is no pending permission request and no conversation
  * that has started without settling anything.
  */
-function availabilityOf(live: ReplLive): ReplLiveAvailability {
+/**
+ * What this process can say about state no history holds.
+ *
+ * `permission` is not "a request is waiting": it is "the request this screen has
+ * selected is still waiting". A drawer opens over one exact request, so a route
+ * that named one which has since settled resolves to nothing rather than to
+ * whatever is pending now.
+ *
+ * `sessions` is the conversations live turns have actually started under. A
+ * queued turn has none yet, and the authored Session name, the Prompt name and
+ * the agent are not conversations — inferring one from them would offer a filter
+ * for a key the provider never issued.
+ */
+function availabilityOf(state: ReplState, live: ReplLive): ReplLiveAvailability {
+  const selected = state.permission;
+  const keys: string[] = [];
+  for (const turn of live.agent.turns) {
+    const key = turn.sessionKey;
+    if (key !== undefined && key.length > 0 && !keys.includes(key)) {
+      keys.push(key);
+    }
+  }
   return {
     elicit: live.question !== undefined,
-    permission: false,
-    sessions: NO_LIVE.sessions,
+    permission:
+      selected !== undefined && live.agent.requests.some((request) => request.key === selected),
+    sessions: Object.freeze(keys),
   };
 }
 
@@ -484,6 +754,28 @@ export function reduceRepl(
         return refuse(state, "no drawer is open.");
       }
       const closing = state.route.drawers[state.route.drawers.length - 1];
+      if (closing?.kind === "live-permission") {
+        // Dismissing a permission request denies it, and a denial is something
+        // only the authority can do. So this closes nothing yet: the drawer goes
+        // when the request it was opened over is really gone, and until then a
+        // screen that had already closed would be claiming an answer nobody gave.
+        const pending =
+          state.permission === undefined ? undefined : offered(state, live, state.permission);
+        if (pending === undefined) {
+          // Nothing left to deny — teardown or publication took it. The drawer is
+          // withdrawn rather than answered.
+          return settled(permissionWithdrawn(state));
+        }
+        return {
+          state: Object.freeze({ ...state, refusal: undefined }),
+          intent: {
+            kind: "settle-permission",
+            request: pending.key,
+            option: undefined,
+            turn: pending.turn,
+          },
+        };
+      }
       const remaining = Object.freeze(state.route.drawers.slice(0, -1));
       const closed = navigate(state, model, { ...state.route, drawers: remaining }, live);
       // Dismissing the question's drawer discards what was typed into it. It is
@@ -500,6 +792,70 @@ export function reduceRepl(
             }),
           }
         : closed;
+    }
+    case "select-session": {
+      // Only the filter moves: the surface, the scope path, the history marker,
+      // the draft and the drawer stack are all left exactly as they stand. A key
+      // that names no conversation is refused by the codec's own resolution, so
+      // a stale one cannot become an empty Sessions view.
+      return navigate(state, model, { ...state.route, session: action.session }, live);
+    }
+    case "all-sessions": {
+      return navigate(state, model, { ...state.route, session: undefined }, live);
+    }
+    case "select-permission": {
+      // The key is taken first, because a `+permission` candidate resolves only
+      // while the request it names is pending — so the state that navigates has
+      // to be the one already holding it. A refusal keeps neither.
+      const holding = Object.freeze({ ...state, permission: action.request });
+      // Declared, so the drawer this adds is the one the grammar defines rather
+      // than a string this case happens to spell the same way.
+      const opening: ReplDrawerRef = { kind: "live-permission" };
+      const opened = navigate(
+        holding,
+        model,
+        {
+          ...state.route,
+          drawers: Object.freeze([...state.route.drawers, opening]),
+        },
+        live,
+      );
+      return opened.state.refusal === undefined ? opened : refuse(state, opened.state.refusal);
+    }
+    case "choose-permission": {
+      const pending = offered(state, live, action.request);
+      if (pending === undefined) {
+        return refuse(state, "that permission request is not the one being answered.");
+      }
+      if (!pending.choices.some((choice) => choice.optionId === action.option)) {
+        // Re-checked against the reading as it stands: a choice drawn one frame
+        // ago is not a choice the provider is still offering.
+        return refuse(state, "that choice is not one this request offered.");
+      }
+      return {
+        state: Object.freeze({ ...state, refusal: undefined }),
+        intent: {
+          kind: "settle-permission",
+          request: action.request,
+          option: action.option,
+          turn: pending.turn,
+        },
+      };
+    }
+    case "dismiss-permission": {
+      const pending = offered(state, live, action.request);
+      if (pending === undefined) {
+        return refuse(state, "that permission request is not the one being answered.");
+      }
+      return {
+        state: Object.freeze({ ...state, refusal: undefined }),
+        intent: {
+          kind: "settle-permission",
+          request: action.request,
+          option: undefined,
+          turn: pending.turn,
+        },
+      };
     }
     case "select-marker": {
       // Adopted rather than resolved here: a position is a *different reading* of
@@ -669,6 +1025,24 @@ function editing(
   });
 }
 
+/**
+ * The request this action may act on, or none.
+ *
+ * One request: the one this screen selected *and* the one still pending. An
+ * unknown key, a stale key and a key for a request that has since settled all
+ * answer none, so nothing is settled on their behalf.
+ */
+function offered(
+  state: ReplState,
+  live: ReplLive,
+  request: string,
+): ReplLivePermission | undefined {
+  if (state.permission !== request) {
+    return undefined;
+  }
+  return live.agent.requests.find((candidate) => candidate.key === request);
+}
+
 function settled(state: ReplState): ReplTransition {
   return { state: Object.freeze(state), intent: { kind: "none" } };
 }
@@ -702,7 +1076,11 @@ function navigate(
   live: ReplLive,
 ): ReplTransition {
   const route = Object.freeze({ ...candidate });
-  const resolved = resolveLocation(model, route, availabilityOf(live));
+  // Against `state`, because what a candidate route may name depends on what
+  // this screen has selected: a `+permission` drawer resolves only while the
+  // selected request is still pending, so whoever selects one navigates from the
+  // state that already holds its key.
+  const resolved = resolveLocation(model, route, availabilityOf(state, live));
   if (!resolved.ok) {
     return refuse(state, resolved.error.message);
   }
@@ -791,6 +1169,12 @@ export function focusClaim(view: ReplView): string | undefined {
   }
   if (state.restore.kind === "asked") {
     return live.question === undefined || state.route.at !== undefined ? undefined : "footer:asked";
+  }
+  if (state.restore.kind === "turn") {
+    const turn = state.restore.turn;
+    return chronology(view.model, live).some((candidate) => candidate.key === turn)
+      ? `sessions:turn:${turn}`
+      : undefined;
   }
   // The record this answer caused: one the history did not hold when the answer
   // was taken, holding exactly what was sent. Not the newest record — by the time
@@ -940,56 +1324,77 @@ function described(view: ReplView): readonly Described[] {
   const items: Described[] = [];
   const { model, selection, live, state } = view;
   const claim = focusClaim(view);
+  // Narrow gives the whole screen to one routed surface, so the other one is not
+  // described at all — not drawn small, not clipped, not placed in a region the
+  // frame does not have. A node nothing can show is a focus stop that draws
+  // nothing and a pointer target behind nothing.
+  const narrow = profileFor(view.size) === "narrow";
+  const routed = state.route.surface;
+  const showSessions = !narrow || routed === "sessions";
+  const showEntry = !narrow || routed === "repl";
 
-  items.push(
-    row(
-      "sessions:heading",
-      "Sessions",
-      { select: "surface", surface: "sessions" },
-      { here: view.focused },
-    ),
-  );
-  // Present and empty. This REPL keeps one execution per invocation, and a
-  // Sessions surface that vanished when it held nothing would read as a feature
-  // that does not exist.
-  items.push(line("sessions:empty", "  (none retained)"));
-  items.push(
-    row(
-      "entries:heading",
-      "Entries",
-      { select: "surface", surface: "repl" },
-      { here: view.focused },
-    ),
-  );
-
-  const entry = model.entry;
-  if (entry === undefined) {
-    items.push(line("entry:none", "  1. (not submitted)"));
-  } else {
+  const turns = chronology(model, live);
+  if (showSessions) {
     items.push(
       row(
-        "entry:1",
-        `  1. ${entry.name}`,
-        { select: "scope", scopes: [entry.key] },
+        "sessions:heading",
+        "Sessions",
+        { select: "surface", surface: "sessions" },
         { here: view.focused },
       ),
     );
-    for (const scope of nested(entry, [entry.key])) {
+  }
+  if (!showSessions) {
+    // Nothing: this frame is showing the other surface.
+  } else if (turns.length === 0) {
+    // Present and empty. This REPL keeps one execution per invocation, and a
+    // Sessions surface that vanished when it held nothing would read as a
+    // feature that does not exist.
+    items.push(line("sessions:empty", "  (none retained)"));
+  } else {
+    items.push(...sessionRows(view, turns, claim));
+  }
+  // Read whether or not this frame draws the entry list: the footer's draft says
+  // whether an entry exists at every size and on either surface.
+  const entry = model.entry;
+  if (showEntry) {
+    items.push(
+      row(
+        "entries:heading",
+        "Entries",
+        { select: "surface", surface: "repl" },
+        { here: view.focused },
+      ),
+    );
+
+    if (entry === undefined) {
+      items.push(line("entry:none", "  1. (not submitted)"));
+    } else {
       items.push(
         row(
-          `scope:${scope.path.join("/")}`,
-          `    ${scope.label}`,
-          {
-            select: "scope",
-            scopes: scope.path,
-          },
+          "entry:1",
+          `  1. ${entry.name}`,
+          { select: "scope", scopes: [entry.key] },
           { here: view.focused },
         ),
       );
+      for (const scope of nested(entry, [entry.key])) {
+        items.push(
+          row(
+            `scope:${scope.path.join("/")}`,
+            `    ${scope.label}`,
+            {
+              select: "scope",
+              scopes: scope.path,
+            },
+            { here: view.focused },
+          ),
+        );
+      }
     }
   }
 
-  for (const [index, transcript] of model.transcript.entries()) {
+  for (const [index, transcript] of showEntry ? model.transcript.entries() : []) {
     // One cell is one row, so a recorded row that holds several lines of output
     // becomes several cells. A cell given more than one line would show only the
     // first, which is the whole of what a reader would then believe was there.
@@ -1000,13 +1405,13 @@ function described(view: ReplView): readonly Described[] {
   // The live overlay, explicitly below the recorded rows and explicitly labelled.
   // Once the durable close exists its recorded output is in the transcript and
   // this is empty, so the two never both claim to be the output.
-  if (live.output.length > 0) {
+  if (showEntry && live.output.length > 0) {
     for (const [offset, text] of live.output.split("\n").entries()) {
       items.push(line(`line:live:${offset}`, `… ${text}`));
     }
   }
 
-  const scope = selection.scope;
+  const scope = showEntry ? selection.scope : undefined;
   if (scope !== undefined) {
     for (const binding of scope.bindings) {
       items.push(
@@ -1140,6 +1545,137 @@ function described(view: ReplView): readonly Described[] {
 }
 
 /**
+ * The Sessions reading, as rows.
+ *
+ * One control per conversation and one per turn, with each turn's own facts
+ * beneath it as lines. A turn's control is keyed by its slot, so a turn that
+ * publishes keeps the node — and the focus — it already had.
+ */
+function sessionRows(
+  view: ReplView,
+  turns: readonly ReplSessionTurn[],
+  claim: string | undefined,
+): readonly Described[] {
+  const { state } = view;
+  const items: Described[] = [];
+  const filter = state.route.session;
+  const offered = conversations(turns);
+  if (offered.length > 0) {
+    // All is a control rather than the absence of one: clearing a filter is
+    // something a person does, and a list that could only be narrowed would
+    // leave them holding a view they cannot get out of.
+    items.push(
+      row(
+        "sessions:all",
+        filter === undefined ? "  All conversations" : "  All conversations (filtered)",
+        { select: "all-sessions" },
+        { here: view.focused },
+      ),
+    );
+    for (const key of offered) {
+      items.push(
+        row(
+          `sessions:conversation:${key}`,
+          `  ${filter === key ? "> " : ""}${headline(key)}`,
+          { select: "session", session: key },
+          { here: view.focused },
+        ),
+      );
+    }
+  }
+  for (const turn of turns) {
+    if (filter !== undefined && turn.sessionKey !== filter) {
+      continue;
+    }
+    items.push(
+      row(
+        `sessions:turn:${turn.key}`,
+        `  ${headline(turn.prompt)} · ${stateOf(turn)}`,
+        // A turn is read at the position its record holds; a live one has none
+        // to go to yet, so it selects the surface it is already on.
+        turn.marker === undefined
+          ? { select: "surface", surface: "sessions" }
+          : { select: "marker", marker: turn.marker },
+        // A settled permission sends focus back to the turn that was waiting, so
+        // this is the row that may be claimed.
+        { here: view.focused, claim },
+      ),
+    );
+    if (turn.agent !== undefined || turn.sessionKey !== undefined) {
+      const said = [turn.agent, turn.sessionKey].filter((fact) => fact !== undefined);
+      items.push(line(`sessions:turn:${turn.key}:whose`, `    ${said.join(" · ")}`));
+    }
+    if (turn.text.length > 0) {
+      items.push(line(`sessions:turn:${turn.key}:text`, `    ${headline(turn.text)}`));
+    }
+    if (turn.stopReason !== undefined) {
+      items.push(line(`sessions:turn:${turn.key}:stop`, `    stopped: ${turn.stopReason}`));
+    }
+    if (turn.failure !== undefined) {
+      items.push(line(`sessions:turn:${turn.key}:failed`, `    ${headline(turn.failure)}`));
+    }
+    const request = turn.request;
+    if (request !== undefined) {
+      // Inline, on the turn that is waiting. Focusable where it can be answered
+      // and a plain fact where it cannot: the grammar answers a request on the
+      // Sessions surface, and a control that refused when activated would be a
+      // target that does nothing. Either way, arriving here opens nothing —
+      // somebody activates it.
+      const label = `    asks: ${headline(request.title ?? request.toolCallId)}`;
+      items.push(
+        state.route.surface === "sessions"
+          ? row(
+              `sessions:request:${request.key}`,
+              label,
+              { select: "permission", request: request.key },
+              { here: view.focused },
+            )
+          : line(`sessions:request:${request.key}`, label),
+      );
+    }
+    for (const [at, audit] of turn.audits.entries()) {
+      // Read, never answered: a record is what a turn was granted, and offering
+      // a control here would invite somebody to answer a question nobody asked.
+      items.push(
+        line(
+          `sessions:audit:${turn.key}:${at}`,
+          `    granted: ${headline(audit.title ?? audit.toolCallId)} — ${outcomeOf(audit)}`,
+        ),
+      );
+    }
+  }
+  return items;
+}
+
+/**
+ * How far one turn has got, in words a reader can act on.
+ *
+ * How it ended and whether the history holds it are separate facts, and a turn
+ * that has finished is not the same as one that has been recorded: a person
+ * looking at the second may go to its position, and a person looking at the
+ * first is watching this process.
+ */
+function stateOf(turn: ReplSessionTurn): string {
+  if (turn.state === "queued") {
+    return "queued";
+  }
+  if (turn.state === "active") {
+    return "streaming";
+  }
+  const ended = turn.status ?? "finished";
+  return turn.state === "terminal" ? `${ended}, not recorded yet` : `${ended}, recorded`;
+}
+
+/** What a retained audit says happened, without repeating the whole record. */
+function outcomeOf(audit: ReplAgentPermission): string {
+  if (audit.outcome === "cancelled") {
+    return "cancelled";
+  }
+  const chosen = audit.options.find((option) => option.optionId === audit.selected);
+  return chosen === undefined ? "answered" : chosen.name;
+}
+
+/**
  * The innermost open drawer, as a modal branch holding its own controls.
  *
  * Its detail is one child per line rather than one multi-line label, because a
@@ -1157,6 +1693,14 @@ function drawerFor(view: ReplView, history: Described): Described | undefined {
   // text stopped, because a renderer writes what changed and nothing else.
   const width = drawerWidth(view.size);
   let title: string;
+  /**
+   * The request this drawer's close control denies, when it is one.
+   *
+   * A permission drawer closes by *answering* — dismissal is the direct denial
+   * path the authority owns — so its close control carries the request rather
+   * than the generic close action that means "this changed nothing".
+   */
+  let dismissing: string | undefined;
 
   if (open.kind === "binding") {
     title = open.name;
@@ -1176,6 +1720,58 @@ function drawerFor(view: ReplView, history: Described): Described | undefined {
     for (const [offset, text] of detail(open.elicitation.answer).entries()) {
       children.push(drawerLine(`drawer:answer:${offset}`, text, width).description);
     }
+  } else if (open.kind === "live-permission") {
+    // The request this screen selected, read again here: a drawer draws what is
+    // pending now, and the one it was opened over may have been answered or torn
+    // down since.
+    const request =
+      view.state.permission === undefined
+        ? undefined
+        : view.live.agent.requests.find((candidate) => candidate.key === view.state.permission);
+    if (request === undefined) {
+      return undefined;
+    }
+    title = request.title ?? "Permission";
+    // What is being asked, in the provider's own words. Never `rawInput` and
+    // never the request object: a screen shows what a person decides about.
+    if (request.kind !== undefined) {
+      children.push(drawerLine("drawer:permission:kind", `  ${request.kind}`, width).description);
+    }
+    children.push(
+      drawerLine("drawer:permission:call", `  call ${request.toolCallId}`, width).description,
+    );
+    // Whose turn is waiting, so a decision is not made about an anonymous one.
+    const waiting = chronology(view.model, view.live).find(
+      (candidate) => candidate.key === request.turn,
+    );
+    if (waiting !== undefined) {
+      const whose =
+        waiting.sessionKey === undefined
+          ? headline(waiting.prompt)
+          : `${headline(waiting.prompt)} · ${waiting.sessionKey}`;
+      children.push(drawerLine("drawer:permission:turn", `  ${whose}`, width).description);
+    }
+    // Every choice the provider offered, in its order, each one its own control.
+    for (const choice of request.choices) {
+      children.push(
+        row(
+          `drawer:permission:choice:${choice.optionId}`,
+          pad(`[${choice.name}]${lasting(choice.kind)}`, width),
+          { select: "permission-choice", request: request.key, option: choice.optionId },
+          { here: view.focused },
+        ).description,
+      );
+    }
+    // Said rather than implied: dismissing is a denial of this request, and the
+    // session goes on running either way.
+    children.push(
+      drawerLine(
+        "drawer:permission:dismissal",
+        "  Escape or close denies this request; the session keeps running.",
+        width,
+      ).description,
+    );
+    dismissing = request.key;
   } else if (open.kind === "history") {
     title = "History";
     for (const checkpoint of view.model.checkpoints) {
@@ -1334,7 +1930,9 @@ function drawerFor(view: ReplView, history: Described): Described | undefined {
     row(
       "drawer:close",
       width < 1 ? "[close]" : "[close]".padEnd(width, " "),
-      { select: "close" },
+      dismissing === undefined
+        ? { select: "close" }
+        : { select: "permission-dismiss", request: dismissing },
       {
         here: view.focused,
       },
@@ -1350,6 +1948,17 @@ function drawerFor(view: ReplView, history: Described): Described | undefined {
       modal: true,
     }),
   };
+}
+
+/**
+ * What a lasting choice lasts for.
+ *
+ * This Agent session, and said so: a person reading "always" in a terminal has
+ * every reason to think it means their machine, and nothing here can make a rule
+ * that outlives the conversation asking.
+ */
+function lasting(kind: ReplLiveChoice["kind"]): string {
+  return kind === "allow_always" || kind === "reject_always" ? " for this Agent session" : "";
 }
 
 /**
@@ -1541,17 +2150,24 @@ export function replSurface(tree: ReplTree<ReplAction>, view: ReplView): ReplPla
 
 /** Whether a pointer may activate the row this key names. */
 function targetable(key: string): boolean {
-  // A line is text. Everything a pointer may activate is a control, and the two
-  // footer lines that are not — the location somebody copies and the reason the
-  // last action changed nothing — are lines.
+  // A line is text. Everything a pointer may activate is a control, and the lines
+  // that are not — the location somebody copies, the reason the last action
+  // changed nothing, a turn's own facts and a retained permission it was granted
+  // — are lines. A cell that offered itself as a target and then did nothing
+  // would be a control that is not one.
   return (
     !key.startsWith("line:") &&
+    !key.startsWith("sessions:audit:") &&
+    !TURN_FACTS.some((suffix) => key.endsWith(suffix)) &&
     key !== "sessions:empty" &&
     key !== "entry:none" &&
     key !== "footer:location" &&
     key !== "footer:refused"
   );
 }
+
+/** The suffixes a turn's own read-only facts are keyed with. */
+const TURN_FACTS = [":whose", ":text", ":stop", ":failed"];
 
 export { HISTORY_ROWS };
 export type { ReplDrawerRef, ReplSurface };

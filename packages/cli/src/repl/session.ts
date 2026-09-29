@@ -543,6 +543,7 @@ function* start(
 const EMPTY_AGENT_READING: ReplAgentReading = Object.freeze({
   turns: Object.freeze([]),
   requests: Object.freeze([]),
+  slots: Object.freeze([]),
 });
 
 /** No live request exists, so no key settles one. */

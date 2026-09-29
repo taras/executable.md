@@ -31,6 +31,7 @@ import {
   focusClaim,
   focusSettled,
   initialState,
+  NO_AGENT,
   reduceRepl,
   viewFor,
 } from "../src/repl/application.ts";
@@ -114,7 +115,7 @@ const EMPTY_MODEL: ReplModel = Object.freeze({
 
 /** A live reading with one question waiting. */
 function asking(question: ReplQuestion | undefined): ReplLive {
-  return { output: "", question, expansion: "playing", pausable: false };
+  return { output: "", question, expansion: "playing", pausable: false, agent: NO_AGENT };
 }
 
 describe("F1 — the bounded language is exact", () => {
@@ -956,7 +957,9 @@ describe("F3 — focus returns to the invocation, not to where the drawer came f
     yield* applied(tree, reading(unclaimed, asking(undefined), recorded.model, NARROW, inside));
     const landed = keyed(tree);
     expect(landed).not.toBe(`elicit:${recorded.marker}`);
-    expect(landed).toBe("sessions:heading");
+    // The first focusable row of the surface this frame draws, which is neither
+    // the invocation nor where the drawer was opened from.
+    expect(landed).toBe("entries:heading");
   });
 });
 
@@ -1040,6 +1043,7 @@ function liveReading(session: ReplSession): ReplLive {
     question: session.overlay.question,
     expansion: session.expansion.state,
     pausable: session.controller !== undefined,
+    agent: session.agent,
   };
 }
 
