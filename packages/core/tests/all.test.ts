@@ -472,11 +472,14 @@ describe("Tier ALL — PA2: durable identity follows the source", () => {
       { id: "root.0", status: "ok" },
       { id: "root", status: "ok" },
     ]);
-    // Each child closes with exactly the markdown it rendered.
+    // Each child closes with exactly the markdown it rendered, and with what
+    // that markdown is: a run says whether those bytes are prose or a program's
+    // approved source, because the segments they came from do not leave the
+    // child and a replay has nothing else to read the disposition from.
     expect(new Map(childCloseValues(result.events))).toEqual(
       new Map([
-        ["root.1", "[two]"],
-        ["root.0", "[one]"],
+        ["root.1", [{ text: "[two]", exact: false }]],
+        ["root.0", [{ text: "[one]", exact: false }]],
       ]),
     );
   });

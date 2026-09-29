@@ -104,6 +104,7 @@ import type {
 } from "./execution-declarations.ts";
 import { regionStream } from "./expansion-region.ts";
 import { emissions } from "./render.ts";
+import type { Emission } from "./render.ts";
 import { printsErrors, usePrintErrors } from "./component-failures.ts";
 import { containedLedger, recoveringLedger, refuseCheckedFailure } from "./component-failures.ts";
 import type { CheckedFailures } from "./component-failures.ts";
@@ -2325,7 +2326,7 @@ function spawnEnvironment(incoming: EvalEnv | undefined): EvalEnv {
 }
 
 /**
- * Expand one `<Spawn>` body into the string its child closes with.
+ * Expand one `<Spawn>` body into the emission runs its child closes with.
  *
  * Everything mutable the ordinary walk threads is allocated here rather than
  * inherited: the binding environment and its live overlay, an eval scope the
@@ -2348,7 +2349,7 @@ function spawnChild(
   path: string,
   inherited: CheckedFailures | undefined,
   environment: ExecutionEnvironment | undefined,
-): Operation<string> {
+): Operation<Emission[]> {
   return scoped(function* () {
     yield* provideEnv(spawnEnvironment(incoming));
     yield* provideEvalScope(yield* useEvalScope());
@@ -2379,7 +2380,13 @@ function spawnChild(
       undefined,
     );
     yield* refuseCheckedFailure(ledger);
-    return renderSegments(segments);
+    // Runs rather than one joined string. What a child produced is prose, or a
+    // program's approved source, or both in order — and exact presentation is a
+    // provenance this execution recorded against the segments it marked. Those
+    // segments do not leave the child, so the child states what they were: a
+    // string would arrive in the caller as prose, and a durable close holding
+    // one could not say otherwise on a replay either.
+    return emissions(environment?.sourceSegments, segments);
   });
 }
 
@@ -2447,13 +2454,61 @@ function* expandAll(
   const rendered =
     scope.get(DurableContext) === undefined
       ? yield* all(children.map((child) => child()))
-      : yield* durableAll(children.map((child) => (): Workflow<string> => ephemeral(child())));
+      : (yield* durableAll(
+          children.map((child) => (): Workflow<Json> => ephemeral(retained(child()))),
+        )).map(readEmissions);
 
-  for (const text of rendered) {
-    if (text !== "") {
-      owner.push({ type: "text", content: text });
+  for (const runs of rendered) {
+    for (const run of runs) {
+      if (run.text === "") {
+        continue;
+      }
+      // One segment per run, and the exact ones are marked again here: the
+      // record is keyed by segment identity, and these segments are this
+      // region's, not the child's. A child that ran on a previous attempt says
+      // what its runs were through its own durable close, so a replay marks
+      // exactly what the live run marked.
+      const segment: Segment = { type: "text", content: run.text };
+      owner.push(segment);
+      if (run.exact) {
+        markExactSource(environment?.sourceSegments, [segment]);
+      }
     }
   }
+}
+
+/** One child's runs, as its durable close retains them. */
+function retained(child: Operation<Emission[]>): Operation<Json> {
+  return (function* (): Operation<Json> {
+    return (yield* child).map((run) => ({ text: run.text, exact: run.exact }));
+  })();
+}
+
+/**
+ * The runs a child closed with, read back from what the journal holds.
+ *
+ * Parsed rather than trusted: a replay hands back whatever the history has, and
+ * a record that is not a list of runs is a record this version cannot read. A
+ * run it cannot read is not presented as source — the safe answer, and the same
+ * one an unmarked segment gets.
+ */
+function readEmissions(value: Json): Emission[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  const runs: Emission[] = [];
+  for (const entry of value) {
+    if (entry === null || typeof entry !== "object" || Array.isArray(entry)) {
+      continue;
+    }
+    const text = (entry as { [key: string]: Json })["text"];
+    const exact = (entry as { [key: string]: Json })["exact"];
+    if (typeof text !== "string" || typeof exact !== "boolean") {
+      continue;
+    }
+    runs.push({ text, exact });
+  }
+  return runs;
 }
 
 function printErrorsPropError(segment: ComponentElement, message: string): ErrorSegment {

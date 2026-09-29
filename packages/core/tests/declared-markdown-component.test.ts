@@ -1389,6 +1389,7 @@ function* published(
   source: string,
   declarations: readonly MarkdownComponent[],
   extra: readonly ExecutionInstallation[],
+  stream: InMemoryStream = new InMemoryStream(),
 ): Operation<string> {
   const chunks: string[] = [];
   return yield* scoped(function* () {
@@ -1404,7 +1405,7 @@ function* published(
       yield* executeInstalled(
         {
           ...retainedSource(ROOT_PATH, source),
-          stream: new InMemoryStream(),
+          stream,
           includes: [],
         },
         [installation(declarations), ...extra],
@@ -1559,6 +1560,82 @@ describe("Tier DM — exact source is a provenance, not a field", () => {
 
     expect(unpresented(output)).toBe(false);
     expect(output).not.toContain("**these**");
+  });
+
+  it("DM54: a spawned child's exact source is still source", function* () {
+    // `<All>` joins its children by value, so what crosses the join says what
+    // it is. A child that reduced its region to one string would hand the
+    // caller prose, and the approved bytes a `<Spawn>` rendered would be
+    // presented — reflowed, its markers eaten — as if a person had written them.
+    const inside = yield* published(
+      [
+        "<All>",
+        "<Spawn>",
+        "<Policy />",
+        "</Spawn>",
+        "<Spawn>",
+        "ordinary prose",
+        "</Spawn>",
+        "</All>",
+        "",
+      ].join("\n"),
+      [declared(PRESENTABLE, { exact: true })],
+      [],
+    );
+
+    expect(unpresented(inside)).toBe(true);
+    // And the sibling that rendered prose is still prose: the join does not
+    // make one child's disposition the other's.
+    expect(inside).toContain("ordinary prose");
+  });
+
+  it("DM54: a replayed child restores what its bytes were", function* () {
+    // The disposition is a fact about what canonical expansion produced, and
+    // the segments it marked do not survive the process. A replay therefore
+    // reads it from the child's own durable close — and a close that retained
+    // only text could not answer at all.
+    const source = [
+      "<All>",
+      "<Spawn>",
+      "<Policy />",
+      "</Spawn>",
+      "<Spawn>",
+      "ordinary prose",
+      "</Spawn>",
+      "</All>",
+      "",
+    ].join("\n");
+    const declarations = [declared(PRESENTABLE, { exact: true })];
+    const stream = new InMemoryStream();
+    const live = yield* published(source, declarations, [], stream);
+    expect(unpresented(live)).toBe(true);
+
+    // The children's own closes, without the root's: the parent runs again and
+    // restores each child from what it recorded, which is the state a resumed
+    // run is actually in.
+    const history = (yield* stream.readAll()).filter(
+      (event) => !(event.type === "close" && event.coroutineId === "root"),
+    );
+    const children = history.filter(
+      (event) => event.type === "close" && event.coroutineId.includes("."),
+    );
+    expect(children).toHaveLength(2);
+    // What each child retained says what its bytes were, not only what they said.
+    // What each child retained says what its bytes were, not only what they
+    // said. Read as a set: children close in whatever order they finished, and
+    // which one finished first is exactly what this must not depend on.
+    const runs = children.flatMap((event) =>
+      event.type === "close" && event.result.status === "ok" && Array.isArray(event.result.value)
+        ? (event.result.value as { text: string; exact: boolean }[])
+        : [],
+    );
+    expect(runs.filter((run) => run.exact)).toEqual([{ text: PRESENTABLE, exact: true }]);
+    expect(runs.some((run) => !run.exact && run.text.includes("ordinary prose"))).toBe(true);
+
+    const replayed = yield* published(source, declarations, [], new InMemoryStream(history));
+
+    expect(replayed).toBe(live);
+    expect(unpresented(replayed)).toBe(true);
   });
 });
 
