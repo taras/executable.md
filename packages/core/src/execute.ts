@@ -93,7 +93,7 @@ import {
   filesFatalFailure,
   useSegmentCauses,
 } from "./errors.ts";
-import { Component, importComponent, raise } from "./component-api.ts";
+import { Component, importComponent, isMissingImportProvider, raise } from "./component-api.ts";
 import { sourceDescription } from "./source-position.ts";
 import { emissions, exactly, renderSegment } from "./render.ts";
 import { createExactSource } from "./output/exact-source.ts";
@@ -142,7 +142,7 @@ import {
   installIdentities,
   parseFormDeclaration,
 } from "./invocation-identity.ts";
-import type { IdentityComponent } from "./invocation-identity.ts";
+import type { IdentityComponent, ImportSelection } from "./invocation-identity.ts";
 import {
   CanonicalImports,
   ExecutionImports,
@@ -846,7 +846,7 @@ function* resolveComponentAnswers(
           ) {
             return answer;
           }
-          const asked = canonicalProvider.open(yield* useScope(), name, position);
+          const asked = canonicalProvider.open(name, position);
           try {
             return asked.request.claim(answer, { key: name, revision: CORE_REVISION });
           } finally {
@@ -866,7 +866,7 @@ function* resolveComponentAnswers(
       // One call, one result. The claim and core's copy of what was claimed
       // come back together, and the object the chain returned is not read
       // again — so nothing this run keeps was decided by a second read.
-      const resolution = imports.beginResolution(name, yield* useScope());
+      const resolution = imports.beginResolution(name);
       let identified;
       try {
         // The resolution this run opened is handed to identification rather
@@ -2573,8 +2573,60 @@ function* executeDocument(
               identity.componentRouting.project,
             );
 
+      /**
+       * Canonical resolution for one import, and the only thing that puts an
+       * invocation in one of this execution's identity domains.
+       *
+       * Held by the execution and handed to expansion by value. Expansion calls
+       * it as the terminal of a descriptor it created for one authored import,
+       * passing that import's own frame; the ordinary provider below calls it
+       * with no frame, for a direct `importComponent()` an invocation started
+       * itself. Neither path publishes the frame, and nothing outside core can
+       * name this operation.
+       */
+      function* resolveCanonicalImport(
+        name: string,
+        position: Readonly<SourcePosition> | undefined,
+        selection: ImportSelection | undefined,
+      ): Operation<ComponentDefinition | FunctionComponentDefinition> {
+        // Read per import, in the invoking scope, so a component registered
+        // by a nested scope is visible to what that scope expands.
+        const registered = yield* Component.operations.registry;
+        const definition = yield* durableImportComponent(
+          name,
+          name === "__root__" ? root : undefined,
+          position,
+          {
+            searchPaths: includes,
+            registry: registered,
+            bundle,
+            declared: installedComponents,
+            catalog,
+            guarded: identity.protected,
+          },
+        );
+        // Canonical selection, recorded into the frame of the import that asked
+        // for it. This is the only thing that puts an invocation in one of this
+        // execution's identity domains: not the name, not the answer that comes
+        // back, and nothing a handler above this can hold
+        // (`invocation-identity.ts`).
+        if (definition.kind === "function") {
+          selection?.select(name, definition);
+          // The same record, for the other thing canonical resolution decides
+          // here: which dispatcher — if any — this import selected. A dispatcher
+          // a handler kept from another import reaches no body without it.
+          forms.select(name, definition);
+        }
+        // The witness for this answer. It is issued where the answer is
+        // produced and verified where it is invoked, so what a handler does to
+        // the value in between is visible rather than authoritative.
+        return imports === undefined ? definition : imports.issue(name, definition);
+      }
+
       const environment: ExecutionEnvironment = {
         componentResolution: imports,
+        // Canonical resolution, for the terminal expansion builds per import.
+        canonicalImport: resolveCanonicalImport,
         // Everything this host declared, admitted above. Expansion asks it
         // about every name it reaches, which is how an installed construct is
         // dispatched without core holding a branch for its name.
@@ -2613,42 +2665,31 @@ function* executeDocument(
       // and the root eval scope.
       yield* Component.around(
         {
-          *importComponent([name, position], _next) {
-            // Read per import, in the invoking scope, so a component registered
-            // by a nested scope is visible to what that scope expands.
-            const registered = yield* Component.operations.registry;
-            const definition = yield* durableImportComponent(
-              name,
-              name === "__root__" ? root : undefined,
-              position,
-              {
-                searchPaths: includes,
-                registry: registered,
-                bundle,
-                declared: installedComponents,
-                catalog,
-                guarded: identity.protected,
-              },
-            );
-            // Canonical selection, recorded where it is made. This is the only
-            // thing that puts an invocation in one of this execution's identity
-            // domains: not the name, not the answer that comes back, and
-            // nothing a handler above this can hold (`invocation-identity.ts`).
-            if (definition.kind === "function") {
-              // Recorded into the frame the scope that is resolving opened,
-              // rather than into whichever import happens to be innermost
-              // across the whole execution.
-              identity.identities.select(name, definition, yield* useScope());
-              // The same record, for the other thing canonical resolution
-              // decides here: which dispatcher — if any — this import selected.
-              // A dispatcher a handler kept from another import reaches no body
-              // without it.
-              forms.select(name, definition);
+          *importComponent([name, position], next) {
+            // Delegation first. An authored import is asked through a descriptor
+            // that supplied a terminal of its own, so `next` answers it there —
+            // in that import's frame — and this provider is the middleware it
+            // composed through rather than the thing that resolved it.
+            try {
+              return yield* next(name, position);
+            } catch (error) {
+              // Only an empty public terminal reporting *this* name: nothing
+              // answered this call, so it is a direct `importComponent()` an
+              // invocation started for itself. It resolves ordinarily and names
+              // no frame, which is what makes it a separate import rather than a
+              // delegation of the authored one. Every other failure is somebody
+              // else's and propagates unchanged.
+              //
+              // The mark is parsed rather than the class compared: the terminal
+              // that raised it belongs to whichever copy of core built the
+              // descriptor that was asked, and a component loaded with
+              // `--include` or a middleware package holding its own copy is an
+              // ordinary arrangement, not a hypothetical.
+              if (!isMissingImportProvider(error, name)) {
+                throw error;
+              }
+              return yield* resolveCanonicalImport(name, position, undefined);
             }
-            // The witness for this answer. It is issued where the answer is
-            // produced and verified where it is invoked, so what a handler does
-            // to the value in between is visible rather than authoritative.
-            return imports === undefined ? definition : imports.issue(name, definition);
           },
           *applyModifiers([modifiers, context], _next) {
             const chain = composeModifierChain(modifiers, context, registry);

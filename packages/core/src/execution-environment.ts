@@ -30,9 +30,11 @@ import type {
   ComponentInvocation,
   ComponentRouting,
   FormSyntax,
+  ImportSelection,
   InvocationIdentities,
 } from "./invocation-identity.ts";
 import type { ExactSource } from "./output/exact-source.ts";
+import type { ComponentDefinition, FunctionComponentDefinition, SourcePosition } from "./types.ts";
 import type { SyntaxReference } from "./syntax-reference.ts";
 
 /**
@@ -98,6 +100,25 @@ export interface ExecutionEnvironment {
    * through this.
    */
   readonly componentIdentity?: InvocationIdentities;
+  /**
+   * Canonical resolution for one import, as the execution performs it.
+   *
+   * Expansion calls this as the terminal of a descriptor it creates for one
+   * authored import, handing it that import's own frame — so the frame that
+   * receives the canonical selection is the one the element opened, whatever
+   * scope a handler delegated through. Absent where nothing canonical resolves
+   * imports, and then the public chain answers as it always did.
+   *
+   * Execution-owned and execution-private: it is on this by-value boundary
+   * beside component resolution, reaches no document, component or handler, and
+   * grants nothing by being here — what it decides is what canonical resolution
+   * decided anyway.
+   */
+  readonly canonicalImport?: (
+    name: string,
+    position: Readonly<SourcePosition> | undefined,
+    selection: ImportSelection | undefined,
+  ) => Operation<ComponentDefinition | FunctionComponentDefinition>;
   /**
    * Records which segments this execution produced as source rather than prose.
    *

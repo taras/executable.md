@@ -5497,20 +5497,37 @@ the implementation this execution built, carried to the issuance through the
 engine's own import frame (§5.3), and settled to nothing when resolution did not
 happen, happened twice, or answered for a name the engine did not ask.
 
-An import frame belongs to the Effection scope that opened it, and each scope
-keeps its own innermost-last stack of them. Nesting inside one scope is
-unchanged: an inner import owns the top until it closes, after which the outer
-one may be selected into again. What the ownership adds is spawned concurrency.
-Two `<Spawn>` children under one `<All>` may have imports open at the same time,
-and each one's canonical selection is recorded into its own spawn's frame — so an
-ordinary `<Session>` written in each child receives its own authentic identity,
-neither child can be handed the other's, and closing or cancelling one spawn
-neither clears nor authorizes the other. Two selections in one frame still
-settle to nothing. The engine holds one domain per declared component per
-execution however many spawns invoke it, and the same ownership governs the
-windows a provider's claim is admitted in: one installation may answer in two
-sibling spawns at once, and may answer with the exact same definition in each,
-while a second, *different* answer in either refuses.
+An import frame belongs to the import that opened it, and the association is
+that import's own **terminal**: expansion asks through a `Component` Api
+descriptor it creates for this one import, whose core `importComponent` handler
+closes over the frame. The descriptor carries the stable `Component` Api name, so
+it receives the same installed middleware in the same order — a stable name
+shares middleware and shares no terminal authority. Middleware may observe,
+delegate, replace or refuse, and may run `next` in a scope of its own: `next`
+terminates in the terminal that dispatch was created with, so the invocation
+keeps its identity. A handler that calls the public import operation itself is
+making a separate import rather than delegating the authored one, and that
+separate import grants the authored one no identity. Nothing about an Effection
+scope, a context, a token or a durable coroutine takes part.
+
+What this ownership adds is spawned concurrency. Two `<Spawn>` children under one
+`<All>` may have imports open at the same time; each has its own frame behind its
+own terminal, so an ordinary `<Session>` written in each child receives its own
+authentic identity, neither child can be handed the other's, and closing or
+cancelling one spawn neither clears nor authorizes the other. Nesting needs no
+stack, because an inner authored import is its own dispatch with its own
+terminal. Two selections in one frame still settle to nothing. The engine holds
+one domain per declared component per execution however many spawns invoke it.
+
+The windows a provider's claim is admitted in are owned the same way and by the
+same kind of value — the explicit window object, captured by the request before
+its handler runs — and serially: component answers are resolved in one capture
+phase before any document expands, so one window is open at a time and a handler
+delegating through a descendant scope answers the resolution it was opened in.
+One installation may answer more than one import with the exact same definition,
+while a second, *different* answer in either refuses. A concurrent document
+import happens after capture, with no window open, so it may be answered as
+ordinary middleware and acquires no profile identity.
 Forwarding the genuine issuance is ordinary delegation and stays supported;
 everything else refuses. None of it reads replaceable state, so middleware may
 short-circuit an import, redirect a name, replace a definition, shadow a
@@ -13261,6 +13278,9 @@ Defined in §5.6, with the selection rule in §5.3.
 | CIV23 | The identity a provider states for its answer | A request states a claim on the exact object its handler returns, under the name and provider origin canonical execution fixed when it minted that request. A different object, a copy, an object edited after the claim, a competing provider installation, another key and another revision each identify nothing, and the first statement stands after every one of them. The provider states only key and revision, and a partial identity is refused rather than half-recorded. Backs FE14 |
 | CIV24 | Identification is one atomic answer | The claim and core's own claim-time copy of what was claimed come back from one call, so nothing downstream reads the chain's object again: an answer whose member alternates between the claimed value and a substitution is sealed as the claimed one, with the plant proven live by the next read. At execution scale, an answer whose props schema alternates validates the fragment against the claimed contract. Backs FE14 |
 | CIV25 | A request belongs to one resolution occurrence | Provider installation and the right to answer one occurrence are separate. An installation receives a registrar and installs import middleware once; every middleware invocation receives a fresh request with readonly name and position, plus `next`. The request captures the exact resolution-window object, provider-installation token, origin and name, and `claim` accepts only the answer plus key and revision. Its handler closes the request synchronously in `finally` on return, failure or cancellation, while an outer request stays live across `yield* next()` and may claim its replacement after the delegated handler returns. The enclosing resolution closes in its existing `finally`. A claim succeeds only during active execution, through an open request whose captured window is the exact current object and whose fixed name matches it, with no different statement by that provider in the window. Identification takes the expected window explicitly and accepts only that exact window and name. Thus a stale request from resolution N refuses during N+1 of the same name, a stale `Open` request cannot retag while `Other` is live, and a losing inner request refuses after its handler returns while the still-live outer request may claim after delegation. One installation answers several names and repeated same-name resolutions through distinct requests; unidentified replacements remain ordinary valid middleware answers outside fragment evaluation. Two owners live at once each answer only for what they recorded, and tearing one down leaves the other working. No Context, shared symbol, public brand or module-global registry participates. Backs FE15 |
+| CIV26 | The terminal is the association | Import middleware that delegates the same name once from inside `scoped()` keeps the invocation's identity, and names the same one an undelegated import does. Two nested authored imports each own their terminal, so both are identified without a stack. Delegating twice, or delegating another name, reaches this import's own terminal and settles it to nothing |
+| CIV27 | Two imports live at once | Two `<Spawn>` children are each suspended inside their own import before either resolves. Each dispatch selects into the frame its terminal carries, so both invocations are identified exactly once, their identities differ, and they are the identities the same two sites name when nothing holds their imports — in either release order |
+| CIV28 | A cancelled import closes only its own frame | With two imports live, one is released and claims while the other is still suspended and is cancelled by a failing sibling. The survivor is refused nothing and names exactly what that site names when nothing is torn down beside it; the cancelled branch claims nothing, and nothing it left behind lends or withholds an identity afterwards |
 
 ### Tier NEX — Nested document executions (`specs/testing-spec.md`)
 

@@ -391,20 +391,16 @@ export interface ProtectedDeclaration {
  */
 export interface InvocationIdentities {
   /**
-   * Open the frame for one import the engine is about to ask for, under the
-   * engine scope that is asking.
+   * Open the frame for one import the engine is about to ask for.
    *
-   * The engine settles it as soon as that import answers, whatever the answer
-   * was, so nothing a handler does in between decides what the frame holds —
-   * including an import a sibling spawn opened while this one was in flight.
+   * The frame is a closure and nothing else: it is in no collection, under no
+   * key, and reachable only through the object this returns. The engine hands
+   * that object to the terminal it builds for this one import and settles it as
+   * soon as the import answers, however it answered — so nothing a handler does
+   * in between decides what the frame holds, and an import a sibling spawn
+   * opened at the same time is a different closure with a different terminal.
    */
-  beginImport(name: string, scope: Scope): ImportSelection;
-  /**
-   * Record what canonical resolution selected. Only core's own resolver calls
-   * this, from inside the import the frame above was opened for, and under the
-   * same engine scope that opened it.
-   */
-  select(name: string, definition: object, scope: Scope): void;
+  beginImport(name: string): ImportSelection;
   /** Answer for nothing, from here on. Called when the execution is torn down. */
   revoke(): void;
 }
@@ -412,13 +408,24 @@ export interface InvocationIdentities {
 /** One import's frame: what canonical resolution selected, once. */
 export interface ImportSelection {
   /**
+   * Record what canonical resolution selected for this import.
+   *
+   * Reachable only by holding this frame, which only the engine does: the
+   * terminal it builds for this import closes over it, and that terminal is
+   * what `next` reaches however many scopes a handler delegates through. A
+   * second selection in one frame is ambiguity rather than a correction, and
+   * settles to nothing.
+   */
+  select(name: string, definition: object): void;
+  /**
    * The domain of the registration canonical resolution selected here, if it
    * selected one of this execution's own.
    *
    * Answers `undefined` unless exactly one canonical resolution happened inside
-   * this frame, for the name the engine asked, selecting the implementation
-   * this execution built for that domain. A selection made in another scope's
-   * frame is not one that happened inside this one.
+   * this frame, for the name the engine asked, selecting the implementation this
+   * execution built for that domain. Idempotent: the frame closes the first time
+   * it is settled, and a selection after that is not one that happened inside
+   * it.
    */
   settle(): IdentityDomain | undefined;
 }
@@ -1142,88 +1149,60 @@ export function installIdentities(
     });
   }
 
-  /**
-   * The import frames each Effection scope has open, innermost last.
-   *
-   * A stack per scope rather than one for the execution. Nesting inside one
-   * scope is still LIFO — a handler may expand something of its own while an
-   * import is in flight, and the inner import owns the top until it closes.
-   * What a single execution-wide stack could not express is *spawned
-   * concurrency*: two `<Spawn>` children may each have an import open at the
-   * same time, and whichever pushed last would then receive the other's
-   * canonical selection.
-   * One invocation would settle with no domain and the other with a domain it
-   * never selected, which is where an ordinary `<Session>` in each spawned child
-   * stopped being able to name its own durable identity.
-   *
-   * The scope is a private key and nothing else. It is never published, never
-   * read from, and never reaches a document, a component or a handler; two
-   * frames belong together because they were opened under the same engine
-   * scope object, not because of anything either of them says.
-   *
-   * Anything that leaves two selections in one frame — a handler delegating
-   * twice — still settles to nothing, which is the safe direction.
-   */
-  const frames = new Map<Scope, { asked: string; selected: Minted | undefined; count: number }[]>();
-
   return {
     identities: {
-      beginImport(asked: string, scope: Scope): ImportSelection {
-        const frame = { asked, selected: undefined as Minted | undefined, count: 0 };
-        const open = frames.get(scope);
-        if (open === undefined) {
-          frames.set(scope, [frame]);
-        } else {
-          open.push(frame);
-        }
+      /**
+       * One import's frame, and the terminal that will select into it.
+       *
+       * No collection, no key, no stack: the frame is this closure, and the only
+       * way to select into it is to hold the object returned here. The engine
+       * hands it to the terminal it builds for this exact import, so a handler
+       * delegating through any number of descendant scopes still reaches *this*
+       * frame, and a sibling spawn resolving the same name at the same time
+       * reaches its own. Nothing about either frame is inferred from where it
+       * was opened or from what it resolved to.
+       */
+      beginImport(asked: string): ImportSelection {
+        let selected: Minted | undefined;
+        let count = 0;
+        let closed = false;
         return {
-          settle(): IdentityDomain | undefined {
-            // Only this frame, and only from the scope that opened it: a sibling
-            // spawn closing its own import may neither clear this one nor be
-            // cleared by it.
-            const stack = frames.get(scope);
-            if (stack !== undefined) {
-              const index = stack.lastIndexOf(frame);
-              if (index >= 0) {
-                stack.splice(index, 1);
-              }
-              if (stack.length === 0) {
-                frames.delete(scope);
-              }
+          select(name: string, definition: FunctionComponentDefinition): void {
+            // A frame the engine has already settled records nothing: the
+            // invocation it belonged to has its answer, and a selection arriving
+            // afterwards is another call's.
+            if (closed) {
+              return;
             }
-            return frame.count === 1 && frame.selected !== undefined
-              ? frame.selected.domain
-              : undefined;
+            count += 1;
+            // The name canonical resolution answered for has to be the one the
+            // engine asked: a handler that delegates a different name selects a
+            // registration the element never named.
+            const domain = asked === name ? minted.get(name) : undefined;
+            // And the implementation has to be the one this execution built. A
+            // repository file, a nested registration and another execution's
+            // component all resolve to a different function.
+            selected =
+              domain !== undefined && domain.implementation === definition.fn ? domain : undefined;
+          },
+          settle(): IdentityDomain | undefined {
+            if (closed) {
+              return undefined;
+            }
+            closed = true;
+            return count === 1 && selected !== undefined ? selected.domain : undefined;
           },
         };
-      },
-      select(name: string, definition: FunctionComponentDefinition, scope: Scope): void {
-        // The innermost import open in the scope that is resolving, which is
-        // the one this selection answers. A selection never reaches another
-        // spawn's frame, however the two happen to interleave.
-        const frame = frames.get(scope)?.at(-1);
-        if (frame === undefined) {
-          return;
-        }
-        frame.count += 1;
-        // The name canonical resolution answered for has to be the one the
-        // engine asked: a handler that delegates a different name selects a
-        // registration the element never named.
-        const domain = frame.asked === name ? minted.get(name) : undefined;
-        // And the implementation has to be the one this execution built. A
-        // repository file, a nested registration and another execution's
-        // component all resolve to a different function.
-        frame.selected =
-          domain !== undefined && domain.implementation === definition.fn ? domain : undefined;
       },
       revoke: () => {
         for (const domain of minted.values()) {
           domain.revoke();
         }
-        // Every stack, not only the ones that emptied themselves: an execution
-        // torn down while a spawn still had an import open leaves no frame
-        // behind for anything to select into.
-        frames.clear();
+        // There is no frame registry to clear. An execution torn down while a
+        // spawn still had an import open leaves that frame reachable only from
+        // the dispatch that owns it, and its domains answer for nothing from
+        // here — so a frame still in flight settles to nothing of its own
+        // accord.
         // The route goes with the domains: a wrapper projected into it, or a
         // route narrowed from it, answers for nothing once the execution that
         // minted the bodies is gone.

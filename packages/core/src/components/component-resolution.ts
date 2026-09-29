@@ -18,8 +18,6 @@
  * nothing a handler still holds decides what is *invoked*.
  */
 
-import type { Scope } from "effection";
-
 import type { ComponentDefinition, FunctionComponentDefinition, SourcePosition } from "../types.ts";
 
 /** A definition an import may answer with. */
@@ -332,14 +330,14 @@ export interface OpenAnswerRequest {
  */
 export interface ProviderInstallation {
   /**
-   * Begin one handler invocation's request for one asked name, under the engine
-   * scope that is resolving it.
+   * Begin one handler invocation's request for one asked name.
    *
-   * The scope is how the request finds the resolution it was asked in when
-   * several are open at once. It is a private key the caller reads from its own
-   * operation; nothing about it reaches the provider.
+   * The request captures the resolution that is open when it is minted, by
+   * identity, which is how it finds the asking it answers. Nothing about where
+   * the handler runs takes part in that, and nothing about it reaches the
+   * provider.
    */
-  open(scope: Scope, name: string, position?: Readonly<SourcePosition>): OpenAnswerRequest;
+  open(name: string, position?: Readonly<SourcePosition>): OpenAnswerRequest;
 }
 
 /** An identity a provider stated in a shape this execution cannot record. */
@@ -373,7 +371,7 @@ export class CanonicalImports {
    */
   #active = false;
   /**
-   * The resolutions each Effection scope has open, innermost last.
+   * The one resolution this owner has open, if it has one.
    *
    * A provider installation outlives every resolution it takes part in, while a
    * fresh request belongs to one handler invocation. Canonical execution asks
@@ -387,14 +385,14 @@ export class CanonicalImports {
    * handler settled for one name from recording under it while a different
    * name is being resolved.
    *
-   * A stack per scope rather than one for the execution, because sibling spawns
-   * resolve at the same time. Nesting inside one scope stays LIFO — an inner
-   * resolution hides its parent until it closes — while each spawn has its own
-   * top, so closing or cancelling one can neither clear nor authorize the
-   * other. The scope object is a private key: never published,
-   * never read from, and never handed to a provider.
+   * One window at a time, because component answers are resolved in one serial
+   * capture phase before any document expands: the execution asks for each
+   * admitted name in turn, and nothing concurrent is resolving beside it. A
+   * request captures the window object itself before its handler runs, so a
+   * handler delegating through any number of descendant scopes still answers the
+   * resolution it was opened in — no scope takes part in this at all.
    */
-  readonly #windows = new Map<Scope, ResolutionWindow[]>();
+  #window: ResolutionWindow | undefined;
   /** How many resolutions this owner has opened, so each one is its own. */
   #occurrences = 0;
   /**
@@ -406,10 +404,10 @@ export class CanonicalImports {
    * what it resolved to.
    *
    * A set of windows per installation rather than the last one it answered.
-   * Two windows can be open at once now, so one installation may legitimately
-   * answer in window A and then in window B — and a second, different answer
-   * in A must still refuse, even though B was answered in between. Remembering
-   * only the most recent window would have let that second answer through.
+   * Windows follow one another, and one installation may legitimately answer in
+   * window A and then in window B — while a request kept from A may still try to
+   * state a second, different answer for A after B was answered. Remembering only
+   * the most recent window would have let that one through.
    *
    * Keyed by the installation's own frozen token, so an installation stays
    * reusable: it answers several admitted names and the same name resolved more
@@ -425,9 +423,9 @@ export class CanonicalImports {
   /** Stop. Called at teardown, on completion, failure or cancellation. */
   revoke(): void {
     this.#active = false;
-    // Every scope's stack, not only the ones that emptied themselves: a spawn
-    // torn down with a resolution still open leaves nothing claimable.
-    this.#windows.clear();
+    // Whatever was open goes with it: an execution torn down mid-resolution
+    // leaves nothing claimable.
+    this.#window = undefined;
   }
 
   get identifying(): boolean {
@@ -443,7 +441,7 @@ export class CanonicalImports {
    * one: there is no path from a document, a component or a provider to this
    * method.
    */
-  beginResolution(name: string, scope: Scope): ResolutionWindow {
+  beginResolution(name: string): ResolutionWindow {
     if (!this.#active) {
       throw new AnswerIdentityError(REVOKED_ANSWER_IDENTIFICATION);
     }
@@ -454,31 +452,14 @@ export class CanonicalImports {
       name,
       occurrence,
       close(): void {
-        // Only this window, and only out of the scope that opened it. A nested
-        // resolution above it has its own close, and a sibling spawn's stack
-        // is not touched at all — clearing either would settle a decision still
-        // being made somewhere else. Removed by identity, so no bookkeeping
-        // value has to be trusted to say which window this is, and idempotent,
-        // because a close that ran twice would otherwise remove its parent.
-        const open = owner.#windows.get(scope);
-        if (open === undefined) {
-          return;
-        }
-        const index = open.lastIndexOf(window);
-        if (index >= 0) {
-          open.splice(index, 1);
-        }
-        if (open.length === 0) {
-          owner.#windows.delete(scope);
+        // By identity, and idempotent: a close that ran twice must not clear a
+        // window somebody else opened afterwards.
+        if (owner.#window === window) {
+          owner.#window = undefined;
         }
       },
     };
-    const open = this.#windows.get(scope);
-    if (open === undefined) {
-      this.#windows.set(scope, [window]);
-    } else {
-      open.push(window);
-    }
+    this.#window = window;
     return window;
   }
 
@@ -500,13 +481,13 @@ export class CanonicalImports {
     const installation = Object.freeze({});
     const owner = this;
     return {
-      open(scope: Scope, name: string, position?: Readonly<SourcePosition>): OpenAnswerRequest {
-        // Captured by identity, here, at the moment this invocation begins, out
-        // of the scope that is resolving. A request minted while resolution N
-        // is open answers resolution N or nothing: it holds the object, so it
-        // cannot be made to describe whichever window is open later — or a
-        // window a sibling spawn opened in the meantime.
-        const opened = owner.#windows.get(scope)?.at(-1);
+      open(name: string, position?: Readonly<SourcePosition>): OpenAnswerRequest {
+        // Captured by identity, here, at the moment this invocation begins. A
+        // request minted while resolution N is open answers resolution N or
+        // nothing: it holds the object, so it cannot be made to describe
+        // whichever window is open later, and running its handler in a
+        // descendant scope changes nothing about which window it captured.
+        const opened = owner.#window;
         let live = true;
         const request: ComponentAnswerRequest = Object.freeze({
           name,
@@ -519,7 +500,7 @@ export class CanonicalImports {
             return owner.#record(
               installation,
               origin,
-              { name, window: opened, scope, live: () => live },
+              { name, window: opened, live: () => live },
               answer,
               stated,
             );
@@ -541,7 +522,6 @@ export class CanonicalImports {
     asked: {
       name: string;
       window: ResolutionWindow | undefined;
-      scope: Scope;
       live: () => boolean;
     },
     answer: ImportedDefinition,
@@ -552,15 +532,11 @@ export class CanonicalImports {
     }
     // Four questions, and each of them is about the invocation rather than
     // about the provider: is this handler still deciding; is the resolution it
-    // was asked in the one still open, by identity; and is the name it was
-    // asked the name that resolution is deciding. A stable installation handle
-    // answers none of them, which is why it does not claim.
-    // Four questions, and the window one is asked of the scope that resolved:
-    // being the innermost open resolution somewhere else in the execution is
-    // not being the one this handler was asked in.
+    // was asked in the one still open, by identity; and is the name it was asked
+    // the name that resolution is deciding. A stable installation handle answers
+    // none of them, which is why it does not claim.
     const open = asked.window;
-    const top = this.#windows.get(asked.scope)?.at(-1);
-    if (!asked.live() || open === undefined || open !== top || open.name !== asked.name) {
+    if (!asked.live() || open === undefined || open !== this.#window || open.name !== asked.name) {
       throw new AnswerIdentityError(SETTLED_CLAIM);
     }
     const identity = complete(origin, stated);

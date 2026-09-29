@@ -3993,7 +3993,8 @@ matching name says nothing about which registration answered. What settles it is
 the selection itself, recorded where it is made:
 
 - expansion opens an **execution-private import frame** before it asks the
-  public import chain anything, in the Effection scope that is asking;
+  public import chain anything, and hands it to the terminal it builds for that
+  one import;
 - canonical core resolution records, inside that frame, the exact name it was
   asked for and the exact implementation it selected — the function object this
   execution built from the host's factory, by identity;
@@ -4014,30 +4015,52 @@ answered; and a replay decides the same way, against this execution's own
 factory-created implementation rather than against anything a previous run
 recorded.
 
-**Frames are owned per Effection scope, not per execution.** `<All>` gives two
-`<Spawn>` children imports in flight at the same time, so "the frame this
-selection belongs to" can no longer mean "the last one anybody opened". Each
-scope keeps its own LIFO stack of open frames, and a canonical selection is
-recorded into the top frame of the scope that is resolving:
+**A frame is owned by the import's own terminal, not by an Effection scope and
+not by the execution.** `<All>` gives two `<Spawn>` children imports in flight at
+the same time, so "the frame this selection belongs to" can be neither "the last
+one anybody opened" nor "the one opened where this code happens to be running".
+Each import creates its own frame and its own `Component` Api descriptor whose
+core `importComponent` handler closes over that frame; the engine asks through
+that descriptor, and the selection is recorded by the terminal `next` reaches:
 
-- nesting inside one scope is unchanged — an inner import owns the top until it
-  closes, and the outer one may be selected into again afterwards;
-- sibling spawns have independent tops, so one spawned child's selection can
-  never land in another's frame, and closing or cancelling one spawn neither
-  clears nor authorizes the other;
-- a frame is removed only by the settle that opened it, from the scope that
-  opened it, and teardown discards every remaining stack; and
+- the descriptor carries the same stable Api name as the public one, so it
+  receives the same installed middleware in the same order — **a stable name
+  shares middleware, and shares no terminal authority**;
+- middleware may observe, delegate, replace or refuse the answer, and may run
+  `next` in any descendant scope: `next` still terminates in the terminal that
+  dispatch was created with, so delegating through a scope of its own keeps the
+  identity;
+- sibling spawns resolve through different descriptors, so one spawned child's
+  selection cannot land in another's frame, and closing or cancelling one
+  neither clears nor authorizes the other;
+- nesting is unchanged and needs no stack: an inner authored import is its own
+  dispatch with its own terminal, so the outer one is neither shadowed nor
+  inferred from scheduling;
+- a handler that starts an import of its own by calling the public operation is
+  making a **separate** import, not delegating the authored one — it may resolve
+  normally, and it grants the authored import no identity; and
 - two selections in *one* frame — a handler delegating twice — still yield no
   domain, which remains the safe direction.
 
-The scope object is a private key. It is never published, never read from, and
-never reaches a document, a component, a provider or a handler: two frames
-belong together because they were opened under the same engine scope, not
-because of anything either of them says. The same ownership governs the
-canonical answer windows a provider claims through, where one installation may
-hold an answer open in two sibling spawns at once — the exact same definition
-included, because a reusable provider owns one object and a claim is per
-window — and a second, *different* answer in either still refuses.
+The frame is a closure and nothing else: it is in no map, under no key, and
+reachable only from the dispatch that opened it. Nothing is published, keyed or
+read from — not a scope, not a context, not a token, and not a durable coroutine
+id, which non-journaled expansion does not have. A counterfeit descriptor made
+with the same Api name changes only what is asked through that counterfeit; it
+cannot become the terminal of the engine's own call. Live expansion and replay
+decide this the same way.
+
+Canonical answer windows are owned the same way and by the same kind of value —
+an explicit object rather than a scope — but serially: component answers are
+resolved in one capture phase before any document expands, so one window is open
+at a time. Each provider request captures that window object before its handler
+runs, a claim states it back explicitly, and a handler delegating through a
+descendant scope answers the resolution it was opened in. One installation may
+answer more than one import with the same definition — a reusable provider owns
+one object and a claim is per window — and a second, *different* answer in
+either still refuses. Concurrent document imports happen after capture, with no
+window open at all: such an import may be answered as ordinary middleware, and
+acquires no profile identity.
 
 The engine then mints one issuance per invocation, carrying that domain — or
 none — the authored name for what a refusal says, and the frame the body is

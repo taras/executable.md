@@ -41,7 +41,7 @@ import type {
 } from "../host.ts";
 import { forEach } from "@effectionx/stream-helpers";
 import { collect } from "../src/collect.ts";
-import { retain } from "../src/component-api.ts";
+import { Component, retain } from "../src/component-api.ts";
 import { getExpansion } from "../src/expansion.ts";
 import { retainedSource } from "../src/root-source.ts";
 import { registerComponents } from "../src/components/registration.ts";
@@ -289,6 +289,7 @@ function run(
     stream?: InMemoryStream;
     files?: Record<string, string>;
     drive?: (shared: Gated, stream: InMemoryStream) => Operation<void>;
+    install?: () => Operation<void>;
   } = {},
 ): Operation<Run> {
   return scoped(function* () {
@@ -298,6 +299,9 @@ function run(
     yield* useStubFs({ "test.md": source, ...options.files });
     yield* useEchoExec();
     yield* useComponents(shared);
+    if (options.install) {
+      yield* options.install();
+    }
     if (options.drive) {
       yield* spawn(() => options.drive!(shared, stream));
     }
@@ -570,6 +574,162 @@ const COUNTER_DOC = [
   "output('AFTER');",
   "```",
 ].join("\n");
+
+/**
+ * Hold every import of `component` until `width` of them are live, then release
+ * them in `order`.
+ *
+ * The barrier is inside `importComponent` deliberately. `<Gate>` holds a child in
+ * its component *body*, which its import has already finished by then — so two
+ * gated children prove the bodies overlapped, not the imports. Only a wait
+ * inside the import puts two of them in flight together, which is the one
+ * arrangement in which an import could take a sibling's canonical selection.
+ */
+function heldImports(
+  component: string,
+  width: number,
+  order: readonly number[],
+): () => Operation<void> {
+  const arrivals = Array.from({ length: width }, () => signal());
+  const releases = Array.from({ length: width }, () => signal());
+  let seen = 0;
+  return function* () {
+    yield* spawn(function* () {
+      for (const [index, arrival] of arrivals.entries()) {
+        yield* awaiting(
+          `the import of <${component}> number ${index + 1} starting`,
+          arrival.published,
+        );
+      }
+      for (const index of order) {
+        releases[index].publish();
+      }
+    });
+    yield* Component.around(
+      {
+        *importComponent([name, position], next) {
+          if (name !== component || seen >= width) {
+            return yield* next(name, position);
+          }
+          const index = seen++;
+          arrivals[index].publish();
+          yield* awaiting(
+            `the import of <${component}> number ${index + 1} being released`,
+            releases[index].published,
+          );
+          return yield* next(name, position);
+        },
+      },
+      { at: "max" },
+    );
+  };
+}
+
+/** Two spawns, each held at its own gate and then naming its own identity. */
+const GATED_PROBES = [
+  "<All>",
+  '<Spawn><Gate name="one" /><Probe name="p1" /></Spawn>',
+  '<Spawn><Gate name="two" /><Probe name="p2" /></Spawn>',
+  "</All>",
+  "",
+].join("\n");
+
+describe("Tier ALL — PA2: each concurrent site owns its own identity", () => {
+  beforeAll(() => useTempFileCompiler());
+
+  it("ALL3b: two concurrent authored sites each name their own identity, in either release order", function* () {
+    // Both children are held at their gates and then inside their own import, so
+    // the two imports are live at the same time. What this row holds is what the
+    // *document* decides under that overlap: which authored site each expansion
+    // identity belongs to, and that each site's component ran once. Where the
+    // canonical selection landed is CIV27's row, over declared components.
+    const first = harness();
+    const forwards = yield* run(GATED_PROBES, {
+      shared: first,
+      // Both gates open first, and then both children suspend inside their own
+      // import until the other one is there too.
+      install: heldImports("Probe", 2, [0, 1]),
+      *drive(shared) {
+        yield* shared.arrival("one");
+        yield* shared.arrival("two");
+        shared.release("one");
+        shared.release("two");
+      },
+    });
+    expect(forwards.ok).toBe(true);
+
+    const p1 = first.identities.get("p1");
+    const p2 = first.identities.get("p2");
+    expect(typeof p1).toBe("string");
+    expect(typeof p2).toBe("string");
+    expect(p1).not.toBe(p2);
+    // Each site claimed once. A frame that received a second selection would
+    // have settled to nothing and the invocation would name no identity at all.
+    expect(first.ran.filter((one) => one.startsWith("probe:"))).toEqual(["probe:p1", "probe:p2"]);
+
+    // The same document, released in the opposite order. Ownership is the
+    // authored element's, so scheduling decides nothing about it.
+    const second = harness();
+    const backwards = yield* run(GATED_PROBES, {
+      shared: second,
+      install: heldImports("Probe", 2, [1, 0]),
+      *drive(shared) {
+        yield* shared.arrival("one");
+        yield* shared.arrival("two");
+        shared.release("two");
+        shared.release("one");
+      },
+    });
+    expect(backwards.ok).toBe(true);
+    expect(second.identities.get("p1")).toBe(p1);
+    expect(second.identities.get("p2")).toBe(p2);
+  });
+
+  it("ALL3c: one child failing leaves the surviving sibling's own identity intact", function* () {
+    // One import is cancelled while the other is still live. There is no frame
+    // registry for a cancelled branch to leave behind, so the sibling that
+    // already claimed keeps exactly what it claimed.
+    const shared = harness();
+    const result = yield* run(
+      [
+        "<All>",
+        '<Spawn><Gate name="one" /><Probe name="p1" /></Spawn>',
+        '<Spawn><Gate name="two" /><Fail name="two" /></Spawn>',
+        "</All>",
+        "",
+      ].join("\n"),
+      {
+        shared,
+        *drive(inner) {
+          yield* inner.arrival("one");
+          yield* inner.arrival("two");
+          // The survivor runs first, then the sibling fails under it.
+          inner.release("one");
+          yield* inner.append("one");
+          inner.release("two");
+        },
+      },
+    );
+
+    expect(result.ok).toBe(false);
+    // The join published nothing, and the child that did run named its own
+    // identity rather than nothing or its sibling's.
+    const p1 = shared.identities.get("p1");
+    expect(typeof p1).toBe("string");
+    // The same identity that site names when nothing fails beside it: what the
+    // element is called its work after does not depend on a sibling at all.
+    const alone = harness();
+    const quiet = yield* run(GATED_PROBES, {
+      shared: alone,
+      *drive(inner) {
+        inner.release("one");
+        inner.release("two");
+      },
+    });
+    expect(quiet.ok).toBe(true);
+    expect(p1).toBe(alone.identities.get("p1"));
+  });
+});
 
 describe("Tier ALL — PA3: counters, paths and the parent's own numbering", () => {
   beforeAll(() => useTempFileCompiler());

@@ -36,7 +36,7 @@ import { API } from "@executablemd/runtime";
 import { mkdir, mkdtemp, realpath } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { InMemoryStream } from "@executablemd/durable-streams";
+import { InMemoryStream, StaleInputError } from "@executablemd/durable-streams";
 import type { DurableEvent, Json } from "@executablemd/durable-streams";
 import { Component } from "../src/component-api.ts";
 import { collect } from "../src/collect.ts";
@@ -1390,8 +1390,9 @@ function* published(
   declarations: readonly MarkdownComponent[],
   extra: readonly ExecutionInstallation[],
   stream: InMemoryStream = new InMemoryStream(),
+  /** Where each published chunk lands, so a failed run's output is still readable. */
+  chunks: string[] = [],
 ): Operation<string> {
-  const chunks: string[] = [];
   return yield* scoped(function* () {
     yield* useNormalizedOutput();
     yield* useTerminalOutput();
@@ -1434,17 +1435,25 @@ function answeringOpenName(definition: ImportedDefinition): ExecutionInstallatio
   };
 }
 
-/** One replay that is expected to refuse, with whatever it managed to publish. */
+/**
+ * One replay that is expected to refuse, with whatever it published on the way.
+ *
+ * The chunks are the caller's array, so what this reports is what the run
+ * actually handed the Output Api before it failed — not an empty string this
+ * helper decided on. A row asserting "published nothing" has to be able to see
+ * something.
+ */
 function* refusalOfRun(
   source: string,
   declarations: readonly MarkdownComponent[],
   history: readonly DurableEvent[],
-): Operation<{ failed: boolean; output: string }> {
+): Operation<{ failure: unknown; output: string }> {
+  const chunks: string[] = [];
   try {
-    const output = yield* published(source, declarations, [], new InMemoryStream([...history]));
-    return { failed: false, output };
-  } catch {
-    return { failed: true, output: "" };
+    yield* published(source, declarations, [], new InMemoryStream([...history]), chunks);
+    return { failure: undefined, output: chunks.join("") };
+  } catch (error) {
+    return { failure: error, output: chunks.join("") };
   }
 }
 
@@ -1634,7 +1643,6 @@ describe("Tier DM — exact source is a provenance, not a field", () => {
       (event) => event.type === "close" && event.coroutineId.includes("."),
     );
     expect(children).toHaveLength(2);
-    // What each child retained says what its bytes were, not only what they said.
     // What each child retained says what its bytes were, not only what they
     // said. Read as a set: children close in whatever order they finished, and
     // which one finished first is exactly what this must not depend on.
@@ -1688,12 +1696,14 @@ describe("Tier DM — exact source is a provenance, not a field", () => {
           ? { ...event, result: { status: "ok" as const, value } }
           : event,
       );
-      const published_ = yield* refusalOfRun(source, declarations, history);
+      const attempt = yield* refusalOfRun(source, declarations, history);
+      const which = JSON.stringify(value);
 
-      // Refused, and nothing published: a document rebuilt without the part it
-      // could not read is a document that never existed.
-      expect([JSON.stringify(value), published_.failed]).toEqual([JSON.stringify(value), true]);
-      expect([JSON.stringify(value), published_.output]).toEqual([JSON.stringify(value), ""]);
+      // Refused as the stale input it is, and nothing published on the way: a
+      // document rebuilt without the part it could not read is a document that
+      // never existed. The chunks are the run's own, collected before it failed.
+      expect([which, attempt.failure instanceof StaleInputError]).toEqual([which, true]);
+      expect([which, attempt.output]).toEqual([which, ""]);
     }
   });
 });

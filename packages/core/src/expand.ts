@@ -79,6 +79,7 @@ import {
   evalScope,
   handleFailure,
   importComponent,
+  importThroughTerminal,
   raise,
 } from "./component-api.ts";
 import {
@@ -2645,10 +2646,13 @@ function* expandComponent(
   // answered: what canonical resolution selected here is what decides whether
   // this invocation is in one of this execution's identity domains, and nothing
   // on the answer or in the chain carries it (`invocation-identity.ts`).
-  // Opened under the scope this expansion is running in, which is what makes
-  // the frame this spawn's own: a sibling `<Spawn>` resolving the same name at
-  // the same time opens its own, under its own scope.
-  const selection = environment?.componentIdentity?.beginImport(name, yield* useScope());
+  //
+  // The frame is this dispatch's closure, and the terminal built for this one
+  // import is the only thing that can select into it. That is what makes it this
+  // invocation's own: a sibling `<Spawn>` resolving the same name at the same
+  // time has its own frame behind its own terminal, and a handler delegating
+  // through any number of descendant scopes still arrives at this one.
+  const selection = environment?.componentIdentity?.beginImport(name);
   let selected: IdentityDomain | undefined;
   let dispatcher: FunctionComponent | undefined;
   /**
@@ -2673,8 +2677,19 @@ function* expandComponent(
     // whatever asks first, and authorizes only the answer it produced itself.
     const offered = environment?.installedComponents?.offer(environment.componentBodyScope, name);
     let answered: ImportedDefinition;
+    const canonical = environment?.canonicalImport;
     try {
-      answered = yield* importComponent(name, position);
+      // Through this import's own terminal when the execution has one: the
+      // public middleware chain composes around it by name, and `next`
+      // terminates in the continuation that carries this frame. Without an
+      // execution — inspection, a tool describing a document — the ordinary
+      // public operation answers exactly as it always did.
+      answered =
+        canonical === undefined
+          ? yield* importComponent(name, position)
+          : yield* importThroughTerminal(name, position, (asked, at) =>
+              canonical(asked, at, selection),
+            );
     } finally {
       offered?.close();
     }

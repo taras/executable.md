@@ -175,16 +175,87 @@ export interface ComponentApi {
   registry: ComponentRegistry;
 }
 
-export const Component: Api<ComponentApi> = createApi<ComponentApi>("Component", {
+/**
+ * The mark an empty public terminal puts on what it raises: a namespaced,
+ * non-enumerable own property carrying the name that was asked for.
+ *
+ * A property rather than a class, because the readers are in a different copy of
+ * this module than the writer as often as not. A component loaded from disk with
+ * `--include`, and a middleware package holding its own copy of core, each build
+ * their own `Component` descriptor with their own empty terminal and their own
+ * error class — and an execution has to recognize "nothing answered this" across
+ * exactly that seam, which `instanceof` cannot do. The name is namespaced so it
+ * collides with nothing, and non-enumerable so it does not travel into whatever
+ * a reporter serializes.
+ *
+ * It conveys one fact — *this call reached an empty public terminal, asking for
+ * this name* — and no authority. Anything may put it on anything; all it can
+ * cause is the ordinary resolution an unanswered import gets anyway.
+ */
+const MISSING_IMPORT_PROVIDER = "@executablemd/core/missing-import-provider";
+
+/**
+ * What the public descriptor's own terminal raises when nothing answered.
+ *
+ * An execution's provider delegates to `next` first and performs its ordinary
+ * resolution only for this, so a descriptor that supplied a terminal of its own
+ * is answered by that terminal and never resolved twice. Exported for core,
+ * published from no package entry point, and carrying nothing but the name that
+ * was asked.
+ */
+export class MissingImportProvider extends Error {
+  override name = "MissingImportProvider";
+  constructor(asked: string) {
+    super(
+      `Component.importComponent("${asked}") has no provider. Install one with ` +
+        `Component.around({ importComponent }, { at: "min" }) before expansion.`,
+    );
+    Object.defineProperty(this, MISSING_IMPORT_PROVIDER, {
+      value: { asked },
+      enumerable: false,
+      writable: false,
+      configurable: false,
+    });
+  }
+}
+
+/**
+ * Whether `error` is an empty public terminal reporting that nothing answered an
+ * import of exactly `asked`.
+ *
+ * The whole mark is parsed rather than trusted: an own, non-enumerable property
+ * under the namespaced name, holding an object with exactly one member, `asked`,
+ * whose value is the name this call asked for. Nothing is cast, and a mark that
+ * names another component — a foreign terminal's report about a *different*
+ * import, arriving here on some other failure — is not this call's.
+ */
+export function isMissingImportProvider(error: unknown, asked: string): boolean {
+  if (typeof error !== "object" || error === null) {
+    return false;
+  }
+  const mark = Object.getOwnPropertyDescriptor(error, MISSING_IMPORT_PROVIDER);
+  if (mark === undefined || mark.enumerable) {
+    return false;
+  }
+  const value: unknown = mark.value;
+  if (typeof value !== "object" || value === null || Object.keys(value).length !== 1) {
+    return false;
+  }
+  return Object.getOwnPropertyDescriptor(value, "asked")?.value === asked;
+}
+
+/**
+ * Every default but the registry, which each descriptor is given its own of:
+ * a `Map` living at module scope would be one table shared by every run in the
+ * process, and the lint rule that says so is right.
+ */
+const COMPONENT_DEFAULTS: Omit<ComponentApi, "registry"> = {
   // deno-lint-ignore require-yield
   *importComponent(
     name: string,
     _position?: Readonly<SourcePosition>,
   ): Operation<ComponentDefinition | FunctionComponentDefinition> {
-    throw new Error(
-      `Component.importComponent("${name}") has no provider. Install one with ` +
-        `Component.around({ importComponent }, { at: "min" }) before expansion.`,
-    );
+    throw new MissingImportProvider(name);
   },
   // deno-lint-ignore require-yield
   *applyModifiers(_modifiers: Modifier[], block: CodeBlockContext): Operation<CodeBlockResult> {
@@ -259,8 +330,51 @@ export const Component: Api<ComponentApi> = createApi<ComponentApi>("Component",
   *handleFailure(failure: ComponentFailure): Operation<ErrorSegment> {
     throw failure.error;
   },
+};
+
+export const Component: Api<ComponentApi> = createApi<ComponentApi>("Component", {
+  ...COMPONENT_DEFAULTS,
   registry: new Map(),
 });
+
+/**
+ * Ask one import through a descriptor whose terminal belongs to that import.
+ *
+ * The name is what shares middleware: a descriptor created with the stable
+ * `Component` name receives every handler installed anywhere, in the order they
+ * were installed, exactly as the public descriptor does. What a name does not
+ * share is the default handler — each `createApi()` instance owns its own — so
+ * the chain composed here terminates in the continuation this caller passed and
+ * in nothing a handler can reach, replace or reorder.
+ *
+ * That is the whole of the correlation. A middleware may delegate `next` through
+ * any descendant Effection scope and still arrive here; two imports asking at
+ * the same time have two descriptors and two terminals; and a counterfeit
+ * descriptor built with the same name changes only the calls made through it.
+ */
+export function importThroughTerminal(
+  name: string,
+  position: Readonly<SourcePosition> | undefined,
+  terminal: (
+    asked: string,
+    at: Readonly<SourcePosition> | undefined,
+  ) => Operation<ComponentDefinition | FunctionComponentDefinition>,
+): Operation<ComponentDefinition | FunctionComponentDefinition> {
+  const owned = createApi<ComponentApi>("Component", {
+    ...COMPONENT_DEFAULTS,
+    // Its own, and empty: what a registration installed is middleware, which
+    // this descriptor shares by name, so a registry asked through it is answered
+    // there exactly as it is through the public one.
+    registry: new Map(),
+    *importComponent(
+      asked: string,
+      at?: Readonly<SourcePosition>,
+    ): Operation<ComponentDefinition | FunctionComponentDefinition> {
+      return yield* terminal(asked, at);
+    },
+  });
+  return owned.operations.importComponent(name, position);
+}
 
 export const importComponent: Operations<ComponentApi>["importComponent"] =
   Component.operations.importComponent;
