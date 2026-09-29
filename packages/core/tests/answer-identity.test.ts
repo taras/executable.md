@@ -1135,6 +1135,59 @@ describe("Tier PA10c — one definition answering more than one import", () => {
     expect(imports.identify(first, shared)?.identity).toEqual(IDENTITY);
   });
 
+  it("PA10c: reuse cannot substitute between comparison and retention", function* () {
+    const imports = owner();
+    const provider = imports.provider(ORIGIN);
+    const here = yield* useScope();
+    const reads: string[] = [];
+    const shared = new Proxy(answer(), {
+      get(target, key, receiver) {
+        if (key !== "name") {
+          return Reflect.get(target, key, receiver);
+        }
+        reads.push(key);
+        return reads.length === 1 ? "Open" : "Substituted";
+      },
+      getOwnPropertyDescriptor(target, key) {
+        const descriptor = Reflect.getOwnPropertyDescriptor(target, key);
+        if (key !== "name" || descriptor === undefined || !("value" in descriptor)) {
+          return descriptor;
+        }
+        return { ...descriptor, value: reads.length < 2 ? "Open" : "Substituted" };
+      },
+    });
+
+    const first = resolving(
+      imports,
+      "Open",
+      (resolution) => {
+        asking(provider, "Open", (request) => request.claim(shared, OPEN), here);
+        return resolution;
+      },
+      here,
+    );
+    expect(imports.identify(first, shared)?.definition.name).toBe("Open");
+    resolving(
+      imports,
+      "Open",
+      (resolution) => {
+        asking(
+          provider,
+          "Open",
+          (request) => {
+            expect(refusalOf(() => request.claim(shared, OPEN))).toBeInstanceOf(
+              AnswerIdentityError,
+            );
+            return undefined;
+          },
+          here,
+        );
+        expect(imports.identify(resolution, shared)).toBe(undefined);
+      },
+      here,
+    );
+  });
+
   it("PA10c: an edited definition cannot be claimed again, and identifies nowhere", function* () {
     const imports = owner();
     const provider = imports.provider(ORIGIN);

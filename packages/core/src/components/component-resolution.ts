@@ -589,12 +589,17 @@ export class CanonicalImports {
         // add: one import is one implementation, and this is that one again.
         return answer;
       }
-      // Still the definition the identity was stated about. A claimed object the
-      // provider went on to edit is a different implementation, and taking a
-      // fresh copy of it here would record the edited one under the revision
-      // that described the original. Asked before anything is recorded and
-      // before the window is spent, so a refusal leaves both untouched.
-      if (held.baseline === undefined || !stillDescribes(held.baseline, answer)) {
+      // Retained once before it is compared: the answer may run user-controlled
+      // machinery when read, so comparing it and then retaining it would leave
+      // a gap in which those two reads could describe different definitions.
+      // Asked before anything is recorded and before the window is spent, so a
+      // refusal leaves both untouched.
+      const copy = retain(answer);
+      if (
+        held.baseline === undefined ||
+        copy === undefined ||
+        !stillDescribes(held.baseline, copy)
+      ) {
         throw new AnswerIdentityError(
           "this answer no longer describes the implementation its identity was stated about, so a " +
             "further import cannot be answered with it. One implementation states what it is " +
@@ -607,7 +612,7 @@ export class CanonicalImports {
       if (this.#spent.get(installation)?.has(open) === true) {
         throw new AnswerIdentityError(SPENT_OPPORTUNITY);
       }
-      held.copies.set(open, retain(answer));
+      held.copies.set(open, copy);
       this.#spend(installation, open);
       return answer;
     }
