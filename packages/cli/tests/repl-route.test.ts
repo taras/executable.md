@@ -16,9 +16,9 @@ import type { DurableEvent } from "@executablemd/durable-streams";
 
 import { projectRepl } from "../src/repl/model.ts";
 import type { ReplModel } from "../src/repl/model.ts";
-import { decodeLocation, encodeLocation, resolveLocation } from "../src/repl/route.ts";
-import type { ReplRoute, ReplSelection } from "../src/repl/route.ts";
-import { referenceEvents } from "./fixtures/repl/reference.ts";
+import { decodeLocation, encodeLocation, NO_LIVE, resolveLocation } from "../src/repl/route.ts";
+import type { ReplLiveAvailability, ReplRoute, ReplSelection } from "../src/repl/route.ts";
+import { agentReferenceEvents, referenceEvents } from "./fixtures/repl/reference.ts";
 
 function decoded(location: string): ReplRoute {
   const result = decodeLocation(location);
@@ -44,16 +44,29 @@ function projected(events: readonly DurableEvent[], selection?: string): ReplMod
   return result.value;
 }
 
-function resolved(model: ReplModel, location: string, asking = false): ReplSelection {
-  const result = resolveLocation(model, decoded(location), asking);
+/** What a process holding some live state would say, from the parts named. */
+function holding(availability: Partial<ReplLiveAvailability>): ReplLiveAvailability {
+  return { ...NO_LIVE, ...availability };
+}
+
+function resolved(
+  model: ReplModel,
+  location: string,
+  availability: ReplLiveAvailability = NO_LIVE,
+): ReplSelection {
+  const result = resolveLocation(model, decoded(location), availability);
   if (!result.ok) {
     throw result.error;
   }
   return result.value;
 }
 
-function unresolved(model: ReplModel, location: string, asking = false): string {
-  const result = resolveLocation(model, decoded(location), asking);
+function unresolved(
+  model: ReplModel,
+  location: string,
+  availability: ReplLiveAvailability = NO_LIVE,
+): string {
+  const result = resolveLocation(model, decoded(location), availability);
   if (result.ok) {
     throw new Error(`${location} resolved, and this model cannot answer it`);
   }
@@ -268,7 +281,7 @@ describe("REPL route: resolving against one model", () => {
     expect(unresolved(unclosed, live)).toContain("nothing is being asked");
 
     // Only the process actually holding the question may open it, and it says so.
-    expect(resolved(head, live, true).drawers[0].kind).toBe("live-elicit");
+    expect(resolved(head, live, holding({ elicit: true })).drawers[0].kind).toBe("live-elicit");
   });
 
   it("R2: refuses a missing entry, scope, binding or incomplete path", function* () {
@@ -337,6 +350,230 @@ describe("REPL route: resolving against one model", () => {
     );
     expect(resolved(projected([]), `xmd://repl/${EXECUTION}/repl?draft=first%20entry`).entry).toBe(
       undefined,
+    );
+  });
+});
+
+/**
+ * The conversation filter and the live permission drawer (#854 R1, R2).
+ *
+ * Two halves again. The grammar has to spell one more query member without
+ * moving any of the ones that were canonical before it, and has to keep the new
+ * drawer on the one surface that has it. Resolution has to answer a filter from
+ * what the *selected prefix* retained, plus — only at the live head — what the
+ * process says it has started, and has to refuse anything else rather than
+ * showing an empty list.
+ */
+describe("REPL route: the conversation filter", () => {
+  it("R1: encodes session last, after every member that was canonical before it", function* () {
+    const locations = [
+      `xmd://repl/${EXECUTION}/sessions?session=xmd:v1:a`,
+      `xmd://repl/${EXECUTION}/sessions/+permission?session=xmd:v1:a`,
+      `xmd://repl/${EXECUTION}/repl/entry-1?session=xmd:v1:a`,
+      `xmd://repl/${EXECUTION}/repl/entry-1/+history?at=yield:root:1&inspect&session=one`,
+      `xmd://repl/${EXECUTION}/repl?draft=one%20more%20line&session=one`,
+      `xmd://repl/${EXECUTION}/repl/entry-1/+binding:plan?at=yield:root:1&session=one`,
+    ];
+
+    for (const location of locations) {
+      expect(encodeLocation(decoded(location))).toBe(location);
+      expect(decoded(encodeLocation(decoded(location)))).toEqual(decoded(location));
+    }
+  });
+
+  it("R1: leaves every location that names no conversation byte-identical", function* () {
+    const locations = [
+      `xmd://repl/${EXECUTION}/sessions`,
+      `xmd://repl/${EXECUTION}/repl`,
+      `xmd://repl/${EXECUTION}/repl/entry-1`,
+      `xmd://repl/${EXECUTION}/repl/entry-1/+history/+binding:plan`,
+      `xmd://repl/${EXECUTION}/repl/entry-1?at=yield:root:1&inspect`,
+      `xmd://repl/${EXECUTION}/repl?draft=one%20more%20line`,
+    ];
+
+    for (const location of locations) {
+      expect(encodeLocation(decoded(location))).toBe(location);
+      expect(decoded(location).session).toBe(undefined);
+    }
+  });
+
+  it("R1: reads query members by name, so order still does not matter", function* () {
+    const canonical = decoded(
+      `xmd://repl/${EXECUTION}/repl/entry-1?at=yield:root:6&inspect&session=xmd:v1:a`,
+    );
+
+    expect(canonical).toEqual(
+      decoded(`xmd://repl/${EXECUTION}/repl/entry-1?session=xmd:v1:a&inspect&at=yield%3Aroot%3A6`),
+    );
+    expect(canonical.session).toBe("xmd:v1:a");
+  });
+
+  it("R1: refuses an empty, repeated or unspellable conversation", function* () {
+    expect(refused(`xmd://repl/${EXECUTION}/sessions?session=`)).toContain("query");
+    expect(refused(`xmd://repl/${EXECUTION}/sessions?session=a&session=b`)).toContain("query");
+    expect(refused(`xmd://repl/${EXECUTION}/sessions?session`)).toContain("query");
+    expect(refused(`xmd://repl/${EXECUTION}/sessions?session=%zz`)).toContain("query");
+    // Not a path segment. A conversation is a filter over what Sessions lists,
+    // not a place inside it, and a segment would make one URL mean two things.
+    expect(refused(`xmd://repl/${EXECUTION}/sessions/xmd:v1:a`)).toContain("Sessions surface");
+
+    const route = decoded(`xmd://repl/${EXECUTION}/sessions?session=one`);
+    expect(() => encodeLocation({ ...route, session: "" })).toThrow();
+  });
+
+  it("R1: the permission drawer belongs to Sessions, carries nothing, and is one word", function* () {
+    const location = `xmd://repl/${EXECUTION}/sessions/+permission`;
+    expect(encodeLocation(decoded(location))).toBe(location);
+    expect(decoded(location).drawers).toEqual([{ kind: "live-permission" }]);
+
+    // It names no request. The one being answered belongs to this process, and
+    // a key for it in a URL would publish an identity nothing else can use.
+    expect(refused(`xmd://repl/${EXECUTION}/sessions/+permission:turn-3`)).toContain(
+      "names a drawer",
+    );
+    expect(refused(`xmd://repl/${EXECUTION}/repl/entry-1/+permission`)).toContain(
+      "Sessions surface",
+    );
+    // And Sessions still holds nothing else.
+    expect(refused(`xmd://repl/${EXECUTION}/sessions/+history`)).toContain("Sessions surface");
+    expect(refused(`xmd://repl/${EXECUTION}/sessions/+elicit`)).toContain("Sessions surface");
+
+    const sessions = decoded(`xmd://repl/${EXECUTION}/sessions`);
+    expect(() =>
+      encodeLocation({ ...sessions, surface: "repl", drawers: [{ kind: "live-permission" }] }),
+    ).toThrow();
+  });
+});
+
+describe("REPL route: resolving a conversation", () => {
+  beforeAll(() => useTempFileCompiler());
+
+  it("R2: resolves a retained conversation to the exact group the model holds", function* () {
+    const events = yield* agentReferenceEvents();
+    const model = projected(events);
+
+    const filtered = resolved(model, `xmd://repl/${EXECUTION}/sessions?session=stub%3Areview`);
+    expect(filtered.session).toBe(model.sessions[0]);
+    // The filter is orthogonal to everything else a location can say.
+    const beside = resolved(model, `xmd://repl/${EXECUTION}/repl/entry-1?session=stub%3Abuild`);
+    expect(beside.session).toBe(model.sessions[1]);
+    expect(beside.scope).toBe(model.entry);
+    // And absent means every conversation rather than none.
+    expect(resolved(model, `xmd://repl/${EXECUTION}/sessions`).session).toBe(undefined);
+  });
+
+  it("R2: resolves a live key only at the head, and only when the process says so", function* () {
+    const events = yield* agentReferenceEvents();
+    const model = projected(events);
+    const started = `xmd://repl/${EXECUTION}/sessions?session=stub%3Aplanning`;
+
+    // Nothing has settled in it yet, so no history holds it and there is no
+    // retained group to point at — but the process running it can say it exists.
+    expect(unresolved(model, started)).toContain("no conversation stub:planning");
+    const live = resolved(model, started, holding({ sessions: ["stub:planning"] }));
+    expect(live.session).toBe(undefined);
+    expect(live.route.session).toBe("stub:planning");
+
+    // A key nobody claims is still refused rather than becoming an empty list.
+    expect(unresolved(model, started, holding({ sessions: ["stub:other"] }))).toContain(
+      "no conversation stub:planning",
+    );
+  });
+
+  it("R2: a historical prefix answers from its own retained groups and ignores the head", function* () {
+    const events = yield* agentReferenceEvents();
+    const head = projected(events);
+    const early = head.turns[0].marker;
+    const historical = projected(events, early);
+
+    const retained = resolved(
+      historical,
+      `xmd://repl/${EXECUTION}/sessions?at=${early}&session=stub%3Areview`,
+    );
+    expect(retained.session).toBe(historical.sessions[0]);
+
+    // The build conversation had not started at this position. It is in the
+    // head and in this process, and neither may answer for the past.
+    const later = `xmd://repl/${EXECUTION}/sessions?at=${early}&session=stub%3Abuild`;
+    expect(head.sessions.map((session) => session.sessionKey)).toContain("stub:build");
+    expect(unresolved(historical, later)).toContain("had started at this history position");
+    expect(
+      unresolved(historical, later, holding({ sessions: ["stub:build", "stub:planning"] })),
+    ).toContain("had started at this history position");
+  });
+
+  it("R2: a conversation no turn ever joined cannot be selected", function* () {
+    const events = yield* agentReferenceEvents();
+    const model = projected(events);
+
+    // The refused turn is in the chronology and in no conversation, so there is
+    // nothing for a filter to name — least of all the empty key itself.
+    expect(model.turns.some((turn) => turn.sessionKey.length === 0)).toBe(true);
+    expect(unresolved(model, `xmd://repl/${EXECUTION}/sessions?session=planner`)).toContain(
+      "no conversation planner",
+    );
+    expect(
+      unresolved(
+        model,
+        `xmd://repl/${EXECUTION}/sessions?session=prompt%3A%3Ceval%3E%3A19%3A1%230`,
+      ),
+    ).toContain("no conversation");
+  });
+
+  it("R2: a refused filter leaves the standing route and selection untouched", function* () {
+    const events = yield* agentReferenceEvents();
+    const model = projected(events);
+    const standing = resolved(model, `xmd://repl/${EXECUTION}/sessions?session=stub%3Areview`);
+    const before = standing.session;
+
+    expect(unresolved(model, `xmd://repl/${EXECUTION}/sessions?session=stub%3Anowhere`)).toContain(
+      "no conversation stub:nowhere",
+    );
+
+    expect(standing.session).toBe(before);
+    expect(standing.route.session).toBe("stub:review");
+    expect(Object.isFrozen(model)).toBe(true);
+  });
+
+  it("R2: a live permission drawer is live-only, and independent of a live question", function* () {
+    const events = yield* agentReferenceEvents();
+    const model = projected(events);
+    const drawer = `xmd://repl/${EXECUTION}/sessions/+permission`;
+
+    // No reading of any history can establish it: a request still waiting is
+    // the one thing a Journal never holds.
+    expect(unresolved(model, drawer)).toContain("nothing is asking for permission");
+    // A live question is a different fact and does not stand in for it.
+    expect(unresolved(model, drawer, holding({ elicit: true }))).toContain(
+      "nothing is asking for permission",
+    );
+    expect(resolved(model, drawer, holding({ permission: true })).drawers).toEqual([
+      { kind: "live-permission" },
+    ]);
+
+    // And a frozen view cannot answer what this process is being asked now.
+    const early = model.turns[0].marker;
+    const historical = projected(events, early);
+    expect(
+      unresolved(
+        historical,
+        `xmd://repl/${EXECUTION}/sessions/+permission?at=${early}`,
+        holding({ permission: true }),
+      ),
+    ).toContain("frozen at an earlier position");
+  });
+
+  it("R2: the two live facts stay independent of each other", function* () {
+    const events = yield* referenceEvents();
+    const model = projected(events);
+    const question = `xmd://repl/${EXECUTION}/repl/entry-1/+elicit`;
+
+    // Holding a permission request says nothing about a waiting question.
+    expect(unresolved(model, question, holding({ permission: true }))).toContain(
+      "nothing is being asked",
+    );
+    expect(resolved(model, question, holding({ elicit: true })).drawers[0].kind).toBe(
+      "live-elicit",
     );
   });
 });

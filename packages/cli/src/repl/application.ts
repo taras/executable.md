@@ -33,8 +33,14 @@ import type { ReplDescription } from "./description.ts";
 import { drawerWidth, HISTORY_ROWS, NARROW, surfaceWidth } from "./layout.ts";
 import type { ReplSurface as ReplPlacedSurface, ReplSurfaceCell } from "./layout.ts";
 import type { ReplTerminalSize } from "./terminal.ts";
-import { decodeLocation, encodeLocation, resolveLocation } from "./route.ts";
-import type { ReplDrawerRef, ReplRoute, ReplSelection, ReplSurface } from "./route.ts";
+import { decodeLocation, encodeLocation, NO_LIVE, resolveLocation } from "./route.ts";
+import type {
+  ReplDrawerRef,
+  ReplLiveAvailability,
+  ReplRoute,
+  ReplSelection,
+  ReplSurface,
+} from "./route.ts";
 import type { ReplModel, ReplRow, ReplScope } from "./model.ts";
 import type { ReplQuestion } from "./elicitation.ts";
 import type { ExpansionState } from "./expansion.ts";
@@ -163,6 +169,7 @@ export function initialRoute(execution: string): ReplRoute {
     at: undefined,
     inspect: false,
     draft: undefined,
+    session: undefined,
   });
 }
 
@@ -209,7 +216,7 @@ export function viewFor(
   // This process is the only thing that can say a question is waiting, so it
   // says so here rather than leaving resolution to infer it from a history that
   // does not record it.
-  const resolved = resolveLocation(model, state.route, live.question !== undefined);
+  const resolved = resolveLocation(model, state.route, availabilityOf(live));
   if (!resolved.ok) {
     return resolved;
   }
@@ -255,6 +262,7 @@ export function refusedView(
       entry: undefined,
       ancestry: Object.freeze([]),
       scope: undefined,
+      session: undefined,
       drawers: Object.freeze([]),
     }),
     live: Object.freeze({
@@ -270,6 +278,21 @@ export function refusedView(
   });
 }
 
+/**
+ * What this process can say about state no history holds.
+ *
+ * A live question is the only one of them this slice has: no Agent runtime runs
+ * in the REPL yet, so there is no pending permission request and no conversation
+ * that has started without settling anything.
+ */
+function availabilityOf(live: ReplLive): ReplLiveAvailability {
+  return {
+    elicit: live.question !== undefined,
+    permission: false,
+    sessions: NO_LIVE.sessions,
+  };
+}
+
 const EMPTY_MODEL: ReplModel = Object.freeze({
   selection: undefined,
   head: true,
@@ -278,6 +301,8 @@ const EMPTY_MODEL: ReplModel = Object.freeze({
   terminal: undefined,
   checkpoints: Object.freeze([]),
   transcript: Object.freeze([]),
+  turns: Object.freeze([]),
+  sessions: Object.freeze([]),
 });
 
 /**
@@ -330,12 +355,7 @@ export function reduceRepl(
       };
     }
     case "select-surface": {
-      return navigate(
-        state,
-        model,
-        { ...state.route, surface: action.surface, drawers: [] },
-        live.question !== undefined,
-      );
+      return navigate(state, model, { ...state.route, surface: action.surface, drawers: [] }, live);
     }
     case "select-scope": {
       return navigate(
@@ -349,7 +369,7 @@ export function reduceRepl(
           // different scope cannot keep it.
           drawers: Object.freeze([]),
         },
-        live.question !== undefined,
+        live,
       );
     }
     case "open-drawer": {
@@ -368,7 +388,7 @@ export function reduceRepl(
         state,
         model,
         { ...state.route, drawers: Object.freeze([...state.route.drawers, action.drawer]) },
-        live.question !== undefined,
+        live,
       );
     }
     case "close-drawer": {
@@ -377,12 +397,7 @@ export function reduceRepl(
       }
       const closing = state.route.drawers[state.route.drawers.length - 1];
       const remaining = Object.freeze(state.route.drawers.slice(0, -1));
-      const closed = navigate(
-        state,
-        model,
-        { ...state.route, drawers: remaining },
-        live.question !== undefined,
-      );
+      const closed = navigate(state, model, { ...state.route, drawers: remaining }, live);
       // Dismissing the question's drawer discards what was typed into it. It is
       // not an answer, and keeping it would offer it again as though it were.
       return closing.kind === "live-elicit"
@@ -484,10 +499,10 @@ function navigate(
   state: ReplState,
   model: ReplModel,
   candidate: ReplRoute,
-  asking: boolean,
+  live: ReplLive,
 ): ReplTransition {
   const route = Object.freeze({ ...candidate });
-  const resolved = resolveLocation(model, route, asking);
+  const resolved = resolveLocation(model, route, availabilityOf(live));
   if (!resolved.ok) {
     return refuse(state, resolved.error.message);
   }
@@ -939,6 +954,8 @@ function describeRow(entry: ReplRow): string {
       return `generated ${entry.decision}${entry.source === undefined ? "" : `: ${entry.source}`}`;
     case "elicit":
       return `answered ${entry.location} ${summarize(entry.answer)}`;
+    case "agent":
+      return `agent ${entry.turn.agent} ${entry.turn.status}`;
     case "effect":
       return `${entry.type} ${entry.status}`;
     case "terminal":

@@ -55,6 +55,8 @@ const EMPTY_MODEL_FOR_TEST = Object.freeze({
   terminal: undefined,
   checkpoints: Object.freeze([]),
   transcript: Object.freeze([]),
+  turns: Object.freeze([]),
+  sessions: Object.freeze([]),
 });
 const TEXT = new TextDecoder();
 
@@ -953,6 +955,7 @@ describe("REPL journey: one entry, from raw bytes", () => {
       at: marker,
       inspect: true,
       draft: undefined,
+      session: undefined,
     });
 
     // A fresh host: a new terminal, a new repository handle, and nothing carried
@@ -1962,6 +1965,7 @@ describe("REPL journey: what it settles before it acts", () => {
       at: undefined,
       inspect: false,
       draft: undefined,
+      session: undefined,
     });
 
     const second = recordingTerminal();
@@ -2063,6 +2067,7 @@ describe("REPL journey: what it settles before it acts", () => {
       at: undefined,
       inspect: false,
       draft: undefined,
+      session: undefined,
     });
     expect(stale).toContain("+elicit");
 

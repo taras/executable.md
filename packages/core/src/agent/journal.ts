@@ -8,6 +8,22 @@
  * conversation ran under. `sequence` records prompt execution order explicitly,
  * so restoration never depends on asynchronous completion order.
  *
+ * ## What a turn retains about the permissions it was granted
+ *
+ * A turn that answered permission requests also retains an audit of them, so a
+ * reader of the history can see what the agent was allowed to do without
+ * re-running anything. An audit is a closed account of one request — its tool
+ * call, the choices the provider offered, and which one answered it — assembled
+ * field by field by {@link promptPermissionAudit}.
+ *
+ * Nothing else crosses. The request's `rawInput` is the agent's own argument
+ * text, its `Session` is a live object, and a provider's callbacks, waiters and
+ * errors are not data at all: a durable record that spread the request would
+ * publish all of them and would keep whatever the caller mutated afterwards.
+ * So the audit is copied at the moment the request arrives, and the decision is
+ * added only once it has been made — by whichever policy makes it, which this
+ * observation neither replaces nor delays.
+ *
  * On a full replay (journal already holds the root Close), durableRun
  * returns the stored root result without re-expanding, so the failed
  * records are restored from the stream instead of re-recording.
@@ -40,7 +56,13 @@ import type {
   Workflow,
 } from "@executablemd/durable-streams";
 import type { Operation } from "effection";
-import type { SessionConfiguration } from "./agent-api.ts";
+import { Agent } from "./agent-api.ts";
+import type {
+  PermissionOption,
+  PermissionOutcome,
+  PermissionRequest,
+  SessionConfiguration,
+} from "./agent-api.ts";
 import { readConfiguration, serializeConfiguration } from "./configuration-record.ts";
 import { readCheckpoint } from "./checkpoint.ts";
 import type { AgentPromptCheckpoint } from "./checkpoint.ts";
@@ -53,6 +75,21 @@ import type { SourcePosition } from "../types.ts";
 
 /** The durable effect type every journaled Agent Prompt is recorded under. */
 export const AGENT_PROMPT = "agent_prompt";
+
+/**
+ * One permission request a prompt's turn answered, as the journal retains it.
+ *
+ * The safe half of a `PermissionRequest` — which tool call asked, what the
+ * provider offered, and the decision that came back. Nothing here is a live
+ * object, and nothing here is the agent's own argument text.
+ */
+export interface PromptPermission {
+  readonly toolCallId: string;
+  readonly title?: string;
+  readonly kind?: string;
+  readonly options: readonly PermissionOption[];
+  readonly outcome: PermissionOutcome;
+}
 
 export interface PromptRecord {
   sequence: number;
@@ -74,6 +111,17 @@ export interface PromptRecord {
    */
   configuration?: SessionConfiguration;
   /**
+   * The permission requests this turn answered, in the order they arrived.
+   *
+   * Arrival order rather than completion order: two overlapping requests are
+   * answered whenever their policies finish, and a list ordered by that would
+   * say the agent asked in an order it did not. A request that raised instead
+   * of returning has no entry — nothing decided it, so there is nothing to
+   * record. Absent on a turn that answered none, and on every record written
+   * before this member existed.
+   */
+  permissions?: readonly PromptPermission[];
+  /**
    * True only for failed prompts thrown through `throwOnError`. Replay
    * uses the stored marker: a partial replay re-throws, and a full
    * replay omits the failure from aggregate restoration because the
@@ -93,6 +141,141 @@ export interface PromptRecord {
    * it happened if it names which turn it was.
    */
   checkpoint?: AgentPromptCheckpoint;
+}
+
+/** The safe half of one request, before its decision has been made. */
+type PermissionSubject = Omit<PromptPermission, "outcome">;
+
+interface PermissionDraft {
+  readonly subject: PermissionSubject;
+  outcome?: PermissionOutcome;
+}
+
+/** What one turn observed of the permission requests made while it ran. */
+export interface PromptPermissionAudit {
+  /** Observe permission requests for as long as the installing scope lives. */
+  observe(): Operation<void>;
+  /** The requests that were decided, in the order they arrived. */
+  completed(): readonly PromptPermission[];
+}
+
+/**
+ * Observe the permission requests one prompt turn answers.
+ *
+ * Ordinary middleware around the existing `Agent.requestPermission()`, so it
+ * sits outside every installed policy and inside whatever a document composed:
+ * it sees the request on its way to being decided and the decision on its way
+ * back, and it delegates both unchanged. It decides nothing, substitutes
+ * nothing, and swallows nothing — a policy that raises raises through here, and
+ * the request it was answering is simply never completed.
+ *
+ * The subject is copied when the call begins rather than when it ends, because
+ * a caller is free to reuse or rewrite the request object it passed once the
+ * answer is in hand. A request whose safe fields do not read as this closed
+ * shape is observed as nothing at all: retaining a half-read audit would make
+ * the record unparseable, which would fail a turn over how it was watched.
+ */
+export function promptPermissionAudit(): PromptPermissionAudit {
+  const drafts: PermissionDraft[] = [];
+  return {
+    observe() {
+      return Agent.around({
+        *requestPermission([request], next) {
+          const subject = permissionSubject(request);
+          if (subject === undefined) {
+            return yield* next(request);
+          }
+          const draft: PermissionDraft = { subject };
+          drafts.push(draft);
+          const outcome = yield* next(request);
+          draft.outcome = permissionDecision(outcome);
+          return outcome;
+        },
+      });
+    },
+    completed() {
+      return drafts.flatMap((draft) => {
+        if (draft.outcome === undefined) {
+          return [];
+        }
+        const permission: PromptPermission & { title?: string; kind?: string } = {
+          toolCallId: draft.subject.toolCallId,
+          options: draft.subject.options,
+          outcome: draft.outcome,
+        };
+        if (draft.subject.title !== undefined) {
+          permission.title = draft.subject.title;
+        }
+        if (draft.subject.kind !== undefined) {
+          permission.kind = draft.subject.kind;
+        }
+        return [Object.freeze(permission)];
+      });
+    },
+  };
+}
+
+function isPermissionOptionKind(value: unknown): value is PermissionOption["kind"] {
+  return (
+    value === "allow_once" ||
+    value === "allow_always" ||
+    value === "reject_once" ||
+    value === "reject_always"
+  );
+}
+
+/**
+ * The safe fields of one live request, named one at a time.
+ *
+ * Named rather than spread: a spread would carry `rawInput` and every member a
+ * provider added to the object, and the next member somebody adds to
+ * `PermissionRequest` would join the journal without anyone deciding it should.
+ */
+function permissionSubject(request: PermissionRequest): PermissionSubject | undefined {
+  const { toolCallId, title, kind } = request.toolCall;
+  if (typeof toolCallId !== "string") {
+    return undefined;
+  }
+  if (title !== undefined && typeof title !== "string") {
+    return undefined;
+  }
+  if (kind !== undefined && typeof kind !== "string") {
+    return undefined;
+  }
+  const options: PermissionOption[] = [];
+  for (const option of request.options) {
+    if (typeof option.optionId !== "string" || typeof option.name !== "string") {
+      return undefined;
+    }
+    if (!isPermissionOptionKind(option.kind)) {
+      return undefined;
+    }
+    options.push(
+      Object.freeze({ optionId: option.optionId, name: option.name, kind: option.kind }),
+    );
+  }
+  const subject: PermissionSubject & { title?: string; kind?: string } = {
+    toolCallId,
+    options: Object.freeze(options),
+  };
+  if (title !== undefined) {
+    subject.title = title;
+  }
+  if (kind !== undefined) {
+    subject.kind = kind;
+  }
+  return Object.freeze(subject);
+}
+
+/** One decision, as this record retains it, or nothing that is one. */
+function permissionDecision(outcome: PermissionOutcome): PermissionOutcome | undefined {
+  if (outcome.outcome === "cancelled") {
+    return Object.freeze({ outcome: "cancelled" });
+  }
+  if (outcome.outcome === "selected" && typeof outcome.optionId === "string") {
+    return Object.freeze({ outcome: "selected", optionId: outcome.optionId });
+  }
+  return undefined;
 }
 
 export function* persistPrompt(
@@ -268,6 +451,9 @@ function serializePromptRecord(record: PromptRecord): Json {
   if (record.error !== undefined) {
     payload.error = record.error;
   }
+  if (record.permissions !== undefined) {
+    payload.permissions = record.permissions.map(serializePermission);
+  }
   Object.assign(payload, serializeConfiguration(record.configuration));
   if (record.raised === true) {
     payload.raised = true;
@@ -280,6 +466,127 @@ function serializePromptRecord(record: PromptRecord): Json {
     };
   }
   return payload;
+}
+
+/** One audit as the journal writes it, member by named member. */
+function serializePermission(permission: PromptPermission): Json {
+  const payload: Record<string, Json> = {
+    toolCallId: permission.toolCallId,
+    options: permission.options.map((option) => ({
+      optionId: option.optionId,
+      name: option.name,
+      kind: option.kind,
+    })),
+    outcome:
+      permission.outcome.outcome === "selected"
+        ? { outcome: "selected", optionId: permission.outcome.optionId }
+        : { outcome: "cancelled" },
+  };
+  if (permission.title !== undefined) {
+    payload.title = permission.title;
+  }
+  if (permission.kind !== undefined) {
+    payload.kind = permission.kind;
+  }
+  return payload;
+}
+
+/** What a retained audit that does not read back is, as distinct from none. */
+const UNREADABLE = Symbol("unreadable permission audit");
+
+/**
+ * The audits one durable record carries, read as the closed shape they claim.
+ *
+ * Closed in both directions: every member is checked, and a member nothing here
+ * defines refuses the whole record rather than being read past. An audit is
+ * evidence about what an agent was permitted to do, and a reader that ignored
+ * the parts it did not recognize would be reporting a decision it had not read.
+ */
+function readPermissions(value: unknown): readonly PromptPermission[] | typeof UNREADABLE {
+  if (!Array.isArray(value)) {
+    return UNREADABLE;
+  }
+  const permissions: PromptPermission[] = [];
+  for (const member of value) {
+    if (!isRecord(member)) {
+      return UNREADABLE;
+    }
+    const { toolCallId, title, kind, options, outcome, ...rest } = member;
+    if (Object.keys(rest).length > 0) {
+      return UNREADABLE;
+    }
+    if (typeof toolCallId !== "string") {
+      return UNREADABLE;
+    }
+    if (title !== undefined && typeof title !== "string") {
+      return UNREADABLE;
+    }
+    if (kind !== undefined && typeof kind !== "string") {
+      return UNREADABLE;
+    }
+    const offered = readPermissionOptions(options);
+    if (offered === UNREADABLE) {
+      return UNREADABLE;
+    }
+    const decided = readPermissionOutcome(outcome);
+    if (decided === undefined) {
+      return UNREADABLE;
+    }
+    const permission: PromptPermission & { title?: string; kind?: string } = {
+      toolCallId,
+      options: offered,
+      outcome: decided,
+    };
+    if (title !== undefined) {
+      permission.title = title;
+    }
+    if (kind !== undefined) {
+      permission.kind = kind;
+    }
+    permissions.push(permission);
+  }
+  return permissions;
+}
+
+function readPermissionOptions(value: unknown): readonly PermissionOption[] | typeof UNREADABLE {
+  if (!Array.isArray(value)) {
+    return UNREADABLE;
+  }
+  const options: PermissionOption[] = [];
+  for (const member of value) {
+    if (!isRecord(member)) {
+      return UNREADABLE;
+    }
+    const { optionId, name, kind, ...rest } = member;
+    if (Object.keys(rest).length > 0) {
+      return UNREADABLE;
+    }
+    if (typeof optionId !== "string" || typeof name !== "string") {
+      return UNREADABLE;
+    }
+    if (!isPermissionOptionKind(kind)) {
+      return UNREADABLE;
+    }
+    options.push({ optionId, name, kind });
+  }
+  return options;
+}
+
+function readPermissionOutcome(value: unknown): PermissionOutcome | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const { outcome, optionId, ...rest } = value;
+  if (Object.keys(rest).length > 0) {
+    return undefined;
+  }
+  if (outcome === "cancelled" && optionId === undefined) {
+    return { outcome: "cancelled" };
+  }
+  if (outcome === "selected" && typeof optionId === "string") {
+    return { outcome: "selected", optionId };
+  }
+  return undefined;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -307,10 +614,16 @@ export function parsePromptRecord(value: unknown): PromptRecord | undefined {
     stopReason,
     text,
     error,
+    permissions,
     raised,
     checkpoint,
   } = value;
-  if (typeof sequence !== "number" || typeof agent !== "string") {
+  if (
+    typeof sequence !== "number" ||
+    !Number.isInteger(sequence) ||
+    sequence < 0 ||
+    typeof agent !== "string"
+  ) {
     return undefined;
   }
   if (typeof sessionKey !== "string" || typeof text !== "string") {
@@ -332,6 +645,13 @@ export function parsePromptRecord(value: unknown): PromptRecord | undefined {
       return undefined;
     }
     record.error = parsed;
+  }
+  if (permissions !== undefined) {
+    const audited = readPermissions(permissions);
+    if (audited === UNREADABLE) {
+      return undefined;
+    }
+    record.permissions = audited;
   }
   // Refused rather than read past: a record whose configuration does not read
   // back is not describing work this build can say anything about.

@@ -11,7 +11,7 @@
  *
  * ```text
  * xmd://repl/<execution>/<surface>[/<entry>][/<scope>]*[/+<drawer>]*
- *   [?at=<marker>][&inspect][&draft=<text>]
+ *   [?at=<marker>][&inspect][&draft=<text>][&session=<session-key>]
  * ```
  *
  * The codec is pure and has no model. `decodeLocation` decides only what the
@@ -20,13 +20,26 @@
  * Journal actually holds, by looking the exact objects up in a frozen model. The
  * split is what keeps a typo in a location from being answered with a guess
  * about the history.
+ *
+ * `session` selects one Agent conversation to filter the Sessions list by. It
+ * is the provider's own session key, which is the one name for a conversation
+ * that a second process reading the same Journal would arrive at too. The live
+ * permission drawer is spelled `+permission` and carries nothing: the request it
+ * opens over belongs to this process, and a URL naming one would be a URL
+ * naming something no other reader could ever have.
  */
 
 import { Err, Ok } from "effection";
 import type { Result } from "effection";
 
 import { ENTRY_SCOPE } from "./model.ts";
-import type { ReplBinding, ReplElicitation, ReplModel, ReplScope } from "./model.ts";
+import type {
+  ReplAgentSession,
+  ReplBinding,
+  ReplElicitation,
+  ReplModel,
+  ReplScope,
+} from "./model.ts";
 
 /** The one scheme and authority a REPL location has. */
 const PREFIX = "xmd://repl/";
@@ -47,6 +60,7 @@ export type ReplDrawerRef =
   | { readonly kind: "binding"; readonly name: string }
   | { readonly kind: "recorded-elicit"; readonly marker: string }
   | { readonly kind: "live-elicit" }
+  | { readonly kind: "live-permission" }
   | { readonly kind: "history" };
 
 /** One decoded location. Every member is what the grammar said, parsed. */
@@ -62,13 +76,46 @@ export interface ReplRoute {
   readonly inspect: boolean;
   /** Text typed but not yet admitted. Exists only before an entry does. */
   readonly draft: string | undefined;
+  /**
+   * The one conversation the Sessions list is filtered to, by provider session
+   * key. Absent means every conversation.
+   */
+  readonly session: string | undefined;
 }
+
+/**
+ * What this process can say about state no Journal holds.
+ *
+ * A waiting question, a waiting permission request and a conversation that has
+ * started but settled nothing are all live facts: a history records answers and
+ * completed turns, so no reading of any prefix can establish one. The process
+ * holding them says so, and a caller that holds none passes {@link NO_LIVE} —
+ * which is also the default, because a caller that cannot say is a caller with
+ * nothing to say, and resolving a drawer it does not have would accept a URL
+ * naming something nothing will mount.
+ */
+export interface ReplLiveAvailability {
+  /** Whether a live question is waiting to be answered. */
+  readonly elicit: boolean;
+  /** Whether a live permission request is selected and waiting. */
+  readonly permission: boolean;
+  /** The non-empty session keys live turns have started under. */
+  readonly sessions: readonly string[];
+}
+
+/** No live capability at all: what a cold reader of a Journal has. */
+export const NO_LIVE: ReplLiveAvailability = Object.freeze({
+  elicit: false,
+  permission: false,
+  sessions: Object.freeze([]),
+});
 
 /** One drawer resolved against a model. */
 export type ReplDrawer =
   | { readonly kind: "binding"; readonly name: string; readonly binding: ReplBinding }
   | { readonly kind: "recorded-elicit"; readonly elicitation: ReplElicitation }
   | { readonly kind: "live-elicit" }
+  | { readonly kind: "live-permission" }
   | { readonly kind: "history" };
 
 /** What one location selects in one model. */
@@ -80,6 +127,14 @@ export interface ReplSelection {
   readonly ancestry: readonly ReplScope[];
   /** The innermost selected scope, which is the entry when only it was named. */
   readonly scope: ReplScope | undefined;
+  /**
+   * The retained conversation the filter names, when the history holds it.
+   *
+   * None where no filter was asked for, and none where the key names a live
+   * conversation that has settled nothing yet — there is no retained group to
+   * point at until one of its turns is appended.
+   */
+  readonly session: ReplAgentSession | undefined;
   readonly drawers: readonly ReplDrawer[];
 }
 
@@ -146,8 +201,9 @@ export function decodeLocation(location: string): Result<ReplRoute> {
     }
     scopes.push(segment);
   }
-  if (surface === "sessions" && (scopes.length > 0 || drawers.length > 0)) {
-    return refuse("the Sessions surface holds no entry, scope or drawer");
+  const misplaced = misplacedDrawer(surface, scopes, drawers);
+  if (misplaced !== undefined) {
+    return refuse(misplaced);
   }
 
   const query = readQuery(queryText);
@@ -172,7 +228,34 @@ export function decodeLocation(location: string): Result<ReplRoute> {
     at: query.at,
     inspect: query.inspect,
     draft: query.draft,
+    session: query.session,
   });
+}
+
+/**
+ * Why this surface cannot hold what this path put on it, or nothing.
+ *
+ * The two surfaces hold different things, and each drawer belongs to one of
+ * them. Sessions has no entry to select inside and no binding or answer to
+ * inspect; the permission drawer opens over the turn a conversation is having,
+ * which is a thing only Sessions shows.
+ */
+function misplacedDrawer(
+  surface: ReplSurface,
+  scopes: readonly string[],
+  drawers: readonly ReplDrawerRef[],
+): string | undefined {
+  if (surface !== "sessions") {
+    return drawers.some((drawer) => drawer.kind === "live-permission")
+      ? "a live permission request is answered on the Sessions surface"
+      : undefined;
+  }
+  if (scopes.length > 0) {
+    return "the Sessions surface holds no entry or scope";
+  }
+  return drawers.every((drawer) => drawer.kind === "live-permission")
+    ? undefined
+    : "the Sessions surface holds only the live permission drawer";
 }
 
 /**
@@ -193,8 +276,12 @@ export function encodeLocation(route: ReplRoute): string {
   if (route.draft !== undefined && (route.at !== undefined || route.scopes.length > 0)) {
     throw new TypeError("a draft cannot accompany an admitted structure or a history position");
   }
-  if (route.surface === "sessions" && (route.scopes.length > 0 || route.drawers.length > 0)) {
-    throw new TypeError("the Sessions surface holds no entry, scope or drawer");
+  if (route.session !== undefined && route.session.length === 0) {
+    throw new TypeError("a session filter names one conversation");
+  }
+  const misplaced = misplacedDrawer(route.surface, route.scopes, route.drawers);
+  if (misplaced !== undefined) {
+    throw new TypeError(misplaced);
   }
 
   const path = [route.execution, route.surface, ...route.scopes].map(encodeSegment);
@@ -211,6 +298,12 @@ export function encodeLocation(route: ReplRoute): string {
   if (route.draft !== undefined) {
     query.push(`draft=${encodeValue(route.draft)}`);
   }
+  // Last, after every member that was canonical before it: a location written
+  // by an older build and one written by this one have to agree character for
+  // character where they say the same thing.
+  if (route.session !== undefined) {
+    query.push(`session=${encodeValue(route.session)}`);
+  }
   const search = query.length === 0 ? "" : `?${query.join("&")}`;
   return `${PREFIX}${path.join("/")}${search}`;
 }
@@ -224,18 +317,17 @@ export function encodeLocation(route: ReplRoute): string {
  * earlier members were left out, because a stack with a hole in it does not
  * describe a surface anybody saw.
  *
- * `asking` is the one thing the model cannot answer. A question that is waiting
- * has by definition not been recorded — a Journal holds answered questions, not
- * pending ones — so no reading of any history can establish that a live
- * question's drawer is mountable. The process that is asking says so. It
- * defaults to false, because a caller that cannot say is a caller with no
- * question: resolving one it does not have would accept a URL naming a drawer
- * nothing will mount.
+ * `live` is everything the model cannot answer. A waiting question, a waiting
+ * permission request and a conversation that has started but settled nothing
+ * are facts no history holds — a Journal records answers and completed turns —
+ * so the process holding them says so here. A historical route ignores all of
+ * it: a view frozen at an earlier position is a view of what was recorded then,
+ * and letting the present satisfy it would show the present as the past.
  */
 export function resolveLocation(
   model: ReplModel,
   route: ReplRoute,
-  asking = false,
+  live: ReplLiveAvailability = NO_LIVE,
 ): Result<ReplSelection> {
   if (route.at !== model.selection) {
     return Err(
@@ -245,14 +337,23 @@ export function resolveLocation(
       ),
     );
   }
+  const filtered = selectConversation(model, route, live);
+  if (!filtered.ok) {
+    return filtered;
+  }
   if (route.surface === "sessions") {
+    const opened = openDrawers(model, route, undefined, live);
+    if (!opened.ok) {
+      return opened;
+    }
     return Ok({
       route,
       surface: "sessions",
       entry: undefined,
       ancestry: Object.freeze([]),
       scope: undefined,
-      drawers: Object.freeze([]),
+      session: filtered.value,
+      drawers: opened.value,
     });
   }
   if (route.draft !== undefined && model.entry !== undefined) {
@@ -290,13 +391,9 @@ export function resolveLocation(
     ancestry.push(child);
   }
 
-  const drawers: ReplDrawer[] = [];
-  for (const reference of route.drawers) {
-    const drawer = openDrawer(model, route, scope, reference, asking);
-    if (!drawer.ok) {
-      return drawer;
-    }
-    drawers.push(drawer.value);
+  const opened = openDrawers(model, route, scope, live);
+  if (!opened.ok) {
+    return opened;
   }
 
   return Ok({
@@ -305,8 +402,62 @@ export function resolveLocation(
     entry: model.entry,
     ancestry: Object.freeze(ancestry),
     scope,
-    drawers: Object.freeze(drawers),
+    session: filtered.value,
+    drawers: opened.value,
   });
+}
+
+/**
+ * The conversation a filter names, or why this prefix cannot show one.
+ *
+ * At the live head a key may be one this process has started and nothing has
+ * settled yet, which no history holds and only the process can say. At a
+ * historical position it may only be one that prefix retained: a conversation
+ * that started after the position a reader is looking at had not happened yet,
+ * and answering with it would show the present as the past.
+ *
+ * An unknown key refuses. Filtering to a conversation nothing holds would be an
+ * empty list that looks exactly like a conversation with no turns.
+ */
+function selectConversation(
+  model: ReplModel,
+  route: ReplRoute,
+  live: ReplLiveAvailability,
+): Result<ReplAgentSession | undefined> {
+  if (route.session === undefined) {
+    return Ok(undefined);
+  }
+  const retained = model.sessions.find((session) => session.sessionKey === route.session);
+  if (retained !== undefined) {
+    return Ok(retained);
+  }
+  if (route.at === undefined && live.sessions.includes(route.session)) {
+    return Ok(undefined);
+  }
+  return Err(
+    new ReplRouteError(
+      route.at === undefined
+        ? `this execution holds no conversation ${route.session}.`
+        : `no conversation ${route.session} had started at this history position.`,
+    ),
+  );
+}
+
+function openDrawers(
+  model: ReplModel,
+  route: ReplRoute,
+  scope: ReplScope | undefined,
+  live: ReplLiveAvailability,
+): Result<readonly ReplDrawer[]> {
+  const drawers: ReplDrawer[] = [];
+  for (const reference of route.drawers) {
+    const drawer = openDrawer(model, route, scope, reference, live);
+    if (!drawer.ok) {
+      return drawer;
+    }
+    drawers.push(drawer.value);
+  }
+  return Ok(Object.freeze(drawers));
 }
 
 function openDrawer(
@@ -314,10 +465,39 @@ function openDrawer(
   route: ReplRoute,
   scope: ReplScope | undefined,
   reference: ReplDrawerRef,
-  asking: boolean,
+  live: ReplLiveAvailability,
 ): Result<ReplDrawer> {
   if (reference.kind === "history") {
     return Ok({ kind: "history" });
+  }
+  if (reference.kind === "live-permission") {
+    if (route.surface !== "sessions") {
+      return Err(
+        new ReplRouteError("a live permission request is answered on the Sessions surface."),
+      );
+    }
+    if (route.at !== undefined) {
+      return Err(
+        new ReplRouteError(
+          "a permission request belongs to a turn this process is running, and this view is " +
+            "frozen at an earlier position. Return to the live head to answer it.",
+        ),
+      );
+    }
+    if (!live.permission) {
+      // The same reason a live question's drawer cannot be reopened: a request
+      // that is still waiting is not in any history, so every retained fact is
+      // consistent with none ever arriving. Only the process holding one — and
+      // holding the exact one this drawer opens over — may say so.
+      return Err(
+        new ReplRouteError(
+          "nothing is asking for permission. A permission drawer belongs to the process holding " +
+            "the request, and no history records one that is still waiting — so this location " +
+            "cannot be reopened into answering it.",
+        ),
+      );
+    }
+    return Ok({ kind: "live-permission" });
   }
   if (reference.kind === "binding") {
     if (scope === undefined) {
@@ -342,7 +522,7 @@ function openDrawer(
         ),
       );
     }
-    if (!asking) {
+    if (!live.elicit) {
       // Nothing retained can establish this drawer. A waiting question is the
       // one thing a Journal never holds — it records answers — so `settled`,
       // the recorded elicitations and every other fact in the model are all
@@ -381,6 +561,11 @@ function readDrawer(text: string): ReplDrawerRef | undefined {
   if (kind === "history") {
     return argument === undefined ? { kind: "history" } : undefined;
   }
+  if (kind === "permission") {
+    // No argument, ever. Which request is being answered is process-local, and
+    // a key for it in a URL would publish a live identity nothing else can use.
+    return argument === undefined ? { kind: "live-permission" } : undefined;
+  }
   if (kind === "binding") {
     return argument === undefined || argument.length === 0
       ? undefined
@@ -402,18 +587,27 @@ function spellDrawer(drawer: ReplDrawerRef): string {
   if (drawer.kind === "binding") {
     return `binding:${drawer.name}`;
   }
+  if (drawer.kind === "live-permission") {
+    return "permission";
+  }
   return drawer.kind === "recorded-elicit" ? `elicit:${drawer.marker}` : "elicit";
 }
 
 /** What the query said, or none when it said something it does not define. */
-function readQuery(
-  text: string,
-): { at: string | undefined; inspect: boolean; draft: string | undefined } | undefined {
+function readQuery(text: string):
+  | {
+      at: string | undefined;
+      inspect: boolean;
+      draft: string | undefined;
+      session: string | undefined;
+    }
+  | undefined {
   let at: string | undefined;
   let inspect = false;
   let draft: string | undefined;
+  let session: string | undefined;
   if (text.length === 0) {
-    return { at, inspect, draft };
+    return { at, inspect, draft, session };
   }
   for (const member of text.split("&")) {
     if (member.length === 0) {
@@ -437,9 +631,13 @@ function readQuery(
       draft = value;
       continue;
     }
+    if (name === "session" && value !== undefined && value.length > 0 && session === undefined) {
+      session = value;
+      continue;
+    }
     return undefined;
   }
-  return { at, inspect, draft };
+  return { at, inspect, draft, session };
 }
 
 /**

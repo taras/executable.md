@@ -10,9 +10,9 @@
 
 import { beforeAll, describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { InMemoryStream } from "@executablemd/durable-streams";
+import { InMemoryStream, serializeDurableEvent } from "@executablemd/durable-streams";
 import type { DurableEvent } from "@executablemd/durable-streams";
-import { createContext, ensure, scoped } from "effection";
+import { createContext, ensure, scoped, spawn, withResolvers } from "effection";
 import type { Operation, Result, Stream } from "effection";
 import { ensureDir, rm, writeTextFile } from "@effectionx/fs";
 import { randomUUID } from "node:crypto";
@@ -26,6 +26,9 @@ import { isSessionRequest } from "../src/agent/session-request.ts";
 import type { ConfigureAgentSession } from "../src/agent/session-placement.ts";
 import type {
   AgentPromptEvent,
+  PermissionOption,
+  PermissionOutcome,
+  PermissionRequest,
   PromptOptions,
   Session,
   SessionConfiguration,
@@ -37,7 +40,7 @@ import { installAgentComponents } from "../src/agent/components.ts";
 import { registerComponents } from "../src/components/registration.ts";
 import { AgentInternal } from "../src/agent/internal.ts";
 import { parsePromptRecord } from "../src/agent/journal.ts";
-import { installPromptFailurePolicy } from "../src/agent/permission.ts";
+import { installApproveAll, installPromptFailurePolicy } from "../src/agent/permission.ts";
 import { inspectComponent } from "../src/inspect.ts";
 import type { AgentProviderFactory } from "../src/agent/provider-api.ts";
 import type { Json } from "../src/types.ts";
@@ -72,10 +75,122 @@ interface Trace {
   sessionArgumentCounts?: number[];
 }
 
+/**
+ * One permission request a scripted turn makes while it is running.
+ *
+ * `options` is the exact array the provider hands over, so a test that mutates
+ * it afterwards is mutating what the caller kept — which is the only way to
+ * show the audit copied rather than borrowed it.
+ */
+interface ScriptedPermission {
+  toolCallId: string;
+  title?: string;
+  kind?: string;
+  rawInput?: unknown;
+  options: PermissionOption[];
+}
+
+/** What a turn asks for, and what it saw come back. */
+interface PermissionPlan {
+  /** The requests this turn makes, in the order they must arrive. */
+  readonly requests: readonly ScriptedPermission[];
+  /**
+   * Hold the first request open until the last one has answered.
+   *
+   * The two gates make the interleaving exact rather than likely: the provider
+   * does not send the second request until the policy has seen the first, and
+   * the policy does not answer the first until it has answered the second.
+   */
+  readonly reversed?: { arrived: PermissionGate; released: PermissionGate };
+  /** Overwrite everything the caller kept, once a request has settled. */
+  readonly mutateAfterSettlement?: boolean;
+  /** What the provider was answered, in the order the answers arrived. */
+  answered: { toolCallId: string; outcome: PermissionOutcome }[];
+  /** The requests that raised instead of answering. */
+  raised: string[];
+}
+
+interface PermissionGate {
+  readonly operation: Operation<void>;
+  open(): void;
+}
+
+function permissionGate(): PermissionGate {
+  const { operation, resolve } = withResolvers<void>();
+  return { operation, open: () => resolve() };
+}
+
+/** The text every mutated field is overwritten with after settlement. */
+const MUTATED = "mutated-after-settlement";
+
+function permissionRequest(scripted: ScriptedPermission, session: Session): PermissionRequest {
+  const toolCall: PermissionRequest["toolCall"] = { toolCallId: scripted.toolCallId };
+  if (scripted.title !== undefined) {
+    toolCall.title = scripted.title;
+  }
+  if (scripted.kind !== undefined) {
+    toolCall.kind = scripted.kind;
+  }
+  if (scripted.rawInput !== undefined) {
+    toolCall.rawInput = scripted.rawInput;
+  }
+  return { session, toolCall, options: scripted.options };
+}
+
+function* askPermission(
+  plan: PermissionPlan,
+  scripted: ScriptedPermission,
+  session: Session,
+): Operation<void> {
+  const asked = scripted.toolCallId;
+  const request = permissionRequest(scripted, session);
+  try {
+    const outcome = yield* Agent.operations.requestPermission(request);
+    plan.answered.push({ toolCallId: asked, outcome });
+  } catch (error) {
+    plan.raised.push(error instanceof Error ? error.message : String(error));
+  }
+  if (plan.mutateAfterSettlement !== true) {
+    return;
+  }
+  // Everything a caller could still be holding, rewritten the instant the
+  // answer is in hand and long before the record is written.
+  request.toolCall.toolCallId = MUTATED;
+  request.toolCall.title = MUTATED;
+  request.toolCall.kind = MUTATED;
+  request.toolCall.rawInput = MUTATED;
+  for (const option of scripted.options) {
+    option.optionId = MUTATED;
+    option.name = MUTATED;
+    option.kind = "allow_always";
+  }
+  scripted.options.length = 0;
+}
+
+/** Make this turn's permission requests, in the order the plan names. */
+function* askPermissions(plan: PermissionPlan, session: Session): Operation<void> {
+  if (plan.reversed === undefined) {
+    for (const scripted of plan.requests) {
+      yield* askPermission(plan, scripted, session);
+    }
+    return;
+  }
+  const [first, ...rest] = plan.requests;
+  const held = yield* spawn(() => askPermission(plan, first, session));
+  // Sent only once the policy has the first request in hand, so what arrived
+  // first is a fact rather than a scheduling accident.
+  yield* plan.reversed.arrived.operation;
+  for (const scripted of rest) {
+    yield* askPermission(plan, scripted, session);
+  }
+  yield* held;
+}
+
 function stubFactory(
   trace: Trace,
   fail?: boolean,
   refuseBeforeStart?: boolean,
+  permissions?: PermissionPlan,
 ): AgentProviderFactory {
   const issued = new Map<string, Session>();
   // One operation per conversation, as a provider has: the owner that settles
@@ -147,7 +262,7 @@ function stubFactory(
               },
             };
           }
-          return stubStream(content, options, fail, trace);
+          return stubStream(content, options, fail, trace, permissions);
         },
       },
       { at: "min" },
@@ -160,6 +275,7 @@ function stubStream(
   options: PromptOptions | undefined,
   fail?: boolean,
   trace?: Trace,
+  permissions?: PermissionPlan,
 ): Stream<AgentPromptEvent, string> {
   return {
     *[Symbol.iterator]() {
@@ -184,9 +300,17 @@ function stubStream(
         { type: "terminal", status: fail ? "failed" : "completed" },
       ];
       let index = 0;
+      let asked = false;
       return {
-        // deno-lint-ignore require-yield
         *next() {
+          // After the turn started and before it produced anything: where a
+          // real agent asks whether it may use the tool it is about to use.
+          if (index === 1 && !asked) {
+            asked = true;
+            if (permissions !== undefined) {
+              yield* askPermissions(permissions, session);
+            }
+          }
           if (index < events.length) {
             return { done: false, value: events[index++]! };
           }
@@ -211,6 +335,15 @@ interface RunOptions {
   promptTimeout?: number;
   /** Refuse the turn before it starts, as a failed configuration does. */
   refuseBeforeStart?: boolean;
+  /** The permission requests the provider makes while its turn runs. */
+  permissions?: PermissionPlan;
+  /**
+   * The policy that answers them, installed where a permission policy lives.
+   *
+   * At `min`, like every installed policy, so it sits inside the observation
+   * the prompt turn itself installs — which is the arrangement under test.
+   */
+  permissionPolicy?: () => Operation<void>;
   /**
    * An ordinary public handler, installed around the whole execution.
    *
@@ -244,10 +377,13 @@ function* runDoc(
     }
     yield* installAgentComponents({
       rootProvider: {
-        factory: stubFactory(trace, options.fail, options.refuseBeforeStart),
+        factory: stubFactory(trace, options.fail, options.refuseBeforeStart, options.permissions),
         options: { defaultAgent: "stub-agent", permissionMode: "deny-all" },
       },
     });
+    if (options.permissionPolicy) {
+      yield* options.permissionPolicy();
+    }
     if (options.policy) {
       yield* installPromptFailurePolicy(options.policy);
     }
@@ -858,6 +994,21 @@ describe("Tier AF — Session configuration", () => {
     expect(parsed?.configuration).toBe(undefined);
   });
 
+  it("AF32a: a prompt sequence is a non-negative integer", function* () {
+    const complete = {
+      sequence: 0,
+      agent: "codex",
+      sessionKey: "xmd:v1:a",
+      status: "completed",
+      text: "hello",
+    };
+
+    expect(parsePromptRecord(complete)?.sequence).toBe(0);
+    for (const sequence of [-1, 0.5]) {
+      expect(parsePromptRecord({ ...complete, sequence })).toBe(undefined);
+    }
+  });
+
   it("AF33: a configuration member that names no choice refuses the record", function* () {
     const complete = {
       sequence: 0,
@@ -1180,5 +1331,373 @@ describe("Tier AF — the final routed Session decides", () => {
     expect(trace.prompts).toEqual(["hi"]);
     const [prompt] = promptRecords(events);
     expect(prompt?.value.configuration).toBe(undefined);
+  });
+});
+
+/**
+ * Tier AF — the permission audit one turn retains (issue #854 A1, A2).
+ *
+ * A turn that was granted permission retains an account of it, so a reader of
+ * the history can see what the agent was allowed to do. What is under test is
+ * both halves of that: the account is complete and exact, and it is only the
+ * account — a live request object, its `rawInput`, its session and anything the
+ * caller went on to mutate all stay out of the journal.
+ *
+ * Every journal here comes from a real turn through the real Prompt, because
+ * the audit's whole claim is about where in a turn the copy is taken.
+ */
+function permissionPlan(
+  requests: readonly ScriptedPermission[],
+  extra: Partial<PermissionPlan> = {},
+): PermissionPlan {
+  return { requests, answered: [], raised: [], ...extra };
+}
+
+/** The options a tool call usually offers. Fresh per plan, because they mutate. */
+function offeredOptions(): PermissionOption[] {
+  return [
+    { optionId: "allow", name: "Allow once", kind: "allow_once" },
+    { optionId: "always", name: "Always allow", kind: "allow_always" },
+    { optionId: "deny", name: "Deny", kind: "reject_once" },
+  ];
+}
+
+/** The audits one prompt record carries, as the durable Json holds them. */
+function recordedPermissions(record: Record<string, Json> | undefined): Json {
+  return record?.permissions ?? null;
+}
+
+/** Whether a canary string occurs anywhere in a value. */
+function mentions(value: unknown, canary: string): boolean {
+  return JSON.stringify(value)?.includes(canary) === true;
+}
+
+describe("Tier AF — the permission audit one turn retains", () => {
+  beforeAll(() => useTempFileCompiler());
+
+  it("A1: a turn that was asked nothing retains no audit at all", function* () {
+    const { result, events } = yield* runDoc('<Prompt text="hi" />\n');
+
+    expect(result.ok).toBe(true);
+    const [prompt] = promptRecords(events);
+    // Absent rather than empty: a turn nobody asked about is the history every
+    // record written before this member existed describes.
+    expect(prompt?.value.permissions).toBe(undefined);
+    expect(Object.keys(prompt?.value ?? {})).not.toContain("permissions");
+  });
+
+  it("A1: one answered request round-trips as exactly its safe fields", function* () {
+    const plan = permissionPlan([
+      {
+        toolCallId: "call-1",
+        title: "Write README.md",
+        kind: "edit",
+        options: offeredOptions(),
+      },
+    ]);
+    const { result, events } = yield* runDoc('<Prompt text="hi" />\n', { permissions: plan });
+
+    expect(result.ok).toBe(true);
+    // The base policy denies, and denial selects the reject option the
+    // provider offered — the decision the provider itself was answered with.
+    expect(plan.answered).toEqual([
+      { toolCallId: "call-1", outcome: { outcome: "selected", optionId: "deny" } },
+    ]);
+    const [prompt] = promptRecords(events);
+    expect(recordedPermissions(prompt?.value)).toEqual([
+      {
+        toolCallId: "call-1",
+        title: "Write README.md",
+        kind: "edit",
+        options: [
+          { optionId: "allow", name: "Allow once", kind: "allow_once" },
+          { optionId: "always", name: "Always allow", kind: "allow_always" },
+          { optionId: "deny", name: "Deny", kind: "reject_once" },
+        ],
+        outcome: { outcome: "selected", optionId: "deny" },
+      },
+    ]);
+    // And the same record read back out of the journal, because the shape the
+    // parser accepts is the shape the writer wrote.
+    expect(parsePromptRecord(prompt?.value)?.permissions).toEqual([
+      {
+        toolCallId: "call-1",
+        title: "Write README.md",
+        kind: "edit",
+        options: [
+          { optionId: "allow", name: "Allow once", kind: "allow_once" },
+          { optionId: "always", name: "Always allow", kind: "allow_always" },
+          { optionId: "deny", name: "Deny", kind: "reject_once" },
+        ],
+        outcome: { outcome: "selected", optionId: "deny" },
+      },
+    ]);
+  });
+
+  it("A1: several requests retain one audit each, in the order they arrived", function* () {
+    const plan = permissionPlan([
+      { toolCallId: "call-1", kind: "read", options: offeredOptions() },
+      { toolCallId: "call-2", options: offeredOptions() },
+      // No way to say no, so the decision is cancellation rather than a choice.
+      {
+        toolCallId: "call-3",
+        title: "Run the build",
+        options: [{ optionId: "allow", name: "Allow once", kind: "allow_once" }],
+      },
+    ]);
+    const { result, events } = yield* runDoc('<Prompt text="hi" />\n', { permissions: plan });
+
+    expect(result.ok).toBe(true);
+    const [prompt] = promptRecords(events);
+    const audits = parsePromptRecord(prompt?.value)?.permissions ?? [];
+    expect(audits.map((audit) => audit.toolCallId)).toEqual(["call-1", "call-2", "call-3"]);
+    expect(audits.map((audit) => audit.outcome)).toEqual([
+      { outcome: "selected", optionId: "deny" },
+      { outcome: "selected", optionId: "deny" },
+      { outcome: "cancelled" },
+    ]);
+    // The optional members are exactly as asked, absent included.
+    expect(audits[0].title).toBe(undefined);
+    expect(audits[0].kind).toBe("read");
+    expect(audits[1].title).toBe(undefined);
+    expect(audits[1].kind).toBe(undefined);
+    expect(audits[2].title).toBe("Run the build");
+    // A cancelled audit names no choice, and the choices it was offered survive
+    // in the order the provider offered them.
+    expect(audits[2].options).toEqual([
+      { optionId: "allow", name: "Allow once", kind: "allow_once" },
+    ]);
+  });
+
+  it("A1: occurrence order survives a reversed return order", function* () {
+    const arrived = permissionGate();
+    const released = permissionGate();
+    const plan = permissionPlan(
+      [
+        { toolCallId: "first", options: offeredOptions() },
+        { toolCallId: "second", options: offeredOptions() },
+      ],
+      { reversed: { arrived, released } },
+    );
+    const { result, events } = yield* runDoc('<Prompt text="hi" />\n', {
+      permissions: plan,
+      permissionPolicy: () =>
+        Agent.around(
+          {
+            *requestPermission([request]): Operation<PermissionOutcome> {
+              if (request.toolCall.toolCallId === "first") {
+                arrived.open();
+                yield* released.operation;
+                return { outcome: "selected", optionId: "allow" };
+              }
+              released.open();
+              return { outcome: "selected", optionId: "always" };
+            },
+          },
+          { at: "min" },
+        ),
+    });
+
+    expect(result.ok).toBe(true);
+    // The interleaving really happened: the second request was answered first.
+    expect(plan.answered.map((answer) => answer.toolCallId)).toEqual(["second", "first"]);
+    const [prompt] = promptRecords(events);
+    const audits = parsePromptRecord(prompt?.value)?.permissions ?? [];
+    // And the record says what the agent asked, in the order it asked.
+    expect(audits.map((audit) => audit.toolCallId)).toEqual(["first", "second"]);
+    expect(audits.map((audit) => audit.outcome)).toEqual([
+      { outcome: "selected", optionId: "allow" },
+      { outcome: "selected", optionId: "always" },
+    ]);
+  });
+
+  it("A1: a request that raised instead of answering retains no audit", function* () {
+    const plan = permissionPlan([
+      { toolCallId: "call-1", options: offeredOptions() },
+      { toolCallId: "call-2", options: offeredOptions() },
+    ]);
+    const { result, events } = yield* runDoc('<Prompt text="hi" />\n', {
+      permissions: plan,
+      permissionPolicy: () =>
+        Agent.around(
+          {
+            // deno-lint-ignore require-yield
+            *requestPermission([request]): Operation<PermissionOutcome> {
+              if (request.toolCall.toolCallId === "call-1") {
+                throw new Error("this policy could not decide");
+              }
+              return { outcome: "selected", optionId: "allow" };
+            },
+          },
+          { at: "min" },
+        ),
+    });
+
+    expect(result.ok).toBe(true);
+    expect(plan.raised).toEqual(["this policy could not decide"]);
+    const [prompt] = promptRecords(events);
+    const audits = parsePromptRecord(prompt?.value)?.permissions ?? [];
+    // Nothing decided the first request, so there is no decision to describe.
+    expect(audits.map((audit) => audit.toolCallId)).toEqual(["call-2"]);
+  });
+
+  it("A1: a turn that failed still retains what it was granted before it did", function* () {
+    const plan = permissionPlan([{ toolCallId: "call-1", options: offeredOptions() }]);
+    const { events } = yield* runDoc('<Prompt text="hi" />\n', { permissions: plan, fail: true });
+
+    const [prompt] = promptRecords(events);
+    expect(prompt?.value.status).toBe("failed");
+    expect(parsePromptRecord(prompt?.value)?.permissions?.map((audit) => audit.toolCallId)).toEqual(
+      ["call-1"],
+    );
+  });
+
+  it("A1: a record written before this member existed still parses", function* () {
+    const legacy = {
+      sequence: 0,
+      agent: "codex",
+      sessionKey: "xmd:v1:a",
+      status: "completed",
+      text: "hello",
+    };
+
+    const parsed = parsePromptRecord(legacy);
+    expect(parsed?.text).toBe("hello");
+    expect(parsed?.permissions).toBe(undefined);
+  });
+
+  it("A1: an audit this build cannot read refuses the whole prompt record", function* () {
+    const complete = {
+      sequence: 0,
+      agent: "codex",
+      sessionKey: "xmd:v1:a",
+      status: "completed",
+      text: "hello",
+      permissions: [
+        {
+          toolCallId: "call-1",
+          options: [{ optionId: "allow", name: "Allow once", kind: "allow_once" }],
+          outcome: { outcome: "selected", optionId: "allow" },
+        },
+      ],
+    };
+    expect(parsePromptRecord(complete)?.permissions).toHaveLength(1);
+
+    const audit = complete.permissions[0];
+    const refused: Json[] = [
+      "not a list",
+      [{ ...audit, toolCallId: 7 }],
+      [{ ...audit, title: 7 }],
+      [{ ...audit, kind: [] }],
+      // A kind nothing offers is not a choice this build can report.
+      [{ ...audit, options: [{ optionId: "allow", name: "Allow once", kind: "allow_maybe" }] }],
+      [{ ...audit, options: [{ optionId: "allow", name: "Allow once" }] }],
+      [{ ...audit, options: "allow" }],
+      // Closed: a member nothing here defines is a record describing something
+      // this build cannot state, not a record with an extra field.
+      [{ ...audit, options: [{ optionId: "a", name: "A", kind: "allow_once", rawInput: "x" }] }],
+      [{ ...audit, rawInput: { path: "/etc/passwd" } }],
+      [{ ...audit, outcome: "selected" }],
+      [{ ...audit, outcome: { outcome: "selected" } }],
+      [{ ...audit, outcome: { outcome: "cancelled", optionId: "allow" } }],
+      [{ ...audit, outcome: { outcome: "refused" } }],
+      [{ ...audit, outcome: { outcome: "cancelled", why: "no" } }],
+    ];
+    for (const permissions of refused) {
+      const described = JSON.stringify(permissions);
+      expect([described, parsePromptRecord({ ...complete, permissions })]).toEqual([
+        described,
+        undefined,
+      ]);
+    }
+  });
+
+  it("A2: nothing the request carried beyond its audit crosses the boundary", function* () {
+    const canary = "canary-7f3c1a-raw-input";
+    const plan = permissionPlan([
+      {
+        toolCallId: "call-1",
+        title: "Write README.md",
+        kind: "edit",
+        rawInput: { path: "/tmp/README.md", content: canary },
+        options: offeredOptions(),
+      },
+    ]);
+    const { result, events } = yield* runDoc(
+      ['<Session name="review">', '<Prompt text="hi" />', "</Session>", ""].join("\n"),
+      { permissions: plan },
+    );
+
+    expect(result.ok).toBe(true);
+    // It really was asked with the canary, so its absence below is an absence
+    // rather than a request that never carried one.
+    expect(plan.answered).toHaveLength(1);
+    const [prompt] = promptRecords(events);
+    // The journal's own bytes, not just the value read back out of them.
+    const written = events.map((event) => serializeDurableEvent(event)).join("\n");
+    expect(written.includes("agent_prompt")).toBe(true);
+    expect(written.includes(canary)).toBe(false);
+    expect(mentions(prompt?.value, canary)).toBe(false);
+    expect(mentions(parsePromptRecord(prompt?.value), canary)).toBe(false);
+
+    // Nor the live objects the request travelled with. The audit names the
+    // tool call and the choices, and nothing that could reach a provider.
+    const audits = parsePromptRecord(prompt?.value)?.permissions ?? [];
+    expect(Object.keys(audits[0]).sort()).toEqual([
+      "kind",
+      "options",
+      "outcome",
+      "title",
+      "toolCallId",
+    ]);
+    expect(mentions(audits[0], "cwd")).toBe(false);
+    expect(mentions(audits[0], "stub:review")).toBe(false);
+  });
+
+  it("A2: mutating everything the caller kept cannot change the record", function* () {
+    const plan = permissionPlan(
+      [{ toolCallId: "call-1", title: "Write README.md", kind: "edit", options: offeredOptions() }],
+      { mutateAfterSettlement: true },
+    );
+    const { result, events } = yield* runDoc('<Prompt text="hi" />\n', { permissions: plan });
+
+    expect(result.ok).toBe(true);
+    // The caller really did rewrite what it was holding, before the turn ended
+    // and long before this record was written.
+    expect(plan.requests[0].options).toEqual([]);
+    const [prompt] = promptRecords(events);
+    expect(mentions(prompt?.value, MUTATED)).toBe(false);
+    expect(recordedPermissions(prompt?.value)).toEqual([
+      {
+        toolCallId: "call-1",
+        title: "Write README.md",
+        kind: "edit",
+        options: [
+          { optionId: "allow", name: "Allow once", kind: "allow_once" },
+          { optionId: "always", name: "Always allow", kind: "allow_always" },
+          { optionId: "deny", name: "Deny", kind: "reject_once" },
+        ],
+        outcome: { outcome: "selected", optionId: "deny" },
+      },
+    ]);
+  });
+
+  it("A2: the observation decides nothing — the installed policy still does", function* () {
+    const plan = permissionPlan([{ toolCallId: "call-1", options: offeredOptions() }]);
+    const { result, events } = yield* runDoc('<Prompt text="hi" />\n', {
+      permissions: plan,
+      permissionPolicy: () => installApproveAll(),
+    });
+
+    expect(result.ok).toBe(true);
+    // Approve-all still chose, and the provider was answered with its choice.
+    expect(plan.answered).toEqual([
+      { toolCallId: "call-1", outcome: { outcome: "selected", optionId: "allow" } },
+    ]);
+    const [prompt] = promptRecords(events);
+    expect(parsePromptRecord(prompt?.value)?.permissions?.[0].outcome).toEqual({
+      outcome: "selected",
+      optionId: "allow",
+    });
   });
 });
