@@ -428,6 +428,19 @@ function* start(
       }
     }
 
+    // Both subscriptions belong to this scope, and both exist before the
+    // document can publish anything. `spawn()` returns before its child body
+    // has run, and a Signal drops what it sends while no subscription is
+    // active, so subscribing inside a watcher loses an announcement the
+    // execution makes immediately — which is the announcement that admits a
+    // cold session. Effection's contract is explicit that the subscription is
+    // created in the enclosing scope and only iterated in the child
+    // (`docs/agents.md`, "Subscription readiness across `spawn()`"). Spawning
+    // the consumer earlier would not be equivalent: what must precede the
+    // document is the subscription, not the task that reads it.
+    const agentReadings = yield* agent.changes;
+    const questions = yield* elicitation.changes;
+
     const document: Task<Result<unknown>> = yield* spawn(function* () {
       const outcome = yield* runExecution();
       settle(outcome);
@@ -499,18 +512,16 @@ function* start(
     // record or a question is: replay that reached one is past what the history
     // held, so the session is admitted rather than still provisional.
     yield* spawn(function* () {
-      const readings = yield* agent.changes;
-      let next = yield* readings.next();
+      let next = yield* agentReadings.next();
       while (!next.done) {
         if (next.value.turns.length > 0) {
           admit();
         }
-        next = yield* readings.next();
+        next = yield* agentReadings.next();
       }
     });
 
     yield* spawn(function* () {
-      const questions = yield* elicitation.changes;
       let next = yield* questions.next();
       while (!next.done) {
         if (next.value !== undefined) {
