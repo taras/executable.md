@@ -185,6 +185,21 @@ export function drawerHeight(size: ReplTerminalSize): number {
   return body - 2 * Math.floor(body / 8);
 }
 
+/**
+ * How many rows the region that carries the Sessions reading has, at one size.
+ *
+ * The narrow content region and the wide sidebar are both the body — everything
+ * above the footer — so one answer covers both. Asked by whoever windows that
+ * reading: a list describing more rows than this has its tail placed nowhere,
+ * and a row layout cannot place is not one a person can see or point at.
+ */
+export function sessionsHeight(size: ReplTerminalSize): number {
+  if (profileFor(size) === "too-small") {
+    return 0;
+  }
+  return size.rows - FOOTER_ROWS;
+}
+
 /** Which profile a size gets. */
 export function profileFor(size: ReplTerminalSize): ReplProfile {
   if (size.columns < NARROW.columns || size.rows < NARROW.rows) {

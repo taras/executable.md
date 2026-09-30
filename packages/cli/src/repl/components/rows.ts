@@ -160,6 +160,34 @@ function activation(input: ReplViewData): ReplAction | undefined {
     const delta = named["delta"];
     return typeof delta === "number" ? { kind: "scroll", delta } : undefined;
   }
+  if (select === "scroll-sessions") {
+    const delta = named["delta"];
+    return typeof delta === "number" ? { kind: "scroll-sessions", delta } : undefined;
+  }
+  if (select === "session") {
+    const session = named["session"];
+    return typeof session === "string" && session.length > 0
+      ? { kind: "select-session", session }
+      : undefined;
+  }
+  if (select === "all-sessions") {
+    return { kind: "all-sessions" };
+  }
+  if (select === "permission") {
+    const request = named["request"];
+    return typeof request === "string" ? { kind: "select-permission", request } : undefined;
+  }
+  if (select === "permission-choice") {
+    const request = named["request"];
+    const option = named["option"];
+    return typeof request === "string" && typeof option === "string"
+      ? { kind: "choose-permission", request, option }
+      : undefined;
+  }
+  if (select === "permission-dismiss") {
+    const request = named["request"];
+    return typeof request === "string" ? { kind: "dismiss-permission", request } : undefined;
+  }
   return undefined;
 }
 

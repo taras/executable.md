@@ -53,4 +53,33 @@ export type ReplAction =
    * which way it points and nothing else: how far the region can go is the
    * frame's to decide, and clamping belongs where the height is known.
    */
-  | { readonly kind: "scroll"; readonly delta: number };
+  | { readonly kind: "scroll"; readonly delta: number }
+  /**
+   * Move the Sessions reading by whole rows.
+   *
+   * Its own member rather than `scroll`, because the two windows are open at
+   * once: a drawer scrolls the question it is asking while the reading behind it
+   * keeps the row somebody left it on, and one action meaning either would move
+   * whichever the reducer guessed.
+   */
+  | { readonly kind: "scroll-sessions"; readonly delta: number }
+  /**
+   * Show only the conversation this provider session key names.
+   *
+   * The key and nothing else: which turns that is, and whether the key still
+   * names a conversation at all, is the root's to resolve against the reading it
+   * holds.
+   */
+  | { readonly kind: "select-session"; readonly session: string }
+  /** Show every conversation again. Distinct from selecting one, so it cannot be a key nobody has. */
+  | { readonly kind: "all-sessions" }
+  /** Open the drawer over the one pending permission request this key names. */
+  | { readonly kind: "select-permission"; readonly request: string }
+  /** Answer the selected request with one option the provider offered. */
+  | {
+      readonly kind: "choose-permission";
+      readonly request: string;
+      readonly option: string;
+    }
+  /** Dismiss the selected request, which denies it while the session runs on. */
+  | { readonly kind: "dismiss-permission"; readonly request: string };

@@ -31,6 +31,7 @@ import {
   focusClaim,
   focusSettled,
   initialState,
+  NO_AGENT,
   reduceRepl,
   viewFor,
 } from "../src/repl/application.ts";
@@ -92,6 +93,17 @@ const DETAILS_SCHEMA: Json = {
   additionalProperties: false,
 };
 
+/** Fields named after the suffixes a turn's own read-only facts are keyed with. */
+const NAMED_LIKE_FACTS_SCHEMA: Json = {
+  type: "object",
+  properties: {
+    text: { type: "string", title: "Text" },
+    stop: { type: "string", title: "Stop" },
+  },
+  required: ["text"],
+  additionalProperties: false,
+};
+
 /** Confirmation: one required enum. */
 const CONFIRM_SCHEMA: Json = {
   type: "object",
@@ -114,7 +126,7 @@ const EMPTY_MODEL: ReplModel = Object.freeze({
 
 /** A live reading with one question waiting. */
 function asking(question: ReplQuestion | undefined): ReplLive {
-  return { output: "", question, expansion: "playing", pausable: false };
+  return { output: "", question, expansion: "playing", pausable: false, agent: NO_AGENT };
 }
 
 describe("F1 — the bounded language is exact", () => {
@@ -682,6 +694,22 @@ describe("F3 — complete content and reachable navigation", () => {
     "footer:history",
   ];
 
+  it("F3: a field named after a turn's facts is still pointer-targetable", function* () {
+    // The key of this field's editable line ends in `:text`, which is how a
+    // turn's own read-only text is keyed too. What decides whether a pointer may
+    // activate a row is what the row is, so the field keeps its pointer and the
+    // fact never had one.
+    const asked = yield* askingFor(NAMED_LIKE_FACTS_SCHEMA);
+    const live = asking(asked.question);
+    const tree = yield* useReplTree<ReplAction>();
+    const keys = yield* placedKeys(tree, reading(opened(live), live, EMPTY_MODEL, NARROW));
+    expect(keys.get("drawer:field:text")).toBe(true);
+    expect(keys.get("drawer:value:text")).toBe(true);
+    expect(keys.get("drawer:field:stop")).toBe(true);
+    // And what a person only reads inside the same drawer is not a target.
+    expect(keys.get("drawer:message:0")).toBe(false);
+  });
+
   it("F3: scrolling places every essential control in the narrow frame", function* () {
     const asked = yield* askingFor(PLAN_SCHEMA, DRAFT);
     const live = asking(asked.question);
@@ -956,6 +984,9 @@ describe("F3 — focus returns to the invocation, not to where the drawer came f
     yield* applied(tree, reading(unclaimed, asking(undefined), recorded.model, NARROW, inside));
     const landed = keyed(tree);
     expect(landed).not.toBe(`elicit:${recorded.marker}`);
+    // The first focusable row this frame draws, which is neither the invocation
+    // nor where the drawer was opened from. On a narrow route that is the
+    // surface navigation, which is mounted above whichever outlet is routed.
     expect(landed).toBe("sessions:heading");
   });
 });
@@ -1040,6 +1071,7 @@ function liveReading(session: ReplSession): ReplLive {
     question: session.overlay.question,
     expansion: session.expansion.state,
     pausable: session.controller !== undefined,
+    agent: session.agent,
   };
 }
 
