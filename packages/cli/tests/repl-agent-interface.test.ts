@@ -896,6 +896,12 @@ describe("U1 — one chronology, filtered, undisturbed by the background", () =>
       "both started turns reporting their conversation",
       () => started(session) === 2,
     );
+    // And the queued one being observed, which is a different fact: a turn is a
+    // row as soon as its Prompt is observed, and a turn held before it produces
+    // anything never reports a conversation — so waiting for the two that do
+    // says nothing about whether the third is there yet. This row ends by
+    // counting all three under All.
+    yield* until(session, "all three Prompts being observed", () => observed(session) === 3);
     // In the order the provider was reached, among the turns it has answered:
     // which spawn gets there first is the scheduler's business, and a queued turn
     // has no conversation to be ordered by at all.
