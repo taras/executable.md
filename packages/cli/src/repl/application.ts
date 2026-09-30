@@ -30,7 +30,7 @@ import type { Json } from "@executablemd/durable-streams";
 
 import { describe as describeNode } from "./description.ts";
 import type { ReplDescription } from "./description.ts";
-import { drawerWidth, HISTORY_ROWS, NARROW, surfaceWidth } from "./layout.ts";
+import { drawerHeight, drawerWidth, HISTORY_ROWS, NARROW, surfaceWidth } from "./layout.ts";
 import type { ReplSurface as ReplPlacedSurface, ReplSurfaceCell } from "./layout.ts";
 import type { ReplTerminalSize } from "./terminal.ts";
 import { decodeLocation, encodeLocation, NO_LIVE, resolveLocation } from "./route.ts";
@@ -42,7 +42,7 @@ import type {
   ReplSurface,
 } from "./route.ts";
 import type { ReplModel, ReplRow, ReplScope } from "./model.ts";
-import type { ReplQuestion } from "./elicitation.ts";
+import type { ReplFormField, ReplQuestion, ReplQuestionForm } from "./elicitation.ts";
 import type { ExpansionState } from "./expansion.ts";
 import type { ReplTree } from "./reconcile.ts";
 import { DRAWER, FIELD, LINE, REFUSAL, SELECT_ROW } from "./components/rows.ts";
@@ -61,15 +61,84 @@ export interface ReplLive {
   readonly pausable: boolean;
 }
 
+/** One thing the last submission said was wrong, as a reader sees it. */
+export interface ReplFormMessage {
+  /** The field it belongs to, or none for the object as a whole. */
+  readonly field: string | undefined;
+  readonly message: string;
+}
+
+/**
+ * The form being filled in, while a question is being asked.
+ *
+ * Values are keyed by field name because the fields are independent: one global
+ * string would make editing either field overwrite the other. None of this is
+ * durable, none of it is in the route, and all of it is discarded when the
+ * question ends or its drawer is closed.
+ */
+export interface ReplFormState {
+  /** What has been typed into each field so far, by field name. */
+  readonly values: Readonly<Record<string, string>>;
+  /** Which field text and Backspace act on, or none yet. */
+  readonly field: string | undefined;
+  /** What the last submission was told was wrong. */
+  readonly messages: readonly ReplFormMessage[];
+  /** How far the read-only message region has been scrolled, in lines. */
+  readonly offset: number;
+}
+
+/** A form nobody has touched. */
+export const EMPTY_FORM: ReplFormState = Object.freeze({
+  values: Object.freeze({}),
+  field: undefined,
+  messages: Object.freeze([]),
+  offset: 0,
+});
+
+/**
+ * Which control focus goes back to, because the drawer that held it went.
+ *
+ * Freedom restores the control that was focused before a modal was pushed, which
+ * is where focus *was* rather than where the question now is: answering leaves a
+ * retained invocation to look at, and dismissing leaves one still being asked.
+ * Both are named here rather than resolved, because which row that is depends on
+ * what is mounted and only the view knows that.
+ */
+export type ReplFocusRestore =
+  /**
+   * The invocation whose answer this was, once its record is projected.
+   *
+   * Named by what it caused rather than by where it sits: the record appends
+   * after the drawer is gone, so the row does not exist yet at the moment the
+   * claim is made. `known` is every answer already retained when this one was
+   * taken and `answer` is exactly what was sent, which together name one
+   * record — not the newest one, and not an answer somebody else caused.
+   */
+  | {
+      readonly kind: "answered";
+      readonly known: readonly string[];
+      readonly answer: Json;
+    }
+  /** The invocation still asking, now that its drawer is not up. */
+  | { readonly kind: "asked" };
+
 /** Everything typed and not yet committed anywhere. */
 export interface ReplState {
   readonly route: ReplRoute;
   /** The entry draft, before an entry exists. */
   readonly draft: string;
-  /** The answer being typed into the waiting question. */
-  readonly answer: string;
+  /** The form being filled into the waiting question. */
+  readonly form: ReplFormState;
   /** Why the last action changed nothing, or none. */
   readonly refusal: string | undefined;
+  /**
+   * Where focus starts again, for the one commit after a drawer went.
+   *
+   * One-shot and process-local. A claim repeated every frame would drag focus
+   * back after every Tab, so the next action clears it: from then on focus is
+   * the tree's, which is the only thing that knows where it is.
+   */
+  readonly restore: ReplFocusRestore | undefined;
 }
 
 /** What the root must perform, because a component cannot. */
@@ -78,7 +147,7 @@ export type ReplIntent =
   | { readonly kind: "submit"; readonly source: string }
   | { readonly kind: "pause" }
   | { readonly kind: "continue" }
-  | { readonly kind: "answer"; readonly choice: string };
+  | { readonly kind: "answer"; readonly values: Readonly<Record<string, string>> };
 
 /** One reduction: the state that stands now, and what the root owes. */
 export interface ReplTransition {
@@ -141,16 +210,25 @@ export function admitted(state: ReplState): ReplState {
 /**
  * The state after a question accepted its answer.
  *
+ * `model` is the history as it stood *before* the answer and `answer` is the
+ * object the question took, because together they name the record this answer is
+ * about to add.
+ *
  * The question is over, so the drawer that was asking it is over too. Leaving
  * `+elicit` in the route would print a location naming a drawer the topology no
  * longer mounts — a URL that describes a screen nobody can be shown — and
  * leaving the typed text in `answer` would offer it again as though it were
  * still waiting to be sent.
  */
-export function answered(state: ReplState): ReplState {
+export function answered(state: ReplState, model: ReplModel, answer: Json): ReplState {
   return Object.freeze({
     ...state,
-    answer: "",
+    form: EMPTY_FORM,
+    // The answer is what there is to look at now, so focus goes to the
+    // invocation that has it rather than wherever the drawer was opened from.
+    // Which invocation that is cannot be read yet: its record appends after this,
+    // so the claim carries what will identify it when it arrives.
+    restore: Object.freeze({ kind: "answered", known: retainedAnswers(model), answer }),
     route: Object.freeze({
       ...state.route,
       drawers: Object.freeze(state.route.drawers.filter((drawer) => drawer.kind !== "live-elicit")),
@@ -178,8 +256,9 @@ export function initialState(execution: string): ReplState {
   return Object.freeze({
     route: initialRoute(execution),
     draft: "",
-    answer: "",
+    form: EMPTY_FORM,
     refusal: undefined,
+    restore: undefined,
   });
 }
 
@@ -193,8 +272,9 @@ export function stateFor(location: string): Result<ReplState> {
     Object.freeze({
       route: decoded.value,
       draft: decoded.value.draft ?? "",
-      answer: "",
+      form: EMPTY_FORM,
       refusal: undefined,
+      restore: undefined,
     }),
   );
 }
@@ -313,17 +393,25 @@ const EMPTY_MODEL: ReplModel = Object.freeze({
  * the decision and the effect are separable and the decision is testable alone.
  */
 export function reduceRepl(
-  state: ReplState,
+  given: ReplState,
   action: ReplAction,
   model: ReplModel,
   live: ReplLive,
+  // What the frame can hold, for the one decision that depends on it: how far
+  // the drawer's content may be scrolled. Narrow is the smallest accepted
+  // frame, so a caller that states none clamps to the tightest capacity.
+  size: ReplTerminalSize = NARROW,
 ): ReplTransition {
+  // Whoever pressed this key has moved on from wherever the last drawer put
+  // focus, so the claim does not outlive the commit it was made for.
+  const state =
+    given.restore === undefined ? given : Object.freeze({ ...given, restore: undefined });
   const answering = state.route.drawers.some((drawer) => drawer.kind === "live-elicit");
 
   switch (action.kind) {
     case "type": {
       if (answering) {
-        return settled({ ...state, answer: state.answer + action.text, refusal: undefined });
+        return editing(state, live, action.field, (value) => value + action.text);
       }
       if (model.entry !== undefined) {
         return refuse(state, "this execution has admitted its entry, and an entry is immutable.");
@@ -332,7 +420,7 @@ export function reduceRepl(
     }
     case "erase": {
       if (answering) {
-        return settled({ ...state, answer: shortened(state.answer), refusal: undefined });
+        return editing(state, live, action.field, shortened);
       }
       if (model.entry !== undefined) {
         return refuse(state, "this execution has admitted its entry, and an entry is immutable.");
@@ -401,7 +489,16 @@ export function reduceRepl(
       // Dismissing the question's drawer discards what was typed into it. It is
       // not an answer, and keeping it would offer it again as though it were.
       return closing.kind === "live-elicit"
-        ? { ...closed, state: Object.freeze({ ...closed.state, answer: "" }) }
+        ? {
+            ...closed,
+            // Still being asked, so what focus returns to is the invocation that
+            // is asking — the one control that opens this drawer again.
+            state: Object.freeze({
+              ...closed.state,
+              form: EMPTY_FORM,
+              restore: Object.freeze({ kind: "asked" }),
+            }),
+          }
         : closed;
     }
     case "select-marker": {
@@ -458,15 +555,118 @@ export function reduceRepl(
       if (live.question === undefined) {
         return refuse(state, "nothing is being asked right now.");
       }
-      if (state.answer.length === 0) {
-        return refuse(state, "type one of the offered choices first.");
-      }
+      // The whole object, however it was assembled. Whether it is an answer is
+      // the schema's to say, and the root asks it — a reducer that guessed here
+      // would be a second validator disagreeing with the first.
       return {
         state: Object.freeze({ ...state, refusal: undefined }),
-        intent: { kind: "answer", choice: state.answer },
+        intent: { kind: "answer", values: state.form.values },
       };
     }
+    case "select-field": {
+      if (!answering || live.question === undefined) {
+        return refuse(state, "nothing is being asked right now.");
+      }
+      if (!live.question.form.fields.some((one) => one.name === action.field)) {
+        return refuse(state, "this question has no such field.");
+      }
+      return settled({
+        ...state,
+        form: Object.freeze({ ...state.form, field: action.field }),
+        refusal: undefined,
+      });
+    }
+    case "choose": {
+      if (!answering || live.question === undefined) {
+        return refuse(state, "nothing is being asked right now.");
+      }
+      const field = live.question.form.fields.find((one) => one.name === action.field);
+      if (field === undefined) {
+        return refuse(state, "this question has no such field.");
+      }
+      // Never a value the question did not offer: a stray identifier puts
+      // nothing into the form rather than something the schema will reject.
+      if (field.choices === undefined || !field.choices.includes(action.option)) {
+        return refuse(state, "this field does not offer that value.");
+      }
+      // Activating an option is an answer attempt, like Enter anywhere else in
+      // the form: the value goes in and the whole object is offered. Whether it
+      // is an answer is the schema's to say — choosing "Request changes" with no
+      // feedback yet leaves the same question open, carrying what it said.
+      const chosen = written(state.form, action.field, action.option);
+      return {
+        state: Object.freeze({ ...state, form: chosen, refusal: undefined }),
+        intent: { kind: "answer", values: chosen.values },
+      };
+    }
+    case "scroll": {
+      if (!answering) {
+        return refuse(state, "nothing is being asked right now.");
+      }
+      // Clamped at both ends, and stored clamped. An offset kept past the last
+      // window would take several presses to have any visible effect, so the
+      // value held is the one the region is actually showing.
+      // Clamped against the whole ordered content, not only the message: the
+      // viewport is what moves, and the form rows are inside it.
+      const rows = drawerContentRows(live.question, state.form);
+      const capacity = drawerCapacity(size);
+      const furthest = Math.max(0, rows - capacity);
+      const offset = Math.min(Math.max(0, state.form.offset + action.delta), furthest);
+      return settled({
+        ...state,
+        form: Object.freeze({ ...state.form, offset }),
+        refusal: undefined,
+      });
+    }
   }
+}
+
+/** One field's value replaced, leaving every other field alone. */
+function written(form: ReplFormState, field: string, value: string): ReplFormState {
+  return Object.freeze({
+    ...form,
+    values: Object.freeze({ ...form.values, [field]: value }),
+    // A value that has changed makes the last verdict about the old one stale,
+    // so the messages go rather than sitting under a form they no longer
+    // describe.
+    messages: Object.freeze([]),
+  });
+}
+
+/**
+ * The field text and Backspace act on.
+ *
+ * Whichever field has focus, or the first one the question declares — so a
+ * person who starts typing before selecting anything edits the field they are
+ * looking at rather than nothing.
+ */
+function fieldNamed(live: ReplLive, name: string): ReplFormField | undefined {
+  return live.question?.form.fields.find((one) => one.name === name);
+}
+
+function focused(state: ReplState, live: ReplLive): ReplFormField | undefined {
+  const fields = live.question?.form.fields ?? [];
+  const named = fields.find((one) => one.name === state.form.field);
+  return named ?? fields[0];
+}
+
+/** Edit the focused field, and only it. */
+function editing(
+  state: ReplState,
+  live: ReplLive,
+  named: string | undefined,
+  change: (value: string) => string,
+): ReplTransition {
+  const field = named === undefined ? focused(state, live) : fieldNamed(live, named);
+  if (field === undefined) {
+    return refuse(state, "nothing is being asked right now.");
+  }
+  const form = written(state.form, field.name, change(state.form.values[field.name] ?? ""));
+  return settled({
+    ...state,
+    form: Object.freeze({ ...form, field: field.name }),
+    refusal: undefined,
+  });
 }
 
 function settled(state: ReplState): ReplTransition {
@@ -556,17 +756,107 @@ function row(
   key: string,
   label: string,
   select: { readonly [name: string]: Json },
-  options: { readonly focus?: true; readonly here?: string | undefined } = {},
+  options: {
+    readonly focus?: true;
+    readonly here?: string | undefined;
+    /** The key this frame restores focus to, for the row that turns out to be it. */
+    readonly claim?: string | undefined;
+  } = {},
 ): Described {
+  const claims = options.focus === true || options.claim === key;
   return {
     key,
     description: describeNode<ReplAction>({
       key,
       component: SELECT_ROW,
       input: { label, ...select, ...(options.here === key ? { focused: true } : {}) },
-      ...(options.focus === undefined ? {} : { focus: options.focus }),
+      ...(claims ? { focus: true } : {}),
     }),
   };
+}
+
+/**
+ * Which control this frame claims focus for, because a drawer went.
+ *
+ * Resolved against what is mounted rather than stored: a claim naming a row this
+ * view does not draw would be focus asked for on behalf of nothing, and the
+ * commit that honoured it would throw. So the claim is silent for as long as the
+ * row it names is not there — the answer's record has not been projected yet —
+ * and the hint waits rather than being spent on nothing.
+ */
+export function focusClaim(view: ReplView): string | undefined {
+  const { state, selection, live } = view;
+  if (state.restore === undefined) {
+    return undefined;
+  }
+  if (state.restore.kind === "asked") {
+    return live.question === undefined || state.route.at !== undefined ? undefined : "footer:asked";
+  }
+  // The record this answer caused: one the history did not hold when the answer
+  // was taken, holding exactly what was sent. Not the newest record — by the time
+  // a frame can draw this row, another invocation may have settled after it.
+  const known = new Set(state.restore.known);
+  const answer = state.restore.answer;
+  const caused = (selection.scope?.elicitations ?? []).find(
+    (one) => !known.has(one.marker) && sameJson(one.answer, answer),
+  );
+  return caused === undefined ? undefined : `elicit:${caused.marker}`;
+}
+
+/**
+ * The state after a commit settled focus.
+ *
+ * A restoration claim is one claim, not a standing one. It survives the frames
+ * between the answer and its record — nothing can be focused that is not there
+ * yet — and is spent by the commit that puts focus where it asked. Focus
+ * traversal is not an action, so a claim nobody retired would pull somebody back
+ * after every Tab and traversal would never move.
+ */
+export function focusSettled(view: ReplView, focused: string | undefined): ReplState {
+  const claim = focusClaim(view);
+  if (view.state.restore === undefined || claim === undefined || focused !== claim) {
+    return view.state;
+  }
+  return Object.freeze({ ...view.state, restore: undefined });
+}
+
+/** Every answer this history already holds, wherever in the entry it holds it. */
+function retainedAnswers(model: ReplModel): readonly string[] {
+  const markers: string[] = [];
+  const walk = (scope: ReplScope): void => {
+    for (const elicitation of scope.elicitations) {
+      markers.push(elicitation.marker);
+    }
+    for (const child of scope.scopes) {
+      walk(child);
+    }
+  };
+  if (model.entry !== undefined) {
+    walk(model.entry);
+  }
+  return Object.freeze(markers);
+}
+
+/** Whether two Json values are the same value, whatever order they were written in. */
+function sameJson(left: Json, right: Json): boolean {
+  if (left === null || right === null || typeof left !== "object" || typeof right !== "object") {
+    return left === right;
+  }
+  if (Array.isArray(left) || Array.isArray(right)) {
+    if (!Array.isArray(left) || !Array.isArray(right) || left.length !== right.length) {
+      return false;
+    }
+    return left.every((member, index) => sameJson(member, right[index] ?? null));
+  }
+  const names = Object.keys(left);
+  if (names.length !== Object.keys(right).length) {
+    return false;
+  }
+  return names.every((name) => {
+    const mine = left[name];
+    const theirs = right[name];
+    return mine !== undefined && theirs !== undefined && sameJson(mine, theirs);
+  });
 }
 
 function line(key: string, label: string): Described {
@@ -592,14 +882,25 @@ function field(
   prompt: string,
   text: string,
   purpose: "draft" | "answer",
-  options: { readonly focus?: true; readonly here?: string | undefined } = {},
+  options: {
+    readonly focus?: true;
+    readonly here?: string | undefined;
+    /** The form field this line edits, for a line that edits one. */
+    readonly field?: string;
+  } = {},
 ): Described {
   return {
     key,
     description: describeNode<ReplAction>({
       key,
       component: FIELD,
-      input: { prompt, text, purpose, ...(options.here === key ? { focused: true } : {}) },
+      input: {
+        prompt,
+        text,
+        purpose,
+        ...(options.field === undefined ? {} : { field: options.field }),
+        ...(options.here === key ? { focused: true } : {}),
+      },
       ...(options.focus === undefined ? {} : { focus: options.focus }),
     }),
   };
@@ -638,6 +939,7 @@ function described(view: ReplView): readonly Described[] {
 
   const items: Described[] = [];
   const { model, selection, live, state } = view;
+  const claim = focusClaim(view);
 
   items.push(
     row(
@@ -728,7 +1030,7 @@ function described(view: ReplView): readonly Described[] {
             select: "recorded-elicit",
             marker: elicitation.marker,
           },
-          { here: view.focused },
+          { here: view.focused, claim },
         ),
       );
     }
@@ -737,7 +1039,23 @@ function described(view: ReplView): readonly Described[] {
   // The way into history. The band above shows where the positions are; choosing
   // an exact one is a drawer, because a position is something you select and the
   // band is something you read.
-  items.push(row("footer:history", "[history]", { select: "history" }, { here: view.focused }));
+  // The one way into history, and one node. While a drawer is mounted it is
+  // reparented into the modal branch below rather than drawn again beside it:
+  // two nodes with one key would be two controls claiming one name, and leaving
+  // it out here would put it outside the active focus root where nothing could
+  // reach it.
+  const history = row(
+    "footer:history",
+    "[history]",
+    { select: "history" },
+    {
+      here: view.focused,
+    },
+  );
+  const modal = view.selection.drawers.length > 0;
+  if (!modal) {
+    items.push(history);
+  }
   if (state.route.at !== undefined) {
     items.push(row("footer:live", "[live]", { select: "live" }, { here: view.focused }));
   }
@@ -767,9 +1085,11 @@ function described(view: ReplView): readonly Described[] {
     items.push(
       row(
         "footer:asked",
-        `? ${live.question.message}`,
+        // One line, bounded. The whole message is in the drawer this opens; a
+        // footer that drew every line of a Plan draft would be the transcript.
+        `? ${headline(live.question.message)}`,
         { select: "live-elicit" },
-        { here: view.focused },
+        { here: view.focused, claim },
       ),
     );
   }
@@ -798,7 +1118,10 @@ function described(view: ReplView): readonly Described[] {
   // not an assertion repeated every frame: the tree re-reads the claim at each
   // commit, and this screen commits on every frame, so a standing claim would
   // drag focus back here after every Tab and traversal would never move at all.
-  const claiming = state.route.drawers.length === 0 && view.focused === undefined;
+  // A restoration claim is somebody else's: exactly one description may claim
+  // focus, and a drawer that just went says which one it is.
+  const claiming =
+    state.route.drawers.length === 0 && view.focused === undefined && claim === undefined;
   items.push(
     field(
       "footer:input",
@@ -809,7 +1132,7 @@ function described(view: ReplView): readonly Described[] {
     ),
   );
 
-  const drawer = drawerFor(view);
+  const drawer = drawerFor(view, history);
   if (drawer !== undefined) {
     items.push(drawer);
   }
@@ -823,7 +1146,7 @@ function described(view: ReplView): readonly Described[] {
  * cell is a row: a label holding three lines would show one of them, and a reader
  * would have no way to know the other two existed.
  */
-function drawerFor(view: ReplView): Described | undefined {
+function drawerFor(view: ReplView, history: Described): Described | undefined {
   const open = view.selection.drawers[view.selection.drawers.length - 1];
   if (open === undefined) {
     return undefined;
@@ -873,28 +1196,140 @@ function drawerFor(view: ReplView): Described | undefined {
     if (question === undefined) {
       return undefined;
     }
-    title = question.message;
-    // The retained normalized schema, as a form: the one field it asks for and
-    // the exact values it will accept.
+    const form = question.form;
+    title = form.title ?? "Answer";
+    // The whole message, every line of it, through a window that scrolls. A
+    // drawer that showed only the first line — or only the first window —
+    // would be hiding the draft the question is about.
+    // One viewport over the whole ordered content. Everything a person has to
+    // read or reach — the complete message, the form's description, every
+    // field with its annotation, options, editable value, every validation
+    // message and [submit] — is built in order and then windowed. A drawer too
+    // short to hold all of it scrolls, rather than describing rows that layout
+    // has no frame to place.
+    const lines = question.message.split("\n");
+    const capacity = drawerCapacity(view.size);
+    const last = Math.max(0, drawerContentRows(question, view.state.form) - capacity);
+    const from = Math.min(Math.max(0, view.state.form.offset), last);
+    const until = from + capacity;
+    const content: ReplDescription<ReplAction>[] = [];
+    /** Whether the row about to be built lands inside the viewport. */
+    const showing = (): boolean => content.length >= from && content.length < until;
     children.push(
-      drawerLine(
-        "drawer:form",
-        `${question.form.field}: ${question.form.choices.join(" | ")}`,
-        width,
+      row(
+        "drawer:scroll:up",
+        pad("[^ earlier]", width),
+        { select: "scroll", delta: -1 },
+        {
+          here: view.focused,
+        },
       ).description,
     );
-    // The same rule inside the modal: the field claims focus when the drawer
-    // opens, and afterwards traversal inside the drawer owns it.
+    for (const [offset, text] of lines.entries()) {
+      content.push(drawerLine(`drawer:message:${offset}`, text, width).description);
+    }
+    if (form.description !== undefined) {
+      content.push(drawerLine("drawer:form:about", form.description, width).description);
+    }
+    // The same rule inside the modal: the first control claims focus when the
+    // drawer opens, and afterwards traversal inside the drawer owns it.
     const entering = view.focused === undefined || !view.focused.startsWith("drawer:");
-    const claim: { readonly focus?: true } = entering ? { focus: true } : {};
+    let claimed = false;
+    for (const one of form.fields) {
+      const value = view.state.form.values[one.name] ?? "";
+      const marked = requiredNow(form, view.state.form.values, one) ? "*" : " ";
+      const label = one.title ?? one.name;
+      content.push(
+        row(
+          `drawer:field:${one.name}`,
+          pad(`${marked}${label}: ${value}`, width),
+          { select: "form-field", field: one.name },
+          { here: view.focused },
+        ).description,
+      );
+      if (one.description !== undefined) {
+        content.push(
+          drawerLine(`drawer:field:${one.name}:about`, `  ${one.description}`, width).description,
+        );
+      }
+      if (one.choices !== undefined) {
+        // What this field accepts, said once. The controls below are how a
+        // value is chosen; this is the line that names the whole set, and it
+        // is what a reader scanning the form reads first.
+        content.push(
+          drawerLine(`drawer:form:${one.name}`, `${one.name}: ${one.choices.join(" | ")}`, width)
+            .description,
+        );
+      }
+      // Every offered value, each its own control. A form that drew only the
+      // first would be offering a choice nobody could make.
+      for (const option of one.choices ?? []) {
+        content.push(
+          row(
+            `drawer:choice:${one.name}:${option}`,
+            pad(`  ${value === option ? "(x)" : "( )"} ${option}`, width),
+            { select: "form-choice", field: one.name, option },
+            { here: view.focused },
+          ).description,
+        );
+      }
+      // The one editable line for this field, which is where text and Backspace
+      // land while it has focus. The first field's line claims focus when the
+      // drawer opens — including an enum's, because typing an offered value and
+      // pressing Enter is still a way to answer.
+      // Claimed only by a row the viewport actually shows: focusing one that
+      // scrolled out would put focus where nothing is placed.
+      const takes = entering && !claimed && showing();
+      const focus: { readonly focus?: true } = takes ? { focus: true } : {};
+      if (takes) {
+        claimed = true;
+      }
+      content.push(
+        field(`drawer:value:${one.name}`, "  = ", value, "answer", {
+          ...focus,
+          here: view.focused,
+        }).description,
+      );
+    }
+    // What the last submission was told, under the form it is about.
+    for (const [offset, message] of view.state.form.messages.entries()) {
+      content.push(
+        drawerLine(
+          `drawer:invalid:${offset}`,
+          message.field === undefined ? message.message : `${message.field}: ${message.message}`,
+          width,
+        ).description,
+      );
+    }
+    content.push(
+      row(
+        "drawer:form:submit",
+        pad("[submit]", width),
+        { select: "form-submit" },
+        {
+          here: view.focused,
+        },
+      ).description,
+    );
+    // Only what the viewport holds becomes a placed cell. A row outside it is
+    // not described at all, so it is neither drawn nor pointable.
+    for (const placed of content.slice(from, until)) {
+      children.push(placed);
+    }
     children.push(
-      field("drawer:answer", "= ", view.state.answer, "answer", {
-        ...claim,
-        here: view.focused,
-      }).description,
+      row(
+        "drawer:scroll:down",
+        pad("[v later]", width),
+        { select: "scroll", delta: 1 },
+        {
+          here: view.focused,
+        },
+      ).description,
     );
   }
 
+  // The same node the footer would have drawn, inside the modal focus root.
+  children.push(history.description);
   children.push(
     row(
       "drawer:close",
@@ -915,6 +1350,83 @@ function drawerFor(view: ReplView): Described | undefined {
       modal: true,
     }),
   };
+}
+
+/**
+ * The rows the drawer keeps whatever the viewport shows.
+ *
+ * Its own title row, the two scroll controls and `[close]`: how a person moves
+ * the viewport and leaves, so none of them is ever inside the thing it moves.
+ * `[history]` is not among them — it is reparented into the drawer's subtree so
+ * it stays inside the active focus root, but layout places it in the footer
+ * region, where it costs the drawer no row.
+ */
+const FIXED_DRAWER_ROWS = 4;
+
+/**
+ * How many rows of ordered content this drawer can place at this size.
+ *
+ * At least one, because a viewport showing nothing would say the question was
+ * empty.
+ */
+function drawerCapacity(size: ReplTerminalSize): number {
+  return Math.max(1, drawerHeight(size) - FIXED_DRAWER_ROWS);
+}
+
+/**
+ * How many rows the drawer's ordered content holds in total.
+ *
+ * The complete message, the form's description, every field with its
+ * annotation, enum summary, offered values and editable line, every validation
+ * message, and `[submit]`. Counted the same way the rows are built, because the
+ * reducer clamps a scroll against this before any of them exist.
+ */
+function drawerContentRows(question: ReplQuestion | undefined, form: ReplFormState): number {
+  if (question === undefined) {
+    return 0;
+  }
+  let rows = question.message.split("\n").length;
+  rows += question.form.description === undefined ? 0 : 1;
+  for (const one of question.form.fields) {
+    rows += 2;
+    rows += one.description === undefined ? 0 : 1;
+    rows += one.choices === undefined ? 0 : 1 + one.choices.length;
+  }
+  rows += form.messages.length;
+  // [submit] scrolls with the form it submits.
+  return rows + 1;
+}
+
+/** The first line of a message, for a control that is one row tall. */
+function headline(message: string): string {
+  const [first = ""] = message.split("\n");
+  return first.length > 60 ? `${first.slice(0, 59)}…` : first;
+}
+
+function pad(label: string, width: number): string {
+  return width < 1 ? label : label.padEnd(width, " ");
+}
+
+/**
+ * Whether this field is required as the form currently stands.
+ *
+ * The root's own `required`, plus whatever the one conditional adds while its
+ * field holds the value it tests for. Presentation only — what actually decides
+ * is the compiled schema, which judges the assembled object.
+ */
+function requiredNow(
+  form: ReplQuestionForm,
+  values: Readonly<Record<string, string>>,
+  field: ReplFormField,
+): boolean {
+  if (field.required) {
+    return true;
+  }
+  const condition = form.condition;
+  if (condition === undefined || values[condition.field] !== condition.equals) {
+    return false;
+  }
+  return condition.requires.some((one) => one.name === field.name);
 }
 
 /** One value, as the lines a drawer shows it on. */

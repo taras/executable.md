@@ -140,6 +140,26 @@ function activation(input: ReplViewData): ReplAction | undefined {
   if (select === "close") {
     return { kind: "close-drawer" };
   }
+  if (select === "form-field") {
+    const field = named["field"];
+    return typeof field === "string" ? { kind: "select-field", field } : undefined;
+  }
+  if (select === "form-choice") {
+    const field = named["field"];
+    const option = named["option"];
+    return typeof field === "string" && typeof option === "string"
+      ? { kind: "choose", field, option }
+      : undefined;
+  }
+  if (select === "form-submit") {
+    return { kind: "answer" };
+  }
+  if (select === "scroll") {
+    // A direction, not a position: the control knows which way it points, and
+    // how far the region may travel is the frame's to decide.
+    const delta = named["delta"];
+    return typeof delta === "number" ? { kind: "scroll", delta } : undefined;
+  }
   return undefined;
 }
 
@@ -159,14 +179,19 @@ export const FIELD: ReplComponent<ReplAction> = component<ReplAction>({
     node.render(rendered(node.input));
     node.onInput((input: ReplViewData) => node.render(rendered(input)));
     node.claim((event: ReplInputEvent): ReplAction | undefined => {
+      // The field this line edits, read off its own description. Text reaches
+      // the field the person is actually on rather than whichever one the
+      // application last recorded as selected.
+      const named = optional(node.input, "field");
+      const owns: { readonly field?: string } = named === undefined ? {} : { field: named };
       if (event.kind === "text") {
-        return { kind: "type", text: event.text };
+        return { kind: "type", text: event.text, ...owns };
       }
       if (event.kind === "pointer") {
         return undefined;
       }
       if (event.key === "Backspace") {
-        return { kind: "erase" };
+        return { kind: "erase", ...owns };
       }
       if (event.key === "Enter") {
         return submission(node.input);

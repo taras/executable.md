@@ -170,6 +170,21 @@ export function drawerWidth(size: ReplTerminalSize): number {
   return size.columns - 2 * Math.floor(size.columns / 8);
 }
 
+/**
+ * How tall the drawer layer is, at one size.
+ *
+ * The same arithmetic the placement below uses, exported because what a drawer
+ * can hold decides how much of a long message it may show: a region that drew
+ * more rows than this would clip its own controls off the bottom.
+ */
+export function drawerHeight(size: ReplTerminalSize): number {
+  if (profileFor(size) === "too-small") {
+    return 0;
+  }
+  const body = size.rows - FOOTER_ROWS;
+  return body - 2 * Math.floor(body / 8);
+}
+
 /** Which profile a size gets. */
 export function profileFor(size: ReplTerminalSize): ReplProfile {
   if (size.columns < NARROW.columns || size.rows < NARROW.rows) {

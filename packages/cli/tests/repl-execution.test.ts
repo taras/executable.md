@@ -196,7 +196,7 @@ function* pausedOrDone(session: ReplSession): Operation<void> {
     if (session.elicitation.pending !== undefined) {
       // A walk suspended on a question is not held: pause takes effect at the
       // walk's next boundary, which it only reaches once the question is over.
-      session.elicitation.pending.answer("approve");
+      session.elicitation.pending.submit({ decision: "approve" });
     }
     const next = yield* race([
       states.next(),
@@ -230,10 +230,27 @@ describe("REPL execution: submitting one entry", () => {
 
     const question = yield* nextQuestion(session);
     expect(question.message).toContain("Approve Ship the REPL?");
-    expect(question.form).toEqual({ field: "decision", choices: ["approve", "decline"] });
+    // The whole form the schema reads as, member for member: every field the
+    // drawer draws, with its annotations, its required marker and the values it
+    // accepts.
+    expect(question.form).toEqual({
+      title: undefined,
+      description: undefined,
+      condition: undefined,
+      fields: [
+        {
+          name: "decision",
+          title: undefined,
+          description: undefined,
+          choices: ["approve", "decline"],
+          minLength: undefined,
+          required: true,
+        },
+      ],
+    });
     expect(session.model.entry?.elicitations).toEqual([]);
 
-    expect(question.answer("approve")).toBe(true);
+    expect(question.submit({ decision: "approve" }).kind).toBe("answered");
     yield* session.join();
 
     const entry = session.model.entry;
@@ -279,7 +296,7 @@ describe("REPL execution: submitting one entry", () => {
     expect(latest).toBe(session.overlay.output);
     expect(session.model.terminal).toBe(undefined);
 
-    question.answer("approve");
+    question.submit({ decision: "approve" });
     yield* session.join();
   });
 
@@ -287,7 +304,7 @@ describe("REPL execution: submitting one entry", () => {
     const holder = execution();
     const source = yield* referenceSource();
     const session = opened(yield* submitReplEntry({ ...options(holder), source }));
-    (yield* nextQuestion(session)).answer("decline");
+    (yield* nextQuestion(session)).submit({ decision: "decline" });
     yield* session.join();
 
     const generated = session.model.entry?.generated[0];
@@ -328,7 +345,7 @@ describe("REPL execution: submitting one entry", () => {
     expect(admitted).toBe(true);
 
     controlling(session).resume();
-    (yield* nextQuestion(session)).answer("approve");
+    (yield* nextQuestion(session)).submit({ decision: "approve" });
     yield* session.join();
 
     // The admitted fragment then ran where it was written: its rendering
@@ -357,7 +374,9 @@ describe("REPL execution: submitting one entry", () => {
     const session = opened(yield* submitReplEntry({ ...options(holder), source }));
 
     const question = yield* nextQuestion(session);
-    expect(question.answer("maybe")).toBe(false);
+    // Not an offered value, so the schema rejects it: the question stays open and
+    // nothing is recorded.
+    expect(question.submit({ decision: "maybe" }).kind).toBe("invalid");
     yield* sleep(10);
 
     // An incomplete interaction, not a rejected answer. The provider never
@@ -370,7 +389,7 @@ describe("REPL execution: submitting one entry", () => {
     expect(counted(yield* readAll(holder), "elicit")).toBe(0);
     expect(session.model.settled).toBe(false);
 
-    question.answer("approve");
+    question.submit({ decision: "approve" });
     yield* session.join();
     expect(counted(yield* readAll(holder), "elicit")).toBe(1);
   });
@@ -397,7 +416,7 @@ describe("REPL execution: reopening one history", () => {
     const performed = yield* countPerformed();
     const session = opened(yield* openReplSession(options(holder)));
 
-    (yield* nextQuestion(session)).answer("approve");
+    (yield* nextQuestion(session)).submit({ decision: "approve" });
     yield* session.join();
 
     const events = yield* readAll(holder);
@@ -426,7 +445,7 @@ describe("REPL execution: reopening one history", () => {
     const asked = yield* countAsked();
     const session = opened(yield* submitReplEntry({ ...options(holder), source }));
 
-    (yield* nextQuestion(session)).answer("approve");
+    (yield* nextQuestion(session)).submit({ decision: "approve" });
     yield* session.join();
 
     // The positive control for every count the negatives rely on. Without it, a
@@ -475,7 +494,7 @@ describe("REPL execution: reopening one history", () => {
     yield* scoped(function* () {
       const session = opened(yield* submitReplEntry({ ...options(holder), source }));
       expect(holder.stream.onAppend).not.toBe(null);
-      (yield* nextQuestion(session)).answer("approve");
+      (yield* nextQuestion(session)).submit({ decision: "approve" });
       yield* session.join();
       ended = session;
     });
@@ -628,7 +647,7 @@ describe("REPL execution: pausing expansion", () => {
     // Answering lets the already-started operation settle. Its record reaches
     // the Journal while the pause request is outstanding, which is the whole
     // point: the expansion position and the Journal head are two positions.
-    question.answer("approve");
+    question.submit({ decision: "approve" });
     yield* pausedOrDone(session);
 
     const atPause = (yield* readAll(holder)).length;
@@ -662,7 +681,7 @@ describe("REPL execution: pausing expansion", () => {
     expect(afterFirst).toBeGreaterThan(held);
     expect(controlling(session).released).toBe(afterFirst);
 
-    (yield* nextQuestion(session)).answer("approve");
+    (yield* nextQuestion(session)).submit({ decision: "approve" });
     yield* session.join();
   });
 
@@ -681,7 +700,7 @@ describe("REPL execution: pausing expansion", () => {
     expect((yield* readAll(holder)).length).toBe(frozen);
 
     controlling(session).resume();
-    (yield* nextQuestion(session)).answer("approve");
+    (yield* nextQuestion(session)).submit({ decision: "approve" });
     yield* session.join();
     expect(session.model.settled).toBe(true);
   });
@@ -750,7 +769,7 @@ describe("REPL execution: the boundary inventory", () => {
     // The controller, not a snapshot of its crossings: `crossings` answers
     // with what has been crossed *so far*, and so far is nothing yet.
     const controller = controlling(session);
-    (yield* nextQuestion(session)).answer("approve");
+    (yield* nextQuestion(session)).submit({ decision: "approve" });
     yield* session.join();
     const crossings = controller.crossings;
 
