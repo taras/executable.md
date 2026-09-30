@@ -182,12 +182,15 @@ interface PromptAuditLedger {
 /** What one turn observed of the permission requests made while it ran. */
 export interface PromptPermissionAudit {
   /**
-   * Put this ledger where a request made by this Prompt will find it.
+   * Run this Prompt's provider work with this ledger in place, and only it.
    *
-   * For the lifetime of the scope that calls it, which is the scope the provider
-   * stream is consumed in.
+   * A bracket rather than a marker: the ledger exists for exactly as long as
+   * `body` runs, descendants inherit it, and it is restored when `body`
+   * finishes however it finishes — returning, raising or being cancelled. There
+   * is no way to install the ledger without naming the work it governs, so it
+   * cannot be left behind for sibling work to inherit.
    */
-  place(): Operation<void>;
+  within<T>(body: () => Operation<T>): Operation<T>;
   /** The requests that were decided, in the order they arrived. */
   completed(): readonly PromptPermission[];
 }
@@ -253,8 +256,8 @@ export function promptPermissionAudit(): PromptPermissionAudit {
     },
   };
   return {
-    *place() {
-      yield* PromptAudit.set(ledger);
+    within<T>(body: () => Operation<T>): Operation<T> {
+      return PromptAudit.with(ledger, () => body());
     },
     completed() {
       return drafts.flatMap((draft) => {
