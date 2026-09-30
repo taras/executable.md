@@ -55,7 +55,7 @@
  * answer requests correctly.
  */
 
-import { action, createSignal, useScope } from "effection";
+import { action, createSignal, resource, useScope } from "effection";
 import type { Operation, Scope, Stream } from "effection";
 import { Agent, denyPermission } from "@executablemd/core";
 import type {
@@ -279,388 +279,418 @@ function* currentCoroutine(): Operation<string> {
 }
 
 /**
- * Create the private live Agent owner for one session.
+ * The private live Agent owner for one session, for as long as that session.
  *
- * The owner is created here and installed into the execution through
- * `installation`, so everything it holds belongs to the scope that created it
- * and dies with that scope — including the middleware, which an execution
- * elsewhere would otherwise inherit.
+ * A resource, because everything it holds is mutable and session-scoped:
+ * announcements, the turns and requests presented right now, which publication
+ * is appending, and who is waiting on the first failure. Acquiring it ties all
+ * of that to the acquiring scope, and releasing that scope retires it.
+ *
+ * Retiring answers nothing and releases nothing. A permission wait still held
+ * at teardown is abandoned, not denied — the scope that raised it is going away
+ * too, and a decision invented on the way out would be a decision nobody made.
+ * The same goes for whoever was waiting on `failed`: there is no failure to
+ * report, so no one is woken.
+ *
+ * `installation` stays a separate, explicit act. Installing the middleware in
+ * this body would put it in the resource's own child scope, which the execution
+ * started afterwards does not inherit: the resource owns the kernel, and the
+ * execution installation is what places the contextual middleware.
  */
-export function useReplAgent(mode: PermissionMode): ReplAgentKernel {
-  const changes = createSignal<ReplAgentReading, never>();
-  const turns: LiveTurn[] = [];
-  const requests: LiveRequest[] = [];
-  /** The live turn core began in a scope, until that scope's prompt claims it. */
-  const begun = new Map<Scope, LiveTurn>();
-  /**
-   * The live turn each handle this owner minted stands for.
-   *
-   * The handle is an object of this owner's own making, so a value from
-   * anywhere else simply is not a key here — which is how a handle is read
-   * back without asserting anything about what it is.
-   */
-  const minted = new WeakMap<object, LiveTurn>();
-  /**
-   * The canonical publication appending right now on each coroutine.
-   *
-   * The handle is what identifies the turn; this only says which of several
-   * concurrent publications an append belongs to. At most one canonical
-   * publication is ever in flight per coroutine, because expansion inside one
-   * coroutine is strictly sequential — so this is an index, never a queue, and
-   * it holds nothing between transitions.
-   */
-  const publishing = new Map<string, LiveTurn>();
-  let reading: ReplAgentReading = Object.freeze({
-    turns: Object.freeze([]),
-    requests: Object.freeze([]),
-  });
-  let keys = 0;
-  let failure: Error | undefined;
-  const failures: Array<(error: Error) => void> = [];
-
-  function allocate(prefix: string): string {
-    keys += 1;
-    return `${prefix}-${keys}`;
-  }
-
-  function project(): void {
-    reading = Object.freeze({
-      turns: Object.freeze(turns.map(frozenTurn)),
-      requests: Object.freeze(requests.map(frozenRequest)),
+export function useReplAgent(mode: PermissionMode): Operation<ReplAgentKernel> {
+  return resource(function* (provide) {
+    const changes = createSignal<ReplAgentReading, never>();
+    const turns: LiveTurn[] = [];
+    const requests: LiveRequest[] = [];
+    /** The live turn core began in a scope, until that scope's prompt claims it. */
+    const begun = new Map<Scope, LiveTurn>();
+    /**
+     * The live turn each handle this owner minted stands for.
+     *
+     * The handle is an object of this owner's own making, so a value from
+     * anywhere else simply is not a key here — which is how a handle is read
+     * back without asserting anything about what it is.
+     */
+    const minted = new WeakMap<object, LiveTurn>();
+    /**
+     * The canonical publication appending right now on each coroutine.
+     *
+     * The handle is what identifies the turn; this only says which of several
+     * concurrent publications an append belongs to. At most one canonical
+     * publication is ever in flight per coroutine, because expansion inside one
+     * coroutine is strictly sequential — so this is an index, never a queue, and
+     * it holds nothing between transitions.
+     */
+    const publishing = new Map<string, LiveTurn>();
+    let reading: ReplAgentReading = Object.freeze({
+      turns: Object.freeze([]),
+      requests: Object.freeze([]),
     });
-  }
+    let keys = 0;
+    let failure: Error | undefined;
+    const failures: Array<(error: Error) => void> = [];
 
-  function announce(): void {
-    project();
-    changes.send(reading);
-  }
+    function allocate(prefix: string): string {
+      keys += 1;
+      return `${prefix}-${keys}`;
+    }
 
-  /**
-   * Record the first failure that must end this session, and report it.
-   *
-   * Reported to whoever is waiting rather than thrown here: the caller also has
-   * to raise it into the operation that caused it, and the two are different
-   * deliveries of one failure.
-   */
-  function fail(error: Error): Error {
-    if (failure === undefined) {
-      failure = error;
-      for (const waiting of failures) {
-        waiting(error);
+    function project(): void {
+      reading = Object.freeze({
+        turns: Object.freeze(turns.map(frozenTurn)),
+        requests: Object.freeze(requests.map(frozenRequest)),
+      });
+    }
+
+    function announce(): void {
+      project();
+      changes.send(reading);
+    }
+
+    /**
+     * Record the first failure that must end this session, and report it.
+     *
+     * Reported to whoever is waiting rather than thrown here: the caller also has
+     * to raise it into the operation that caused it, and the two are different
+     * deliveries of one failure.
+     */
+    function fail(error: Error): Error {
+      if (failure === undefined) {
+        failure = error;
+        for (const waiting of failures) {
+          waiting(error);
+        }
+        failures.length = 0;
       }
-      failures.length = 0;
+      return failure;
     }
-    return failure;
-  }
 
-  /** Take one live turn down, leaving the announcement to the caller. */
-  function retire(turn: LiveTurn): void {
-    const at = turns.indexOf(turn);
-    if (at >= 0) {
-      turns.splice(at, 1);
+    /** Take one live turn down, leaving the announcement to the caller. */
+    function retire(turn: LiveTurn): void {
+      const at = turns.indexOf(turn);
+      if (at >= 0) {
+        turns.splice(at, 1);
+      }
     }
-  }
 
-  function queued(coroutine: string, prompt: string): LiveTurn {
-    const turn: LiveTurn = {
-      key: allocate("turn"),
-      coroutine,
-      prompt,
-      state: "queued",
-      text: "",
-      agent: undefined,
-      sessionKey: undefined,
-      agentSessionId: undefined,
-      status: undefined,
-      stopReason: undefined,
-      failure: undefined,
-    };
-    turns.push(turn);
-    announce();
-    return turn;
-  }
-
-  /** Copy one provider event's facts into the reading, changing nothing else. */
-  function observed(turn: LiveTurn, event: AgentPromptEvent): void {
-    if (event.type === "started") {
-      turn.state = "active";
-      turn.agent = event.agent;
-      turn.sessionKey = event.session.sessionKey;
-      turn.agentSessionId = event.session.agentSessionId;
-    } else if (event.type === "text_delta") {
-      turn.state = "active";
-      turn.text += event.text;
-    } else {
-      turn.state = "terminal";
-      turn.status = event.status;
-      turn.stopReason = event.stopReason;
-      turn.failure = event.error?.message;
+    function queued(coroutine: string, prompt: string): LiveTurn {
+      const turn: LiveTurn = {
+        key: allocate("turn"),
+        coroutine,
+        prompt,
+        state: "queued",
+        text: "",
+        agent: undefined,
+        sessionKey: undefined,
+        agentSessionId: undefined,
+        status: undefined,
+        stopReason: undefined,
+        failure: undefined,
+      };
+      turns.push(turn);
+      announce();
+      return turn;
     }
-    announce();
-  }
 
-  /**
-   * Wrap the provider's cold stream so subscribing still starts exactly one
-   * turn, owned by `<Prompt>`.
-   *
-   * Nothing is collected, pre-read or replaced: each event travels back the
-   * moment it arrives, as the same object the provider produced, and the final
-   * value is the provider's own.
-   */
-  function watch(
-    turn: LiveTurn,
-    stream: Stream<AgentPromptEvent, string>,
-  ): Stream<AgentPromptEvent, string> {
-    return {
-      *[Symbol.iterator]() {
-        const subscription = yield* stream;
-        return {
-          *next() {
-            const next = yield* subscription.next();
-            if (!next.done) {
-              observed(turn, next.value);
+    /** Copy one provider event's facts into the reading, changing nothing else. */
+    function observed(turn: LiveTurn, event: AgentPromptEvent): void {
+      if (event.type === "started") {
+        turn.state = "active";
+        turn.agent = event.agent;
+        turn.sessionKey = event.session.sessionKey;
+        turn.agentSessionId = event.session.agentSessionId;
+      } else if (event.type === "text_delta") {
+        turn.state = "active";
+        turn.text += event.text;
+      } else {
+        turn.state = "terminal";
+        turn.status = event.status;
+        turn.stopReason = event.stopReason;
+        turn.failure = event.error?.message;
+      }
+      announce();
+    }
+
+    /**
+     * Wrap the provider's cold stream so subscribing still starts exactly one
+     * turn, owned by `<Prompt>`.
+     *
+     * Nothing is collected, pre-read or replaced: each event travels back the
+     * moment it arrives, as the same object the provider produced, and the final
+     * value is the provider's own.
+     */
+    function watch(
+      turn: LiveTurn,
+      stream: Stream<AgentPromptEvent, string>,
+    ): Stream<AgentPromptEvent, string> {
+      return {
+        *[Symbol.iterator]() {
+          const subscription = yield* stream;
+          return {
+            *next() {
+              const next = yield* subscription.next();
+              if (!next.done) {
+                observed(turn, next.value);
+              }
+              return next;
+            },
+          };
+        },
+      };
+    }
+
+    /** The live turn a permission request on this coroutine belongs to. */
+    function owner(coroutine: string): LiveTurn {
+      const candidates = turns.filter(
+        (turn) => turn.coroutine === coroutine && turn.state !== "terminal",
+      );
+      const only = candidates[0];
+      if (only === undefined || candidates.length > 1) {
+        throw fail(
+          new ReplPermissionOwnerError(
+            candidates.length > 1
+              ? "an interactive permission request arrived where more than one live Prompt turn " +
+                  "could own it, so the session cannot say which conversation is asking."
+              : "an interactive permission request arrived with no live Prompt turn to own it, so " +
+                  "the session cannot present or answer it.",
+          ),
+        );
+      }
+      return only;
+    }
+
+    function remove(request: LiveRequest): void {
+      const at = requests.indexOf(request);
+      if (at >= 0) {
+        requests.splice(at, 1);
+      }
+    }
+
+    function* interactive(request: PermissionRequest): Operation<PermissionOutcome> {
+      // Decided before anything is published: an unowned request publishes no
+      // reading and no key, and never becomes a denial.
+      const held = owner(yield* currentCoroutine());
+      return yield* action<PermissionOutcome>(function (resolve) {
+        let settled = false;
+        const live: LiveRequest = {
+          key: allocate("request"),
+          turn: held.key,
+          toolCallId: request.toolCall.toolCallId,
+          title: request.toolCall.title,
+          kind: request.toolCall.kind,
+          choices: offeredChoices(request),
+          request,
+          settle(outcome: PermissionOutcome): void {
+            if (settled) {
+              return;
             }
-            return next;
+            settled = true;
+            remove(live);
+            announce();
+            resolve(outcome);
+          },
+        };
+        // Whatever ends this — an answer, a dismissal, teardown, a failure
+        // upstream — the reading disappears exactly when the wait does. Returned
+        // as `action`'s own cleanup, which is registered before this body's
+        // caller can suspend, and the wait is never resolved synchronously.
+        const dispose = (): void => {
+          if (!settled) {
+            settled = true;
+            remove(live);
+            announce();
+          }
+        };
+        requests.push(live);
+        announce();
+        return dispose;
+      });
+    }
+
+    /**
+     * The selected mode, applied exactly, with every other kind asked.
+     *
+     * A mode that cannot approve denies through Core's own `denyPermission`
+     * rather than a rule spelled again here, so an automatic denial is the same
+     * decision the base handler would have reached.
+     */
+    function* decide(request: PermissionRequest): Operation<PermissionOutcome> {
+      if (mode === "approve-all") {
+        return approval(request) ?? denyPermission(request);
+      }
+      if (mode === "deny-all") {
+        return denyPermission(request);
+      }
+      if (isRead(request)) {
+        return approval(request) ?? denyPermission(request);
+      }
+      return yield* interactive(request);
+    }
+
+    const authority: ReplAgentAuthority = {
+      choose(request: string, option: string): boolean {
+        const live = requests.find((candidate) => candidate.key === request);
+        if (live === undefined) {
+          return false;
+        }
+        // Only what the provider offered: a stray identifier settles nothing
+        // rather than selecting an option this turn was never given.
+        if (!live.choices.some((choice) => choice.optionId === option)) {
+          return false;
+        }
+        live.settle({ outcome: "selected", optionId: option });
+        return true;
+      },
+      dismiss(request: string): boolean {
+        const live = requests.find((candidate) => candidate.key === request);
+        if (live === undefined) {
+          return false;
+        }
+        // A dismissal while the session continues is a denial the provider turn
+        // resumes with, decided by the one authoritative rule.
+        live.settle(denyPermission(live.request));
+        return true;
+      },
+    };
+
+    const publisher: AgentPromptPublisher = {
+      *begin(input: string): Operation<AgentPromptHandle> {
+        // Created before the provider is asked for anything at all, and handed
+        // back on this turn's own publication — the only thing that will say
+        // which live turn that record ended.
+        const turn = queued(yield* currentCoroutine(), input);
+        begun.set(yield* useScope(), turn);
+        // An opaque token rather than the turn itself: core carries it back
+        // untouched, and only this map can say what it stood for.
+        const handle: object = {};
+        minted.set(handle, turn);
+        return handle;
+      },
+      *publish(publication: AgentPromptPublication): Operation<void> {
+        const handle = publication.begun;
+        // A handle this owner did not mint is not a key in this map: another
+        // host's publisher, or a turn from an execution this session never ran.
+        // Read back by lookup, never by asserting what the value is.
+        const turn = typeof handle === "object" && handle !== null ? minted.get(handle) : undefined;
+        const where = turn?.coroutine;
+        if (turn !== undefined && where !== undefined) {
+          publishing.set(where, turn);
+        }
+        try {
+          // The single durable handoff. `consume()` runs inside this append, in
+          // the caller's one transition, and removes exactly this turn.
+          yield* publication.append();
+        } catch (error) {
+          // Nothing was retained, so nothing may still be shown as though it is
+          // about to be. The turn this publication began is taken down and the
+          // removal announced before the failure travels on — otherwise a
+          // terminal overlay outlives the record it was waiting for.
+          if (turn !== undefined) {
+            retire(turn);
+            announce();
+          }
+          throw error;
+        } finally {
+          if (where !== undefined) {
+            publishing.delete(where);
+          }
+        }
+      },
+    };
+
+    const installation: ExecutionInstallation = {
+      *install(): Operation<void> {
+        // At the ordinary position, not `min`. A provider installs its own
+        // handlers innermost and answers without delegating, so an observer
+        // installed there would never see the call it exists to wrap — and a
+        // policy installed there would be decided for, by whatever the provider
+        // brought with it. Outermost is where this session's own authority goes:
+        // it wraps the provider's stream, and it decides permission before
+        // anything inherited can.
+        yield* useAgentPromptPublisher(publisher);
+        yield* Agent.around({
+          *prompt([text, options], next) {
+            // Only the turn core began in this exact scope is journal-owned work.
+            // A registered component calling the public `Agent.prompt()` arrives
+            // here having begun nothing: it is delegated untouched, shown in no
+            // reading, and left unable to claim any record.
+            const scope = yield* useScope();
+            const turn = begun.get(scope);
+            begun.delete(scope);
+            const stream = yield* next(text, options);
+            return turn === undefined ? stream : watch(turn, stream);
+          },
+          *requestPermission([request]) {
+            return yield* decide(request);
+          },
+        });
+      },
+    };
+
+    const kernel: ReplAgentKernel = {
+      get reading() {
+        return reading;
+      },
+      changes,
+      authority,
+      installation,
+      publisher,
+      consume(event: DurableEvent): void {
+        if (event.type !== "yield" || event.description.type !== AGENT_PROMPT) {
+          return;
+        }
+        const turn = publishing.get(event.coroutineId);
+        if (turn === undefined) {
+          // An `agent_prompt` appended where this process observed no turn. The
+          // session has already been admitted, so there is nothing left to refuse
+          // atomically: the owner is terminated instead of guessing which reading
+          // this record replaced.
+          throw fail(
+            new ReplAgentCorrelationError(
+              "an agent turn was recorded that this session never observed, so its live view " +
+                "cannot be reconciled with the journal.",
+            ),
+          );
+        }
+        retire(turn);
+        project();
+      },
+      announce,
+      get failed(): Operation<Error> {
+        return {
+          *[Symbol.iterator]() {
+            if (failure !== undefined) {
+              return failure;
+            }
+            return yield* action<Error>(function (resolve) {
+              failures.push(resolve);
+              return () => {
+                const at = failures.indexOf(resolve);
+                if (at >= 0) {
+                  failures.splice(at, 1);
+                }
+              };
+            });
           },
         };
       },
     };
-  }
 
-  /** The live turn a permission request on this coroutine belongs to. */
-  function owner(coroutine: string): LiveTurn {
-    const candidates = turns.filter(
-      (turn) => turn.coroutine === coroutine && turn.state !== "terminal",
-    );
-    const only = candidates[0];
-    if (only === undefined || candidates.length > 1) {
-      throw fail(
-        new ReplPermissionOwnerError(
-          candidates.length > 1
-            ? "an interactive permission request arrived where more than one live Prompt turn " +
-                "could own it, so the session cannot say which conversation is asking."
-            : "an interactive permission request arrived with no live Prompt turn to own it, so " +
-                "the session cannot present or answer it.",
-        ),
-      );
-    }
-    return only;
-  }
-
-  function remove(request: LiveRequest): void {
-    const at = requests.indexOf(request);
-    if (at >= 0) {
-      requests.splice(at, 1);
-    }
-  }
-
-  function* interactive(request: PermissionRequest): Operation<PermissionOutcome> {
-    // Decided before anything is published: an unowned request publishes no
-    // reading and no key, and never becomes a denial.
-    const held = owner(yield* currentCoroutine());
-    return yield* action<PermissionOutcome>(function (resolve) {
-      let settled = false;
-      const live: LiveRequest = {
-        key: allocate("request"),
-        turn: held.key,
-        toolCallId: request.toolCall.toolCallId,
-        title: request.toolCall.title,
-        kind: request.toolCall.kind,
-        choices: offeredChoices(request),
-        request,
-        settle(outcome: PermissionOutcome): void {
-          if (settled) {
-            return;
-          }
-          settled = true;
-          remove(live);
-          announce();
-          resolve(outcome);
-        },
-      };
-      // Whatever ends this — an answer, a dismissal, teardown, a failure
-      // upstream — the reading disappears exactly when the wait does. Returned
-      // as `action`'s own cleanup, which is registered before this body's
-      // caller can suspend, and the wait is never resolved synchronously.
-      const dispose = (): void => {
-        if (!settled) {
-          settled = true;
-          remove(live);
-          announce();
-        }
-      };
-      requests.push(live);
-      announce();
-      return dispose;
-    });
-  }
-
-  /**
-   * The selected mode, applied exactly, with every other kind asked.
-   *
-   * A mode that cannot approve denies through Core's own `denyPermission`
-   * rather than a rule spelled again here, so an automatic denial is the same
-   * decision the base handler would have reached.
-   */
-  function* decide(request: PermissionRequest): Operation<PermissionOutcome> {
-    if (mode === "approve-all") {
-      return approval(request) ?? denyPermission(request);
-    }
-    if (mode === "deny-all") {
-      return denyPermission(request);
-    }
-    if (isRead(request)) {
-      return approval(request) ?? denyPermission(request);
-    }
-    return yield* interactive(request);
-  }
-
-  const authority: ReplAgentAuthority = {
-    choose(request: string, option: string): boolean {
-      const live = requests.find((candidate) => candidate.key === request);
-      if (live === undefined) {
-        return false;
-      }
-      // Only what the provider offered: a stray identifier settles nothing
-      // rather than selecting an option this turn was never given.
-      if (!live.choices.some((choice) => choice.optionId === option)) {
-        return false;
-      }
-      live.settle({ outcome: "selected", optionId: option });
-      return true;
-    },
-    dismiss(request: string): boolean {
-      const live = requests.find((candidate) => candidate.key === request);
-      if (live === undefined) {
-        return false;
-      }
-      // A dismissal while the session continues is a denial the provider turn
-      // resumes with, decided by the one authoritative rule.
-      live.settle(denyPermission(live.request));
-      return true;
-    },
-  };
-
-  const publisher: AgentPromptPublisher = {
-    *begin(input: string): Operation<AgentPromptHandle> {
-      // Created before the provider is asked for anything at all, and handed
-      // back on this turn's own publication — the only thing that will say
-      // which live turn that record ended.
-      const turn = queued(yield* currentCoroutine(), input);
-      begun.set(yield* useScope(), turn);
-      // An opaque token rather than the turn itself: core carries it back
-      // untouched, and only this map can say what it stood for.
-      const handle: object = {};
-      minted.set(handle, turn);
-      return handle;
-    },
-    *publish(publication: AgentPromptPublication): Operation<void> {
-      const handle = publication.begun;
-      // A handle this owner did not mint is not a key in this map: another
-      // host's publisher, or a turn from an execution this session never ran.
-      // Read back by lookup, never by asserting what the value is.
-      const turn = typeof handle === "object" && handle !== null ? minted.get(handle) : undefined;
-      const where = turn?.coroutine;
-      if (turn !== undefined && where !== undefined) {
-        publishing.set(where, turn);
-      }
-      try {
-        // The single durable handoff. `consume()` runs inside this append, in
-        // the caller's one transition, and removes exactly this turn.
-        yield* publication.append();
-      } catch (error) {
-        // Nothing was retained, so nothing may still be shown as though it is
-        // about to be. The turn this publication began is taken down and the
-        // removal announced before the failure travels on — otherwise a
-        // terminal overlay outlives the record it was waiting for.
-        if (turn !== undefined) {
-          retire(turn);
-          announce();
-        }
-        throw error;
-      } finally {
-        if (where !== undefined) {
-          publishing.delete(where);
-        }
-      }
-    },
-  };
-
-  const installation: ExecutionInstallation = {
-    *install(): Operation<void> {
-      // At the ordinary position, not `min`. A provider installs its own
-      // handlers innermost and answers without delegating, so an observer
-      // installed there would never see the call it exists to wrap — and a
-      // policy installed there would be decided for, by whatever the provider
-      // brought with it. Outermost is where this session's own authority goes:
-      // it wraps the provider's stream, and it decides permission before
-      // anything inherited can.
-      yield* useAgentPromptPublisher(publisher);
-      yield* Agent.around({
-        *prompt([text, options], next) {
-          // Only the turn core began in this exact scope is journal-owned work.
-          // A registered component calling the public `Agent.prompt()` arrives
-          // here having begun nothing: it is delegated untouched, shown in no
-          // reading, and left unable to claim any record.
-          const scope = yield* useScope();
-          const turn = begun.get(scope);
-          begun.delete(scope);
-          const stream = yield* next(text, options);
-          return turn === undefined ? stream : watch(turn, stream);
-        },
-        *requestPermission([request]) {
-          return yield* decide(request);
-        },
-      });
-    },
-  };
-
-  return {
-    get reading() {
-      return reading;
-    },
-    changes,
-    authority,
-    installation,
-    publisher,
-    consume(event: DurableEvent): void {
-      if (event.type !== "yield" || event.description.type !== AGENT_PROMPT) {
-        return;
-      }
-      const turn = publishing.get(event.coroutineId);
-      if (turn === undefined) {
-        // An `agent_prompt` appended where this process observed no turn. The
-        // session has already been admitted, so there is nothing left to refuse
-        // atomically: the owner is terminated instead of guessing which reading
-        // this record replaced.
-        throw fail(
-          new ReplAgentCorrelationError(
-            "an agent turn was recorded that this session never observed, so its live view " +
-              "cannot be reconciled with the journal.",
-          ),
-        );
-      }
-      retire(turn);
+    try {
+      yield* provide(kernel);
+    } finally {
+      // Dropped, never called: a held `settle` would answer a request nobody
+      // decided, and a waiting `failed` resolver would report a failure that
+      // never happened. Both are abandoned with the scope that owned them.
+      requests.length = 0;
+      failures.length = 0;
+      turns.length = 0;
+      begun.clear();
+      publishing.clear();
+      // Projected, not announced. A reader still holding this owner sees a
+      // retired one; nothing is pushed into consumers that are themselves going
+      // away.
       project();
-    },
-    announce,
-    get failed(): Operation<Error> {
-      return {
-        *[Symbol.iterator]() {
-          if (failure !== undefined) {
-            return failure;
-          }
-          return yield* action<Error>(function (resolve) {
-            failures.push(resolve);
-            return () => {
-              const at = failures.indexOf(resolve);
-              if (at >= 0) {
-                failures.splice(at, 1);
-              }
-            };
-          });
-        },
-      };
-    },
-  };
+    }
+  });
 }

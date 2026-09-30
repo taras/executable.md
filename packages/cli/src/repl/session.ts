@@ -314,7 +314,7 @@ function* start(
     // owns belongs to this session's scope and dies with it. An execution
     // elsewhere would otherwise inherit an observer watching for a session that
     // is gone.
-    const agent = useReplAgent(permissionMode ?? "deny-all");
+    const agent = yield* useReplAgent(permissionMode ?? "deny-all");
 
     function reproject(): void {
       const next = projectRepl(retained, selection);

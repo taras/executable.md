@@ -60,7 +60,8 @@ import { ordinaryEvaluationProfile } from "../src/evaluation-profile.ts";
 import { REFERENCE_DIRECTORY } from "./fixtures/repl/reference.ts";
 import { openReplSession, submitReplEntry } from "../src/repl/session.ts";
 import type { ReplSession } from "../src/repl/session.ts";
-import type { ReplAgentReading } from "../src/repl/agent.ts";
+import { useReplAgent } from "../src/repl/agent.ts";
+import type { ReplAgentKernel, ReplAgentReading } from "../src/repl/agent.ts";
 import type { ReplAgentPermission } from "../src/repl/model.ts";
 import type { ReplExecution } from "../src/repl/journal.ts";
 
@@ -1329,6 +1330,67 @@ describe("P3 — whole-session teardown is structured cancellation", () => {
     // request reserved was never completed, so nothing names an outcome.
     expect(session.model.turns).toEqual([]);
     expect(audited(session)).toEqual([]);
+  });
+
+  it("P3: releasing the owning scope retires the agent owner and wakes nobody", function* () {
+    const holder = execution();
+    const stub = createStub({
+      one: { permission: { toolCallId: "call-1", kind: "execute" }, deltas: ["reply"] },
+    });
+    const [owner, dispose] = createScope(yield* useScope());
+    const held = withResolvers<ReplSession>();
+    owner.run(function* () {
+      yield* useStub(stub);
+      held.resolve(opened(yield* start(holder, ONE_PROMPT, "approve-reads")));
+      yield* sleep(DEADLOCK_MS);
+    });
+    const session = yield* held.operation;
+    yield* reported(session, "a pending request", (reading) => reading.requests.length === 1);
+    const pending = session.agent.requests[0]!;
+
+    yield* until(dispose());
+    yield* sleep(0);
+
+    // The owner is retired: nothing it was presenting is presented any more.
+    expect(session.agent.turns).toEqual([]);
+    expect(session.agent.requests).toEqual([]);
+    // Retiring answered nothing. The held request was abandoned with its
+    // scope, not decided on the way out.
+    expect(stub.outcomes.has("call-1")).toBe(false);
+    expect(session.permissions.choose(pending.key, "once")).toBe(false);
+    expect(stub.outcomes.has("call-1")).toBe(false);
+    // Nothing durable was written by any of it.
+    expect(appends(yield* holder.stream.readAll())).toEqual([]);
+  });
+
+  it("P3: retiring the owner wakes nobody who was waiting on its failure", function* () {
+    // The owner acquired directly, so what is under test is the resource's own
+    // lifetime rather than a session's use of it.
+    const [owner, dispose] = createScope(yield* useScope());
+    const held = withResolvers<ReplAgentKernel>();
+    owner.run(function* () {
+      held.resolve(yield* useReplAgent("deny-all"));
+      yield* sleep(DEADLOCK_MS);
+    });
+    const kernel = yield* held.operation;
+
+    // Waiting from outside the scope that is about to go away, so this task
+    // outlives the disposal and can say whether anything woke it.
+    let woken = false;
+    yield* spawn(function* () {
+      yield* kernel.failed;
+      woken = true;
+    });
+    yield* sleep(0);
+
+    yield* until(dispose());
+    yield* sleep(0);
+
+    // Released, not failed: there was no failure, so the waiter is left
+    // exactly as it was rather than told about one.
+    expect(woken).toBe(false);
+    expect(kernel.reading.turns).toEqual([]);
+    expect(kernel.reading.requests).toEqual([]);
   });
 });
 
