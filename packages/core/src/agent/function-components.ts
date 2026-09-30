@@ -58,7 +58,7 @@ import { persistPrompt, promptFailureFromRecord, promptPermissionAudit } from ".
 import type { PromptRecord } from "./journal.ts";
 import { checkpointOf } from "./checkpoint.ts";
 import type { AgentPromptCheckpoint } from "./checkpoint.ts";
-import type { AgentPromptAssociation } from "./publication.ts";
+import type { AgentPromptAssociation, AgentPromptHandle } from "./publication.ts";
 
 export const AGENT_PROVIDER_PROPS: PropsSchema = {
   type: "object",
@@ -330,11 +330,12 @@ export function* Prompt(props: Record<string, Json>): Operation<Json> {
   const sequence = yield* AgentInternal.operations.nextPromptSequence();
   // Held here rather than on the record: what the journal keeps about a prompt
   // is unchanged, and this is what a host may retain beside it.
-  const carried: { association?: AgentPromptAssociation } = {};
+  const carried: Carried = {};
   const record = yield* persistPrompt(
     { name: `prompt:${location}#${ordinal}`, input: text, position: expansion.position },
     () => runPrompt(text, options, sequence, throwOnError, carried),
     () => carried.association,
+    () => carried.begun,
   );
 
   const failure = promptFailureFromRecord(record);
@@ -384,12 +385,21 @@ interface ConsumedTurn {
   checkpoint?: AgentPromptCheckpoint;
 }
 
+/**
+ * What this turn hands the publication beside the record: the association a
+ * host may retain, and the handle that host recognised this exact live turn by.
+ */
+interface Carried {
+  association?: AgentPromptAssociation;
+  begun?: AgentPromptHandle;
+}
+
 function* runPrompt(
   text: string,
   options: PromptOptions,
   sequence: number,
   throwOnError: boolean,
-  carried: { association?: AgentPromptAssociation },
+  carried: Carried,
 ): Operation<PromptRecord> {
   let consumed: ConsumedTurn = { text: "" };
   // Held out here because the audit outlives the turn's own scope: a turn that
@@ -410,6 +420,15 @@ function* runPrompt(
       // What observes the decision is installed for the whole execution, outside
       // every policy; this says only which turn a decision it sees belongs to.
       yield* permissions.place();
+      // Begun where the ledger is placed, and in this turn's own scope: this is
+      // the one moment that is both canonical and live, so it is the only place
+      // a host can be handed something that identifies this turn and nothing
+      // else. A component calling the public `Agent.prompt()` never reaches
+      // here, which is exactly why it can claim no publication later.
+      const publisher = yield* AgentInternal.operations.promptPublisher;
+      if (publisher?.begin !== undefined) {
+        carried.begun = yield* publisher.begin(text);
+      }
       const stream = yield* Agent.operations.prompt(text, options);
       const subscription = yield* stream;
       let next = yield* subscription.next();

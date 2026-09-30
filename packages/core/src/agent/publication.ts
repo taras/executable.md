@@ -40,8 +40,30 @@ export interface AgentPromptAssociation {
   readonly sessionKey: string;
 }
 
+/**
+ * What a host recognised one canonical turn by, exactly as its own `begin()`
+ * returned it.
+ *
+ * Opaque to core, which never reads it, compares it or writes it anywhere: it
+ * is carried from the turn that began to the publication that ends it and
+ * nowhere else. Ephemeral and process-local by construction — it is whatever
+ * object the host made, so it cannot outlive the process and cannot be
+ * journaled.
+ */
+export type AgentPromptHandle = unknown;
+
 /** One Prompt, ready to publish. */
 export interface AgentPromptPublication {
+  /**
+   * What this host's own `begin()` returned for this exact turn, or nothing
+   * when it declared no `begin()`.
+   *
+   * This is the only thing that says which live turn this publication ends. A
+   * prompt that never began canonically — a direct `Agent.prompt()` call from
+   * a component, which core does not journal — reaches no publication at all,
+   * so it can neither claim this one nor be claimed by it.
+   */
+  readonly begun: AgentPromptHandle;
   /**
    * What this completion carries, or nothing.
    *
@@ -60,6 +82,22 @@ export interface AgentPromptPublication {
 }
 
 export interface AgentPromptPublisher {
+  /**
+   * A canonical Prompt is about to ask its provider; nothing is durable yet.
+   *
+   * Called once per journal-owned turn, in that turn's own scope and at the
+   * moment its private audit ledger is placed — so a host that shows live work
+   * can create it here and be handed the same value back in `publish()`. What
+   * it returns is the host's own, and core only carries it.
+   *
+   * `input` is the rendered prompt this turn is about to ask, exactly as the
+   * record will hold it.
+   *
+   * Only the canonical `<Prompt>` boundary calls this. A component that calls
+   * the public `Agent.prompt()` itself is not journal-owned work: it begins
+   * nothing, publishes nothing, and appends no record.
+   */
+  begin?(input: string): Operation<AgentPromptHandle>;
   /**
    * Publish one completed Prompt, and whatever this host keeps beside it.
    *

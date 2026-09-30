@@ -349,6 +349,7 @@ export type {
 export { useAgentPromptPublisher } from "./src/agent/publication.ts";
 export type {
   AgentPromptAssociation,
+  AgentPromptHandle,
   AgentPromptPublication,
   AgentPromptPublisher,
 } from "./src/agent/publication.ts";

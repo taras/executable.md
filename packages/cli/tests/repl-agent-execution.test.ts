@@ -1535,3 +1535,71 @@ describe("P5 — the durable audit of a live REPL turn", () => {
     ]);
   });
 });
+
+describe("P6 — only a canonical Prompt claims a record", () => {
+  beforeAll(() => useTempFileCompiler());
+
+  it("P6: a direct public prompt neither claims the canonical record nor lingers", function* () {
+    const stub = createStub({
+      direct: { deltas: ["off-books"] },
+      one: { deltas: ["reply"] },
+    });
+    yield* useStub(stub);
+    // A registered component reaching the public operation itself. This is
+    // ordinary — the Api is exported — and it is not journal-owned work: no
+    // `agent_prompt` record will ever describe it.
+    yield* registerComponents([
+      {
+        name: "DirectPrompt",
+        origin: "tier-854",
+        props: { type: "object", properties: {}, additionalProperties: false },
+        *fn() {
+          const stream = yield* Agent.operations.prompt("direct", {});
+          const subscription = yield* stream;
+          let next = yield* subscription.next();
+          while (!next.done) {
+            next = yield* subscription.next();
+          }
+          return "direct";
+        },
+      },
+    ]);
+    const holder = execution();
+    // Both on the root coroutine, the direct call first: a queue drained on
+    // append would hand the canonical record the direct call's entry.
+    const session = opened(yield* start(holder, '<DirectPrompt />\n\n<Prompt text="one" />\n'));
+    const outcome = yield* session.join();
+
+    expect(outcome.ok).toBe(true);
+    // The provider answered both, so the direct call really did happen.
+    expect(stub.asked).toEqual(["direct", "one"]);
+    // Exactly one record, and it is the canonical Prompt's.
+    expect(session.model.turns).toHaveLength(1);
+    expect(session.model.turns[0]?.text).toBe("reply");
+    // Nothing live is left over: the canonical publication removed its own
+    // turn, and the direct call never had one to leave behind.
+    expect(session.agent.turns).toEqual([]);
+    expect(session.live).toBe(false);
+  });
+
+  for (const ended of ["failed", "cancelled"] as const) {
+    it(`P6: a ${ended} canonical Prompt hands off exactly as a completed one does`, function* () {
+      // `association` is absent for every unsuccessful turn, so this is the
+      // case where nothing but the handle can say which live turn ended.
+      const stub = createStub({ one: { deltas: ["partial"], status: ended } });
+      yield* useStub(stub);
+      const holder = execution();
+      const session = opened(yield* start(holder, ONE_PROMPT));
+      const outcome = yield* session.join();
+
+      // Whether an unsuccessful turn also fails the document is the Prompt
+      // failure policy's business and not this row's. What this row holds is
+      // the handoff: the record was appended, and the live turn it began is
+      // gone — with no `association` to identify it by, only the handle.
+      expect(outcome).toBeDefined();
+      expect(session.model.turns).toHaveLength(1);
+      expect(session.model.turns[0]?.status).toBe(ended);
+      expect(session.agent.turns).toEqual([]);
+    });
+  }
+});

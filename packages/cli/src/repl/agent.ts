@@ -24,20 +24,25 @@
  * unfrozen — what is frozen is the separate reading copied out of it — and an
  * observation failure is never allowed to become a Prompt failure.
  *
- * ## Correlation is by coroutine, not by resemblance
+ * ## Correlation is the canonical publication, not a resemblance or a queue
  *
  * Two `<Spawn>` children may run identical prompts against identical responses
  * and settle in either order, so nothing about a turn's *content* identifies
  * it: not its text, its display name, its agent, its session key, or the order
- * it finished in. What does identify it is where it ran. Each spawned child is
- * its own durable coroutine, expansion inside one coroutine is strictly
- * sequential, and an `agent_prompt` record appends on the coroutine that made
- * it — so the Nth prompt this execution observed on coroutine X is the Nth
- * `agent_prompt` appended on coroutine X. That is a queue per coroutine, and it
- * is exact.
+ * it finished in. Nor does where it ran: a queue per coroutine would also hold
+ * calls that never become records, because the public `Agent.prompt()` is
+ * reachable by any registered component and journals nothing.
  *
- * A turn replay restored never reaches this middleware and never appends, so it
- * produces no reading and consumes no queue entry.
+ * So the journal boundary itself says which turn is which. Core calls this
+ * owner's `begin()` at the one moment that is both canonical and live — in the
+ * turn's own scope, as its private audit ledger is placed — and hands back the
+ * very same value on the publication that ends it. `append()` is the single
+ * durable handoff, and the live turn it began is removed inside that same
+ * transition, so no announced snapshot holds a turn both ways or neither.
+ *
+ * A direct `Agent.prompt()` call begins nothing. It gets no reading, claims no
+ * record, and cannot be claimed by one. A turn replay restored asks no
+ * provider, so it begins nothing either: no association, and no live turn.
  *
  * ## A request without one owner is an invariant failure
  *
@@ -51,7 +56,7 @@
  */
 
 import { action, createSignal, useScope } from "effection";
-import type { Operation, Stream } from "effection";
+import type { Operation, Scope, Stream } from "effection";
 import { Agent, denyPermission } from "@executablemd/core";
 import type {
   AgentPromptEvent,
@@ -60,7 +65,13 @@ import type {
   PermissionOutcome,
   PermissionRequest,
 } from "@executablemd/core";
-import type { ExecutionInstallation } from "@executablemd/core/host";
+import { useAgentPromptPublisher } from "@executablemd/core/host";
+import type {
+  AgentPromptHandle,
+  AgentPromptPublication,
+  AgentPromptPublisher,
+  ExecutionInstallation,
+} from "@executablemd/core/host";
 import { DurableContext } from "@executablemd/durable-streams";
 import type { DurableEvent } from "@executablemd/durable-streams";
 
@@ -143,6 +154,13 @@ export interface ReplAgentKernel {
   readonly authority: ReplAgentAuthority;
   /** What this owner installs inside the execution. */
   readonly installation: ExecutionInstallation;
+  /**
+   * The publisher that ties each canonical `<Prompt>` to its live turn.
+   *
+   * Installed by `installation`; exposed so a caller can see the one seam this
+   * owner correlates through.
+   */
+  readonly publisher: AgentPromptPublisher;
   /**
    * Account for one appended event, without announcing.
    *
@@ -272,8 +290,20 @@ export function useReplAgent(mode: PermissionMode): ReplAgentKernel {
   const changes = createSignal<ReplAgentReading, never>();
   const turns: LiveTurn[] = [];
   const requests: LiveRequest[] = [];
-  /** Turns observed on one coroutine and not yet replaced by their record. */
-  const awaiting = new Map<string, string[]>();
+  /** The live turn core began in a scope, until that scope's prompt claims it. */
+  const begun = new Map<Scope, LiveTurn>();
+  /** Every live turn this owner made, so a handle from elsewhere is not one. */
+  const ours = new WeakSet<LiveTurn>();
+  /**
+   * The canonical publication appending right now on each coroutine.
+   *
+   * The handle is what identifies the turn; this only says which of several
+   * concurrent publications an append belongs to. At most one canonical
+   * publication is ever in flight per coroutine, because expansion inside one
+   * coroutine is strictly sequential — so this is an index, never a queue, and
+   * it holds nothing between transitions.
+   */
+  const publishing = new Map<string, LiveTurn>();
   let reading: ReplAgentReading = Object.freeze({
     turns: Object.freeze([]),
     requests: Object.freeze([]),
@@ -332,12 +362,7 @@ export function useReplAgent(mode: PermissionMode): ReplAgentKernel {
       failure: undefined,
     };
     turns.push(turn);
-    const pending = awaiting.get(coroutine);
-    if (pending === undefined) {
-      awaiting.set(coroutine, [turn.key]);
-    } else {
-      pending.push(turn.key);
-    }
+    ours.add(turn);
     announce();
     return turn;
   }
@@ -503,6 +528,37 @@ export function useReplAgent(mode: PermissionMode): ReplAgentKernel {
     },
   };
 
+  const publisher: AgentPromptPublisher = {
+    *begin(input: string): Operation<AgentPromptHandle> {
+      // Created before the provider is asked for anything at all, and handed
+      // back on this turn's own publication — the only thing that will say
+      // which live turn that record ended.
+      const turn = queued(yield* currentCoroutine(), input);
+      begun.set(yield* useScope(), turn);
+      return turn;
+    },
+    *publish(publication: AgentPromptPublication): Operation<void> {
+      const handle = publication.begun;
+      // A handle this owner did not make identifies nothing here: another
+      // host's publisher, or a turn from an execution this session never ran.
+      const turn =
+        handle !== undefined && ours.has(handle as LiveTurn) ? (handle as LiveTurn) : undefined;
+      const where = turn?.coroutine;
+      if (turn !== undefined && where !== undefined) {
+        publishing.set(where, turn);
+      }
+      try {
+        // The single durable handoff. `consume()` runs inside this append, in
+        // the caller's one transition, and removes exactly this turn.
+        yield* publication.append();
+      } finally {
+        if (where !== undefined) {
+          publishing.delete(where);
+        }
+      }
+    },
+  };
+
   const installation: ExecutionInstallation = {
     *install(): Operation<void> {
       // At the ordinary position, not `min`. A provider installs its own
@@ -512,13 +568,18 @@ export function useReplAgent(mode: PermissionMode): ReplAgentKernel {
       // brought with it. Outermost is where this session's own authority goes:
       // it wraps the provider's stream, and it decides permission before
       // anything inherited can.
+      yield* useAgentPromptPublisher(publisher);
       yield* Agent.around({
         *prompt([text, options], next) {
-          const turn = queued(yield* currentCoroutine(), text);
-          // Published first, delegated second: the reading exists before the
-          // provider is asked for anything at all.
+          // Only the turn core began in this exact scope is journal-owned work.
+          // A registered component calling the public `Agent.prompt()` arrives
+          // here having begun nothing: it is delegated untouched, shown in no
+          // reading, and left unable to claim any record.
+          const scope = yield* useScope();
+          const turn = begun.get(scope);
+          begun.delete(scope);
           const stream = yield* next(text, options);
-          return watch(turn, stream);
+          return turn === undefined ? stream : watch(turn, stream);
         },
         *requestPermission([request]) {
           return yield* decide(request);
@@ -534,13 +595,13 @@ export function useReplAgent(mode: PermissionMode): ReplAgentKernel {
     changes,
     authority,
     installation,
+    publisher,
     consume(event: DurableEvent): void {
       if (event.type !== "yield" || event.description.type !== AGENT_PROMPT) {
         return;
       }
-      const pending = awaiting.get(event.coroutineId);
-      const key = pending?.shift();
-      if (key === undefined) {
+      const turn = publishing.get(event.coroutineId);
+      if (turn === undefined) {
         // An `agent_prompt` appended where this process observed no turn. The
         // session has already been admitted, so there is nothing left to refuse
         // atomically: the owner is terminated instead of guessing which reading
@@ -552,7 +613,7 @@ export function useReplAgent(mode: PermissionMode): ReplAgentKernel {
           ),
         );
       }
-      const at = turns.findIndex((turn) => turn.key === key);
+      const at = turns.indexOf(turn);
       if (at >= 0) {
         turns.splice(at, 1);
       }

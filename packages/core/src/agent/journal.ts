@@ -70,7 +70,7 @@ import type { AgentPromptCheckpoint } from "./checkpoint.ts";
 import { AgentPromptError, parsePromptFailure } from "./errors.ts";
 import type { SerializedPromptFailure } from "./errors.ts";
 import { AgentInternal } from "./internal.ts";
-import type { AgentPromptAssociation } from "./publication.ts";
+import type { AgentPromptAssociation, AgentPromptHandle } from "./publication.ts";
 import { sourceDescription } from "../source-position.ts";
 import type { SourcePosition } from "../types.ts";
 
@@ -345,6 +345,7 @@ export function* persistPrompt(
   identity: { name: string; input: string; position?: Readonly<SourcePosition> },
   live: () => Operation<PromptRecord>,
   association: () => AgentPromptAssociation | undefined = () => undefined,
+  begun: () => AgentPromptHandle = () => undefined,
 ): Workflow<PromptRecord> {
   const stored = yield createDurableOperation<Json>(
     {
@@ -356,7 +357,7 @@ export function* persistPrompt(
     function* (): Operation<Json> {
       return serializePromptRecord(yield* live());
     },
-    { coordinator: promptPublication(association) },
+    { coordinator: promptPublication(association, begun) },
   );
   const parsed = parsePromptRecord(stored);
   if (!parsed) {
@@ -387,6 +388,7 @@ class AgentPromptPublicationError extends Error {
  */
 function promptPublication(
   association: () => AgentPromptAssociation | undefined,
+  begun: () => AgentPromptHandle,
 ): LiveDurableOperationCoordinator {
   return {
     *run<T extends Json>(
@@ -412,6 +414,9 @@ function promptPublication(
       let appended = false;
       try {
         yield* publisher.publish({
+          // Carried whatever this turn did: a failed or cancelled Prompt still
+          // ends the live turn that began, so the handoff is the same one.
+          begun: begun(),
           association: published.status === "ok" ? association() : undefined,
           *append(): Operation<void> {
             if (appended) {
