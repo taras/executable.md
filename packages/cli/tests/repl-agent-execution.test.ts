@@ -1582,6 +1582,54 @@ describe("P6 — only a canonical Prompt claims a record", () => {
     expect(session.live).toBe(false);
   });
 
+  it("P6: concurrent spawns with a direct call each retire only their own turn", function* () {
+    // Two canonical turns running at once, one of them on a coroutine that
+    // also made a direct public call. Reversed *completion* is held by the L2
+    // and P5 rows above, which run the same mechanism; what this adds is a
+    // direct call in the middle of concurrent work.
+    const stub = createStub({
+      direct: { deltas: ["off-books"] },
+      same: { deltas: ["reply"] },
+    });
+    yield* useStub(stub);
+    yield* registerComponents([
+      {
+        name: "DirectPrompt",
+        origin: "tier-854",
+        props: { type: "object", properties: {}, additionalProperties: false },
+        *fn() {
+          const stream = yield* Agent.operations.prompt("direct", {});
+          const subscription = yield* stream;
+          let next = yield* subscription.next();
+          while (!next.done) {
+            next = yield* subscription.next();
+          }
+          return "direct";
+        },
+      },
+    ]);
+    const holder = execution();
+    const source = [
+      "<All>",
+      '<Spawn><Session name="planner"><DirectPrompt /><Prompt text="same" /></Session></Spawn>',
+      '<Spawn><Session name="reviewer"><Prompt text="same" /></Session></Spawn>',
+      "</All>",
+    ].join("\n");
+    const session = opened(yield* start(holder, source));
+    const outcome = yield* session.join();
+
+    expect(outcome.ok).toBe(true);
+    // The direct call really happened, beside both canonical turns.
+    expect(stub.asked.filter((asked) => asked === "direct")).toHaveLength(1);
+    expect(stub.asked.filter((asked) => asked === "same")).toHaveLength(2);
+    // Two canonical records, and the direct call is in neither.
+    expect(session.model.turns).toHaveLength(2);
+    expect(session.model.turns.map((turn) => turn.text)).toEqual(["reply", "reply"]);
+    // Every live turn retired, including on the coroutine that also made a
+    // direct call — which had no live turn to leave behind.
+    expect(session.agent.turns).toEqual([]);
+  });
+
   for (const ended of ["failed", "cancelled"] as const) {
     it(`P6: a ${ended} canonical Prompt hands off exactly as a completed one does`, function* () {
       // `association` is absent for every unsuccessful turn, so this is the

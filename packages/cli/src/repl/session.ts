@@ -72,6 +72,7 @@ import {
 import type { DurableEvent } from "@executablemd/durable-streams";
 
 import { useReplAgent } from "./agent.ts";
+import { consumeAdmissions } from "./admission.ts";
 import type { ReplAgentAuthority, ReplAgentReading } from "./agent.ts";
 import { useReplElicitation } from "./elicitation.ts";
 import type { ReplElicitations, ReplQuestion } from "./elicitation.ts";
@@ -511,25 +512,9 @@ function* start(
     // A queued Agent turn is work beyond the retained prefix, exactly as a new
     // record or a question is: replay that reached one is past what the history
     // held, so the session is admitted rather than still provisional.
-    yield* spawn(function* () {
-      let next = yield* agentReadings.next();
-      while (!next.done) {
-        if (next.value.turns.length > 0) {
-          admit();
-        }
-        next = yield* agentReadings.next();
-      }
-    });
+    yield* spawn(consumeAdmissions(agentReadings, (reading) => reading.turns.length > 0, admit));
 
-    yield* spawn(function* () {
-      let next = yield* questions.next();
-      while (!next.done) {
-        if (next.value !== undefined) {
-          admit();
-        }
-        next = yield* questions.next();
-      }
-    });
+    yield* spawn(consumeAdmissions(questions, (question) => question !== undefined, admit));
 
     // Held open deliberately. This body owns the observer and both tasks, and
     // finishing it would halt them — so it lasts as long as the scope does, and

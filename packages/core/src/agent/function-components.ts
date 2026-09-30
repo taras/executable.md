@@ -54,11 +54,13 @@ import { installApproveAll, installAskPermission } from "./permission.ts";
 import { AgentInternal, formatLocation } from "./internal.ts";
 import { serializePromptFailure } from "./errors.ts";
 import type { SerializedPromptFailure } from "./errors.ts";
-import { persistPrompt, promptFailureFromRecord, promptPermissionAudit } from "./journal.ts";
+import { completedPromptAudit, persistPrompt, promptFailureFromRecord } from "./journal.ts";
 import type { PromptRecord } from "./journal.ts";
 import { checkpointOf } from "./checkpoint.ts";
 import type { AgentPromptCheckpoint } from "./checkpoint.ts";
 import type { AgentPromptAssociation, AgentPromptHandle } from "./publication.ts";
+import type { Stream } from "effection";
+import type { AgentPromptEvent } from "./agent-api.ts";
 
 export const AGENT_PROVIDER_PROPS: PropsSchema = {
   type: "object",
@@ -402,9 +404,11 @@ function* runPrompt(
   carried: Carried,
 ): Operation<PromptRecord> {
   let consumed: ConsumedTurn = { text: "" };
-  // Held out here because the audit outlives the turn's own scope: a turn that
-  // failed still answered whatever it was asked before it did.
-  const permissions = promptPermissionAudit();
+  // The exact stream this turn consumed, held out here because the audit
+  // outlives the turn's own scope: a turn that failed still answered whatever
+  // it was asked before it did. Holding the stream is what makes its audit
+  // readable — nothing else can name it.
+  let consumedStream: Stream<AgentPromptEvent, string> | undefined;
   // What this turn was authored to run under, and — once the provider has been
   // reached — the exact value it was reached with. The record below is written
   // from the second, so the journal describes the turn that actually ran.
@@ -414,57 +418,53 @@ function* runPrompt(
     // permission routing, session lock) run when this prompt finishes — not at
     // document teardown.
     consumed = yield* scoped(function* (): Operation<ConsumedTurn> {
-      // Everything this turn asks its provider happens inside the audit
-      // bracket, so a provider that requests permission the moment it is
-      // subscribed already finds this turn's ledger, and nothing outside can
-      // find it at all. What observes the decision is installed for the whole
-      // execution, outside every policy; the ledger says only which turn a
-      // decision it sees belongs to.
-      return yield* permissions.within(function* (): Operation<ConsumedTurn> {
-        const result: ConsumedTurn = { text: "" };
-        // Begun inside that same bracket: this is the one moment that is both
-        // canonical and live, so it is the only place a host can be handed
-        // something that identifies this turn and nothing else. A component
-        // calling the public `Agent.prompt()` never reaches here, which is
-        // exactly why it can claim no publication later.
-        const publisher = yield* AgentInternal.operations.promptPublisher;
-        if (publisher?.begin !== undefined) {
-          carried.begun = yield* publisher.begin(text);
-        }
-        const stream = yield* Agent.operations.prompt(text, options);
-        const subscription = yield* stream;
-        let next = yield* subscription.next();
-        while (!next.done) {
-          const event = next.value;
-          if (event.type === "started") {
-            result.started = true;
-            result.agent = event.agent;
-            result.sessionKey = event.session.sessionKey;
-            // The value the provider named as the conversation this turn ran in.
-            // For a configured turn that is the authentic use it was verified
-            // under, which is what the record is written from.
-            result.ranIn = event.session;
-            if (event.session.agentSessionId !== undefined) {
-              result.agentSessionId = event.session.agentSessionId;
-            }
-          } else if (event.type === "terminal") {
-            result.status = event.status;
-            if (event.stopReason !== undefined) {
-              result.stopReason = event.stopReason;
-            }
-            if (event.error) {
-              result.failure = serializePromptFailure(event.error);
-            }
-            const checkpoint = checkpointOf(event);
-            if (checkpoint !== undefined) {
-              result.checkpoint = checkpoint;
-            }
+      const result: ConsumedTurn = { text: "" };
+      // Begun immediately before the provider is asked, in this turn's own
+      // scope: the one moment that is both canonical and live, so it is the
+      // only place a host can be handed something identifying this turn and
+      // nothing else. A component calling the public `Agent.prompt()` never
+      // reaches here, which is exactly why it can claim no publication later.
+      const publisher = yield* AgentInternal.operations.promptPublisher;
+      if (publisher?.begin !== undefined) {
+        carried.begun = yield* publisher.begin(text);
+      }
+      // Auditing is installed by the Agent middleware around this call, not
+      // here: the stream that comes back already carries its own ledger, and
+      // holding it is how this turn reads what it was allowed to do.
+      const stream = yield* Agent.operations.prompt(text, options);
+      consumedStream = stream;
+      const subscription = yield* stream;
+      let next = yield* subscription.next();
+      while (!next.done) {
+        const event = next.value;
+        if (event.type === "started") {
+          result.started = true;
+          result.agent = event.agent;
+          result.sessionKey = event.session.sessionKey;
+          // The value the provider named as the conversation this turn ran in.
+          // For a configured turn that is the authentic use it was verified
+          // under, which is what the record is written from.
+          result.ranIn = event.session;
+          if (event.session.agentSessionId !== undefined) {
+            result.agentSessionId = event.session.agentSessionId;
           }
-          next = yield* subscription.next();
+        } else if (event.type === "terminal") {
+          result.status = event.status;
+          if (event.stopReason !== undefined) {
+            result.stopReason = event.stopReason;
+          }
+          if (event.error) {
+            result.failure = serializePromptFailure(event.error);
+          }
+          const checkpoint = checkpointOf(event);
+          if (checkpoint !== undefined) {
+            result.checkpoint = checkpoint;
+          }
         }
-        result.text = next.value;
-        return result;
-      });
+        next = yield* subscription.next();
+      }
+      result.text = next.value;
+      return result;
     });
     if (consumed.status === undefined) {
       consumed.failure = { message: "agent prompt stream closed without a terminal event" };
@@ -516,7 +516,10 @@ function* runPrompt(
   }
   // Written once the turn is over, with the rest of the result: a decision is
   // part of the account of this turn, not an event of its own.
-  const answered = permissions.completed();
+  // Read from the exact stream this turn consumed. A turn that never got one
+  // was allowed nothing, because it never asked.
+  const answered =
+    (consumedStream === undefined ? undefined : yield* completedPromptAudit(consumedStream)) ?? [];
   if (answered.length > 0) {
     record.permissions = answered;
   }

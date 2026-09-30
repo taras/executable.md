@@ -56,9 +56,10 @@ import type {
   Workflow,
 } from "@executablemd/durable-streams";
 import { createContext } from "effection";
-import type { Operation } from "effection";
+import type { Operation, Stream } from "effection";
 import { Agent } from "./agent-api.ts";
 import type {
+  AgentPromptEvent,
   PermissionOption,
   PermissionOutcome,
   PermissionRequest,
@@ -181,16 +182,8 @@ interface PromptAuditLedger {
 
 /** What one turn observed of the permission requests made while it ran. */
 export interface PromptPermissionAudit {
-  /**
-   * Run this Prompt's provider work with this ledger in place, and only it.
-   *
-   * A bracket rather than a marker: the ledger exists for exactly as long as
-   * `body` runs, descendants inherit it, and it is restored when `body`
-   * finishes however it finishes — returning, raising or being cancelled. There
-   * is no way to install the ledger without naming the work it governs, so it
-   * cannot be left behind for sibling work to inherit.
-   */
-  within<T>(body: () => Operation<T>): Operation<T>;
+  /** Where a request made beneath this turn's stream records itself. */
+  readonly ledger: PromptAuditLedger;
   /** The requests that were decided, in the order they arrived. */
   completed(): readonly PromptPermission[];
 }
@@ -209,8 +202,23 @@ export interface PromptPermissionAudit {
  * completed.
  */
 export function* observePermissionDecisions(): Operation<void> {
+  // Owned by this installation, not by the module: one execution's audits are
+  // not another's, and a process-lifetime registry would outlive every run.
+  yield* PromptAudits.set(new WeakMap());
   yield* Agent.around(
     {
+      *prompt([text, options], next) {
+        // One ledger for this exact invocation, made here rather than by
+        // whoever called: nothing outside this middleware creates, places or
+        // brackets an audit, so no caller can get the lifetime wrong.
+        const audit = promptPermissionAudit();
+        const wrapped = audited(yield* next(text, options), audit.ledger);
+        // The association is the wrapped stream itself. Only whoever holds the
+        // exact stream this invocation returned can read its audit, which is
+        // what makes a canonical `<Prompt>` able to and a bystander not.
+        (yield* PromptAudits.get())?.set(wrapped, audit);
+        return wrapped;
+      },
       *requestPermission([request], next) {
         const ledger = yield* PromptAudit.get();
         // Reserved on the way in, because a caller is free to reuse or rewrite the
@@ -223,6 +231,57 @@ export function* observePermissionDecisions(): Operation<void> {
     },
     { at: "max" },
   );
+}
+
+/**
+ * Each wrapped stream's own audit, readable only by whoever holds the stream.
+ *
+ * Private to this module and scoped to one Agent installation. Nothing outside
+ * can reach the map, and holding a stream is the only way to name an entry.
+ */
+const PromptAudits =
+  createContext<WeakMap<Stream<AgentPromptEvent, string>, PromptPermissionAudit>>(
+    "xmd.agent.prompt-audits",
+  );
+
+/**
+ * What the turn consumed through this exact stream was allowed to do.
+ *
+ * Undefined for a stream this middleware did not wrap, which is every stream a
+ * caller made itself.
+ */
+export function* completedPromptAudit(
+  stream: Stream<AgentPromptEvent, string>,
+): Operation<readonly PromptPermission[] | undefined> {
+  const audits = yield* PromptAudits.get();
+  return audits?.get(stream)?.completed();
+}
+
+/**
+ * Wrap a cold provider stream so the ledger is in place for every event.
+ *
+ * The stream is cold, so subscribing is where the turn actually starts, and a
+ * provider may raise its first request the moment it is subscribed. Both the
+ * subscription and every `next()` therefore run beneath the context, and it is
+ * restored whichever way each of them finishes — returning, raising, or being
+ * cancelled — because that is what `with` does.
+ */
+function audited(
+  stream: Stream<AgentPromptEvent, string>,
+  ledger: PromptAuditLedger,
+): Stream<AgentPromptEvent, string> {
+  return {
+    *[Symbol.iterator]() {
+      // A `Stream` is itself the operation that subscribes, so this is that
+      // subscription run beneath the ledger — not a copy of it.
+      const subscription = yield* PromptAudit.with(ledger, () => stream);
+      return {
+        *next() {
+          return yield* PromptAudit.with(ledger, () => subscription.next());
+        },
+      };
+    },
+  };
 }
 
 /**
@@ -256,9 +315,7 @@ export function promptPermissionAudit(): PromptPermissionAudit {
     },
   };
   return {
-    within<T>(body: () => Operation<T>): Operation<T> {
-      return PromptAudit.with(ledger, () => body());
-    },
+    ledger,
     completed() {
       return drafts.flatMap((draft) => {
         if (draft.outcome === undefined) {
