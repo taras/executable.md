@@ -84,6 +84,8 @@ import { join } from "node:path";
 import { randomBytes } from "node:crypto";
 import { fields, readDescription } from "../src/repl/description.ts";
 import type { ReplDescription } from "../src/repl/description.ts";
+import { snapshotRender, useReplRenderer } from "../src/repl/renderer.ts";
+import type { ReplRenderer } from "../src/repl/renderer.ts";
 import { useReplTree } from "../src/repl/reconcile.ts";
 import type { ReplTree } from "../src/repl/reconcile.ts";
 
@@ -572,6 +574,68 @@ function sessionKeysOf(view: ReplView): string[] {
 /** The permission choices this view's drawer describes, in order. */
 function drawerKeysOf(view: ReplView): string[] {
   return keysOf(view).filter((key) => key.startsWith("drawer:permission:choice:"));
+}
+
+/** The same state carrying one draft, which is where a location gets long. */
+function withDraft(state: ReplState, draft: string): ReplState {
+  return Object.freeze({
+    ...state,
+    draft,
+    route: Object.freeze({ ...state.route, draft }),
+  });
+}
+
+/** Draw one laid-out frame through this renderer, and keep what it wrote. */
+function* painted(
+  renderer: ReplRenderer,
+  frame: ReplSemanticFrame,
+  tree: ReplTree<ReplAction>,
+): Operation<Uint8Array> {
+  const drawn = yield* renderer.render(
+    snapshotRender({
+      frame,
+      tree: tree.frame().id,
+      mounted: tree.mounted(),
+      deltaTime: 0,
+      pointer: undefined,
+    }),
+  );
+  if (!drawn.ok) {
+    throw drawn.error;
+  }
+  return drawn.value.output;
+}
+
+/** The row this screen is showing the location's omission summary on. */
+function summaryOn(rows: readonly string[]): string {
+  const found = rows.find((row) => row.includes("more characters"));
+  if (found === undefined) {
+    throw new Error("the screen is showing no omission summary");
+  }
+  return found;
+}
+
+/** The keys this view describes with one `select`, which is what a row asks for. */
+function keysSelecting(view: ReplView, select: string): string[] {
+  const found: string[] = [];
+  const walk = (description: ReplDescription<ReplAction>): void => {
+    const read = readDescription(description);
+    if (fields(read.input)?.["select"] === select) {
+      found.push(read.key);
+    }
+    for (const child of read.children) {
+      walk(child);
+    }
+  };
+  for (const description of describeApplication(view)) {
+    walk(description);
+  }
+  return found;
+}
+
+/** Everything inside the drawer's window, which is what moving it changes. */
+function drawerWindowOf(view: ReplView): string[] {
+  return keysOf(view).filter((key) => key.startsWith("drawer:permission:"));
 }
 
 /** Scroll the Sessions window until it is showing this row, or say it never did. */
@@ -2055,6 +2119,210 @@ describe("U6 — the Sessions reading is windowed", () => {
     expect(reading(far, session, NARROW).location).not.toContain(String(furthest));
     expect(stub.outcomes.size).toBe(0);
   });
+
+  it("U6: a draft long enough to fill the region still leaves every control placed", function* () {
+    const { session } = yield* asking({
+      review: { permission: { toolCallId: "call-1", title: "Write", kind: "edit" } },
+      build: { streaming: true },
+      // One turn runs all the way to its record, so the outlet holds a control
+      // whose action is the turn's own — a position in the history that no
+      // surface selector can ask for.
+      check: {},
+    });
+    yield* until(session, "all three Prompts being observed", () => observed(session) === 3);
+    yield* until(session, "a request waiting", () => session.agent.requests.length === 1);
+    yield* until(session, "one turn being recorded", () => recorded(session) === 1);
+
+    // A draft of a thousand characters, which is a location of more than a
+    // thousand: at 72 columns that is more rows than the whole narrow region
+    // has, so drawing all of it would take every control off the screen while
+    // leaving each one mounted, focusable and reachable by nothing.
+    const standing = onSessions(session);
+    const drafted: ReplState = Object.freeze({
+      ...standing,
+      draft: "x".repeat(1000),
+      route: Object.freeze({ ...standing.route, draft: "x".repeat(1000) }),
+    });
+    const view = reading(drafted, session, NARROW);
+    expect(view.location.length).toBeGreaterThan(1000);
+
+    const tree = yield* useReplTree<ReplAction>();
+    yield* applied(tree, view);
+    const frame = layout(NARROW, replSurface(tree, view));
+    const body = NARROW.rows - 7;
+    expect(frame.cells.filter((cell) => cell.region === "content").length).toBeLessThanOrEqual(
+      body,
+    );
+
+    // Both ways off this screen are drawn and pointable.
+    for (const key of ["sessions:heading", "entries:heading"]) {
+      const placed = placedFor(tree, frame, key);
+      expect(placed).toBeDefined();
+      expect(placed?.targetable).toBe(true);
+    }
+    expect(yield* pointed(tree, frame, "entries:heading")).toEqual({
+      kind: "select-surface",
+      surface: "repl",
+    });
+
+    // And so is the outlet the route selected — not merely present in it: a
+    // control of the reading itself is placed, offered to a pointer, and asks
+    // for what that turn asks for.
+    const drawn = frame.cells.map((cell) => tree.keyOf(cell.node) ?? "");
+    const turns = frame.cells
+      .filter((cell) => (tree.keyOf(cell.node) ?? "").startsWith("sessions:turn:"))
+      .map((cell) => ({ key: tree.keyOf(cell.node) ?? "", targetable: cell.targetable }));
+    expect(turns.length).toBeGreaterThan(0);
+    // Every placed turn control is offered to a pointer, and the facts beneath
+    // them are not.
+    for (const one of turns) {
+      expect(one.targetable).toBe(TURN_FACT_SUFFIXES.every((end) => !one.key.endsWith(end)));
+    }
+
+    // One of them, activated: the pointer resolved against this exact frame
+    // asks for exactly what Enter on it asks for.
+    const control = turns.find((one) => one.targetable);
+    expect(control).toBeDefined();
+    yield* focusTo(tree, control?.key ?? "");
+    const pressed = yield* activate(tree);
+    expect(yield* pointed(tree, frame, control?.key ?? "")).toEqual(pressed);
+
+    expect(placedFor(tree, frame, "sessions:earlier")).toBeDefined();
+    expect(placedFor(tree, frame, "sessions:later")).toBeDefined();
+    // The location says what it is not showing rather than showing none of it.
+    const location = drawn.filter((key) => key.startsWith("location:"));
+    expect(location.length).toBeLessThanOrEqual(3);
+    const shown = rowsOf(describeApplication(view))
+      .filter((one) => one.key.startsWith("location:"))
+      .map((one) => one.label);
+    expect(shown.at(0)).toContain("xmd://repl/");
+    expect(shown.at(-1)).toContain("more characters");
+    // Every row this frame describes is one it places: nothing is mounted with
+    // nowhere to be.
+    for (const key of keysOf(view).filter((one) => one.startsWith("sessions:"))) {
+      expect(placedFor(tree, frame, key)).toBeDefined();
+    }
+
+    // And the outlet stays usable at this size rather than merely present: the
+    // recorded turn's own control is reached by walking the window, and asks
+    // for a position in the history — the one action neither surface selector
+    // can ask for.
+    const recordedKey = keysSelecting(reading(drafted, session, WIDE), "marker").find((key) =>
+      key.startsWith("sessions:turn:"),
+    );
+    expect(recordedKey).toBeDefined();
+    const walked = scrolledTo(drafted, session, recordedKey ?? "");
+    const scrolled = reading(walked, session, NARROW);
+    yield* applied(tree, scrolled);
+    const scrolledFrame = layout(NARROW, replSurface(tree, scrolled));
+    expect(placedFor(tree, scrolledFrame, recordedKey ?? "")?.targetable).toBe(true);
+    expect((yield* pointed(tree, scrolledFrame, recordedKey ?? "")).kind).toBe("select-marker");
+    // Walking it changed no location and took no control off the screen.
+    expect(scrolled.location).toBe(view.location);
+    for (const key of ["sessions:heading", "entries:heading"]) {
+      expect(placedFor(tree, scrolledFrame, key)?.targetable).toBe(true);
+    }
+  });
+
+  it("U6: a shrinking omission summary repaints cleanly, and is a complete row", function* () {
+    const { session } = yield* asking({
+      review: { streaming: true },
+      build: { streaming: true },
+      check: {},
+    });
+    yield* until(session, "all three Prompts being observed", () => observed(session) === 3);
+    yield* until(session, "one turn being recorded", () => recorded(session) === 1);
+
+    // Two drafts whose omission counts have different numbers of digits, so the
+    // row that says how much is hidden gets shorter as the draft does. That row
+    // is the only location row whose length changes, and these two facts about
+    // it are separate: what the terminal ends up showing, and what this
+    // application described for it to show.
+    const standing = onSessions(session);
+    const longer = withDraft(standing, "x".repeat(1200));
+    const shorter = withDraft(standing, "x".repeat(1050));
+
+    const tree = yield* useReplTree<ReplAction>();
+    const renderer = yield* useReplRenderer(NARROW);
+    /** Everything written to this one terminal, in order. */
+    const written: Uint8Array[] = [];
+
+    const first = reading(longer, session, NARROW);
+    yield* applied(tree, first);
+    const before = layout(NARROW, replSurface(tree, first));
+    written.push(yield* painted(renderer, before, tree));
+    const four = summaryOn(screenFrom(written));
+    expect(four).toMatch(/^… \d{4} more characters/);
+
+    // The same terminal, drawn again, with nothing clearing it between the two.
+    // What comes back is the shorter summary and nothing of the longer one —
+    // measured, and true of this renderer either way: it fills a placed cell to
+    // its bounds, so it is not the padding below that makes this pass.
+    const second = reading(shorter, session, NARROW);
+    yield* applied(tree, second);
+    const after = layout(NARROW, replSurface(tree, second));
+    written.push(yield* painted(renderer, after, tree));
+
+    const three = summaryOn(screenFrom(written));
+    expect(three).toMatch(/^… \d{3} more characters/);
+
+    // And the row this application described is itself a complete row, as wide
+    // as the ones around it. This is the assertion that discriminates: the
+    // rendered screen above is clean whether or not the summary arrives padded,
+    // so it says what this renderer does, while this says what the application
+    // owns — the same full-width contract `chunked` gives every other location
+    // row, rather than one inherited from whatever draws it.
+    const located = rowsOf(describeApplication(second))
+      .filter((one) => one.key.startsWith("location:"))
+      .map((one) => one.label);
+    expect(located.length).toBe(3);
+    for (const row of located) {
+      expect(row.length).toBe(surfaceWidth(NARROW));
+    }
+    // Exactly the new summary, with nothing of the longer one left on the end
+    // of it: the row is the row, not the row plus whatever it stopped short of.
+    const hidden = /… (\d+) more characters/.exec(three)?.[1] ?? "";
+    expect(three.trimEnd()).toBe(`… ${hidden} more characters, in a wider window`);
+    expect(three.trimEnd().endsWith("window")).toBe(true);
+
+    // And the screen is still one a person can use: both ways off it, and a
+    // control of the reading itself.
+    for (const key of ["sessions:heading", "entries:heading"]) {
+      expect(placedFor(tree, after, key)?.targetable).toBe(true);
+    }
+    const outlet = after.cells.filter(
+      (cell) => (tree.keyOf(cell.node) ?? "").startsWith("sessions:turn:") && cell.targetable,
+    );
+    expect(outlet.length).toBeGreaterThan(0);
+  });
+
+  it("U6: the first press after a resize moves the window, not the stored number", function* () {
+    const { session } = yield* asking({
+      review: { permission: { toolCallId: "call-1", title: "Write", kind: "edit" } },
+      build: { permission: { toolCallId: "call-2", title: "Move", kind: "edit" } },
+      check: { permission: { toolCallId: "call-3", title: "Delete", kind: "edit" } },
+    });
+    yield* until(session, "all three Prompts being observed", () => observed(session) === 3);
+    yield* until(session, "all three requests waiting", () => session.agent.requests.length === 3);
+
+    // As far down as the smallest frame goes.
+    let at = onSessions(session);
+    for (let press = 0; press < 60; press += 1) {
+      at = acted(at, { kind: "scroll-sessions", delta: 1 }, session);
+    }
+    const furthest = at.viewports.sessions;
+    expect(furthest).toBeGreaterThan(0);
+
+    // One row taller holds one row more, so the last window starts one row
+    // earlier and the frame is already drawing that. The stored number is now
+    // past it.
+    const taller: ReplTerminalSize = { columns: NARROW.columns, rows: NARROW.rows + 1 };
+    const before = sessionKeysOf(reading(at, session, taller));
+    const pressed = acted(at, { kind: "scroll-sessions", delta: -1 }, session, taller);
+    // Moved, rather than spending the press normalizing state nobody can see.
+    expect(sessionKeysOf(reading(pressed, session, taller))).not.toEqual(before);
+    expect(pressed.viewports.sessions).toBeLessThan(furthest);
+  });
 });
 
 describe("U7 — the permission drawer is windowed", () => {
@@ -2191,6 +2459,46 @@ describe("U7 — the permission drawer is windowed", () => {
     expect(session.permissions.dismiss(request.key)).toBe(false);
     expect(stub.answers.get("call-1")).toBe(1);
     expect(session.live).toBe(true);
+  });
+
+  it("U7: the first press after a resize moves the drawer, not the stored number", function* () {
+    const { session } = yield* asking({
+      review: {
+        streaming: true,
+        permission: {
+          toolCallId: "call-1",
+          title: "Write",
+          kind: "edit",
+          options: SEVEN_CHOICES,
+        },
+      },
+      build: { streaming: true },
+      check: { queued: true },
+    });
+    yield* until(session, "a request waiting", () => session.agent.requests.length === 1);
+    const request = session.agent.requests[0];
+    if (request === undefined) {
+      throw new Error("no request was published");
+    }
+    let at = acted(
+      onSessions(session),
+      { kind: "select-permission", request: request.key },
+      session,
+    );
+    for (let press = 0; press < 20; press += 1) {
+      at = acted(at, { kind: "scroll", delta: 1 }, session);
+    }
+    const furthest = at.viewports.permission;
+    expect(furthest).toBeGreaterThan(0);
+
+    // One row taller holds one row more, so the last window starts one row
+    // earlier and the drawer is already showing that. The stored number is now
+    // past it, and the first press has to move what is drawn.
+    const taller: ReplTerminalSize = { columns: NARROW.columns, rows: NARROW.rows + 1 };
+    const before = drawerWindowOf(reading(at, session, taller));
+    const pressed = acted(at, { kind: "scroll", delta: -1 }, session, taller);
+    expect(drawerWindowOf(reading(pressed, session, taller))).not.toEqual(before);
+    expect(pressed.viewports.permission).toBeLessThan(furthest);
   });
 });
 
@@ -2551,6 +2859,18 @@ function* useTemporaryHost(): Operation<string> {
  * screen an assertion about the screen.
  */
 function screenOf(terminal: Terminal): string[] {
+  return screenFrom(terminal.presented);
+}
+
+/**
+ * Replay written bytes into the rows a terminal would be showing.
+ *
+ * One buffer across every chunk, because that is what a terminal is: a renderer
+ * writes what changed, and what it did not write is still whatever was there.
+ * Reading the rows back is how a test sees the screen a person sees rather than
+ * the row an application described.
+ */
+function screenFrom(chunks: readonly Uint8Array[]): string[] {
   const rows: string[][] = [];
   let row = 0;
   let column = 0;
@@ -2567,7 +2887,7 @@ function screenOf(terminal: Terminal): string[] {
     column += 1;
   };
 
-  const written = terminal.presented.map((bytes) => TEXT.decode(bytes)).join("");
+  const written = chunks.map((bytes) => TEXT.decode(bytes)).join("");
   for (let index = 0; index < written.length; index += 1) {
     const character = written[index];
     if (character !== "\u001B") {

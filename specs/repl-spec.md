@@ -119,7 +119,14 @@ At narrow, the surface the route did not select is still there in the model and
 is not on the screen: it is in no cell, in no target map, and no pointer reaches
 it. What stays is the way between them: both surface controls are on the screen
 at every size, because a screen you cannot leave is not one this route may put
-you on. The History band is five rows at every size; when the labels of
+you on.
+
+The location is drawn in full wherever there is room for it. A narrow frame
+draws it in at most three rows and says how much it is not showing: there, the
+location shares one region with every control on the screen, and a draft long
+enough to fill that region would leave you with a URL and no way to do anything
+else. The command still prints the whole location when it ends, and a wider
+window still shows all of it. The History band is five rows at every size; when the labels of
 several positions cannot all fit, they share a label and every position keeps its
 own identity.
 

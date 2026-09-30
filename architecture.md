@@ -5501,7 +5501,13 @@ requests to answer.
 
 Both readings are windowed at the layout region that will place them, rather
 than described whole and clipped: only what the window holds is described, so
-only that is mounted, focusable, drawn and pointable. Their window controls and
+only that is mounted, focusable, drawn and pointable. A window moves from the
+position its frame is drawing rather than from the number stored, because a
+resize changes what a window holds and a delta added to a stale number would
+spend a press on state nobody can see. The canonical location is bounded the
+same way and for the same reason: in a narrow frame it shares one region with
+every control on the screen, so it takes at most three rows and says what it is
+not showing. Their window controls and
 the two surface controls stay outside the moving window. A narrow frame mounts
 one routed outlet and both surface controls, so the outlet the route did not
 select is absent everywhere — `mounted()`, the frame, the target map — while the

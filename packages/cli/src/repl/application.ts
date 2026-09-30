@@ -841,7 +841,15 @@ export function reduceRepl(
       // any visible effect, so what is held is what the region is showing.
       const rows = sessionContentRows(state, model, live);
       const furthest = Math.max(0, rows - sessionsCapacity(state, model, size));
-      const sessions = Math.min(Math.max(0, state.viewports.sessions + action.delta), furthest);
+      // From where the frame is, not from the number that was stored. A resize
+      // changes what a window holds, and the region is already drawing the
+      // clamped position — so a delta added to a stale larger number would
+      // spend a press normalizing state nobody can see, and the screen would
+      // not move.
+      const sessions = clamped(
+        clamped(state.viewports.sessions, furthest) + action.delta,
+        furthest,
+      );
       return settled({
         ...state,
         viewports: Object.freeze({ ...state.viewports, sessions }),
@@ -1020,8 +1028,9 @@ export function reduceRepl(
         // what closing does.
         const rows = permissionContentRows(model, live, pending);
         const furthest = Math.max(0, rows - drawerCapacity(size));
-        const permission = Math.min(
-          Math.max(0, state.viewports.permission + action.delta),
+        // From where the drawer is, for the same reason.
+        const permission = clamped(
+          clamped(state.viewports.permission, furthest) + action.delta,
           furthest,
         );
         return settled({
@@ -1115,6 +1124,16 @@ function offered(
     return undefined;
   }
   return live.agent.requests.find((candidate) => candidate.key === request);
+}
+
+/**
+ * One offset, inside the window it is over.
+ *
+ * The one place either window decides where it is, so what a reducer moves from
+ * and what a frame draws cannot be two different rows.
+ */
+function clamped(offset: number, furthest: number): number {
+  return Math.min(Math.max(0, offset), furthest);
 }
 
 /** The same state with the Sessions reading back at its first row. */
@@ -1454,8 +1473,7 @@ function described(view: ReplView): readonly Described[] {
     // is not one a person can see, focus or point at.
     const content = sessionRows(state, turns, view.focused, claim);
     const capacity = sessionsCapacity(state, model, view.size);
-    const last = Math.max(0, content.length - capacity);
-    const from = Math.min(Math.max(0, state.viewports.sessions), last);
+    const from = clamped(state.viewports.sessions, Math.max(0, content.length - capacity));
     // Outside the thing they move, like the drawer's: a control inside the
     // window would scroll away from whoever was reaching for it.
     items.push(
@@ -1619,13 +1637,10 @@ function described(view: ReplView): readonly Described[] {
     );
   }
 
-  // The canonical location, as it stands and in full. It is the one thing a
-  // person copies out of this screen — how they come back to exactly this view,
-  // here or in another process — so a prefix of it is no use to them. A location
-  // carrying a draft is longer than a row, so it is as many rows as it needs,
-  // above whatever surface is being shown rather than in the footer, which is
-  // seven rows and has controls in them.
-  for (const [offset, part] of chunked(view.location, surfaceWidth(view.size)).entries()) {
+  // The canonical location: how a person comes back to exactly this view, here
+  // or in another process. It goes above whatever surface is being shown rather
+  // than in the footer, which is seven rows and has controls in them.
+  for (const [offset, part] of locationRows(view.location, view.size).entries()) {
     items.push(line(`location:${offset}`, part));
   }
 
@@ -1768,6 +1783,51 @@ function sessionRows(
 }
 
 /**
+ * How many rows a narrow frame gives the canonical location.
+ *
+ * Three, and the region is thirteen. A narrow frame draws the location, both
+ * surface controls, the two window controls and the routed outlet in one
+ * region, so what the location takes is what the rest cannot have.
+ */
+const NARROW_LOCATION_ROWS = 3;
+
+/**
+ * The canonical location, as the rows one frame places it in.
+ *
+ * In full wherever there is room: it is the one thing a person copies out of
+ * this screen, and a prefix of it takes them somewhere else. A narrow frame is
+ * where there is not room — the location shares its region with every control
+ * on the screen, and a draft long enough to fill that region would leave the
+ * surface controls and the whole outlet mounted, focusable and drawn nowhere,
+ * which is a screen with no way off it.
+ *
+ * So a narrow frame bounds it and says what it is not showing. A person who
+ * cannot see the whole location can still read that fact and act on it; a
+ * person whose controls are all off the bottom of the screen cannot do
+ * anything at all.
+ */
+function locationRows(location: string, size: ReplTerminalSize): readonly string[] {
+  const rows = chunked(location, surfaceWidth(size));
+  if (profileFor(size) !== "narrow" || rows.length <= NARROW_LOCATION_ROWS) {
+    return rows;
+  }
+  const shown = rows.slice(0, NARROW_LOCATION_ROWS - 1);
+  const hidden = location.length - shown.join("").length;
+  // To the same width as the rows above it. This is the one location row whose
+  // length changes — a count that loses a digit makes it shorter — and what
+  // this application describes is a complete row either way: `chunked` already
+  // pads every ordinary one, and covering what a shorter row no longer reaches
+  // is this boundary's job rather than something to leave to whichever renderer
+  // happens to draw it. The renderer in use fills a placed cell to its bounds,
+  // so it repaints this cleanly whether or not the row arrives padded; that is
+  // its behavior, and this is the contract.
+  return Object.freeze([
+    ...shown,
+    pad(`… ${hidden} more characters, in a wider window`, surfaceWidth(size)),
+  ]);
+}
+
+/**
  * How many rows the Sessions reading holds, whatever the window shows.
  *
  * Counted by building the same rows the window slices, so the number a scroll
@@ -1792,9 +1852,7 @@ function sessionContentRows(state: ReplState, model: ReplModel, live: ReplLive):
  */
 function sessionsCapacity(state: ReplState, model: ReplModel, size: ReplTerminalSize): number {
   const narrow = profileFor(size) === "narrow";
-  const shared = narrow
-    ? chunked(encodeLocation(state.route), surfaceWidth(size)).length
-    : entryRows(model);
+  const shared = narrow ? locationRows(encodeLocation(state.route), size).length : entryRows(model);
   // Both controls in a narrow frame, where they are one bar above the outlet.
   // In a sidebar the entry list brings its own heading, counted with it.
   const navigation = narrow ? 2 : 1;
@@ -1900,8 +1958,7 @@ function drawerFor(view: ReplView, history: Described): Described | undefined {
     // down to find.
     const content = permissionContent(view.model, view.live, request, width, view.focused);
     const capacity = drawerCapacity(view.size);
-    const last = Math.max(0, content.length - capacity);
-    const from = Math.min(Math.max(0, view.state.viewports.permission), last);
+    const from = clamped(view.state.viewports.permission, Math.max(0, content.length - capacity));
     children.push(
       row(
         "drawer:scroll:up",
