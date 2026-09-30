@@ -34,7 +34,7 @@ import type {
   SessionConfiguration,
 } from "../src/agent/agent-api.ts";
 import { AgentPromptError } from "../src/agent/errors.ts";
-import { executeInstalled } from "../host.ts";
+import { executeInstalled, useAgentPromptPublisher } from "../host.ts";
 import { agentIdentityComponents } from "../src/agent/components.ts";
 import { installAgentComponents } from "../src/agent/components.ts";
 import { registerComponents } from "../src/components/registration.ts";
@@ -1699,5 +1699,65 @@ describe("Tier AF — the permission audit one turn retains", () => {
       outcome: "selected",
       optionId: "allow",
     });
+  });
+});
+
+describe("AFP — a publisher that never appends retains nothing", () => {
+  beforeAll(() => useTempFileCompiler());
+
+  it("AFP0: the same harness with a publisher that appends succeeds and records", function* () {
+    // The other side of the comparison. Without it, AFP1 and AFP2 would pass
+    // just as well if installing any publisher at all broke the run.
+    const { result, events } = yield* runDoc('<Prompt text="one" />\n', {
+      *handler() {
+        yield* useAgentPromptPublisher({
+          *publish(publication) {
+            yield* publication.append();
+          },
+        });
+      },
+    });
+
+    expect(result.ok).toBe(true);
+    expect(
+      events.filter((event) => event.type === "yield" && event.description.type === "agent_prompt"),
+    ).toHaveLength(1);
+  });
+
+  it("AFP1: a raising publisher leaves no agent_prompt and fails the execution", function* () {
+    const { result, events } = yield* runDoc('<Prompt text="one" />\n', {
+      *handler() {
+        yield* useAgentPromptPublisher({
+          *publish() {
+            throw new Error("this publisher could not commit");
+          },
+        });
+      },
+    });
+
+    // Failed through the durability path rather than carrying on from a result
+    // no journal holds.
+    expect(result.ok).toBe(false);
+    // And nothing durable describes the turn, so nothing can be presented as
+    // retained.
+    expect(
+      events.filter((event) => event.type === "yield" && event.description.type === "agent_prompt"),
+    ).toEqual([]);
+  });
+
+  it("AFP2: a publisher that returns without appending is the same failure", function* () {
+    const { result, events } = yield* runDoc('<Prompt text="one" />\n', {
+      *handler() {
+        yield* useAgentPromptPublisher({
+          // Returns cleanly, appends nothing. Silence is not publication.
+          *publish() {},
+        });
+      },
+    });
+
+    expect(result.ok).toBe(false);
+    expect(
+      events.filter((event) => event.type === "yield" && event.description.type === "agent_prompt"),
+    ).toEqual([]);
   });
 });

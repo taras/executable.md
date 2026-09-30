@@ -2152,6 +2152,23 @@ public permission chain. This is the V1 permission ceiling; the portable proof
 that every provider exposes no ambient tool is tracked separately and does not
 widen it. `xmd run` keeps its caller-selected Agent permission behavior.
 
+What a turn was allowed to do is retained beside what it said, and the two are
+recorded by different things. A permission policy decides every request inside
+its scope without deferring outward, so nothing installed inside one — and
+nothing installed inside the turn, below a policy a host put around the execution
+— can see the decision it makes. The Agent middleware installed with the
+Agent itself, outside every policy installed after it, owns both sides of this.
+Each `Agent.prompt()` call is given a private ledger and the cold stream it
+returns is wrapped, so every event that call produces is read with that ledger
+in place and a request raised while it is read inherits that ledger and no
+other. A component installs nothing to be audited. The observer reserves a
+place, delegates once, and copies the outcome that comes back into that place, so
+concurrent turns keep their own audits and two overlapping requests keep the
+order they were asked in. A place nobody completed — a policy that raised, a turn
+torn down while a request waited — is published as nothing rather than as a
+denial somebody invented. The ledger names a destination and confers no authority
+to answer anything.
+
 The only thing a workflow Agent receives is the rendered content of an authored
 `<Prompt>`. It proposes an information request, or a change, by returning XMD. The
 trusted workflow host passes that exact response to the constrained

@@ -1,6 +1,6 @@
 /**
- * Where a completed Prompt's durable result is published, for a host that
- * retains something beside it.
+ * Where a Prompt's durable result is published, for a host that retains
+ * something beside it.
  *
  * An ordinary `xmd run` has no publisher, and publishes exactly as it always
  * did: the `agent_prompt` event is appended by the durable machinery and
@@ -11,9 +11,16 @@
  * or not at all, so no association can survive a Prompt that was never
  * journaled and no journaled Prompt can be left half-described.
  *
- * The Prompt itself runs *before* any of this. A publisher receives a Prompt
- * that has already finished talking to its provider, so nothing a host does
- * here holds a database open across a conversation.
+ * A publisher sees one turn at two moments, and only these two. `begin()` is
+ * called before the provider is asked, so a host that shows live work can
+ * create it there; `publish()` is called once the turn has finished talking to
+ * its provider, so nothing a host does at publication holds a database open
+ * across a conversation. What `begin()` returned comes back on the
+ * publication, and that is the only thing tying the two together — core never
+ * reads it.
+ *
+ * `begin()` is optional. A publisher that declares none is called exactly as
+ * it always was, and its publications carry an undefined handle.
  *
  * Installing one is a host act and reads as one at the import: this is reached
  * through `@executablemd/core/host`, and the private Api it seeds is exported
@@ -40,8 +47,30 @@ export interface AgentPromptAssociation {
   readonly sessionKey: string;
 }
 
+/**
+ * What a host recognised one canonical turn by, exactly as its own `begin()`
+ * returned it.
+ *
+ * Opaque to core, which never reads it, compares it or writes it anywhere: it
+ * is carried from the turn that began to the publication that ends it and
+ * nowhere else. Ephemeral and process-local by construction — it is whatever
+ * object the host made, so it cannot outlive the process and cannot be
+ * journaled.
+ */
+export type AgentPromptHandle = unknown;
+
 /** One Prompt, ready to publish. */
 export interface AgentPromptPublication {
+  /**
+   * What this host's own `begin()` returned for this exact turn, or nothing
+   * when it declared no `begin()`.
+   *
+   * This is the only thing that says which live turn this publication ends. A
+   * prompt that never began canonically — a direct `Agent.prompt()` call from
+   * a component, which core does not journal — reaches no publication at all,
+   * so it can neither claim this one nor be claimed by it.
+   */
+  readonly begun: AgentPromptHandle;
   /**
    * What this completion carries, or nothing.
    *
@@ -60,6 +89,22 @@ export interface AgentPromptPublication {
 }
 
 export interface AgentPromptPublisher {
+  /**
+   * A canonical Prompt is about to ask its provider; nothing is durable yet.
+   *
+   * Called once per journal-owned turn, in that turn's own scope and at the
+   * moment its private audit ledger is placed — so a host that shows live work
+   * can create it here and be handed the same value back in `publish()`. What
+   * it returns is the host's own, and core only carries it.
+   *
+   * `input` is the rendered prompt this turn is about to ask, exactly as the
+   * record will hold it.
+   *
+   * Only the canonical `<Prompt>` boundary calls this. A component that calls
+   * the public `Agent.prompt()` itself is not journal-owned work: it begins
+   * nothing, publishes nothing, and appends no record.
+   */
+  begin?(input: string): Operation<AgentPromptHandle>;
   /**
    * Publish one completed Prompt, and whatever this host keeps beside it.
    *

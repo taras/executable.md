@@ -536,8 +536,28 @@ omits the member entirely, which is also how every record written before this
 member existed reads. Parsing an older record is unchanged, and nothing rewrites
 one.
 
-Observing a request changes no decision. The installed `PermissionMode` policy
-still answers it, and these records describe decisions rather than making them.
+Observing a request changes no decision, and what observes one is deliberately
+somewhere else from what answers it. A policy decides every request inside its
+scope and never defers outward, so an observer installed inside a policy — or
+inside the turn, below a policy a host installed around the execution — sees
+nothing of the decision it exists to record. Auditing is therefore installed with the
+Agent itself, outside every policy installed after it, and it owns both sides:
+each `Agent.prompt()` call is given its own private ledger, and the cold stream
+that call returns is wrapped so every event is read with that ledger in place. A
+request raised while a turn's stream is being read inherits that turn's ledger,
+so two turns asking at the same time keep their audits apart without anything
+correlating by recency, prompt text, agent, conversation or the order decisions
+settled in. Nothing a turn does installs its own audit, and a turn reads what it
+was allowed to do from the exact stream it consumed.
+
+The ledger is a destination and grants no authority: holding it says which turn a
+decision belongs to, never what the decision is. The observer reserves the
+request's place on the way in, delegates exactly once to whatever answers it, and
+copies the returned outcome into that same place — which is why two overlapping
+requests from one turn keep the order they arrived in however their answers
+interleave. A place nobody completed is published as nothing: a policy that
+raised, and one cancelled with its turn during teardown, both leave no member
+rather than a fabricated outcome.
 
 On a **full replay** (the journal already holds the root `Close`), completed
 records are restored from the journal without contacting any provider —
