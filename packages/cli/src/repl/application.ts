@@ -398,7 +398,7 @@ export function reduceRepl(
   model: ReplModel,
   live: ReplLive,
   // What the frame can hold, for the one decision that depends on it: how far
-  // a bounded message region may be scrolled. Narrow is the smallest accepted
+  // the drawer's content may be scrolled. Narrow is the smallest accepted
   // frame, so a caller that states none clamps to the tightest capacity.
   size: ReplTerminalSize = NARROW,
 ): ReplTransition {
@@ -606,9 +606,11 @@ export function reduceRepl(
       // Clamped at both ends, and stored clamped. An offset kept past the last
       // window would take several presses to have any visible effect, so the
       // value held is the one the region is actually showing.
-      const lines = live.question?.message.split("\n").length ?? 0;
-      const capacity = messageCapacity(size, live.question, state.form);
-      const furthest = Math.max(0, lines - capacity);
+      // Clamped against the whole ordered content, not only the message: the
+      // viewport is what moves, and the form rows are inside it.
+      const rows = drawerContentRows(live.question, state.form);
+      const capacity = drawerCapacity(size);
+      const furthest = Math.max(0, rows - capacity);
       const offset = Math.min(Math.max(0, state.form.offset + action.delta), furthest);
       return settled({
         ...state,
@@ -1199,12 +1201,20 @@ function drawerFor(view: ReplView, history: Described): Described | undefined {
     // The whole message, every line of it, through a window that scrolls. A
     // drawer that showed only the first line — or only the first window —
     // would be hiding the draft the question is about.
+    // One viewport over the whole ordered content. Everything a person has to
+    // read or reach — the complete message, the form's description, every
+    // field with its annotation, options, editable value, every validation
+    // message and [submit] — is built in order and then windowed. A drawer too
+    // short to hold all of it scrolls, rather than describing rows that layout
+    // has no frame to place.
     const lines = question.message.split("\n");
-    const window = messageWindow(
-      lines.length,
-      view.state.form.offset,
-      messageCapacity(view.size, question, view.state.form),
-    );
+    const capacity = drawerCapacity(view.size);
+    const last = Math.max(0, drawerContentRows(question, view.state.form) - capacity);
+    const from = Math.min(Math.max(0, view.state.form.offset), last);
+    const until = from + capacity;
+    const content: ReplDescription<ReplAction>[] = [];
+    /** Whether the row about to be built lands inside the viewport. */
+    const showing = (): boolean => content.length >= from && content.length < until;
     children.push(
       row(
         "drawer:scroll:up",
@@ -1215,21 +1225,11 @@ function drawerFor(view: ReplView, history: Described): Described | undefined {
         },
       ).description,
     );
-    for (const offset of window.shown) {
-      children.push(drawerLine(`drawer:message:${offset}`, lines[offset] ?? "", width).description);
+    for (const [offset, text] of lines.entries()) {
+      content.push(drawerLine(`drawer:message:${offset}`, text, width).description);
     }
-    children.push(
-      row(
-        "drawer:scroll:down",
-        pad("[v later]", width),
-        { select: "scroll", delta: 1 },
-        {
-          here: view.focused,
-        },
-      ).description,
-    );
     if (form.description !== undefined) {
-      children.push(drawerLine("drawer:form:about", form.description, width).description);
+      content.push(drawerLine("drawer:form:about", form.description, width).description);
     }
     // The same rule inside the modal: the first control claims focus when the
     // drawer opens, and afterwards traversal inside the drawer owns it.
@@ -1239,7 +1239,7 @@ function drawerFor(view: ReplView, history: Described): Described | undefined {
       const value = view.state.form.values[one.name] ?? "";
       const marked = requiredNow(form, view.state.form.values, one) ? "*" : " ";
       const label = one.title ?? one.name;
-      children.push(
+      content.push(
         row(
           `drawer:field:${one.name}`,
           pad(`${marked}${label}: ${value}`, width),
@@ -1248,7 +1248,7 @@ function drawerFor(view: ReplView, history: Described): Described | undefined {
         ).description,
       );
       if (one.description !== undefined) {
-        children.push(
+        content.push(
           drawerLine(`drawer:field:${one.name}:about`, `  ${one.description}`, width).description,
         );
       }
@@ -1256,7 +1256,7 @@ function drawerFor(view: ReplView, history: Described): Described | undefined {
         // What this field accepts, said once. The controls below are how a
         // value is chosen; this is the line that names the whole set, and it
         // is what a reader scanning the form reads first.
-        children.push(
+        content.push(
           drawerLine(`drawer:form:${one.name}`, `${one.name}: ${one.choices.join(" | ")}`, width)
             .description,
         );
@@ -1264,7 +1264,7 @@ function drawerFor(view: ReplView, history: Described): Described | undefined {
       // Every offered value, each its own control. A form that drew only the
       // first would be offering a choice nobody could make.
       for (const option of one.choices ?? []) {
-        children.push(
+        content.push(
           row(
             `drawer:choice:${one.name}:${option}`,
             pad(`  ${value === option ? "(x)" : "( )"} ${option}`, width),
@@ -1277,11 +1277,14 @@ function drawerFor(view: ReplView, history: Described): Described | undefined {
       // land while it has focus. The first field's line claims focus when the
       // drawer opens — including an enum's, because typing an offered value and
       // pressing Enter is still a way to answer.
-      const focus: { readonly focus?: true } = entering && !claimed ? { focus: true } : {};
-      if (entering && !claimed) {
+      // Claimed only by a row the viewport actually shows: focusing one that
+      // scrolled out would put focus where nothing is placed.
+      const takes = entering && !claimed && showing();
+      const focus: { readonly focus?: true } = takes ? { focus: true } : {};
+      if (takes) {
         claimed = true;
       }
-      children.push(
+      content.push(
         field(`drawer:value:${one.name}`, "  = ", value, "answer", {
           ...focus,
           here: view.focused,
@@ -1290,7 +1293,7 @@ function drawerFor(view: ReplView, history: Described): Described | undefined {
     }
     // What the last submission was told, under the form it is about.
     for (const [offset, message] of view.state.form.messages.entries()) {
-      children.push(
+      content.push(
         drawerLine(
           `drawer:invalid:${offset}`,
           message.field === undefined ? message.message : `${message.field}: ${message.message}`,
@@ -1298,11 +1301,26 @@ function drawerFor(view: ReplView, history: Described): Described | undefined {
         ).description,
       );
     }
-    children.push(
+    content.push(
       row(
         "drawer:form:submit",
         pad("[submit]", width),
         { select: "form-submit" },
+        {
+          here: view.focused,
+        },
+      ).description,
+    );
+    // Only what the viewport holds becomes a placed cell. A row outside it is
+    // not described at all, so it is neither drawn nor pointable.
+    for (const placed of content.slice(from, until)) {
+      children.push(placed);
+    }
+    children.push(
+      row(
+        "drawer:scroll:down",
+        pad("[v later]", width),
+        { select: "scroll", delta: 1 },
         {
           here: view.focused,
         },
@@ -1334,65 +1352,49 @@ function drawerFor(view: ReplView, history: Described): Described | undefined {
   };
 }
 
-/** One value, as the lines a drawer shows it on. */
 /**
- * How many rows the form's own controls take, whatever the message is.
+ * The rows the drawer keeps whatever the viewport shows.
  *
- * Counted rather than assumed, because the message region has to give way to
- * them: a fixed window would clip the fields, the submit control or the close
- * control off the bottom of a narrow drawer, which is exactly the content a
- * person needs in order to answer.
+ * Its own title row, the two scroll controls and `[close]`: how a person moves
+ * the viewport and leaves, so none of them is ever inside the thing it moves.
+ * `[history]` is not among them — it is reparented into the drawer's subtree so
+ * it stays inside the active focus root, but layout places it in the footer
+ * region, where it costs the drawer no row.
  */
-function formRows(question: ReplQuestion | undefined, form: ReplFormState): number {
-  const fields = question?.form.fields ?? [];
-  let rows = 0;
-  for (const one of fields) {
-    // The field row, its editable line, its description when it has one, its
-    // enum summary when it is an enum, and one row per offered value.
+const FIXED_DRAWER_ROWS = 4;
+
+/**
+ * How many rows of ordered content this drawer can place at this size.
+ *
+ * At least one, because a viewport showing nothing would say the question was
+ * empty.
+ */
+function drawerCapacity(size: ReplTerminalSize): number {
+  return Math.max(1, drawerHeight(size) - FIXED_DRAWER_ROWS);
+}
+
+/**
+ * How many rows the drawer's ordered content holds in total.
+ *
+ * The complete message, the form's description, every field with its
+ * annotation, enum summary, offered values and editable line, every validation
+ * message, and `[submit]`. Counted the same way the rows are built, because the
+ * reducer clamps a scroll against this before any of them exist.
+ */
+function drawerContentRows(question: ReplQuestion | undefined, form: ReplFormState): number {
+  if (question === undefined) {
+    return 0;
+  }
+  let rows = question.message.split("\n").length;
+  rows += question.form.description === undefined ? 0 : 1;
+  for (const one of question.form.fields) {
     rows += 2;
     rows += one.description === undefined ? 0 : 1;
     rows += one.choices === undefined ? 0 : 1 + one.choices.length;
   }
-  rows += question?.form.description === undefined ? 0 : 1;
   rows += form.messages.length;
-  // The two scroll controls, [submit], [close], and the reparented [history].
-  return rows + 5;
-}
-
-/**
- * How many message lines this drawer can show at this size.
- *
- * Derived from the drawer's own height less what the form needs, so the region
- * shrinks rather than pushing anything out of the frame. At least one line,
- * because a message region showing nothing would say the message was empty.
- */
-function messageCapacity(
-  size: ReplTerminalSize,
-  question: ReplQuestion | undefined,
-  form: ReplFormState,
-): number {
-  return Math.max(1, drawerHeight(size) - formRows(question, form));
-}
-
-/**
- * Which message lines are visible, clamped at both ends.
- *
- * Clamping rather than wrapping: a reader who holds a scroll control down
- * reaches the end of the message and stays there, rather than arriving back at
- * the top having skipped what was in between.
- */
-function messageWindow(
-  total: number,
-  offset: number,
-  capacity: number,
-): { readonly shown: readonly number[] } {
-  const last = Math.max(0, total - capacity);
-  const from = Math.min(Math.max(0, offset), last);
-  const shown: number[] = [];
-  for (let line = from; line < Math.min(total, from + capacity); line++) {
-    shown.push(line);
-  }
-  return { shown: Object.freeze(shown) };
+  // [submit] scrolls with the form it submits.
+  return rows + 1;
 }
 
 /** The first line of a message, for a control that is one row tall. */
@@ -1427,6 +1429,7 @@ function requiredNow(
   return condition.requires.some((one) => one.name === field.name);
 }
 
+/** One value, as the lines a drawer shows it on. */
 function detail(value: Json): readonly string[] {
   return (JSON.stringify(value, undefined, 2) ?? "null").split("\n");
 }

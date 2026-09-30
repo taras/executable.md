@@ -23,10 +23,14 @@ scopes the entry admitted, the bindings its `eval` blocks published, the source 
 generated fragment produced before that fragment was admitted, and each line the
 document rendered.
 
-When the entry asks a question, its drawer opens: the whole message — scrollable
-when it is longer than the drawer — and then every field the schema declares,
-with its title, its description, whether it is required, and exactly the values
-it will accept. Fill them in, or activate one of an enum's offered values, and
+When the entry asks a question, its drawer opens: the whole message, and then
+every field the schema declares, with its title, its description, whether it is
+required, and exactly the values it will accept. All of that is one ordered
+whole, and it is that whole — not the message alone — that scrolls when it is
+taller than the drawer. The earlier and later controls, the title and the close
+control stay put while the content moves beneath them, so however short the
+drawer is, scrolling reaches every field, every offered value and the control
+that submits. Fill them in, or activate one of an enum's offered values, and
 press Enter from any of them to offer the whole object. The answer is recorded,
 and what the document renders after it changes because of the recorded answer
 rather than because of anything this process remembered. An answer the schema

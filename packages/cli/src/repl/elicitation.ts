@@ -292,6 +292,12 @@ function conditionOf(
     refuse("declares a condition that is not an object schema", `$.if.properties.${field}`);
   }
   refuseUnknown(test, new Set(["const", "type"]), `$.if.properties.${field}`);
+  // Core evaluates this type as part of the condition. This form reduces the
+  // whole condition to one string equality, so a tested type of anything else
+  // would draw a form that requires different fields than validation does.
+  if (test["type"] !== undefined && test["type"] !== "string") {
+    refuse("tests its field as a type other than string", `$.if.properties.${field}.type`);
+  }
   const equals = test["const"];
   if (typeof equals !== "string") {
     refuse(
@@ -299,7 +305,14 @@ function conditionOf(
       `$.if.properties.${field}.const`,
     );
   }
-  const requiredByCondition = namesOf(when["required"] ?? [field], "$.if.required");
+  // Not defaulted to the tested field. `properties` does not require a property
+  // to exist, so an `if` without `required` also matches an object where the
+  // field is absent — Core would apply `then` there, and this form would be
+  // waiting for a value the person never has to give.
+  if (when["required"] === undefined) {
+    refuse("tests a field without requiring it to be present", "$.if.required");
+  }
+  const requiredByCondition = namesOf(when["required"], "$.if.required");
   if (requiredByCondition.length !== 1 || requiredByCondition[0] !== field) {
     refuse("requires something other than the field it tests", "$.if.required");
   }

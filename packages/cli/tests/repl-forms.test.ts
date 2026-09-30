@@ -13,7 +13,12 @@ import { beforeAll, describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { race, sleep, spawn, withResolvers } from "effection";
 import type { Operation, Result } from "effection";
-import { Elicitation, useTempFileCompiler } from "@executablemd/core";
+import {
+  Elicitation,
+  prepareElicitation,
+  useTempFileCompiler,
+  validateParsed,
+} from "@executablemd/core";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import type { Json } from "@executablemd/core";
 
@@ -36,12 +41,13 @@ import type {
   ReplTransition,
   ReplView,
 } from "../src/repl/application.ts";
-import { NARROW } from "../src/repl/layout.ts";
+import { layout, NARROW } from "../src/repl/layout.ts";
 import { fields, readDescription } from "../src/repl/description.ts";
 import type { ReplDescription } from "../src/repl/description.ts";
 import { ENTRY_SCOPE, projectRepl } from "../src/repl/model.ts";
 import type { ReplElicitation, ReplModel, ReplScope } from "../src/repl/model.ts";
 import { useReplTree } from "../src/repl/reconcile.ts";
+import { replSurface } from "../src/repl/application.ts";
 import type { ReplTree } from "../src/repl/reconcile.ts";
 import { submitReplEntry } from "../src/repl/session.ts";
 import type { ReplSession } from "../src/repl/session.ts";
@@ -309,6 +315,37 @@ describe("F1 — the bounded language is exact", () => {
         then: { type: "string", required: ["a"] },
       },
       "$.then.type",
+    ],
+    [
+      // Core evaluates the tested type. This form reduces the condition to a
+      // string equality, so a numeric test would draw a form whose required
+      // fields disagree with validation.
+      "a condition that tests a type other than string",
+      {
+        type: "object",
+        properties: { a: { type: "string" }, b: { type: "string" } },
+        additionalProperties: false,
+        if: {
+          type: "object",
+          properties: { a: { type: "number", const: "x" } },
+          required: ["a"],
+        },
+        then: { type: "object", required: ["b"] },
+      },
+      "$.if.properties.a.type",
+    ],
+    [
+      // `properties` does not require a property to exist, so this condition
+      // also matches an object with no `a` at all.
+      "a condition that does not require the field it tests",
+      {
+        type: "object",
+        properties: { a: { type: "string" }, b: { type: "string" } },
+        additionalProperties: false,
+        if: { type: "object", properties: { a: { const: "x" } } },
+        then: { type: "object", required: ["b"] },
+      },
+      "$.if.required",
     ],
   ];
 
@@ -614,67 +651,125 @@ function framed(state: ReplState, live: ReplLive, size = NARROW, focused?: strin
 const DRAFT = Array.from({ length: 40 }, (_, line) => `draft line ${line}`).join("\n");
 
 describe("F3 — complete content and reachable navigation", () => {
-  it("F3: every field, option and annotation is drawn, not just the first", function* () {
-    const asked = yield* askingFor(PLAN_SCHEMA);
-    const rows = framed(opened(asking(asked.question)), asking(asked.question));
-    const keys = rows.map((one) => one.key);
-    // Both fields, and every offered value — not the first of either.
-    expect(keys).toContain("drawer:field:decision");
-    expect(keys).toContain("drawer:field:feedback");
-    for (const option of ["Approve", "Request changes", "Stop"]) {
-      expect(keys).toContain(`drawer:choice:decision:${option}`);
+  /** Every key layout actually placed, with whether it can be pointed at. */
+  function* placedKeys(
+    tree: ReplTree<ReplAction>,
+    view: ReplView,
+  ): Operation<Map<string, boolean>> {
+    yield* applied(tree, view);
+    const frame = layout(NARROW, replSurface(tree, view));
+    const keys = new Map<string, boolean>();
+    for (const cell of frame.cells) {
+      const key = tree.keyOf(cell.node);
+      if (key !== undefined) {
+        keys.set(key, cell.targetable);
+      }
     }
-    expect(keys).toContain("drawer:value:feedback");
-    expect(keys).toContain("drawer:form:submit");
-    expect(keys).toContain("drawer:close");
-  });
+    return keys;
+  }
 
-  it("F3: the whole message is reachable through the window, and clamps", function* () {
+  /** The essential Plan controls a person has to be able to reach. */
+  const ESSENTIAL = [
+    "drawer:field:decision",
+    "drawer:choice:decision:Approve",
+    "drawer:choice:decision:Request changes",
+    "drawer:choice:decision:Stop",
+    "drawer:value:decision",
+    "drawer:field:feedback",
+    "drawer:value:feedback",
+    "drawer:form:submit",
+    "drawer:close",
+    "footer:history",
+  ];
+
+  it("F3: scrolling places every essential control in the narrow frame", function* () {
     const asked = yield* askingFor(PLAN_SCHEMA, DRAFT);
     const live = asking(asked.question);
-    const first = framed(opened(live), live);
+    const tree = yield* useReplTree<ReplAction>();
+
+    // Walked from the first clamped position to the last, through the real
+    // tree and the real placement boundary. A described node layout never
+    // placed is not something a person can see or point at, so only placed
+    // cells count here.
+    let state = opened(live);
+    const reached = new Map<string, boolean>();
+    for (let press = 0; press < 120; press++) {
+      for (const [key, targetable] of yield* placedKeys(
+        tree,
+        reading(state, live, EMPTY_MODEL, NARROW, undefined),
+      )) {
+        if (targetable || !reached.has(key)) {
+          reached.set(key, targetable || (reached.get(key) ?? false));
+        }
+      }
+      const next = reduceRepl(state, { kind: "scroll", delta: 1 }, EMPTY_MODEL, live, NARROW).state;
+      if (next.form.offset === state.form.offset) {
+        break;
+      }
+      state = next;
+    }
+
+    for (const key of ESSENTIAL) {
+      expect([key, reached.has(key)]).toEqual([key, true]);
+      expect([key, reached.get(key)]).toEqual([key, true]);
+    }
+  });
+
+  it("F3: the viewport walks the whole message before the form controls", function* () {
+    const asked = yield* askingFor(PLAN_SCHEMA, DRAFT);
+    const live = asking(asked.question);
     const shown = (rows: ReturnType<typeof framed>): string[] =>
       rows.filter((one) => one.key.startsWith("drawer:message:")).map((one) => one.label.trim());
+
+    const first = framed(opened(live), live);
     // Not every line at once, and the first window starts at the beginning.
     expect(shown(first).length).toBeGreaterThan(0);
     expect(shown(first).length).toBeLessThan(40);
     expect(shown(first)[0]).toBe("draft line 0");
 
-    // Scrolled to the end, and clamped there rather than wrapping.
+    // Every message line is encountered, and all of them before the form's
+    // own controls come into view.
     let state = opened(live);
-    for (let press = 0; press < 80; press++) {
-      state = reduceRepl(state, { kind: "scroll", delta: 1 }, EMPTY_MODEL, live, NARROW).state;
+    const seenLines: string[] = [];
+    let sawSubmit = false;
+    let submitBeforeLastLine = false;
+    for (let press = 0; press < 120; press++) {
+      const rows = framed(state, live);
+      for (const label of shown(rows)) {
+        if (!seenLines.includes(label)) {
+          seenLines.push(label);
+        }
+      }
+      if (rows.some((one) => one.key === "drawer:form:submit")) {
+        sawSubmit = true;
+        if (seenLines.length < 40) {
+          submitBeforeLastLine = true;
+        }
+      }
+      const next = reduceRepl(state, { kind: "scroll", delta: 1 }, EMPTY_MODEL, live, NARROW).state;
+      if (next.form.offset === state.form.offset) {
+        break;
+      }
+      state = next;
     }
-    const end = shown(framed(state, live));
-    expect(end[end.length - 1]).toBe("draft line 39");
+
+    expect(seenLines).toHaveLength(40);
+    expect(seenLines[0]).toBe("draft line 0");
+    expect(seenLines[39]).toBe("draft line 39");
+    expect(sawSubmit).toBe(true);
+    expect(submitBeforeLastLine).toBe(false);
+
+    // Clamped at the end rather than wrapping, and one press back moves
+    // immediately because the stored offset was clamped.
     const held = state.form.offset;
     state = reduceRepl(state, { kind: "scroll", delta: 1 }, EMPTY_MODEL, live, NARROW).state;
     expect(state.form.offset).toBe(held);
-
-    // One press back moves immediately, because the stored offset is clamped
-    // rather than sitting past the last window.
     const back = reduceRepl(state, { kind: "scroll", delta: -1 }, EMPTY_MODEL, live, NARROW).state;
     expect(back.form.offset).toBe(held - 1);
-    expect(shown(framed(back, live))).not.toEqual(end);
 
     // And scrolling changed no value and no route.
     expect(back.form.values).toEqual({});
     expect(back.route.drawers.map((one) => one.kind)).toEqual(["live-elicit"]);
-  });
-
-  it("F3: the narrow drawer still draws its fields, submit and close", function* () {
-    const asked = yield* askingFor(PLAN_SCHEMA, DRAFT);
-    const live = asking(asked.question);
-    for (const size of [NARROW, WIDE]) {
-      const keys = framed(opened(live), live, size).map((one) => one.key);
-      // The message region gives way to the controls rather than pushing them
-      // out of a frame this small.
-      expect(keys).toContain("drawer:field:decision");
-      expect(keys).toContain("drawer:field:feedback");
-      expect(keys).toContain("drawer:form:submit");
-      expect(keys).toContain("drawer:close");
-      expect(keys).toContain("footer:history");
-    }
   });
 
   it("F3: the one History control is inside the drawer while it is open", function* () {
@@ -1046,3 +1141,63 @@ function* tabbed(tree: ReplTree<ReplAction>): Operation<string | undefined> {
   yield* tree.dispatch({ kind: "key", key: "Tab" });
   return keyed(tree);
 }
+
+describe("F1 — the form's conditional means exactly what Core validates", () => {
+  beforeAll(() => useTempFileCompiler());
+
+  /** What this reader did with a schema, as a refusal path or a drawn condition. */
+  function* readingOf(schema: Json): Operation<string> {
+    try {
+      const form = readQuestionForm(schema);
+      return `drew a condition on ${form.condition?.field ?? "nothing"}`;
+    } catch (error) {
+      return error instanceof Error ? error.message : String(error);
+    }
+  }
+
+  it("F1: a numeric tested type is false where a string equality would be true", function* () {
+    const schema: Json = {
+      type: "object",
+      properties: { a: { type: "string" }, b: { type: "string" } },
+      additionalProperties: false,
+      if: {
+        type: "object",
+        properties: { a: { type: "number", const: "x" } },
+        required: ["a"],
+      },
+      // `b` is declared here because Core compiles in strict mode, which
+      // requires a `required` name to be defined in the same subschema.
+      then: { type: "object", required: ["b"], properties: { b: { type: "string" } } },
+    };
+
+    // What Core actually does: `a` is the string "x", the tested type is
+    // number, so the condition is false, `then` never applies and `b` is not
+    // required. The object validates.
+    const prepared = yield* prepareElicitation(schema, "Elicit");
+    expect(validateParsed(prepared.validate, { a: "x" })).toEqual([]);
+
+    // A form that reduced this to `a === "x"` would demand `b` for an answer
+    // Core accepts without it, so the reader refuses rather than disagree.
+    expect(yield* readingOf(schema)).toContain("$.if.properties.a.type");
+  });
+
+  it("F1: an if with no required also matches the field being absent", function* () {
+    const schema: Json = {
+      type: "object",
+      properties: { a: { type: "string" }, b: { type: "string" } },
+      additionalProperties: false,
+      if: { type: "object", properties: { a: { const: "x" } } },
+      then: { type: "object", required: ["b"], properties: { b: { type: "string" } } },
+    };
+
+    // What Core actually does: `properties` does not require `a` to exist, so
+    // the condition holds for an object with no `a` at all, `then` applies and
+    // the missing `b` is reported.
+    const prepared = yield* prepareElicitation(schema, "Elicit");
+    expect(validateParsed(prepared.validate, {}).length).toBeGreaterThan(0);
+
+    // A form that waited for `a === "x"` before asking for `b` would never ask
+    // for a field Core already requires, so the reader refuses.
+    expect(yield* readingOf(schema)).toContain("$.if.required");
+  });
+});
