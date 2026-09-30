@@ -1,6 +1,6 @@
 /**
- * Where a completed Prompt's durable result is published, for a host that
- * retains something beside it.
+ * Where a Prompt's durable result is published, for a host that retains
+ * something beside it.
  *
  * An ordinary `xmd run` has no publisher, and publishes exactly as it always
  * did: the `agent_prompt` event is appended by the durable machinery and
@@ -11,9 +11,16 @@
  * or not at all, so no association can survive a Prompt that was never
  * journaled and no journaled Prompt can be left half-described.
  *
- * The Prompt itself runs *before* any of this. A publisher receives a Prompt
- * that has already finished talking to its provider, so nothing a host does
- * here holds a database open across a conversation.
+ * A publisher sees one turn at two moments, and only these two. `begin()` is
+ * called before the provider is asked, so a host that shows live work can
+ * create it there; `publish()` is called once the turn has finished talking to
+ * its provider, so nothing a host does at publication holds a database open
+ * across a conversation. What `begin()` returned comes back on the
+ * publication, and that is the only thing tying the two together — core never
+ * reads it.
+ *
+ * `begin()` is optional. A publisher that declares none is called exactly as
+ * it always was, and its publications carry an undefined handle.
  *
  * Installing one is a host act and reads as one at the import: this is reached
  * through `@executablemd/core/host`, and the private Api it seeds is exported

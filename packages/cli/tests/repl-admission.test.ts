@@ -9,6 +9,7 @@
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { createSignal, sleep, spawn } from "effection";
+import { filter } from "@effectionx/stream-helpers";
 import { consumeAdmissions } from "../src/repl/admission.ts";
 
 describe("AD — admission survives an announcement made before the consumer runs", () => {
@@ -18,23 +19,28 @@ describe("AD — admission survives an announcement made before the consumer run
 
     // The caller subscribes first, exactly as the session does before it
     // spawns the document that can announce.
-    const subscription = yield* changes;
+    // Filtered before subscribing, exactly as the session composes it, so the
+    // drain itself stays generic.
+    const subscription = yield* filter(function* (value: number) {
+      return value > 0;
+    })(changes);
     // Announced while the consumer does not exist yet, let alone read.
     changes.send(1);
 
     yield* spawn(
-      consumeAdmissions(
-        subscription,
-        (value) => value > 0,
-        () => {
-          admitted += 1;
-        },
-      ),
+      consumeAdmissions(subscription, () => {
+        admitted += 1;
+      }),
     );
     // One turn is all it takes to reach what was already queued for this
     // active subscription.
     yield* sleep(0);
 
+    expect(admitted).toBe(1);
+
+    // And a value the filter rejects never reaches the drain at all.
+    changes.send(0);
+    yield* sleep(0);
     expect(admitted).toBe(1);
   });
 

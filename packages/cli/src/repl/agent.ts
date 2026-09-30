@@ -292,8 +292,14 @@ export function useReplAgent(mode: PermissionMode): ReplAgentKernel {
   const requests: LiveRequest[] = [];
   /** The live turn core began in a scope, until that scope's prompt claims it. */
   const begun = new Map<Scope, LiveTurn>();
-  /** Every live turn this owner made, so a handle from elsewhere is not one. */
-  const ours = new WeakSet<LiveTurn>();
+  /**
+   * The live turn each handle this owner minted stands for.
+   *
+   * The handle is an object of this owner's own making, so a value from
+   * anywhere else simply is not a key here — which is how a handle is read
+   * back without asserting anything about what it is.
+   */
+  const minted = new WeakMap<object, LiveTurn>();
   /**
    * The canonical publication appending right now on each coroutine.
    *
@@ -347,6 +353,14 @@ export function useReplAgent(mode: PermissionMode): ReplAgentKernel {
     return failure;
   }
 
+  /** Take one live turn down, leaving the announcement to the caller. */
+  function retire(turn: LiveTurn): void {
+    const at = turns.indexOf(turn);
+    if (at >= 0) {
+      turns.splice(at, 1);
+    }
+  }
+
   function queued(coroutine: string, prompt: string): LiveTurn {
     const turn: LiveTurn = {
       key: allocate("turn"),
@@ -362,7 +376,6 @@ export function useReplAgent(mode: PermissionMode): ReplAgentKernel {
       failure: undefined,
     };
     turns.push(turn);
-    ours.add(turn);
     announce();
     return turn;
   }
@@ -535,14 +548,18 @@ export function useReplAgent(mode: PermissionMode): ReplAgentKernel {
       // which live turn that record ended.
       const turn = queued(yield* currentCoroutine(), input);
       begun.set(yield* useScope(), turn);
-      return turn;
+      // An opaque token rather than the turn itself: core carries it back
+      // untouched, and only this map can say what it stood for.
+      const handle: object = {};
+      minted.set(handle, turn);
+      return handle;
     },
     *publish(publication: AgentPromptPublication): Operation<void> {
       const handle = publication.begun;
-      // A handle this owner did not make identifies nothing here: another
+      // A handle this owner did not mint is not a key in this map: another
       // host's publisher, or a turn from an execution this session never ran.
-      const turn =
-        handle !== undefined && ours.has(handle as LiveTurn) ? (handle as LiveTurn) : undefined;
+      // Read back by lookup, never by asserting what the value is.
+      const turn = typeof handle === "object" && handle !== null ? minted.get(handle) : undefined;
       const where = turn?.coroutine;
       if (turn !== undefined && where !== undefined) {
         publishing.set(where, turn);
@@ -551,6 +568,16 @@ export function useReplAgent(mode: PermissionMode): ReplAgentKernel {
         // The single durable handoff. `consume()` runs inside this append, in
         // the caller's one transition, and removes exactly this turn.
         yield* publication.append();
+      } catch (error) {
+        // Nothing was retained, so nothing may still be shown as though it is
+        // about to be. The turn this publication began is taken down and the
+        // removal announced before the failure travels on — otherwise a
+        // terminal overlay outlives the record it was waiting for.
+        if (turn !== undefined) {
+          retire(turn);
+          announce();
+        }
+        throw error;
       } finally {
         if (where !== undefined) {
           publishing.delete(where);
@@ -613,10 +640,7 @@ export function useReplAgent(mode: PermissionMode): ReplAgentKernel {
           ),
         );
       }
-      const at = turns.indexOf(turn);
-      if (at >= 0) {
-        turns.splice(at, 1);
-      }
+      retire(turn);
       project();
     },
     announce,

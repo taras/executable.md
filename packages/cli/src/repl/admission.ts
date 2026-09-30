@@ -19,7 +19,11 @@
 import type { Operation, Subscription } from "effection";
 
 /**
- * Iterate an already-active subscription, admitting on every value that counts.
+ * Drain an already-active subscription, admitting once per value it carries.
+ *
+ * Generic on purpose: what counts as admitting work is decided by filtering
+ * the stream before it is subscribed, which is the caller's business and
+ * happens in the caller's scope. This only reads what it was handed.
  *
  * Takes the subscription rather than the stream, so there is no way to write
  * the consumer that creates its own: the race this exists to prevent cannot be
@@ -27,15 +31,12 @@ import type { Operation, Subscription } from "effection";
  */
 export function consumeAdmissions<T>(
   subscription: Subscription<T, never>,
-  admits: (value: T) => boolean,
   admit: () => void,
 ): () => Operation<void> {
   return function* (): Operation<void> {
     let next = yield* subscription.next();
     while (!next.done) {
-      if (admits(next.value)) {
-        admit();
-      }
+      admit();
       next = yield* subscription.next();
     }
   };

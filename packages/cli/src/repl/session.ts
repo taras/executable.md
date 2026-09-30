@@ -72,6 +72,7 @@ import {
 import type { DurableEvent } from "@executablemd/durable-streams";
 
 import { useReplAgent } from "./agent.ts";
+import { filter } from "@effectionx/stream-helpers";
 import { consumeAdmissions } from "./admission.ts";
 import type { ReplAgentAuthority, ReplAgentReading } from "./agent.ts";
 import { useReplElicitation } from "./elicitation.ts";
@@ -439,8 +440,15 @@ function* start(
     // (`docs/agents.md`, "Subscription readiness across `spawn()`"). Spawning
     // the consumer earlier would not be equivalent: what must precede the
     // document is the subscription, not the task that reads it.
-    const agentReadings = yield* agent.changes;
-    const questions = yield* elicitation.changes;
+    // Filtered before either is subscribed, so what reaches the drain is
+    // already only the announcements that admit. The composition belongs here,
+    // in the scope that owns the subscription.
+    const agentReadings = yield* filter(function* (reading: ReplAgentReading) {
+      return reading.turns.length > 0;
+    })(agent.changes);
+    const questions = yield* filter(function* (question: ReplQuestion | undefined) {
+      return question !== undefined;
+    })(elicitation.changes);
 
     const document: Task<Result<unknown>> = yield* spawn(function* () {
       const outcome = yield* runExecution();
@@ -512,9 +520,8 @@ function* start(
     // A queued Agent turn is work beyond the retained prefix, exactly as a new
     // record or a question is: replay that reached one is past what the history
     // held, so the session is admitted rather than still provisional.
-    yield* spawn(consumeAdmissions(agentReadings, (reading) => reading.turns.length > 0, admit));
-
-    yield* spawn(consumeAdmissions(questions, (question) => question !== undefined, admit));
+    yield* spawn(consumeAdmissions(agentReadings, admit));
+    yield* spawn(consumeAdmissions(questions, admit));
 
     // Held open deliberately. This body owns the observer and both tasks, and
     // finishing it would halt them — so it lasts as long as the scope does, and

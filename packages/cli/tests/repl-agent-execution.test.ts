@@ -448,6 +448,25 @@ function execution(events: readonly DurableEvent[] = []): ReplExecution {
   return { id: "agent-kernel", stream: new InMemoryStream([...events]) };
 }
 
+/**
+ * An execution whose journal refuses to record an Agent turn.
+ *
+ * The one way a canonical publication fails after the turn has already run:
+ * everything the provider was going to say has been said, the overlay is
+ * terminal, and then nothing retains it.
+ */
+function refusingExecution(): ReplExecution {
+  const stream = new InMemoryStream();
+  const appended = stream.append.bind(stream);
+  stream.append = function* (event: DurableEvent): Operation<void> {
+    if (event.type === "yield" && event.description.type === "agent_prompt") {
+      throw new Error("this journal refused the record");
+    }
+    yield* appended(event);
+  };
+  return { id: "agent-kernel", stream };
+}
+
 function installations(): readonly ExecutionInstallation[] {
   return [{ evaluation: ordinaryEvaluationProfile() }, { components: agentIdentityComponents() }];
 }
@@ -1630,7 +1649,26 @@ describe("P6 — only a canonical Prompt claims a record", () => {
     expect(session.agent.turns).toEqual([]);
   });
 
-  for (const ended of ["failed", "cancelled"] as const) {
+  it("P6: a refused publication leaves the turn neither retained nor mounted", function* () {
+    const stub = createStub({ one: { deltas: ["reply"] } });
+    yield* useStub(stub);
+    const holder = refusingExecution();
+    const session = opened(yield* start(holder, ONE_PROMPT));
+    const outcome = yield* session.join();
+
+    // The provider really ran and really finished, so the overlay was
+    // terminal at the moment publication was refused.
+    expect(stub.asked).toEqual(["one"]);
+    // Nothing retained it.
+    expect(outcome.ok).toBe(false);
+    expect(session.model.turns).toEqual([]);
+    // And nothing is still mounted waiting for a record that will never come.
+    expect(session.agent.turns).toEqual([]);
+    expect(session.live).toBe(false);
+  });
+
+  const endings: readonly ("failed" | "cancelled")[] = ["failed", "cancelled"];
+  for (const ended of endings) {
     it(`P6: a ${ended} canonical Prompt hands off exactly as a completed one does`, function* () {
       // `association` is absent for every unsuccessful turn, so this is the
       // case where nothing but the handle can say which live turn ended.

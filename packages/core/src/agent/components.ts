@@ -233,13 +233,16 @@ export function* installAgentComponents(options?: AgentComponentsOptions): Opera
 
   yield* useAgentComponents();
 
-  // One observer for this installation, outside every policy installed after it.
+  // Auditing for this installation, outside every policy installed after it.
   // A policy decides without delegating — that is what deciding means — so an
   // observer anywhere inside one never sees the decision it makes. Installed
   // here, in the Agent installation itself, it wraps the host's own policy and
-  // the REPL's authority alike. Each Prompt puts its own ledger where its
-  // requests will find it, and this copies the outcome into the place the
-  // request reserved on the way in.
+  // the REPL's authority alike.
+  //
+  // It owns both sides. Each `Agent.prompt()` call gets a private ledger and a
+  // wrapped stream, so every event that call produces is read with that
+  // ledger in place; a request raised while it is read finds that ledger and
+  // no other. Nothing a component does installs, places or brackets an audit.
   yield* observePermissionDecisions();
 
   const rootProvider = options?.rootProvider;
