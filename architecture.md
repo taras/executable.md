@@ -5477,6 +5477,42 @@ Freedom is vendored from a pinned unpublished commit under
 `packages/cli/src/repl/vendor/freedom/`, as a pristine copy and a patched copy
 whose every difference belongs to one named patch. See its `PROVENANCE.md`.
 
+### One chronology, and the authority that answers it
+
+The Sessions reading is one list, not two appended: every Prompt this process
+observes takes a slot when it is scheduled and keeps it through publication, so
+a turn that becomes durable stays the same mounted node in the same place, and
+concurrent Prompts that publish out of order do not reorder each other. The
+slot, its order and its live key are process-local — no route, model, Journal
+record or public Core Api carries one.
+
+Filtering is by the conversation key a provider actually issued; an authored
+`<Session>` name is not one. Selecting or clearing changes `route.session` and
+nothing else, and background Agent work never changes it.
+
+A pending request is a fact on the turn that is waiting. Arrival mounts it and
+does nothing else. Activating it records that request's opaque key in
+process-local state — never in the location — and opens the Sessions-only
+`+permission` drawer; the reducer decides and `program.ts` alone holds the
+authority that answers, so the drawer closes only when the request is really
+settled and a stale, unknown or unoffered action settles nothing. A retained
+permission audit is an inert reading, and a historical prefix has no live
+requests to answer.
+
+Both readings are windowed at the layout region that will place them, rather
+than described whole and clipped: only what the window holds is described, so
+only that is mounted, focusable, drawn and pointable. Their window controls and
+the two surface controls stay outside the moving window. A narrow frame mounts
+one routed outlet and both surface controls, so the outlet the route did not
+select is absent everywhere — `mounted()`, the frame, the target map — while the
+way to it is not.
+
+Whether a pointer may activate a row is decided by what the row is, not by how
+its key is spelled: a control answers Enter, so a pointer on it asks for the
+same thing, and a line has nothing to activate. Keys carry provider session keys
+and field names, so a rule about spelling would have taken the pointer away from
+a conversation or a field whose name happened to look like something else.
+
 ### From a frame to a terminal, and back
 
 Below the tree, one more direction:

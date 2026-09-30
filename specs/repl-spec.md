@@ -50,6 +50,48 @@ to the head.
 When the root settles, its recorded output is what the transcript shows, and the
 screen stops asking for frames.
 
+## Agent conversations, and what one turn is waiting on
+
+When the entry runs Agent work, the Sessions surface is one chronology of it:
+every turn this process observed and every turn the history holds, in the order
+their Prompts were scheduled. A turn keeps its place when it publishes — the
+same row, where it already was, reading from the record once there is one —
+because a turn that has been recorded is still the turn you were looking at, and
+a list that appended the live ones to the retained ones would reorder Prompts
+that finished out of order.
+
+Each turn says what is known about it at that moment: its prompt, whether it is
+queued, streaming, finished or recorded, what it has said so far, which agent and
+which conversation it joined, and how it ended.
+
+The conversations you can filter by are the ones a provider actually started. A
+queued turn belongs to none of them yet, and the name the document gave its
+`<Session>` is not an answer to which conversation a provider opened, so a turn
+without one appears under **All conversations** and nowhere else. Choosing a
+conversation changes the filter and nothing else — not the surface, the selected
+scope, the history position, the draft, the drawers or where focus is — and work
+going on behind the screen never chooses or clears one for you.
+
+A turn waiting for permission says so on its own row. It opens nothing: nothing
+moves, nothing takes focus, and nothing else stops. Activate it and a drawer
+shows what is being asked — its kind, the call, whose turn is waiting and every
+choice the provider offered, in the provider's order. A choice that lasts says it
+lasts *for this Agent session*, because nothing here can make a rule that
+outlives the conversation asking. Closing or pressing Escape denies the request
+while the session keeps running, and the drawer closes only when the request is
+really settled: a screen that closed first would be claiming an answer nobody
+gave. Afterwards focus returns to the turn that was waiting.
+
+A permission the history already holds is a record of what a turn was granted.
+It is read, never answered, and a view frozen at a history position shows no
+live request at all.
+
+Both readings are windowed rather than clipped. The Sessions list and the
+permission drawer each move through as many rows as the frame can place, with
+their earlier and later controls — and the way to the other surface — staying
+put while the rows move beneath them. What the window is not showing is not
+drawn, not focusable and reaches no pointer.
+
 ## One cold journey
 
 The command prints the location it ended at. Pass that location to a new
@@ -70,12 +112,14 @@ started.
 | --- | --- |
 | `160x36` and larger | Sessions/Entries sidebar, transcript, bindings and recorded questions, the drawer layer, and a fixed full-width footer holding five History rows and the input |
 | `120x30` and larger | the same, with a narrower sidebar and inspection column |
-| `72x20` and larger | one routed surface — the one the route selected — with the same drawer and footer |
+| `72x20` and larger | one routed surface — the one the route selected — under the two surface controls, with the same drawer and footer |
 | smaller than `72x20` | a refusal saying the minimum, showing nothing else; it recovers when the window grows |
 
-At narrow, the surfaces the route did not select are still there in the model and
-are not on the screen: they are in no cell, in no target map, and no pointer
-reaches them. The History band is five rows at every size; when the labels of
+At narrow, the surface the route did not select is still there in the model and
+is not on the screen: it is in no cell, in no target map, and no pointer reaches
+it. What stays is the way between them: both surface controls are on the screen
+at every size, because a screen you cannot leave is not one this route may put
+you on. The History band is five rows at every size; when the labels of
 several positions cannot all fit, they share a label and every position keeps its
 own identity.
 
@@ -86,8 +130,9 @@ was refused. It does not replace the screen.
 ## One entry, and nothing else
 
 This product admits zero or one entry per execution. There is no second entry, no
-catalog of past runs, no fork, no agent, no snapshot and no sidecar file. The
-Sessions surface exists and says it is empty.
+catalog of past runs, no fork, no snapshot and no sidecar file. The Sessions
+surface presents the Agent work that entry did, and says it is empty until there
+is some.
 
 ## What is retained, and what is not
 

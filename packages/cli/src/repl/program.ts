@@ -655,6 +655,21 @@ function* build(
 
 /** Wake the loop whenever this session's history or overlay moves. */
 function* watch(session: ReplSession, wakes: Wakes): Operation<void> {
+  // Subscribed here, in the scope that outlives the spawn, and drained there.
+  // A spawned body starts a turn after the spawn returns, and a turn is long
+  // enough for a queued turn, a delta or a permission request to be sent to
+  // nobody: the Agent reading moves while the document is doing nothing else,
+  // so there is no other event to draw the frame that would have shown it.
+  const agents = yield* session.agentChanges;
+  yield* spawn(function* conversations(): Operation<void> {
+    while (true) {
+      const next = yield* agents.next();
+      if (next.done === true) {
+        return;
+      }
+      wakes.send({ kind: "session" });
+    }
+  });
   yield* spawn(function* projections(): Operation<void> {
     const changes = yield* session.changes;
     while (true) {

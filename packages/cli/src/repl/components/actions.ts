@@ -55,6 +55,15 @@ export type ReplAction =
    */
   | { readonly kind: "scroll"; readonly delta: number }
   /**
+   * Move the Sessions reading by whole rows.
+   *
+   * Its own member rather than `scroll`, because the two windows are open at
+   * once: a drawer scrolls the question it is asking while the reading behind it
+   * keeps the row somebody left it on, and one action meaning either would move
+   * whichever the reducer guessed.
+   */
+  | { readonly kind: "scroll-sessions"; readonly delta: number }
+  /**
    * Show only the conversation this provider session key names.
    *
    * The key and nothing else: which turns that is, and whether the key still

@@ -160,6 +160,10 @@ function activation(input: ReplViewData): ReplAction | undefined {
     const delta = named["delta"];
     return typeof delta === "number" ? { kind: "scroll", delta } : undefined;
   }
+  if (select === "scroll-sessions") {
+    const delta = named["delta"];
+    return typeof delta === "number" ? { kind: "scroll-sessions", delta } : undefined;
+  }
   if (select === "session") {
     const session = named["session"];
     return typeof session === "string" && session.length > 0

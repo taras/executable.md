@@ -28,7 +28,7 @@
 import { Ok, type Result } from "effection";
 import type { Json } from "@executablemd/durable-streams";
 
-import { describe as describeNode } from "./description.ts";
+import { describe as describeNode, fields, readDescription } from "./description.ts";
 import type { ReplDescription } from "./description.ts";
 import {
   drawerHeight,
@@ -36,6 +36,7 @@ import {
   HISTORY_ROWS,
   NARROW,
   profileFor,
+  sessionsHeight,
   surfaceWidth,
 } from "./layout.ts";
 import type { ReplSurface as ReplPlacedSurface, ReplSurfaceCell } from "./layout.ts";
@@ -303,6 +304,29 @@ export type ReplFocusRestore =
    */
   | { readonly kind: "turn"; readonly turn: string };
 
+/**
+ * How far each windowed reading is scrolled, in rows.
+ *
+ * Process-local, and deliberately not in the route: where somebody scrolled to
+ * is not a place another process can be sent to, and a location carrying it
+ * would reopen somewhere else at a row describing a different reading. Two
+ * separate numbers because both windows are open at once — a drawer scrolls the
+ * request it is asking while the reading behind it keeps the row it was left on.
+ *
+ * Each is clamped where it is read, because publication, a filter, a background
+ * change and a resize all change how many rows there are with nobody pressing
+ * anything.
+ */
+export interface ReplViewports {
+  /** Rows the Sessions reading is scrolled by. */
+  readonly sessions: number;
+  /** Rows the open permission drawer is scrolled by. */
+  readonly permission: number;
+}
+
+/** Both windows at their first row, which is where a fresh reading starts. */
+export const AT_TOP: ReplViewports = Object.freeze({ sessions: 0, permission: 0 });
+
 /** Everything typed and not yet committed anywhere. */
 export interface ReplState {
   readonly route: ReplRoute;
@@ -328,6 +352,8 @@ export interface ReplState {
    * the tree's, which is the only thing that knows where it is.
    */
   readonly restore: ReplFocusRestore | undefined;
+  /** How far each windowed reading is scrolled. */
+  readonly viewports: ReplViewports;
 }
 
 /** What the root must perform, because a component cannot. */
@@ -457,6 +483,9 @@ export function permissionSettled(state: ReplState, turn: string): ReplState {
       ),
     }),
     restore: Object.freeze({ kind: "turn", turn }),
+    // The drawer is over, so the window over it is too: the next request opens
+    // at its own first row rather than at wherever this one was read to.
+    viewports: Object.freeze({ ...state.viewports, permission: 0 }),
     refusal: undefined,
   });
 }
@@ -478,6 +507,7 @@ export function permissionWithdrawn(state: ReplState): ReplState {
         state.route.drawers.filter((drawer) => drawer.kind !== "live-permission"),
       ),
     }),
+    viewports: Object.freeze({ ...state.viewports, permission: 0 }),
   });
 }
 
@@ -504,6 +534,7 @@ export function initialState(execution: string): ReplState {
     refusal: undefined,
     permission: undefined,
     restore: undefined,
+    viewports: AT_TOP,
   });
 }
 
@@ -521,6 +552,10 @@ export function stateFor(location: string): Result<ReplState> {
       refusal: undefined,
       permission: undefined,
       restore: undefined,
+      // Never decoded: a window position is this process's, so a location read
+      // here opens the reading at its first row rather than at a row the
+      // process that wrote the location happened to be on.
+      viewports: AT_TOP,
     }),
   );
 }
@@ -606,13 +641,6 @@ export function refusedView(
   });
 }
 
-/**
- * What this process can say about state no history holds.
- *
- * A live question is the only one of them this slice has: no Agent runtime runs
- * in the REPL yet, so there is no pending permission request and no conversation
- * that has started without settling anything.
- */
 /**
  * What this process can say about state no history holds.
  *
@@ -798,16 +826,40 @@ export function reduceRepl(
       // the draft and the drawer stack are all left exactly as they stand. A key
       // that names no conversation is refused by the codec's own resolution, so
       // a stale one cannot become an empty Sessions view.
-      return navigate(state, model, { ...state.route, session: action.session }, live);
+      //
+      // The window goes back to the first row, because a filtered reading is a
+      // different list: row forty of everything is not row forty of one
+      // conversation, and keeping the number would open somewhere nobody chose.
+      return navigate(atFirstRow(state), model, { ...state.route, session: action.session }, live);
     }
     case "all-sessions": {
-      return navigate(state, model, { ...state.route, session: undefined }, live);
+      return navigate(atFirstRow(state), model, { ...state.route, session: undefined }, live);
+    }
+    case "scroll-sessions": {
+      // Clamped against the reading this state actually has, and stored clamped:
+      // an offset kept past the last window would take several presses to have
+      // any visible effect, so what is held is what the region is showing.
+      const rows = sessionContentRows(state, model, live);
+      const furthest = Math.max(0, rows - sessionsCapacity(state, model, size));
+      const sessions = Math.min(Math.max(0, state.viewports.sessions + action.delta), furthest);
+      return settled({
+        ...state,
+        viewports: Object.freeze({ ...state.viewports, sessions }),
+        refusal: undefined,
+      });
     }
     case "select-permission": {
       // The key is taken first, because a `+permission` candidate resolves only
       // while the request it names is pending — so the state that navigates has
       // to be the one already holding it. A refusal keeps neither.
-      const holding = Object.freeze({ ...state, permission: action.request });
+      const holding = Object.freeze({
+        ...state,
+        permission: action.request,
+        // At its first row: this is a different request, and a window left where
+        // the last one was read to would open part way down a question nobody
+        // has read the start of.
+        viewports: Object.freeze({ ...state.viewports, permission: 0 }),
+      });
       // Declared, so the drawer this adds is the one the grammar defines rather
       // than a string this case happens to spell the same way.
       const opening: ReplDrawerRef = { kind: "live-permission" };
@@ -956,6 +1008,28 @@ export function reduceRepl(
       };
     }
     case "scroll": {
+      const open = state.route.drawers[state.route.drawers.length - 1];
+      if (open?.kind === "live-permission") {
+        const pending =
+          state.permission === undefined ? undefined : offered(state, live, state.permission);
+        if (pending === undefined) {
+          return refuse(state, "no permission request is being answered.");
+        }
+        // The same clamp, over the drawer's own ordered content: the kind, the
+        // call, whose turn is waiting, every choice the provider offered and
+        // what closing does.
+        const rows = permissionContentRows(model, live, pending);
+        const furthest = Math.max(0, rows - drawerCapacity(size));
+        const permission = Math.min(
+          Math.max(0, state.viewports.permission + action.delta),
+          furthest,
+        );
+        return settled({
+          ...state,
+          viewports: Object.freeze({ ...state.viewports, permission }),
+          refusal: undefined,
+        });
+      }
       if (!answering) {
         return refuse(state, "nothing is being asked right now.");
       }
@@ -1041,6 +1115,14 @@ function offered(
     return undefined;
   }
   return live.agent.requests.find((candidate) => candidate.key === request);
+}
+
+/** The same state with the Sessions reading back at its first row. */
+function atFirstRow(state: ReplState): ReplState {
+  return Object.freeze({
+    ...state,
+    viewports: Object.freeze({ ...state.viewports, sessions: 0 }),
+  });
 }
 
 function settled(state: ReplState): ReplTransition {
@@ -1334,15 +1416,29 @@ function described(view: ReplView): readonly Described[] {
   const showEntry = !narrow || routed === "repl";
 
   const turns = chronology(model, live);
-  if (showSessions) {
-    items.push(
-      row(
-        "sessions:heading",
-        "Sessions",
-        { select: "surface", surface: "sessions" },
-        { here: view.focused },
-      ),
-    );
+  // Which surface to be on belongs to neither surface. A narrow frame mounts one
+  // outlet, so a control that lives inside the outlet can only take somebody
+  // where they already are — and the way back would be mounted on the screen
+  // they cannot reach. Both controls are described at every size; the route
+  // decides which outlet's rows follow them, never whether they exist.
+  const toSessions = row(
+    "sessions:heading",
+    "Sessions",
+    { select: "surface", surface: "sessions" },
+    { here: view.focused },
+  );
+  const toEntries = row(
+    "entries:heading",
+    "Entries",
+    { select: "surface", surface: "repl" },
+    { here: view.focused },
+  );
+  items.push(toSessions);
+  // In a narrow frame the two are one navigation bar above the routed outlet. In
+  // a sidebar each heading stays with the list it names, which is where a reader
+  // looks for it.
+  if (narrow) {
+    items.push(toEntries);
   }
   if (!showSessions) {
     // Nothing: this frame is showing the other surface.
@@ -1352,21 +1448,45 @@ function described(view: ReplView): readonly Described[] {
     // feature that does not exist.
     items.push(line("sessions:empty", "  (none retained)"));
   } else {
-    items.push(...sessionRows(view, turns, claim));
+    // One window over the whole reading. Every conversation, turn, fact, audit
+    // and request is built in order and then windowed: a list that described all
+    // of them would have its tail placed nowhere, and a row layout cannot place
+    // is not one a person can see, focus or point at.
+    const content = sessionRows(state, turns, view.focused, claim);
+    const capacity = sessionsCapacity(state, model, view.size);
+    const last = Math.max(0, content.length - capacity);
+    const from = Math.min(Math.max(0, state.viewports.sessions), last);
+    // Outside the thing they move, like the drawer's: a control inside the
+    // window would scroll away from whoever was reaching for it.
+    items.push(
+      row(
+        "sessions:earlier",
+        "  [^ earlier]",
+        { select: "scroll-sessions", delta: -1 },
+        {
+          here: view.focused,
+        },
+      ),
+    );
+    items.push(...content.slice(from, from + capacity));
+    items.push(
+      row(
+        "sessions:later",
+        "  [v later]",
+        { select: "scroll-sessions", delta: 1 },
+        {
+          here: view.focused,
+        },
+      ),
+    );
   }
   // Read whether or not this frame draws the entry list: the footer's draft says
   // whether an entry exists at every size and on either surface.
   const entry = model.entry;
+  if (!narrow) {
+    items.push(toEntries);
+  }
   if (showEntry) {
-    items.push(
-      row(
-        "entries:heading",
-        "Entries",
-        { select: "surface", surface: "repl" },
-        { here: view.focused },
-      ),
-    );
-
     if (entry === undefined) {
       items.push(line("entry:none", "  1. (not submitted)"));
     } else {
@@ -1552,11 +1672,11 @@ function described(view: ReplView): readonly Described[] {
  * publishes keeps the node — and the focus — it already had.
  */
 function sessionRows(
-  view: ReplView,
+  state: ReplState,
   turns: readonly ReplSessionTurn[],
+  focused: string | undefined,
   claim: string | undefined,
 ): readonly Described[] {
-  const { state } = view;
   const items: Described[] = [];
   const filter = state.route.session;
   const offered = conversations(turns);
@@ -1569,7 +1689,7 @@ function sessionRows(
         "sessions:all",
         filter === undefined ? "  All conversations" : "  All conversations (filtered)",
         { select: "all-sessions" },
-        { here: view.focused },
+        { here: focused },
       ),
     );
     for (const key of offered) {
@@ -1578,7 +1698,7 @@ function sessionRows(
           `sessions:conversation:${key}`,
           `  ${filter === key ? "> " : ""}${headline(key)}`,
           { select: "session", session: key },
-          { here: view.focused },
+          { here: focused },
         ),
       );
     }
@@ -1598,7 +1718,7 @@ function sessionRows(
           : { select: "marker", marker: turn.marker },
         // A settled permission sends focus back to the turn that was waiting, so
         // this is the row that may be claimed.
-        { here: view.focused, claim },
+        { here: focused, claim },
       ),
     );
     if (turn.agent !== undefined || turn.sessionKey !== undefined) {
@@ -1628,7 +1748,7 @@ function sessionRows(
               `sessions:request:${request.key}`,
               label,
               { select: "permission", request: request.key },
-              { here: view.focused },
+              { here: focused },
             )
           : line(`sessions:request:${request.key}`, label),
       );
@@ -1645,6 +1765,48 @@ function sessionRows(
     }
   }
   return items;
+}
+
+/**
+ * How many rows the Sessions reading holds, whatever the window shows.
+ *
+ * Counted by building the same rows the window slices, so the number a scroll
+ * clamps against cannot disagree with the list it is clamping: one definition of
+ * what the reading is, asked twice.
+ */
+function sessionContentRows(state: ReplState, model: ReplModel, live: ReplLive): number {
+  return sessionRows(state, chronology(model, live), undefined, undefined).length;
+}
+
+/**
+ * How many rows of the Sessions reading one frame can place.
+ *
+ * The region carries more than the reading. A narrow content region also holds
+ * the canonical location and both surface controls; a sidebar also holds the
+ * entry list under its own heading. Whatever is not the moving window is
+ * subtracted, because a window sized by the whole region would push exactly
+ * those controls out of the frame — and a described row nothing places is a
+ * focus stop that draws nothing.
+ *
+ * At least one row: a window showing nothing would say the reading is empty.
+ */
+function sessionsCapacity(state: ReplState, model: ReplModel, size: ReplTerminalSize): number {
+  const narrow = profileFor(size) === "narrow";
+  const shared = narrow
+    ? chunked(encodeLocation(state.route), surfaceWidth(size)).length
+    : entryRows(model);
+  // Both controls in a narrow frame, where they are one bar above the outlet.
+  // In a sidebar the entry list brings its own heading, counted with it.
+  const navigation = narrow ? 2 : 1;
+  /** `[^ earlier]` and `[v later]`, which are how the window moves. */
+  const controls = 2;
+  return Math.max(1, sessionsHeight(size) - shared - navigation - controls);
+}
+
+/** How many rows the entry list takes in a sidebar, its heading included. */
+function entryRows(model: ReplModel): number {
+  const entry = model.entry;
+  return entry === undefined ? 2 : 2 + nested(entry, [entry.key]).length;
 }
 
 /**
@@ -1732,43 +1894,31 @@ function drawerFor(view: ReplView, history: Described): Described | undefined {
       return undefined;
     }
     title = request.title ?? "Permission";
-    // What is being asked, in the provider's own words. Never `rawInput` and
-    // never the request object: a screen shows what a person decides about.
-    if (request.kind !== undefined) {
-      children.push(drawerLine("drawer:permission:kind", `  ${request.kind}`, width).description);
+    // One window over the whole of it. `options` is the provider's, and nothing
+    // bounds how many it offers: a drawer that described every choice would have
+    // layout clip the last ones, which are exactly the ones a person scrolled
+    // down to find.
+    const content = permissionContent(view.model, view.live, request, width, view.focused);
+    const capacity = drawerCapacity(view.size);
+    const last = Math.max(0, content.length - capacity);
+    const from = Math.min(Math.max(0, view.state.viewports.permission), last);
+    children.push(
+      row(
+        "drawer:scroll:up",
+        pad("[^ earlier]", width),
+        { select: "scroll", delta: -1 },
+        { here: view.focused },
+      ).description,
+    );
+    for (const placed of content.slice(from, from + capacity)) {
+      children.push(placed);
     }
     children.push(
-      drawerLine("drawer:permission:call", `  call ${request.toolCallId}`, width).description,
-    );
-    // Whose turn is waiting, so a decision is not made about an anonymous one.
-    const waiting = chronology(view.model, view.live).find(
-      (candidate) => candidate.key === request.turn,
-    );
-    if (waiting !== undefined) {
-      const whose =
-        waiting.sessionKey === undefined
-          ? headline(waiting.prompt)
-          : `${headline(waiting.prompt)} · ${waiting.sessionKey}`;
-      children.push(drawerLine("drawer:permission:turn", `  ${whose}`, width).description);
-    }
-    // Every choice the provider offered, in its order, each one its own control.
-    for (const choice of request.choices) {
-      children.push(
-        row(
-          `drawer:permission:choice:${choice.optionId}`,
-          pad(`[${choice.name}]${lasting(choice.kind)}`, width),
-          { select: "permission-choice", request: request.key, option: choice.optionId },
-          { here: view.focused },
-        ).description,
-      );
-    }
-    // Said rather than implied: dismissing is a denial of this request, and the
-    // session goes on running either way.
-    children.push(
-      drawerLine(
-        "drawer:permission:dismissal",
-        "  Escape or close denies this request; the session keeps running.",
-        width,
+      row(
+        "drawer:scroll:down",
+        pad("[v later]", width),
+        { select: "scroll", delta: 1 },
+        { here: view.focused },
       ).description,
     );
     dismissing = request.key;
@@ -1951,6 +2101,76 @@ function drawerFor(view: ReplView, history: Described): Described | undefined {
 }
 
 /**
+ * Everything a permission drawer holds inside its window, in order.
+ *
+ * The kind, the call, whose turn is waiting, every choice the provider offered
+ * and what closing does — one ordered whole rather than a fixed head and a
+ * scrolling tail, because a reader who has scrolled to the choices no longer
+ * needs the line saying which call they are for taking up a row.
+ */
+function permissionContent(
+  model: ReplModel,
+  live: ReplLive,
+  request: ReplLivePermission,
+  width: number,
+  focused: string | undefined,
+): readonly ReplDescription<ReplAction>[] {
+  const content: ReplDescription<ReplAction>[] = [];
+  // What is being asked, in the provider's own words. Never `rawInput` and
+  // never the request object: a screen shows what a person decides about.
+  if (request.kind !== undefined) {
+    content.push(drawerLine("drawer:permission:kind", `  ${request.kind}`, width).description);
+  }
+  content.push(
+    drawerLine("drawer:permission:call", `  call ${request.toolCallId}`, width).description,
+  );
+  // Whose turn is waiting, so a decision is not made about an anonymous one.
+  const waiting = chronology(model, live).find((candidate) => candidate.key === request.turn);
+  if (waiting !== undefined) {
+    const whose =
+      waiting.sessionKey === undefined
+        ? headline(waiting.prompt)
+        : `${headline(waiting.prompt)} · ${waiting.sessionKey}`;
+    content.push(drawerLine("drawer:permission:turn", `  ${whose}`, width).description);
+  }
+  // Every choice the provider offered, in its order, each one its own control.
+  for (const choice of request.choices) {
+    content.push(
+      row(
+        `drawer:permission:choice:${choice.optionId}`,
+        pad(`[${choice.name}]${lasting(choice.kind)}`, width),
+        { select: "permission-choice", request: request.key, option: choice.optionId },
+        { here: focused },
+      ).description,
+    );
+  }
+  // Said rather than implied: dismissing is a denial of this request, and the
+  // session goes on running either way.
+  content.push(
+    drawerLine(
+      "drawer:permission:dismissal",
+      "  Escape or close denies this request; the session keeps running.",
+      width,
+    ).description,
+  );
+  return content;
+}
+
+/**
+ * How many rows that drawer holds, whatever its window shows.
+ *
+ * The same builder, asked for its length: what a scroll clamps against is the
+ * list it is clamping.
+ */
+function permissionContentRows(
+  model: ReplModel,
+  live: ReplLive,
+  request: ReplLivePermission,
+): number {
+  return permissionContent(model, live, request, 0, undefined).length;
+}
+
+/**
  * What a lasting choice lasts for.
  *
  * This Agent session, and said so: a person reading "always" in a terminal has
@@ -2093,8 +2313,15 @@ function describeRow(entry: ReplRow): string {
  * pointer resolved against the drawn frame has to name.
  */
 export function replSurface(tree: ReplTree<ReplAction>, view: ReplView): ReplPlacedSurface {
+  const controls = controlsOf(view);
+  /** The two surface controls, which belong to neither outlet. */
+  const navigation: ReplSurfaceCell[] = [];
   const sessions: ReplSurfaceCell[] = [];
+  /** The Sessions outlet without the heading above it. */
+  const sessionsBody: ReplSurfaceCell[] = [];
   const entries: ReplSurfaceCell[] = [];
+  /** The entry outlet without the heading above it. */
+  const entriesBody: ReplSurfaceCell[] = [];
   const transcript: ReplSurfaceCell[] = [];
   const inspection: ReplSurfaceCell[] = [];
   const drawer: ReplSurfaceCell[] = [];
@@ -2109,16 +2336,23 @@ export function replSurface(tree: ReplTree<ReplAction>, view: ReplView): ReplPla
     const placed: ReplSurfaceCell = {
       node: cell.node,
       text: cell.cell,
-      ...(targetable(key) ? { targetable: true } : {}),
+      ...(controls.has(key) ? { targetable: true } : {}),
     };
     if (key.startsWith("drawer:")) {
       drawer.push(placed);
     } else if (key.startsWith("location:")) {
       located.push(placed);
+    } else if (key === "sessions:heading" || key === "entries:heading") {
+      // In both: a sidebar keeps each heading with the list it names, and a
+      // narrow frame shows the pair as the bar above whichever outlet is routed.
+      navigation.push(placed);
+      (key === "sessions:heading" ? sessions : entries).push(placed);
     } else if (key.startsWith("sessions:")) {
       sessions.push(placed);
+      sessionsBody.push(placed);
     } else if (key.startsWith("entries:") || key.startsWith("entry:") || key.startsWith("scope:")) {
       entries.push(placed);
+      entriesBody.push(placed);
     } else if (key.startsWith("line:")) {
       transcript.push(placed);
     } else if (key.startsWith("binding:") || key.startsWith("elicit:")) {
@@ -2129,8 +2363,14 @@ export function replSurface(tree: ReplTree<ReplAction>, view: ReplView): ReplPla
   }
 
   return {
-    // Narrow shows exactly the surface the route selected.
-    content: [...located, ...(view.state.route.surface === "sessions" ? sessions : entries)],
+    // Narrow shows exactly the surface the route selected, under navigation that
+    // is on neither of them: the outlet is what the route chooses, and the way
+    // out of it cannot be inside it.
+    content: [
+      ...located,
+      ...navigation,
+      ...(view.state.route.surface === "sessions" ? sessionsBody : entriesBody),
+    ],
     sessions,
     entries,
     transcript: [...located, ...transcript],
@@ -2148,26 +2388,40 @@ export function replSurface(tree: ReplTree<ReplAction>, view: ReplView): ReplPla
   };
 }
 
-/** Whether a pointer may activate the row this key names. */
-function targetable(key: string): boolean {
-  // A line is text. Everything a pointer may activate is a control, and the lines
-  // that are not — the location somebody copies, the reason the last action
-  // changed nothing, a turn's own facts and a retained permission it was granted
-  // — are lines. A cell that offered itself as a target and then did nothing
-  // would be a control that is not one.
-  return (
-    !key.startsWith("line:") &&
-    !key.startsWith("sessions:audit:") &&
-    !TURN_FACTS.some((suffix) => key.endsWith(suffix)) &&
-    key !== "sessions:empty" &&
-    key !== "entry:none" &&
-    key !== "footer:location" &&
-    key !== "footer:refused"
-  );
+/**
+ * Which of this view's rows a pointer may activate.
+ *
+ * Read from what each row *is* — the component it was described with — rather
+ * than from how its key happens to be spelled. A turn's own facts, a retained
+ * audit, the location somebody copies and the reason the last action changed
+ * nothing are lines, and a line has nothing to activate; every control answers
+ * Enter, so a pointer on one asks for exactly what Enter there asks for.
+ *
+ * Spelling could never have decided this. A conversation key carries a provider
+ * session key and a field key carries a field name, so a conversation called
+ * `text` or a field called `stop` would have lost its pointer to a rule about
+ * suffixes — and a row that draws a control and refuses the pointer is a control
+ * that is not one.
+ */
+function controlsOf(view: ReplView): ReadonlySet<string> {
+  const keys = new Set<string>();
+  const walk = (description: ReplDescription<ReplAction>): void => {
+    const read = readDescription(description);
+    if (read.component === SELECT_ROW || read.component === FIELD) {
+      keys.add(read.key);
+    } else if (read.component === REFUSAL && fields(read.input)?.["back"] !== undefined) {
+      // A refusal is a control only when it offers somewhere to go back to.
+      keys.add(read.key);
+    }
+    for (const child of read.children) {
+      walk(child);
+    }
+  };
+  for (const description of describeApplication(view)) {
+    walk(description);
+  }
+  return keys;
 }
-
-/** The suffixes a turn's own read-only facts are keyed with. */
-const TURN_FACTS = [":whose", ":text", ":stop", ":failed"];
 
 export { HISTORY_ROWS };
 export type { ReplDrawerRef, ReplSurface };

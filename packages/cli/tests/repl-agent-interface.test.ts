@@ -69,6 +69,7 @@ import type {
   ReplView,
 } from "../src/repl/application.ts";
 import { layout, NARROW, surfaceWidth } from "../src/repl/layout.ts";
+import type { ReplPlacedCell, ReplSemanticFrame } from "../src/repl/layout.ts";
 import { decodeLocation, encodeLocation } from "../src/repl/route.ts";
 import { installReplHost } from "../src/repl-assembly.ts";
 import { installReplTerminal } from "../src/repl/terminal-host.ts";
@@ -102,6 +103,41 @@ const THREE_SPAWNS = [
 const REVIEWER = "root.0";
 const BUILDER = "root.1";
 const CHECKER = "root.2";
+
+/** Two conversations named after the suffixes a turn's own facts are keyed with. */
+const SPAWNS_NAMED_LIKE_FACTS = [
+  "<All>",
+  '<Spawn><Session name="text"><Prompt text="review" /></Session></Spawn>',
+  '<Spawn><Session name="stop"><Prompt text="build" /></Session></Spawn>',
+  "</All>",
+].join("\n");
+
+/** More choices than the smallest accepted drawer can place at once. */
+const SEVEN_CHOICES: readonly PermissionOption[] = [
+  { optionId: "once", name: "Allow once", kind: "allow_once" },
+  { optionId: "always", name: "Allow for this session", kind: "allow_always" },
+  { optionId: "conversation", name: "Allow for this conversation", kind: "allow_always" },
+  { optionId: "reads", name: "Allow reads only", kind: "allow_once" },
+  { optionId: "no", name: "Deny once", kind: "reject_once" },
+  { optionId: "never", name: "Deny for this session", kind: "reject_always" },
+  { optionId: "halt", name: "Deny and stop", kind: "reject_always" },
+];
+
+/** Options named after a turn's own read-only facts. */
+const NAMED_LIKE_FACTS: readonly PermissionOption[] = [
+  { optionId: "text", name: "Allow the write", kind: "allow_once" },
+  { optionId: "stop", name: "Stop here", kind: "reject_once" },
+  { optionId: "failed", name: "Report it failed", kind: "reject_once" },
+  { optionId: "whose", name: "Ask whose this is", kind: "allow_once" },
+];
+
+/** The permission drawer's own read-only rows, which are never targets. */
+const drawerContentKeys = [
+  "drawer:permission:kind",
+  "drawer:permission:call",
+  "drawer:permission:turn",
+  "drawer:permission:dismissal",
+];
 
 /** Every option kind a provider can offer, for the permission rows. */
 const ALL_KINDS: readonly PermissionOption[] = [
@@ -464,6 +500,110 @@ function keyed(tree: ReplTree<ReplAction>): string | undefined {
   return node === undefined ? undefined : tree.keyOf(node);
 }
 
+/** Every mounted node's key, in canonical order. */
+function mountedKeys(tree: ReplTree<ReplAction>): string[] {
+  return tree.mounted().map((id) => tree.keyOf(id) ?? "");
+}
+
+/** The cell this frame placed for one key, or none, which is what a map holds. */
+function placedFor(
+  tree: ReplTree<ReplAction>,
+  frame: ReplSemanticFrame,
+  key: string,
+): ReplPlacedCell | undefined {
+  return frame.cells.find((cell) => tree.keyOf(cell.node) === key);
+}
+
+/**
+ * Point at one key the way the renderer's map resolves a pointer.
+ *
+ * Through the frame rather than through the tree: a cell the frame did not
+ * place, or placed and did not offer, is not in the map at all, so reaching for
+ * the node directly would prove something no pointer can do.
+ */
+function* pointed(
+  tree: ReplTree<ReplAction>,
+  frame: ReplSemanticFrame,
+  key: string,
+): Operation<ReplAction> {
+  const cell = placedFor(tree, frame, key);
+  if (cell === undefined) {
+    throw new Error(`this frame placed no cell for ${key}`);
+  }
+  if (!cell.targetable) {
+    throw new Error(`${key} is placed but is in no target map`);
+  }
+  const dispatched = yield* tree.dispatch({
+    kind: "pointer",
+    target: cell.node,
+    frame: tree.frame().id,
+  });
+  if (!dispatched.ok || dispatched.value.outcome !== "action") {
+    throw new Error(`the pointer on ${key} produced no action`);
+  }
+  return dispatched.value.action;
+}
+
+/** One action, reduced at one size, refusing to carry a refusal forward. */
+function acted(
+  state: ReplState,
+  action: ReplAction,
+  session: ReplSession,
+  size = NARROW,
+): ReplState {
+  const next = reduceRepl(state, action, session.model, liveReading(session), size);
+  if (next.state.refusal !== undefined) {
+    throw new Error(`${action.kind} was refused: ${next.state.refusal}`);
+  }
+  return next.state;
+}
+
+/** The Sessions rows this view describes, in order. */
+function sessionKeysOf(view: ReplView): string[] {
+  return keysOf(view).filter(
+    (key) =>
+      key.startsWith("sessions:") &&
+      key !== "sessions:heading" &&
+      key !== "sessions:earlier" &&
+      key !== "sessions:later",
+  );
+}
+
+/** The permission choices this view's drawer describes, in order. */
+function drawerKeysOf(view: ReplView): string[] {
+  return keysOf(view).filter((key) => key.startsWith("drawer:permission:choice:"));
+}
+
+/** Scroll the Sessions window until it is showing this row, or say it never did. */
+function scrolledTo(state: ReplState, session: ReplSession, key: string): ReplState {
+  let at = state;
+  for (let press = 0; press < 60; press += 1) {
+    if (sessionKeysOf(reading(at, session, NARROW)).includes(key)) {
+      return at;
+    }
+    const next = acted(at, { kind: "scroll-sessions", delta: 1 }, session);
+    if (next.viewports.sessions === at.viewports.sessions) {
+      break;
+    }
+    at = next;
+  }
+  throw new Error(`the Sessions window never reached ${key}`);
+}
+
+/** Wait until nothing is painting, so the next paint is the one released. */
+function* quiet(terminal: Terminal): Operation<void> {
+  let seen = -1;
+  for (let round = 0; round < 200; round += 1) {
+    const painted = terminal.presented.length;
+    if (painted === seen) {
+      return;
+    }
+    seen = painted;
+    yield* settled(20);
+  }
+  throw new Error("the screen never stopped painting");
+}
+
 /** The mounted node this key names, or none. */
 function nodeOf(tree: ReplTree<ReplAction>, key: string): string | undefined {
   return tree.mounted().find((id) => tree.keyOf(id) === key);
@@ -563,6 +703,7 @@ function turnKeyed(view: ReplView, prompt: string): string {
 function* asking(
   script: Record<string, Script>,
   permissionMode: PermissionMode = "approve-reads",
+  source: string = THREE_SPAWNS,
 ): Operation<{
   readonly session: ReplSession;
   readonly stub: Stub;
@@ -576,7 +717,7 @@ function* asking(
       execution: holder,
       installations: installations(),
       permissionMode,
-      source: THREE_SPAWNS,
+      source,
     }),
   );
   return { session, stub, holder };
@@ -1349,13 +1490,18 @@ describe("U3 — what each accepted frame mounts, and nothing else", () => {
     // column are not mounted, so they are in no frame, no target map and no
     // pointer's way.
     const mounted = tree.mounted().map((id) => tree.keyOf(id) ?? "");
-    for (const prefix of ["entries:", "entry:", "scope:", "line:", "binding:", "elicit:"]) {
+    for (const prefix of ["entry:", "scope:", "line:", "binding:", "elicit:"]) {
       expect(mounted.filter((key) => key.startsWith(prefix))).toEqual([]);
       expect(keysOf(view).filter((key) => key.startsWith(prefix))).toEqual([]);
     }
+    // The entry *outlet* is absent; the control that goes to it is not part of
+    // that outlet and stays, because a screen a person cannot leave is not one
+    // this route may put them on.
+    expect(mounted.filter((key) => key.startsWith("entries:"))).toEqual(["entries:heading"]);
     const drawn = frame.cells.map((cell) => tree.keyOf(cell.node) ?? "");
     expect(drawn.some((key) => key.startsWith("sessions:turn:"))).toBe(true);
-    expect(drawn.filter((key) => key.startsWith("entry") || key.startsWith("line:"))).toEqual([]);
+    expect(drawn).toContain("entries:heading");
+    expect(drawn.filter((key) => key.startsWith("entry:") || key.startsWith("line:"))).toEqual([]);
     // Every target this frame offers is a control, and every one of them is
     // mounted: nothing offers itself to a pointer and then does nothing.
     for (const cell of frame.cells.filter((one) => one.targetable)) {
@@ -1378,9 +1524,17 @@ describe("U3 — what each accepted frame mounts, and nothing else", () => {
     const view = reading(initialState("agents"), session, NARROW);
     yield* applied(tree, view);
     const mounted = tree.mounted().map((id) => tree.keyOf(id) ?? "");
-    expect(mounted.filter((key) => key.startsWith("sessions:"))).toEqual([]);
+    // No row of the Sessions reading: not a conversation, not a turn, not a
+    // fact, not a request, and neither window control.
+    expect(mounted.filter((key) => key.startsWith("sessions:"))).toEqual(["sessions:heading"]);
     // The entry list is what this frame is for.
     expect(mounted.some((key) => key.startsWith("entries:"))).toBe(true);
+    // And the way to the other surface is drawn and pointable from here, which
+    // is the whole reason it is mounted.
+    const frame = layout(NARROW, replSurface(tree, view));
+    const drawn = frame.cells.filter((cell) => tree.keyOf(cell.node) === "sessions:heading");
+    expect(drawn).toHaveLength(1);
+    expect(drawn[0]?.targetable).toBe(true);
   });
 
   it("U3: the permission drawer traps focus, keeps History inside it and hides what is behind", function* () {
@@ -1631,6 +1785,525 @@ describe("U2 — the program performs a permission, end to end", () => {
 
     expect(outcome?.location).toBeDefined();
     expect(outcome?.location).not.toContain("+permission");
+  });
+});
+
+describe("U4 — the loop wakes for Agent work", () => {
+  beforeAll(() => useTempFileCompiler());
+
+  it("U4: queued, streaming and a waiting request each repaint on their own", function* () {
+    // Every turn is held before it produces anything, so the only thing that
+    // moves between the assertions below is the Agent reading: no record
+    // appends, nothing is printed, nothing is asked through Elicit and
+    // expansion stays where it is. If the screen changes, this is what changed
+    // it.
+    const stub = createStub({
+      review: { queued: true, streaming: true },
+      build: {
+        queued: true,
+        permission: { toolCallId: "call-1", title: "Write", kind: "edit" },
+      },
+      check: { queued: true },
+    });
+    const { terminal, install } = recordingTerminal();
+
+    yield* scoped(function* (): Operation<void> {
+      yield* install();
+      yield* immediateClock();
+      yield* useStub(stub);
+      yield* useTemporaryHost();
+
+      const running = yield* spawn(function* (): Operation<void> {
+        const ran = yield* runReplProgram({
+          installations: installations(),
+          permissionMode: "approve-reads",
+        });
+        if (!ran.ok) {
+          throw ran.error;
+        }
+      });
+      yield* untilDrawn(terminal);
+      terminal.bytes(BYTES.encode(THREE_SPAWNS));
+      yield* settled(20);
+      terminal.feed("\r");
+      yield* settled(40);
+
+      // A stable frame: all three observed, none of them started.
+      yield* showing(terminal, "review · queued");
+      yield* showing(terminal, "check · queued");
+      yield* quiet(terminal);
+
+      // One turn starts. Nobody pressed anything, nothing was recorded, and the
+      // screen has to say so.
+      const beforeStart = terminal.presented.length;
+      stub.start(REVIEWER);
+      yield* showing(terminal, "review · streaming");
+      expect(terminal.presented.length).toBeGreaterThan(beforeStart);
+      // And only that turn moved.
+      expect(shows(terminal, "check · queued")).toBe(true);
+      yield* quiet(terminal);
+
+      // One turn asks for permission. The fact appears on the turn that is
+      // waiting, in a frame nothing else asked for.
+      const beforeAsking = terminal.presented.length;
+      stub.start(BUILDER);
+      yield* showing(terminal, "asks: Write");
+      expect(terminal.presented.length).toBeGreaterThan(beforeAsking);
+      // Arriving opened nothing and moved nobody: the location is unchanged and
+      // no drawer is up.
+      expect(maybeLocation(terminal)).not.toContain("+permission");
+
+      terminal.end();
+      yield* running;
+    });
+  });
+});
+
+describe("U5 — navigation is outside the outlet it leaves", () => {
+  beforeAll(() => useTempFileCompiler());
+
+  it("U5: a narrow frame is left in both directions, by key and by pointer", function* () {
+    const { session } = yield* asking({
+      review: { streaming: true },
+      build: { streaming: true },
+      check: { queued: true },
+    });
+    yield* until(session, "a started turn", () => started(session) >= 1);
+
+    // The narrow REPL route, which mounts the entry outlet and no Sessions row.
+    const onRepl = initialState("agents");
+    const tree = yield* useReplTree<ReplAction>();
+    const replView = reading(onRepl, session, NARROW);
+    yield* applied(tree, replView);
+    const replFrame = layout(NARROW, replSurface(tree, replView));
+    expect(mountedKeys(tree).filter((key) => key.startsWith("sessions:"))).toEqual([
+      "sessions:heading",
+    ]);
+
+    // Enter on the control and a pointer resolved from the frame ask for the
+    // same thing, and both are available from the outlet this route mounts.
+    yield* focusTo(tree, "sessions:heading");
+    const pressed = yield* activate(tree);
+    const aimed = yield* pointed(tree, replFrame, "sessions:heading");
+    expect(pressed).toEqual({ kind: "select-surface", surface: "sessions" });
+    expect(aimed).toEqual(pressed);
+
+    // Which takes the person to Sessions, where the way back is mounted too.
+    const onSessionsNow = acted(onRepl, pressed, session);
+    expect(onSessionsNow.route.surface).toBe("sessions");
+    const sessionsView = reading(onSessionsNow, session, NARROW);
+    yield* applied(tree, sessionsView);
+    const sessionsFrame = layout(NARROW, replSurface(tree, sessionsView));
+    // The entry outlet is absent; the control that goes to it is not.
+    expect(mountedKeys(tree).filter((key) => key.startsWith("entry:"))).toEqual([]);
+    expect(mountedKeys(tree).filter((key) => key.startsWith("scope:"))).toEqual([]);
+    yield* focusTo(tree, "entries:heading");
+    const back = yield* activate(tree);
+    expect(back).toEqual({ kind: "select-surface", surface: "repl" });
+    expect(yield* pointed(tree, sessionsFrame, "entries:heading")).toEqual(back);
+    expect(acted(onSessionsNow, back, session).route.surface).toBe("repl");
+  });
+
+  it("U5: a request arriving on the other surface is still reachable from this one", function* () {
+    const { session } = yield* asking({
+      review: { streaming: true, permission: { toolCallId: "call-1", title: "Write" } },
+      build: { streaming: true },
+      check: { queued: true },
+    });
+    yield* until(session, "a request waiting", () => session.agent.requests.length === 1);
+    const request = session.agent.requests[0];
+    if (request === undefined) {
+      throw new Error("no request was published");
+    }
+
+    // Standing on the narrow REPL route when it arrives: no route changed, no
+    // drawer opened, and the fact is not a control here.
+    const onRepl = initialState("agents");
+    const tree = yield* useReplTree<ReplAction>();
+    const replView = reading(onRepl, session, NARROW);
+    yield* applied(tree, replView);
+    expect(replView.state.route).toEqual(onRepl.route);
+    expect(replView.state.route.drawers).toEqual([]);
+
+    // The person goes to Sessions through the mounted control, and the request
+    // is there to activate.
+    yield* focusTo(tree, "sessions:heading");
+    const moved = acted(onRepl, yield* activate(tree), session);
+    const sessionsView = reading(moved, session, NARROW);
+    yield* applied(tree, sessionsView);
+    const key = `sessions:request:${request.key}`;
+    const at = scrolledTo(moved, session, key);
+    const view = reading(at, session, NARROW);
+    yield* applied(tree, view);
+    yield* focusTo(tree, key);
+    expect(yield* activate(tree)).toEqual({ kind: "select-permission", request: request.key });
+  });
+});
+
+describe("U6 — the Sessions reading is windowed", () => {
+  beforeAll(() => useTempFileCompiler());
+
+  it("U6: a request past the first window is reached by scrolling, and the top comes back", function* () {
+    // Every turn asks. Which one the scheduler reaches first is its own
+    // business, so what this row relies on is only that the reading is longer
+    // than the smallest accepted frame can place — and one of the requests is
+    // therefore past its first window.
+    const { session } = yield* asking({
+      review: { permission: { toolCallId: "call-1", title: "Write", kind: "edit" } },
+      build: { permission: { toolCallId: "call-2", title: "Move", kind: "edit" } },
+      check: { permission: { toolCallId: "call-3", title: "Delete", kind: "edit" } },
+    });
+    // Every turn observed and started, so the reading is the whole one this row
+    // is about rather than however much of it had arrived first.
+    yield* until(session, "all three Prompts being observed", () => observed(session) === 3);
+    yield* until(session, "all three turns being started", () => started(session) === 3);
+    yield* until(session, "all three requests waiting", () => session.agent.requests.length === 3);
+
+    const standing = onSessions(session);
+    const whole = sessionKeysOf(reading(standing, session, WIDE));
+    const first = reading(standing, session, NARROW);
+    const shown = sessionKeysOf(first);
+    // There is more reading than this frame can place, and what it places is a
+    // prefix of the whole thing rather than a sample of it.
+    expect(whole.length).toBeGreaterThan(shown.length);
+    expect(whole.slice(0, shown.length)).toEqual(shown);
+
+    // The exact request whose row this window does not reach.
+    const request = session.agent.requests.find(
+      (candidate) => !shown.includes(`sessions:request:${candidate.key}`),
+    );
+    if (request === undefined) {
+      throw new Error("every request was inside the first window");
+    }
+    const key = `sessions:request:${request.key}`;
+    // Past the window: not described, so not mounted, not focusable, not drawn
+    // and not in any target map.
+    expect(whole).toContain(key);
+    expect(shown).not.toContain(key);
+    const tree = yield* useReplTree<ReplAction>();
+    yield* applied(tree, first);
+    expect(nodeOf(tree, key)).toBe(undefined);
+    expect(placedFor(tree, layout(NARROW, replSurface(tree, first)), key)).toBe(undefined);
+
+    // Scrolling reaches it, and the control it becomes is the exact one that
+    // answers this request — by pointer, resolved from the frame that drew it.
+    const at = scrolledTo(standing, session, key);
+    const view = reading(at, session, NARROW);
+    yield* applied(tree, view);
+    const frame = layout(NARROW, replSurface(tree, view));
+    const placed = placedFor(tree, frame, key);
+    expect(placed).toBeDefined();
+    expect(placed?.targetable).toBe(true);
+    expect(yield* pointed(tree, frame, key)).toEqual({
+      kind: "select-permission",
+      request: request.key,
+    });
+    // The window controls never scroll away from whoever is using them.
+    expect(placedFor(tree, frame, "sessions:earlier")).toBeDefined();
+    expect(placedFor(tree, frame, "sessions:later")).toBeDefined();
+    expect(placedFor(tree, frame, "sessions:heading")).toBeDefined();
+
+    // And scrolling back recovers what was there before, rather than leaving a
+    // window that only travels one way.
+    let back = at;
+    for (let press = 0; press < 40 && back.viewports.sessions > 0; press += 1) {
+      back = acted(back, { kind: "scroll-sessions", delta: -1 }, session);
+    }
+    expect(back.viewports.sessions).toBe(0);
+    expect(sessionKeysOf(reading(back, session, NARROW))).toEqual(shown);
+  });
+
+  it("U6: the stored offset is clamped when the reading it was taken against changes", function* () {
+    const { session, stub } = yield* asking({
+      review: { permission: { toolCallId: "call-1", title: "Write", kind: "edit" } },
+      build: { permission: { toolCallId: "call-2", title: "Move", kind: "edit" } },
+      check: { permission: { toolCallId: "call-3", title: "Delete", kind: "edit" } },
+    });
+    yield* until(session, "all three Prompts being observed", () => observed(session) === 3);
+    yield* until(session, "all three turns being started", () => started(session) === 3);
+    yield* until(session, "all three requests waiting", () => session.agent.requests.length === 3);
+    const standing = onSessions(session);
+    const shown = sessionKeysOf(reading(standing, session, NARROW));
+    const beyond = session.agent.requests.find(
+      (candidate) => !shown.includes(`sessions:request:${candidate.key}`),
+    );
+    if (beyond === undefined) {
+      throw new Error("every request was inside the first window");
+    }
+    const scrolled = scrolledTo(standing, session, `sessions:request:${beyond.key}`);
+    expect(scrolled.viewports.sessions).toBeGreaterThan(0);
+
+    // Filtering is a different list, so the window starts again at its first
+    // row rather than at a number taken against the other one.
+    const filtered = acted(scrolled, { kind: "select-session", session: "stub:builder" }, session);
+    expect(filtered.viewports.sessions).toBe(0);
+    expect(acted(filtered, { kind: "all-sessions" }, session).viewports.sessions).toBe(0);
+
+    // A window cannot be scrolled past the end of the reading it is over, and
+    // what is stored is what is being shown: one press back moves it.
+    let far = scrolled;
+    for (let press = 0; press < 60; press += 1) {
+      far = acted(far, { kind: "scroll-sessions", delta: 1 }, session);
+    }
+    const furthest = far.viewports.sessions;
+    const stepped = acted(far, { kind: "scroll-sessions", delta: -1 }, session);
+    expect(stepped.viewports.sessions).toBe(furthest - 1);
+    expect(sessionKeysOf(reading(stepped, session, NARROW))).not.toEqual(
+      sessionKeysOf(reading(far, session, NARROW)),
+    );
+    // Nothing about any of this reached the location.
+    expect(reading(far, session, NARROW).location).not.toContain(String(furthest));
+    expect(stub.outcomes.size).toBe(0);
+  });
+});
+
+describe("U7 — the permission drawer is windowed", () => {
+  beforeAll(() => useTempFileCompiler());
+
+  it("U7: every offered choice becomes placed and pointable, in the provider's order", function* () {
+    const { session, stub } = yield* asking({
+      review: {
+        streaming: true,
+        permission: {
+          toolCallId: "call-1",
+          title: "Write",
+          kind: "edit",
+          options: SEVEN_CHOICES,
+        },
+      },
+      build: { streaming: true },
+      check: { queued: true },
+    });
+    yield* until(session, "a request waiting", () => session.agent.requests.length === 1);
+    const request = session.agent.requests[0];
+    if (request === undefined) {
+      throw new Error("no request was published");
+    }
+    expect(request.choices).toHaveLength(SEVEN_CHOICES.length);
+
+    const opened = acted(
+      onSessions(session),
+      { kind: "select-permission", request: request.key },
+      session,
+    );
+    const tree = yield* useReplTree<ReplAction>();
+    // More content than the smallest accepted drawer can place, so the first
+    // window is a prefix and the rest is reached by scrolling.
+    const firstWindow = drawerKeysOf(reading(opened, session, NARROW));
+    expect(firstWindow.length).toBeLessThan(SEVEN_CHOICES.length);
+
+    const reached: string[] = [];
+    let at = opened;
+    for (let press = 0; press < 20; press += 1) {
+      const view = reading(at, session, NARROW);
+      yield* applied(tree, view);
+      const frame = layout(NARROW, replSurface(tree, view));
+      for (const choice of SEVEN_CHOICES) {
+        const key = `drawer:permission:choice:${choice.optionId}`;
+        const placed = placedFor(tree, frame, key);
+        if (placed !== undefined && !reached.includes(choice.optionId)) {
+          // Placed means pointable: a choice a person can read is a choice they
+          // can take.
+          expect(placed.targetable).toBe(true);
+          expect(yield* pointed(tree, frame, key)).toEqual({
+            kind: "choose-permission",
+            request: request.key,
+            option: choice.optionId,
+          });
+          reached.push(choice.optionId);
+        }
+      }
+      // Leaving is never scrolled away from, whatever the window is showing.
+      expect(placedFor(tree, frame, "drawer:close")).toBeDefined();
+      // What the window is not showing is in no target map at all.
+      for (const key of drawerContentKeys) {
+        const described = keysOf(view).includes(key);
+        if (!described) {
+          expect(placedFor(tree, frame, key)).toBe(undefined);
+          expect(nodeOf(tree, key)).toBe(undefined);
+        }
+      }
+      if (reached.length === SEVEN_CHOICES.length) {
+        break;
+      }
+      at = acted(at, { kind: "scroll", delta: 1 }, session);
+    }
+    // Every one of them, in the order the provider offered them.
+    expect(reached).toEqual(SEVEN_CHOICES.map((choice) => choice.optionId));
+
+    // And taking one calls the authority exactly once.
+    const chose = reduceRepl(
+      at,
+      { kind: "choose-permission", request: request.key, option: "never" },
+      session.model,
+      liveReading(session),
+      NARROW,
+    );
+    expect(answer(session, chose.intent)).toBe(true);
+    yield* until(session, "the request being answered", () => stub.outcomes.size === 1);
+    expect(stub.outcomes.get("call-1")).toEqual({ outcome: "selected", optionId: "never" });
+    expect(stub.answers.get("call-1")).toBe(1);
+    // The window over it is gone with it: the next request opens at its own
+    // first row.
+    expect(permissionSettled(chose.state, request.turn).viewports.permission).toBe(0);
+  });
+
+  it("U7: closing a scrolled drawer denies exactly once", function* () {
+    const { session, stub } = yield* asking({
+      review: {
+        streaming: true,
+        permission: {
+          toolCallId: "call-1",
+          title: "Write",
+          kind: "edit",
+          options: SEVEN_CHOICES,
+        },
+      },
+      build: { streaming: true },
+      check: { queued: true },
+    });
+    yield* until(session, "a request waiting", () => session.agent.requests.length === 1);
+    const request = session.agent.requests[0];
+    if (request === undefined) {
+      throw new Error("no request was published");
+    }
+    let at = acted(
+      onSessions(session),
+      { kind: "select-permission", request: request.key },
+      session,
+    );
+    at = acted(at, { kind: "scroll", delta: 1 }, session);
+    at = acted(at, { kind: "scroll", delta: 1 }, session);
+    expect(at.viewports.permission).toBeGreaterThan(0);
+
+    const tree = yield* useReplTree<ReplAction>();
+    const view = reading(at, session, NARROW);
+    yield* applied(tree, view);
+    const frame = layout(NARROW, replSurface(tree, view));
+    // Still there, whatever the window is showing, and it denies this request
+    // rather than meaning "this changed nothing".
+    const closing = yield* pointed(tree, frame, "drawer:close");
+    expect(closing).toEqual({ kind: "dismiss-permission", request: request.key });
+    const dismissed = reduceRepl(at, closing, session.model, liveReading(session), NARROW);
+    expect(answer(session, dismissed.intent)).toBe(true);
+    yield* until(session, "the request being denied", () => stub.outcomes.size === 1);
+    expect(stub.answers.get("call-1")).toBe(1);
+    expect(session.permissions.dismiss(request.key)).toBe(false);
+    expect(stub.answers.get("call-1")).toBe(1);
+    expect(session.live).toBe(true);
+  });
+});
+
+describe("U8 — a target is a control, whatever its key is spelled", () => {
+  beforeAll(() => useTempFileCompiler());
+
+  it("U8: values named like a turn's facts are still pointer-equivalent to Enter", function* () {
+    // Conversations named after the suffixes a turn's own read-only facts carry,
+    // and options named the same way: a rule about spelling would take the
+    // pointer away from every one of them.
+    const { session } = yield* asking(
+      {
+        review: {
+          streaming: true,
+          permission: {
+            toolCallId: "call-1",
+            title: "Write",
+            kind: "edit",
+            options: NAMED_LIKE_FACTS,
+          },
+        },
+        build: { streaming: true },
+      },
+      "approve-reads",
+      SPAWNS_NAMED_LIKE_FACTS,
+    );
+    yield* until(session, "a request waiting", () => session.agent.requests.length === 1);
+    const request = session.agent.requests[0];
+    if (request === undefined) {
+      throw new Error("no request was published");
+    }
+
+    const standing = onSessions(session);
+    const tree = yield* useReplTree<ReplAction>();
+    const view = reading(standing, session, WIDE);
+    yield* applied(tree, view);
+    const frame = layout(WIDE, replSurface(tree, view));
+
+    // A conversation whose provider key ends in `:text`.
+    const conversation = "sessions:conversation:stub:text";
+    expect(keysOf(view)).toContain(conversation);
+    yield* focusTo(tree, conversation);
+    const pressed = yield* activate(tree);
+    expect(pressed).toEqual({ kind: "select-session", session: "stub:text" });
+    expect(yield* pointed(tree, frame, conversation)).toEqual(pressed);
+
+    // And every option named after one of those facts.
+    const opened = acted(standing, { kind: "select-permission", request: request.key }, session);
+    const drawer = reading(opened, session, WIDE);
+    yield* applied(tree, drawer);
+    const drawerFrame = layout(WIDE, replSurface(tree, drawer));
+    for (const choice of NAMED_LIKE_FACTS) {
+      const key = `drawer:permission:choice:${choice.optionId}`;
+      yield* focusTo(tree, key);
+      const chose = yield* activate(tree);
+      expect(chose).toEqual({
+        kind: "choose-permission",
+        request: request.key,
+        option: choice.optionId,
+      });
+      expect(yield* pointed(tree, drawerFrame, key)).toEqual(chose);
+    }
+  });
+
+  it("U8: a fact is read, not activated, wherever it is drawn", function* () {
+    const { session } = yield* asking({
+      review: {
+        streaming: true,
+        permission: { toolCallId: "call-1", title: "Write", kind: "edit" },
+      },
+      build: { streaming: true },
+      check: { queued: true },
+    });
+    yield* until(session, "a request waiting", () => session.agent.requests.length === 1);
+    const request = session.agent.requests[0];
+    if (request === undefined) {
+      throw new Error("no request was published");
+    }
+    const tree = yield* useReplTree<ReplAction>();
+
+    // On the REPL surface the pending request is a fact: the grammar answers one
+    // on Sessions, so a control here would be a target that refuses.
+    const onRepl = reading(initialState("agents"), session, WIDE);
+    yield* applied(tree, onRepl);
+    const replFrame = layout(WIDE, replSurface(tree, onRepl));
+    const fact = placedFor(tree, replFrame, `sessions:request:${request.key}`);
+    expect(fact).toBeDefined();
+    expect(fact?.targetable).toBe(false);
+
+    // Inside the drawer, what a person decides *about* is read the same way.
+    const opened = acted(
+      onSessions(session),
+      { kind: "select-permission", request: request.key },
+      session,
+    );
+    const drawer = reading(opened, session, WIDE);
+    yield* applied(tree, drawer);
+    const drawerFrame = layout(WIDE, replSurface(tree, drawer));
+    for (const key of drawerContentKeys) {
+      const placed = placedFor(tree, drawerFrame, key);
+      expect(placed).toBeDefined();
+      expect(placed?.targetable).toBe(false);
+    }
+    // A turn's own facts and a retained audit are lines wherever they appear.
+    const sessions = reading(onSessions(session), session, WIDE);
+    yield* applied(tree, sessions);
+    const sessionsFrame = layout(WIDE, replSurface(tree, sessions));
+    for (const cell of sessionsFrame.cells) {
+      const key = tree.keyOf(cell.node) ?? "";
+      if (TURN_FACT_SUFFIXES.some((suffix) => key.endsWith(suffix))) {
+        expect(cell.targetable).toBe(false);
+      }
+    }
   });
 });
 
