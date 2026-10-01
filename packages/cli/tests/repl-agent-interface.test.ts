@@ -3146,7 +3146,11 @@ describe("EU1 — selecting an entry moves the transcript locus and nothing else
   beforeAll(() => useTempFileCompiler());
 
   /** Two entries, each with one recorded turn in one provider conversation. */
-  function* twoRecordedEntries(): Operation<{ session: ReplSession; stub: Stub }> {
+  function* twoRecordedEntries(): Operation<{
+    session: ReplSession;
+    stub: Stub;
+    holder: ReplExecution;
+  }> {
     const stub = createStub({ two: { unrecorded: true } });
     yield* useStub(stub);
     const holder = execution();
@@ -3164,7 +3168,7 @@ describe("EU1 — selecting an entry moves the transcript locus and nothing else
     yield* until(session, "the second entry's turn reaching its terminal event", () =>
       session.agent.turns.some((turn) => turn.state === "terminal"),
     );
-    return { session, stub };
+    return { session, stub, holder };
   }
 
   it("EU1: selecting an entry changes the locus, and leaves Sessions global", function* () {
@@ -3231,6 +3235,171 @@ describe("EU1 — selecting an entry moves the transcript locus and nothing else
     expect(session.model.turns).toHaveLength(appendsBefore);
     expect(session.live).toBe(false);
     expect(session.agent.requests).toEqual([]);
+  });
+
+  /** Mount one view and lay it out, the way the program does before a pointer lands. */
+  function* framed(
+    tree: ReplTree<ReplAction>,
+    view: ReplView,
+    size: ReplTerminalSize,
+  ): Operation<ReplSemanticFrame> {
+    yield* applied(tree, view);
+    return layout(size, replSurface(tree, view));
+  }
+
+  /**
+   * What one mounted control asks for, by key and by pointer.
+   *
+   * Both, and asserted equal: a control a person can reach two ways has to mean
+   * one thing, and a pointer is resolved against the exact frame that drew it
+   * rather than against the tree.
+   */
+  function* asked(
+    tree: ReplTree<ReplAction>,
+    view: ReplView,
+    size: ReplTerminalSize,
+    key: string,
+  ): Operation<ReplAction> {
+    const frame = yield* framed(tree, view, size);
+    const placed = placedFor(tree, frame, key);
+    expect([key, placed !== undefined]).toEqual([key, true]);
+    expect([key, placed?.targetable]).toEqual([key, true]);
+    const pointer = yield* pointed(tree, frame, key);
+    yield* focusTo(tree, key);
+    const pressed = yield* activate(tree);
+    expect(pointer).toEqual(pressed);
+    return pressed;
+  }
+
+  /** One action reduced against one explicit model, refusing to carry a refusal on. */
+  function reducedAt(
+    state: ReplState,
+    action: ReplAction,
+    model: ReplModel,
+    session: ReplSession,
+    size: ReplTerminalSize,
+  ): ReplState {
+    const next = reduceRepl(state, action, model, liveReading(session), size);
+    if (next.state.refusal !== undefined) {
+      throw new Error(`${action.kind} was refused: ${next.state.refusal}`);
+    }
+    return next.state;
+  }
+
+  it("ER1: a narrow round trip to Sessions keeps the entry, the draft and the filter", function* () {
+    const { session, stub, holder } = yield* twoRecordedEntries();
+    stub.record("root");
+    yield* until(session, "the second entry's turn being recorded", () => recorded(session) === 2);
+    yield* session.join();
+
+    // Read at one retained position, so this round trip carries history state
+    // alongside the selection, the draft and the conversation filter. The last
+    // one, because what each entry's transcript holds has to be distinguishable
+    // for the locus below to be a claim about which entry is being read.
+    const marker = session.model.checkpoints[session.model.checkpoints.length - 1]?.marker;
+    if (marker === undefined) {
+      throw new Error("this journal offers at least one position");
+    }
+    const model = yield* projectedAt(holder, marker);
+    expect(model.entries.map((entry) => entry.key)).toEqual(["entry-1", "entry-2"]);
+    expect(model.sessions.map((one) => one.sessionKey)).toEqual(["stub:planner"]);
+
+    const drafted = withDraft(initialState("agents"), "the next one");
+    const standing: ReplState = Object.freeze({
+      ...drafted,
+      route: Object.freeze({
+        ...drafted.route,
+        at: marker,
+        inspect: true,
+        session: "stub:planner",
+      }),
+    });
+    const tree = yield* useReplTree<ReplAction>();
+
+    // 1. Select the second entry through its own mounted catalog row.
+    const catalog = reading(standing, session, NARROW, undefined, model);
+    expect(yield* asked(tree, catalog, NARROW, "entry:entry-2")).toEqual({
+      kind: "select-scope",
+      scopes: ["entry-2"],
+    });
+    const onEntry = reducedAt(
+      standing,
+      { kind: "select-scope", scopes: ["entry-2"] },
+      model,
+      session,
+      NARROW,
+    );
+    const entryView = reading(onEntry, session, NARROW, undefined, model);
+    expect(entryView.selection.entry?.key).toBe("entry-2");
+    // The locus this round trip has to come back to.
+    const locus = transcriptLines(entryView);
+    expect(locus).toContain("two done");
+    expect(locus).not.toContain("one done");
+
+    // 2. Go to Sessions through the mounted surface control, which a narrow
+    //    frame keeps outside the outlet it leaves.
+    expect(yield* asked(tree, entryView, NARROW, "sessions:heading")).toEqual({
+      kind: "select-surface",
+      surface: "sessions",
+    });
+    const onSessions = reducedAt(
+      onEntry,
+      { kind: "select-surface", surface: "sessions" },
+      model,
+      session,
+      NARROW,
+    );
+
+    // Everything it was carrying is still carried, and the location says so.
+    expect(onSessions.route.surface).toBe("sessions");
+    expect(onSessions.route.scopes).toEqual(["entry-2"]);
+    expect(onSessions.draft).toBe("the next one");
+    expect(onSessions.route.draft).toBe("the next one");
+    expect(onSessions.route.session).toBe("stub:planner");
+    expect(onSessions.route.at).toBe(marker);
+    expect(onSessions.route.inspect).toBe(true);
+    const sessionsView = reading(onSessions, session, NARROW, undefined, model);
+    expect(sessionsView.location).toContain("/sessions/entry-2");
+    expect(sessionsView.selection.entry?.key).toBe("entry-2");
+
+    // Sessions is still the execution's whole chronology: both entries' turns,
+    // under the one conversation the provider named — and exactly the reading it
+    // is with no entry selected, so selecting one narrowed nothing.
+    expect(turnRows(sessionsView)).toHaveLength(2);
+    expect(labelOf(sessionsView, "one")).toContain("recorded");
+    expect(labelOf(sessionsView, "two")).toContain("recorded");
+    expect(conversationRows(sessionsView)).toEqual(["sessions:conversation:stub:planner"]);
+    const unselected = reading(
+      Object.freeze({ ...standing, route: Object.freeze({ ...onSessions.route, scopes: [] }) }),
+      session,
+      NARROW,
+      undefined,
+      model,
+    );
+    expect(sessionKeysOf(sessionsView)).toEqual(sessionKeysOf(unselected));
+
+    // 3. And back, through the other mounted surface control, to the same locus.
+    expect(yield* asked(tree, sessionsView, NARROW, "entries:heading")).toEqual({
+      kind: "select-surface",
+      surface: "repl",
+    });
+    const back = reducedAt(
+      onSessions,
+      { kind: "select-surface", surface: "repl" },
+      model,
+      session,
+      NARROW,
+    );
+    expect(back.route.surface).toBe("repl");
+    expect(back.route.scopes).toEqual(["entry-2"]);
+    expect(back.draft).toBe("the next one");
+    expect(back.route.session).toBe("stub:planner");
+    expect(back.route.at).toBe(marker);
+    const returned = reading(back, session, NARROW, undefined, model);
+    expect(returned.selection.entry?.key).toBe("entry-2");
+    expect(transcriptLines(returned)).toEqual(locus);
+    // One location either way.
+    expect(returned.location).toBe(entryView.location);
   });
 
   it("EU1: entry keys and mounted nodes survive publication and an outcome change", function* () {

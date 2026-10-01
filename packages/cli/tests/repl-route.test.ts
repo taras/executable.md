@@ -17,7 +17,12 @@ import type { DurableEvent } from "@executablemd/durable-streams";
 import { projectRepl } from "../src/repl/model.ts";
 import type { ReplModel } from "../src/repl/model.ts";
 import { decodeLocation, encodeLocation, NO_LIVE, resolveLocation } from "../src/repl/route.ts";
-import type { ReplLiveAvailability, ReplRoute, ReplSelection } from "../src/repl/route.ts";
+import type {
+  ReplDrawerRef,
+  ReplLiveAvailability,
+  ReplRoute,
+  ReplSelection,
+} from "../src/repl/route.ts";
 import { agentReferenceEvents, referenceEvents } from "./fixtures/repl/reference.ts";
 
 function decoded(location: string): ReplRoute {
@@ -179,12 +184,11 @@ describe("REPL route: the grammar", () => {
     // unspellable. Which surface is being read and which entry is selected are
     // independent members of one location (#827 Slice C), so what cannot be
     // spelled on Sessions is a drawer that opens over a scope.
+    // Declared, so the drawer this spells is the one the grammar defines rather
+    // than a shape this row asserts into place.
+    const binding: ReplDrawerRef = { kind: "binding", name: "plan" };
     expect(() =>
-      encodeLocation({
-        ...route,
-        surface: "sessions",
-        drawers: Object.freeze([{ kind: "binding", name: "plan" } as const]),
-      }),
+      encodeLocation({ ...route, surface: "sessions", drawers: Object.freeze([binding]) }),
     ).toThrow();
   });
 
