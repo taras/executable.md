@@ -3119,3 +3119,121 @@ describe("U9 — two entries whose Prompts share one durable name", () => {
     expect(session.model.sessions[0]?.turns).toHaveLength(2);
   });
 });
+
+/** The catalog rows one view describes, in the order it describes them. */
+function catalogRows(view: ReplView): Array<{ key: string; label: string }> {
+  return rowsOf(describeApplication(view)).filter((one) => one.key.startsWith("entry:"));
+}
+
+/** The label of the catalog row for one entry key. */
+function catalogLabel(view: ReplView, entry: string): string {
+  const found = catalogRows(view).find((one) => one.key === `entry:${entry}`);
+  if (found === undefined) {
+    throw new Error(`this catalog has no row for ${entry}`);
+  }
+  return found.label;
+}
+
+describe("EU1 — selecting an entry moves the transcript locus and nothing else", () => {
+  beforeAll(() => useTempFileCompiler());
+
+  /** Two entries, each with one recorded turn in one provider conversation. */
+  function* twoRecordedEntries(): Operation<{ session: ReplSession; stub: Stub }> {
+    const stub = createStub({ two: { unrecorded: true } });
+    yield* useStub(stub);
+    const holder = execution();
+    const session = granted(
+      yield* submitReplEntry({
+        execution: holder,
+        installations: installations(),
+        permissionMode: "deny-all",
+        source: onePromptAt("one"),
+      }),
+    );
+    yield* until(session, "the first entry's turn being recorded", () => recorded(session) === 1);
+    yield* session.join();
+    expect((yield* session.submit(onePromptAt("two"))).ok).toBe(true);
+    yield* until(session, "the second entry's turn reaching its terminal event", () =>
+      session.agent.turns.some((turn) => turn.state === "terminal"),
+    );
+    return { session, stub };
+  }
+
+  it("EU1: selecting an entry changes the locus, and leaves Sessions global", function* () {
+    const { session, stub } = yield* twoRecordedEntries();
+    stub.record("root");
+    yield* until(session, "the second entry's turn being recorded", () => recorded(session) === 2);
+    yield* session.join();
+
+    // Standing with a draft, a conversation filter, and the first entry
+    // selected: everything selecting another entry must leave alone.
+    let standing = withDraft(initialState("agents"), "the next one");
+    standing = acted(standing, { kind: "select-scope", scopes: ["entry-1"] }, session);
+    standing = acted(standing, { kind: "select-session", session: "stub:planner" }, session);
+    const before = reading(standing, session);
+    expect(before.selection.entry?.key).toBe("entry-1");
+    const turnsBefore = turnRows(before);
+    const conversationsBefore = conversationRows(before);
+    const appendsBefore = session.model.turns.length;
+
+    const selected = acted(standing, { kind: "select-scope", scopes: ["entry-2"] }, session);
+    const after = reading(selected, session);
+
+    // The locus moved, and that is the whole of what moved.
+    expect(after.selection.entry?.key).toBe("entry-2");
+    expect(after.selection.scope?.key).toBe("entry-2");
+    expect(before.selection.entry?.key).toBe("entry-1");
+
+    // The draft, the marker, the surface and the conversation filter all stand.
+    expect(selected.draft).toBe("the next one");
+    expect(selected.route.draft).toBe("the next one");
+    expect(selected.route.at).toBe(undefined);
+    expect(selected.route.surface).toBe("repl");
+    expect(selected.route.session).toBe("stub:planner");
+
+    // Sessions is one execution-wide chronology and selecting an entry never
+    // narrows it: both entries' turns are still in it, in the same order, under
+    // the one conversation the provider named.
+    expect(turnRows(after)).toEqual(turnsBefore);
+    expect(conversationRows(after)).toEqual(conversationsBefore);
+    expect(conversationRows(after)).toEqual(["sessions:conversation:stub:planner"]);
+    expect(session.model.sessions.map((one) => one.sessionKey)).toEqual(["stub:planner"]);
+    expect(session.model.sessions[0]?.turns).toHaveLength(2);
+    expect(labelOf(after, "one")).toBe(labelOf(before, "one"));
+    expect(labelOf(after, "two")).toBe(labelOf(before, "two"));
+
+    // And no live execution, Agent work or history was touched by a selection.
+    expect(session.model.turns).toHaveLength(appendsBefore);
+    expect(session.live).toBe(false);
+    expect(session.agent.requests).toEqual([]);
+  });
+
+  it("EU1: entry keys and mounted nodes survive publication and an outcome change", function* () {
+    const { session, stub } = yield* twoRecordedEntries();
+    const tree = yield* useReplTree<ReplAction>();
+
+    // The second entry's root cannot close until its Prompt publishes, so the
+    // catalog honestly says it has not settled.
+    const before = reading(initialState("agents"), session);
+    expect(catalogRows(before).map((one) => one.key)).toEqual(["entry:entry-1", "entry:entry-2"]);
+    expect(catalogLabel(before, "entry-1")).toContain("ok");
+    expect(catalogLabel(before, "entry-2")).toContain("unfinished");
+    yield* applied(tree, before);
+    const nodes = ["entry-1", "entry-2"].map((key) => nodeOf(tree, `entry:${key}`));
+    expect(nodes.every((node) => node !== undefined)).toBe(true);
+
+    stub.record("root");
+    yield* until(session, "the second entry's turn being recorded", () => recorded(session) === 2);
+    yield* session.join();
+
+    // The outcome changed under it, which is the point: a row whose identity
+    // came from its place in the window would have moved, and a row keyed by
+    // its entry does not.
+    const after = reading(initialState("agents"), session);
+    expect(catalogRows(after).map((one) => one.key)).toEqual(["entry:entry-1", "entry:entry-2"]);
+    expect(catalogLabel(after, "entry-2")).toContain("ok");
+    expect(catalogLabel(after, "entry-2")).not.toContain("unfinished");
+    yield* applied(tree, after);
+    expect(["entry-1", "entry-2"].map((key) => nodeOf(tree, `entry:${key}`))).toEqual(nodes);
+  });
+});

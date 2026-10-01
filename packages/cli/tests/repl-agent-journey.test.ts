@@ -1660,6 +1660,14 @@ function maybeLocation(terminal: Terminal): string | undefined {
       break;
     }
     parts.push(part.trimEnd());
+    // Every row of a location is padded to the full surface width, so a row
+    // with space left on its end is the last of them. Without this the row
+    // drawn underneath joins on, and the round-trip below cannot always tell:
+    // a location ending in `/entry-2` followed by a transcript row beginning
+    // `entry ...` re-encodes as `/entry-2entry` exactly as written.
+    if (part.trimEnd().length < part.length) {
+      break;
+    }
   }
 
   const joined = parts.join("");
@@ -1852,7 +1860,15 @@ function* typed(terminal: Terminal, text: string): Operation<void> {
   terminal.feed("\r");
   yield* sleep(200);
   yield* settled(20);
-  yield* showing(terminal, "(one entry admitted)");
+  // The draft leaving the location is what says the entry exists. It used to be
+  // the footer notice that replaced the draft once one did; a draft is now
+  // execution-wide and survives admission as the *next* entry's text (#827
+  // Slice C), so what clears is the one this helper just typed — and it clears
+  // only when it has become an entry.
+  yield* until(
+    () => !(maybeLocation(terminal) ?? "draft=").includes("draft="),
+    "the draft never became an entry",
+  );
 }
 
 /** Type a value into the field this label names. */

@@ -21,6 +21,12 @@
  * split is what keeps a typo in a location from being answered with a guess
  * about the history.
  *
+ * `draft` is the next entry's text, and it is execution-wide. An admitted entry
+ * is immutable, so what is being typed is always the one *after* whatever a
+ * reader is looking at — which is why it accompanies a selected entry, a nested
+ * scope, a drawer stack, a conversation filter and a frozen history position
+ * rather than being a state the execution can only be in before its first entry.
+ *
  * `session` selects one Agent conversation to filter the Sessions list by. It
  * is the provider's own session key, which is the one name for a conversation
  * that a second process reading the same Journal would arrive at too. The live
@@ -32,7 +38,6 @@
 import { Err, Ok } from "effection";
 import type { Result } from "effection";
 
-import { ENTRY_SCOPE } from "./model.ts";
 import type {
   ReplAgentSession,
   ReplBinding,
@@ -74,7 +79,15 @@ export interface ReplRoute {
   readonly at: string | undefined;
   /** Whether that frozen position is read-only. Requires `at`. */
   readonly inspect: boolean;
-  /** Text typed but not yet admitted. Exists only before an entry does. */
+  /**
+   * Text typed for the next entry and not yet admitted.
+   *
+   * Execution-wide rather than a state one entry can be in: an entry is
+   * immutable once admitted, so what is being typed is always the *next* one and
+   * is a different thing from whichever entry a reader happens to be looking at.
+   * It therefore accompanies a selected entry, a nested scope, either surface, a
+   * drawer stack, a conversation filter and a frozen history position.
+   */
   readonly draft: string | undefined;
   /**
    * The one conversation the Sessions list is filtered to, by provider session
@@ -122,6 +135,7 @@ export type ReplDrawer =
 export interface ReplSelection {
   readonly route: ReplRoute;
   readonly surface: ReplSurface;
+  /** The root scope of the entry this location selected, when it selected one. */
   readonly entry: ReplScope | undefined;
   /** The entry and each selected nested scope, outermost first. */
   readonly ancestry: readonly ReplScope[];
@@ -213,12 +227,6 @@ export function decodeLocation(location: string): Result<ReplRoute> {
   if (query.inspect && query.at === undefined) {
     return refuse("inspecting a history position needs the position");
   }
-  if (query.draft !== undefined && (query.at !== undefined || scopes.length > 0)) {
-    return refuse(
-      "a draft is text no entry has admitted yet, so it cannot accompany an admitted " +
-        "structure or a history position",
-    );
-  }
 
   return Ok({
     execution,
@@ -272,9 +280,6 @@ export function encodeLocation(route: ReplRoute): string {
   }
   if (route.inspect && route.at === undefined) {
     throw new TypeError("inspecting a history position needs the position");
-  }
-  if (route.draft !== undefined && (route.at !== undefined || route.scopes.length > 0)) {
-    throw new TypeError("a draft cannot accompany an admitted structure or a history position");
   }
   if (route.session !== undefined && route.session.length === 0) {
     throw new TypeError("a session filter names one conversation");
@@ -356,34 +361,27 @@ export function resolveLocation(
       drawers: opened.value,
     });
   }
-  // The first entry's scope, which is the only entry this slice's route grammar
-  // selects. Entry selection across the collection is the route work this
-  // Story's later slice owns; what changed here is where the one entry is read
-  // from, not which entries a location may name.
-  const admitted = model.entries[0]?.scope;
-  if (route.draft !== undefined && admitted !== undefined) {
-    return Err(
-      new ReplRouteError(
-        "this route carries a draft, and this execution has already admitted its entry. An " +
-          "admitted entry is immutable.",
-      ),
-    );
-  }
-
+  // The first structural member is the entry, by its own admission-order key,
+  // and every nested scope is resolved beneath that one entry. An entry this
+  // prefix did not admit refuses here rather than falling back to another: a
+  // location naming something the history does not hold is a location to
+  // answer, not to guess at.
   const ancestry: ReplScope[] = [];
+  let entry: ReplScope | undefined;
   let scope: ReplScope | undefined;
   for (const key of route.scopes) {
     if (scope === undefined) {
-      if (key !== ENTRY_SCOPE) {
-        return Err(new ReplRouteError(`this execution has no ${key}.`));
-      }
+      const admitted = model.entries.find((candidate) => candidate.key === key)?.scope;
       if (admitted === undefined) {
         return Err(
           new ReplRouteError(
-            "this route selects an entry, and this execution has not admitted one yet.",
+            model.entries.length === 0
+              ? "this route selects an entry, and this execution has not admitted one yet."
+              : `this execution has no ${key}.`,
           ),
         );
       }
+      entry = admitted;
       scope = admitted;
       ancestry.push(scope);
       continue;
@@ -404,7 +402,7 @@ export function resolveLocation(
   return Ok({
     route,
     surface: "repl",
-    entry: admitted,
+    entry,
     ancestry: Object.freeze(ancestry),
     scope,
     session: filtered.value,

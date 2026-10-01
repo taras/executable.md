@@ -441,6 +441,25 @@ function* focusOn(terminal: Terminal, label: string, limit = 240): Operation<voi
 }
 
 /**
+ * Put focus on the entry draft.
+ *
+ * There is no label to aim at: the draft is empty, and what it draws is its own
+ * prompt. So the marker and the prompt together are what name it — a focused
+ * field renders its marker immediately before its prompt, and the draft's
+ * prompt is the only one on this screen that is itself a marker.
+ */
+function* focusDraft(terminal: Terminal, limit = 240): Operation<void> {
+  for (let press = 0; press <= limit; press += 1) {
+    if (screenOf(terminal).some((line) => line.includes(">> "))) {
+      return;
+    }
+    terminal.feed("\t");
+    yield* settled(12);
+  }
+  throw new Error(`focus never reached the entry draft in ${limit} presses`);
+}
+
+/**
  * Whether the control holding focus is the one this label names.
  *
  * Anchored to the marker rather than matched anywhere on the line, because a
@@ -488,6 +507,14 @@ function maybeLocation(terminal: Terminal): string | undefined {
       break;
     }
     parts.push(part.trimEnd());
+    // Every row of a location is padded to the full surface width, so a row
+    // with space left on its end is the last of them. Without this the row
+    // drawn underneath joins on, and the round-trip below cannot always tell:
+    // a location ending in `/entry-2` followed by a transcript row beginning
+    // `entry ...` re-encodes as `/entry-2entry` exactly as written.
+    if (part.trimEnd().length < part.length) {
+      break;
+    }
   }
 
   // The rows below a location belong to whatever is drawn under it, and a row that
@@ -800,9 +827,18 @@ describe("REPL journey: one entry, from raw bytes", () => {
         }
       }
 
-      // The entry is admitted and immutable, and the question it reaches is
-      // being asked.
-      expect(shows(terminal, "(one entry admitted)")).toBe(true);
+      // The entry is admitted and it has not settled, and the question it
+      // reaches is being asked.
+      //
+      // Read from the history rather than from the screen. The footer used to
+      // report admission, because the draft was replaced by a notice once an
+      // entry existed; a draft is now execution-wide and goes on being typed
+      // while an entry runs (#827 Slice C), so what says an entry exists is its
+      // catalog row — and that row is in the sidebar, behind the open drawer.
+      const admittedModel = yield* projectionOf(root, files[0]);
+      expect(admittedModel.entries.map((entry) => entry.key)).toEqual(["entry-1"]);
+      expect(admittedModel.entries[0]?.source).toBe(source);
+      expect(admittedModel.entries[0]?.settled).toBe(false);
       expect(shows(terminal, "Approve Ship the REPL?")).toBe(true);
 
       terminal.end();
@@ -857,9 +893,9 @@ describe("REPL journey: one entry, from raw bytes", () => {
       const recorded = lines.filter((line) => line.includes("elicit"));
       expect(recorded.length).toBeGreaterThan(0);
       expect(shows(terminal, "Decision: approve")).toBe(true);
-      // Settled: the root closed, so the answer is in the history and the entry
-      // is immutable.
-      expect(shows(terminal, "(one entry admitted)")).toBe(true);
+      // Settled: the root closed, so the answer is in the history and the
+      // entry's catalog row carries the outcome it closed with.
+      expect(shows(terminal, "\u00b7 ok")).toBe(true);
 
       terminal.end();
       yield* running;
@@ -1213,7 +1249,7 @@ describe("REPL journey: what it refuses, and what it leaves alone", () => {
       // answer field rather than the draft. Dismissed first, and focus put back on
       // the draft, so what follows really is an attempt to submit a second entry.
       yield* dismissQuestion(terminal);
-      yield* focusOn(terminal, "(one entry admitted)");
+      yield* focusDraft(terminal);
 
       terminal.bytes(BYTES.encode("<Json value={1} />"));
       yield* settled(30);
@@ -1222,9 +1258,14 @@ describe("REPL journey: what it refuses, and what it leaves alone", () => {
 
       // The submission path itself refused, history did not change, and the
       // screen says why rather than appearing to do nothing.
+      //
+      // Superseded: this used to assert the one-entry ceiling. That ceiling is
+      // gone — what refuses here is the lifecycle, because the entry before
+      // this one is still running (#827 Slice C). The draft the refusal left is
+      // exactly what was typed, which is the other half of the contract.
       expect(yield* records(root, files[0])).toEqual(admitted);
-      expect(shows(terminal, "(one entry admitted)")).toBe(true);
-      expect(shows(terminal, "admits one entry")).toBe(true);
+      expect(shows(terminal, "has not finished")).toBe(true);
+      expect(locationOn(terminal)).toContain("draft=");
 
       terminal.end();
       yield* running;
@@ -1465,7 +1506,7 @@ describe("REPL journey: the whole of it, from raw bytes", () => {
       yield* settled(30);
       terminal.feed("\r");
       yield* until_(terminal, "the answer's output", (t) => shows(t, "Decision: approve"));
-      expect(shows(terminal, "(one entry admitted)")).toBe(true);
+      expect(shows(terminal, "\u00b7 ok")).toBe(true);
 
       // The generated fragment's source is on screen above the row that admits it.
       // Which two rows those are comes from the model rather than from a guess at
@@ -2306,6 +2347,98 @@ describe("REPL journey: output nothing records still reaches the screen", () => 
       gate.resolve();
       yield* until_(terminal, "the question", (t) => shows(t, "Decide?"));
       expect((yield* records(root, files[0])).length).toBeGreaterThan(0);
+
+      terminal.end();
+      yield* running;
+    });
+  });
+});
+
+/**
+ * Type one source into the draft and admit it as an entry.
+ *
+ * What says the entry exists is the draft leaving the location: it clears only
+ * once it has become one, and it is the thing this helper just put there.
+ */
+function* submitted(terminal: Terminal, source: string): Operation<void> {
+  yield* focusDraft(terminal);
+  terminal.bytes(BYTES.encode(source));
+  yield* settled(60);
+  terminal.feed("\r");
+  yield* until_(
+    terminal,
+    "the draft becoming an entry",
+    (one) => !(maybeLocation(one) ?? "draft=").includes("draft="),
+  );
+}
+
+/**
+ * The history action against a prefix the selected entry predates (#827 ER1).
+ *
+ * Through the running command, because the clearing is a decision the loop
+ * makes with a model it has just reprojected: the view the standing route asks
+ * for does not resolve at the chosen position, and what the loop does about
+ * that is the behavior. Driving the reducer alone would prove the decision and
+ * not that anything calls it.
+ */
+describe("REPL journey: a position earlier than the entry being read", () => {
+  it("ER1: the invalid entry clears, and the draft, surface and position stand", function* () {
+    const { terminal, install } = recordingTerminal();
+
+    yield* scoped(function* (): Operation<void> {
+      yield* install();
+      yield* immediateClock();
+      yield* useTempFileCompiler();
+      const root = yield* useTemporaryHost();
+
+      const running = yield* spawn(function* (): Operation<void> {
+        const ran = yield* runReplProgram({ profile: PROFILE });
+        if (!ran.ok) {
+          throw ran.error;
+        }
+      });
+      yield* untilDrawn(terminal);
+      const files = yield* histories(root);
+
+      // Two entries, one after the other, through the one command. The second
+      // is submitted without reopening anything, which is the Story's point.
+      yield* submitted(terminal, "One.\n");
+      yield* submitted(terminal, "Two.\n");
+      const head = yield* projectionOf(root, files[0]);
+      expect(head.entries.map((entry) => entry.key)).toEqual(["entry-1", "entry-2"]);
+
+      // Standing on the second entry, with the next one already being typed.
+      yield* activate(terminal, "2. entry-2");
+      yield* focusDraft(terminal);
+      terminal.bytes(BYTES.encode("Three."));
+      yield* settled(40);
+      expect(locationOn(terminal)).toContain("draft=Three.");
+
+      // A position from before the second entry was ever admitted.
+      yield* activate(terminal, "[history]");
+      const markers = drawerMarkers(terminal);
+      expect(markers.length).toBeGreaterThan(1);
+      yield* activate(terminal, markers[0] ?? "");
+      // The drawer is read through, so it is closed before the location is.
+      terminal.feed("\x1b");
+      yield* settled(40);
+
+      const after = decodeLocation(locationOn(terminal));
+      expect(after.ok).toBe(true);
+      if (after.ok) {
+        // The entry that prefix never admitted is gone, and nothing was
+        // guessed in its place.
+        expect(after.value.scopes).toEqual([]);
+        // The position is what was asked for, and it stands.
+        expect(after.value.at).toBeDefined();
+        expect(after.value.inspect).toBe(true);
+        // So do the draft and the surface.
+        expect(after.value.draft).toBe("Three.");
+        expect(after.value.surface).toBe("repl");
+      }
+      // And the catalog is the one that prefix holds, rather than the head's.
+      expect(shows(terminal, "1. entry-1")).toBe(true);
+      expect(shows(terminal, "2. entry-2")).toBe(false);
 
       terminal.end();
       yield* running;
