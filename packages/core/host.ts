@@ -67,7 +67,21 @@
  * or a second loaded copy to reach.
  */
 export { executeInstalled } from "./src/execute.ts";
-export type { ExecutionInstallation, JournalAdmission } from "./src/execute.ts";
+/**
+ * `ExecutionInitialization` is the fourth, and it is input rather than
+ * infrastructure: the root JSON bindings one execution starts with, supplied
+ * beside the root source by whoever already holds them.
+ *
+ * It is exported here and nowhere else. `execute()` does not take it, no
+ * authoring export names it, and no installation carries it — a document that
+ * could name what a previous execution retained could ask for it, and the only
+ * host with a predecessor to inherit from is the one that kept the journal.
+ */
+export type {
+  ExecutionInitialization,
+  ExecutionInstallation,
+  JournalAdmission,
+} from "./src/execute.ts";
 /**
  * What a trusted host states about generated-fragment evaluation.
  *

@@ -114,7 +114,7 @@ const CONFIRM_SCHEMA: Json = {
 
 const EMPTY_MODEL: ReplModel = Object.freeze({
   head: true,
-  entry: undefined,
+  entries: Object.freeze([]),
   settled: false,
   terminal: undefined,
   checkpoints: Object.freeze([]),
@@ -1001,7 +1001,7 @@ function* retained(): Operation<{
   if (!projected.ok) {
     throw projected.error;
   }
-  const entry = projected.value.entry;
+  const entry = projected.value.entries[0]?.scope;
   const elicitation = entry?.elicitations[0];
   if (entry === undefined || elicitation === undefined) {
     throw new Error("the reference execution recorded no answered elicitation");
@@ -1151,8 +1151,8 @@ function answers(model: ReplModel): readonly ReplElicitation[] {
       walk(child);
     }
   };
-  if (model.entry !== undefined) {
-    walk(model.entry);
+  for (const entry of model.entries) {
+    walk(entry.scope);
   }
   return found;
 }

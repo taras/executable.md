@@ -674,7 +674,7 @@ function availabilityOf(state: ReplState, live: ReplLive): ReplLiveAvailability 
 const EMPTY_MODEL: ReplModel = Object.freeze({
   selection: undefined,
   head: true,
-  entry: undefined,
+  entries: Object.freeze([]),
   settled: false,
   terminal: undefined,
   checkpoints: Object.freeze([]),
@@ -711,7 +711,7 @@ export function reduceRepl(
       if (answering) {
         return editing(state, live, action.field, (value) => value + action.text);
       }
-      if (model.entry !== undefined) {
+      if (model.entries.length > 0) {
         return refuse(state, "this execution has admitted its entry, and an entry is immutable.");
       }
       return drafting(state, state.draft + action.text);
@@ -720,13 +720,13 @@ export function reduceRepl(
       if (answering) {
         return editing(state, live, action.field, shortened);
       }
-      if (model.entry !== undefined) {
+      if (model.entries.length > 0) {
         return refuse(state, "this execution has admitted its entry, and an entry is immutable.");
       }
       return drafting(state, shortened(state.draft));
     }
     case "submit": {
-      if (model.entry !== undefined) {
+      if (model.entries.length > 0) {
         return refuse(state, "this REPL admits one entry, and this execution has admitted it.");
       }
       if (state.draft.length === 0) {
@@ -1305,7 +1305,7 @@ export function focusSettled(view: ReplView, focused: string | undefined): ReplS
   return Object.freeze({ ...view.state, restore: undefined });
 }
 
-/** Every answer this history already holds, wherever in the entry it holds it. */
+/** Every answer this history already holds, wherever in its entries it holds it. */
 function retainedAnswers(model: ReplModel): readonly string[] {
   const markers: string[] = [];
   const walk = (scope: ReplScope): void => {
@@ -1316,8 +1316,8 @@ function retainedAnswers(model: ReplModel): readonly string[] {
       walk(child);
     }
   };
-  if (model.entry !== undefined) {
-    walk(model.entry);
+  for (const entry of model.entries) {
+    walk(entry.scope);
   }
   return Object.freeze(markers);
 }
@@ -1500,7 +1500,7 @@ function described(view: ReplView): readonly Described[] {
   }
   // Read whether or not this frame draws the entry list: the footer's draft says
   // whether an entry exists at every size and on either surface.
-  const entry = model.entry;
+  const entry = model.entries[0]?.scope;
   if (!narrow) {
     items.push(toEntries);
   }
@@ -1863,7 +1863,7 @@ function sessionsCapacity(state: ReplState, model: ReplModel, size: ReplTerminal
 
 /** How many rows the entry list takes in a sidebar, its heading included. */
 function entryRows(model: ReplModel): number {
-  const entry = model.entry;
+  const entry = model.entries[0]?.scope;
   return entry === undefined ? 2 : 2 + nested(entry, [entry.key]).length;
 }
 

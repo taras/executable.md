@@ -35,6 +35,17 @@ function projected(events: readonly DurableEvent[], selection?: string): ReplMod
   return result.value;
 }
 
+/**
+ * The root scope of the one entry a one-entry journal projects.
+ *
+ * Read off `entries` at the public boundary, which is where this suite's claim
+ * now lives: every journal here holds one entry, and what these assertions are
+ * about is what that entry holds rather than how many the collection can hold.
+ */
+function only(model: ReplModel): ReplScope | undefined {
+  return model.entries[0]?.scope;
+}
+
 /** The refusal a doctored journal produced, or a failure naming what passed. */
 function refusal(events: readonly DurableEvent[], selection?: string): string {
   const result = projectRepl(events, selection);
@@ -161,7 +172,7 @@ describe("REPL model: what one journal projects", () => {
   it("M1: projects an empty journal as an execution with no entry", function* () {
     const model = projected([]);
 
-    expect(model.entry).toBe(undefined);
+    expect(model.entries).toEqual([]);
     expect(model.settled).toBe(false);
     expect(model.terminal).toBe(undefined);
     expect(model.transcript).toEqual([]);
@@ -172,7 +183,7 @@ describe("REPL model: what one journal projects", () => {
   it("M2: projects the reference entry into the documented scopes", function* () {
     const events = yield* referenceEvents();
     const model = projected(events);
-    const entry = model.entry;
+    const entry = only(model);
     if (entry === undefined) {
       throw new Error("the reference journal admits an entry");
     }
@@ -220,7 +231,7 @@ describe("REPL model: what one journal projects", () => {
   it("M1: deep-freezes the model and reprojects the same journal identically", function* () {
     const events = yield* referenceEvents();
     const model = projected(events);
-    const entry = model.entry;
+    const entry = only(model);
     if (entry === undefined) {
       throw new Error("the reference journal admits an entry");
     }
@@ -251,7 +262,7 @@ describe("REPL model: what one journal projects", () => {
     expect(graph.filter((member) => Object.isFrozen(member))).toEqual([]);
 
     const model = projected(events);
-    const entry = model.entry;
+    const entry = only(model);
     if (entry === undefined) {
       throw new Error("the reference journal admits an entry");
     }
@@ -289,8 +300,8 @@ describe("REPL model: what one journal projects", () => {
 
     const before = projected(events, spelling[admission - 1]);
     const after = projected(events, spelling[admission]);
-    const entryBefore = before.entry;
-    const entryAfter = after.entry;
+    const entryBefore = only(before);
+    const entryAfter = only(after);
     if (entryBefore === undefined || entryAfter === undefined) {
       throw new Error("both prefixes admit the entry");
     }
@@ -341,10 +352,13 @@ describe("REPL model: the histories it refuses", () => {
     expect(refusal([], "yield:root:0")).toContain("not in this journal");
   });
 
-  it("M1: refuses a second entry, work after settlement, and a repeated close", function* () {
+  it("M1: refuses work outside an entry boundary, and a repeated close", function* () {
     const events = yield* referenceEvents();
 
-    expect(refusal([...events, events[0]])).toContain("after the entry settled");
+    // Work that belongs to no entry: past this entry's outcome and before any
+    // next admission. A *second admission* there is an entry rather than
+    // damage, which `repl-entries.test.ts` owns.
+    expect(refusal([...events, events[1]])).toContain("after the entry settled");
     expect(refusal([events[0], ...events])).toContain("a second entry");
     expect(refusal([...events, events[events.length - 1]])).toContain("records");
     expect(refusal(events.slice(1))).toContain("before it admitted its entry");
@@ -433,7 +447,7 @@ describe("REPL model: the histories it refuses", () => {
     const model = projected(run.events);
 
     expect(run.asked).toHaveLength(1);
-    expect(model.entry?.elicitations).toEqual([]);
+    expect(only(model)?.elicitations).toEqual([]);
     expect(model.transcript.some((row) => row.kind === "elicit")).toBe(false);
   });
 });
@@ -876,7 +890,7 @@ function planJournal(
 describe("REPL model: the declared sources it owns", () => {
   it("M3: a declared component's retained origin and bytes become its scope", function* () {
     const model = projected(planJournal());
-    const entry = model.entry;
+    const entry = only(model);
     if (entry === undefined) {
       throw new Error("the journal admits one entry");
     }
@@ -896,7 +910,7 @@ describe("REPL model: the declared sources it owns", () => {
 
   it("M3: the optional exact disposition is read, and only as `true`", function* () {
     const exact = projected(planJournal(declared({ exact: true })));
-    const entry = exact.entry;
+    const entry = only(exact);
     if (entry === undefined) {
       throw new Error("the journal admits one entry");
     }
@@ -985,7 +999,7 @@ function askedInside(
 
 /** The entry, and the Plan scope every fragment below is admitted inside. */
 function scopes(model: ReplModel): ReplScope {
-  const entry = model.entry;
+  const entry = only(model);
   if (entry === undefined) {
     throw new Error("the journal admits one entry");
   }

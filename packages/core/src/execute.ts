@@ -187,7 +187,7 @@ import type { TestHarnessInstaller } from "./test-harness.ts";
 import type { CheckedFailures } from "./component-failures.ts";
 import { clearsLiveOutput, useSecretDetection } from "./secrets/policy.ts";
 import { propsEnvironment } from "./eval-env.ts";
-import { liveEnvironment } from "./live-env.ts";
+import { liveEnvironment, validateBindingName } from "./live-env.ts";
 
 export interface ExecuteSettings {
   /** Durable stream for journaling. */
@@ -2103,6 +2103,11 @@ function* documentWorkflow(
    * given it (`expand.ts`).
    */
   importTerminal: ComponentImportTerminal,
+  /**
+   * The bare root bindings this execution starts with, already this execution's
+   * own detached copy. Ordinary mutable values from here on.
+   */
+  initialBindings: Readonly<JsonObject>,
 ): Workflow<DocumentResult> {
   // This run's memory of a checked command failure it never authorized. Passed
   // by value into core's own expansion and reachable from nowhere else, so no
@@ -2141,6 +2146,27 @@ function* documentWorkflow(
   const validatedProps = yield* ephemeral(validateProps("__root__", props, root.props));
 
   const rootEnv: EvalEnv = propsEnvironment(validatedProps);
+  // Every name, unconditionally. The one name that could have collided with what
+  // this invocation just established is `props`, and that is refused where the
+  // record is read — so there is no name to skip here, and skipping one would be
+  // a value the caller believes it passed and nothing ever installed.
+  //
+  // Each name is *defined* rather than assigned, for the reason `parseJson`
+  // defines it: `values["__proto__"] = …` reaches `Object.prototype`'s inherited
+  // setter, and what that does depends on the engine — V8 under Node and
+  // JavaScriptCore under Bun replace the object's prototype and drop the name,
+  // while Deno keeps it as an own property. A record read back from a journal
+  // can hold that name, because `JSON.parse` makes it an own property, so the
+  // same retained value would become a different environment on different
+  // runtimes.
+  for (const [name, value] of Object.entries(initialBindings)) {
+    Object.defineProperty(rootEnv.values, name, {
+      value,
+      enumerable: true,
+      writable: true,
+      configurable: true,
+    });
+  }
   liveEnvironment(rootEnv);
 
   // Per-root-segment emission loop (spec §9).
@@ -2417,6 +2443,16 @@ function* executeDocument(
    * document that could reach it could raise it.
    */
   prepared?: PreparedProfile,
+  /**
+   * The root bindings this execution starts with, parsed and copied by the
+   * invocation that captured them.
+   *
+   * Carried by value from there to the one place that builds the root eval
+   * environment, like the profile and the documentation beside it. It is not on
+   * `ExecutionEnvironment`: that bundle describes what a document is expanded
+   * *against*, and these are values the document's own namespace starts with.
+   */
+  initialBindings: Readonly<JsonObject> = NO_INITIAL_BINDINGS,
 ): Operation<DocumentExecution> {
   const {
     stream,
@@ -2756,7 +2792,7 @@ function* executeDocument(
       const returned = yield* durableRun(
         function* (): Operation<DocumentResult> {
           const issued = issueDocument<DocumentResult>(props, (claimed) =>
-            documentWorkflow(claimed, environment, resolveComponentImport),
+            documentWorkflow(claimed, environment, resolveComponentImport, initialBindings),
           );
           try {
             return yield* beforeAnyImport(issued);
@@ -3109,7 +3145,16 @@ function* runInvocation(
    */
   readAsset: DocumentationReader = packagedAssetReader,
   observed?: () => void,
+  /** What a trusted host initializes this execution's root bindings with. */
+  initialization?: ExecutionInitialization,
 ): Operation<DocumentExecution> {
+  // Parsed, name-validated and copied here, before the owner task exists: an
+  // input this execution cannot have refuses before an installation has run,
+  // before a document has been read, and before there is a handle to report it
+  // on. The copy is what makes the caller's own object graph unreachable
+  // afterwards; nothing is frozen, so the values stay as ordinary to work with
+  // as any other binding.
+  const initialBindings = initialRootBindings(initialization);
   const ready = withResolvers<DocumentExecution>();
   const settled = withResolvers<Result<Json>>();
   const state: { finished: boolean; document: Result<Json> | undefined } = {
@@ -3140,7 +3185,7 @@ function* runInvocation(
     let published = false;
     try {
       yield* scoped(function* () {
-        const execution = yield* invoke(options, installations, readAsset);
+        const execution = yield* invoke(options, installations, readAsset, initialBindings);
         published = true;
         ready.resolve(execution);
         state.document = yield* execution;
@@ -3392,6 +3437,14 @@ function* invoke(
   installations: readonly ExecutionInstallation[],
   /** This execution's packaged-asset reader, carried by value from its caller. */
   readAsset: DocumentationReader = packagedAssetReader,
+  /**
+   * This execution's own detached copy of the root bindings it starts with.
+   *
+   * Already parsed and name-validated when it arrives here, so nothing below can
+   * be the first thing to look at it: the invocation refused an input it could
+   * not have before this function was reached.
+   */
+  initialBindings: Readonly<JsonObject> = NO_INITIAL_BINDINGS,
 ): Operation<DocumentExecution> {
   const admissions = Object.freeze(
     installations.flatMap((installation) => [...(installation.admissions ?? [])]),
@@ -3615,6 +3668,7 @@ function* invoke(
     readAsset,
     canonicalImports,
     prepared,
+    initialBindings,
   );
 }
 
@@ -3656,6 +3710,98 @@ export function executeObserved(
 }
 
 /**
+ * What a trusted host initializes one execution's root environment with.
+ *
+ * Invocation input, and only that. It is not an `ExecutionInstallation`, a
+ * Context, a component, a middleware answer, a document prop or a durable
+ * record, because each of those is something a running document can name, reach
+ * or be asked about — and what an earlier execution retained is none of a
+ * document's business to discover. It crosses once, as the third argument of one
+ * call, and nothing published anywhere describes it afterwards.
+ *
+ * The REPL supplies the root JSON values its earlier entries durably published,
+ * so a later entry starts from them. That is the whole purpose: ordinary
+ * `execute()` has no predecessor, and takes no such input.
+ */
+export interface ExecutionInitialization {
+  /**
+   * The bare root bindings this execution starts with.
+   *
+   * Parsed, name-validated and recursively copied before any installation or
+   * document code runs, so what the execution reads is its own graph rather than
+   * the caller's. Inside the run they are ordinary durable values: a document
+   * that inherits a list and appends to it is doing what any block does to any
+   * binding. They behave like values authored before the document, so an
+   * ordinary export of the same name replaces one through the rules that replace
+   * any other binding.
+   *
+   * `props` is not one of them. Each execution's props namespace is the one its
+   * own root validated, so a record carrying that name is refused rather than
+   * installed over the namespace or quietly dropped.
+   */
+  readonly initialBindings?: Readonly<Record<string, Json>>;
+}
+
+/**
+ * Nothing retained.
+ *
+ * Frozen because it is *shared* — every ordinary run reads this one object — and
+ * for no other reason. A record a host actually supplies is copied and left
+ * mutable; this one has no members to mutate.
+ */
+const NO_INITIAL_BINDINGS: Readonly<JsonObject> = Object.freeze({});
+
+/** The root namespace an execution's own validated props owns, and keeps. */
+const ROOT_PROPS_BINDING = "props";
+
+/**
+ * Core's own copy of one execution's initial root bindings.
+ *
+ * Parsed rather than read in place, and parsed *whole*: `parseJsonObject` walks
+ * every member once and builds a new graph, so a function, a non-finite number,
+ * a class instance, a cycle or a sparse hole is refused here instead of
+ * reaching an eval block as something that is not JSON. That copy is what makes
+ * a caller's later mutation of its own object graph invisible to this run, and
+ * it is the whole of the isolation: nothing is frozen, because a durable eval
+ * value is ordinary mutable data and an execution handed a frozen graph could
+ * not do to an inherited value what it can do to any other binding.
+ *
+ * Every name is checked against the same parser an authored binding is checked
+ * against, here and not later. An unbindable name reaches the generated preamble
+ * otherwise, and fails there as whatever that happens to be — a syntax error
+ * about somebody's document, naming nothing about the record that caused it.
+ *
+ * Refusing is a throw rather than a `Result`, because this is the earliest
+ * point in an invocation: nothing is installed, no document exists, and there is
+ * no handle to carry an outcome on.
+ */
+function initialRootBindings(
+  initialization: ExecutionInitialization | undefined,
+): Readonly<JsonObject> {
+  // Read once. A property that answered differently the second time would let a
+  // host be inspected for one record and run with another.
+  const supplied = initialization?.initialBindings;
+  if (supplied === undefined) {
+    return NO_INITIAL_BINDINGS;
+  }
+  const copied = parseJsonObject(supplied);
+  for (const name of Object.keys(copied)) {
+    if (name === ROOT_PROPS_BINDING) {
+      throw new Error(
+        "an initial root binding may not be named `props`. Each execution's props namespace is " +
+          "the one its own root validated, so a retained value of that name is not something a " +
+          "later execution inherits.",
+      );
+    }
+    const binding = validateBindingName(name);
+    if (!binding.ok) {
+      throw new Error(`an initial root binding name ${binding.error.message}`);
+    }
+  }
+  return copied;
+}
+
+/**
  * The trusted-host entrypoint.
  *
  * Reached through `@executablemd/core/host`, because attaching an admission is
@@ -3666,8 +3812,9 @@ export function executeObserved(
 export function executeInstalled(
   options: ExecuteOptions,
   installations: readonly ExecutionInstallation[],
+  initialization?: ExecutionInitialization,
 ): Operation<DocumentExecution> {
-  return runInvocation(options, [...installations]);
+  return runInvocation(options, [...installations], packagedAssetReader, undefined, initialization);
 }
 
 /**
