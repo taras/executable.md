@@ -23,14 +23,31 @@ import { beforeAll, describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { collect, inlineSource, useTempFileCompiler } from "@executablemd/core";
 import { executeInstalled } from "@executablemd/core/host";
+import type { ExecutionInstallation } from "@executablemd/core/host";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import type { DurableEvent, DurableStream, Json } from "@executablemd/durable-streams";
+import { API } from "@executablemd/runtime";
+import {
+  createScope,
+  ensure,
+  race,
+  scoped,
+  sleep,
+  suspend,
+  until,
+  useScope,
+  withResolvers,
+} from "effection";
 import type { Operation, Result } from "effection";
 
-import { EntrySegmentStream, partitionEntrySegments } from "../src/repl/entries.ts";
+import { EntrySegmentStream, partitionEntrySegments, ROOT_IMPORT } from "../src/repl/entries.ts";
 import type { EntrySegment } from "../src/repl/entries.ts";
+import type { ReplQuestion } from "../src/repl/elicitation.ts";
+import type { ReplExecution } from "../src/repl/journal.ts";
 import { entryInitialBindings, projectRepl } from "../src/repl/model.ts";
 import type { ReplModel } from "../src/repl/model.ts";
+import { openReplSession, submitReplEntry } from "../src/repl/session.ts";
+import type { ReplSession } from "../src/repl/session.ts";
 
 /** One entry that publishes two root values and renders one of them. */
 const FIRST = [
@@ -872,5 +889,519 @@ describe("REPL entries: what a one-entry history still does", () => {
     expect(refusal([...events, events[events.length - 1]])).toContain(
       "records an entry settling that it never admitted",
     );
+  });
+});
+
+/**
+ * One entry that publishes a value and then waits on a question.
+ *
+ * The hold every row that needs a *running* entry uses: a question is the one
+ * place an ordinary document stops and waits for somebody, and the row answering
+ * it is what releases the entry. Nothing here waits on the scheduler.
+ */
+const ASKS = [
+  "```js eval",
+  'const token = "held";',
+  "const schema = {",
+  '  type: "object",',
+  '  properties: { decision: { type: "string", enum: ["go"] } },',
+  '  required: ["decision"],',
+  "  additionalProperties: false,",
+  "};",
+  "```",
+  "",
+  '<Elicit schema={schema} as="answer">Go?</Elicit>',
+  "",
+  "One: {answer.decision}",
+  "",
+].join("\n");
+
+/** One entry that publishes nothing and asks nothing. */
+const PLAIN = "Plain.\n";
+
+/**
+ * How long a wait a correct session opens immediately may go unopened before it
+ * is called a deadlock.
+ *
+ * Never reached by a passing run: every wait below is opened by the session, the
+ * document or the execution's own teardown. It bounds the failure mode only, so a
+ * defect that stops opening one says which it stopped opening instead of hanging.
+ */
+const DEADLOCK_MS = 10_000;
+
+/** One gate a row opens itself, so no row depends on scheduler timing. */
+interface Gate {
+  open(): void;
+  readonly opened: Operation<void>;
+}
+
+function gate(): Gate {
+  const resolvers = withResolvers<void>();
+  let settled = false;
+  return {
+    open(): void {
+      if (!settled) {
+        settled = true;
+        resolvers.resolve();
+      }
+    },
+    get opened(): Operation<void> {
+      return resolvers.operation;
+    },
+  };
+}
+
+function* awaiting(what: string, held: Operation<void>): Operation<void> {
+  const reached = yield* race([
+    (function* (): Operation<boolean> {
+      yield* held;
+      return true;
+    })(),
+    (function* (): Operation<boolean> {
+      yield* sleep(DEADLOCK_MS);
+      return false;
+    })(),
+  ]);
+  if (!reached) {
+    throw new Error(`${what} never happened`);
+  }
+}
+
+/**
+ * An installation whose own teardown waits.
+ *
+ * Its `ensure` is registered inside the execution, so it holds *that
+ * execution's* teardown: by the time it is entered the root close is already in
+ * the file and the task that wrote it has not finished coming down. That is the
+ * one state where "this entry settled" and "this entry's task has been joined"
+ * disagree, and the only honest way to stand in it is to hold it open.
+ *
+ * Every row that installs it releases in a `finally`, because a held finalizer is
+ * the session's teardown correctly refusing to finish — which cannot be told
+ * from a hang by waiting longer.
+ */
+function holdingTeardown(entered: Gate, release: Gate): ExecutionInstallation {
+  return {
+    *install(): Operation<void> {
+      yield* ensure(function* () {
+        entered.open();
+        yield* release.opened;
+      });
+    },
+  };
+}
+
+function replExecution(events: readonly DurableEvent[] = []): ReplExecution {
+  return { id: "entries", stream: new InMemoryStream([...events]) };
+}
+
+function opened(result: Result<ReplSession>): ReplSession {
+  if (!result.ok) {
+    throw result.error;
+  }
+  return result.value;
+}
+
+function refusedSession(result: Result<ReplSession>): Error {
+  if (result.ok) {
+    throw new Error("this session was handed back, and it must be refused");
+  }
+  return result.error;
+}
+
+function refusedSubmission(result: Result<void>): Error {
+  if (result.ok) {
+    throw new Error("this submission started an entry, and it must be refused");
+  }
+  return result.error;
+}
+
+function accepted(result: Result<void>): void {
+  if (!result.ok) {
+    throw result.error;
+  }
+}
+
+/**
+ * How many entry tasks this journal records having been started.
+ *
+ * One root admission is one task: an execution writes that record before it does
+ * anything else, so a second task over one execution leaves a second one behind
+ * whatever else it managed to do.
+ */
+function started(events: readonly DurableEvent[]): number {
+  return events.filter(
+    (event) =>
+      event.type === "yield" &&
+      event.description.type === "import_component" &&
+      event.description.name === ROOT_IMPORT,
+  ).length;
+}
+
+/** The question this session is asking, once it is asking one. */
+function* asking(session: ReplSession): Operation<ReplQuestion> {
+  const changes = yield* session.elicitation.changes;
+  const pending = session.overlay.question;
+  if (pending !== undefined) {
+    return pending;
+  }
+  yield* awaiting(
+    "the entry reaching its question",
+    (function* (): Operation<void> {
+      let next = yield* changes.next();
+      while (!next.done && next.value === undefined) {
+        next = yield* changes.next();
+      }
+    })(),
+  );
+  const asked = session.overlay.question;
+  if (asked === undefined) {
+    throw new Error("the session announced a question and then had none");
+  }
+  return asked;
+}
+
+/**
+ * What a run really performed, counted where performing it happens.
+ *
+ * Not at the durable operations: replay enters those and hands back what was
+ * recorded, so counting them would count restoration as work. A component's
+ * source is read inside the recorded selection and an eval block is compiled
+ * inside the recorded evaluation, so both are zero for anything replay restored.
+ */
+interface Performed {
+  readonly reads: string[];
+  compiles: number;
+}
+
+function* countPerformed(): Operation<Performed> {
+  const performed: Performed = { reads: [], compiles: 0 };
+  yield* API.Fs.around({
+    *readTextFile([path], next) {
+      performed.reads.push(path);
+      return yield* next(path);
+    },
+  });
+  yield* API.Env.around({
+    *compile([source, options], next) {
+      performed.compiles++;
+      return yield* next(source, options);
+    },
+  });
+  return performed;
+}
+
+describe("REPL entries: one session, one entry task, in turn", () => {
+  beforeAll(() => useTempFileCompiler());
+
+  it("EL1: the first entry starts exactly one task", function* () {
+    const holder = replExecution();
+    yield* scoped(function* () {
+      const session = opened(yield* submitReplEntry({ execution: holder, source: FIRST }));
+      yield* session.join();
+
+      expect(session.model.entries.map((entry) => entry.key)).toEqual(["entry-1"]);
+      expect(session.model.settled).toBe(true);
+      expect(session.live).toBe(false);
+    });
+    expect(started(yield* holder.stream.readAll())).toBe(1);
+  });
+
+  it("EL1: a submission while an entry is running refuses and starts nothing", function* () {
+    const holder = replExecution();
+    yield* scoped(function* () {
+      const session = opened(yield* submitReplEntry({ execution: holder, source: ASKS }));
+      const question = yield* asking(session);
+      const held = yield* holder.stream.readAll();
+
+      const error = refusedSubmission(yield* session.submit(PLAIN));
+      // Named for the entry in the way, rather than for which of the two
+      // conditions fired: what this row claims is that a submission arriving
+      // while an entry runs refuses and starts nothing.
+      expect(error.name).toBe("ReplLifecycleError");
+      expect(error.message).toContain("entry-1");
+      // Nothing started: the file has not moved, no second root was admitted, and
+      // the question this entry is waiting on is the one it was waiting on.
+      expect(yield* holder.stream.readAll()).toEqual(held);
+      expect(started(held)).toBe(1);
+      expect(session.overlay.question).toBe(question);
+
+      question.submit({ decision: "go" });
+      yield* session.join();
+    });
+    expect(started(yield* holder.stream.readAll())).toBe(1);
+  });
+
+  it("EL1: terminal and unjoined still refuses; the join lets the next one start", function* () {
+    const holder = replExecution();
+    const entered = gate();
+    const release = gate();
+    try {
+      yield* scoped(function* () {
+        // Released from inside this scope as well as outside it. An assertion
+        // that throws while a finalizer is parked would otherwise deadlock the
+        // teardown it is holding, and a deadlock reports as a timeout rather
+        // than as the assertion that failed.
+        try {
+          const session = opened(
+            yield* submitReplEntry({
+              execution: holder,
+              source: FIRST,
+              installations: [holdingTeardown(entered, release)],
+            }),
+          );
+          yield* awaiting("the first entry reaching its own teardown", entered.opened);
+
+          // The history says this entry settled, and the session still owns the
+          // task that settled it.
+          expect(session.model.entries[0]?.settled).toBe(true);
+          expect(session.model.entries[0]?.terminal?.status).toBe("ok");
+          expect(session.live).toBe(true);
+
+          const error = refusedSubmission(yield* session.submit(INHERITING));
+          expect(error.name).toBe("ReplLifecycleError");
+          expect(started(yield* holder.stream.readAll())).toBe(1);
+
+          release.open();
+          // The join is the second fact, and it is what makes the next submission
+          // a start rather than an overlap.
+          yield* session.join();
+          accepted(yield* session.submit(INHERITING));
+          yield* session.join();
+
+          expect(session.model.entries.map((entry) => entry.key)).toEqual(["entry-1", "entry-2"]);
+          expect(session.model.entries[1]?.terminal?.output).toContain("Three: alpha/first");
+        } finally {
+          release.open();
+        }
+      });
+    } finally {
+      release.open();
+    }
+    expect(started(yield* holder.stream.readAll())).toBe(2);
+  });
+
+  it("EL1: a later entry receives only what earlier entries durably published", function* () {
+    const holder = replExecution();
+    yield* scoped(function* () {
+      const session = opened(yield* submitReplEntry({ execution: holder, source: FIRST }));
+      yield* session.join();
+      accepted(yield* session.submit(INHERITING));
+      yield* session.join();
+
+      const [first, second] = session.model.entries;
+      expect(second.terminal?.output).toContain("Three: alpha/first");
+      // Exactly the two names the first entry retained, and nothing else: the
+      // record handed to the second entry is the one a cold command derives from
+      // the same bytes, not a reading of what this process had in memory.
+      expect(entryInitialBindings(session.model, second)).toEqual({
+        token: "alpha",
+        kept: "first",
+      });
+      expect(first.bindings.map((binding) => binding.name)).toEqual(["token", "kept"]);
+      // And the first entry inherits nothing, because nothing precedes it.
+      expect(entryInitialBindings(session.model, first)).toEqual({});
+    });
+  });
+
+  it("EL1: a failed entry permits the next one; an interrupted one permits none", function* () {
+    const holder = replExecution();
+    yield* scoped(function* () {
+      const session = opened(yield* submitReplEntry({ execution: holder, source: FIRST }));
+      yield* session.join();
+
+      accepted(yield* session.submit(FAILING));
+      expect((yield* session.join()).ok).toBe(false);
+      expect(session.model.entries[1]?.terminal?.status).toBe("err");
+
+      // A failure is an outcome, and an outcome is what a successor waits for.
+      // What the failing entry published before failing survives.
+      accepted(yield* session.submit(INHERITING));
+      yield* session.join();
+      expect(session.model.entries.map((entry) => entry.key)).toEqual([
+        "entry-1",
+        "entry-2",
+        "entry-3",
+      ]);
+      expect(session.model.entries[2]?.terminal?.output).toContain("Three: beta/first");
+    });
+
+    // Measured rather than assumed: cancelling a held REPL entry appends no
+    // terminal record at all, so what it leaves is an *unfinished* entry — and
+    // nothing may follow one of those.
+    const interrupted = replExecution();
+    yield* scoped(function* () {
+      const session = opened(yield* submitReplEntry({ execution: interrupted, source: ASKS }));
+      yield* asking(session);
+    });
+    const events = yield* interrupted.stream.readAll();
+    expect(events.some((event) => event.type === "close")).toBe(false);
+    expect(partitioned(events).map((segment) => segment.settled)).toEqual([false]);
+    const blocked = refusedSession(
+      yield* submitReplEntry({ execution: replExecution(events), source: PLAIN }),
+    );
+    expect(blocked.name).toBe("ReplLifecycleError");
+    expect(blocked.message).toContain("has not settled");
+  });
+
+  it("EL1: a cancelled close permits a successor once its task has joined", function* () {
+    // The close is doctored and only the close: the entry before it really ran,
+    // and what is replaced is the terminal record a cancelled root writes. The
+    // row above measures that this REPL's own cancellation appends no close, so
+    // this is the one way to stand where a cancelled entry has settled.
+    const physical = new InMemoryStream();
+    yield* runEntry(physical, FIRST);
+    const events = yield* physical.readAll();
+    const [only] = partitioned(events);
+    const holder = replExecution(withClose(events, only, cancelled("root")));
+
+    yield* scoped(function* () {
+      const session = opened(yield* openReplSession({ execution: holder }));
+      expect(session.model.entries[0]?.terminal?.status).toBe("cancelled");
+      // Nothing is running: a settled entry is read, never resumed.
+      expect(session.live).toBe(false);
+
+      accepted(yield* session.submit(INHERITING));
+      yield* session.join();
+      expect(session.model.entries.map((entry) => entry.key)).toEqual(["entry-1", "entry-2"]);
+      expect(session.model.entries[1]?.terminal?.output).toContain("Three: alpha/first");
+    });
+  });
+
+  it("EL1: opening a settled two-entry history executes neither segment", function* () {
+    const built = replExecution();
+    yield* scoped(function* () {
+      const session = opened(yield* submitReplEntry({ execution: built, source: FIRST }));
+      yield* session.join();
+      accepted(yield* session.submit(INHERITING));
+      yield* session.join();
+    });
+    const events = yield* built.stream.readAll();
+
+    const holder = replExecution(events);
+    yield* scoped(function* () {
+      const performed = yield* countPerformed();
+      const session = opened(yield* openReplSession({ execution: holder }));
+
+      expect(session.live).toBe(false);
+      expect(session.model.entries.map((entry) => entry.key)).toEqual(["entry-1", "entry-2"]);
+      expect(session.model.entries[1]?.terminal?.output).toContain("Three: alpha/first");
+      yield* session.join();
+
+      // Nothing was executed: no block compiled, no source read, and the file is
+      // the bytes it was.
+      expect(performed.compiles).toBe(0);
+      expect(performed.reads).toEqual([]);
+      expect(yield* holder.stream.readAll()).toEqual(events);
+    });
+  });
+
+  it("EL1: opening an unfinished final segment resumes only that segment", function* () {
+    const built = replExecution();
+    yield* scoped(function* () {
+      const session = opened(yield* submitReplEntry({ execution: built, source: FIRST }));
+      yield* session.join();
+      accepted(yield* session.submit(ASKS));
+      yield* asking(session);
+    });
+    const events = yield* built.stream.readAll();
+    expect(partitioned(events).map((segment) => segment.settled)).toEqual([true, false]);
+
+    const holder = replExecution(events);
+    yield* scoped(function* () {
+      const performed = yield* countPerformed();
+      const session = opened(yield* openReplSession({ execution: holder }));
+
+      // Resumed: the question this history never answered is being asked again by
+      // the one segment that never finished.
+      const question = yield* asking(session);
+      expect(session.live).toBe(true);
+      expect(session.model.entries.map((entry) => entry.settled)).toEqual([true, false]);
+      // The settled segment did nothing, and the resumed one restored its own
+      // work rather than doing it again. An execution handed the whole file would
+      // have read the first entry's records as its own and diverged instead.
+      expect(performed.compiles).toBe(0);
+
+      question.submit({ decision: "go" });
+      yield* session.join();
+      expect(session.model.entries[1]?.terminal?.output).toContain("One: go");
+      expect(started(yield* holder.stream.readAll())).toBe(2);
+    });
+  });
+
+  it("EL1: teardown racing a submission starts no task and joins the one running", function* () {
+    const holder = replExecution();
+    const entered = gate();
+    const release = gate();
+    // A child of this row's own scope, so the session it holds runs under the
+    // same compiler and host the rest of the suite does. Teardown is then this
+    // row's to begin, which is the whole point.
+    const [scope, dispose] = createScope(yield* useScope());
+    const held = withResolvers<ReplSession>();
+    try {
+      scope.run(function* () {
+        const session = opened(
+          yield* submitReplEntry({
+            execution: holder,
+            source: ASKS,
+            installations: [holdingTeardown(entered, release)],
+          }),
+        );
+        held.resolve(session);
+        yield* suspend();
+      });
+      const session = yield* held.operation;
+      yield* asking(session);
+      const before = yield* holder.stream.readAll();
+
+      const tearing = dispose();
+      // Teardown has reached the running entry's own finalizers, which is as far
+      // in as anything gets before the task is joined.
+      yield* awaiting("this session reaching its teardown", entered.opened);
+
+      const error = refusedSubmission(yield* session.submit(PLAIN));
+      expect(error.name).toBe("ReplLifecycleError");
+      expect(yield* holder.stream.readAll()).toEqual(before);
+
+      release.open();
+      // And the active task is joined, rather than abandoned: observing the
+      // teardown is what says so.
+      yield* until(tearing);
+      expect(started(yield* holder.stream.readAll())).toBe(1);
+      expect(holder.stream.onAppend).toBe(null);
+    } finally {
+      release.open();
+    }
+  });
+
+  it("EL1: an append the journal refuses opens no successor and mounts no task", function* () {
+    const stream = new InMemoryStream();
+    const appended = stream.append.bind(stream);
+    stream.append = function* (event: DurableEvent): Operation<void> {
+      if (event.type === "close" && event.coroutineId === "root") {
+        throw new Error("this journal refused the record");
+      }
+      yield* appended(event);
+    };
+    const holder: ReplExecution = { id: "entries", stream };
+
+    yield* scoped(function* () {
+      const session = opened(yield* submitReplEntry({ execution: holder, source: FIRST }));
+      expect((yield* session.join()).ok).toBe(false);
+
+      // The close never landed, so this entry has no outcome — and an entry with
+      // no outcome is one nothing may follow, however the append failed.
+      expect(session.model.entries[0]?.settled).toBe(false);
+      expect(session.model.terminal).toBe(undefined);
+      const error = refusedSubmission(yield* session.submit(PLAIN));
+      expect(error.name).toBe("ReplLifecycleError");
+      expect(error.message).toContain("has not settled");
+
+      // And nothing of the failed entry is still mounted: no execution is live
+      // and no further task was started on its behalf.
+      expect(session.live).toBe(false);
+      expect(session.agent.turns).toEqual([]);
+      expect(started(yield* holder.stream.readAll())).toBe(1);
+    });
   });
 });

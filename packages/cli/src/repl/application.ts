@@ -136,12 +136,12 @@ function chronology(model: ReplModel, live: ReplLive): readonly ReplSessionTurn[
   const observed = new Set<string>();
   for (const slot of live.agent.slots) {
     if (slot.durable !== undefined) {
-      observed.add(slot.durable);
+      observed.add(correlation(slot.entry, slot.durable));
     }
   }
   const shown: ReplSessionTurn[] = [];
   for (const turn of model.turns) {
-    if (!observed.has(turn.name)) {
+    if (!observed.has(correlation(turn.entry, turn.name))) {
       shown.push(retainedTurn(turn.marker, turn));
     }
   }
@@ -154,6 +154,24 @@ function chronology(model: ReplModel, live: ReplLive): readonly ReplSessionTurn[
   return Object.freeze(shown);
 }
 
+/**
+ * The one identity a publication is correlated by.
+ *
+ * Both halves, because neither is unique on its own. A Prompt's durable name is
+ * derived from where it was written, and names restart with each entry — two
+ * entries running the same source hold the same name at the same position, which
+ * is ordinary rather than damaged. Correlating by the name alone suppresses both
+ * of those records and resolves both slots to whichever one the chronology
+ * reached first, so one turn is shown twice and the other not at all.
+ *
+ * The entry is the one each side already carries: the slot's own, and the
+ * record's own. Never the entry that is current, the sequence by itself, or the
+ * order the two turns happened to finish in.
+ */
+function correlation(entry: string, name: string): string {
+  return `${entry}\u0000${name}`;
+}
+
 /** What one observed slot shows now: its record, or the turn as it still stands. */
 function resolved(
   slot: ReplAgentSlot,
@@ -164,7 +182,9 @@ function resolved(
     const turn = live.agent.turns.find((candidate) => candidate.key === slot.key);
     return turn === undefined ? undefined : liveTurn(slot.key, turn, live);
   }
-  const record = model.turns.find((candidate) => candidate.name === slot.durable);
+  const record = model.turns.find(
+    (candidate) => candidate.entry === slot.entry && candidate.name === slot.durable,
+  );
   if (record !== undefined) {
     // Keyed by the slot, not by the marker: this is the row it already was.
     return retainedTurn(slot.key, record);

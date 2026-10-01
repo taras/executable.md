@@ -38,6 +38,7 @@ import type { DurableEvent } from "@executablemd/durable-streams";
 import {
   Agent,
   agentIdentityComponents,
+  Elicitation,
   installAgentComponents,
   registerComponents,
   useTempFileCompiler,
@@ -62,6 +63,7 @@ import { openReplSession, submitReplEntry } from "../src/repl/session.ts";
 import type { ReplSession } from "../src/repl/session.ts";
 import { useReplAgent } from "../src/repl/agent.ts";
 import type { ReplAgentKernel, ReplAgentReading } from "../src/repl/agent.ts";
+import { projectRepl } from "../src/repl/model.ts";
 import type { ReplAgentPermission } from "../src/repl/model.ts";
 import type { ReplExecution } from "../src/repl/journal.ts";
 
@@ -1750,4 +1752,534 @@ describe("P6 — only a canonical Prompt claims a record", () => {
       expect(session.agent.turns).toEqual([]);
     });
   }
+});
+
+/** One prompt in a named conversation, which is what makes two entries share one. */
+function onePromptIn(text: string): string {
+  return `<Session name="planner"><Prompt text="${text}" /></Session>\n`;
+}
+
+/** Two prompts in that conversation, which one entry records as sequence 0 and 1. */
+function twoPromptsIn(first: string, second: string): string {
+  return [
+    `<Session name="planner"><Prompt text="${first}" /></Session>`,
+    `<Session name="planner"><Prompt text="${second}" /></Session>`,
+    "",
+  ].join("\n");
+}
+
+function admitted(result: Result<void>): void {
+  if (!result.ok) {
+    throw result.error;
+  }
+}
+
+/**
+ * The same journal with its last recorded prompt claiming an earlier sequence.
+ *
+ * Doctored, because no run writes it: a sequence counts the Prompts of one
+ * execution, so one entry holding a value twice is damage to the file rather than
+ * anything a second entry could cause.
+ */
+function resequenced(events: readonly DurableEvent[], sequence: number): DurableEvent[] {
+  const last = events.reduce(
+    (at, event, index) =>
+      event.type === "yield" && event.description.type === "agent_prompt" ? index : at,
+    -1,
+  );
+  if (last === -1) {
+    throw new Error("this journal records no agent prompt");
+  }
+  return events.map((event, index) => {
+    if (index !== last || event.type !== "yield" || event.result.status !== "ok") {
+      return event;
+    }
+    const held = event.result.value;
+    if (held === null || typeof held !== "object" || Array.isArray(held)) {
+      throw new Error("a recorded prompt retains a record");
+    }
+    const doctored: DurableEvent = {
+      ...event,
+      result: { status: "ok", value: { ...held, sequence } },
+    };
+    return doctored;
+  });
+}
+
+describe("EA1 — one chronology of entries, each counting its own Prompts", () => {
+  beforeAll(() => useTempFileCompiler());
+
+  it("EA1: two entries each retain sequence 0, ordered by entry and then sequence", function* () {
+    const holder = execution();
+    const stub = createStub();
+    yield* scoped(function* () {
+      yield* useStub(stub);
+      const session = opened(yield* start(holder, twoPromptsIn("one", "two")));
+      yield* session.join();
+      admitted(yield* session.submit(twoPromptsIn("three", "four")));
+      yield* session.join();
+
+      expect(session.model.turns.map((turn) => [turn.entry, turn.sequence, turn.input])).toEqual([
+        ["entry-1", 0, "one"],
+        ["entry-1", 1, "two"],
+        ["entry-2", 0, "three"],
+        ["entry-2", 1, "four"],
+      ]);
+      // Each entry counts its own Prompts from zero, so one global sort by
+      // sequence would interleave the two entries instead of following them.
+      expect(
+        session.model.entries.map((entry) => entry.turns.map((turn) => turn.sequence)),
+      ).toEqual([
+        [0, 1],
+        [0, 1],
+      ]);
+    });
+  });
+
+  it("EA1: two prompts in one entry claiming one sequence refuse the whole projection", function* () {
+    const holder = execution();
+    const stub = createStub();
+    yield* scoped(function* () {
+      yield* useStub(stub);
+      const session = opened(yield* start(holder, twoPromptsIn("one", "two")));
+      yield* session.join();
+      expect(session.model.turns.map((turn) => turn.sequence)).toEqual([0, 1]);
+    });
+
+    const result = projectRepl(resequenced(yield* holder.stream.readAll(), 0));
+    expect(result.ok).toBe(false);
+    // Atomically: there is no value to read at all, rather than a model holding
+    // whichever turns happened to be unambiguous.
+    expect(Object.hasOwn(result, "value")).toBe(false);
+    expect(result.ok ? "" : result.error.message).toContain("claim sequence 0");
+  });
+
+  it("EA1: a live turn carries the entry that began it, and keeps it on publication", function* () {
+    const holder = execution();
+    const stub = createStub({ one: { gated: true }, two: { gated: true } });
+    yield* scoped(function* () {
+      yield* useStub(stub);
+      const session = opened(yield* start(holder, onePromptIn("one")));
+      const recorded = watchAppends(holder);
+      yield* stub.arrival("one");
+
+      // Live, before anything retains it: the turn names the entry whose
+      // execution began it.
+      expect(session.agent.turns.map((turn) => [turn.entry, turn.prompt])).toEqual([
+        ["entry-1", "one"],
+      ]);
+      stub.release("one");
+      yield* recorded(1);
+      yield* session.join();
+
+      // Published: the slot keeps its place and its entry, and so does the facts
+      // it published with.
+      expect(session.agent.slots.map((slot) => [slot.entry, slot.order])).toEqual([["entry-1", 1]]);
+      expect(session.agent.slots[0]?.last?.entry).toBe("entry-1");
+
+      admitted(yield* session.submit(onePromptIn("two")));
+      yield* stub.arrival("two");
+
+      // The entry that is running now is entry-2, and the first entry's slot
+      // still says entry-1: which entry a turn belongs to is not which entry is
+      // current.
+      expect(session.agent.slots.map((slot) => [slot.entry, slot.order])).toEqual([
+        ["entry-1", 1],
+        ["entry-2", 2],
+      ]);
+      expect(session.agent.turns.map((turn) => [turn.entry, turn.prompt])).toEqual([
+        ["entry-2", "two"],
+      ]);
+
+      stub.release("two");
+      yield* recorded(2);
+      yield* session.join();
+
+      // And each record that replaced a live turn belongs to the entry that turn
+      // did, at the position it held.
+      expect(session.model.turns.map((turn) => [turn.entry, turn.sequence, turn.input])).toEqual([
+        ["entry-1", 0, "one"],
+        ["entry-2", 0, "two"],
+      ]);
+      expect(session.agent.slots.map((slot) => [slot.entry, slot.order])).toEqual([
+        ["entry-1", 1],
+        ["entry-2", 2],
+      ]);
+    });
+  });
+
+  it("EA1: one conversation spans two entries, and naming an entry does not narrow it", function* () {
+    const holder = execution();
+    const stub = createStub();
+    yield* scoped(function* () {
+      yield* useStub(stub);
+      const session = opened(yield* start(holder, onePromptIn("one")));
+      yield* session.join();
+      admitted(yield* session.submit(onePromptIn("two")));
+      yield* session.join();
+
+      // One conversation, because the provider named one key across both
+      // entries — and the key is the only thing the grouping reads.
+      expect(session.model.sessions.map((one) => one.sessionKey)).toEqual(["stub:planner"]);
+      expect(session.model.sessions[0].turns.map((turn) => [turn.entry, turn.sequence])).toEqual([
+        ["entry-1", 0],
+        ["entry-2", 0],
+      ]);
+      // Each entry identifies its own turn, and the execution-wide chronology
+      // still holds both: reading one entry does not make the conversation a
+      // reading of that entry.
+      expect(session.model.entries.map((entry) => entry.turns.map((turn) => turn.entry))).toEqual([
+        ["entry-1"],
+        ["entry-2"],
+      ]);
+      expect(session.model.turns).toHaveLength(2);
+      expect(session.model.sessions[0].turns).toHaveLength(2);
+    });
+  });
+});
+
+/** The schema an entry's stopping `<Elicit>` is asked with. */
+const EMPTY_SCHEMA =
+  'const schema = { type: "object", additionalProperties: false, properties: {} };';
+
+/**
+ * One entry whose held Prompt is cancelled by a sibling that fails.
+ *
+ * The ordinary shape of the hazard: concurrent children, one waiting on a
+ * provider, and one that takes the whole entry down. The held Prompt is cancelled
+ * where it stands, so it is never handed to a publication and no record is ever
+ * written for it.
+ */
+const HELD_AND_STOPPED = [
+  "```js eval",
+  EMPTY_SCHEMA,
+  "```",
+  "",
+  "<All>",
+  '<Spawn><Session name="planner"><Prompt text="held" /></Session></Spawn>',
+  '<Spawn><Elicit schema={schema} as="stop">Stop?</Elicit></Spawn>',
+  "</All>",
+  "",
+].join("\n");
+
+/**
+ * One entry whose Prompt is waiting on a person when its sibling fails.
+ *
+ * The permission half of the same hazard: an interactive request is a live wait
+ * this process owns, keyed to a live turn, and an entry that ends while one is
+ * held leaves both behind unless its own scope takes them down.
+ */
+const ASKS_AND_STOPPED = [
+  "```js eval",
+  EMPTY_SCHEMA,
+  "```",
+  "",
+  "<All>",
+  '<Spawn><Session name="planner"><Prompt text="asks" /></Session></Spawn>',
+  '<Spawn><Elicit schema={schema} as="stop">Stop?</Elicit></Spawn>',
+  "</All>",
+  "",
+].join("\n");
+
+/**
+ * One entry asking for permission on the coroutine the entry before it used.
+ *
+ * The asking Prompt is the first `<Spawn>`, so it runs on `root.0` — the same
+ * coroutine id the cancelled turn ran on, because coroutine ids restart with
+ * every entry. An owner lookup that still saw the old turn there would find two
+ * candidates for this request and fail the session rather than present it. The
+ * second child asks nothing and exists because `<All>` runs at least two.
+ */
+const ASKS_ALONE = [
+  "<All>",
+  '<Spawn><Session name="planner"><Prompt text="next" /></Session></Spawn>',
+  '<Spawn><Session name="planner"><Prompt text="quiet" /></Session></Spawn>',
+  "</All>",
+  "",
+].join("\n");
+
+/** The same entry, with one more child whose Prompt records before the failure. */
+const PUBLISHED_HELD_AND_STOPPED = [
+  "```js eval",
+  EMPTY_SCHEMA,
+  "```",
+  "",
+  "<All>",
+  '<Spawn><Session name="planner"><Prompt text="done" /></Session></Spawn>',
+  '<Spawn><Session name="planner"><Prompt text="held" /></Session></Spawn>',
+  '<Spawn><Elicit schema={schema} as="stop">Stop?</Elicit></Spawn>',
+  "</All>",
+  "",
+].join("\n");
+
+/**
+ * An Elicitation provider that fails its entry when the row says so.
+ *
+ * Installed at the ordinary position, outside the session's own provider at
+ * `min`, so it decides before any question is published. Raising here fails the
+ * `<Elicit>`, which fails the `<Spawn>` holding it and the `<All>` around it —
+ * the ordinary way one child takes an entry down, with its siblings cancelled
+ * where they stand.
+ */
+function* useStopping(stop: Signal): Operation<void> {
+  yield* Elicitation.around({
+    *elicit() {
+      yield* awaiting("the row stopping this entry", stop.published);
+      throw new Error("the sibling stopped this entry");
+    },
+  });
+}
+
+describe("EL2 — an entry's live Agent state is retired with its execution", () => {
+  beforeAll(() => useTempFileCompiler());
+
+  it("EL2: a cancelled turn is retired with its entry, and the next entry runs clean", function* () {
+    const holder = execution();
+    const stub = createStub({ held: { gated: true }, two: { gated: true } });
+    const stop = signal();
+    yield* scoped(function* () {
+      yield* useStub(stub);
+      yield* useStopping(stop);
+      const session = opened(yield* start(holder, HELD_AND_STOPPED));
+      const recorded = watchAppends(holder);
+
+      // The Prompt is at the provider and held there, so this entry really does
+      // own a live turn at the moment its sibling fails.
+      yield* stub.arrival("held");
+      expect(session.agent.turns.map((turn) => [turn.entry, turn.prompt])).toEqual([
+        ["entry-1", "held"],
+      ]);
+      expect(session.agent.slots.map((slot) => [slot.entry, slot.durable])).toEqual([
+        ["entry-1", undefined],
+      ]);
+
+      stop.publish();
+      expect((yield* session.join()).ok).toBe(false);
+
+      // The entry settled `err` and its task joined, and nothing of it is still
+      // mounted: the turn never became a record, so nothing else would have taken
+      // it down.
+      expect(session.model.entries[0]?.terminal?.status).toBe("err");
+      expect(session.model.entries[0]?.settled).toBe(true);
+      expect(session.agent.turns).toEqual([]);
+      expect(session.agent.slots).toEqual([]);
+      // And it appended nothing on the way out: the journal holds no turn at all.
+      expect(session.model.turns).toEqual([]);
+      expect(appends(yield* holder.stream.readAll())).toEqual([]);
+
+      admitted(yield* session.submit(onePromptIn("two")));
+      yield* stub.arrival("two");
+      // While the successor is live the reading holds its turn and only its turn.
+      expect(session.agent.turns.map((turn) => [turn.entry, turn.prompt])).toEqual([
+        ["entry-2", "two"],
+      ]);
+      expect(session.agent.slots.map((slot) => [slot.entry, slot.durable])).toEqual([
+        ["entry-2", undefined],
+      ]);
+
+      stub.release("two");
+      yield* recorded(1);
+      yield* session.join();
+
+      // And after publication the model and the durable slot identify only the
+      // successor's turn: no correlation state of the entry before it claimed the
+      // record.
+      expect(session.model.turns.map((turn) => [turn.entry, turn.input])).toEqual([
+        ["entry-2", "two"],
+      ]);
+      const [only] = session.agent.slots;
+      expect(session.agent.slots).toHaveLength(1);
+      expect(only.entry).toBe("entry-2");
+      expect(only.durable).toBe(session.model.turns[0]?.name);
+      expect(only.last?.entry).toBe("entry-2");
+    });
+  });
+
+  it("EL2: cleanup keeps a published slot and removes only the unpublished one", function* () {
+    const holder = execution();
+    const stub = createStub({
+      done: { gated: true },
+      held: { gated: true },
+      after: { gated: true },
+    });
+    const stop = signal();
+    yield* scoped(function* () {
+      yield* useStub(stub);
+      yield* useStopping(stop);
+      const session = opened(yield* start(holder, PUBLISHED_HELD_AND_STOPPED));
+      const recorded = watchAppends(holder);
+
+      // Both turns reach the provider before either is let go, so which of them
+      // publishes is this row's to decide rather than the scheduler's.
+      yield* stub.arrival("done");
+      yield* stub.arrival("held");
+      expect(session.agent.slots).toHaveLength(2);
+      expect(session.agent.slots.every((slot) => slot.durable === undefined)).toBe(true);
+
+      // One finishes and is recorded; the other is still waiting on its provider.
+      stub.release("done");
+      yield* recorded(1);
+      stop.publish();
+      expect((yield* session.join()).ok).toBe(false);
+      expect(session.model.entries[0]?.terminal?.status).toBe("err");
+
+      // The published turn keeps its slot and goes on resolving from its own
+      // record; the one that never published is gone. A row a person was reading
+      // that really happened does not disappear because its entry ended.
+      expect(session.agent.turns).toEqual([]);
+      expect(session.agent.slots).toHaveLength(1);
+      const [kept] = session.agent.slots;
+      expect(kept.entry).toBe("entry-1");
+      expect(kept.durable).toBe(session.model.turns[0]?.name);
+      expect(kept.last?.prompt).toBe("done");
+      expect(session.model.turns.map((turn) => [turn.entry, turn.input])).toEqual([
+        ["entry-1", "done"],
+      ]);
+      // Exactly one record was ever appended, and teardown added none.
+      expect(appends(yield* holder.stream.readAll())).toHaveLength(1);
+
+      // And the transfer is what makes it the session's rather than the entry's:
+      // the slot is still there, in its own place and under its own entry key,
+      // while a later entry is running and taking places of its own.
+      admitted(yield* session.submit(onePromptIn("after")));
+      yield* stub.arrival("after");
+      const [first, second] = session.agent.slots;
+      expect(session.agent.slots).toHaveLength(2);
+      expect([first.entry, first.order, first.durable !== undefined]).toEqual([
+        "entry-1",
+        kept.order,
+        true,
+      ]);
+      // A place is session-wide, so the successor takes the one after both of the
+      // Prompts the entry before it observed — the published slot does not shuffle
+      // down to make room.
+      expect([second.entry, second.durable]).toEqual(["entry-2", undefined]);
+      expect(second.order).toBe(3);
+      expect(second.order).toBeGreaterThan(first.order);
+      expect(session.agent.turns.map((turn) => [turn.entry, turn.prompt])).toEqual([
+        ["entry-2", "after"],
+      ]);
+
+      stub.release("after");
+      yield* recorded(2);
+      yield* session.join();
+      // Both records stand, each under the entry that wrote it.
+      expect(session.model.turns.map((turn) => [turn.entry, turn.input])).toEqual([
+        ["entry-1", "done"],
+        ["entry-2", "after"],
+      ]);
+      expect(session.agent.slots.map((slot) => [slot.entry, slot.order])).toEqual([
+        ["entry-1", kept.order],
+        ["entry-2", 3],
+      ]);
+    });
+  });
+
+  it("EL2: a request held by a cancelled entry crosses nothing into its successor", function* () {
+    const holder = execution();
+    const stub = createStub({
+      asks: { permission: { toolCallId: "entry-one", kind: "write", title: "Write once?" } },
+      next: { permission: { toolCallId: "entry-two", kind: "write", title: "Write again?" } },
+    });
+    const stop = signal();
+    yield* scoped(function* () {
+      // `approve-reads`, because it is the one mode that leaves a non-read
+      // decision to a person: the other two answer every request themselves, and
+      // nothing would ever be held.
+      yield* useStub(stub);
+      yield* useStopping(stop);
+      const session = opened(yield* start(holder, ASKS_AND_STOPPED, "approve-reads"));
+      const recorded = watchAppends(holder);
+
+      // A real interactive request, really waiting, and exposed before anything
+      // fails — which is what makes its absence afterwards a fact about cleanup.
+      yield* reported(
+        session,
+        "the first entry's request",
+        (reading) => reading.requests.length === 1,
+      );
+      const [waiting] = session.agent.requests;
+      expect(waiting.toolCallId).toBe("entry-one");
+      const asking = session.agent.turns.find((turn) => turn.key === waiting.turn);
+      expect(asking?.entry).toBe("entry-1");
+      const staleRequest = waiting.key;
+      const staleOption = waiting.choices.find((choice) => choice.kind === "allow_once")?.optionId;
+      expect(staleOption).toBe("once");
+
+      stop.publish();
+      expect((yield* session.join()).ok).toBe(false);
+      expect(session.model.entries[0]?.terminal?.status).toBe("err");
+
+      // Nothing of the entry is left: no turn, no request, no provisional slot,
+      // and no record — so no audit either. Named by the identities that really
+      // existed a moment ago as well as by emptiness, because the wait above is
+      // what makes these absences facts about cleanup rather than about a
+      // fixture that never asked anything.
+      expect(session.agent.requests.some((request) => request.key === staleRequest)).toBe(false);
+      expect(session.agent.turns.some((turn) => turn.key === waiting.turn)).toBe(false);
+      expect(session.agent.turns).toEqual([]);
+      expect(session.agent.requests).toEqual([]);
+      expect(session.agent.slots).toEqual([]);
+      expect(session.model.turns).toEqual([]);
+      expect(appends(yield* holder.stream.readAll())).toEqual([]);
+      // And the provider was never answered. Teardown abandoned the wait instead
+      // of resolving it, so there is no selection, no denial and no cancelled
+      // outcome anywhere — the decision nobody made was not made.
+      expect(stub.outcomes.has("entry-one")).toBe(false);
+      // The key that really did name that request settles nothing now, either way.
+      expect(session.permissions.choose(staleRequest, staleOption ?? "")).toBe(false);
+      expect(session.permissions.dismiss(staleRequest)).toBe(false);
+      expect(stub.outcomes.has("entry-one")).toBe(false);
+
+      // The successor asks on the coroutine the cancelled turn ran on. The
+      // journal says so: that coroutine closed under the entry before this one.
+      const closed = (yield* holder.stream.readAll()).filter(
+        (event) => event.type === "close" && event.coroutineId === "root.0",
+      );
+      expect(closed).toHaveLength(1);
+
+      admitted(yield* session.submit(ASKS_ALONE));
+      yield* reported(
+        session,
+        "the second entry's request",
+        (reading) => reading.requests.length === 1,
+      );
+      const [now] = session.agent.requests;
+      expect(now.toolCallId).toBe("entry-two");
+      expect(now.key).not.toBe(staleRequest);
+      // Only the successor's request is exposed, and nothing the reading holds
+      // belongs to the entry before it — neither a turn nor the slot one sat in.
+      // Asserted as "all of them are the successor's" rather than by counting,
+      // because the sibling that asks nothing may already have published.
+      expect(session.agent.requests).toHaveLength(1);
+      expect(session.agent.turns.find((turn) => turn.key === now.turn)?.prompt).toBe("next");
+      expect(session.agent.turns.filter((turn) => turn.entry !== "entry-2")).toEqual([]);
+      expect(session.agent.slots.filter((slot) => slot.entry !== "entry-2")).toEqual([]);
+      expect(session.agent.slots.length).toBeGreaterThan(0);
+      // And the successor's request found exactly one owner. A turn left behind
+      // on this coroutine would have made two candidates of it, and the session
+      // would have been withdrawn instead of presenting anything.
+      expect(session.agent.requests.filter((request) => request.turn === now.turn)).toHaveLength(1);
+
+      // Settled once, through the authority, and only this one.
+      const option = now.choices.find((choice) => choice.kind === "allow_once")?.optionId ?? "";
+      expect(session.permissions.choose(now.key, option)).toBe(true);
+      expect(session.permissions.choose(now.key, option)).toBe(false);
+
+      yield* recorded(2);
+      yield* session.join();
+
+      // Only the successor's turns are published, and the audit is on the one
+      // that asked — recorded at a position naming the coroutine the cancelled
+      // turn had used.
+      expect(session.model.turns.map((turn) => turn.entry)).toEqual(["entry-2", "entry-2"]);
+      const asked = session.model.turns.find((turn) => turn.input === "next");
+      expect(asked?.marker).toContain(":root.0:");
+      expect(asked?.permissions.map((audit) => audit.toolCallId)).toEqual(["entry-two"]);
+      expect(asked?.permissions.map((audit) => audit.selected)).toEqual([option]);
+      expect(session.model.turns.find((turn) => turn.input === "quiet")?.permissions).toEqual([]);
+      expect(stub.outcomes.get("entry-two")).toEqual({ outcome: "selected", optionId: option });
+      expect(stub.outcomes.has("entry-one")).toBe(false);
+    });
+  });
 });

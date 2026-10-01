@@ -3035,3 +3035,87 @@ function* untilDrawn(terminal: Terminal): Operation<void> {
       ),
   );
 }
+
+/**
+ * One Prompt in one conversation, written at the same place whatever it asks.
+ *
+ * The two spellings differ only inside the quotes, so each entry's Prompt sits at
+ * the same offset and both are journaled under the same durable name. That is
+ * ordinary rather than damaged — a durable name says where a Prompt was written,
+ * and every entry is its own execution — and it is the collision this row exists
+ * for.
+ */
+function onePromptAt(text: string): string {
+  return `<Session name="planner"><Prompt text="${text}" /></Session>\n`;
+}
+
+describe("U9 — two entries whose Prompts share one durable name", () => {
+  beforeAll(() => useTempFileCompiler());
+
+  it("U9: each entry's turn shows once and resolves to its own record", function* () {
+    const stub = createStub({ two: { unrecorded: true } });
+    yield* useStub(stub);
+    const holder = execution();
+    const session = granted(
+      yield* submitReplEntry({
+        execution: holder,
+        installations: installations(),
+        permissionMode: "deny-all",
+        source: onePromptAt("one"),
+      }),
+    );
+    yield* until(session, "the first entry's turn being recorded", () => recorded(session) === 1);
+    yield* session.join();
+
+    const started = yield* session.submit(onePromptAt("two"));
+    expect(started.ok).toBe(true);
+    yield* until(session, "the second entry's turn reaching its terminal event", () =>
+      session.agent.turns.some((turn) => turn.state === "terminal"),
+    );
+
+    // The one moment the two are most easily confused: the first entry's turn is
+    // durable, the second entry's is terminal and unrecorded, and both are
+    // mounted.
+    const before = reading(initialState("agents"), session);
+    expect(turnRows(before)).toHaveLength(2);
+    const firstRow = turnKeyed(before, "one");
+    const secondRow = turnKeyed(before, "two");
+    expect(firstRow).not.toBe(secondRow);
+    expect(labelOf(before, "one")).toContain("completed, recorded");
+    expect(labelOf(before, "two")).toContain("not recorded yet");
+
+    stub.record("root");
+    yield* until(session, "the second entry's turn being recorded", () => recorded(session) === 2);
+    yield* session.join();
+
+    // The hazard, stated: one durable name, two entries, two records.
+    const [first, last] = session.model.turns;
+    expect(first.name).toBe(last.name);
+    expect([first.entry, last.entry]).toEqual(["entry-1", "entry-2"]);
+    // Their history positions are namespaced, so the two places a reader can go to
+    // are distinct and each names its own entry's record.
+    expect(first.marker).not.toBe(last.marker);
+    expect(first.marker.startsWith("entry-")).toBe(false);
+    expect(last.marker.startsWith("entry-2:")).toBe(true);
+
+    const after = reading(initialState("agents"), session);
+    // Each turn exactly once — two rows, rather than one record shown twice and
+    // the other not at all.
+    expect(turnRows(after)).toHaveLength(2);
+    expect(labelOf(after, "one")).toContain("completed, recorded");
+    expect(labelOf(after, "two")).toContain("completed, recorded");
+    // Each row resolved to its own entry's record, so each shows its own prompt
+    // and its own text.
+    expect(detailOf(after, "one", "text")).toContain("one done");
+    expect(detailOf(after, "two", "text")).toContain("two done");
+    // Publication preserved each mounted slot: the rows a person was reading a
+    // moment ago are the rows they are reading now.
+    expect(turnKeyed(after, "one")).toBe(firstRow);
+    expect(turnKeyed(after, "two")).toBe(secondRow);
+    // And the conversation the provider named is still one conversation, holding
+    // both entries' turns.
+    expect(conversationRows(after)).toEqual(["sessions:conversation:stub:planner"]);
+    expect(session.model.sessions.map((one) => one.sessionKey)).toEqual(["stub:planner"]);
+    expect(session.model.sessions[0]?.turns).toHaveLength(2);
+  });
+});
