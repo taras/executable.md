@@ -41,15 +41,24 @@
 
 import { Err, Ok } from "effection";
 import type { Result } from "effection";
+import { validateBindingName } from "@executablemd/core";
 import { AGENT_PROMPT, parsePromptRecord, readElicitationSchema } from "@executablemd/core/host";
 import type { PromptRecord } from "@executablemd/core/host";
 import type { Close, DurableEvent, Json, Yield } from "@executablemd/durable-streams";
 
-/** The authored root scope: this slice admits one entry and this is its key. */
-export const ENTRY_SCOPE = "entry-1";
+import { entryKey, entryMarker, partitionEntrySegments } from "./entries.ts";
+import type { EntrySegment } from "./entries.ts";
 
-/** The durable name of the root document import. */
-const ROOT_IMPORT = "__root__";
+/** The first entry's key, and the root scope key every existing location names. */
+export const ENTRY_SCOPE = entryKey(1);
+
+/**
+ * The root namespace each entry's own validated props owns.
+ *
+ * Named here because two things turn on it: a retained value under this name is
+ * not inherited, and Core refuses one supplied as an initial binding.
+ */
+const ROOT_PROPS_BINDING = "props";
 
 const SOURCE_POSITION_FIELD = "executablemd.source-position";
 
@@ -281,14 +290,58 @@ export type ReplRow =
       readonly output: string;
     };
 
+/**
+ * One entry this execution admitted, and everything that entry holds.
+ *
+ * One frozen object per semantic reading. The catalog, the transcript and the
+ * binding inheritance all read this same value, because two objects describing
+ * one entry are two answers to what that entry did.
+ *
+ * `bindings` is what the root environment holds *after* this entry: the values
+ * earlier entries durably published, with this entry's own published values over
+ * them. It is what the next entry starts from, which is why it is a reading of
+ * the Journal and never of a process's memory — a value a run computed and never
+ * retained is a value a cold reopen would not have.
+ */
+export interface ReplEntry {
+  /** Its admission-order key: `entry-1`, `entry-2`, and so on. */
+  readonly key: string;
+  /** Its admission order, counting from one, which is also its display order. */
+  readonly order: number;
+  /** The exact source admitted, which nothing afterwards can change. */
+  readonly source: string;
+  /** The path that source was admitted under. */
+  readonly path: string;
+  /** This entry's root scope, holding its nested scopes and published values. */
+  readonly scope: ReplScope;
+  readonly transcript: readonly ReplRow[];
+  readonly checkpoints: readonly ReplCheckpoint[];
+  /** What this entry's root settled to, or none while it is unfinished. */
+  readonly terminal: ReplTerminal | undefined;
+  readonly settled: boolean;
+  /**
+   * The root bindings in effect after this entry, in the order they appeared.
+   *
+   * `props` is never among them: each entry's props namespace belongs to its own
+   * validated root, so a value published under that name stays in `scope` where
+   * it happened rather than appearing here as something a successor receives.
+   */
+  readonly bindings: readonly ReplBinding[];
+  /** This entry's retained turns, in its own Prompt sequence order. */
+  readonly turns: readonly ReplAgentTurn[];
+}
+
 /** One frozen reading of one validated Journal prefix. */
 export interface ReplModel {
   /** The marker this model was projected at, or none for the Journal head. */
   readonly selection: string | undefined;
   /** Whether the projected prefix is the whole file. */
   readonly head: boolean;
-  readonly entry: ReplScope | undefined;
+  /** Every entry this prefix admitted, in admission order. */
+  readonly entries: readonly ReplEntry[];
+  /** Whether the last entry this prefix admitted has settled. */
   readonly settled: boolean;
+  /** What the last entry settled to, or none while it is unfinished. */
   readonly terminal: ReplTerminal | undefined;
   readonly checkpoints: readonly ReplCheckpoint[];
   readonly transcript: readonly ReplRow[];
@@ -324,22 +377,25 @@ function markerFor(event: DurableEvent, ordinal: number): string {
  * whole file. A marker that names no event in this file, or names one twice,
  * is refused rather than rounded to the head: a reader looking at history must
  * never be shown the present instead.
+ *
+ * Whatever the selection, the complete file is read first — boundaries and the
+ * contents of every segment — and a file this version cannot read refuses
+ * whichever prefix was asked for. What a selection chooses is which part of a
+ * readable history to show, not how much of it has to be readable.
  */
 export function projectRepl(
   events: readonly DurableEvent[],
   selection?: string,
 ): Result<ReplModel> {
-  const markers: string[] = [];
-  const ordinals = new Map<string, number>();
-  for (const event of events) {
-    if (event.type === "yield") {
-      const ordinal = ordinals.get(event.coroutineId) ?? 0;
-      ordinals.set(event.coroutineId, ordinal + 1);
-      markers.push(markerFor(event, ordinal));
-    } else {
-      markers.push(markerFor(event, 0));
-    }
+  // The whole file's boundaries first, before any part of it is read as an
+  // entry. A prefix whose ranges are not ranges comes back as one refusal with
+  // no entries at all: a catalog missing whichever entry stopped parsing looks
+  // exactly like a history that never held it.
+  const partitioned = partitionEntrySegments(events);
+  if (!partitioned.ok) {
+    return partitioned;
   }
+  const markers = globalMarkers(partitioned.value, events.length);
 
   const duplicated = firstDuplicate(markers);
   if (duplicated !== undefined) {
@@ -351,21 +407,100 @@ export function projectRepl(
     );
   }
 
-  let end = events.length;
-  if (selection !== undefined) {
-    const at = markers.indexOf(selection);
-    if (at === -1) {
-      return Err(
-        new ReplProjectionError(
-          "the selected history position is not in this journal. Return to the live head and " +
-            "choose a checkpoint the history offers.",
-        ),
-      );
-    }
-    end = at + 1;
+  // Every segment in the complete prefix is read before any view escapes —
+  // including a view a selection shortens. Boundaries alone are not enough:
+  // a later entry whose retained payload this version cannot read is damage to
+  // the file, and an earlier position is not a place to stand and be shown a
+  // catalog in front of it. A reader inspecting history would see a model that
+  // looks whole, go back to the head, and only then be told the file is broken.
+  const whole = build(partitioned.value, markers, selection, true);
+  if (!whole.ok) {
+    return whole;
   }
+  if (selection === undefined) {
+    return whole;
+  }
+  const at = markers.indexOf(selection);
+  if (at === -1) {
+    return Err(
+      new ReplProjectionError(
+        "the selected history position is not in this journal. Return to the live head and " +
+          "choose a checkpoint the history offers.",
+      ),
+    );
+  }
+  const end = at + 1;
+  if (end === events.length) {
+    // The selection names the last event, so the reading above is already it.
+    return whole;
+  }
+  // Partitioned again rather than sliced by hand. Every boundary rule is about a
+  // prefix, so a prefix of a valid partition is a valid partition — and reading
+  // it that way keeps one description of what a segment is.
+  const selected = partitionEntrySegments(events.slice(0, end));
+  if (!selected.ok) {
+    return selected;
+  }
+  return build(selected.value, markers.slice(0, end), selection, false);
+}
 
-  return build(events.slice(0, end), markers.slice(0, end), selection, end === events.length);
+/**
+ * The root bindings a next entry would start from.
+ *
+ * The last durably published value for each root name across every entry this
+ * prefix holds, in the record shape the trusted-host entrypoint takes. Read off
+ * the projection and off nothing a process remembers: the same Journal prefix
+ * produces the same record in a cold command, which is what makes an inherited
+ * value a fact about the history rather than about whoever happened to run it.
+ *
+ * Every name here is one an eval block could bind, because the projection
+ * refused the record otherwise, and `props` is not here at all — the entries it
+ * reads already exclude it. Core refuses both independently, so neither rule
+ * rests on this function having applied it.
+ *
+ * `__proto__` is defined rather than assigned, for the reason the projection
+ * defines it: assignment reaches `Object.prototype`'s inherited setter and would
+ * drop the name while replacing the prototype.
+ */
+export function entryInitialBindings(model: ReplModel): Readonly<Record<string, Json>> {
+  const record: { [key: string]: Json } = {};
+  const last = model.entries[model.entries.length - 1];
+  for (const binding of last?.bindings ?? []) {
+    Object.defineProperty(record, binding.name, {
+      value: binding.value,
+      enumerable: true,
+      writable: true,
+      configurable: true,
+    });
+  }
+  return Object.freeze(record);
+}
+
+/**
+ * Every event's marker, in append order, spelled as the whole history spells it.
+ *
+ * Ordinals are counted inside the segment that holds the event, because that is
+ * the history its own execution replayed: a second entry's root yield is its
+ * coroutine's first, not the file's second. The entry key then namespaces every
+ * marker after the first entry's, so one spelling names one position in the file
+ * while every location an earlier build wrote still resolves to the event it
+ * named.
+ */
+function globalMarkers(segments: readonly EntrySegment[], length: number): readonly string[] {
+  const markers: string[] = Array.from({ length }, () => "");
+  for (const segment of segments) {
+    const ordinals = new Map<string, number>();
+    for (let index = 0; index < segment.events.length; index++) {
+      const event = segment.events[index];
+      let ordinal = 0;
+      if (event.type === "yield") {
+        ordinal = ordinals.get(event.coroutineId) ?? 0;
+        ordinals.set(event.coroutineId, ordinal + 1);
+      }
+      markers[segment.start + index] = entryMarker(segment.order, markerFor(event, ordinal));
+    }
+  }
+  return markers;
 }
 
 /** The first marker that appears twice, if any. */
@@ -395,17 +530,133 @@ interface ScopeDraft {
   scopes: ScopeDraft[];
 }
 
+/**
+ * Assemble one reading of a partitioned prefix.
+ *
+ * Each range is read by the one-entry reader below, exactly as a one-entry
+ * history has always been read, and only a complete set of readings becomes a
+ * model: an unreadable range refuses the whole projection rather than publishing
+ * the entries before it. The global chronology is the entries' own turns
+ * concatenated in admission order, so two entries that each recorded Prompt
+ * sequence `0` stay in the order they ran rather than colliding.
+ */
 function build(
-  events: readonly DurableEvent[],
+  segments: readonly EntrySegment[],
   markers: readonly string[],
   selection: string | undefined,
   head: boolean,
 ): Result<ReplModel> {
+  const entries: ReplEntry[] = [];
+  const transcript: ReplRow[] = [];
+  const checkpoints: ReplCheckpoint[] = [];
+  const chronology: ReplAgentTurn[] = [];
+  /** What the root environment holds after the entries read so far. */
+  let inherited: readonly ReplBinding[] = Object.freeze([]);
+
+  for (const segment of segments) {
+    const read = buildEntry(segment, markers.slice(segment.start, segment.end));
+    if (!read.ok) {
+      return read;
+    }
+    const reading = read.value;
+    const bindings = inEffectAfter(inherited, reading.scope.bindings);
+    inherited = bindings;
+    entries.push(
+      freeze({
+        key: segment.key,
+        order: segment.order,
+        source: reading.scope.source,
+        path: reading.scope.path,
+        scope: reading.scope,
+        transcript: reading.transcript,
+        checkpoints: reading.checkpoints,
+        terminal: reading.terminal,
+        settled: reading.terminal !== undefined,
+        bindings,
+        turns: reading.turns,
+      }),
+    );
+    transcript.push(...reading.transcript);
+    checkpoints.push(...reading.checkpoints);
+    chronology.push(...reading.turns);
+  }
+
+  const last = entries[entries.length - 1];
+  const ordered = Object.freeze(chronology);
+  return Ok(
+    freeze({
+      selection,
+      head,
+      entries: Object.freeze(entries),
+      settled: last?.terminal !== undefined,
+      terminal: last?.terminal,
+      checkpoints: Object.freeze(checkpoints),
+      transcript: Object.freeze(transcript),
+      turns: ordered,
+      sessions: conversationsOf(ordered),
+    }),
+  );
+}
+
+/**
+ * The root bindings in effect after one entry: what it inherited, with what it
+ * published over the top.
+ *
+ * A name keeps the position it first appeared in, so a reader watching a value
+ * change across entries watches it change in place rather than move. Only values
+ * an entry durably published are here — a value a run computed and never
+ * retained is not something a cold reopen could find, so it is not something an
+ * entry may inherit either.
+ *
+ * `props` is the one name that does not cross. Every entry's props namespace is
+ * the one its own root validated, so a document that published a root value
+ * under that name published it for itself. It stays visible in that entry's own
+ * scope, where it happened, and is absent from here rather than listed as though
+ * a later entry would receive it.
+ */
+function inEffectAfter(
+  inherited: readonly ReplBinding[],
+  own: readonly ReplBinding[],
+): readonly ReplBinding[] {
+  const effective = inherited.map((binding) => binding);
+  for (const binding of own) {
+    if (binding.name === ROOT_PROPS_BINDING) {
+      continue;
+    }
+    const at = effective.findIndex((candidate) => candidate.name === binding.name);
+    if (at === -1) {
+      effective.push(binding);
+      continue;
+    }
+    effective[at] = binding;
+  }
+  return Object.freeze(effective);
+}
+
+/** One entry's reading, before it is placed in the collection. */
+interface EntryReading {
+  readonly scope: ReplScope;
+  readonly transcript: readonly ReplRow[];
+  readonly checkpoints: readonly ReplCheckpoint[];
+  readonly turns: readonly ReplAgentTurn[];
+  readonly terminal: ReplTerminal | undefined;
+}
+
+/**
+ * Read one entry's range: the same reading a one-entry history has always had.
+ *
+ * The range's shape is already settled — it begins with this entry's root
+ * admission and holds at most one terminal close, because that is what made it a
+ * range — so nothing here decides a boundary. The markers arrive spelled the way
+ * the whole history spells them, so every position this reading retains is one a
+ * location can name.
+ */
+function buildEntry(segment: EntrySegment, markers: readonly string[]): Result<EntryReading> {
+  const events = segment.events;
   const transcript: ReplRow[] = [];
   const checkpoints: ReplCheckpoint[] = [];
   /** Every retained turn, in append order, before the chronology is ordered. */
   const turns: ReplAgentTurn[] = [];
-  let entry: ScopeDraft | undefined;
   let terminal: ReplTerminal | undefined;
   /** Every scope by the source path it was admitted from, for owner lookup. */
   const byPath = new Map<string, ScopeDraft[]>();
@@ -421,31 +672,53 @@ function build(
   const announced = admittedIdentities(events);
   const occurrences = new Map<string, number>();
 
-  for (let index = 0; index < events.length; index++) {
+  // The range's first event is this entry's root admission, because that is what
+  // began the range. Read here rather than recognized inside the loop, so the
+  // reading below has an entry from its first iteration and the one thing a
+  // segment cannot hold — a second root admission — needs no check it could
+  // never reach.
+  const rootSource = readRetainedSource(segment.admission);
+  if (rootSource === undefined) {
+    return Err(
+      new ReplProjectionError(
+        "the entry's recorded source cannot be read by this version of the REPL.",
+      ),
+    );
+  }
+  const entry: ScopeDraft = {
+    key: segment.key,
+    kind: "entry",
+    name: segment.key,
+    path: rootSource.path,
+    source: rootSource.content,
+    position: undefined,
+    marker: markers[0],
+    bindings: [],
+    elicitations: [],
+    generated: [],
+    scopes: [],
+  };
+  register(byPath, entry);
+  transcript.push({
+    kind: "entry",
+    marker: markers[0],
+    path: rootSource.path,
+    source: rootSource.content,
+  });
+  checkpoints.push({
+    marker: markers[0],
+    kind: "entry",
+    label: `Entry ${segment.order} admitted`,
+  });
+
+  for (let index = 1; index < events.length; index++) {
     const event = events[index];
     const marker = markers[index];
-
-    if (terminal !== undefined) {
-      return Err(
-        new ReplProjectionError(
-          "this journal records work after the entry settled. A settled entry is the end of " +
-            "its history.",
-        ),
-      );
-    }
 
     if (event.type === "close") {
       if (event.coroutineId !== "root") {
         transcript.push({ kind: "effect", marker, type: "close", status: event.result.status });
         continue;
-      }
-      if (entry === undefined) {
-        return Err(
-          new ReplProjectionError(
-            "this journal settles an entry it never admitted. An entry's source is admitted " +
-              "before anything it does.",
-          ),
-        );
       }
       const settled = readTerminal(event);
       if (settled === undefined) {
@@ -462,58 +735,6 @@ function build(
     }
 
     const description = event.description;
-
-    if (description.type === "import_component" && description.name === ROOT_IMPORT) {
-      if (entry !== undefined) {
-        return Err(
-          new ReplProjectionError(
-            "this journal admits a second entry. One REPL execution holds one entry.",
-          ),
-        );
-      }
-      if (index !== 0) {
-        return Err(
-          new ReplProjectionError(
-            "this journal records work before it admitted its entry. The entry's source is the " +
-              "first thing an execution decides.",
-          ),
-        );
-      }
-      const retained = readRetainedSource(event);
-      if (retained === undefined) {
-        return Err(
-          new ReplProjectionError(
-            "the entry's recorded source cannot be read by this version of the REPL.",
-          ),
-        );
-      }
-      entry = {
-        key: ENTRY_SCOPE,
-        kind: "entry",
-        name: ENTRY_SCOPE,
-        path: retained.path,
-        source: retained.content,
-        position: undefined,
-        marker,
-        bindings: [],
-        elicitations: [],
-        generated: [],
-        scopes: [],
-      };
-      register(byPath, entry);
-      transcript.push({ kind: "entry", marker, path: retained.path, source: retained.content });
-      checkpoints.push({ marker, kind: "entry", label: "Entry 1 admitted" });
-      continue;
-    }
-
-    if (entry === undefined) {
-      return Err(
-        new ReplProjectionError(
-          "this journal records work before it admitted its entry. The entry's source is the " +
-            "first thing an execution decides.",
-        ),
-      );
-    }
 
     const position = readPosition(event);
     if (position === MALFORMED) {
@@ -581,14 +802,11 @@ function build(
         transcript.push({ kind: "effect", marker, type: "eval", status: event.result.status });
         continue;
       }
-      const published = readExports(event);
-      if (published === undefined) {
-        return Err(
-          new ReplProjectionError(
-            "a recorded evaluation's published values cannot be read by this version of the REPL.",
-          ),
-        );
+      const read = readExports(event);
+      if (!read.ok) {
+        return read;
       }
+      const published = read.value;
       const owner = ownerOf(
         byPath,
         fragments,
@@ -820,6 +1038,10 @@ function build(
     });
   }
 
+  // Inside this entry and nowhere else. A sequence counts the Prompts of one
+  // execution, and every entry is its own execution — so two entries each
+  // recording `0` is what the protocol writes, while one entry recording it
+  // twice is a history whose conversation cannot be ordered.
   const sequences = new Set<number>();
   for (const turn of turns) {
     if (sequences.has(turn.sequence)) {
@@ -837,15 +1059,11 @@ function build(
 
   return Ok(
     freeze({
-      selection,
-      head,
-      entry: entry === undefined ? undefined : freezeScope(entry),
-      settled: terminal !== undefined,
-      terminal: terminal === undefined ? undefined : freeze({ ...terminal }),
-      checkpoints: Object.freeze(checkpoints.map((checkpoint) => freeze({ ...checkpoint }))),
+      scope: freezeScope(entry),
       transcript: Object.freeze(transcript.map((row) => freeze({ ...row }))),
+      checkpoints: Object.freeze(checkpoints.map((checkpoint) => freeze({ ...checkpoint }))),
       turns: Object.freeze(chronology),
-      sessions: conversationsOf(chronology),
+      terminal: terminal === undefined ? undefined : freeze({ ...terminal }),
     }),
   );
 }
@@ -1238,28 +1456,46 @@ function readRetainedSource(event: Yield): { path: string; content: string } | u
  */
 function readExports(
   event: Yield,
-): { bindings: [string, Json][]; output: string | undefined } | undefined {
+): Result<{ bindings: [string, Json][]; output: string | undefined }> {
   if (event.result.status !== "ok" || !isJsonObject(event.result.value)) {
-    return undefined;
+    return Err(new ReplProjectionError(UNREADABLE_EXPORTS));
   }
   const published = event.result.value["value"];
   if (!isJsonObject(published)) {
-    return undefined;
+    return Err(new ReplProjectionError(UNREADABLE_EXPORTS));
   }
   const bindings: [string, Json][] = [];
   let output: string | undefined;
   for (const [name, value] of Object.entries(published)) {
     if (name === "__output") {
       if (typeof value !== "string") {
-        return undefined;
+        return Err(new ReplProjectionError(UNREADABLE_EXPORTS));
       }
       output = value;
       continue;
     }
+    // Checked against the parser an authored binding is checked against, here
+    // and not when something tries to use it. A retained name no eval block
+    // could have bound is a record this version cannot read — and reading it
+    // anyway puts the name into a later entry's environment, where it reaches
+    // the generated preamble and fails as a syntax error about a document that
+    // never wrote it.
+    const binding = validateBindingName(name);
+    if (!binding.ok) {
+      return Err(
+        new ReplProjectionError(
+          `a recorded evaluation published a value under a name no binding can have: ` +
+            `${binding.error.message}`,
+        ),
+      );
+    }
     bindings.push([name, detach(value)]);
   }
-  return { bindings, output };
+  return Ok({ bindings, output });
 }
+
+const UNREADABLE_EXPORTS =
+  "a recorded evaluation's published values cannot be read by this version of the REPL.";
 
 /** What a recorded generated fragment decided. */
 function readAdmission(event: Yield): Omit<ReplGenerated, "marker"> | undefined {

@@ -51,7 +51,7 @@ const BYTES = new TextEncoder();
 const EMPTY_MODEL_FOR_TEST = Object.freeze({
   selection: undefined,
   head: true,
-  entry: undefined,
+  entries: Object.freeze([]),
   settled: false,
   terminal: undefined,
   checkpoints: Object.freeze([]),
@@ -930,7 +930,7 @@ describe("REPL journey: one entry, from raw bytes", () => {
     if (!projected.ok) {
       throw projected.error;
     }
-    const entry = projected.value.entry;
+    const entry = projected.value.entries[0]?.scope;
     expect(entry).toBeDefined();
     const nested = entry?.scopes[0];
     expect(nested).toBeDefined();
@@ -1911,8 +1911,8 @@ describe("REPL journey: what it settles before it acts", () => {
     });
 
     const model = yield* projectionOf(retained, files[0]);
-    expect(model.entry).toBeDefined();
-    entryKey = model.entry?.key ?? "";
+    expect(model.entries[0]?.scope).toBeDefined();
+    entryKey = model.entries[0]?.key ?? "";
     expect(model.settled).toBe(false);
     const lines = yield* records(retained, files[0]);
 
@@ -2019,7 +2019,7 @@ describe("REPL journey: what it settles before it acts", () => {
     const stale = encodeLocation({
       execution: files[0].replace(/\.jsonl$/, ""),
       surface: "repl",
-      scopes: [model.entry?.key ?? ""],
+      scopes: [model.entries[0]?.key ?? ""],
       drawers: [{ kind: "live-elicit" }],
       at: undefined,
       inspect: false,
@@ -2093,11 +2093,11 @@ describe("REPL journey: what it settles before it acts", () => {
 
       const model = yield* projectionOf(root, "unclosed.jsonl");
       expect(model.settled).toBe(false);
-      expect(model.entry?.elicitations[0].answer).toEqual({ decision: "approve" });
+      expect(model.entries[0]?.scope.elicitations[0].answer).toEqual({ decision: "approve" });
 
       const running = yield* spawn(function* (): Operation<void> {
         outcome = yield* runReplProgram({
-          location: `xmd://repl/unclosed/repl/${model.entry?.key ?? ""}/+elicit`,
+          location: `xmd://repl/unclosed/repl/${model.entries[0]?.key ?? ""}/+elicit`,
           profile: PROFILE,
         });
       });

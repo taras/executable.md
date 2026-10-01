@@ -248,12 +248,12 @@ describe("REPL execution: submitting one entry", () => {
         },
       ],
     });
-    expect(session.model.entry?.elicitations).toEqual([]);
+    expect(session.model.entries[0]?.scope.elicitations).toEqual([]);
 
     expect(question.submit({ decision: "approve" }).kind).toBe("answered");
     yield* session.join();
 
-    const entry = session.model.entry;
+    const entry = session.model.entries[0]?.scope;
     if (entry === undefined) {
       throw new Error("the entry was admitted");
     }
@@ -307,8 +307,10 @@ describe("REPL execution: submitting one entry", () => {
     (yield* nextQuestion(session)).submit({ decision: "decline" });
     yield* session.join();
 
-    const generated = session.model.entry?.generated[0];
-    const fragment = session.model.entry?.scopes.find((scope) => scope.kind === "generated");
+    const generated = session.model.entries[0]?.scope.generated[0];
+    const fragment = session.model.entries[0]?.scope.scopes.find(
+      (scope) => scope.kind === "generated",
+    );
     expect(generated?.decision).toBe("admitted");
     // The value the durable evaluation published is what the fragment says,
     // which is what makes it deterministic rather than merely repeatable.
@@ -482,7 +484,7 @@ describe("REPL execution: reopening one history", () => {
     expect(yield* readAll(holder)).toEqual(settled);
     expect(session.elicitation.asked).toBe(0);
     expect(session.model.settled).toBe(true);
-    expect(session.model.entry?.elicitations[0].answer).toEqual({ decision: "approve" });
+    expect(session.model.entries[0]?.scope.elicitations[0].answer).toEqual({ decision: "approve" });
   });
 
   it("X2: the append observer lives exactly as long as the session", function* () {
@@ -745,7 +747,7 @@ describe("REPL execution: pausing expansion", () => {
     const session = opened(yield* openReplSession(options(holder)));
 
     expect(session.controller).toBe(undefined);
-    expect(session.model.entry).toBe(undefined);
+    expect(session.model.entries[0]?.scope).toBe(undefined);
     expect(session.expansion.state).toBe("playing");
   });
 });

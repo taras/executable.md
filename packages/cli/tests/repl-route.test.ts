@@ -194,7 +194,7 @@ describe("REPL route: resolving against one model", () => {
   it("M3: returns the exact objects the model holds", function* () {
     const events = yield* referenceEvents();
     const model = projected(events);
-    const entry = model.entry;
+    const entry = model.entries[0]?.scope;
     if (entry === undefined) {
       throw new Error("the reference journal admits an entry");
     }
@@ -239,7 +239,7 @@ describe("REPL route: resolving against one model", () => {
   it("R2: resolves a historical prefix and refuses a live question inside it", function* () {
     const events = yield* referenceEvents();
     const head = projected(events);
-    const answered = head.entry?.elicitations[0];
+    const answered = head.entries[0]?.scope.elicitations[0];
     if (answered === undefined) {
       throw new Error("the reference journal records one answered question");
     }
@@ -254,7 +254,7 @@ describe("REPL route: resolving against one model", () => {
     if (drawer.kind !== "recorded-elicit") {
       throw new Error("an inspected question opens its recorded answer");
     }
-    expect(drawer.elicitation).toBe(historical.entry?.elicitations[0]);
+    expect(drawer.elicitation).toBe(historical.entries[0]?.scope.elicitations[0]);
 
     expect(
       unresolved(
@@ -277,7 +277,7 @@ describe("REPL route: resolving against one model", () => {
     // Already answered: reopening this shape asks nobody anything and only
     // finishes the root, so a route resolved here would replay and append
     // before discovering that no drawer can mount.
-    expect(unclosed.entry?.elicitations[0].answer).toEqual({ decision: "approve" });
+    expect(unclosed.entries[0]?.scope.elicitations[0].answer).toEqual({ decision: "approve" });
     expect(unresolved(unclosed, live)).toContain("nothing is being asked");
 
     // Only the process actually holding the question may open it, and it says so.
@@ -457,7 +457,7 @@ describe("REPL route: resolving a conversation", () => {
     // The filter is orthogonal to everything else a location can say.
     const beside = resolved(model, `xmd://repl/${EXECUTION}/repl/entry-1?session=stub%3Abuild`);
     expect(beside.session).toBe(model.sessions[1]);
-    expect(beside.scope).toBe(model.entry);
+    expect(beside.scope).toBe(model.entries[0]?.scope);
     // And absent means every conversation rather than none.
     expect(resolved(model, `xmd://repl/${EXECUTION}/sessions`).session).toBe(undefined);
   });

@@ -356,7 +356,12 @@ export function resolveLocation(
       drawers: opened.value,
     });
   }
-  if (route.draft !== undefined && model.entry !== undefined) {
+  // The first entry's scope, which is the only entry this slice's route grammar
+  // selects. Entry selection across the collection is the route work this
+  // Story's later slice owns; what changed here is where the one entry is read
+  // from, not which entries a location may name.
+  const admitted = model.entries[0]?.scope;
+  if (route.draft !== undefined && admitted !== undefined) {
     return Err(
       new ReplRouteError(
         "this route carries a draft, and this execution has already admitted its entry. An " +
@@ -372,14 +377,14 @@ export function resolveLocation(
       if (key !== ENTRY_SCOPE) {
         return Err(new ReplRouteError(`this execution has no ${key}.`));
       }
-      if (model.entry === undefined) {
+      if (admitted === undefined) {
         return Err(
           new ReplRouteError(
             "this route selects an entry, and this execution has not admitted one yet.",
           ),
         );
       }
-      scope = model.entry;
+      scope = admitted;
       ancestry.push(scope);
       continue;
     }
@@ -399,7 +404,7 @@ export function resolveLocation(
   return Ok({
     route,
     surface: "repl",
-    entry: model.entry,
+    entry: admitted,
     ancestry: Object.freeze(ancestry),
     scope,
     session: filtered.value,
@@ -544,7 +549,7 @@ function openDrawer(
   }
   const elicitation = scope.elicitations.find((candidate) => candidate.marker === reference.marker);
   if (elicitation === undefined) {
-    if (model.entry === undefined) {
+    if (model.entries.length === 0) {
       return Err(new ReplRouteError("this execution has recorded no question."));
     }
     return Err(new ReplRouteError(`${scope.key} recorded no question at ${reference.marker}.`));

@@ -231,7 +231,21 @@ function* start(
   }
   let model = projection.value;
 
-  const admitted = model.entry;
+  if (model.entries.length > 1) {
+    // This session owns one entry task, starts it from the whole physical
+    // stream, and has no way to tell a later entry's records from an earlier
+    // one's. The projector now reads a history holding several; serially
+    // *running* them is the lifecycle work this Story's next slice owns, and
+    // until it lands a session that accepted such a history would replay one
+    // entry's work as another's.
+    return Err(
+      new ReplReconstructionError(
+        "this execution's history holds more than one entry, which this version of the REPL " +
+          "cannot continue.",
+      ),
+    );
+  }
+  const admitted = model.entries[0]?.scope;
   if (admitted !== undefined && submitted !== undefined) {
     return Err(
       new ReplReconstructionError(
