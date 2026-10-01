@@ -14,7 +14,7 @@
  */
 
 import { describe, it } from "@executablemd/test-support/bdd";
-import { directoryEntry, executeInstalled } from "@executablemd/core/host";
+import { directoryEntry, elicitWriteEntry, executeInstalled } from "@executablemd/core/host";
 import type { FragmentEntry } from "@executablemd/core/host";
 import { expect } from "@executablemd/test-support/expect";
 import { scoped, spawn, suspend, withResolvers } from "effection";
@@ -870,6 +870,36 @@ describe("Tier WGAC — the registered Evaluate component", () => {
         // resume restored them rather than admitting anything a second time.
         expect(admissions(resumed.events)).toEqual(admitted);
       });
+    });
+  });
+
+  it("WGAC18: a generated question is admitted only where this host admits one", function* () {
+    const root = yield* useStorageRoot();
+    yield* withStorage(root, function* () {
+      const database = yield* createRun();
+
+      // The workflow's own generated write table lists no question. A fragment
+      // that writes `<Elicit>` is refused for not being admitted — before the
+      // provider is reached, and whatever the run's authored documents may do
+      // with the workflow's own suspension replacement for the same name.
+      const refused = yield* runDocument(
+        database,
+        `<Evaluate allow={["write"]} source={'<Elicit schema={{}} as="x">ask?</Elicit>'} />\n`,
+      );
+      expect(reported(refused)).toContain("did not admit");
+    });
+
+    const second = yield* useStorageRoot();
+    yield* withStorage(second, function* () {
+      const database = yield* createRun();
+      // And a host that states the entry admits it: the table is the host's,
+      // which is what "unless its own profile admits it" means.
+      const admitted = yield* runDocument(
+        database,
+        `<Evaluate allow={["write"]} source={'<Elicit schema={{}} as="x">ask?</Elicit>'} />\n`,
+        { writes: [elicitWriteEntry()] },
+      );
+      expect(reported(admitted)).not.toContain("did not admit");
     });
   });
 

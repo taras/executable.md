@@ -83,10 +83,11 @@ export function elementSite(position: SourcePosition | undefined, index: number)
   if (position === undefined) {
     return `@${index}`;
   }
-  if (position.path === undefined) {
+  const source = position.path ?? position.generatedSource;
+  if (source === undefined) {
     return `#${position.offset}`;
   }
-  return `${position.path}#${position.offset}`;
+  return `${source}#${position.offset}`;
 }
 
 /** The frame an authored element contributes. */
@@ -108,6 +109,9 @@ export function snapshot(
     name,
     position: Object.freeze({
       ...(position.path === undefined ? {} : { path: position.path }),
+      ...(position.generatedSource === undefined
+        ? {}
+        : { generatedSource: position.generatedSource }),
       offset: position.offset,
       line: position.line,
       column: position.column,

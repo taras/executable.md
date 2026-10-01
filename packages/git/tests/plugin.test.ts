@@ -219,9 +219,21 @@ function* record(
 
 describe("the Git Plugin's command profile", () => {
   it("declares for the commands that execute or describe a document", function* () {
-    for (const command of ["run", "plan", "syntax"]) {
+    for (const command of ["run", "plan", "syntax", "repl"]) {
       expect(declaresFor({ command, args: [command] })).toBe(true);
     }
+  });
+
+  it("declares for the REPL, which runs an entry under the ordinary profile", function* () {
+    // Explicit rather than incidental: the REPL runs a document a person typed,
+    // so the Git vocabulary is available there exactly as it is to `run`. A
+    // Plugin that only meant `run` is a different question, and `repl` arriving
+    // under its own name is what lets one answer it.
+    expect(declaresFor({ command: "repl", args: ["repl"] })).toBe(true);
+    expect(declaresFor({ command: "repl", args: ["repl", "xmd://repl/one/repl"] })).toBe(true);
+    const runOnly = (request: PluginInstallRequest): boolean => request.command === "run";
+    expect(runOnly({ command: "repl", args: ["repl"] })).toBe(false);
+    expect(runOnly({ command: "run", args: ["run", "doc.md"] })).toBe(true);
   });
 
   it("declares for the workflow actions that execute a document, and no others", function* () {

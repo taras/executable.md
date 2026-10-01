@@ -1810,6 +1810,7 @@ interface Preflight {
  * could disagree with the one `<Fetch>` will make.
  */
 function* preflight(
+  id: string,
   source: string,
   table: ReadonlyMap<string, Entry[]>,
   ceilings: ReadonlyMap<string, FetchRequest[]>,
@@ -1821,7 +1822,12 @@ function* preflight(
   yield* timeoutFetch;
 
   const named: Planned[] = [];
-  const segments = scanSegments(source);
+  // Scanned as the fragment it is: generated text has no path, so every
+  // executable position in it names this admission instead. That is what lets a
+  // reader of the history say which fragment performed an effect — and it is
+  // decided here, in the scan preflight runs, rather than by anything watching
+  // the expansion afterwards.
+  const segments = scanSegments(source, { generatedSource: id, baseOffset: 0, baseLine: 1 });
   // A generated fragment starts with no bindings: it imports none from the
   // document that admitted it, and exports none back to it.
   yield* walk(segments, table, ceilings, named, new Set<string>());
@@ -2299,13 +2305,14 @@ const RECORD_VERSION = 2;
  * one word already says.
  */
 function* admitSource(
+  id: string,
   source: string,
   table: ReadonlyMap<string, Entry[]>,
   ceilings: ReadonlyMap<string, FetchRequest[]>,
   policy: Policy,
 ): Operation<DurableJson> {
   try {
-    const { named } = yield* preflight(source, table, ceilings);
+    const { named } = yield* preflight(id, source, table, ceilings);
     return parseJson({
       version: RECORD_VERSION,
       decision: "admitted",
@@ -2350,7 +2357,7 @@ function* persistAdmission(
       input: policyRecord(policy),
       ...sourceDescription(position),
     },
-    () => admitSource(source, table, ceilings, policy),
+    () => admitSource(id, source, table, ceilings, policy),
   );
   return parseJson(stored);
 }
@@ -2558,6 +2565,6 @@ export function* evaluateProtectedGeneratedXmd(
 
   // The retained source is what expands, so a continuation runs exactly the
   // bytes this run admitted rather than a caller's copy of them.
-  const restored = yield* preflight(decided.source, table, ceilings);
+  const restored = yield* preflight(request.id, decided.source, table, ceilings);
   return yield* expand(request.id, restored.segments, restored.named, componentRouting, syntax);
 }

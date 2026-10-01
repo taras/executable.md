@@ -38,7 +38,7 @@
 
 import type { Operation } from "effection";
 
-import { CORE_ORIGIN } from "./components/registry.ts";
+import { CORE_ORIGIN, ELICIT_COMPONENT } from "./components/registry.ts";
 import { SYNTAX_COMPONENT } from "./components/Syntax.ts";
 import {
   CAPABILITY_FORMS,
@@ -335,6 +335,37 @@ export function syntaxReadEntry(): ComponentAnswerEntry {
   };
 }
 
+/**
+ * Canonical `<Elicit>`, admitted as a question a generated fragment may ask.
+ *
+ * A capability, not a component answer. What core owns here is the *behavior*,
+ * so the body a fragment reaches is pinned the way `<File>`'s is rather than
+ * resolved by name: the ordinary import chain answers for the authored element,
+ * where a repository file, a registration, a declaration and the workflow's own
+ * suspension replacement all legitimately shadow it, and none of them is what a
+ * generated fragment was admitted to run.
+ *
+ * Resolving it was also the wrong *time*. An admitted component answer is
+ * resolved for every execution the profile belongs to, before any document code
+ * — so a name a host had quite properly shadowed made executions that never ask
+ * anything refuse, and a document holding only `<File>` was refused for an
+ * entry it never wrote. Nothing is resolved now: preflight selects this entry
+ * only where it finds an `<Elicit>` occurrence, and what it selects is core's.
+ *
+ * In the write table and not the read one. Asking a person is not reading:
+ * `allow={["read"]}` admits what a fragment may look at without anyone being
+ * interrupted, and a question is an interaction whose answer then drives what
+ * the fragment writes. A program a person is asked to approve before it writes
+ * is the case this exists for, and a `read` fragment that could ask would be
+ * able to interrupt on a permission that promised it would not.
+ *
+ * Paired only. The question is the content, so a self-closing spelling would be
+ * a request with nothing in it.
+ */
+export function elicitWriteEntry(): CapabilityEntry {
+  return coreEntry(ELICIT_COMPONENT, ELICIT_COMPONENT, "elicit:ask");
+}
+
 /** Core's `<File>…</File>`, admitted to write and not to read. */
 export function fileWriteEntry(): CapabilityEntry {
   return coreEntry("File", "File:write", "file:write");
@@ -398,6 +429,9 @@ export function fetchEntry(requests: readonly GeneratedRequest[]): CapabilityEnt
 
 /** What core's own entries tell an agent they do. */
 const CORE_DESCRIPTIONS: Readonly<Record<FragmentCapability, string>> = Object.freeze({
+  "elicit:ask":
+    "Ask a person a structured question and bind the validated answer. Written paired, with " +
+    "the request as its content.",
   "file:read": "Read one file and render its text. Written self-closing.",
   "files:glob":
     "Select the files under the working directory that these patterns match, as a sorted " +
@@ -431,6 +465,10 @@ const CORE_LEGACY: Readonly<Record<FragmentCapability, readonly string[]>> = Obj
   // and states its own alias.
   "directory:ensure": Object.freeze([]),
   fetch: Object.freeze(["@executablemd/core#Fetch"]),
+  // A new grant. No version-1 record ever admitted a generated question, so
+  // there is no older string for this to assert it authorizes no more than —
+  // and a record naming one refuses rather than resuming against this.
+  "elicit:ask": Object.freeze([]),
 });
 
 function coreEntry(name: string, key: string, capability: FragmentCapability): CapabilityEntry {

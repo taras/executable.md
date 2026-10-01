@@ -23,6 +23,7 @@ import { InMemoryStream } from "@executablemd/durable-streams";
 import type { DurableEvent } from "@executablemd/durable-streams";
 import { Component, content } from "../src/component-api.ts";
 import { collect } from "../src/collect.ts";
+import { elementSite, snapshot } from "../src/expansion.ts";
 import { execute } from "../src/execute.ts";
 import { inlineSource } from "../src/root-source.ts";
 import { registerComponents } from "../src/components/registration.ts";
@@ -833,5 +834,46 @@ describe("Tier XP — expansion identity", () => {
 
     expect(live).toHaveLength(2);
     expect(yield* executed(only!, truncated)).toEqual(live);
+  });
+});
+
+/**
+ * Tier GS — the site a generated element sits at.
+ *
+ * An element's site is where it was written, so an element inside generated
+ * source is sited by the fragment that source is — and two fragments' elements
+ * at the same offset are two different sites, because they are two different
+ * sources.
+ */
+describe("Tier GS — generated element sites", () => {
+  it("GS1: a generated position sites an element by its fragment", function* () {
+    expect(elementSite({ generatedSource: "gen-a", offset: 58, line: 4, column: 1 }, 0)).toBe(
+      "gen-a#58",
+    );
+    // Two fragments, one offset: different sites, because the sources differ.
+    expect(elementSite({ generatedSource: "gen-b", offset: 58, line: 4, column: 1 }, 0)).not.toBe(
+      elementSite({ generatedSource: "gen-a", offset: 58, line: 4, column: 1 }, 0),
+    );
+    // A file still sites by its path, and a position with neither by its offset.
+    expect(elementSite({ path: "Doc.md", offset: 4, line: 1, column: 1 }, 0)).toBe("Doc.md#4");
+    expect(elementSite({ offset: 4, line: 1, column: 1 }, 0)).toBe("#4");
+    expect(elementSite(undefined, 3)).toBe("@3");
+  });
+
+  it("GS1: an expansion snapshot carries the fragment it was written in", function* () {
+    const taken = snapshot("path-1", "Elicit", {
+      generatedSource: "gen-a",
+      offset: 58,
+      line: 4,
+      column: 1,
+    });
+
+    expect(taken.position).toEqual({
+      generatedSource: "gen-a",
+      offset: 58,
+      line: 4,
+      column: 1,
+    });
+    expect(Object.isFrozen(taken.position)).toBe(true);
   });
 });

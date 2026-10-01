@@ -163,9 +163,19 @@ export function hostAcpDependencies(stack: PlanWriterStack): AcpxProviderDepende
  *
  * Nothing here starts an agent. The provider validates availability on first
  * use, and an embedded adapter reaches the disk at that same point.
+ *
+ * `acp` is the seam `planAgentContext` already takes, for the same reason and on
+ * the same terms: production states none and gets what this host carries, while
+ * a journey states a scriptable runtime so it can drive this exact provider
+ * stack rather than a copy of it. It reaches the subprocess boundary and nothing
+ * above it — the provider, the components, the policy and the record are the
+ * product's own.
  */
-export function* installAgentProviderStack(stack: AgentStack): Operation<void> {
-  const acpx = createAcpxProvider(hostAcpDependencies(stack));
+export function* installAgentProviderStack(
+  stack: AgentStack,
+  acp?: AcpxProviderDependencies,
+): Operation<void> {
+  const acpx = createAcpxProvider(acp ?? hostAcpDependencies(stack));
   yield* registerAgentProvider("acpx", acpx);
 
   // The trusted host selects its own root provider by name. Document-level

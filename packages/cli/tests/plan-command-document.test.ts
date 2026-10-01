@@ -20,7 +20,7 @@
  */
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { ensure, scoped, sleep, spawn, withResolvers } from "effection";
+import { ensure, scoped, sleep, spawn, useScope, withResolvers } from "effection";
 import type { Operation } from "effection";
 import { forEach } from "@effectionx/stream-helpers";
 import { ensureDir, rm } from "@effectionx/fs";
@@ -51,6 +51,8 @@ import type {
   FragmentEvaluationInput,
 } from "@executablemd/core/host";
 import { ordinaryEvaluationProfile } from "../src/evaluation-profile.ts";
+import { elicitWriteEntry } from "@executablemd/core/host";
+import { Elicitation } from "@executablemd/core";
 import { recordedFiles } from "../../core/tests/support/fragment-files.ts";
 import { answerProvider } from "../../core/tests/support/answer-provider.ts";
 import { InMemoryStream } from "@executablemd/durable-streams";
@@ -1245,6 +1247,56 @@ describe("Tier PI — read-only information requests", () => {
  * its second site nothing. The failure names the turn and quotes the prompt, so
  * the case that under-scripted is identifiable from the message alone.
  */
+describe("Tier PI — the ordinary ceiling admits the question with the write", () => {
+  it("EL1: the ordinary write table holds canonical `<Elicit>` once, and the read table none", function* () {
+    const profile = ordinaryEvaluationProfile();
+
+    // One entry, and exactly the one core states. Two would be two grants
+    // under one spelling; a hand-written copy would be a second place this
+    // command decided what canonical `<Elicit>` is.
+    const asking = profile.write?.filter((entry) => entry.name === "Elicit") ?? [];
+    expect(asking).toEqual([elicitWriteEntry()]);
+    // And nothing in the read table: `allow={["read"]}` promises nobody will
+    // be interrupted, so the question is not there to select.
+    expect(profile.read.map((entry) => entry.name)).toEqual(["File", "Glob", "Syntax"]);
+    yield* useScope();
+  });
+
+  it("EL3: a read-only information request that asks a question is refused whole", function* () {
+    const files = recordedFiles({ "notes.md": "the retained note\n" });
+    const asked: string[] = [];
+    const run = yield* scoped(function* () {
+      yield* Elicitation.around(
+        {
+          // deno-lint-ignore require-yield
+          *elicit([request]): Operation<Json> {
+            asked.push(request.message);
+            return { decision: "Approve" };
+          },
+        },
+        { at: "min" },
+      );
+      return yield* runDocument({
+        // The Plan writer's own requests select `read`, so the question the
+        // returned program may write is not one the writer may ask while it is
+        // still deciding what to propose.
+        turns: [
+          { reply: '<Elicit schema={{ type: "object" }}>Which file?</Elicit>\n' },
+          { reply: CANDIDATE },
+        ],
+        evaluation: { read: [fileReadEntry(), globReadEntry(), syntaxReadEntry()], files },
+      });
+    });
+
+    expect(run.failure).toBe(undefined);
+    // Nobody was asked, and no read happened either: the refusal is the whole
+    // fragment's, before its first effect.
+    expect(asked).toEqual([]);
+    expect(files.performed).toEqual([]);
+    expect(run.prompts[1] ?? "").toContain("That request was refused");
+  });
+});
+
 describe("the scripted agent", () => {
   it("fails loudly on a turn nobody scripted, naming it", function* () {
     const run = yield* runDocument({

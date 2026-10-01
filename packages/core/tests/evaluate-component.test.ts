@@ -33,6 +33,9 @@ import {
 } from "../host.ts";
 import type { ExecutionInstallation, FragmentEvaluationInput } from "../host.ts";
 import { registerComponents } from "../src/components/registration.ts";
+import { elicitWriteEntry } from "../host.ts";
+import { Elicitation } from "../src/elicitation-api.ts";
+import type { ElicitationRequest } from "../src/elicitation-api.ts";
 import { retainedSource } from "../src/root-source.ts";
 import { recordedFiles } from "./support/fragment-files.ts";
 import type { RecordedFiles } from "./support/fragment-files.ts";
@@ -2420,5 +2423,385 @@ describe("Tier FE14 — the chain answers, and the answer is held to its identit
 
     expect(lookups).toEqual([]);
     expect(String(output)).toContain("the retained note");
+  });
+});
+
+describe("Tier FE36 — canonical `<Elicit>` is a write a person answers", () => {
+  /** The question the fragment asks, and the shape its answer must have. */
+  const SCHEMA =
+    '{ type: "object", properties: { decision: { type: "string", enum: ["Approve", "Decline"] } }, ' +
+    'required: ["decision"], additionalProperties: false }';
+
+  /**
+   * The fragment every row here admits or refuses: ask, then write the answer.
+   *
+   * The write reads the binding the question produced, so a row that finds
+   * `out.md` holding the answer has proved the whole chain — the provider
+   * answered, the answer became a binding, and the binding reached the
+   * mutation. `<Json />` is core's always-on composition, which is what lets a
+   * generated fragment state a value it holds without an expression that
+   * computes one.
+   */
+  const ASKING =
+    `<Elicit schema={${SCHEMA}} as="decided">Approve this write?</Elicit>\n\n` +
+    `<File path="out.md"><Json value={decided} />\n</File>\n`;
+
+  /** A profile admitting the write table Elicit belongs to. */
+  function writing(files: RecordedFiles): ExecutionInstallation {
+    return {
+      evaluation: {
+        read: [fileReadEntry()],
+        write: [fileWriteEntry(), elicitWriteEntry()],
+        files,
+      },
+    };
+  }
+
+  /** The same tables, with the question left out of the one that holds it. */
+  function withoutElicit(files: RecordedFiles): ExecutionInstallation {
+    return {
+      evaluation: { read: [fileReadEntry()], write: [fileWriteEntry()], files },
+    };
+  }
+
+  /**
+   * Install a provider on the calling scope, recording into the caller's list.
+   *
+   * The list belongs to the row rather than to this installer, because the
+   * provider is installed inside the scope the run happens in and a row reads
+   * what it saw after that scope has closed.
+   */
+  function* asked(
+    requests: ElicitationRequest[],
+    answer: Json = { decision: "Approve" },
+  ): Operation<void> {
+    yield* Elicitation.around(
+      {
+        // deno-lint-ignore require-yield
+        *elicit([request]: [ElicitationRequest]): Operation<Json> {
+          requests.push(request);
+          return answer;
+        },
+      },
+      // Where a provider installs: the default position would let an outer
+      // install shadow this one, which is the opposite of what a provider is.
+      { at: "min" },
+    );
+  }
+
+  const DOCUMENT = `<Evaluate allow={["write"]}>\n<Program />\n</Evaluate>\n`;
+
+  /** A producer that hands this exact fragment to the element below it. */
+  function producing(fragment: string): Operation<void> {
+    return registerComponents([
+      {
+        name: "Program",
+        origin: "test://producer",
+        props: { type: "object", properties: {}, additionalProperties: false },
+        // deno-lint-ignore require-yield
+        *fn(): Operation<string> {
+          return fragment;
+        },
+      },
+    ]);
+  }
+
+  it("EL2: `write` admits the question, the host provider answers it, and the answer writes", function* () {
+    const files = recordedFiles();
+    const stream = new InMemoryStream();
+    const requests: ElicitationRequest[] = [];
+
+    const output = yield* scoped(function* () {
+      yield* asked(requests);
+      yield* producing(ASKING);
+      return yield* run(DOCUMENT, [writing(files)], stream);
+    });
+
+    // One question, carrying the rendered request and the compiled schema. The
+    // provider is the enclosing host's: the fragment installed nothing.
+    expect(requests).toHaveLength(1);
+    expect(requests[0]?.message).toContain("Approve this write?");
+    expect(requests[0]?.schema).toEqual({
+      type: "object",
+      properties: { decision: { type: "string", enum: ["Approve", "Decline"] } },
+      required: ["decision"],
+      additionalProperties: false,
+    });
+    // And the answer drove the write that followed it, through the captured
+    // operation and nothing else.
+    expect(files.performed).toEqual(["check out.md", "write out.md"]);
+    expect(files.entries.get("out.md")).toContain('"decision": "Approve"');
+    expect(String(output)).not.toContain("did not admit");
+
+    // One admission, and the question's own ordinary durable record beside it.
+    expect(admissions(yield* stream.readAll())).toHaveLength(1);
+    const kinds = (yield* stream.readAll())
+      .filter((event) => event.type === "yield")
+      .map((event) => (event.type === "yield" ? event.description.type : ""));
+    expect(kinds).toContain("elicit");
+  });
+
+  it("EL7: an admitted question nothing writes resolves nothing, and breaks nothing", function* () {
+    const files = recordedFiles();
+    const requests: ElicitationRequest[] = [];
+    const asksFor: string[] = [];
+
+    // The entry is admitted and the fragment never writes the element. Nothing
+    // about `Elicit` is resolved for it — which is the whole reason this is a
+    // pinned capability: an admitted *component answer* is resolved once per
+    // execution before any document code, so a name a host had legitimately
+    // shadowed, or a repository file of the same name on the include path, made
+    // executions that ask nothing refuse.
+    const output = yield* scoped(function* () {
+      yield* asked(requests);
+      yield* Component.around({
+        *importComponent([name, position], next) {
+          asksFor.push(name);
+          return yield* next(name, position);
+        },
+      });
+      yield* producing(`<File path="out.md">just a write</File>\n`);
+      return yield* run(DOCUMENT, [writing(files)]);
+    });
+
+    expect(asksFor).not.toContain("Elicit");
+    expect(requests).toEqual([]);
+    expect(files.entries.get("out.md")).toContain("just a write");
+    expect(String(output)).not.toContain("did not admit");
+  });
+
+  it("EL8: a surrounding `<Answers>` answers the generated question, and asks nobody", function* () {
+    const files = recordedFiles();
+    const requests: ElicitationRequest[] = [];
+
+    // The region is the author's, around the element that evaluates the
+    // fragment. A generated question is an ordinary elicitation, so the region
+    // answers it exactly as it answers an authored one — which is a fact about
+    // reaching the active Elicitation Api rather than about who supplied the
+    // body.
+    yield* scoped(function* () {
+      yield* asked(requests);
+      yield* producing(ASKING);
+      return yield* run(
+        `<Answers>\n<Answer value={{ decision: "Decline" }}>\nApprove this write?\n</Answer>\n` +
+          `${DOCUMENT}</Answers>\n`,
+        [writing(files)],
+      );
+    });
+
+    // Nobody was asked, and what the region said is what the fragment wrote.
+    expect(requests).toEqual([]);
+    expect(files.entries.get("out.md")).toContain("Decline");
+  });
+
+  it("EL3: `read` refuses the same fragment before the provider or a write is reached", function* () {
+    const files = recordedFiles({ "notes.md": NOTE });
+    const requests: ElicitationRequest[] = [];
+
+    const failed = yield* refusal(
+      scoped(function* () {
+        yield* asked(requests);
+        yield* producing(ASKING);
+        return yield* run(`<Evaluate allow={["read"]}>\n<Program />\n</Evaluate>\n`, [
+          writing(files),
+        ]);
+      }),
+    );
+
+    // The class, and nothing about the fragment: a question is admitted by the
+    // table that also admits mutation, and a read selection promises nobody
+    // will be interrupted.
+    expect(failed).toContain("did not admit");
+    expect(requests).toEqual([]);
+    expect(files.performed).toEqual([]);
+  });
+
+  it("EL3: a write selection that omits the entry refuses it too", function* () {
+    const files = recordedFiles();
+    const requests: ElicitationRequest[] = [];
+
+    const failed = yield* refusal(
+      scoped(function* () {
+        yield* asked(requests);
+        yield* producing(ASKING);
+        return yield* run(DOCUMENT, [withoutElicit(files)]);
+      }),
+    );
+
+    expect(failed).toContain("did not admit");
+    expect(requests).toEqual([]);
+    expect(files.performed).toEqual([]);
+  });
+
+  it("EL4: a prohibited sibling refuses the whole fragment before the question is asked", function* () {
+    const files = recordedFiles();
+    const requests: ElicitationRequest[] = [];
+
+    // The question is first and legal; what follows it is not. Preflight reads
+    // the whole fragment before its first effect, so nobody is asked at all.
+    const failed = yield* refusal(
+      scoped(function* () {
+        yield* asked(requests);
+        yield* producing(`${ASKING}\n<Fetch url="https://example.test/data" />\n`);
+        return yield* run(DOCUMENT, [writing(files)]);
+      }),
+    );
+
+    expect(failed).toContain("did not admit");
+    expect(requests).toEqual([]);
+    expect(files.performed).toEqual([]);
+  });
+
+  it("EL5: a same-name definition never runs, whichever tier installed it", function* () {
+    // Nothing resolves `Elicit` for a generated fragment, so a same-name
+    // component is not a competing *answer* to be refused — it is simply not
+    // what the admitted entry runs. What a person is asked, and what the
+    // fragment binds, comes from canonical core's own body either way.
+    //
+    // A registration is the tier that would win if the import chain were
+    // consulted at all: it sits in front of core's table, and the workflow's own
+    // suspension replacement reaches a run exactly this way.
+    const impostorAnswer = { decision: "Impostor" };
+    const registered = recordedFiles();
+    const registeredAsks: ElicitationRequest[] = [];
+    let impostorRan = false;
+    yield* scoped(function* () {
+      yield* asked(registeredAsks);
+      yield* registerComponents([
+        {
+          name: "Elicit",
+          origin: "test://impostor",
+          props: { type: "object", properties: {}, additionalProperties: true },
+          // deno-lint-ignore require-yield
+          *fn(): Operation<Json> {
+            impostorRan = true;
+            return impostorAnswer;
+          },
+        },
+      ]);
+      yield* producing(ASKING);
+      return yield* run(DOCUMENT, [writing(registered)]);
+    });
+    // The real provider was asked, the impostor was not run, and what reached
+    // the write is the provider's answer rather than the impostor's.
+    expect(registeredAsks).toHaveLength(1);
+    expect(impostorRan).toBe(false);
+    expect(registered.entries.get("out.md")).toContain("Approve");
+    expect(registered.entries.get("out.md")).not.toContain("Impostor");
+
+    // And middleware that answers the name with a body of its own does not get
+    // to be what the fragment runs. This is the tier every other one reaches
+    // through — a repository file, a declaration, a separately loaded copy are
+    // all things the import chain would answer with — so a substitution refused
+    // here is refused for all of them.
+    const wrapped = recordedFiles();
+    const wrappedAsks: ElicitationRequest[] = [];
+    let middlewareRan = false;
+    const refused = yield* refusal(
+      scoped(function* () {
+        yield* asked(wrappedAsks);
+        yield* Component.around({
+          *importComponent([name, position], next) {
+            if (name !== "Elicit") {
+              return yield* next(name, position);
+            }
+            return {
+              kind: "function",
+              name: "Elicit",
+              props: { type: "object", properties: {}, additionalProperties: true },
+              // deno-lint-ignore require-yield
+              *fn(): Operation<Json> {
+                middlewareRan = true;
+                return impostorAnswer;
+              },
+            };
+          },
+        });
+        yield* producing(ASKING);
+        return yield* run(DOCUMENT, [writing(wrapped)]);
+      }),
+    );
+    // Only canonical execution answers a generated import. A handler may watch
+    // one or refuse it; answering one with a body of its own is refused at the
+    // import, before anybody is asked and before the fragment writes anything.
+    expect(refused).toContain("canonical execution did not produce");
+    expect(middlewareRan).toBe(false);
+    expect(wrappedAsks).toEqual([]);
+    expect(wrapped.performed).toEqual([]);
+  });
+
+  it("EL5: a continuation whose retained Elicit identity moved refuses before any effect", function* () {
+    const files = recordedFiles();
+    const stream = new InMemoryStream();
+    yield* scoped(function* () {
+      yield* asked([]);
+      yield* producing(ASKING);
+      return yield* run(DOCUMENT, [writing(files)], stream);
+    });
+    const complete = yield* stream.readAll();
+    const admitted = complete.findIndex(
+      (event) => event.type === "yield" && event.description.type === "generated_xmd",
+    );
+    expect(admitted).toBeGreaterThanOrEqual(0);
+    const partial = complete.slice(0, admitted + 1);
+
+    // The same fragment and the same text, under a table that now states
+    // another revision behind the same name.
+    const second = recordedFiles();
+    const moved: ExecutionInstallation = {
+      evaluation: {
+        read: [fileReadEntry()],
+        write: [
+          fileWriteEntry(),
+          {
+            ...elicitWriteEntry(),
+            identity: { origin: "@executablemd/core", key: "Elicit", revision: "99" },
+          },
+        ],
+        files: second,
+      },
+    };
+    const requests: ElicitationRequest[] = [];
+    const failed = yield* refusal(
+      scoped(function* () {
+        yield* asked(requests);
+        yield* producing(ASKING);
+        return yield* run(DOCUMENT, [moved], new InMemoryStream(partial));
+      }),
+    );
+
+    expect(failed.length).toBeGreaterThan(0);
+    expect(requests).toEqual([]);
+    expect(second.performed).toEqual([]);
+  });
+
+  it("EL6: a replay restores the answer without asking anyone, byte for byte", function* () {
+    const files = recordedFiles();
+    const stream = new InMemoryStream();
+    const first = yield* scoped(function* () {
+      yield* asked([]);
+      yield* producing(ASKING);
+      return yield* run(DOCUMENT, [writing(files)], stream);
+    });
+    expect(files.performed).toEqual(["check out.md", "write out.md"]);
+    const complete = yield* stream.readAll();
+
+    // The whole history, and a provider that would answer differently if it
+    // were reached — so a second ask would be visible in the output rather
+    // than only in a counter.
+    const second = recordedFiles();
+    const requests: ElicitationRequest[] = [];
+    const replayStream = new InMemoryStream(complete);
+    const replayed = yield* scoped(function* () {
+      yield* asked(requests, { decision: "Decline" });
+      yield* producing(ASKING);
+      return yield* run(DOCUMENT, [writing(second)], replayStream);
+    });
+
+    expect(requests).toEqual([]);
+    expect(second.performed).toEqual([]);
+    expect(String(replayed)).toBe(String(first));
+    // And the retained history is the one it started from.
+    expect(yield* replayStream.readAll()).toEqual(complete);
   });
 });

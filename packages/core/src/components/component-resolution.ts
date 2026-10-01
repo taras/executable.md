@@ -732,6 +732,9 @@ export class CanonicalImports {
 function capturePosition(position: Readonly<SourcePosition>): Readonly<SourcePosition> {
   return Object.freeze({
     ...(position.path === undefined ? {} : { path: position.path }),
+    ...(position.generatedSource === undefined
+      ? {}
+      : { generatedSource: position.generatedSource }),
     offset: position.offset,
     line: position.line,
     column: position.column,

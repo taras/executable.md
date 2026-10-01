@@ -87,10 +87,26 @@ describe("PS4 — the command a Plugin is told about", () => {
 
   // deno-lint-ignore require-yield
   it("reports each public command by its own name", function* () {
-    for (const command of ["run", "plan", "test", "syntax", "upgrade", "workflow"]) {
+    for (const command of ["run", "plan", "test", "syntax", "upgrade", "workflow", "repl"]) {
       expect(selectPlugins([command]).command).toBe(command);
       expect(selectPlugins(["--plugin=./a.mjs", command]).command).toBe(command);
     }
+  });
+
+  it("PS4: the REPL is its own command, and its name is not left as a positional", function* () {
+    // Left out of the vocabulary, `repl` normalizes to `run` and arrives as a
+    // document reference — so a Plugin written for `run` installs into a
+    // terminal session, and one written for the REPL never hears about it.
+    const selected = selectPlugins(["repl"]);
+    expect(selected.command).toBe("repl");
+    expect(selected.command).not.toBe("run");
+    // The argv a Plugin reads is the one the caller wrote, with only the
+    // `--plugin` tokens taken out — so the command token is still in it, and
+    // what changed is that `repl` is no longer *also* read as a document.
+    expect(selected.rest).toEqual(["repl"]);
+    const located = selectPlugins(["--plugin=./a.mjs", "repl", "xmd://repl/one/repl"]);
+    expect(located.command).toBe("repl");
+    expect(located.rest).toEqual(["repl", "xmd://repl/one/repl"]);
   });
 });
 

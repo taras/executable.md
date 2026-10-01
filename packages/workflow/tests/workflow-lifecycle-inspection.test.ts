@@ -436,6 +436,80 @@ describe("Tier WLI — immutable lifecycle inspection", () => {
     });
   });
 
+  it("WLI18: a generated operation exposes the fragment it was written in", function* () {
+    const root = yield* useStorageRoot();
+    yield* retainedRun(root, "release-1.4");
+    const path = runPath(root, "release-1.4");
+    // What the engine records for an operation inside admitted generated source:
+    // the fragment's own identity, and no path, because generated text is not a
+    // file.
+    tamper(path, (database) => {
+      database.prepare("UPDATE journal_events SET record = ? WHERE sequence = 1").run(
+        `${JSON.stringify({
+          type: "yield",
+          coroutineId: "root",
+          description: {
+            type: "fetch",
+            name: "fetch:1",
+            [SOURCE_POSITION_FIELD]: {
+              generatedSource: "turn-1",
+              offset: 58,
+              line: 4,
+              column: 1,
+            },
+          },
+          result: { status: "ok", value: "done" },
+        })}\n`,
+      );
+    });
+
+    yield* withLifecycle(root, function* () {
+      const entries = yield* historyOf("release-1.4");
+      expect(entries[0]?.source).toEqual({
+        generatedSource: "turn-1",
+        offset: 58,
+        line: 4,
+        column: 1,
+      });
+    });
+  });
+
+  it("WLI19: a source naming both a file and a fragment makes the entry unreadable", function* () {
+    const root = yield* useStorageRoot();
+    yield* retainedRun(root, "release-1.4");
+    const path = runPath(root, "release-1.4");
+    // Two answers to where one operation was written. Reading either would be
+    // choosing which of them to believe.
+    tamper(path, (database) => {
+      database.prepare("UPDATE journal_events SET record = ? WHERE sequence = 1").run(
+        `${JSON.stringify({
+          type: "yield",
+          coroutineId: "root",
+          description: {
+            type: "fetch",
+            name: "fetch:1",
+            [SOURCE_POSITION_FIELD]: {
+              path: "workflows/release.md",
+              generatedSource: "turn-1",
+              offset: 58,
+              line: 4,
+              column: 1,
+            },
+          },
+          result: { status: "ok", value: "done" },
+        })}\n`,
+      );
+    });
+
+    yield* withLifecycle(root, function* () {
+      const answered = yield* history("release-1.4");
+      expect(answered.ok).toBe(false);
+      const error = answered.ok ? undefined : answered.error;
+      expect(error).toBeInstanceOf(WorkflowRecordMalformedError);
+      expect(error?.message).toContain("found both a path and a generated source");
+    });
+  });
+
   it("WLI7: a present source that does not parse makes the entry unreadable", function* () {
     const root = yield* useStorageRoot();
     yield* retainedRun(root, "release-1.4");

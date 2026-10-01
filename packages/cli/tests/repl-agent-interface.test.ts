@@ -77,6 +77,7 @@ import type { ReplTerminalCapabilities } from "../src/repl/terminal-host.ts";
 import type { ReplTerminalSize } from "../src/repl/terminal.ts";
 import { ReplClock } from "../src/repl/frame.ts";
 import { runReplProgram } from "../src/repl/program.ts";
+import type { ReplExecutionProfile } from "../src/repl-profile.ts";
 import type { ReplOutcome } from "../src/repl/program.ts";
 import { appendFile, mkdtemp, open } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -410,6 +411,21 @@ function* useStub(stub: Stub): Operation<void> {
     },
   });
 }
+
+/**
+ * The profile these rows' program runs under.
+ *
+ * `approve-reads` is the mode that leaves a non-read decision to a person, which
+ * is the only way a request reaches this screen at all.
+ */
+const PROFILE: ReplExecutionProfile = {
+  includes: [],
+  installations: [
+    { evaluation: ordinaryEvaluationProfile() },
+    { components: agentIdentityComponents() },
+  ],
+  permissionMode: "approve-reads",
+};
 
 function installations(): readonly ExecutionInstallation[] {
   return [{ evaluation: ordinaryEvaluationProfile() }, { components: agentIdentityComponents() }];
@@ -1719,12 +1735,7 @@ describe("U2 — the program performs a permission, end to end", () => {
       yield* useTemporaryHost();
 
       const running = yield* spawn(function* (): Operation<void> {
-        // `approve-reads` is the mode that leaves a non-read decision to a
-        // person, which is the only way a request reaches this screen at all.
-        const ran = yield* runReplProgram({
-          installations: installations(),
-          permissionMode: "approve-reads",
-        });
+        const ran = yield* runReplProgram({ profile: PROFILE });
         if (!ran.ok) {
           throw ran.error;
         }
@@ -1801,10 +1812,7 @@ describe("U2 — the program performs a permission, end to end", () => {
       yield* useTemporaryHost();
 
       const running = yield* spawn(function* (): Operation<void> {
-        const ran = yield* runReplProgram({
-          installations: installations(),
-          permissionMode: "approve-reads",
-        });
+        const ran = yield* runReplProgram({ profile: PROFILE });
         if (!ran.ok) {
           throw ran.error;
         }
@@ -1884,10 +1892,7 @@ describe("U4 — the loop wakes for Agent work", () => {
       yield* useTemporaryHost();
 
       const running = yield* spawn(function* (): Operation<void> {
-        const ran = yield* runReplProgram({
-          installations: installations(),
-          permissionMode: "approve-reads",
-        });
+        const ran = yield* runReplProgram({ profile: PROFILE });
         if (!ran.ok) {
           throw ran.error;
         }

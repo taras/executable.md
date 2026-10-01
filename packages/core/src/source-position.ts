@@ -8,7 +8,8 @@
  * part of the event (spec §10.1).
  *
  * The value is the position the scanner produced for that element, carried from
- * the authoring boundary. Nothing reconstructs one from an expansion id, a
+ * the authoring boundary — a file's path, or the generated fragment's own id for
+ * an element inside admitted generated source. Nothing reconstructs one from an expansion id, a
  * formatted `path:line:column` name or the current source: a name is a name, and
  * a document that has been edited since would answer a different question.
  */
@@ -34,6 +35,9 @@ export function sourceDescription(
   return {
     [SOURCE_POSITION_FIELD]: {
       ...(position.path === undefined ? {} : { path: position.path }),
+      ...(position.generatedSource === undefined
+        ? {}
+        : { generatedSource: position.generatedSource }),
       offset: position.offset,
       line: position.line,
       column: position.column,

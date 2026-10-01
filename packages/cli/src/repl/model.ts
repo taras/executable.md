@@ -64,6 +64,14 @@ export class ReplProjectionError extends Error {
 /** Where an authored element was written, as the journal recorded it. */
 export interface ReplPosition {
   readonly path: string | undefined;
+  /**
+   * The generated fragment this position belongs to, when it belongs to one.
+   *
+   * Closed against `path`: an effect inside admitted generated source names the
+   * admission that decided that source, because generated text has no file for
+   * it to name. A record carrying both is malformed.
+   */
+  readonly generatedSource: string | undefined;
   readonly offset: number;
   readonly line: number;
   readonly column: number;
@@ -401,6 +409,16 @@ function build(
   let terminal: ReplTerminal | undefined;
   /** Every scope by the source path it was admitted from, for owner lookup. */
   const byPath = new Map<string, ScopeDraft[]>();
+  /** Every generated fragment this prefix admitted, by the identity it carries. */
+  const fragments: GeneratedOwner[] = [];
+  /**
+   * Every identity the whole prefix admits, read before anything is projected.
+   *
+   * Only so that a history recording work *before* the admission that names it
+   * can be told from one that never admitted it at all: both refuse, and a
+   * reader repairing a history needs to know which of the two they have.
+   */
+  const announced = admittedIdentities(events);
   const occurrences = new Map<string, number>();
 
   for (let index = 0; index < events.length; index++) {
@@ -518,7 +536,14 @@ function build(
         });
         continue;
       }
-      const owner = ownerOf(byPath, position, `<${description.name} />`);
+      const owner = ownerOf(
+        byPath,
+        fragments,
+        announced,
+        position,
+        site(event, index),
+        `<${description.name} />`,
+      );
       if (!owner.ok) {
         return owner;
       }
@@ -564,7 +589,14 @@ function build(
           ),
         );
       }
-      const owner = ownerOf(byPath, position, "an evaluated block");
+      const owner = ownerOf(
+        byPath,
+        fragments,
+        announced,
+        position,
+        site(event, index),
+        "an evaluated block",
+      );
       if (!owner.ok) {
         return owner;
       }
@@ -613,7 +645,14 @@ function build(
           ),
         );
       }
-      const owner = ownerOf(byPath, position, "a generated fragment");
+      const owner = ownerOf(
+        byPath,
+        fragments,
+        announced,
+        position,
+        site(event, index),
+        "a generated fragment",
+      );
       if (!owner.ok) {
         return owner;
       }
@@ -622,7 +661,7 @@ function build(
         const ordinalKey = `${owner.value.scope.key}/generated`;
         const ordinal = (occurrences.get(ordinalKey) ?? 0) + 1;
         occurrences.set(ordinalKey, ordinal);
-        owner.value.scope.scopes.push({
+        const fragment: ScopeDraft = {
           key: `generated-${ordinal}`,
           kind: "generated",
           name: "generated",
@@ -634,6 +673,27 @@ function build(
           elicitations: [],
           generated: [],
           scopes: [],
+        };
+        owner.value.scope.scopes.push(fragment);
+        // Retained by the identity the admission carries rather than indexed by
+        // a path it does not have: what belongs to this scope is the work the
+        // fragment itself performed, and every one of those effects names this
+        // exact admission.
+        const admitted = generatedIdentity(description.name);
+        if (admitted === undefined) {
+          return Err(
+            new ReplProjectionError(
+              "a recorded generated fragment does not name the admission it is, so the work " +
+                "inside it cannot be owned.",
+            ),
+          );
+        }
+        fragments.push({
+          id: admitted,
+          entry: entry.key,
+          coroutine: event.coroutineId,
+          order: index,
+          scope: fragment,
         });
       }
       transcript.push({
@@ -665,7 +725,14 @@ function build(
       if (answer === undefined) {
         return Err(new ReplProjectionError("a recorded question records no answer at all."));
       }
-      const owner = ownerOf(byPath, position, "an answered question");
+      const owner = ownerOf(
+        byPath,
+        fragments,
+        announced,
+        position,
+        site(event, index),
+        "an answered question",
+      );
       if (!owner.ok) {
         return owner;
       }
@@ -720,7 +787,14 @@ function build(
           new ReplProjectionError("a recorded Agent prompt does not retain the text it asked."),
         );
       }
-      const owner = ownerOf(byPath, position, "an Agent prompt");
+      const owner = ownerOf(
+        byPath,
+        fragments,
+        announced,
+        position,
+        site(event, index),
+        "an Agent prompt",
+      );
       if (!owner.ok) {
         return owner;
       }
@@ -880,26 +954,115 @@ function register(index: Map<string, ScopeDraft[]>, scope: ScopeDraft): void {
 }
 
 /**
+ * One generated fragment this prefix admitted, as its own effects name it.
+ *
+ * Generated source is not a file, so the engine records the work inside it at a
+ * position carrying the fragment's identity instead of a path — the id the
+ * admission was decided under. This is that identity, with the two facts that
+ * say whether a candidate effect could have come from it: which coroutine
+ * admitted it, and how far into the history that was.
+ */
+interface GeneratedOwner {
+  readonly id: string;
+  /** The entry that admitted it. One execution holds one, and this states it. */
+  readonly entry: string;
+  readonly coroutine: string;
+  /** Where the admission sits in this prefix, so only earlier work can be its. */
+  readonly order: number;
+  readonly scope: ScopeDraft;
+}
+
+/** Where one recorded effect sits: on which coroutine, and how far in. */
+interface EffectSite {
+  readonly coroutine: string;
+  readonly order: number;
+}
+
+function site(event: Yield, order: number): EffectSite {
+  return { coroutine: event.coroutineId, order };
+}
+
+/**
+ * Every generated identity this prefix admits, wherever it admits it.
+ *
+ * Read from the same records the projection will read, and used for one thing:
+ * telling "this history records work before the fragment that owns it" from
+ * "this history admits no such fragment". Ownership itself is decided in order,
+ * from the admissions already projected.
+ */
+function admittedIdentities(events: readonly DurableEvent[]): ReadonlySet<string> {
+  const found = new Set<string>();
+  for (const event of events) {
+    if (event.type !== "yield" || event.description.type !== "generated_xmd") {
+      continue;
+    }
+    // An admitted one alone. A refused fragment performed nothing and has no
+    // scope, so a record naming its id is naming something that never ran.
+    if (event.result.status !== "ok" || !isJsonObject(event.result.value)) {
+      continue;
+    }
+    if (event.result.value["decision"] !== "admitted") {
+      continue;
+    }
+    const identity = generatedIdentity(String(event.description.name));
+    if (identity !== undefined) {
+      found.add(identity);
+    }
+  }
+  return found;
+}
+
+/** The id a generated admission's durable name carries, or none. */
+function generatedIdentity(name: string): string | undefined {
+  if (!name.startsWith("generated:")) {
+    return undefined;
+  }
+  const id = name.slice("generated:".length);
+  return id.length === 0 ? undefined : id;
+}
+
+/**
+ * Whether one coroutine is the other, or an ancestor of it.
+ *
+ * Segment-aware on purpose: a child's id is its parent's with a further segment,
+ * so `root.1` encloses `root.1.0` and has nothing to do with `root.10`.
+ */
+function descendsFrom(ancestor: string, coroutine: string): boolean {
+  return coroutine === ancestor || coroutine.startsWith(`${ancestor}.`);
+}
+
+/**
  * The one scope an effect's source position belongs to.
  *
- * Attribution is by the path the position names, which is the path the scope's
- * own source was admitted from. A position naming no admitted source, or naming
- * one that this prefix admitted more than once, is refused: a binding attached
- * to a guessed owner is a value shown in the wrong place, and there is no
- * spelling of "probably this one" that a reader could check.
+ * Two attributions, and a position states which one it is. A position naming a
+ * path belongs to the scope admitted from that path. A position naming a
+ * generated fragment belongs to the scope that fragment's admission created —
+ * chosen by the identity the effect itself carries, with journal order and
+ * coroutine ancestry deciding only whether that candidate could be its owner: an
+ * admission that happened afterwards, or on work this effect is not part of, is
+ * not an owner however recently it ran. Nothing is chosen by the latest
+ * admission, the current scope, an effect's name or its line and column: a
+ * binding attached to a guessed owner is a value shown in the wrong place, and
+ * there is no spelling of "probably this one" that a reader could check.
  */
 function ownerOf(
   index: Map<string, ScopeDraft[]>,
+  fragments: readonly GeneratedOwner[],
+  announced: ReadonlySet<string>,
   position: ReplPosition | undefined,
+  where: EffectSite,
   subject: string,
 ): Result<{ scope: ScopeDraft; position: ReplPosition }> {
-  if (position === undefined || position.path === undefined) {
+  if (position === undefined) {
     return Err(
       new ReplProjectionError(
         `${subject} was recorded without the source position that says which part of the entry ` +
           "it belongs to.",
       ),
     );
+  }
+  if (position.path === undefined) {
+    return generatedOwnerOf(fragments, announced, position, where, subject);
   }
   const held = index.get(position.path) ?? [];
   if (held.length === 0) {
@@ -923,6 +1086,64 @@ function ownerOf(
   return Ok({ scope: held[0], position });
 }
 
+/**
+ * The generated fragment one pathless effect belongs to.
+ *
+ * The identity chooses the candidate; order and ancestry only say whether it
+ * could be its owner. Each way that fails is its own refusal, because "nothing
+ * owns this" and "two things might" are different damage and a reader acting on
+ * either needs to know which they have.
+ */
+function generatedOwnerOf(
+  fragments: readonly GeneratedOwner[],
+  announced: ReadonlySet<string>,
+  position: ReplPosition,
+  where: EffectSite,
+  subject: string,
+): Result<{ scope: ScopeDraft; position: ReplPosition }> {
+  const identity = position.generatedSource;
+  if (identity === undefined) {
+    return Err(
+      new ReplProjectionError(
+        `${subject} was recorded with neither a source path nor the generated fragment it ` +
+          "belongs to, so nothing owns it.",
+      ),
+    );
+  }
+  const named = fragments.filter((fragment) => fragment.id === identity);
+  if (named.length === 0) {
+    return Err(
+      new ReplProjectionError(
+        announced.has(identity)
+          ? `${subject} names a generated fragment this entry admitted only afterwards, so ` +
+              "nothing had admitted it when it ran."
+          : `${subject} names a generated fragment this entry never admitted, so nothing owns it.`,
+      ),
+    );
+  }
+  // Only an admission this effect could have come from: one that had already
+  // happened, on this coroutine or on an ancestor of it.
+  const earlier = named.filter((fragment) => fragment.order < where.order);
+  const owning = earlier.filter((fragment) => descendsFrom(fragment.coroutine, where.coroutine));
+  if (owning.length === 0) {
+    return Err(
+      new ReplProjectionError(
+        `${subject} names a generated fragment admitted on work it is not part of, so nothing ` +
+          "owns it.",
+      ),
+    );
+  }
+  if (owning.length > 1) {
+    return Err(
+      new ReplProjectionError(
+        `${subject} names a generated fragment this entry admitted more than once, so which ` +
+          "admission owns it cannot be decided.",
+      ),
+    );
+  }
+  return Ok({ scope: owning[0]!.scope, position });
+}
+
 /** What a position that will not read is, as distinct from one that is absent. */
 const MALFORMED = Symbol("malformed source position");
 
@@ -935,27 +1156,75 @@ function readPosition(event: Yield): ReplPosition | undefined | typeof MALFORMED
     return MALFORMED;
   }
   const path = field["path"];
+  const generatedSource = field["generatedSource"];
   const offset = field["offset"];
   const line = field["line"];
   const column = field["column"];
-  if (path !== undefined && typeof path !== "string") {
+  if (path !== undefined && (typeof path !== "string" || path.length === 0)) {
+    return MALFORMED;
+  }
+  if (
+    generatedSource !== undefined &&
+    (typeof generatedSource !== "string" || generatedSource.length === 0)
+  ) {
+    return MALFORMED;
+  }
+  // One source, or neither. A position naming a file *and* a generated fragment
+  // says two different things about where its effect was written, and there is
+  // no reading of it that is not a choice between them.
+  if (path !== undefined && generatedSource !== undefined) {
     return MALFORMED;
   }
   if (!isIndex(offset) || !isOrdinal(line) || !isOrdinal(column)) {
     return MALFORMED;
   }
-  return { path, offset, line, column };
+  return { path, generatedSource, offset, line, column };
 }
 
-/** The exact source a recorded import retained, or none when it retained none. */
+/**
+ * The exact source a recorded import retained, or none when it retained none.
+ *
+ * Two shapes, because an import resolves two kinds of thing. A component read
+ * from somewhere states the `path` it was read from; a component the host
+ * *declared* states the `origin` it is known by, its digest and its bytes — and
+ * that origin is the path every effect inside its body is recorded at, so it is
+ * the path this model owns the scope under.
+ *
+ * Each is read as the closed record it is. A declared selection carries exactly
+ * four members, or five when the optional `exact` disposition is present, and
+ * `exact` is present only as `true`: a record with a member this version does
+ * not know, or one it knows written as something else, is a record this version
+ * cannot read rather than one to guess the rest of. What comes back for an
+ * unreadable record is nothing, and an effect that then names its path has no
+ * owner — which is the refusal, not a scope assembled from a guess.
+ */
 function readRetainedSource(event: Yield): { path: string; content: string } | undefined {
   if (event.result.status !== "ok" || !isJsonObject(event.result.value)) {
     return undefined;
   }
   const record = event.result.value;
-  const path = record["path"];
   const content = record["content"];
-  if (typeof path !== "string" || typeof content !== "string") {
+  if (typeof content !== "string") {
+    return undefined;
+  }
+  if (record["kind"] === "declared-markdown") {
+    const origin = record["origin"];
+    const digest = record["digest"];
+    const exact = record["exact"];
+    const withExact = Object.hasOwn(record, "exact");
+    const members = Object.keys(record).length;
+    if (
+      members !== (withExact ? 5 : 4) ||
+      typeof origin !== "string" ||
+      typeof digest !== "string" ||
+      (withExact && exact !== true)
+    ) {
+      return undefined;
+    }
+    return { path: origin, content };
+  }
+  const path = record["path"];
+  if (typeof path !== "string") {
     return undefined;
   }
   return { path, content };

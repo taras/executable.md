@@ -760,8 +760,13 @@ own session store and one empty working directory per session, both disposable.
 ## Command-line configuration
 
 `xmd run` configures the agent stack, and `xmd plan` settles the part of it
-authorship needs — the provider and the default agent. `xmd test` rejects those
-options, driving agents through the deterministic test-agent stack instead.
+authorship needs — the provider and the default agent. `xmd repl` resolves the
+same five fields from its own command line and installs the provider and
+component half of the stack with its own interactive policy: it presents
+permission requests and elicitations in its own surface, so it installs neither
+readline permission handling nor a foreground launcher, and `<Session.Launch>` is
+unavailable there (`specs/repl-spec.md`). `xmd test` rejects those options,
+driving agents through the deterministic test-agent stack instead.
 
 That division also applies to a nested run profile. The outer `xmd test`
 invocation supplies no live Agent configuration to a child and no contextual

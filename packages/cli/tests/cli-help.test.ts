@@ -267,4 +267,69 @@ describe("Tier CH — xmd help", { sanitizeOps: false, sanitizeResources: false 
     expect(malformed.stderr).toContain("xmd repl:");
     expect(malformed.stderr).toContain("xmd://repl/");
   });
+
+  it("C1: repl states the same five Agent options as run, described the same way", function* () {
+    const run = yield* runCli(["run", "--help"]).expect();
+    const repl = yield* runCli(["repl", "--help"]).expect();
+
+    // One declaration serves both commands, so the same option cannot come to
+    // mean two things: a reader comparing the two helps is comparing one source.
+    const described = (text: string): string[] =>
+      text
+        .split("\n")
+        .map((line) => line.trim())
+        .filter((line) =>
+          /^--(agent-provider|default-agent|approve-all|approve-reads|deny-all)\b/.test(line),
+        );
+    const options = described(repl.stdout);
+    expect(options).toHaveLength(5);
+    expect(options).toEqual(described(run.stdout));
+    // Approve-reads is what an unstated line means, and the help says so.
+    expect(repl.stdout).toContain("ask for the rest (default)");
+    // And no sixth: this command adds no data directory and no REPL-only knob.
+    expect(repl.stdout).not.toContain("--data-dir");
+  });
+
+  it("C1: each Agent option is accepted, and a wrong line refuses before the terminal", function* () {
+    // Accepted: the line parses, the stack settles, and the command gets as far
+    // as wanting a terminal — which a pipe is not. That refusal is the proof the
+    // option reached the command rather than the parser's error path.
+    for (const accepted of [
+      ["repl", "--approve-all"],
+      ["repl", "--approve-reads"],
+      ["repl", "--deny-all"],
+      ["repl", "--agent-provider", "acpx"],
+      ["repl", "--default-agent", "claude"],
+    ]) {
+      const ran = yield* runCli(accepted).join();
+      expect([accepted, ran.code]).toEqual([accepted, 1]);
+      expect([accepted, ran.stderr.trim()]).toEqual([
+        accepted,
+        "xmd repl: the REPL runs where a terminal is: it is not available over a pipe.",
+      ]);
+    }
+
+    // Refused, and each before the terminal: the messages are the command
+    // line's own, so nothing had been opened when they were printed.
+    const exclusive = yield* runCli(["repl", "--approve-all", "--deny-all"]).join();
+    expect(exclusive.code).toBe(1);
+    expect(exclusive.stderr).toContain("mutually exclusive");
+    expect(exclusive.stderr).not.toContain("terminal");
+
+    const provider = yield* runCli(["repl", "--agent-provider", "nope"]).join();
+    expect(provider.code).toBe(1);
+    expect(provider.stderr).toContain('Unknown agent provider "nope"');
+    expect(provider.stderr).not.toContain("terminal");
+
+    const missing = yield* runCli(["repl", "--default-agent"]).join();
+    expect(missing.code).toBe(1);
+    expect(missing.stderr).toContain("--default-agent requires a value");
+    expect(missing.stderr).not.toContain("terminal");
+
+    // An option value is not a location: `--default-agent claude` names one
+    // thing, and a scan that counted the value would refuse it as two.
+    const withLocation = yield* runCli(["repl", "--default-agent", "claude", "one", "two"]).join();
+    expect(withLocation.code).toBe(1);
+    expect(withLocation.stderr).toContain("at most one location");
+  });
 });

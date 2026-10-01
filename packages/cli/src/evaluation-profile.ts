@@ -9,11 +9,16 @@
  * ## The two tables
  *
  * `read` is core's self-closing `<File />`, its self-closing `<Glob />` and
- * canonical `<Syntax />`. `write` is core's paired `<File>…</File>` and
- * self-closing `<File.Delete />`. A fragment run by `xmd run` therefore reaches
- * the caller's own filesystem through the Files provider this command
- * installed, and reaches nothing else at all: no network read, no process, no
- * repository, no Git, no credential and no agent.
+ * canonical `<Syntax />`. `write` is core's paired `<File>…</File>`, its
+ * self-closing `<File.Delete />` and paired canonical `<Elicit>`: a fragment
+ * that may change something may also ask the person first, which is what makes
+ * "preview this, then confirm it" a program an Agent can write. A `read`
+ * selection admits no question — it promises nobody will be interrupted.
+ *
+ * A fragment run by `xmd run` therefore reaches the caller's own filesystem
+ * through the Files provider this command installed, and the person through the
+ * Elicitation provider the run already has. It reaches nothing else at all: no
+ * network read, no process, no repository, no Git, no credential and no agent.
  *
  * Reading and writing stay separate spellings of one name. A selection of
  * `read` admits `<File />` and not `<File>…</File>`, so a fragment that asks to
@@ -40,6 +45,7 @@
  */
 
 import {
+  elicitWriteEntry,
   fileDeleteEntry,
   fileReadEntry,
   fileWriteEntry,
@@ -92,7 +98,7 @@ function ordinaryFiles(): FragmentFileAccess {
 export function ordinaryEvaluationProfile(): FragmentEvaluationInput {
   return {
     read: [fileReadEntry(), globReadEntry(), syntaxReadEntry()],
-    write: [fileWriteEntry(), fileDeleteEntry()],
+    write: [fileWriteEntry(), fileDeleteEntry(), elicitWriteEntry()],
     files: ordinaryFiles(),
   };
 }

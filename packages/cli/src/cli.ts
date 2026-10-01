@@ -107,6 +107,7 @@ import {
   resolvePlanWriterStack,
 } from "./agent-stack.ts";
 import { planComponentDeclaration } from "./plan-component.ts";
+import { assembleReplProfile } from "./repl-profile.ts";
 import { planAgentContext } from "./plan-writer-profile.ts";
 import { useVerboseComponent } from "./verbose-component.ts";
 import type { AgentStack } from "./agent-stack.ts";
@@ -208,6 +209,41 @@ const SECRET_DETECTION_FIELD = {
  * a journal, a permission mode, an exec deadline or a presentation option would
  * each configure work this command never performs.
  */
+/**
+ * The Agent configuration two commands share.
+ *
+ * Declared once and spread into both, because `xmd run` and `xmd repl` configure
+ * the same thing: which provider answers, which agent a `<Session>` means by
+ * default, and how a permission request is decided. A second table would be two
+ * descriptions of one option, free to drift in wording, default or precedence —
+ * and a person reading either `--help` would have no way to tell which was true.
+ *
+ * `xmd test` refuses all five, because its agents are the deterministic
+ * `<TestAgent>` stack, and `xmd plan` accepts only the two that say who writes.
+ */
+const agentFields = {
+  agentProvider: {
+    description: "agent provider for agent components",
+    ...field(z.string(), field.default("acpx")),
+  },
+  defaultAgent: {
+    description: "default agent name (overrides DEFAULT_AGENT_NAME)",
+    ...field(z.string().optional()),
+  },
+  approveAll: {
+    description: "approve every agent permission request",
+    ...field(z.boolean(), field.default(false)),
+  },
+  approveReads: {
+    description: "approve read and search agent permissions, ask for the rest (default)",
+    ...field(z.boolean(), field.default(false)),
+  },
+  denyAll: {
+    description: "deny every agent permission request",
+    ...field(z.boolean(), field.default(false)),
+  },
+};
+
 const executionFields = {
   include: {
     description: "component search directory",
@@ -227,14 +263,7 @@ const executionFields = {
     description: "output raw markdown without normalization or terminal formatting",
     ...field(z.boolean(), field.default(false)),
   },
-  agentProvider: {
-    description: "agent provider for agent components",
-    ...field(z.string(), field.default("acpx")),
-  },
-  defaultAgent: {
-    description: "default agent name (overrides DEFAULT_AGENT_NAME)",
-    ...field(z.string().optional()),
-  },
+  ...agentFields,
   timeout: {
     description: "deadline for the whole run, as a duration (500ms, 30s, 5min)",
     ...field(z.string().optional()),
@@ -246,18 +275,6 @@ const executionFields = {
   timeoutFetch: {
     description: "default timeout for each fetch, as a duration (500ms, 30s, 5min)",
     ...field(z.string().optional()),
-  },
-  approveAll: {
-    description: "approve every agent permission request",
-    ...field(z.boolean(), field.default(false)),
-  },
-  approveReads: {
-    description: "approve read and search agent permissions, ask for the rest (default)",
-    ...field(z.boolean(), field.default(false)),
-  },
-  denyAll: {
-    description: "deny every agent permission request",
-    ...field(z.boolean(), field.default(false)),
   },
   secretDetection: SECRET_DETECTION_FIELD,
 };
@@ -290,10 +307,12 @@ const REPL_DESCRIPTION = "Run and reconstruct one XMD entry in an interactive te
  * the command reopens exactly that retained history and selects exactly what the
  * location names; with none, it starts a fresh execution with an empty draft.
  *
- * No option a run configures appears here. This command renders no file, takes
- * no document reference and spends no model turn beyond what the one entry a
- * person types asks for, so a permission mode, an exec deadline, a props file
- * and a journal each configure work this command never performs.
+ * The entry a person types may run Agent work, so this command configures the
+ * Agent the same way `xmd run` does: the five shared fields, with the same
+ * descriptions, defaults and environment precedence. Everything else a run
+ * configures is absent — this command renders no file, takes no document
+ * reference and writes no journal of its own, so an exec deadline, a props file
+ * and a trace each configure work it never performs.
  */
 const replConfig = object({
   location: {
@@ -302,6 +321,7 @@ const replConfig = object({
       "that retained history and the exact view it names",
     ...field(z.string().optional(), cli.argument()),
   },
+  ...agentFields,
 });
 
 /** What `xmd --help` says the plan command is for. */
@@ -588,6 +608,12 @@ export type ReplHostInstaller = () => Operation<void>;
  * ignored — a caller who wrote `--json` asked for something, and silence would
  * let them believe they got it.
  */
+/** The two REPL options that carry a value, by the spelling a caller writes. */
+const REPL_VALUES: readonly string[] = ["--agent-provider", "--default-agent"];
+
+/** The three REPL switches, which carry none. */
+const REPL_SWITCHES: readonly string[] = ["--approve-all", "--approve-reads", "--deny-all"];
+
 export function replGrammarError(
   args: readonly string[],
   location: string | undefined,
@@ -595,14 +621,47 @@ export function replGrammarError(
   // The command's own name is the first token, as it is for every command that
   // reads its line directly.
   const rest = args.slice(1);
-  const option = rest.find((token) => token.startsWith("-") && token !== "-");
-  if (option !== undefined) {
+  const positional: string[] = [];
+  for (let at = 0; at < rest.length; at += 1) {
+    const token = rest[at] ?? "";
+    if (!token.startsWith("-") || token === "-") {
+      positional.push(token);
+      continue;
+    }
+    // `--name=value` and `--name value` are both the parser's forms, so the scan
+    // reads the name the same way the parser will.
+    const split = token.indexOf("=");
+    const name = split === -1 ? token : token.slice(0, split);
+    const written = split === -1 ? undefined : token.slice(split + 1);
+    if (REPL_SWITCHES.includes(name)) {
+      if (written !== undefined) {
+        return `xmd repl: ${name} is a switch and takes no value`;
+      }
+      continue;
+    }
+    if (REPL_VALUES.includes(name)) {
+      if (written !== undefined) {
+        if (written.length === 0) {
+          return `xmd repl: ${name} requires a value`;
+        }
+        continue;
+      }
+      // The next token is this option's value, not a location: a scan that
+      // counted it as one would refuse `--default-agent claude` for naming two
+      // things.
+      const value = rest[at + 1];
+      if (value === undefined || value.startsWith("-")) {
+        return `xmd repl: ${name} requires a value`;
+      }
+      at += 1;
+      continue;
+    }
     return (
-      `unrecognized option for xmd repl: ${option} — xmd repl takes one optional location ` +
-      "and no options"
+      `unrecognized option for xmd repl: ${name} — xmd repl takes one optional location and ` +
+      "the agent options --agent-provider, --default-agent, --approve-all, --approve-reads " +
+      "and --deny-all"
     );
   }
-  const positional = rest.filter((token) => !token.startsWith("-"));
   if (positional.length > 1) {
     return (
       "xmd repl takes at most one location. This REPL admits one entry per execution, so " +
@@ -2835,6 +2894,23 @@ function* dispatch(
         yield* exit(1);
         break;
       }
+      // The Agent configuration, settled before a terminal exists: mutual
+      // exclusion, an unknown provider and `DEFAULT_AGENT_NAME` precedence are
+      // all decided here, so an invocation nobody could run refuses without
+      // having taken the screen, made a directory or materialized an adapter.
+      const replStack = yield* settleAgentStack(
+        {
+          agentProvider: command.config.agentProvider,
+          defaultAgent: command.config.defaultAgent,
+          approveAll: command.config.approveAll,
+          approveReads: command.config.approveReads,
+          denyAll: command.config.denyAll,
+        },
+        sessions,
+      );
+      if (replStack === undefined) {
+        break;
+      }
       if (installRepl === undefined) {
         console.error(
           "xmd repl: this host assembles no interactive terminal, so there is nothing to open.",
@@ -2842,10 +2918,17 @@ function* dispatch(
         yield* exit(1);
         break;
       }
+      // One profile for the whole command, assembled once in this scope: the
+      // packaged `<Plan>` Component, the selected Plugins, the Agent identity
+      // vocabulary and the ceiling a generated fragment runs under. Nothing is
+      // assembled again per entry, so two entries of one session cannot run
+      // under different rules.
+      const profile = yield* assembleReplProfile(replStack, plugins);
       yield* installRepl();
-      const ran = yield* runReplProgram(
-        command.config.location === undefined ? {} : { location: command.config.location },
-      );
+      const ran = yield* runReplProgram({
+        profile,
+        ...(command.config.location === undefined ? {} : { location: command.config.location }),
+      });
       if (!ran.ok) {
         console.error(`xmd repl: ${ran.error.message}`);
         yield* exit(1);

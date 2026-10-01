@@ -124,12 +124,17 @@ export function parseInfoString(infoString: string): ParsedInfoString {
 }
 
 /**
- * Where scanned text sits in its original file. `baseOffset`/`baseLine`
+ * Where scanned text sits in the source it came from. `baseOffset`/`baseLine`
  * translate body-relative positions to original-file positions (frontmatter
  * included). Omitted for dynamically scanned strings.
+ *
+ * One of two sources, never both: a file states its `path`, and a generated
+ * fragment states the `generatedSource` its admission was decided under —
+ * generated text has no path, and the id is what an effect inside it can name.
  */
 export interface SourceOrigin {
-  path: string;
+  path?: string;
+  generatedSource?: string;
   baseOffset: number;
   baseLine: number;
 }
@@ -169,6 +174,7 @@ function positionAt(index: PositionIndex, offset: number): SourcePosition {
   const column = offset - lineStarts[low]! + 1;
   return {
     path: origin?.path,
+    ...(origin?.generatedSource === undefined ? {} : { generatedSource: origin.generatedSource }),
     offset: (origin?.baseOffset ?? 0) + offset,
     line: (origin?.baseLine ?? 1) + localLine - 1,
     column,

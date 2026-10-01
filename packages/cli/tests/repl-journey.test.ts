@@ -32,6 +32,7 @@ import type { ReplTerminalSize } from "../src/repl/terminal.ts";
 import { ReplClock } from "../src/repl/frame.ts";
 import { initialState, NO_AGENT, reduceRepl } from "../src/repl/application.ts";
 import { runReplProgram } from "../src/repl/program.ts";
+import type { ReplExecutionProfile } from "../src/repl-profile.ts";
 import type { ReplOutcome } from "../src/repl/program.ts";
 import { parseDurableEvent, serializeDurableEvent } from "@executablemd/durable-streams";
 import { drawerWidth, NARROW, surfaceWidth } from "../src/repl/layout.ts";
@@ -62,6 +63,20 @@ const TEXT = new TextDecoder();
 
 /** What this host installs around the reference entry. */
 const INSTALLATIONS = [{ evaluation: ordinaryEvaluationProfile() }];
+
+/**
+ * The profile this suite's REPL runs under.
+ *
+ * One value rather than two arguments, because the program takes one: what an
+ * execution may resolve and how it answers a permission request are settled by a
+ * command before a terminal exists. This suite runs no Agent, so the mode is the
+ * one an unconfigured command settles.
+ */
+const PROFILE: ReplExecutionProfile = {
+  includes: [REFERENCE_DIRECTORY],
+  installations: INSTALLATIONS,
+  permissionMode: "deny-all",
+};
 
 /** What the reference entry's eval publishes, as the model retains it. */
 const PLAN = { title: "Ship the REPL", steps: 2 };
@@ -709,10 +724,7 @@ describe("REPL journey: one entry, from raw bytes", () => {
       const root = yield* useTemporaryHost();
 
       const running = yield* spawn(function* (): Operation<void> {
-        const ran = yield* runReplProgram({
-          includes: [REFERENCE_DIRECTORY],
-          installations: INSTALLATIONS,
-        });
+        const ran = yield* runReplProgram({ profile: PROFILE });
         if (!ran.ok) {
           throw ran.error;
         }
@@ -763,10 +775,7 @@ describe("REPL journey: one entry, from raw bytes", () => {
       const root = yield* useTemporaryHost();
 
       const running = yield* spawn(function* (): Operation<void> {
-        const ran = yield* runReplProgram({
-          includes: [REFERENCE_DIRECTORY],
-          installations: INSTALLATIONS,
-        });
+        const ran = yield* runReplProgram({ profile: PROFILE });
         if (!ran.ok) {
           throw ran.error;
         }
@@ -816,10 +825,7 @@ describe("REPL journey: one entry, from raw bytes", () => {
       const root = yield* useTemporaryHost();
 
       const running = yield* spawn(function* (): Operation<void> {
-        const ran = yield* runReplProgram({
-          includes: [REFERENCE_DIRECTORY],
-          installations: INSTALLATIONS,
-        });
+        const ran = yield* runReplProgram({ profile: PROFILE });
         if (!ran.ok) {
           throw ran.error;
         }
@@ -878,10 +884,7 @@ describe("REPL journey: one entry, from raw bytes", () => {
       root = yield* useTemporaryHost();
 
       const running = yield* spawn(function* (): Operation<void> {
-        const ran = yield* runReplProgram({
-          includes: [REFERENCE_DIRECTORY],
-          installations: INSTALLATIONS,
-        });
+        const ran = yield* runReplProgram({ profile: PROFILE });
         if (!ran.ok) {
           throw ran.error;
         }
@@ -978,8 +981,7 @@ describe("REPL journey: one entry, from raw bytes", () => {
       const running = yield* spawn(function* (): Operation<void> {
         const ran = yield* runReplProgram({
           location,
-          includes: [REFERENCE_DIRECTORY],
-          installations: INSTALLATIONS,
+          profile: PROFILE,
         });
         if (!ran.ok) {
           throw ran.error;
@@ -1030,10 +1032,7 @@ describe("REPL journey: one entry, from raw bytes", () => {
 
       let outcome: ReplOutcome | undefined;
       const running = yield* spawn(function* (): Operation<void> {
-        const ran = yield* runReplProgram({
-          includes: [REFERENCE_DIRECTORY],
-          installations: INSTALLATIONS,
-        });
+        const ran = yield* runReplProgram({ profile: PROFILE });
         if (!ran.ok) {
           throw ran.error;
         }
@@ -1082,10 +1081,7 @@ describe("REPL journey: what it refuses, and what it leaves alone", () => {
       const root = yield* useTemporaryHost();
 
       const running = yield* spawn(function* (): Operation<void> {
-        const ran = yield* runReplProgram({
-          includes: [REFERENCE_DIRECTORY],
-          installations: INSTALLATIONS,
-        });
+        const ran = yield* runReplProgram({ profile: PROFILE });
         if (!ran.ok) {
           throw ran.error;
         }
@@ -1160,10 +1156,7 @@ describe("REPL journey: what it refuses, and what it leaves alone", () => {
       const root = yield* useTemporaryHost();
 
       const running = yield* spawn(function* (): Operation<void> {
-        const ran = yield* runReplProgram({
-          includes: [REFERENCE_DIRECTORY],
-          installations: INSTALLATIONS,
-        });
+        const ran = yield* runReplProgram({ profile: PROFILE });
         if (!ran.ok) {
           throw ran.error;
         }
@@ -1201,10 +1194,7 @@ describe("REPL journey: what it refuses, and what it leaves alone", () => {
       const root = yield* useTemporaryHost();
 
       const running = yield* spawn(function* (): Operation<void> {
-        const ran = yield* runReplProgram({
-          includes: [REFERENCE_DIRECTORY],
-          installations: INSTALLATIONS,
-        });
+        const ran = yield* runReplProgram({ profile: PROFILE });
         if (!ran.ok) {
           throw ran.error;
         }
@@ -1261,8 +1251,7 @@ describe("REPL journey: what it refuses, and what it leaves alone", () => {
       const running = yield* spawn(function* (): Operation<void> {
         const ran = yield* runReplProgram({
           location: "xmd://repl/broken/repl",
-          includes: [REFERENCE_DIRECTORY],
-          installations: INSTALLATIONS,
+          profile: PROFILE,
         });
         refused = !ran.ok;
       });
@@ -1292,7 +1281,7 @@ describe("REPL journey: what it refuses, and what it leaves alone", () => {
       yield* immediateClock();
       const root = yield* useTemporaryHost();
 
-      const ran = yield* runReplProgram({ location: "xmd://repl//repl" });
+      const ran = yield* runReplProgram({ location: "xmd://repl//repl", profile: PROFILE });
       expect(ran.ok).toBe(false);
 
       // No directory was formed, no file was created, and the terminal's modes
@@ -1313,10 +1302,7 @@ describe("REPL journey: what it refuses, and what it leaves alone", () => {
 
       let outcome: ReplOutcome | undefined;
       const running = yield* spawn(function* (): Operation<void> {
-        const ran = yield* runReplProgram({
-          includes: [REFERENCE_DIRECTORY],
-          installations: INSTALLATIONS,
-        });
+        const ran = yield* runReplProgram({ profile: PROFILE });
         if (!ran.ok) {
           throw ran.error;
         }
@@ -1351,10 +1337,7 @@ describe("REPL journey: what it refuses, and what it leaves alone", () => {
       yield* useTemporaryHost();
 
       const running = yield* spawn(function* (): Operation<void> {
-        const ran = yield* runReplProgram({
-          includes: [REFERENCE_DIRECTORY],
-          installations: INSTALLATIONS,
-        });
+        const ran = yield* runReplProgram({ profile: PROFILE });
         if (!ran.ok) {
           throw ran.error;
         }
@@ -1395,10 +1378,7 @@ describe("REPL journey: the whole of it, from raw bytes", () => {
       const terminal = first.terminal;
 
       const running = yield* spawn(function* (): Operation<void> {
-        const ran = yield* runReplProgram({
-          includes: [REFERENCE_DIRECTORY],
-          installations: INSTALLATIONS,
-        });
+        const ran = yield* runReplProgram({ profile: PROFILE });
         if (!ran.ok) {
           throw ran.error;
         }
@@ -1577,8 +1557,7 @@ describe("REPL journey: the whole of it, from raw bytes", () => {
       const running = yield* spawn(function* (): Operation<void> {
         const ran = yield* runReplProgram({
           location: captured,
-          includes: [REFERENCE_DIRECTORY],
-          installations: INSTALLATIONS,
+          profile: PROFILE,
         });
         if (!ran.ok) {
           throw ran.error;
@@ -1643,10 +1622,7 @@ describe("REPL journey: when a frame counts as applied", () => {
       yield* useTemporaryHost();
 
       const running = yield* spawn(function* (): Operation<void> {
-        const ran = yield* runReplProgram({
-          includes: [REFERENCE_DIRECTORY],
-          installations: INSTALLATIONS,
-        });
+        const ran = yield* runReplProgram({ profile: PROFILE });
         if (!ran.ok) {
           throw ran.error;
         }
@@ -1709,10 +1685,7 @@ describe("REPL journey: the same product at every size", () => {
       yield* useTemporaryHost();
 
       const running = yield* spawn(function* (): Operation<void> {
-        const ran = yield* runReplProgram({
-          includes: [REFERENCE_DIRECTORY],
-          installations: INSTALLATIONS,
-        });
+        const ran = yield* runReplProgram({ profile: PROFILE });
         if (!ran.ok) {
           throw ran.error;
         }
@@ -1767,10 +1740,7 @@ describe("REPL journey: the same product at every size", () => {
         yield* useTemporaryHost();
 
         const running = yield* spawn(function* (): Operation<void> {
-          const ran = yield* runReplProgram({
-            includes: [REFERENCE_DIRECTORY],
-            installations: INSTALLATIONS,
-          });
+          const ran = yield* runReplProgram({ profile: PROFILE });
           if (!ran.ok) {
             throw ran.error;
           }
@@ -1835,10 +1805,7 @@ describe("REPL journey: the same product at every size", () => {
       yield* useTemporaryHost();
 
       const running = yield* spawn(function* (): Operation<void> {
-        const ran = yield* runReplProgram({
-          includes: [REFERENCE_DIRECTORY],
-          installations: INSTALLATIONS,
-        });
+        const ran = yield* runReplProgram({ profile: PROFILE });
         if (!ran.ok) {
           throw ran.error;
         }
@@ -1883,10 +1850,7 @@ describe("REPL journey: what it settles before it acts", () => {
       // is caught as a command still running instead of as a hanging test.
       let ran: Result<ReplOutcome> | undefined;
       const running = yield* spawn(function* (): Operation<void> {
-        ran = yield* runReplProgram({
-          includes: [REFERENCE_DIRECTORY],
-          installations: INSTALLATIONS,
-        });
+        ran = yield* runReplProgram({ profile: PROFILE });
       });
       yield* settled(60);
 
@@ -1928,10 +1892,7 @@ describe("REPL journey: what it settles before it acts", () => {
       retained = yield* useTemporaryHost();
 
       const running = yield* spawn(function* (): Operation<void> {
-        const ran = yield* runReplProgram({
-          includes: [REFERENCE_DIRECTORY],
-          installations: INSTALLATIONS,
-        });
+        const ran = yield* runReplProgram({ profile: PROFILE });
         if (!ran.ok) {
           throw ran.error;
         }
@@ -1987,8 +1948,7 @@ describe("REPL journey: what it settles before it acts", () => {
       const running = yield* spawn(function* (): Operation<void> {
         outcome = yield* runReplProgram({
           location: mistyped,
-          includes: [REFERENCE_DIRECTORY],
-          installations: INSTALLATIONS,
+          profile: PROFILE,
         });
       });
       // A refusal screen, not a reconstruction: waited for by what it says
@@ -2026,10 +1986,7 @@ describe("REPL journey: what it settles before it acts", () => {
       retained = yield* useTemporaryHost();
 
       const running = yield* spawn(function* (): Operation<void> {
-        const ran = yield* runReplProgram({
-          includes: [REFERENCE_DIRECTORY],
-          installations: INSTALLATIONS,
-        });
+        const ran = yield* runReplProgram({ profile: PROFILE });
         if (!ran.ok) {
           throw ran.error;
         }
@@ -2090,8 +2047,7 @@ describe("REPL journey: what it settles before it acts", () => {
       const running = yield* spawn(function* (): Operation<void> {
         outcome = yield* runReplProgram({
           location: stale,
-          includes: [REFERENCE_DIRECTORY],
-          installations: INSTALLATIONS,
+          profile: PROFILE,
         });
       });
       yield* until_(second.terminal, "the refusal", (t) => shows(t, "nothing is being asked"));
@@ -2142,8 +2098,7 @@ describe("REPL journey: what it settles before it acts", () => {
       const running = yield* spawn(function* (): Operation<void> {
         outcome = yield* runReplProgram({
           location: `xmd://repl/unclosed/repl/${model.entry?.key ?? ""}/+elicit`,
-          includes: [REFERENCE_DIRECTORY],
-          installations: INSTALLATIONS,
+          profile: PROFILE,
         });
       });
       yield* until_(terminal, "the refusal", (t) => shows(t, "nothing is being asked"));
@@ -2169,10 +2124,7 @@ describe("REPL journey: what it settles before it acts", () => {
       const root = yield* useTemporaryHost();
 
       const running = yield* spawn(function* (): Operation<void> {
-        const ran = yield* runReplProgram({
-          includes: [REFERENCE_DIRECTORY],
-          installations: INSTALLATIONS,
-        });
+        const ran = yield* runReplProgram({ profile: PROFILE });
         if (!ran.ok) {
           throw ran.error;
         }
@@ -2222,10 +2174,7 @@ describe("REPL journey: what it settles before it acts", () => {
       yield* useTemporaryHost();
 
       const running = yield* spawn(function* (): Operation<void> {
-        const ran = yield* runReplProgram({
-          includes: [REFERENCE_DIRECTORY],
-          installations: INSTALLATIONS,
-        });
+        const ran = yield* runReplProgram({ profile: PROFILE });
         if (!ran.ok) {
           throw ran.error;
         }
@@ -2328,10 +2277,7 @@ describe("REPL journey: output nothing records still reaches the screen", () => 
       });
 
       const running = yield* spawn(function* (): Operation<void> {
-        const ran = yield* runReplProgram({
-          includes: [REFERENCE_DIRECTORY],
-          installations: INSTALLATIONS,
-        });
+        const ran = yield* runReplProgram({ profile: PROFILE });
         if (!ran.ok) {
           throw ran.error;
         }

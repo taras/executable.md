@@ -244,6 +244,57 @@ describe("REPL boundaries: what production code cannot reach", () => {
     expect(packaged).toContain('"@bomb.sh/tty": "0.9.0"');
   });
 
+  it("S1: no production REPL module retains a provider's raw request", function* () {
+    // `rawInput` is whatever an agent handed the adapter. The surface shows a
+    // request's title and the options it offered; keeping the raw payload would
+    // put an agent's own text into this process's state and into a frame.
+    for (const path of yield* authored()) {
+      const text = yield* code(path);
+      expect([path.slice(CLI.length), text.includes("rawInput")]).toEqual([
+        path.slice(CLI.length),
+        false,
+      ]);
+    }
+  });
+
+  it("S1: the profile installs no readline policy, no launcher and no browser form", function* () {
+    const text = yield* code(join(CLI, "src", "repl-profile.ts"));
+    // The REPL's policy is the session's own, and it owns the terminal it is
+    // drawing on. Each of these is the `xmd run` half this command must not
+    // inherit, and the check is the source rather than a behaviour, because what
+    // is claimed is that it cannot reach them.
+    for (const forbidden of [
+      "installRunAgentStack",
+      "installPermissionMode",
+      "installForegroundLauncher",
+      "installWebElicitation",
+      "readline",
+    ]) {
+      expect([forbidden, text.includes(forbidden)]).toEqual([forbidden, false]);
+    }
+    // And it does install the two halves it owns.
+    expect(text).toContain("installAgentProviderStack");
+    expect(text).toContain("planComponentDeclaration");
+  });
+
+  it("S1: the profile check rejects a profile that installed one", function* () {
+    // The same scan against text that deliberately reaches for the launcher, so
+    // a green row above cannot be green by matching nothing.
+    const seeded = [
+      "// a comment mentioning installForegroundLauncher, which is prose",
+      'import { installForegroundLauncher } from "@executablemd/runtime";',
+      "export function* assemble() {",
+      "  yield* installForegroundLauncher();",
+      "}",
+    ].join("\n");
+    const stripped = seeded
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .split("\n")
+      .map((line) => line.replace(/(^|\s)\/\/.*$/, ""))
+      .join("\n");
+    expect(stripped.includes("installForegroundLauncher")).toBe(true);
+  });
+
   it("S1: no REPL record type exists in production", function* () {
     // Every retained line is an ordinary durable event. A record shape of this
     // slice's own would be a second protocol nobody else can read.
@@ -263,17 +314,58 @@ describe("REPL documentation: what it says is what the code does", () => {
 
     for (const rest of commands) {
       // Stripped of the shell's quoting and of the comment beside it, which is
-      // prose rather than argv.
-      const argument = rest
+      // prose rather than argv. What is left is read the way the command line
+      // is: option tokens are options, and at most one other token is the
+      // location.
+      const tokens = rest
         .replace(/#.*$/, "")
         .trim()
-        .replace(/^'(.*)'$/, "$1");
-      const args = argument === "" ? ["repl"] : ["repl", argument];
-      const location = argument === "" ? undefined : argument;
+        .split(/\s+/)
+        .filter((token) => token.length > 0)
+        .map((token) => token.replace(/^'(.*)'$/, "$1"));
+      const positional = tokens.filter((token) => !token.startsWith("-"));
+      expect([rest, positional.length]).toEqual([rest, Math.min(positional.length, 1)]);
       // A placeholder is not a location; what is being checked is the shape.
-      const concrete = location?.replace("<execution>", "kf39sla2");
-      expect(replGrammarError(args, concrete)).toBeUndefined();
+      const concrete = positional[0]?.replace("<execution>", "kf39sla2");
+      const args = ["repl", ...tokens.map((token) => token.replace("<execution>", "kf39sla2"))];
+      expect([rest, replGrammarError(args, concrete)]).toEqual([rest, undefined]);
     }
+  });
+
+  it("D1: the five options the spec names are the five the parser accepts", function* () {
+    const spec = yield* read(join(CLI, "..", "..", "specs", "repl-spec.md"));
+    // Every option the specification names, from its own prose.
+    const named = [...spec.matchAll(/`(--[a-z-]+)`/g)].map((match) => match[1]);
+    expect([...new Set(named)].sort()).toEqual([
+      "--agent-provider",
+      "--approve-all",
+      "--approve-reads",
+      "--default-agent",
+      "--deny-all",
+    ]);
+
+    // Each is one the parser accepts, in both spellings a value option has.
+    for (const option of ["--approve-all", "--approve-reads", "--deny-all"]) {
+      expect([option, replGrammarError(["repl", option], undefined)]).toEqual([option, undefined]);
+      expect(replGrammarError(["repl", `${option}=yes`], undefined)).toContain("takes no value");
+    }
+    for (const option of ["--agent-provider", "--default-agent"]) {
+      expect([option, replGrammarError(["repl", option, "acpx"], undefined)]).toEqual([
+        option,
+        undefined,
+      ]);
+      expect([option, replGrammarError(["repl", `${option}=acpx`], undefined)]).toEqual([
+        option,
+        undefined,
+      ]);
+      expect(replGrammarError(["repl", option], undefined)).toContain("requires a value");
+    }
+
+    // And there is no sixth: an option the specification does not name is
+    // refused by the name it was written as.
+    expect(replGrammarError(["repl", "--include", "x"], undefined)).toContain(
+      "unrecognized option for xmd repl: --include",
+    );
   });
 
   it("D1: the spec's route grammar is the one the codec implements", function* () {
