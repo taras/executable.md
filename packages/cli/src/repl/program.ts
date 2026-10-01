@@ -67,7 +67,7 @@ import type {
 import { decodeLocation, encodeLocation, resolveLocation } from "./route.ts";
 import { replRepository } from "./journal.ts";
 import type { ReplExecution } from "./journal.ts";
-import { openReplSession, submitReplEntry } from "./session.ts";
+import { openReplSession } from "./session.ts";
 import type { ReplSession } from "./session.ts";
 import { useReplFrames } from "./frame.ts";
 import type { ReplFrames } from "./frame.ts";
@@ -337,7 +337,9 @@ function* drive(
   options: ReplProgramOptions,
 ): Operation<Result<ReplOutcome>> {
   let state = start;
-  let current: ReplSession = session;
+  // One session for the whole command: it owns the file, the observer and each
+  // entry task in turn, so submitting an entry does not replace it.
+  const current: ReplSession = session;
   let model: ReplModel = session.model;
   let rendered: ReplRendered | undefined;
   /** The question whose drawer has already been offered. */
@@ -429,9 +431,8 @@ function* drive(
                 options,
                 wakes,
               );
-              if (performed.session !== undefined) {
-                current = performed.session;
-                model = performed.session.model;
+              if (performed.submitted === true) {
+                model = current.model;
                 // The entry exists now, so the draft that became it is finished.
                 state = admitted(state);
               }
@@ -482,9 +483,8 @@ function* drive(
                 options,
                 wakes,
               );
-              if (performed.session !== undefined) {
-                current = performed.session;
-                model = performed.session.model;
+              if (performed.submitted === true) {
+                model = current.model;
                 // The entry exists now, so the draft that became it is finished.
                 state = admitted(state);
               }
@@ -745,8 +745,8 @@ function isObject(value: Json): value is { [key: string]: Json } {
 
 /** What performing one intent produced. */
 interface Performed {
-  /** The session that stands now, when submitting produced a different one. */
-  readonly session?: ReplSession;
+  /** Whether a submission admitted one more entry into this session. */
+  readonly submitted?: true;
   /**
    * The exact object a question took, when one did and is now over.
    *
@@ -832,21 +832,17 @@ function* perform(
       return settled ? { settled: intent.turn } : {};
     }
     case "submit": {
-      const submitted = yield* submitReplEntry({
-        execution,
-        source: intent.source,
-        includes: options.profile.includes,
-        installations: options.profile.installations,
-        permissionMode: options.profile.permissionMode,
-      });
+      // The session this command already owns, rather than a second one. It
+      // holds the one observer on the file and the one entry task, so an entry
+      // is admitted *into* it — there is nothing here to watch again.
+      const submitted = yield* session.submit(intent.source);
+      wakes.send({ kind: "session" });
       if (!submitted.ok) {
-        // A preflight refusal leaves the draft exactly as it was and the history
-        // empty: nothing was admitted, so there is nothing to undo.
+        // A refusal leaves the draft exactly as it was and the history as it
+        // was: nothing was admitted, so there is nothing to undo.
         return { refusal: submitted.error.message };
       }
-      yield* watch(submitted.value, wakes);
-      wakes.send({ kind: "session" });
-      return { session: submitted.value };
+      return { submitted: true };
     }
   }
 }

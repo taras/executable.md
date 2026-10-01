@@ -396,13 +396,20 @@ describe("REPL execution: submitting one entry", () => {
     expect(counted(yield* readAll(holder), "elicit")).toBe(1);
   });
 
-  it("X1: a second entry is refused against an execution that has one", function* () {
-    const holder = execution(yield* referenceEvents());
+  it("X1: an entry is refused while the entry before it has not settled", function* () {
+    // The reference history without its root close: an entry that never reached
+    // an outcome, which is the one thing nothing may follow. A *settled* entry is
+    // followable, and the lifecycle rows in `repl-entries.test.ts` own that.
+    const unfinished = (yield* referenceEvents()).slice(0, -1);
+    const holder = execution(unfinished);
     const refused = refusal(
       yield* submitReplEntry({ ...options(holder), source: "another entry\n" }),
     );
 
-    expect(refused.message).toContain("already admitted its entry");
+    expect(refused.name).toBe("ReplLifecycleError");
+    expect(refused.message).toContain("has not settled");
+    // Refused having started nothing: the history is the bytes it was.
+    expect(yield* readAll(holder)).toEqual(unfinished);
   });
 });
 

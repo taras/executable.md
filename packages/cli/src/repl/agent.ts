@@ -100,6 +100,16 @@ export interface ReplLiveChoice {
 export interface ReplLiveTurn {
   /** This process's own opaque handle. Never a location, model or Journal value. */
   readonly key: string;
+  /**
+   * The admission-order key of the entry whose execution began this turn.
+   *
+   * Taken when the turn began, from the installation that entry's execution was
+   * started with, and carried unchanged from there. A reader asking which entry
+   * a turn belongs to is never answered with the entry that is running now: a
+   * turn that published under one entry stays that entry's while the next one
+   * runs.
+   */
+  readonly entry: string;
   /** The text the Prompt asked. */
   readonly prompt: string;
   readonly state: ReplLiveTurnState;
@@ -137,12 +147,16 @@ export interface ReplLivePermission {
  *
  * `order` is observation order, which is the order Prompts were scheduled in;
  * `durable` is the name the record was journaled under, once the append that
- * replaced this turn has been accounted for. Everything here is process-local:
- * no slot, key or order reaches a location, the model or the Journal.
+ * replaced this turn has been accounted for. `entry` is the entry that began it,
+ * which publication does not change either — the record that replaced this turn
+ * belongs to the same entry the turn did. Everything here is process-local: no
+ * slot, key or order reaches a location, the model or the Journal.
  */
 export interface ReplAgentSlot {
   /** The live key this Prompt was observed under, and stays mounted as. */
   readonly key: string;
+  /** The admission-order key of the entry whose execution began this Prompt. */
+  readonly entry: string;
   /** Where this Prompt sits among the ones this process observed. */
   readonly order: number;
   /** The durable name its record was journaled under, or none while it is live. */
@@ -191,15 +205,15 @@ export interface ReplAgentKernel {
   readonly reading: ReplAgentReading;
   readonly changes: Stream<ReplAgentReading, never>;
   readonly authority: ReplAgentAuthority;
-  /** What this owner installs inside the execution. */
-  readonly installation: ExecutionInstallation;
   /**
-   * The publisher that ties each canonical `<Prompt>` to its live turn.
+   * What this owner installs inside the execution of one entry.
    *
-   * Installed by `installation`; exposed so a caller can see the one seam this
-   * owner correlates through.
+   * One installation per entry, carrying that entry's key and the publisher that
+   * ties each of its canonical `<Prompt>`s to a live turn. The key is an
+   * argument rather than something this owner is told about separately, so a
+   * turn cannot begin under an entry nobody named.
    */
-  readonly publisher: AgentPromptPublisher;
+  owning(entry: string): ExecutionInstallation;
   /**
    * Account for one appended event, without announcing.
    *
@@ -238,6 +252,7 @@ export class ReplAgentCorrelationError extends Error {
 /** Mutable bookkeeping for one observed turn. */
 interface LiveTurn {
   readonly key: string;
+  readonly entry: string;
   readonly coroutine: string;
   readonly prompt: string;
   state: ReplLiveTurnState;
@@ -253,6 +268,7 @@ interface LiveTurn {
 /** Mutable bookkeeping for one observed Prompt's place in the reading. */
 interface Slot {
   readonly key: string;
+  readonly entry: string;
   readonly order: number;
   durable: string | undefined;
   last: ReplLiveTurn | undefined;
@@ -273,6 +289,7 @@ interface LiveRequest {
 function frozenTurn(turn: LiveTurn): ReplLiveTurn {
   return Object.freeze({
     key: turn.key,
+    entry: turn.entry,
     prompt: turn.prompt,
     state: turn.state,
     text: turn.text,
@@ -288,6 +305,7 @@ function frozenTurn(turn: LiveTurn): ReplLiveTurn {
 function frozenSlot(slot: Slot): ReplAgentSlot {
   return Object.freeze({
     key: slot.key,
+    entry: slot.entry,
     order: slot.order,
     durable: slot.durable,
     last: slot.last,
@@ -348,10 +366,12 @@ function* currentCoroutine(): Operation<string> {
  * The same goes for whoever was waiting on `failed`: there is no failure to
  * report, so no one is woken.
  *
- * `installation` stays a separate, explicit act. Installing the middleware in
- * this body would put it in the resource's own child scope, which the execution
+ * `owning()` stays a separate, explicit act. Installing the middleware in this
+ * body would put it in the resource's own child scope, which the execution
  * started afterwards does not inherit: the resource owns the kernel, and the
- * execution installation is what places the contextual middleware.
+ * execution installation is what places the contextual middleware. One owner
+ * serves every entry of its session, and each entry's execution is started with
+ * an installation of its own, which is where that entry's key comes from.
  */
 export function useReplAgent(mode: PermissionMode): Operation<ReplAgentKernel> {
   return resource(function* (provide) {
@@ -433,9 +453,10 @@ export function useReplAgent(mode: PermissionMode): Operation<ReplAgentKernel> {
       }
     }
 
-    function queued(coroutine: string, prompt: string): LiveTurn {
+    function queued(entry: string, coroutine: string, prompt: string): LiveTurn {
       const turn: LiveTurn = {
         key: allocate("turn"),
+        entry,
         coroutine,
         prompt,
         state: "queued",
@@ -450,7 +471,13 @@ export function useReplAgent(mode: PermissionMode): Operation<ReplAgentKernel> {
       turns.push(turn);
       // Its place, taken when the Prompt was scheduled rather than when it
       // finished: a turn that publishes first did not thereby happen first.
-      slots.push({ key: turn.key, order: slots.length + 1, durable: undefined, last: undefined });
+      slots.push({
+        key: turn.key,
+        entry,
+        order: slots.length + 1,
+        durable: undefined,
+        last: undefined,
+      });
       announce();
       return turn;
     }
@@ -616,79 +643,85 @@ export function useReplAgent(mode: PermissionMode): Operation<ReplAgentKernel> {
       },
     };
 
-    const publisher: AgentPromptPublisher = {
-      *begin(input: string): Operation<AgentPromptHandle> {
-        // Created before the provider is asked for anything at all, and handed
-        // back on this turn's own publication — the only thing that will say
-        // which live turn that record ended.
-        const turn = queued(yield* currentCoroutine(), input);
-        begun.set(yield* useScope(), turn);
-        // An opaque token rather than the turn itself: core carries it back
-        // untouched, and only this map can say what it stood for.
-        const handle: object = {};
-        minted.set(handle, turn);
-        return handle;
-      },
-      *publish(publication: AgentPromptPublication): Operation<void> {
-        const handle = publication.begun;
-        // A handle this owner did not mint is not a key in this map: another
-        // host's publisher, or a turn from an execution this session never ran.
-        // Read back by lookup, never by asserting what the value is.
-        const turn = typeof handle === "object" && handle !== null ? minted.get(handle) : undefined;
-        const where = turn?.coroutine;
-        if (turn !== undefined && where !== undefined) {
-          publishing.set(where, turn);
-        }
-        try {
-          // The single durable handoff. `consume()` runs inside this append, in
-          // the caller's one transition, and removes exactly this turn.
-          yield* publication.append();
-        } catch (error) {
-          // Nothing was retained, so nothing may still be shown as though it is
-          // about to be. The turn this publication began is taken down and the
-          // removal announced before the failure travels on — otherwise a
-          // terminal overlay outlives the record it was waiting for.
-          if (turn !== undefined) {
-            retire(turn);
-            announce();
+    function publisherFor(entry: string): AgentPromptPublisher {
+      return {
+        *begin(input: string): Operation<AgentPromptHandle> {
+          // Created before the provider is asked for anything at all, and handed
+          // back on this turn's own publication — the only thing that will say
+          // which live turn that record ended.
+          const turn = queued(entry, yield* currentCoroutine(), input);
+          begun.set(yield* useScope(), turn);
+          // An opaque token rather than the turn itself: core carries it back
+          // untouched, and only this map can say what it stood for.
+          const handle: object = {};
+          minted.set(handle, turn);
+          return handle;
+        },
+        *publish(publication: AgentPromptPublication): Operation<void> {
+          const handle = publication.begun;
+          // A handle this owner did not mint is not a key in this map: another
+          // host's publisher, or a turn from an execution this session never ran.
+          // Read back by lookup, never by asserting what the value is.
+          const turn =
+            typeof handle === "object" && handle !== null ? minted.get(handle) : undefined;
+          const where = turn?.coroutine;
+          if (turn !== undefined && where !== undefined) {
+            publishing.set(where, turn);
           }
-          throw error;
-        } finally {
-          if (where !== undefined) {
-            publishing.delete(where);
+          try {
+            // The single durable handoff. `consume()` runs inside this append, in
+            // the caller's one transition, and removes exactly this turn.
+            yield* publication.append();
+          } catch (error) {
+            // Nothing was retained, so nothing may still be shown as though it is
+            // about to be. The turn this publication began is taken down and the
+            // removal announced before the failure travels on — otherwise a
+            // terminal overlay outlives the record it was waiting for.
+            if (turn !== undefined) {
+              retire(turn);
+              announce();
+            }
+            throw error;
+          } finally {
+            if (where !== undefined) {
+              publishing.delete(where);
+            }
           }
-        }
-      },
-    };
+        },
+      };
+    }
 
-    const installation: ExecutionInstallation = {
-      *install(): Operation<void> {
-        // At the ordinary position, not `min`. A provider installs its own
-        // handlers innermost and answers without delegating, so an observer
-        // installed there would never see the call it exists to wrap — and a
-        // policy installed there would be decided for, by whatever the provider
-        // brought with it. Outermost is where this session's own authority goes:
-        // it wraps the provider's stream, and it decides permission before
-        // anything inherited can.
-        yield* useAgentPromptPublisher(publisher);
-        yield* Agent.around({
-          *prompt([text, options], next) {
-            // Only the turn core began in this exact scope is journal-owned work.
-            // A registered component calling the public `Agent.prompt()` arrives
-            // here having begun nothing: it is delegated untouched, shown in no
-            // reading, and left unable to claim any record.
-            const scope = yield* useScope();
-            const turn = begun.get(scope);
-            begun.delete(scope);
-            const stream = yield* next(text, options);
-            return turn === undefined ? stream : watch(turn, stream);
-          },
-          *requestPermission([request]) {
-            return yield* decide(request);
-          },
-        });
-      },
-    };
+    function owning(entry: string): ExecutionInstallation {
+      const publisher = publisherFor(entry);
+      return {
+        *install(): Operation<void> {
+          // At the ordinary position, not `min`. A provider installs its own
+          // handlers innermost and answers without delegating, so an observer
+          // installed there would never see the call it exists to wrap — and a
+          // policy installed there would be decided for, by whatever the provider
+          // brought with it. Outermost is where this session's own authority goes:
+          // it wraps the provider's stream, and it decides permission before
+          // anything inherited can.
+          yield* useAgentPromptPublisher(publisher);
+          yield* Agent.around({
+            *prompt([text, options], next) {
+              // Only the turn core began in this exact scope is journal-owned work.
+              // A registered component calling the public `Agent.prompt()` arrives
+              // here having begun nothing: it is delegated untouched, shown in no
+              // reading, and left unable to claim any record.
+              const scope = yield* useScope();
+              const turn = begun.get(scope);
+              begun.delete(scope);
+              const stream = yield* next(text, options);
+              return turn === undefined ? stream : watch(turn, stream);
+            },
+            *requestPermission([request]) {
+              return yield* decide(request);
+            },
+          });
+        },
+      };
+    }
 
     const kernel: ReplAgentKernel = {
       get reading() {
@@ -696,8 +729,7 @@ export function useReplAgent(mode: PermissionMode): Operation<ReplAgentKernel> {
       },
       changes,
       authority,
-      installation,
-      publisher,
+      owning,
       consume(event: DurableEvent): void {
         if (event.type !== "yield" || event.description.type !== AGENT_PROMPT) {
           return;

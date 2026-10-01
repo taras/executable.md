@@ -10,10 +10,29 @@
  * ## The entry is admitted once, or not at all
  *
  * Submitted text is a draft until the root `import_component` record appends.
- * So a fresh session validates the document first, against the same environment
- * the run would use, and a document that cannot run leaves the history empty
+ * So a submission validates the document first, against the same environment
+ * the run would use, and a document that cannot run leaves the history as it was
  * and the draft editable — rather than admitting an entry whose only history is
- * its own failure. After admission the entry is immutable and the draft is over.
+ * its own failure. After admission that entry is immutable.
+ *
+ * ## One session, one entry task, in turn
+ *
+ * A session owns the one physical stream, installs its one observer on it, and
+ * owns **at most one** entry task. Starting another entry needs two separate
+ * facts: the entry before it has a retained terminal close, and that entry's own
+ * task has finished tearing down and been joined. Observing a terminal outcome
+ * is not the second of those — an execution whose root has closed is still
+ * releasing providers, middleware and held permissions — so a submission that
+ * arrives in between is refused rather than queued. There is no queue: a refused
+ * submission starts nothing, appends nothing and leaves what was proposed with
+ * whoever proposed it.
+ *
+ * Settled entries are read, never re-run. Replay is for exactly one thing: the
+ * final segment of a history that never finished, resumed through a view of
+ * that segment alone. A new entry starts at the physical end with the root
+ * bindings every earlier entry durably published, derived from the live head of
+ * the file rather than from this process's memory or from whatever prefix
+ * somebody is inspecting.
  *
  * ## Cold opening commits nothing until everything succeeded
  *
@@ -54,7 +73,7 @@ import {
 } from "effection";
 import type { Operation, Result, Stream, Task } from "effection";
 import { INLINE_SOURCE_PATH, inlineSource, validateDocument } from "@executablemd/core";
-import type { DocumentValidationDiagnostic, PermissionMode } from "@executablemd/core";
+import type { DocumentValidationDiagnostic, Json, PermissionMode } from "@executablemd/core";
 import { executeInstalled } from "@executablemd/core/host";
 import type {
   ExecutionDeclaration,
@@ -77,11 +96,12 @@ import { consumeAdmissions } from "./admission.ts";
 import type { ReplAgentAuthority, ReplAgentReading } from "./agent.ts";
 import { useReplElicitation } from "./elicitation.ts";
 import type { ReplElicitations, ReplQuestion } from "./elicitation.ts";
+import { EntrySegmentStream, entryKey, partitionEntrySegments } from "./entries.ts";
 import { useExpansionController } from "./expansion.ts";
 import type { ExpansionController, ExpansionState } from "./expansion.ts";
 import type { ReplExecution } from "./journal.ts";
-import { projectRepl } from "./model.ts";
-import type { ReplModel } from "./model.ts";
+import { entryInitialBindings, projectRepl } from "./model.ts";
+import type { ReplEntry, ReplModel } from "./model.ts";
 
 /** A submitted entry this environment cannot run, refused before it is admitted. */
 export class ReplPreflightError extends Error {
@@ -104,6 +124,21 @@ export class ReplReconstructionError extends Error {
   constructor(message: string) {
     super(message);
     this.name = "ReplReconstructionError";
+  }
+}
+
+/**
+ * A submission this session cannot start, refused having started nothing.
+ *
+ * Separate from a preflight refusal, which is about the document, and from a
+ * reconstruction refusal, which is about the history: this one is about *when*.
+ * The same text is submittable once the entry before it has settled and its task
+ * has been joined.
+ */
+export class ReplLifecycleError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ReplLifecycleError";
   }
 }
 
@@ -169,7 +204,7 @@ export interface ReplSession {
    * thereby hold the capability that answers them.
    */
   readonly permissions: ReplAgentAuthority;
-  /** Whether an execution is still running in this process. */
+  /** Whether an entry's execution is still running in this process. */
   readonly live: boolean;
   /** Each reprojection, as the history grows under it. */
   readonly changes: Stream<ReplModel, never>;
@@ -183,8 +218,18 @@ export interface ReplSession {
    * shows text only when something unrelated happens to move.
    */
   readonly outputs: Stream<string, never>;
-  /** Wait for this process's execution to finish, and answer how it finished. */
+  /** Wait for the entry running in this process to finish, and answer how. */
   join(): Operation<Result<unknown>>;
+  /**
+   * Admit one more entry into this execution, or refuse and start nothing.
+   *
+   * Answers once that entry's work has reached past what the history retained —
+   * its first record, its first question or its own settlement — so a caller that
+   * is told `Ok` has an entry, not an intention. A refusal names why this is not
+   * a moment to submit and leaves the history, the running entry and the proposed
+   * source exactly as they were.
+   */
+  submit(source: string): Operation<Result<void>>;
 }
 
 /** What starting or reopening a session needs. */
@@ -206,7 +251,14 @@ export interface ReplSessionOptions {
   readonly permissionMode?: PermissionMode;
 }
 
-/** Submit one entry into an execution whose history is empty. */
+/**
+ * Submit one entry into an execution, opening the session that will own it.
+ *
+ * The convenience the command's first submission is made through: the session is
+ * opened over whatever the file holds, and the submitted source becomes the entry
+ * after the last one it admitted. A history whose final entry never settled is
+ * refused, because nothing may follow an entry that has no outcome.
+ */
 export function submitReplEntry(
   options: ReplSessionOptions & { readonly source: string },
 ): Operation<Result<ReplSession>> {
@@ -218,6 +270,19 @@ export function openReplSession(options: ReplSessionOptions): Operation<Result<R
   return start(options, undefined);
 }
 
+/** The one entry task a session owns, for as long as it owns one. */
+interface ReplEntryTask {
+  /** The admission-order key of the entry this task is running. */
+  readonly key: string;
+  readonly task: Task<void>;
+  /** Resolves once this entry's work has passed what its segment retained. */
+  readonly admitted: Operation<Result<void>>;
+  /** Resolves with how this entry's execution finished. */
+  readonly finished: Operation<Result<unknown>>;
+  admit(outcome: Result<void>): void;
+  settle(outcome: Result<unknown>): void;
+}
+
 function* start(
   options: ReplSessionOptions,
   submitted: string | undefined,
@@ -225,82 +290,70 @@ function* start(
   const { execution, includes, installations = [], selection, permissionMode } = options;
   const stream = execution.stream;
 
-  const projection = projectRepl(yield* stream.readAll(), selection);
+  const events = yield* stream.readAll();
+  const projection = projectRepl(events, selection);
   if (!projection.ok) {
     return projection;
   }
   let model = projection.value;
 
-  if (model.entries.length > 1) {
-    // This session owns one entry task, starts it from the whole physical
-    // stream, and has no way to tell a later entry's records from an earlier
-    // one's. The projector now reads a history holding several; serially
-    // *running* them is the lifecycle work this Story's next slice owns, and
-    // until it lands a session that accepted such a history would replay one
-    // entry's work as another's.
-    return Err(
-      new ReplReconstructionError(
-        "this execution's history holds more than one entry, which this version of the REPL " +
-          "cannot continue.",
-      ),
-    );
+  // The live head as well as the selected prefix. Which entries exist, which one
+  // is unfinished and what a successor inherits are facts about the file, and a
+  // reader standing at a historical position has changed none of them.
+  const atHead = selection === undefined ? projection : projectRepl(events);
+  if (!atHead.ok) {
+    return atHead;
   }
-  const admitted = model.entries[0]?.scope;
-  if (admitted !== undefined && submitted !== undefined) {
-    return Err(
-      new ReplReconstructionError(
-        "this execution has already admitted its entry, and an admitted entry is immutable.",
-      ),
-    );
+  const head = atHead.value;
+
+  // The ranges the file holds, which is what a segment view is cut from. The
+  // projection above already refused a prefix whose ranges are not ranges, so
+  // this agrees with it or nothing does.
+  const partitioned = partitionEntrySegments(events);
+  if (!partitioned.ok) {
+    return partitioned;
   }
-  if (admitted !== undefined && admitted.path !== INLINE_SOURCE_PATH) {
+  const segments = partitioned.value;
+
+  for (const entry of head.entries) {
+    if (entry.path !== INLINE_SOURCE_PATH) {
+      return Err(
+        new ReplReconstructionError(
+          "this history was written by something other than the REPL: its entry came from a file " +
+            "rather than from submitted text.",
+        ),
+      );
+    }
+  }
+
+  const last = head.entries[head.entries.length - 1];
+  if (submitted !== undefined && last !== undefined && !last.settled) {
     return Err(
-      new ReplReconstructionError(
-        "this history was written by something other than the REPL: its entry came from a file " +
-          "rather than from submitted text.",
+      new ReplLifecycleError(
+        `this execution's ${last.key} has not settled, so nothing can follow it. An entry ends ` +
+          "with its own outcome.",
       ),
     );
   }
 
-  const source = admitted?.source ?? submitted;
-  if (source === undefined) {
-    // Nothing admitted and nothing submitted: an empty execution waiting for an
-    // entry. There is no document to run, so there is nothing to admit either.
-    return Ok(idle(execution.id, model));
-  }
-  // Named again after the guard, because the execution below runs from a
-  // hoisted body and the narrowing does not reach it.
-  const entry: string = source;
+  /** The one unfinished final entry this session resumes, and its range. */
+  const finalSegment = segments[segments.length - 1];
+  const resumed =
+    submitted === undefined && last !== undefined && !last.settled && finalSegment !== undefined
+      ? { entry: last, segment: finalSegment }
+      : undefined;
 
   if (submitted !== undefined) {
-    // Validated against the vocabulary the execution will actually install, not
-    // against the bare registry: a host that declares `<Session>` to the
-    // execution would otherwise have every entry naming one refused here and
-    // run perfectly if it got past. Preflight and the run answer to one
-    // environment or preflight is describing a different document.
-    // In a scope of its own, because admitting a declaration in order to ask
-    // about it mints the durable identity domain that name answers under.
-    // Leaving that behind would have the execution resolve `<Session>` through
-    // preflight's admission while issuing its invocations under its own.
-    const validation = yield* scoped(function* () {
-      return yield* validateDocument({
-        ...inlineSource(submitted),
-        includes,
-        components: declaredComponents(installations),
-        declarations: declaredMarkdown(installations),
-      });
-    });
-    if (validation.outcome === "invalid") {
-      return Err(new ReplPreflightError(validation.diagnostics));
+    const validated = yield* preflight(submitted, includes, installations);
+    if (!validated.ok) {
+      return validated;
     }
   }
 
   const changes = createSignal<ReplModel, never>();
   const outputs = createSignal<string, never>();
-  let output = "";
-  let live = true;
-  const admission = withResolvers<Result<ReplSession>>();
-  let settled = false;
+  const opening = withResolvers<Result<ReplSession>>();
+  let answered = false;
 
   /**
    * Everything this session owns lives here, and nothing outside it does.
@@ -315,20 +368,35 @@ function* start(
   const [provisional, dispose] = createScope(yield* useScope());
 
   function refuse(error: Error): void {
-    if (!settled) {
-      settled = true;
-      admission.resolve(Err(error));
+    if (!answered) {
+      answered = true;
+      opening.resolve(Err(error));
     }
   }
 
   provisional.run(function* () {
     const expansion = yield* useExpansionController();
     const elicitation = yield* useReplElicitation();
-    // Created here and installed into the execution below, so the middleware it
-    // owns belongs to this session's scope and dies with it. An execution
-    // elsewhere would otherwise inherit an observer watching for a session that
-    // is gone.
+    // Created here and installed into each entry's execution below, so the
+    // middleware it owns belongs to this session's scope and dies with it. An
+    // execution elsewhere would otherwise inherit an observer watching for a
+    // session that is gone.
     const agent = yield* useReplAgent(permissionMode ?? "deny-all");
+    // The scope every entry task is started in. One session, one owner: a task
+    // started anywhere else would outlive the observer and the kernels it
+    // reports through.
+    const owner = yield* useScope();
+
+    /** Text the entry that is running has printed, which no record holds yet. */
+    let output = "";
+    /** Whether an entry's execution is still running in this process. */
+    let live = false;
+    /** The one entry task this session owns, or none. */
+    let running: ReplEntryTask | undefined;
+    /** Whether this session still starts entry tasks. */
+    let admitting = true;
+    /** How the last entry to finish finished. */
+    let finished: Result<unknown> | undefined;
 
     function reproject(): void {
       const next = projectRepl(retained, selection);
@@ -378,14 +446,241 @@ function* start(
       changes,
       outputs,
       join(): Operation<Result<unknown>> {
-        return task;
+        return joining();
+      },
+      submit(source: string): Operation<Result<void>> {
+        return submitting(source);
       },
     };
 
-    function admit(): void {
-      if (!settled) {
-        settled = true;
-        admission.resolve(Ok(session));
+    function open(): void {
+      if (!answered) {
+        answered = true;
+        opening.resolve(Ok(session));
+      }
+    }
+
+    /**
+     * Whichever entry is running has reached past what its segment retained.
+     *
+     * The same fact admits the session and answers the submission that started
+     * the entry: both are waiting to hear that replay got beyond the records
+     * that were already there.
+     */
+    function reached(): void {
+      running?.admit(Ok(undefined));
+      open();
+    }
+
+    function* joining(): Operation<Result<unknown>> {
+      const held = running;
+      if (held === undefined) {
+        return finished ?? Ok(undefined);
+      }
+      const outcome = yield* held.finished;
+      // The outcome and then the join, because they are two different moments:
+      // an execution whose root has closed is still releasing its providers, its
+      // middleware and anything it was holding. Halting a task that has already
+      // produced its outcome cancels nothing and waits for exactly that
+      // teardown, which is what a caller told "this entry is finished" needs.
+      yield* held.task.halt();
+      return outcome;
+    }
+
+    /**
+     * The live head a submission would follow, or why there is no following it.
+     *
+     * Three separate refusals, because they are three different situations a
+     * person is in: this session is ending, this session's entry is still
+     * running, or the history's last entry never produced an outcome. None of
+     * them is a queue — each leaves the proposed source with whoever proposed it.
+     */
+    function admissible(): Result<ReplModel> {
+      if (!admitting) {
+        return Err(
+          new ReplLifecycleError("this session is ending, so it starts no further entry."),
+        );
+      }
+      if (running !== undefined) {
+        return Err(
+          new ReplLifecycleError(
+            `this execution's ${running.key} has not finished, so there is nothing to submit into ` +
+              "yet. One entry runs at a time, and the next one starts after this one has ended.",
+          ),
+        );
+      }
+      const prefix = projectRepl(retained);
+      if (!prefix.ok) {
+        return prefix;
+      }
+      const latest = prefix.value.entries[prefix.value.entries.length - 1];
+      if (latest !== undefined && !latest.settled) {
+        return Err(
+          new ReplLifecycleError(
+            `this execution's ${latest.key} has not settled, so nothing can follow it.`,
+          ),
+        );
+      }
+      return prefix;
+    }
+
+    function* submitting(source: string): Operation<Result<void>> {
+      const before = admissible();
+      if (!before.ok) {
+        return before;
+      }
+      const validated = yield* preflight(source, includes, installations);
+      if (!validated.ok) {
+        return validated;
+      }
+      // Asked again, because validating suspended. What a submission needs to be
+      // true is true at the moment the task starts, not at the moment somebody
+      // pressed a key — a session that began tearing down in between starts
+      // nothing.
+      const after = admissible();
+      if (!after.ok) {
+        return after;
+      }
+      const started = begin(
+        entryKey(after.value.entries.length + 1),
+        source,
+        new EntrySegmentStream(stream),
+        // From the live head of the file, and from nothing else: not from what
+        // this process remembers of the entry that just ran, and not from the
+        // prefix somebody happens to be inspecting.
+        entryInitialBindings(after.value),
+      );
+      return yield* started.admitted;
+    }
+
+    /**
+     * Start one entry's task, and own it until it has torn down and joined.
+     *
+     * The occupancy is taken here, synchronously, before anything suspends: a
+     * second submission arriving in the same turn finds this session occupied
+     * rather than starting beside it.
+     */
+    function begin(
+      key: string,
+      source: string,
+      view: EntrySegmentStream,
+      initialBindings: Readonly<Record<string, Json>>,
+    ): ReplEntryTask {
+      const admission = withResolvers<Result<void>>();
+      const completion = withResolvers<Result<unknown>>();
+      let admitted = false;
+      let settled = false;
+      function admit(outcome: Result<void>): void {
+        if (!admitted) {
+          admitted = true;
+          admission.resolve(outcome);
+        }
+      }
+      function settle(outcome: Result<unknown>): void {
+        if (!settled) {
+          settled = true;
+          finished = outcome;
+          completion.resolve(outcome);
+        }
+      }
+      // This entry's own overlay, from here: what the entry before it printed is
+      // not what this one has printed, and the Journal holds that one's anyway.
+      output = "";
+      live = true;
+      const task = owner.run(function* () {
+        // Released last, because destructors run in reverse order of
+        // registration: by the time this runs, the execution this task started
+        // has been torn down and every provider, held permission and piece of
+        // middleware it installed is gone. That is what makes the next entry's
+        // start a start rather than an overlap.
+        //
+        // And released only for an entry that reached an outcome of its own. A
+        // task halted — by this session's teardown, or by a failure that
+        // withdrew its authority — leaves the slot occupied, so nothing can
+        // follow an entry that was interrupted, whatever order the surrounding
+        // destructors happen to run in.
+        yield* ensure(() => {
+          if (running?.task === task && settled) {
+            running = undefined;
+          }
+        });
+        const outcome = yield* runEntry(key, source, view, initialBindings);
+        settle(outcome);
+        // A settled entry is past whatever its segment retained, whichever way
+        // it settled — including a failure that appended nothing at all, which
+        // is still an answer to the submission that asked for it.
+        admit(outcome.ok ? Ok(undefined) : Err(outcome.error));
+      });
+      const started: ReplEntryTask = {
+        key,
+        task,
+        admitted: admission.operation,
+        finished: completion.operation,
+        admit,
+        settle,
+      };
+      running = started;
+      return started;
+    }
+
+    function* runEntry(
+      key: string,
+      source: string,
+      view: EntrySegmentStream,
+      initialBindings: Readonly<Record<string, Json>>,
+    ): Operation<Result<unknown>> {
+      try {
+        const started = yield* executeInstalled(
+          {
+            ...inlineSource(source),
+            // This entry's own range of the one physical stream. An execution
+            // handed the file would replay another entry's records as its own,
+            // because a root import and a coroutine id mean the same thing in
+            // every entry.
+            stream: view,
+            ...(includes === undefined ? {} : { includes: [...includes] }),
+          },
+          // Installed into this exact execution, and nowhere else: the live
+          // observer and the permission policy are this session's, not the
+          // process's, and the installation carries the entry whose turns they
+          // are.
+          [...installations, agent.owning(key)],
+          { initialBindings },
+        );
+        // Consumed as it arrives, inside this session's scope. Collecting until
+        // the stream closed would leave the overlay empty for the whole of the
+        // run and fill it in at the end, which is the opposite of what an
+        // overlay is for: what it shows is what the document has rendered
+        // *so far*.
+        yield* spawn(function* () {
+          const chunks = yield* started.output;
+          let next = yield* chunks.next();
+          while (!next.done) {
+            output += next.value;
+            // Announced, not merely accumulated: nothing else will say that the
+            // overlay moved, because output the Journal has not settled leaves
+            // no record to reproject from.
+            outputs.send(output);
+            next = yield* chunks.next();
+          }
+        });
+        const outcome = yield* started;
+        live = false;
+        if (!outcome.ok && isReconstructionFailure(outcome.error)) {
+          refuse(outcome.error);
+          return outcome;
+        }
+        open();
+        return outcome;
+      } catch (error) {
+        live = false;
+        const raised = error instanceof Error ? error : new Error(String(error));
+        if (isReconstructionFailure(raised)) {
+          refuse(raised);
+        } else {
+          open();
+        }
+        return Err(raised);
       }
     }
 
@@ -409,40 +704,21 @@ function* start(
       }
       reproject();
       agent.announce();
-      admit();
+      reached();
     };
 
     // Registered before the callback is published, and removing exactly the one
     // this session installed. The stream outlives the session that was watching
     // it — a repository hands the same stream to whoever opens the execution
     // next — so a callback left behind would reproject into, and signal, a
-    // session whose scope is gone.
+    // session whose scope is gone. One observer for the whole session, whatever
+    // number of entries it goes on to run.
     yield* ensure(() => {
       if (stream.onAppend === observe) {
         stream.onAppend = null;
       }
     });
     stream.onAppend = observe;
-
-    /**
-     * How this session finished: the execution's own outcome, or the first
-     * failure that withdrew its authority.
-     *
-     * Settled once, by whichever happened first. A withdrawn session may not be
-     * left waiting on the work it withdrew authority from, so the watcher below
-     * halts the execution and waits for it before answering — which is what
-     * makes the provider turn, the held permission wait and the execution task
-     * all gone by the time `join()` returns. A later failure cannot replace the
-     * first one, because by then there is nothing left for it to describe.
-     */
-    const finished = withResolvers<Result<unknown>>();
-    let answered = false;
-    function settle(outcome: Result<unknown>): void {
-      if (!answered) {
-        answered = true;
-        finished.resolve(outcome);
-      }
-    }
 
     // Both subscriptions belong to this scope, and both exist before the
     // document can publish anything. `spawn()` returns before its child body
@@ -464,86 +740,71 @@ function* start(
       return question !== undefined;
     })(elicitation.changes);
 
-    const document: Task<Result<unknown>> = yield* spawn(function* () {
-      const outcome = yield* runExecution();
-      settle(outcome);
-      return outcome;
-    });
-
-    yield* spawn(function* () {
-      const error = yield* agent.failed;
-      live = false;
-      admit();
-      // Halted and joined before the failure is answered, in that order.
-      yield* document.halt();
-      settle(Err(error));
-    });
-
-    const task: Operation<Result<unknown>> = finished.operation;
-
-    function* runExecution(): Operation<Result<unknown>> {
-      try {
-        const running = yield* executeInstalled(
-          {
-            ...inlineSource(entry),
-            stream,
-            ...(includes === undefined ? {} : { includes: [...includes] }),
-          },
-          // Installed into this exact execution, and nowhere else: the live
-          // observer and the permission policy are this session's, not the
-          // process's.
-          [...installations, agent.installation],
-        );
-        // Consumed as it arrives, inside this session's scope. Collecting until
-        // the stream closed would leave the overlay empty for the whole of the
-        // run and fill it in at the end, which is the opposite of what an
-        // overlay is for: what it shows is what the document has rendered
-        // *so far*.
-        yield* spawn(function* () {
-          const chunks = yield* running.output;
-          let next = yield* chunks.next();
-          while (!next.done) {
-            output += next.value;
-            // Announced, not merely accumulated: nothing else will say that the
-            // overlay moved, because output the Journal has not settled leaves
-            // no record to reproject from.
-            outputs.send(output);
-            next = yield* chunks.next();
-          }
-        });
-        const outcome = yield* running;
-        live = false;
-        if (!outcome.ok && isReconstructionFailure(outcome.error)) {
-          refuse(outcome.error);
-          return outcome;
-        }
-        admit();
-        return outcome;
-      } catch (error) {
-        live = false;
-        const raised = error instanceof Error ? error : new Error(String(error));
-        if (isReconstructionFailure(raised)) {
-          refuse(raised);
-        } else {
-          admit();
-        }
-        return Err(raised);
-      }
-    }
-
     // A queued Agent turn is work beyond the retained prefix, exactly as a new
     // record or a question is: replay that reached one is past what the history
     // held, so the session is admitted rather than still provisional.
-    yield* spawn(consumeAdmissions(agentReadings, admit));
-    yield* spawn(consumeAdmissions(questions, admit));
+    yield* spawn(consumeAdmissions(agentReadings, reached));
+    yield* spawn(consumeAdmissions(questions, reached));
 
-    // Held open deliberately. This body owns the observer and both tasks, and
+    yield* spawn(function* () {
+      const error = yield* agent.failed;
+      // A journal this process can no longer reconcile is not one to add to, so
+      // a session failure withdraws the authority to start anything else as well
+      // as ending what was running. Halted and joined before the failure is
+      // answered, in that order.
+      admitting = false;
+      live = false;
+      open();
+      const held = running;
+      if (held !== undefined) {
+        yield* held.task.halt();
+        held.settle(Err(error));
+      }
+    });
+
+    if (resumed !== undefined) {
+      // Only the one segment that never finished, and only ever that one. A
+      // settled range is read by the projector and handed to nobody: replaying
+      // it would re-run work the file already records, and correlate one entry's
+      // coroutines against another's.
+      begin(
+        resumed.entry.key,
+        resumed.entry.source,
+        new EntrySegmentStream(stream, { retained: resumed.segment.events, final: true }),
+        entryInitialBindings(head, resumed.entry),
+      );
+    } else if (submitted !== undefined) {
+      begin(
+        entryKey(head.entries.length + 1),
+        submitted,
+        new EntrySegmentStream(stream),
+        entryInitialBindings(head),
+      );
+    } else {
+      // Nothing to run. Every entry this history holds has settled, so the
+      // reading of them is the whole answer and the session opens at once.
+      open();
+    }
+
+    // Registered last so that it runs first: destructors run in reverse order,
+    // and a submission racing this teardown has to find the door already shut
+    // rather than start a task into a scope that is going away. Only then is the
+    // entry that was running halted and joined.
+    yield* ensure(function* () {
+      admitting = false;
+      const held = running;
+      if (held !== undefined) {
+        yield* held.task.halt();
+      }
+    });
+
+    // Held open deliberately. This body owns the observer and every task, and
     // finishing it would halt them — so it lasts as long as the scope does, and
     // the scope lasts as long as the session is wanted.
     yield* suspend();
   });
 
-  const opened = yield* admission.operation;
+  const opened = yield* opening.operation;
   if (!opened.ok) {
     // Before the refusal is returned, not after: the caller is about to be told
     // there is no session, and everything this one started has to be gone by
@@ -554,17 +815,37 @@ function* start(
   return opened;
 }
 
-const EMPTY_AGENT_READING: ReplAgentReading = Object.freeze({
-  turns: Object.freeze([]),
-  requests: Object.freeze([]),
-  slots: Object.freeze([]),
-});
-
-/** No live request exists, so no key settles one. */
-const IDLE_PERMISSIONS: ReplAgentAuthority = Object.freeze({
-  choose: () => false,
-  dismiss: () => false,
-});
+/**
+ * Whether this environment can run one submitted document at all.
+ *
+ * Validated against the vocabulary the execution will actually install, not
+ * against the bare registry: a host that declares `<Session>` to the execution
+ * would otherwise have every entry naming one refused here and run perfectly if
+ * it got past. Preflight and the run answer to one environment or preflight is
+ * describing a different document.
+ *
+ * In a scope of its own, because admitting a declaration in order to ask about
+ * it mints the durable identity domain that name answers under. Leaving that
+ * behind would have the execution resolve `<Session>` through preflight's
+ * admission while issuing its invocations under its own.
+ */
+function* preflight(
+  source: string,
+  includes: readonly string[] | undefined,
+  installations: readonly ExecutionInstallation[],
+): Operation<Result<void>> {
+  const validation = yield* scoped(function* () {
+    return yield* validateDocument({
+      ...inlineSource(source),
+      includes,
+      components: declaredComponents(installations),
+      declarations: declaredMarkdown(installations),
+    });
+  });
+  return validation.outcome === "invalid"
+    ? Err(new ReplPreflightError(validation.diagnostics))
+    : Ok(undefined);
+}
 
 /** Every identity component these installations declare, in installation order. */
 function declaredComponents(
@@ -587,37 +868,6 @@ function declaredMarkdown(
   return installations.flatMap((installation) =>
     (installation.declarations ?? []).map((declaration) => ({ ...declaration })),
   );
-}
-
-/** An execution with no entry yet: a draft surface and nothing running. */
-function idle(execution: string, model: ReplModel): ReplSession {
-  const changes = createSignal<ReplModel, never>();
-  const elicitation: ReplElicitations = {
-    pending: undefined,
-    changes: createSignal<ReplQuestion | undefined, never>(),
-    asked: 0,
-  };
-  return {
-    execution,
-    model,
-    overlay: { output: "", question: undefined, expansion: "playing", draft: undefined },
-    expansion: { state: "playing", states: createSignal<ExpansionState, never>() },
-    // Nothing is expanding, so there is nothing to pause or continue.
-    controller: undefined,
-    elicitation,
-    // Nothing is running, so there is no live Agent work and nothing to settle.
-    agent: EMPTY_AGENT_READING,
-    agentChanges: createSignal<ReplAgentReading, never>(),
-    permissions: IDLE_PERMISSIONS,
-    live: false,
-    changes,
-    // Nothing is running, so nothing will ever write.
-    outputs: createSignal<string, never>(),
-    // deno-lint-ignore require-yield
-    *join(): Operation<Result<unknown>> {
-      return Ok(undefined);
-    },
-  };
 }
 
 /**

@@ -62,6 +62,7 @@ import { openReplSession, submitReplEntry } from "../src/repl/session.ts";
 import type { ReplSession } from "../src/repl/session.ts";
 import { useReplAgent } from "../src/repl/agent.ts";
 import type { ReplAgentKernel, ReplAgentReading } from "../src/repl/agent.ts";
+import { projectRepl } from "../src/repl/model.ts";
 import type { ReplAgentPermission } from "../src/repl/model.ts";
 import type { ReplExecution } from "../src/repl/journal.ts";
 
@@ -1750,4 +1751,188 @@ describe("P6 — only a canonical Prompt claims a record", () => {
       expect(session.agent.turns).toEqual([]);
     });
   }
+});
+
+/** One prompt in a named conversation, which is what makes two entries share one. */
+function onePromptIn(text: string): string {
+  return `<Session name="planner"><Prompt text="${text}" /></Session>\n`;
+}
+
+/** Two prompts in that conversation, which one entry records as sequence 0 and 1. */
+function twoPromptsIn(first: string, second: string): string {
+  return [
+    `<Session name="planner"><Prompt text="${first}" /></Session>`,
+    `<Session name="planner"><Prompt text="${second}" /></Session>`,
+    "",
+  ].join("\n");
+}
+
+function admitted(result: Result<void>): void {
+  if (!result.ok) {
+    throw result.error;
+  }
+}
+
+/**
+ * The same journal with its last recorded prompt claiming an earlier sequence.
+ *
+ * Doctored, because no run writes it: a sequence counts the Prompts of one
+ * execution, so one entry holding a value twice is damage to the file rather than
+ * anything a second entry could cause.
+ */
+function resequenced(events: readonly DurableEvent[], sequence: number): DurableEvent[] {
+  const last = events.reduce(
+    (at, event, index) =>
+      event.type === "yield" && event.description.type === "agent_prompt" ? index : at,
+    -1,
+  );
+  if (last === -1) {
+    throw new Error("this journal records no agent prompt");
+  }
+  return events.map((event, index) => {
+    if (index !== last || event.type !== "yield" || event.result.status !== "ok") {
+      return event;
+    }
+    const held = event.result.value;
+    if (held === null || typeof held !== "object" || Array.isArray(held)) {
+      throw new Error("a recorded prompt retains a record");
+    }
+    const doctored: DurableEvent = {
+      ...event,
+      result: { status: "ok", value: { ...held, sequence } },
+    };
+    return doctored;
+  });
+}
+
+describe("EA1 — one chronology of entries, each counting its own Prompts", () => {
+  beforeAll(() => useTempFileCompiler());
+
+  it("EA1: two entries each retain sequence 0, ordered by entry and then sequence", function* () {
+    const holder = execution();
+    const stub = createStub();
+    yield* scoped(function* () {
+      yield* useStub(stub);
+      const session = opened(yield* start(holder, twoPromptsIn("one", "two")));
+      yield* session.join();
+      admitted(yield* session.submit(twoPromptsIn("three", "four")));
+      yield* session.join();
+
+      expect(session.model.turns.map((turn) => [turn.entry, turn.sequence, turn.input])).toEqual([
+        ["entry-1", 0, "one"],
+        ["entry-1", 1, "two"],
+        ["entry-2", 0, "three"],
+        ["entry-2", 1, "four"],
+      ]);
+      // Each entry counts its own Prompts from zero, so one global sort by
+      // sequence would interleave the two entries instead of following them.
+      expect(
+        session.model.entries.map((entry) => entry.turns.map((turn) => turn.sequence)),
+      ).toEqual([
+        [0, 1],
+        [0, 1],
+      ]);
+    });
+  });
+
+  it("EA1: two prompts in one entry claiming one sequence refuse the whole projection", function* () {
+    const holder = execution();
+    const stub = createStub();
+    yield* scoped(function* () {
+      yield* useStub(stub);
+      const session = opened(yield* start(holder, twoPromptsIn("one", "two")));
+      yield* session.join();
+      expect(session.model.turns.map((turn) => turn.sequence)).toEqual([0, 1]);
+    });
+
+    const result = projectRepl(resequenced(yield* holder.stream.readAll(), 0));
+    expect(result.ok).toBe(false);
+    // Atomically: there is no value to read at all, rather than a model holding
+    // whichever turns happened to be unambiguous.
+    expect(Object.hasOwn(result, "value")).toBe(false);
+    expect(result.ok ? "" : result.error.message).toContain("claim sequence 0");
+  });
+
+  it("EA1: a live turn carries the entry that began it, and keeps it on publication", function* () {
+    const holder = execution();
+    const stub = createStub({ one: { gated: true }, two: { gated: true } });
+    yield* scoped(function* () {
+      yield* useStub(stub);
+      const session = opened(yield* start(holder, onePromptIn("one")));
+      const recorded = watchAppends(holder);
+      yield* stub.arrival("one");
+
+      // Live, before anything retains it: the turn names the entry whose
+      // execution began it.
+      expect(session.agent.turns.map((turn) => [turn.entry, turn.prompt])).toEqual([
+        ["entry-1", "one"],
+      ]);
+      stub.release("one");
+      yield* recorded(1);
+      yield* session.join();
+
+      // Published: the slot keeps its place and its entry, and so does the facts
+      // it published with.
+      expect(session.agent.slots.map((slot) => [slot.entry, slot.order])).toEqual([["entry-1", 1]]);
+      expect(session.agent.slots[0]?.last?.entry).toBe("entry-1");
+
+      admitted(yield* session.submit(onePromptIn("two")));
+      yield* stub.arrival("two");
+
+      // The entry that is running now is entry-2, and the first entry's slot
+      // still says entry-1: which entry a turn belongs to is not which entry is
+      // current.
+      expect(session.agent.slots.map((slot) => [slot.entry, slot.order])).toEqual([
+        ["entry-1", 1],
+        ["entry-2", 2],
+      ]);
+      expect(session.agent.turns.map((turn) => [turn.entry, turn.prompt])).toEqual([
+        ["entry-2", "two"],
+      ]);
+
+      stub.release("two");
+      yield* recorded(2);
+      yield* session.join();
+
+      // And each record that replaced a live turn belongs to the entry that turn
+      // did, at the position it held.
+      expect(session.model.turns.map((turn) => [turn.entry, turn.sequence, turn.input])).toEqual([
+        ["entry-1", 0, "one"],
+        ["entry-2", 0, "two"],
+      ]);
+      expect(session.agent.slots.map((slot) => [slot.entry, slot.order])).toEqual([
+        ["entry-1", 1],
+        ["entry-2", 2],
+      ]);
+    });
+  });
+
+  it("EA1: one conversation spans two entries, and naming an entry does not narrow it", function* () {
+    const holder = execution();
+    const stub = createStub();
+    yield* scoped(function* () {
+      yield* useStub(stub);
+      const session = opened(yield* start(holder, onePromptIn("one")));
+      yield* session.join();
+      admitted(yield* session.submit(onePromptIn("two")));
+      yield* session.join();
+
+      // One conversation, because the provider named one key across both
+      // entries — and the key is the only thing the grouping reads.
+      expect(session.model.sessions.map((one) => one.sessionKey)).toEqual(["stub:planner"]);
+      expect(session.model.sessions[0].turns.map((turn) => [turn.entry, turn.sequence])).toEqual([
+        ["entry-1", 0],
+        ["entry-2", 0],
+      ]);
+      // Each entry identifies its own turn, and the execution-wide chronology
+      // still holds both: reading one entry does not make the conversation a
+      // reading of that entry.
+      expect(session.model.entries.map((entry) => entry.turns.map((turn) => turn.entry))).toEqual([
+        ["entry-1"],
+        ["entry-2"],
+      ]);
+      expect(session.model.turns).toHaveLength(2);
+      expect(session.model.sessions[0].turns).toHaveLength(2);
+    });
+  });
 });

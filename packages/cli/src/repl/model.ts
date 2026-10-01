@@ -172,6 +172,16 @@ export interface ReplAgentConfiguration {
  */
 export interface ReplAgentTurn {
   readonly marker: string;
+  /**
+   * The admission-order key of the entry whose execution recorded this turn.
+   *
+   * Carried rather than inferred. A sequence counts the Prompts of one entry and
+   * restarts for the next, so the pair of entry and sequence is what names a
+   * turn across the whole history — and the entry a turn belongs to is the one
+   * whose range its record landed in, never the latest one, the one a reader has
+   * selected or the one that happened to finish first.
+   */
+  readonly entry: string;
   /** The order this turn ran in, as its record states it. */
   readonly sequence: number;
   /** The durable name the Prompt was journaled under. */
@@ -345,7 +355,13 @@ export interface ReplModel {
   readonly terminal: ReplTerminal | undefined;
   readonly checkpoints: readonly ReplCheckpoint[];
   readonly transcript: readonly ReplRow[];
-  /** Every retained turn, in Prompt sequence order. */
+  /**
+   * Every retained turn, in entry admission order and then Prompt sequence.
+   *
+   * Two orders rather than one, because a sequence is local to the entry that
+   * recorded it: both entries of a two-entry history may hold sequence `0`, and
+   * a single global sort would interleave them.
+   */
   readonly turns: readonly ReplAgentTurn[];
   /**
    * The conversations those turns belong to.
@@ -445,13 +461,19 @@ export function projectRepl(
 }
 
 /**
- * The root bindings a next entry would start from.
+ * The root bindings one entry starts from.
  *
- * The last durably published value for each root name across every entry this
- * prefix holds, in the record shape the trusted-host entrypoint takes. Read off
- * the projection and off nothing a process remembers: the same Journal prefix
- * produces the same record in a cold command, which is what makes an inherited
- * value a fact about the history rather than about whoever happened to run it.
+ * The last durably published value for each root name across every entry
+ * admitted *before* that one, in the record shape the trusted-host entrypoint
+ * takes. Named `entry` is the entry about to start or resume; absent, it is the
+ * entry that would follow the last one this prefix holds. An entry never seeds
+ * itself, so a history reopened at an unfinished final segment hands its
+ * execution exactly what its first run was handed.
+ *
+ * Read off the projection and off nothing a process remembers: the same Journal
+ * prefix produces the same record in a cold command, which is what makes an
+ * inherited value a fact about the history rather than about whoever happened to
+ * run it.
  *
  * Every name here is one an eval block could bind, because the projection
  * refused the record otherwise, and `props` is not here at all — the entries it
@@ -462,10 +484,17 @@ export function projectRepl(
  * defines it: assignment reaches `Object.prototype`'s inherited setter and would
  * drop the name while replacing the prototype.
  */
-export function entryInitialBindings(model: ReplModel): Readonly<Record<string, Json>> {
+export function entryInitialBindings(
+  model: ReplModel,
+  entry?: ReplEntry,
+): Readonly<Record<string, Json>> {
   const record: { [key: string]: Json } = {};
-  const last = model.entries[model.entries.length - 1];
-  for (const binding of last?.bindings ?? []) {
+  // The entry itself rather than its key, so there is no spelling that names no
+  // entry and quietly inherits nothing. Admission order counts from one, so the
+  // entry before `order` is at `order - 2`, and the first entry has none.
+  const before =
+    entry === undefined ? model.entries[model.entries.length - 1] : model.entries[entry.order - 2];
+  for (const binding of before?.bindings ?? []) {
     Object.defineProperty(record, binding.name, {
       value: binding.value,
       enumerable: true,
@@ -1018,6 +1047,7 @@ function buildEntry(segment: EntrySegment, markers: readonly string[]): Result<E
       }
       const turn = agentTurn(
         marker,
+        segment.key,
         owner.value.scope.key,
         owner.value.position,
         description.name,
@@ -1079,6 +1109,7 @@ function buildEntry(segment: EntrySegment, markers: readonly string[]): Result<E
  */
 function agentTurn(
   marker: string,
+  entry: string,
   scope: string,
   position: ReplPosition,
   name: string,
@@ -1087,6 +1118,7 @@ function agentTurn(
 ): ReplAgentTurn {
   return freeze({
     marker,
+    entry,
     sequence: record.sequence,
     name,
     input,
