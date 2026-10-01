@@ -875,7 +875,9 @@ describe("J2 — three conversations at once, through the terminal", () => {
       // The route gained the session and nothing else: the surface, the entry
       // and the history position it was standing on are the same terms.
       expect(locationRow(terminal)).toBe(`${unfiltered}?session=${sessionOf(terminal)}`);
-      expect(shows(terminal, "1. entry-1")).toBe(true);
+      // Its row, whatever it has settled to: what this asserts is that the
+      // catalog holds the entry, not what became of it.
+      expect(shows(terminal, "] entry-1")).toBe(true);
       const standing = locationRow(terminal);
       // Where the person is standing now: on the control they just chose.
       const focused = focusedRow(terminal);

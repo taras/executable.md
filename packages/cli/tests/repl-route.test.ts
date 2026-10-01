@@ -163,7 +163,7 @@ describe("REPL route: the grammar", () => {
       "scopes precede its drawers",
     );
     expect(refused(`xmd://repl/${EXECUTION}/repl/entry-1/+notes`)).toContain("names a drawer");
-    expect(refused(`xmd://repl/${EXECUTION}/sessions/entry-1`)).toContain("Sessions surface");
+    expect(refused(`xmd://repl/${EXECUTION}/sessions/+binding:plan`)).toContain("Sessions surface");
     expect(refused(`xmd://repl/${EXECUTION}/repl?pause=1`)).toContain("query");
     expect(refused(`xmd://repl/${EXECUTION}/repl#top`)).toContain("no fragment");
     expect(refused("xmd://repl/../repl")).toContain("opaque identifier");
@@ -175,8 +175,16 @@ describe("REPL route: the grammar", () => {
 
     expect(() => encodeLocation({ ...route, at: undefined })).toThrow();
     expect(() => encodeLocation({ ...route, execution: "../escape" })).toThrow();
+    // Superseded: a selected entry beside the Sessions surface used to be
+    // unspellable. Which surface is being read and which entry is selected are
+    // independent members of one location (#827 Slice C), so what cannot be
+    // spelled on Sessions is a drawer that opens over a scope.
     expect(() =>
-      encodeLocation({ ...route, surface: "sessions", at: undefined, inspect: false }),
+      encodeLocation({
+        ...route,
+        surface: "sessions",
+        drawers: Object.freeze([{ kind: "binding", name: "plan" } as const]),
+      }),
     ).toThrow();
   });
 
@@ -493,8 +501,11 @@ describe("REPL route: the conversation filter", () => {
     expect(refused(`xmd://repl/${EXECUTION}/sessions?session`)).toContain("query");
     expect(refused(`xmd://repl/${EXECUTION}/sessions?session=%zz`)).toContain("query");
     // Not a path segment. A conversation is a filter over what Sessions lists,
-    // not a place inside it, and a segment would make one URL mean two things.
-    expect(refused(`xmd://repl/${EXECUTION}/sessions/xmd:v1:a`)).toContain("Sessions surface");
+    // and a path segment is the entry a reader will come back to — so one URL
+    // still means one thing, and spelling a key there selects no conversation.
+    const segmented = decoded(`xmd://repl/${EXECUTION}/sessions/xmd:v1:a`);
+    expect(segmented.session).toBe(undefined);
+    expect(segmented.scopes).toEqual(["xmd:v1:a"]);
 
     const route = decoded(`xmd://repl/${EXECUTION}/sessions?session=one`);
     expect(() => encodeLocation({ ...route, session: "" })).toThrow();

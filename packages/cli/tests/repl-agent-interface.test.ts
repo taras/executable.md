@@ -3120,6 +3120,14 @@ describe("U9 — two entries whose Prompts share one durable name", () => {
   });
 });
 
+/** The transcript lines one view draws, in order, excluding the live overlay. */
+function transcriptLines(view: ReplView): string[] {
+  return rowsOf(describeApplication(view))
+    .filter((one) => one.key.startsWith("line:") && !one.key.startsWith("line:live:"))
+    .map((one) => one.label.trim())
+    .filter((label) => label.length > 0);
+}
+
 /** The catalog rows one view describes, in the order it describes them. */
 function catalogRows(view: ReplView): Array<{ key: string; label: string }> {
   return rowsOf(describeApplication(view)).filter((one) => one.key.startsWith("entry:"));
@@ -3179,10 +3187,27 @@ describe("EU1 — selecting an entry moves the transcript locus and nothing else
     const selected = acted(standing, { kind: "select-scope", scopes: ["entry-2"] }, session);
     const after = reading(selected, session);
 
-    // The locus moved, and that is the whole of what moved.
+    // The locus moved, and the transcript moved with it — which is what
+    // "selecting an entry changes the transcript locus" means. Asserting the
+    // route alone would leave both entries' rows concatenated under either
+    // selection and call it a pass.
     expect(after.selection.entry?.key).toBe("entry-2");
     expect(after.selection.scope?.key).toBe("entry-2");
     expect(before.selection.entry?.key).toBe("entry-1");
+    const firstRows = transcriptLines(before);
+    const secondRows = transcriptLines(after);
+    expect(firstRows.length).toBeGreaterThan(0);
+    expect(secondRows.length).toBeGreaterThan(0);
+    expect(firstRows).not.toEqual(secondRows);
+    // Each is that entry's own reading and holds nothing of the other's: the
+    // two turns say different things, so a concatenated transcript would show
+    // both under both. Matched on the whole answer rather than on the word in
+    // it — `import_component` contains "one", and a looser matcher passes this
+    // row for the wrong reason.
+    expect(firstRows).toContain("one done");
+    expect(firstRows).not.toContain("two done");
+    expect(secondRows).toContain("two done");
+    expect(secondRows).not.toContain("one done");
 
     // The draft, the marker, the surface and the conversation filter all stand.
     expect(selected.draft).toBe("the next one");

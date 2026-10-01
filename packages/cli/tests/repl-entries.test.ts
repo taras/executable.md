@@ -2119,3 +2119,256 @@ describe("REPL entries: the catalog a person reads and reaches", () => {
     ).not.toEqual(catalogOf(reading(narrow, model, NOTHING_LIVE, WIDE)).map((one) => one.key));
   });
 });
+
+/**
+ * One entry that prints before it waits on a question.
+ *
+ * The prose above the question is output the Journal has not settled, so a
+ * session holding this entry at its question has a real live overlay — which
+ * is the thing a reader looking at an *earlier* entry must not be shown.
+ */
+const PRINTS_THEN_ASKS = [
+  "CHARLIE-LIVE",
+  "",
+  "```js eval",
+  "const schema = {",
+  '  type: "object",',
+  '  properties: { decision: { type: "string", enum: ["go"] } },',
+  '  required: ["decision"],',
+  "  additionalProperties: false,",
+  "};",
+  "```",
+  "",
+  '<Elicit schema={schema} as="answer">Go?</Elicit>',
+  "",
+].join("\n");
+
+/** One entry whose output names itself and nothing else. */
+function saying(what: string): string {
+  return `${what}\n`;
+}
+
+/** The transcript lines this view draws, in order. */
+function transcriptOf(view: ReplView): string[] {
+  return rowsOf(describeApplication(view))
+    .filter((one) => one.key.startsWith("line:") && !one.key.startsWith("line:live:"))
+    .map((one) => one.label.trim())
+    .filter((label) => label.length > 0);
+}
+
+/** The live overlay lines this view draws, in order. */
+function overlayOf(view: ReplView): string[] {
+  return rowsOf(describeApplication(view))
+    .filter((one) => one.key.startsWith("line:live:"))
+    .map((one) => one.label.trim());
+}
+
+/** The Sessions rows this view draws, in order, with their labels. */
+function sessionsOf(view: ReplView): Array<{ key: string; label: string }> {
+  return rowsOf(describeApplication(view)).filter((one) => one.key.startsWith("sessions:"));
+}
+
+describe("REPL entries: the transcript belongs to the entry that is selected", () => {
+  beforeAll(() => useTempFileCompiler());
+
+  it("EU1: each entry shows its own retained transcript, and no other entry's", function* () {
+    const physical = new InMemoryStream();
+    yield* runEntry(physical, saying("ALPHA-ONE"));
+    yield* runEntry(physical, saying("BRAVO-TWO"));
+    const model = projected(yield* physical.readAll());
+    expect(model.entries.map((entry) => entry.key)).toEqual(["entry-1", "entry-2"]);
+
+    const standing = initialState(EXECUTION);
+    // Nothing selected is the whole execution, which is what a one-entry
+    // execution has always shown and what this must not change.
+    const whole = transcriptOf(reading(standing, model, NOTHING_LIVE, WIDE));
+    expect(whole).toContain("ALPHA-ONE");
+    expect(whole).toContain("BRAVO-TWO");
+
+    const first = transcriptOf(reading(selecting(standing, "entry-1"), model, NOTHING_LIVE, WIDE));
+    expect(first).toContain("ALPHA-ONE");
+    expect(first).not.toContain("BRAVO-TWO");
+
+    const second = transcriptOf(reading(selecting(standing, "entry-2"), model, NOTHING_LIVE, WIDE));
+    expect(second).toContain("BRAVO-TWO");
+    expect(second).not.toContain("ALPHA-ONE");
+
+    // Selecting is what moved it, and it really is a different reading rather
+    // than the same one twice.
+    expect(first).not.toEqual(second);
+  });
+
+  it("EU1: a live overlay belongs to the entry running it, not to the one being read", function* () {
+    const holder = replExecution();
+    yield* scoped(function* () {
+      const session = opened(
+        yield* submitReplEntry({ execution: holder, source: saying("ALPHA-ONE") }),
+      );
+      yield* session.join();
+      accepted(yield* session.submit(PRINTS_THEN_ASKS));
+      const question = yield* asking(session);
+
+      // A real overlay: the second entry has printed and the Journal has not
+      // settled that text, which is exactly the state this row is about.
+      const live = liveReading(session);
+      expect(live.output).toContain("CHARLIE-LIVE");
+      const model = session.model;
+      expect(model.entries.map((entry) => entry.key)).toEqual(["entry-1", "entry-2"]);
+
+      const standing = initialState(EXECUTION);
+      // Reading the entry that is running: the overlay is its own, so it shows.
+      const running = reading(selecting(standing, "entry-2"), model, live, WIDE);
+      expect(overlayOf(running)).toContain("… CHARLIE-LIVE");
+
+      // Reading the settled entry before it: the overlay is somebody else's
+      // run, and attributing it here would show text this entry never produced.
+      const earlier = reading(selecting(standing, "entry-1"), model, live, WIDE);
+      expect(overlayOf(earlier)).toEqual([]);
+      expect(transcriptOf(earlier)).toContain("ALPHA-ONE");
+      expect(transcriptOf(earlier)).not.toContain("CHARLIE-LIVE");
+
+      // With nothing selected the locus is the execution, which includes
+      // whatever is running in it — unchanged from a one-entry execution.
+      expect(overlayOf(reading(standing, model, live, WIDE))).toContain("… CHARLIE-LIVE");
+
+      // Sessions is execution-wide and the same reading under every selection,
+      // row for row and label for label.
+      const sessions = sessionsOf(reading(standing, model, live, WIDE));
+      expect(sessionsOf(running)).toEqual(sessions);
+      expect(sessionsOf(earlier)).toEqual(sessions);
+
+      question.submit({ decision: "go" });
+      yield* session.join();
+    });
+  });
+});
+
+describe("REPL entries: the catalog keeps its promise at the narrowest sidebar", () => {
+  beforeAll(() => useTempFileCompiler());
+
+  /** The widest sidebar is 32 and the narrowest is 28, so this is the frame to prove. */
+  const MEDIUM: ReplTerminalSize = { columns: 120, rows: 30 };
+
+  /** A root name longer than any sidebar, which is what the promise has to survive. */
+  const LONG = "a-root-name-nobody-would-choose-but-nothing-forbids";
+
+  it("EU1: every outcome stays inside the drawn row, whatever the entry is called", function* () {
+    // Four entries, one per outcome a reader has to tell apart. The cancelled
+    // close is doctored exactly as Slice A doctors it — cancelling a live run
+    // is the lifecycle boundary, and what this row is about is the drawing.
+    const physical = new InMemoryStream();
+    yield* runEntry(physical, saying("one"));
+    yield* runEntry(physical, FAILING);
+    yield* runEntry(physical, saying("three"));
+    yield* runEntry(physical, saying("four"));
+    const written = yield* physical.readAll();
+    const segments = partitioned(written);
+    const third = segments[2];
+    if (third === undefined) {
+      throw new Error("this journal holds four segments");
+    }
+    const events = withClose(written, third, cancelled("root"));
+    const model = projected(events);
+    expect(model.entries.map((entry) => entry.terminal?.status)).toEqual([
+      "ok",
+      "err",
+      "cancelled",
+      "ok",
+    ]);
+
+    // Every entry renamed to something no column can hold. The name is the
+    // model's, so this is done by reading the catalog against a model whose
+    // roots really are called that.
+    const named: ReplModel = Object.freeze({
+      ...model,
+      entries: Object.freeze(
+        model.entries.map((entry) =>
+          Object.freeze({
+            ...entry,
+            scope: Object.freeze({ ...entry.scope, name: `${LONG}-${entry.order}` }),
+          }),
+        ),
+      ),
+    });
+
+    const tree = yield* useReplTree<ReplAction>();
+    const view = reading(initialState(EXECUTION), named, NOTHING_LIVE, MEDIUM);
+    const frame = yield* drawn(tree, view, MEDIUM);
+
+    // Read from the placed cell, clipped to its own bounds: what a renderer may
+    // draw is exactly the text inside the region layout gave the row, so a
+    // promise that falls outside it is a promise this frame does not keep.
+    for (const [at, outcome] of ["ok", "err", "cancelled", "ok"].entries()) {
+      const key = `entry:entry-${at + 1}`;
+      const cell = placedFor(tree, frame, key);
+      if (cell === undefined) {
+        throw new Error(`this frame placed no cell for ${key}`);
+      }
+      const visible = cell.text.slice(0, cell.bounds.width);
+      expect([key, visible.includes(`[${outcome}]`)]).toEqual([key, true]);
+      // And the name really was too long to have left room after it.
+      expect([key, visible.includes(LONG)]).toEqual([key, false]);
+    }
+
+    // The fourth reading, from a prefix where the last entry has not closed.
+    const admission = model.entries[3]?.scope.marker;
+    if (admission === undefined) {
+      throw new Error("an admitted entry has an admission marker");
+    }
+    const open = projected(events, admission);
+    const renamedOpen: ReplModel = Object.freeze({
+      ...open,
+      entries: Object.freeze(
+        open.entries.map((entry) =>
+          Object.freeze({
+            ...entry,
+            scope: Object.freeze({ ...entry.scope, name: `${LONG}-${entry.order}` }),
+          }),
+        ),
+      ),
+    });
+    const frozen = frozenAt(initialState(EXECUTION), admission);
+    const openFrame = yield* drawn(
+      tree,
+      reading(frozen, renamedOpen, NOTHING_LIVE, MEDIUM),
+      MEDIUM,
+    );
+    const last = placedFor(tree, openFrame, "entry:entry-4");
+    if (last === undefined) {
+      throw new Error("this frame placed no cell for entry:entry-4");
+    }
+    expect(last.text.slice(0, last.bounds.width)).toContain("[unfinished]");
+  });
+});
+
+describe("REPL entries: going to Sessions keeps the entry you came from", () => {
+  beforeAll(() => useTempFileCompiler());
+
+  it("ER1: the selected entry survives both surfaces, and comes back with you", function* () {
+    const { events } = yield* twoEntries();
+    const model = projected(events);
+    const standing = selecting(drafting(initialState(EXECUTION), "next"), "entry-2");
+
+    // Going to Sessions keeps the entry. It used to be unspellable there, so
+    // the location this produced could not be encoded at all.
+    const sessions = acted(standing, { kind: "select-surface", surface: "sessions" }, model);
+    expect(sessions.route.surface).toBe("sessions");
+    expect(sessions.route.scopes).toEqual(["entry-2"]);
+    expect(sessions.draft).toBe("next");
+    const onSessions = reading(sessions, model, NOTHING_LIVE, WIDE);
+    expect(onSessions.location).toContain("/sessions/entry-2");
+    expect(onSessions.selection.entry?.key).toBe("entry-2");
+
+    // And coming back lands on the entry that was left, rather than on nothing.
+    const back = acted(sessions, { kind: "select-surface", surface: "repl" }, model);
+    expect(back.route.surface).toBe("repl");
+    expect(back.route.scopes).toEqual(["entry-2"]);
+    expect(reading(back, model, NOTHING_LIVE, WIDE).selection.entry?.key).toBe("entry-2");
+    expect(back.draft).toBe("next");
+
+    // The round trip is one location either way, and it reads back the same.
+    expect(reading(back, model, NOTHING_LIVE, WIDE).location).toBe(
+      reading(standing, model, NOTHING_LIVE, WIDE).location,
+    );
+  });
+});

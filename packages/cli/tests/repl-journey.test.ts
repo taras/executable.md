@@ -895,7 +895,7 @@ describe("REPL journey: one entry, from raw bytes", () => {
       expect(shows(terminal, "Decision: approve")).toBe(true);
       // Settled: the root closed, so the answer is in the history and the
       // entry's catalog row carries the outcome it closed with.
-      expect(shows(terminal, "\u00b7 ok")).toBe(true);
+      expect(shows(terminal, "[ok]")).toBe(true);
 
       terminal.end();
       yield* running;
@@ -1506,7 +1506,7 @@ describe("REPL journey: the whole of it, from raw bytes", () => {
       yield* settled(30);
       terminal.feed("\r");
       yield* until_(terminal, "the answer's output", (t) => shows(t, "Decision: approve"));
-      expect(shows(terminal, "\u00b7 ok")).toBe(true);
+      expect(shows(terminal, "[ok]")).toBe(true);
 
       // The generated fragment's source is on screen above the row that admits it.
       // Which two rows those are comes from the model rather than from a guess at
@@ -1527,7 +1527,7 @@ describe("REPL journey: the whole of it, from raw bytes", () => {
       expect(sourceAt).toBeLessThan(admittedAt);
 
       // 7. The complete binding value, from the drawer that holds it.
-      yield* activate(terminal, "1. entry-1");
+      yield* activate(terminal, "1. [ok] entry-1");
       yield* activate(terminal, "plan");
       expect(locationOn(terminal)).toContain("binding:plan");
       for (const line of JSON.stringify(PLAN, undefined, 2).split("\n")) {
@@ -2408,7 +2408,7 @@ describe("REPL journey: a position earlier than the entry being read", () => {
       expect(head.entries.map((entry) => entry.key)).toEqual(["entry-1", "entry-2"]);
 
       // Standing on the second entry, with the next one already being typed.
-      yield* activate(terminal, "2. entry-2");
+      yield* activate(terminal, "2. [ok] entry-2");
       yield* focusDraft(terminal);
       terminal.bytes(BYTES.encode("Three."));
       yield* settled(40);
@@ -2437,8 +2437,10 @@ describe("REPL journey: a position earlier than the entry being read", () => {
         expect(after.value.surface).toBe("repl");
       }
       // And the catalog is the one that prefix holds, rather than the head's.
-      expect(shows(terminal, "1. entry-1")).toBe(true);
-      expect(shows(terminal, "2. entry-2")).toBe(false);
+      // Which entries the prefix holds, whatever they had settled to by then —
+      // at this position the first one has not closed.
+      expect(shows(terminal, "] entry-1")).toBe(true);
+      expect(shows(terminal, "] entry-2")).toBe(false);
 
       terminal.end();
       yield* running;

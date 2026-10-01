@@ -158,9 +158,9 @@ export interface ReplSelection {
  * Equivalent spellings decode to the same route: percent escapes are resolved,
  * and query members are read by name rather than by position. What decoding
  * refuses is the grammar's own business — an unreadable escape, an absent
- * execution or surface, `inspect` with no position to inspect, a draft beside a
- * structure or a history position it could not coexist with, a drawer before a
- * scope, or a member nothing defines.
+ * execution or surface, `inspect` with no position to inspect, a drawer before
+ * a scope, a drawer on a surface that cannot hold it, or a member nothing
+ * defines.
  */
 export function decodeLocation(location: string): Result<ReplRoute> {
   if (!location.startsWith(PREFIX)) {
@@ -215,7 +215,7 @@ export function decodeLocation(location: string): Result<ReplRoute> {
     }
     scopes.push(segment);
   }
-  const misplaced = misplacedDrawer(surface, scopes, drawers);
+  const misplaced = misplacedDrawer(surface, drawers);
   if (misplaced !== undefined) {
     return refuse(misplaced);
   }
@@ -243,23 +243,24 @@ export function decodeLocation(location: string): Result<ReplRoute> {
 /**
  * Why this surface cannot hold what this path put on it, or nothing.
  *
- * The two surfaces hold different things, and each drawer belongs to one of
- * them. Sessions has no entry to select inside and no binding or answer to
- * inspect; the permission drawer opens over the turn a conversation is having,
- * which is a thing only Sessions shows.
+ * About drawers, and only about them: each one belongs to one surface. Sessions
+ * has no binding or answer to inspect, and the permission drawer opens over the
+ * turn a conversation is having, which is a thing only Sessions shows.
+ *
+ * The selected entry and the scopes beneath it are *not* a surface's business.
+ * Which surface is being read and which entry is selected are two independent
+ * members of one location — a person who goes to Sessions to follow a
+ * conversation and comes back is owed the entry they left, and a location that
+ * could not spell both would have to forget it on the way.
  */
 function misplacedDrawer(
   surface: ReplSurface,
-  scopes: readonly string[],
   drawers: readonly ReplDrawerRef[],
 ): string | undefined {
   if (surface !== "sessions") {
     return drawers.some((drawer) => drawer.kind === "live-permission")
       ? "a live permission request is answered on the Sessions surface"
       : undefined;
-  }
-  if (scopes.length > 0) {
-    return "the Sessions surface holds no entry or scope";
   }
   return drawers.every((drawer) => drawer.kind === "live-permission")
     ? undefined
@@ -284,7 +285,7 @@ export function encodeLocation(route: ReplRoute): string {
   if (route.session !== undefined && route.session.length === 0) {
     throw new TypeError("a session filter names one conversation");
   }
-  const misplaced = misplacedDrawer(route.surface, route.scopes, route.drawers);
+  const misplaced = misplacedDrawer(route.surface, route.drawers);
   if (misplaced !== undefined) {
     throw new TypeError(misplaced);
   }
@@ -346,26 +347,16 @@ export function resolveLocation(
   if (!filtered.ok) {
     return filtered;
   }
-  if (route.surface === "sessions") {
-    const opened = openDrawers(model, route, undefined, live);
-    if (!opened.ok) {
-      return opened;
-    }
-    return Ok({
-      route,
-      surface: "sessions",
-      entry: undefined,
-      ancestry: Object.freeze([]),
-      scope: undefined,
-      session: filtered.value,
-      drawers: opened.value,
-    });
-  }
   // The first structural member is the entry, by its own admission-order key,
   // and every nested scope is resolved beneath that one entry. An entry this
   // prefix did not admit refuses here rather than falling back to another: a
   // location naming something the history does not hold is a location to
   // answer, not to guess at.
+  //
+  // Resolved for either surface, because which surface is being read and which
+  // entry is selected are independent: Sessions draws no entry of its own, and
+  // a location that reached it by forgetting the selection could not bring
+  // anybody back to what they were reading.
   const ancestry: ReplScope[] = [];
   let entry: ReplScope | undefined;
   let scope: ReplScope | undefined;
@@ -401,7 +392,7 @@ export function resolveLocation(
 
   return Ok({
     route,
-    surface: "repl",
+    surface: route.surface,
     entry,
     ancestry: Object.freeze(ancestry),
     scope,

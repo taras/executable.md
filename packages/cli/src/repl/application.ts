@@ -1632,7 +1632,12 @@ function described(view: ReplView): readonly Described[] {
     }
   }
 
-  for (const [index, transcript] of showEntry ? model.transcript.entries() : []) {
+  // The transcript of whatever is selected. Selecting an entry *is* selecting a
+  // transcript locus, so the rows are that entry's own — not every entry's
+  // concatenated, which would make the catalog a list of things that all show
+  // the same reading. With nothing selected the whole execution is the locus,
+  // which is what a one-entry execution has always shown.
+  for (const [index, transcript] of showEntry ? transcriptOf(model, selection).entries() : []) {
     // One cell is one row, so a recorded row that holds several lines of output
     // becomes several cells. A cell given more than one line would show only the
     // first, which is the whole of what a reader would then believe was there.
@@ -1643,7 +1648,12 @@ function described(view: ReplView): readonly Described[] {
   // The live overlay, explicitly below the recorded rows and explicitly labelled.
   // Once the durable close exists its recorded output is in the transcript and
   // this is empty, so the two never both claim to be the output.
-  if (showEntry && live.output.length > 0) {
+  //
+  // It belongs to the entry producing it, which is the last one this prefix
+  // admitted — nothing earlier can still be running. A reader who has selected
+  // an earlier entry is reading a settled transcript, and text from a run that
+  // is not the one they are looking at would be attributed to it.
+  if (showEntry && live.output.length > 0 && livesHere(model, selection)) {
     for (const [offset, text] of live.output.split("\n").entries()) {
       items.push(line(`line:live:${offset}`, `… ${text}`));
     }
@@ -1780,6 +1790,34 @@ function described(view: ReplView): readonly Described[] {
     items.push(drawer);
   }
   return items;
+}
+
+/**
+ * The transcript rows the selected locus holds.
+ *
+ * An entry's own rows when one is selected, and the whole execution's when none
+ * is. The model keeps both, so this chooses between two readings it already
+ * holds rather than filtering one into the other.
+ */
+function transcriptOf(model: ReplModel, selection: ReplSelection): readonly ReplRow[] {
+  const key = selection.entry?.key;
+  if (key === undefined) {
+    return model.transcript;
+  }
+  return model.entries.find((entry) => entry.key === key)?.transcript ?? model.transcript;
+}
+
+/**
+ * Whether the entry producing live output is the one being read.
+ *
+ * Only the last entry a prefix admitted can still be running — entries are
+ * serial, and an earlier one settled before this one was admitted. So output
+ * this process has not retained belongs there, and nowhere else. Selecting
+ * nothing is reading the execution, which includes whatever is running in it.
+ */
+function livesHere(model: ReplModel, selection: ReplSelection): boolean {
+  const key = selection.entry?.key;
+  return key === undefined || key === model.entries[model.entries.length - 1]?.key;
 }
 
 /**
@@ -2029,6 +2067,11 @@ function entriesFootprint(state: ReplState, model: ReplModel, size: ReplTerminal
  * identity of nothing in it. Its nested scopes follow it, keyed by the path
  * that selects them — which begins with that entry, so two entries holding the
  * same component cannot collide.
+ *
+ * The outcome comes before the name, because the name is unbounded and the
+ * column is not. A sidebar is 28 columns at its narrowest, and this row is the
+ * one place a reader is promised an entry's outcome — put it after an
+ * arbitrarily long root name and a long enough name takes the promise away.
  */
 function entryContent(model: ReplModel, focused: string | undefined): readonly Described[] {
   if (model.entries.length === 0) {
@@ -2039,7 +2082,7 @@ function entryContent(model: ReplModel, focused: string | undefined): readonly D
     items.push(
       row(
         `entry:${entry.key}`,
-        `  ${entry.order}. ${entry.scope.name} · ${outcomeOfEntry(entry)}`,
+        `  ${entry.order}. [${outcomeOfEntry(entry)}] ${entry.scope.name}`,
         { select: "scope", scopes: [entry.key] },
         { here: focused },
       ),
