@@ -588,11 +588,13 @@ function* start(
       output = "";
       live = true;
       const task = owner.run(function* () {
-        // Released last, because destructors run in reverse order of
-        // registration: by the time this runs, the execution this task started
-        // has been torn down and every provider, held permission and piece of
-        // middleware it installed is gone. That is what makes the next entry's
-        // start a start rather than an overlap.
+        // Registered before anything this task acquires, and therefore released
+        // after all of it: destructors run in reverse order of registration. By
+        // the time this runs the execution has been torn down, every provider,
+        // held permission and piece of middleware it installed is gone, and this
+        // entry's Agent attachment has discarded whatever it never transferred.
+        // That is what makes the next entry's start a start rather than an
+        // overlap.
         //
         // And released only for an entry that reached an outcome of its own. A
         // task halted — by this session's teardown, or by a failure that
@@ -630,6 +632,14 @@ function* start(
       initialBindings: Readonly<Record<string, Json>>,
     ): Operation<Result<unknown>> {
       try {
+        // This entry's Agent attachment, acquired here and nowhere else. It is a
+        // resource, so everything it holds — live turns, pending requests, the
+        // places they took, the handles that correlate them — has this task's
+        // lifetime. Acquired *after* the release finalizer above and *before* the
+        // execution below, which is what orders teardown: the execution and its
+        // provider work come down first, then this attachment discards whatever it
+        // never transferred, and only then is the session's entry slot freed.
+        const installation = yield* agent.owning(key);
         const started = yield* executeInstalled(
           {
             ...inlineSource(source),
@@ -642,9 +652,8 @@ function* start(
           },
           // Installed into this exact execution, and nowhere else: the live
           // observer and the permission policy are this session's, not the
-          // process's, and the installation carries the entry whose turns they
-          // are.
-          [...installations, agent.owning(key)],
+          // process's, and the attachment carries the entry whose turns they are.
+          [...installations, installation],
           { initialBindings },
         );
         // Consumed as it arrives, inside this session's scope. Collecting until

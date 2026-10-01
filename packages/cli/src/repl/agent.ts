@@ -55,7 +55,7 @@
  * answer requests correctly.
  */
 
-import { action, createSignal, resource, useScope } from "effection";
+import { action, createSignal, ensure, resource, useScope } from "effection";
 import type { Operation, Scope, Stream } from "effection";
 import { Agent, denyPermission } from "@executablemd/core";
 import type {
@@ -206,14 +206,19 @@ export interface ReplAgentKernel {
   readonly changes: Stream<ReplAgentReading, never>;
   readonly authority: ReplAgentAuthority;
   /**
-   * What this owner installs inside the execution of one entry.
+   * The Agent attachment one entry's execution installs.
    *
-   * One installation per entry, carrying that entry's key and the publisher that
-   * ties each of its canonical `<Prompt>`s to a live turn. The key is an
-   * argument rather than something this owner is told about separately, so a
-   * turn cannot begin under an entry nobody named.
+   * An operation rather than a value, because what it hands back is held by a
+   * resource: acquiring it inside the entry task gives that entry's live turns,
+   * pending requests, provisional slots and handle lookups a lifetime of their
+   * own, and releasing that scope discards exactly what the execution did not
+   * durably transfer. The entry key is an argument, so a turn cannot begin under
+   * an entry nobody named.
+   *
+   * Acquire it before `executeInstalled()` and install the result only into that
+   * entry's execution.
    */
-  owning(entry: string): ExecutionInstallation;
+  owning(entry: string): Operation<ExecutionInstallation>;
   /**
    * Account for one appended event, without announcing.
    *
@@ -351,61 +356,103 @@ function* currentCoroutine(): Operation<string> {
   const scope = yield* useScope();
   return scope.get(DurableContext)?.coroutineId ?? "";
 }
+/**
+ * One entry's Agent attachment: what that entry's execution owns, and no more.
+ *
+ * Every value here is live-only and belongs to one `executeInstalled()` call. It
+ * is held by a resource acquired inside that entry's task, so the question "what
+ * does this entry still hold?" is answered by an object rather than by scanning a
+ * session-wide list for a key — and the answer stops existing when the execution
+ * does.
+ *
+ * `minted` is the structural half of the same point: handles are looked up in
+ * *this* attachment's map, so a handle from an entry that has ended is not a key
+ * anywhere and cannot correlate with anything. Nothing has to remember to forget
+ * it.
+ */
+interface Attachment {
+  readonly entry: string;
+  /** The turns this entry is running, none of which a record holds yet. */
+  readonly turns: LiveTurn[];
+  readonly requests: LiveRequest[];
+  /** The places this entry's Prompts took, which no record has taken over. */
+  readonly slots: Slot[];
+  readonly begun: Map<Scope, LiveTurn>;
+  readonly minted: WeakMap<object, LiveTurn>;
+  readonly publishing: Map<string, LiveTurn>;
+}
+
+/** Take one live turn down inside the attachment holding it. */
+function retire(attachment: Attachment, turn: LiveTurn): void {
+  const at = attachment.turns.indexOf(turn);
+  if (at >= 0) {
+    attachment.turns.splice(at, 1);
+  }
+}
+
+/** Take one pending request down inside the attachment holding it. */
+function remove(attachment: Attachment, request: LiveRequest): void {
+  const at = attachment.requests.indexOf(request);
+  if (at >= 0) {
+    attachment.requests.splice(at, 1);
+  }
+}
 
 /**
  * The private live Agent owner for one session, for as long as that session.
  *
- * A resource, because everything it holds is mutable and session-scoped:
- * announcements, the turns and requests presented right now, which publication
- * is appending, and who is waiting on the first failure. Acquiring it ties all
- * of that to the acquiring scope, and releasing that scope retires it.
+ * A resource, because everything it holds is mutable and session-scoped: the
+ * announcement channel, the slots records have taken over, the keys and places
+ * every entry draws from, and who is waiting on the first failure.
  *
- * Retiring answers nothing and releases nothing. A permission wait still held
- * at teardown is abandoned, not denied — the scope that raised it is going away
- * too, and a decision invented on the way out would be a decision nobody made.
- * The same goes for whoever was waiting on `failed`: there is no failure to
- * report, so no one is woken.
+ * ## The session owns what the Journal owns; an entry owns the rest
  *
- * `owning()` stays a separate, explicit act. Installing the middleware in this
- * body would put it in the resource's own child scope, which the execution
- * started afterwards does not inherit: the resource owns the kernel, and the
- * execution installation is what places the contextual middleware. One owner
- * serves every entry of its session, and each entry's execution is started with
- * an installation of its own, which is where that entry's key comes from.
+ * A session lasts for several entries and each entry's live state lasts for one
+ * execution, so the two are held apart. This owner keeps the reading and its
+ * channel, session-wide key and place allocation, the permission authority, the
+ * first fatal failure — and the slots a successful publication *transferred* to
+ * it, because a published turn is a fact about the Journal and has to outlive the
+ * execution that produced it.
+ *
+ * Everything else belongs to one entry's `Attachment`, acquired inside that
+ * entry's task through `owning()`. Releasing that resource discards exactly what
+ * the execution did not transfer, which is why nothing here scans for an entry
+ * key: the attachment instance *is* the authority for what it owned.
+ *
+ * Retiring answers nothing and releases nothing. A permission wait still held at
+ * teardown is abandoned, not denied — the scope that raised it is going away too,
+ * and a decision invented on the way out would be a decision nobody made. The
+ * same goes for whoever was waiting on `failed`: there is no failure to report,
+ * so no one is woken. No teardown path appends a record, writes an audit or
+ * closes a coroutine.
  */
 export function useReplAgent(mode: PermissionMode): Operation<ReplAgentKernel> {
   return resource(function* (provide) {
     const changes = createSignal<ReplAgentReading, never>();
-    const turns: LiveTurn[] = [];
-    const requests: LiveRequest[] = [];
-    /** One per Prompt this process observed, kept after publication. */
-    const slots: Slot[] = [];
-    /** The live turn core began in a scope, until that scope's prompt claims it. */
-    const begun = new Map<Scope, LiveTurn>();
     /**
-     * The live turn each handle this owner minted stands for.
+     * The slots a durable record has taken over, in observation order.
      *
-     * The handle is an object of this owner's own making, so a value from
-     * anywhere else simply is not a key here — which is how a handle is read
-     * back without asserting anything about what it is.
+     * Session-owned the moment the append is accounted for. A reader looking at a
+     * published turn is looking at the Journal, and the entry that wrote it ending
+     * is not a reason for that row to disappear.
      */
-    const minted = new WeakMap<object, LiveTurn>();
-    /**
-     * The canonical publication appending right now on each coroutine.
-     *
-     * The handle is what identifies the turn; this only says which of several
-     * concurrent publications an append belongs to. At most one canonical
-     * publication is ever in flight per coroutine, because expansion inside one
-     * coroutine is strictly sequential — so this is an index, never a queue, and
-     * it holds nothing between transitions.
-     */
-    const publishing = new Map<string, LiveTurn>();
+    const transferred: Slot[] = [];
+    /** The one entry attachment that is live, or none between entries. */
+    let attached: Attachment | undefined;
     let reading: ReplAgentReading = Object.freeze({
       turns: Object.freeze([]),
       requests: Object.freeze([]),
       slots: Object.freeze([]),
     });
+    /**
+     * Session-wide, so one key and one place mean one thing across every entry.
+     *
+     * A place is observation order over the whole session: an entry's Prompts take
+     * places after the entry before it, which is what keeps a published slot where
+     * it was once the next entry starts taking places of its own.
+     */
     let keys = 0;
+    let places = 0;
     let failure: Error | undefined;
     const failures: Array<(error: Error) => void> = [];
 
@@ -415,10 +462,19 @@ export function useReplAgent(mode: PermissionMode): Operation<ReplAgentKernel> {
     }
 
     function project(): void {
+      const live = attached;
+      // One list out of two owners, ordered by the place each slot took rather
+      // than by which owner holds it now: publication moves a slot between them
+      // and must not move it on the screen.
+      // Sorted over a fresh copy, so the two owners' own lists are untouched.
+      // `toSorted()` is unavailable here: the Node typecheck gate targets ES2022.
+      const placed = [...transferred, ...(live?.slots ?? [])].sort(
+        (left, right) => left.order - right.order,
+      );
       reading = Object.freeze({
-        turns: Object.freeze(turns.map(frozenTurn)),
-        requests: Object.freeze(requests.map(frozenRequest)),
-        slots: Object.freeze(slots.map(frozenSlot)),
+        turns: Object.freeze((live?.turns ?? []).map(frozenTurn)),
+        requests: Object.freeze((live?.requests ?? []).map(frozenRequest)),
+        slots: Object.freeze(placed.map(frozenSlot)),
       });
     }
 
@@ -445,18 +501,41 @@ export function useReplAgent(mode: PermissionMode): Operation<ReplAgentKernel> {
       return failure;
     }
 
-    /** Take one live turn down, leaving the announcement to the caller. */
-    function retire(turn: LiveTurn): void {
-      const at = turns.indexOf(turn);
-      if (at >= 0) {
-        turns.splice(at, 1);
+    /**
+     * Discard what one attachment still holds, because its execution is over.
+     *
+     * Whatever is still in it was never transferred — publication is the one thing
+     * that moves a slot out — so this needs no notion of "published" to avoid
+     * taking one down. A request is dropped rather than settled, and nothing is
+     * appended, denied or cancelled on the way out.
+     *
+     * One announcement, after every removal, so no reader ever observes half of a
+     * teardown.
+     */
+    function discard(attachment: Attachment): void {
+      const held =
+        attachment.turns.length > 0 ||
+        attachment.requests.length > 0 ||
+        attachment.slots.length > 0;
+      attachment.turns.length = 0;
+      attachment.requests.length = 0;
+      attachment.slots.length = 0;
+      attachment.begun.clear();
+      attachment.publishing.clear();
+      if (attached === attachment) {
+        attached = undefined;
+      }
+      if (held) {
+        announce();
+      } else {
+        project();
       }
     }
 
-    function queued(entry: string, coroutine: string, prompt: string): LiveTurn {
+    function queued(attachment: Attachment, coroutine: string, prompt: string): LiveTurn {
       const turn: LiveTurn = {
         key: allocate("turn"),
-        entry,
+        entry: attachment.entry,
         coroutine,
         prompt,
         state: "queued",
@@ -468,13 +547,14 @@ export function useReplAgent(mode: PermissionMode): Operation<ReplAgentKernel> {
         stopReason: undefined,
         failure: undefined,
       };
-      turns.push(turn);
+      places += 1;
+      attachment.turns.push(turn);
       // Its place, taken when the Prompt was scheduled rather than when it
       // finished: a turn that publishes first did not thereby happen first.
-      slots.push({
+      attachment.slots.push({
         key: turn.key,
-        entry,
-        order: slots.length + 1,
+        entry: attachment.entry,
+        order: places,
         durable: undefined,
         last: undefined,
       });
@@ -529,9 +609,15 @@ export function useReplAgent(mode: PermissionMode): Operation<ReplAgentKernel> {
       };
     }
 
-    /** The live turn a permission request on this coroutine belongs to. */
-    function owner(coroutine: string): LiveTurn {
-      const candidates = turns.filter(
+    /**
+     * The live turn a permission request on this coroutine belongs to.
+     *
+     * Looked for among this entry's own turns, which is why a coroutine id reused
+     * by the next entry cannot make two candidates of one request: the entry
+     * before it holds none of them any more.
+     */
+    function owner(attachment: Attachment, coroutine: string): LiveTurn {
+      const candidates = attachment.turns.filter(
         (turn) => turn.coroutine === coroutine && turn.state !== "terminal",
       );
       const only = candidates[0];
@@ -549,17 +635,13 @@ export function useReplAgent(mode: PermissionMode): Operation<ReplAgentKernel> {
       return only;
     }
 
-    function remove(request: LiveRequest): void {
-      const at = requests.indexOf(request);
-      if (at >= 0) {
-        requests.splice(at, 1);
-      }
-    }
-
-    function* interactive(request: PermissionRequest): Operation<PermissionOutcome> {
+    function* interactive(
+      attachment: Attachment,
+      request: PermissionRequest,
+    ): Operation<PermissionOutcome> {
       // Decided before anything is published: an unowned request publishes no
       // reading and no key, and never becomes a denial.
-      const held = owner(yield* currentCoroutine());
+      const held = owner(attachment, yield* currentCoroutine());
       return yield* action<PermissionOutcome>(function (resolve) {
         let settled = false;
         const live: LiveRequest = {
@@ -575,7 +657,7 @@ export function useReplAgent(mode: PermissionMode): Operation<ReplAgentKernel> {
               return;
             }
             settled = true;
-            remove(live);
+            remove(attachment, live);
             announce();
             resolve(outcome);
           },
@@ -587,11 +669,11 @@ export function useReplAgent(mode: PermissionMode): Operation<ReplAgentKernel> {
         const dispose = (): void => {
           if (!settled) {
             settled = true;
-            remove(live);
+            remove(attachment, live);
             announce();
           }
         };
-        requests.push(live);
+        attachment.requests.push(live);
         announce();
         return dispose;
       });
@@ -604,7 +686,10 @@ export function useReplAgent(mode: PermissionMode): Operation<ReplAgentKernel> {
      * rather than a rule spelled again here, so an automatic denial is the same
      * decision the base handler would have reached.
      */
-    function* decide(request: PermissionRequest): Operation<PermissionOutcome> {
+    function* decide(
+      attachment: Attachment,
+      request: PermissionRequest,
+    ): Operation<PermissionOutcome> {
       if (mode === "approve-all") {
         return approval(request) ?? denyPermission(request);
       }
@@ -614,12 +699,18 @@ export function useReplAgent(mode: PermissionMode): Operation<ReplAgentKernel> {
       if (isRead(request)) {
         return approval(request) ?? denyPermission(request);
       }
-      return yield* interactive(request);
+      return yield* interactive(attachment, request);
     }
 
+    /**
+     * Settling a request, routed to the attachment that is live.
+     *
+     * A key minted by an entry whose execution has ended is not a key in any live
+     * attachment, so it settles nothing rather than reaching a wait nobody holds.
+     */
     const authority: ReplAgentAuthority = {
       choose(request: string, option: string): boolean {
-        const live = requests.find((candidate) => candidate.key === request);
+        const live = attached?.requests.find((candidate) => candidate.key === request);
         if (live === undefined) {
           return false;
         }
@@ -632,7 +723,7 @@ export function useReplAgent(mode: PermissionMode): Operation<ReplAgentKernel> {
         return true;
       },
       dismiss(request: string): boolean {
-        const live = requests.find((candidate) => candidate.key === request);
+        const live = attached?.requests.find((candidate) => candidate.key === request);
         if (live === undefined) {
           return false;
         }
@@ -643,56 +734,59 @@ export function useReplAgent(mode: PermissionMode): Operation<ReplAgentKernel> {
       },
     };
 
-    function publisherFor(entry: string): AgentPromptPublisher {
+    function publisherFor(attachment: Attachment): AgentPromptPublisher {
       return {
         *begin(input: string): Operation<AgentPromptHandle> {
           // Created before the provider is asked for anything at all, and handed
           // back on this turn's own publication — the only thing that will say
           // which live turn that record ended.
-          const turn = queued(entry, yield* currentCoroutine(), input);
-          begun.set(yield* useScope(), turn);
+          const turn = queued(attachment, yield* currentCoroutine(), input);
+          attachment.begun.set(yield* useScope(), turn);
           // An opaque token rather than the turn itself: core carries it back
-          // untouched, and only this map can say what it stood for.
+          // untouched, and only this attachment's map can say what it stood for.
           const handle: object = {};
-          minted.set(handle, turn);
+          attachment.minted.set(handle, turn);
           return handle;
         },
         *publish(publication: AgentPromptPublication): Operation<void> {
           const handle = publication.begun;
-          // A handle this owner did not mint is not a key in this map: another
-          // host's publisher, or a turn from an execution this session never ran.
+          // A handle this attachment did not mint is not a key in its map: another
+          // host's publisher, or a turn from an execution this one never ran.
           // Read back by lookup, never by asserting what the value is.
           const turn =
-            typeof handle === "object" && handle !== null ? minted.get(handle) : undefined;
+            typeof handle === "object" && handle !== null
+              ? attachment.minted.get(handle)
+              : undefined;
           const where = turn?.coroutine;
           if (turn !== undefined && where !== undefined) {
-            publishing.set(where, turn);
+            attachment.publishing.set(where, turn);
           }
           try {
             // The single durable handoff. `consume()` runs inside this append, in
-            // the caller's one transition, and removes exactly this turn.
+            // the caller's one transition, and transfers exactly this turn's slot.
             yield* publication.append();
           } catch (error) {
             // Nothing was retained, so nothing may still be shown as though it is
             // about to be. The turn this publication began is taken down and the
             // removal announced before the failure travels on — otherwise a
-            // terminal overlay outlives the record it was waiting for.
+            // terminal overlay outlives the record it was waiting for. Its slot
+            // stays untransferred, so this entry's teardown discards it.
             if (turn !== undefined) {
-              retire(turn);
+              retire(attachment, turn);
               announce();
             }
             throw error;
           } finally {
             if (where !== undefined) {
-              publishing.delete(where);
+              attachment.publishing.delete(where);
             }
           }
         },
       };
     }
 
-    function owning(entry: string): ExecutionInstallation {
-      const publisher = publisherFor(entry);
+    function installationFor(attachment: Attachment): ExecutionInstallation {
+      const publisher = publisherFor(attachment);
       return {
         *install(): Operation<void> {
           // At the ordinary position, not `min`. A provider installs its own
@@ -710,17 +804,38 @@ export function useReplAgent(mode: PermissionMode): Operation<ReplAgentKernel> {
               // here having begun nothing: it is delegated untouched, shown in no
               // reading, and left unable to claim any record.
               const scope = yield* useScope();
-              const turn = begun.get(scope);
-              begun.delete(scope);
+              const turn = attachment.begun.get(scope);
+              attachment.begun.delete(scope);
               const stream = yield* next(text, options);
               return turn === undefined ? stream : watch(turn, stream);
             },
             *requestPermission([request]) {
-              return yield* decide(request);
+              return yield* decide(attachment, request);
             },
           });
         },
       };
+    }
+
+    function owning(entry: string): Operation<ExecutionInstallation> {
+      return resource(function* (attach) {
+        const attachment: Attachment = {
+          entry,
+          turns: [],
+          requests: [],
+          slots: [],
+          begun: new Map(),
+          minted: new WeakMap(),
+          publishing: new Map(),
+        };
+        // Registered before this attachment becomes the live one, so nothing can
+        // land between taking the slot and arranging to give it back.
+        yield* ensure(() => {
+          discard(attachment);
+        });
+        attached = attachment;
+        yield* attach(installationFor(attachment));
+      });
     }
 
     const kernel: ReplAgentKernel = {
@@ -734,8 +849,9 @@ export function useReplAgent(mode: PermissionMode): Operation<ReplAgentKernel> {
         if (event.type !== "yield" || event.description.type !== AGENT_PROMPT) {
           return;
         }
-        const turn = publishing.get(event.coroutineId);
-        if (turn === undefined) {
+        const live = attached;
+        const turn = live?.publishing.get(event.coroutineId);
+        if (live === undefined || turn === undefined) {
           // An `agent_prompt` appended where this process observed no turn. The
           // session has already been admitted, so there is nothing left to refuse
           // atomically: the owner is terminated instead of guessing which reading
@@ -747,15 +863,20 @@ export function useReplAgent(mode: PermissionMode): Operation<ReplAgentKernel> {
             ),
           );
         }
-        // The live facts are gone, and the record holds them now — but this is
-        // the same turn, in the same place. The slot says which record that is,
-        // by the durable name the journal wrote it under.
-        const slot = slots.find((candidate) => candidate.key === turn.key);
-        if (slot !== undefined) {
+        // The one transfer, inside the one append. The live facts are gone and the
+        // record holds them now — but this is the same turn, in the same place, so
+        // its slot moves from the entry that produced it to this session with its
+        // mounted key, its entry key and its place unchanged. From here the entry
+        // ending cannot take it away.
+        const at = live.slots.findIndex((candidate) => candidate.key === turn.key);
+        if (at >= 0) {
+          const slot = live.slots[at];
+          live.slots.splice(at, 1);
           slot.durable = event.description.name;
           slot.last = frozenTurn(turn);
+          transferred.push(slot);
         }
-        retire(turn);
+        retire(live, turn);
         project();
       },
       announce,
@@ -782,15 +903,13 @@ export function useReplAgent(mode: PermissionMode): Operation<ReplAgentKernel> {
     try {
       yield* provide(kernel);
     } finally {
-      // Dropped, never called: a held `settle` would answer a request nobody
-      // decided, and a waiting `failed` resolver would report a failure that
-      // never happened. Both are abandoned with the scope that owned them.
-      requests.length = 0;
+      // What is left here is this session's own. Every entry attachment discarded
+      // what it held when its execution ended, and a waiting `failed` resolver is
+      // reporting a failure that never happened, so it is dropped rather than
+      // woken.
       failures.length = 0;
-      turns.length = 0;
-      slots.length = 0;
-      begun.clear();
-      publishing.clear();
+      transferred.length = 0;
+      attached = undefined;
       // Projected, not announced. A reader still holding this owner sees a
       // retired one; nothing is pushed into consumers that are themselves going
       // away.
