@@ -30,6 +30,7 @@ import { refusedPluginModules } from "./support/plugin-modules.ts";
 import { replGrammarError } from "../src/cli.ts";
 import { readQuestionForm } from "../src/repl/elicitation.ts";
 import { decodeLocation, encodeLocation } from "../src/repl/route.ts";
+import { entryKey } from "../src/repl/entries.ts";
 
 const CLI = fileURLToPath(new URL("../", import.meta.url));
 const REPL = join(CLI, "src", "repl");
@@ -387,6 +388,48 @@ describe("REPL documentation: what it says is what the code does", () => {
     expect(encoded).toBe("xmd://repl/kf39sla2/repl");
     const decoded = decodeLocation(encoded);
     expect(decoded.ok).toBe(true);
+  });
+
+  it("D1: the spec's sequential-entry claims are the ones the code makes", function* () {
+    const spec = yield* read(join(CLI, "..", "..", "specs", "repl-spec.md"));
+
+    // The one-entry ceiling is gone from the product, so it must be gone from
+    // the document that describes the product.
+    expect(spec).not.toContain("this execution admits one");
+    expect(spec).not.toContain("zero or one entry");
+    expect(spec).not.toContain("There is no second entry");
+
+    // The keys the spec numbers entries by are the ones the code assigns.
+    expect(spec).toContain("`entry-1`, `entry-2`");
+    expect([entryKey(1), entryKey(2), entryKey(3)]).toEqual(["entry-1", "entry-2", "entry-3"]);
+
+    // The spec says a location names a selected entry on either surface, and
+    // the codec spells exactly that.
+    expect(spec).toContain("a location names a selected entry on either surface");
+    for (const surface of ["repl", "sessions"] as const) {
+      const location = encodeLocation({
+        execution: "kf39sla2",
+        surface,
+        scopes: [entryKey(2)],
+        drawers: [],
+        at: undefined,
+        inspect: false,
+        draft: "the next one",
+        session: undefined,
+      });
+      expect(location).toBe(`xmd://repl/kf39sla2/${surface}/entry-2?draft=the%20next%20one`);
+      const read = decodeLocation(location);
+      expect(read.ok).toBe(true);
+      if (read.ok) {
+        expect(read.value.scopes).toEqual(["entry-2"]);
+        expect(read.value.draft).toBe("the next one");
+      }
+    }
+
+    // And the four outcomes the catalog promises are the four words it writes.
+    for (const outcome of ["[unfinished]", "[ok]", "[err]", "[cancelled]"]) {
+      expect([outcome, spec.includes(outcome)]).toEqual([outcome, true]);
+    }
   });
 
   it("D1: a drifted example is caught", function* () {

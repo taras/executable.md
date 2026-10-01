@@ -2372,3 +2372,127 @@ describe("REPL entries: going to Sessions keeps the entry you came from", () => 
     );
   });
 });
+
+describe("REPL entries: what each prefix of a two-entry history shows", () => {
+  beforeAll(() => useTempFileCompiler());
+
+  it("EH1: before an admission, at it, and at the outcome, with the draft throughout", function* () {
+    const physical = new InMemoryStream();
+    yield* runEntry(physical, saying("ALPHA-ONE"));
+    yield* runEntry(physical, saying("BRAVO-TWO"));
+    const events = yield* physical.readAll();
+    const head = projected(events);
+    expect(head.entries.map((entry) => entry.key)).toEqual(["entry-1", "entry-2"]);
+
+    const admission = head.entries[1]?.scope.marker;
+    const terminal = head.entries[1]?.checkpoints[head.entries[1].checkpoints.length - 1]?.marker;
+    if (admission === undefined || terminal === undefined) {
+      throw new Error("the second entry has an admission and a terminal position");
+    }
+    // A position strictly before the second entry was admitted: the first
+    // entry's own close, which is the last thing that happened before it.
+    const before = "close:root";
+
+    /** What one prefix's catalog says, as a reader reads it. */
+    const catalogAt = (marker: string): string[] => {
+      const state = frozenAt(drafting(initialState(EXECUTION), "still typing"), marker);
+      const model = projected(events, marker);
+      return catalogOf(reading(state, model, NOTHING_LIVE, WIDE)).map((one) => one.label.trim());
+    };
+
+    // [1] Before the admission: one entry, settled, and no sign of the next.
+    expect(catalogAt(before)).toEqual(["1. [ok] entry-1"]);
+
+    // [2] At the admission: the row exists and says it has settled nothing.
+    expect(catalogAt(admission)).toEqual(["1. [ok] entry-1", "2. [unfinished] entry-2"]);
+
+    // [3] At its terminal position: the same row, now carrying its outcome.
+    expect(catalogAt(terminal)).toEqual(["1. [ok] entry-1", "2. [ok] entry-2"]);
+
+    // Each prefix shows only what it retained. The second entry's output is in
+    // none of the readings before its own close.
+    const linesAt = (marker: string): string[] => {
+      const state = frozenAt(drafting(initialState(EXECUTION), "still typing"), marker);
+      return transcriptOf(reading(state, projected(events, marker), NOTHING_LIVE, WIDE));
+    };
+    expect(linesAt(before)).toContain("ALPHA-ONE");
+    expect(linesAt(before)).not.toContain("BRAVO-TWO");
+    expect(linesAt(admission)).not.toContain("BRAVO-TWO");
+    expect(linesAt(terminal)).toContain("BRAVO-TWO");
+
+    // The draft is current route state throughout: it is not a thing a prefix
+    // retained, so freezing the durable view does not freeze it.
+    for (const marker of [before, admission, terminal]) {
+      const state = frozenAt(drafting(initialState(EXECUTION), "still typing"), marker);
+      const view = reading(state, projected(events, marker), NOTHING_LIVE, WIDE);
+      expect([marker, view.state.draft]).toEqual([marker, "still typing"]);
+      expect([marker, view.location.includes("draft=still%20typing")]).toEqual([marker, true]);
+      // And it is still editable at every one of them.
+      const typed = acted(
+        state,
+        { kind: "type", text: "!" },
+        projected(events, marker),
+        NOTHING_LIVE,
+        WIDE,
+      );
+      expect([marker, typed.draft]).toEqual([marker, "still typing!"]);
+    }
+
+    // Returning live from any of them restores the head catalog and keeps it.
+    for (const marker of [before, admission, terminal]) {
+      const state = frozenAt(drafting(initialState(EXECUTION), "still typing"), marker);
+      const live = acted(state, { kind: "go-live" }, projected(events, marker), NOTHING_LIVE, WIDE);
+      expect(live.route.at).toBe(undefined);
+      expect(live.draft).toBe("still typing");
+      expect(
+        catalogOf(reading(live, head, NOTHING_LIVE, WIDE)).map((one) => one.label.trim()),
+      ).toEqual(["1. [ok] entry-1", "2. [ok] entry-2"]);
+    }
+  });
+});
+
+/** One entry that reads the inherited value again, and reports what it got. */
+const READS_INHERITED_AGAIN = [
+  "```js eval",
+  "const third = `${plan.steps.join('/')}/${plan.counts.runs}`;",
+  "```",
+  "",
+  "Three: {third}",
+  "",
+].join("\n");
+
+describe("REPL entries: a third entry inherits the file, not the run before it", () => {
+  beforeAll(() => useTempFileCompiler());
+
+  it("EC1: an edit the entry before it never published reaches no successor", function* () {
+    const holder = replExecution();
+    yield* scoped(function* () {
+      // Entry 1 publishes a nested value. Entry 2 inherits it and edits what it
+      // inherited — ordinary mutation of an ordinary binding, which publishes
+      // nothing, so the two readings of `plan` diverge from here on: the file
+      // holds what Entry 1 retained and this process holds what Entry 2 made of
+      // it.
+      const session = opened(
+        yield* submitReplEntry({ execution: holder, source: PUBLISHES_NESTED }),
+      );
+      yield* session.join();
+      accepted(yield* session.submit(EDITS_INHERITED));
+      yield* session.join();
+      expect(session.model.entries[1]?.terminal?.output).toContain("Two: draft/build/2");
+      // Entry 2 published `seen` and no new `plan`, so the last durably
+      // published `plan` is still the one Entry 1 wrote.
+      expect(session.model.entries[1]?.bindings.map((one) => one.name)).toContain("seen");
+      expect(value(session.model.entries[1].bindings, "plan")).toEqual({
+        steps: ["draft"],
+        counts: { runs: 1 },
+      });
+
+      // Entry 3 therefore starts from the file's value, not from the array the
+      // run before it was holding when it ended.
+      accepted(yield* session.submit(READS_INHERITED_AGAIN));
+      yield* session.join();
+      expect(session.model.entries[2]?.terminal?.output).toContain("Three: draft/1");
+      expect(session.model.entries[2]?.terminal?.output).not.toContain("build");
+    });
+  });
+});
