@@ -132,10 +132,16 @@ order, and the values are the entry's own to change — they behave like values
 authored earlier in the same environment, and a later export replaces one
 through the ordinary rules.
 
-What survives is what was retained. An entry that failed or was interrupted
-still hands on everything it published before that, and hands on nothing it
-never durably published. The reserved `props` namespace belongs to each entry's
+What survives is what was retained. An entry that failed, and one whose
+cancellation the file records, each settle their entry: they hand on everything
+they published before that, hand on nothing they never durably published, and
+let the next entry start. The reserved `props` namespace belongs to each entry's
 own validated root and is never inherited.
+
+An entry interrupted before its root closed is a different thing. The file holds
+no close for it, so it is unfinished, and an unfinished entry permits no
+successor — reopen that execution and it resumes where its records stop, and
+another entry can be submitted once it has settled.
 
 This comes from the file and from nothing else, so a later entry begins from the
 same values whether the earlier ones ran a moment ago in this process or were

@@ -47,6 +47,8 @@ import { resolveAgentStack } from "../src/agent-stack.ts";
 import { createFakeAcp, makeRegistry, makeStore, tripwireAcp } from "./support/fake-acp.ts";
 import type { FakeAcp } from "./support/fake-acp.ts";
 import { ADAPTERS, AGENT } from "./support/plan-harness.ts";
+import { parseDurableEvent } from "@executablemd/durable-streams";
+import { projectRepl } from "../src/repl/model.ts";
 
 /** The exact source the Story publishes. */
 const STORY = [
@@ -631,6 +633,145 @@ describe("J3 — durable truth, and a cold process over it", () => {
       // And nothing was written: the file the entry wrote is in the first
       // process's working directory, and this one has its own.
       expect(yield* untilResolved(readdir(elsewhere))).toEqual([]);
+      second.terminal.end();
+      yield* running;
+    });
+
+    // Byte for byte the history it opened: reading a run is not appending to it.
+    expect(yield* history(hostRoot)).toBe(before);
+  });
+
+  it("EC1: two entries of retained Agent work reopen cold, asking nobody", function* () {
+    const hostRoot = yield* untilResolved(mkdtemp(join(tmpdir(), "xmd-repl-journey-")));
+    const live = createFakeAcp();
+    live.script({ reply: "ONE-DONE" });
+    live.script({ reply: "TWO-DONE" });
+    const first = recordingTerminal({ columns: 200, rows: 140 });
+    let location = "";
+    let turnRows: string[] = [];
+
+    // Two entries, each holding one Prompt, through one command. One Prompt per
+    // execution means each entry records sequence `0` — the collision a global
+    // chronology would have to resolve, and the one a cold reader has to
+    // resolve the same way.
+    yield* scoped(function* (): Operation<void> {
+      const workspace = yield* useWorkspace();
+      yield* first.install();
+      yield* immediateClock();
+      yield* useTemporaryHost(hostRoot);
+      const running = yield* spawn(() => start(live, holds([]), workspace));
+      yield* untilDrawn(first.terminal);
+
+      yield* typed(first.terminal, promptEntry("ask-one"));
+      yield* showing(first.terminal, "1. [ok] entry-1");
+      yield* focusDraft(first.terminal);
+      yield* typed(first.terminal, promptEntry("ask-two"));
+      yield* showing(first.terminal, "2. [ok] entry-2");
+
+      // Both turns are on the Sessions reading, in one conversation, before
+      // anything is read back: this is the reading a cold process has to
+      // reproduce, and it is captured as it is *drawn* so the comparison below
+      // is of two screens rather than of two descriptions.
+      yield* showing(first.terminal, "ONE-DONE");
+      yield* showing(first.terminal, "TWO-DONE");
+      // The conversation control exists, which is what says the Sessions
+      // surface is offering a conversation to filter by at all. Which key it
+      // is, is a fact about the record and is asserted of the record below —
+      // a provider session key is longer than this column and is drawn cut.
+      expect(shows(first.terminal, "All conversations")).toBe(true);
+      turnRows = promptRows(first.terminal);
+      expect(turnRows).toHaveLength(2);
+      expect(turnRows.some((row) => row.includes("ask-one"))).toBe(true);
+      expect(turnRows.some((row) => row.includes("ask-two"))).toBe(true);
+
+      first.terminal.end();
+      location = yield* running;
+    });
+
+    expect(live.prompts).toEqual(["ask-one", "ask-two"]);
+    const before = yield* history(hostRoot);
+
+    // What the file says the two turns are, so the cold reading below is held
+    // to the record rather than to itself.
+    const events = yield* journal(hostRoot);
+    const projected = projectRepl(
+      events.map((event) => {
+        const parsed = parseDurableEvent(JSON.stringify(event));
+        if (!parsed.ok) {
+          throw parsed.error;
+        }
+        return parsed.value;
+      }),
+    );
+    if (!projected.ok) {
+      throw projected.error;
+    }
+    expect(projected.value.entries.map((entry) => entry.key)).toEqual(["entry-1", "entry-2"]);
+    // Each entry's own Prompt really did take sequence `0`, and each turn is
+    // owned by the entry that ran it.
+    expect(projected.value.turns.map((turn) => [turn.entry, turn.sequence])).toEqual([
+      ["entry-1", 0],
+      ["entry-2", 0],
+    ]);
+    // One conversation, execution-wide, holding both.
+    expect(projected.value.sessions).toHaveLength(1);
+    expect(projected.value.sessions[0]?.turns.map((turn) => turn.entry)).toEqual([
+      "entry-1",
+      "entry-2",
+    ]);
+    // Recorded, read from the record: the sidebar is narrower than
+    // "completed, recorded", so what the screen can say about this is which
+    // turns are on it, and what the file says is how they ended.
+    expect(projected.value.turns.map((turn) => turn.status)).toEqual(["completed", "completed"]);
+    expect(projected.value.turns.every((turn) => turn.marker.length > 0)).toBe(true);
+    const selected = projected.value.entries[1];
+    if (selected === undefined) {
+      throw new Error("the journal holds a second entry");
+    }
+
+    // A cold process at a location naming the second entry, with a provider
+    // that refuses every call it is given: reaching one is the defect, so the
+    // stand-in makes reaching one a failure rather than a silent success.
+    const cold = createFakeAcp();
+    const second = recordingTerminal({ columns: 200, rows: 140 });
+    yield* scoped(function* (): Operation<void> {
+      const elsewhere = yield* useWorkspace();
+      yield* second.install();
+      yield* immediateClock();
+      yield* useTemporaryHost(hostRoot);
+      const at = `${location.split("?")[0]}/${selected.key}`;
+      const running = yield* spawn(() => start(cold, holds([]), elsewhere, at));
+      yield* untilDrawn(second.terminal);
+
+      // The catalog the file holds, in admission order with its outcomes.
+      yield* showing(second.terminal, "1. [ok] entry-1");
+      yield* showing(second.terminal, "2. [ok] entry-2");
+      expect(locationRow(second.terminal) ?? "").toContain(`/${selected.key}`);
+
+      // The global Sessions chronology, row for row and conversation for
+      // conversation, is the one the live process showed — both entries' turns
+      // under the one conversation, with the selection narrowing none of it.
+      yield* showing(second.terminal, "ONE-DONE");
+      yield* showing(second.terminal, "TWO-DONE");
+      expect(shows(second.terminal, "All conversations")).toBe(true);
+      expect(promptRows(second.terminal)).toEqual(turnRows);
+
+      // The selected entry's own transcript, read off the transcript column
+      // rather than compared projection to projection — two projections of one
+      // file agree by construction, and what this row is about is the screen.
+      const transcript = column(second.terminal, SIDEBAR).join("\n");
+      expect(transcript).toContain("TWO-DONE");
+      expect(transcript).not.toContain("ONE-DONE");
+      // The first entry's turn is still on the Sessions reading beside it,
+      // which is what makes the absence above a locus and not a lost record.
+      expect(promptRows(second.terminal).some((row) => row.includes("ask-one"))).toBe(true);
+
+      // Nobody was asked anything to do it.
+      expect(cold.prompts).toEqual([]);
+      expect(cold.started).toBe(false);
+      expect(cold.created).toEqual([]);
+      expect(cold.ensured).toEqual([]);
+
       second.terminal.end();
       yield* running;
     });
@@ -1871,6 +2012,46 @@ function* typed(terminal: Terminal, text: string): Operation<void> {
     () => !(maybeLocation(terminal) ?? "draft=").includes("draft="),
     "the draft never became an entry",
   );
+}
+
+/**
+ * The Sessions rows this run's two Prompts are drawn on, as the sidebar draws
+ * them.
+ *
+ * Sliced to the sidebar's own width, because that is what a reader sees: the
+ * column is narrower than a turn's whole line, so what is on the screen is the
+ * prefix of it that fits. Compared rather than interpreted — two readings of
+ * one journal have to draw the same rows.
+ */
+function promptRows(terminal: Terminal): string[] {
+  return screenOf(terminal)
+    .map((line) => line.slice(0, SIDEBAR).trimEnd())
+    .filter((line) => line.includes("ask-"));
+}
+
+/** One entry holding one Prompt, so every entry records sequence `0`. */
+function promptEntry(text: string): string {
+  return `<Session name="planner"><Prompt text="${text}" /></Session>\n`;
+}
+
+/**
+ * Put focus on the entry draft.
+ *
+ * There is no label to aim at: the draft is empty once its text has become an
+ * entry, and what it draws is its own prompt. So the marker and the prompt
+ * together are what name it — a focused field renders its marker immediately
+ * before its prompt, and the draft's prompt is the only one that is itself a
+ * marker.
+ */
+function* focusDraft(terminal: Terminal): Operation<void> {
+  for (let press = 0; press <= 240; press += 1) {
+    if (screenOf(terminal).some((line) => line.includes(">> "))) {
+      return;
+    }
+    terminal.feed("\t");
+    yield* settled(12);
+  }
+  throw new Error("focus never reached the entry draft in 240 presses");
 }
 
 /** Type a value into the field this label names. */

@@ -2365,11 +2365,7 @@ function* submitted(terminal: Terminal, source: string): Operation<void> {
   terminal.bytes(BYTES.encode(source));
   yield* settled(60);
   terminal.feed("\r");
-  yield* until_(
-    terminal,
-    "the draft becoming an entry",
-    (one) => !(maybeLocation(one) ?? "draft=").includes("draft="),
-  );
+  yield* admittedDraft(terminal);
 }
 
 /**
@@ -2496,48 +2492,64 @@ const JOURNEY_THREE = [
   "",
 ].join("\n");
 
-/** Wait until the open drawer is drawing this line of its form. */
-function* awaitingDrawer(terminal: Terminal, line: string): Operation<void> {
-  for (let attempt = 0; attempt < 60; attempt += 1) {
-    if (shows(terminal, line)) {
-      return;
-    }
-    // Real time, not only turns: reaching a question compiles an eval block,
-    // and a compile is work off this interpreter rather than a turn on it.
-    yield* sleep(10);
-    yield* settled(20);
-  }
-  throw new Error(`the drawer never drew ${line}`);
-}
+/**
+ * How long one of these waits may go unmet before it is a failure.
+ *
+ * Never reached by a passing run. It bounds the failure mode only, so a defect
+ * says which wait went unmet instead of hanging.
+ */
+const JOURNEY_DEADLINE_MS = 10_000;
 
-/** Wait until the draft has left the location, which is when it became an entry. */
-function* admittedDraft(terminal: Terminal): Operation<void> {
-  for (let attempt = 0; attempt < 120; attempt += 1) {
-    if (!(maybeLocation(terminal) ?? "draft=").includes("draft=")) {
-      return;
-    }
-    yield* sleep(10);
-    yield* settled(20);
-  }
-  throw new Error("the draft never became an entry");
-}
-
-/** Wait until this entry's catalog row carries this outcome. */
-function* settledEntry(terminal: Terminal, order: number, outcome: string): Operation<void> {
-  for (let attempt = 0; attempt < 200; attempt += 1) {
-    if (shows(terminal, `${order}. [${outcome}]`)) {
+/**
+ * Wait until the screen says something, bounded by real time.
+ *
+ * Real time rather than a count of attempts: what these wait for is work *off*
+ * this interpreter — an eval block compiling, an entry settling, a record
+ * appending — so a loop bounded by turns is really bounded by how busy the
+ * machine is, and a run beside a heavy one reports a wrong answer rather than a
+ * slow one.
+ */
+function* awaiting(
+  terminal: Terminal,
+  what: string,
+  says: (terminal: Terminal) => boolean,
+): Operation<void> {
+  const deadline = Date.now() + JOURNEY_DEADLINE_MS;
+  while (Date.now() < deadline) {
+    if (says(terminal)) {
       return;
     }
     yield* sleep(10);
     yield* settled(20);
   }
   throw new Error(
-    `entry ${order} never reached ${outcome}. rows=` +
+    `${what} never happened within ${JOURNEY_DEADLINE_MS}ms. rows=` +
       JSON.stringify(
         screenOf(terminal)
           .map((line) => line.trim())
           .filter((line) => line.length > 0),
       ),
+  );
+}
+
+/** Wait until the open drawer is drawing this line of its form. */
+function awaitingDrawer(terminal: Terminal, line: string): Operation<void> {
+  return awaiting(terminal, `the drawer drawing ${line}`, (one) => shows(one, line));
+}
+
+/** Wait until the draft has left the location, which is when it became an entry. */
+function admittedDraft(terminal: Terminal): Operation<void> {
+  return awaiting(
+    terminal,
+    "the draft becoming an entry",
+    (one) => !(maybeLocation(one) ?? "draft=").includes("draft="),
+  );
+}
+
+/** Wait until this entry's catalog row carries this outcome. */
+function settledEntry(terminal: Terminal, order: number, outcome: string): Operation<void> {
+  return awaiting(terminal, `entry ${order} reaching ${outcome}`, (one) =>
+    shows(one, `${order}. [${outcome}]`),
   );
 }
 
@@ -2644,7 +2656,7 @@ describe("REPL journey: three entries, one command", () => {
       // 6. The first entry is still selectable, and selecting it is a locus.
       yield* activate(terminal, "1. [ok] entry-1");
       expect(locationOn(terminal)).toContain("/entry-1");
-      yield* until_(terminal, "entry 1's own transcript", (one) => shows(one, "One: alpha/go"));
+      yield* awaiting(terminal, "entry 1's own transcript", (one) => shows(one, "One: alpha/go"));
       expect(shows(terminal, "Three: alpha-three")).toBe(false);
 
       terminal.end();

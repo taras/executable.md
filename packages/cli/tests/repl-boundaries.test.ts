@@ -30,6 +30,7 @@ import { refusedPluginModules } from "./support/plugin-modules.ts";
 import { replGrammarError } from "../src/cli.ts";
 import { readQuestionForm } from "../src/repl/elicitation.ts";
 import { decodeLocation, encodeLocation } from "../src/repl/route.ts";
+import type { ReplSurface } from "../src/repl/route.ts";
 import { entryKey } from "../src/repl/entries.ts";
 
 const CLI = fileURLToPath(new URL("../", import.meta.url));
@@ -406,7 +407,8 @@ describe("REPL documentation: what it says is what the code does", () => {
     // The spec says a location names a selected entry on either surface, and
     // the codec spells exactly that.
     expect(spec).toContain("a location names a selected entry on either surface");
-    for (const surface of ["repl", "sessions"] as const) {
+    const surfaces: readonly ReplSurface[] = ["repl", "sessions"];
+    for (const surface of surfaces) {
       const location = encodeLocation({
         execution: "kf39sla2",
         surface,
