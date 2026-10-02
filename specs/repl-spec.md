@@ -1,8 +1,9 @@
 # The XMD REPL
 
-`xmd repl` opens one XMD entry in a full-screen terminal, runs it for real, and
-lets you look at what it did — while it is running and afterwards, in this
-process or in another one.
+`xmd repl` is a full-screen terminal you keep working in. Submit an XMD entry,
+watch it run for real, submit the next one when it settles, and look at what any
+of them did — while they are running and afterwards, in this process or in
+another one.
 
 ```bash
 xmd repl                                  # a fresh execution with an empty draft
@@ -49,11 +50,18 @@ empty, an Entries list with nothing in it yet, and a location of the form
 file, before you have typed anything.
 
 Type or paste one XMD entry and press Enter. What was in the draft is now the
-entry, and the entry is immutable: this execution admits one, and typing after
-that changes nothing. The run begins, and the screen fills in as it goes — the
-scopes the entry admitted, the bindings its `eval` blocks published, the source a
-generated fragment produced before that fragment was admitted, and each line the
-document rendered.
+entry, and an admitted entry is immutable. The run begins, and the screen fills
+in as it goes — the scopes the entry admitted, the bindings its `eval` blocks
+published, the source a generated fragment produced before that fragment was
+admitted, and each line the document rendered.
+
+Keep typing. The draft is always the *next* entry's, so it goes on taking
+keystrokes while this entry runs and while you are reading an earlier position:
+an admitted entry is immutable, so there is never one those keystrokes could be
+editing. Press Enter before the entry ahead of it is done and Run says so, and
+what you typed stays exactly as you typed it, character for character. When that
+entry has both settled and finished coming down, the same draft becomes the next
+entry — and only then does it leave the input and the location.
 
 When the entry asks a question, its drawer opens: the whole message, and then
 every field the schema declares, with its title, its description, whether it is
@@ -82,19 +90,79 @@ to the head.
 When the root settles, its recorded output is what the transcript shows, and the
 screen stops asking for frames.
 
+## Entries: a catalog you come back to
+
+The Entries surface lists every entry this execution has admitted, numbered in
+the order they were submitted. That order is what it is: an entry's place comes
+from when it was admitted, so one that finished first, published first or failed
+cannot move ahead of one submitted before it. Each row carries its outcome
+before its name — `[unfinished]` while it is running or if it was interrupted
+before closing, and then `[ok]`, `[err]` or `[cancelled]` — because a root name
+is as long as its author made it and the sidebar is not.
+
+Each entry has a stable key from that same order — `entry-1`, `entry-2`, and so
+on — and it is the key a location names, so a link to what you are reading keeps
+meaning it. The first entry's key and every marker spelling it ever had are
+unchanged, so a location written before an execution could hold more than one
+entry still opens on exactly what it always did.
+
+Selecting a row changes what you are reading and nothing else. The transcript
+becomes that entry's own, its scopes and published values become the ones to
+inspect, and the entry you selected is part of the location. Live execution, the
+draft, the history position, the Sessions chronology, the Sessions filter and
+focus outside the list all stay where they were — and output from the entry
+that is still running appears under that entry, never under the settled one you
+are reading.
+
+The list is windowed rather than clipped: it moves through as many rows as the
+frame can place, with its earlier and later controls staying put while the rows
+move beneath them. What the window is not showing is not drawn, not focusable
+and reaches no pointer, and every row can be scrolled to, activated by Enter and
+activated by a pointer.
+
+Entries run one at a time. There is no queue: a submission while one is running,
+while one has settled but its work is still coming down, or while you are
+reading an earlier position is refused, and refusing it starts nothing.
+
+## What a later entry starts from
+
+The root values an earlier entry durably published are what the next one begins
+with. For each name it is the last value any earlier entry retained, in Journal
+order, and the values are the entry's own to change — they behave like values
+authored earlier in the same environment, and a later export replaces one
+through the ordinary rules.
+
+What survives is what was retained. An entry that failed, and one whose
+cancellation the file records, each settle their entry: they hand on everything
+they published before that, hand on nothing they never durably published, and
+let the next entry start. The reserved `props` namespace belongs to each entry's
+own validated root and is never inherited.
+
+An entry interrupted before its root closed is a different thing. The file holds
+no close for it, so it is unfinished, and an unfinished entry permits no
+successor — reopen that execution and it resumes where its records stop, and
+another entry can be submitted once it has settled.
+
+This comes from the file and from nothing else, so a later entry begins from the
+same values whether the earlier ones ran a moment ago in this process or were
+read back cold from the journal.
+
 ## One cold journey
 
 The command prints the location it ended at. Pass that location to a new
 `xmd repl` — on this machine, in a new process, with nothing carried over — and
-the same view comes back: the same selected scope, the same binding values, the
-same transcript, the same generated source, the same recorded question and answer,
-the same History positions and the same terminal output.
+the same view comes back: the same catalog of entries in the same order with the
+same outcomes, the same selected entry and scope, the same binding values, the
+same transcript, the same generated source, the same recorded question and
+answer, the same History positions and the same terminal output.
 
 Nothing is re-run to do it. No component source is read, no `eval` block is
 compiled, and nobody is asked anything: everything on that screen was
-reconstructed from the location and the retained events. A location naming a
-history this version cannot read refuses, with nothing appended and no execution
-started.
+reconstructed from the location and the retained events. Settled entries are
+projected and never performed again; only a final entry the file shows as
+unfinished is given back to the engine to continue. A location naming a history
+this version cannot read, or naming an entry its selected prefix never admitted,
+refuses whole — with nothing appended and no execution started.
 
 ## The packaged Plan, in the REPL's own drawer
 
@@ -242,16 +310,21 @@ window still shows all of it. The History band is five rows at every size; when 
 several positions cannot all fit, they share a label and every position keeps its
 own identity.
 
-A refusal of one action — a second entry, a navigation that selects nothing, a
-pause this process cannot perform — appears in the footer beside the control that
-was refused. It does not replace the screen.
+A refusal of one action — a submission the entry ahead of it has not made room
+for, a navigation that selects nothing, a pause this process cannot perform —
+appears in the footer beside the control that was refused. It does not replace
+the screen.
 
-## One entry, and nothing else
+## Sequential entries, and nothing else
 
-This product admits zero or one entry per execution. There is no second entry, no
-catalog of past runs, no fork, no snapshot and no sidecar file. The Sessions
-surface presents the Agent work that entry did, and an execution with no Agent
-work has one that says so.
+One execution admits entries in submission order, one at a time, into one
+append-only journal. There is no concurrent entry, no submission queue, no fork
+from a history position, no renaming, deleting, reordering, importing or
+exporting an entry, no snapshot and no sidecar file. Two processes writing one
+execution is unsupported.
+
+The Sessions surface presents the Agent work every entry did, as one chronology,
+and an execution with no Agent work has one that says so.
 
 ## What is retained, and what is not
 
@@ -261,17 +334,26 @@ model, no checkpoint file and no record type of the REPL's own. The file and the
 location are the whole of the state, which is what makes reconstruction from them
 possible at all.
 
-The location carries route state only: which surface, which scopes, which
-drawers, which history position, and the draft before an entry exists. It never
-carries focus, pause state, form internals, rendered cells or this process's
-overlay.
+The location carries route state only: which surface, which entry and scopes,
+which drawers, which history position, and the draft for the next entry. Those
+members are independent — a location names a selected entry on either surface,
+beside a drawer stack, a conversation filter and a frozen position, so going to
+Sessions to follow a conversation and coming back returns you to the entry you
+left. It never carries focus, pause state, how far a window is scrolled, form
+internals, rendered cells or this process's overlay.
 
 ## History is immutable; the present is explicit
 
 A view frozen at a history position shows what the file held at that position and
-nothing else. It fills nothing from the live head: no live output, no waiting
+nothing else: exactly the entries admitted by then, each with the outcome it had
+reached by then. It fills nothing from the live head: no live output, no waiting
 question, no pause capability, and it cannot open the question this process is
-asking. Before the root closes, output this process has produced but the file has
+asking. What it does not freeze is the draft, which is the next entry's and
+belongs to no position — it stays editable, and `[live]` brings it back to the
+head with the current catalog. Choosing a position from before the selected
+entry was admitted clears that entry and the scopes beneath it rather than
+guessing another, and keeps the draft, the surface, the conversation filter and
+the position itself. Before the root closes, output this process has produced but the file has
 not recorded appears as an explicit overlay; once the durable close exists, the
 recorded output replaces it.
 

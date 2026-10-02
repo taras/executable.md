@@ -441,6 +441,25 @@ function* focusOn(terminal: Terminal, label: string, limit = 240): Operation<voi
 }
 
 /**
+ * Put focus on the entry draft.
+ *
+ * There is no label to aim at: the draft is empty, and what it draws is its own
+ * prompt. So the marker and the prompt together are what name it — a focused
+ * field renders its marker immediately before its prompt, and the draft's
+ * prompt is the only one on this screen that is itself a marker.
+ */
+function* focusDraft(terminal: Terminal, limit = 240): Operation<void> {
+  for (let press = 0; press <= limit; press += 1) {
+    if (screenOf(terminal).some((line) => line.includes(">> "))) {
+      return;
+    }
+    terminal.feed("\t");
+    yield* settled(12);
+  }
+  throw new Error(`focus never reached the entry draft in ${limit} presses`);
+}
+
+/**
  * Whether the control holding focus is the one this label names.
  *
  * Anchored to the marker rather than matched anywhere on the line, because a
@@ -488,6 +507,14 @@ function maybeLocation(terminal: Terminal): string | undefined {
       break;
     }
     parts.push(part.trimEnd());
+    // Every row of a location is padded to the full surface width, so a row
+    // with space left on its end is the last of them. Without this the row
+    // drawn underneath joins on, and the round-trip below cannot always tell:
+    // a location ending in `/entry-2` followed by a transcript row beginning
+    // `entry ...` re-encodes as `/entry-2entry` exactly as written.
+    if (part.trimEnd().length < part.length) {
+      break;
+    }
   }
 
   // The rows below a location belong to whatever is drawn under it, and a row that
@@ -800,9 +827,18 @@ describe("REPL journey: one entry, from raw bytes", () => {
         }
       }
 
-      // The entry is admitted and immutable, and the question it reaches is
-      // being asked.
-      expect(shows(terminal, "(one entry admitted)")).toBe(true);
+      // The entry is admitted and it has not settled, and the question it
+      // reaches is being asked.
+      //
+      // Read from the history rather than from the screen. The footer used to
+      // report admission, because the draft was replaced by a notice once an
+      // entry existed; a draft is now execution-wide and goes on being typed
+      // while an entry runs (#827 Slice C), so what says an entry exists is its
+      // catalog row — and that row is in the sidebar, behind the open drawer.
+      const admittedModel = yield* projectionOf(root, files[0]);
+      expect(admittedModel.entries.map((entry) => entry.key)).toEqual(["entry-1"]);
+      expect(admittedModel.entries[0]?.source).toBe(source);
+      expect(admittedModel.entries[0]?.settled).toBe(false);
       expect(shows(terminal, "Approve Ship the REPL?")).toBe(true);
 
       terminal.end();
@@ -857,9 +893,9 @@ describe("REPL journey: one entry, from raw bytes", () => {
       const recorded = lines.filter((line) => line.includes("elicit"));
       expect(recorded.length).toBeGreaterThan(0);
       expect(shows(terminal, "Decision: approve")).toBe(true);
-      // Settled: the root closed, so the answer is in the history and the entry
-      // is immutable.
-      expect(shows(terminal, "(one entry admitted)")).toBe(true);
+      // Settled: the root closed, so the answer is in the history and the
+      // entry's catalog row carries the outcome it closed with.
+      expect(shows(terminal, "[ok]")).toBe(true);
 
       terminal.end();
       yield* running;
@@ -1213,7 +1249,7 @@ describe("REPL journey: what it refuses, and what it leaves alone", () => {
       // answer field rather than the draft. Dismissed first, and focus put back on
       // the draft, so what follows really is an attempt to submit a second entry.
       yield* dismissQuestion(terminal);
-      yield* focusOn(terminal, "(one entry admitted)");
+      yield* focusDraft(terminal);
 
       terminal.bytes(BYTES.encode("<Json value={1} />"));
       yield* settled(30);
@@ -1222,9 +1258,14 @@ describe("REPL journey: what it refuses, and what it leaves alone", () => {
 
       // The submission path itself refused, history did not change, and the
       // screen says why rather than appearing to do nothing.
+      //
+      // Superseded: this used to assert the one-entry ceiling. That ceiling is
+      // gone — what refuses here is the lifecycle, because the entry before
+      // this one is still running (#827 Slice C). The draft the refusal left is
+      // exactly what was typed, which is the other half of the contract.
       expect(yield* records(root, files[0])).toEqual(admitted);
-      expect(shows(terminal, "(one entry admitted)")).toBe(true);
-      expect(shows(terminal, "admits one entry")).toBe(true);
+      expect(shows(terminal, "has not finished")).toBe(true);
+      expect(locationOn(terminal)).toContain("draft=");
 
       terminal.end();
       yield* running;
@@ -1465,7 +1506,7 @@ describe("REPL journey: the whole of it, from raw bytes", () => {
       yield* settled(30);
       terminal.feed("\r");
       yield* until_(terminal, "the answer's output", (t) => shows(t, "Decision: approve"));
-      expect(shows(terminal, "(one entry admitted)")).toBe(true);
+      expect(shows(terminal, "[ok]")).toBe(true);
 
       // The generated fragment's source is on screen above the row that admits it.
       // Which two rows those are comes from the model rather than from a guess at
@@ -1486,7 +1527,7 @@ describe("REPL journey: the whole of it, from raw bytes", () => {
       expect(sourceAt).toBeLessThan(admittedAt);
 
       // 7. The complete binding value, from the drawer that holds it.
-      yield* activate(terminal, "1. entry-1");
+      yield* activate(terminal, "1. [ok] entry-1");
       yield* activate(terminal, "plan");
       expect(locationOn(terminal)).toContain("binding:plan");
       for (const line of JSON.stringify(PLAN, undefined, 2).split("\n")) {
@@ -2310,5 +2351,443 @@ describe("REPL journey: output nothing records still reaches the screen", () => 
       terminal.end();
       yield* running;
     });
+  });
+});
+
+/**
+ * Type one source into the draft and admit it as an entry.
+ *
+ * What says the entry exists is the draft leaving the location: it clears only
+ * once it has become one, and it is the thing this helper just put there.
+ */
+function* submitted(terminal: Terminal, source: string): Operation<void> {
+  yield* focusDraft(terminal);
+  terminal.bytes(BYTES.encode(source));
+  yield* settled(60);
+  terminal.feed("\r");
+  yield* admittedDraft(terminal);
+}
+
+/**
+ * The history action against a prefix the selected entry predates (#827 ER1).
+ *
+ * Through the running command, because the clearing is a decision the loop
+ * makes with a model it has just reprojected: the view the standing route asks
+ * for does not resolve at the chosen position, and what the loop does about
+ * that is the behavior. Driving the reducer alone would prove the decision and
+ * not that anything calls it.
+ */
+describe("REPL journey: a position earlier than the entry being read", () => {
+  it("ER1: the invalid entry clears, and the draft, surface and position stand", function* () {
+    const { terminal, install } = recordingTerminal();
+
+    yield* scoped(function* (): Operation<void> {
+      yield* install();
+      yield* immediateClock();
+      yield* useTempFileCompiler();
+      const root = yield* useTemporaryHost();
+
+      const running = yield* spawn(function* (): Operation<void> {
+        const ran = yield* runReplProgram({ profile: PROFILE });
+        if (!ran.ok) {
+          throw ran.error;
+        }
+      });
+      yield* untilDrawn(terminal);
+      const files = yield* histories(root);
+
+      // Two entries, one after the other, through the one command. The second
+      // is submitted without reopening anything, which is the Story's point.
+      yield* submitted(terminal, "One.\n");
+      yield* submitted(terminal, "Two.\n");
+      const head = yield* projectionOf(root, files[0]);
+      expect(head.entries.map((entry) => entry.key)).toEqual(["entry-1", "entry-2"]);
+
+      // Standing on the second entry, with the next one already being typed.
+      yield* activate(terminal, "2. [ok] entry-2");
+      yield* focusDraft(terminal);
+      terminal.bytes(BYTES.encode("Three."));
+      yield* settled(40);
+      expect(locationOn(terminal)).toContain("draft=Three.");
+
+      // A position from before the second entry was ever admitted.
+      yield* activate(terminal, "[history]");
+      const markers = drawerMarkers(terminal);
+      expect(markers.length).toBeGreaterThan(1);
+      yield* activate(terminal, markers[0] ?? "");
+      // The drawer is read through, so it is closed before the location is.
+      terminal.feed("\x1b");
+      yield* settled(40);
+
+      const after = decodeLocation(locationOn(terminal));
+      expect(after.ok).toBe(true);
+      if (after.ok) {
+        // The entry that prefix never admitted is gone, and nothing was
+        // guessed in its place.
+        expect(after.value.scopes).toEqual([]);
+        // The position is what was asked for, and it stands.
+        expect(after.value.at).toBeDefined();
+        expect(after.value.inspect).toBe(true);
+        // So do the draft and the surface.
+        expect(after.value.draft).toBe("Three.");
+        expect(after.value.surface).toBe("repl");
+      }
+      // And the catalog is the one that prefix holds, rather than the head's.
+      // Which entries the prefix holds, whatever they had settled to by then —
+      // at this position the first one has not closed.
+      expect(shows(terminal, "] entry-1")).toBe(true);
+      expect(shows(terminal, "] entry-2")).toBe(false);
+
+      terminal.end();
+      yield* running;
+    });
+  });
+});
+
+/**
+ * One entry that publishes a value and then holds at a question.
+ *
+ * The hold is what makes "a draft typed while an entry runs" a fact rather than
+ * a race: an ordinary document settles whenever it settles, and a question is
+ * the one place one stops and waits for somebody.
+ */
+const JOURNEY_ONE = [
+  "```js eval",
+  'const token = "alpha";',
+  "const schema = {",
+  '  type: "object",',
+  '  properties: { decision: { type: "string", enum: ["go"] } },',
+  '  required: ["decision"],',
+  "  additionalProperties: false,",
+  "};",
+  "```",
+  "",
+  '<Elicit schema={schema} as="answer">Ready?</Elicit>',
+  "",
+  "One: {token}/{answer.decision}",
+  "",
+].join("\n");
+
+/** One entry that reads what the first published, renders it, and then fails. */
+const JOURNEY_TWO = [
+  "```js eval",
+  "const seen = `${token}-two`;",
+  "```",
+  "",
+  "Two: {seen}",
+  "",
+  "```js eval",
+  "const lost = nothingDeclaredAnywhere;",
+  "```",
+  "",
+].join("\n");
+
+/** One entry that follows the failure and still reads the first entry's value. */
+const JOURNEY_THREE = [
+  "```js eval",
+  "const after = `${token}-three`;",
+  "```",
+  "",
+  "Three: {after}",
+  "",
+].join("\n");
+
+/**
+ * How long one of these waits may go unmet before it is a failure.
+ *
+ * Never reached by a passing run. It bounds the failure mode only, so a defect
+ * says which wait went unmet instead of hanging.
+ */
+const JOURNEY_DEADLINE_MS = 10_000;
+
+/**
+ * Wait until the screen says something, bounded by real time.
+ *
+ * Real time rather than a count of attempts: what these wait for is work *off*
+ * this interpreter — an eval block compiling, an entry settling, a record
+ * appending — so a loop bounded by turns is really bounded by how busy the
+ * machine is, and a run beside a heavy one reports a wrong answer rather than a
+ * slow one.
+ */
+function* awaiting(
+  terminal: Terminal,
+  what: string,
+  says: (terminal: Terminal) => boolean,
+): Operation<void> {
+  const deadline = Date.now() + JOURNEY_DEADLINE_MS;
+  while (Date.now() < deadline) {
+    if (says(terminal)) {
+      return;
+    }
+    yield* sleep(10);
+    yield* settled(20);
+  }
+  throw new Error(
+    `${what} never happened within ${JOURNEY_DEADLINE_MS}ms. rows=` +
+      JSON.stringify(
+        screenOf(terminal)
+          .map((line) => line.trim())
+          .filter((line) => line.length > 0),
+      ),
+  );
+}
+
+/** Wait until the open drawer is drawing this line of its form. */
+function awaitingDrawer(terminal: Terminal, line: string): Operation<void> {
+  return awaiting(terminal, `the drawer drawing ${line}`, (one) => shows(one, line));
+}
+
+/** Wait until the draft has left the location, which is when it became an entry. */
+function admittedDraft(terminal: Terminal): Operation<void> {
+  return awaiting(
+    terminal,
+    "the draft becoming an entry",
+    (one) => !(maybeLocation(one) ?? "draft=").includes("draft="),
+  );
+}
+
+/** Wait until this entry's catalog row carries this outcome. */
+function settledEntry(terminal: Terminal, order: number, outcome: string): Operation<void> {
+  return awaiting(terminal, `entry ${order} reaching ${outcome}`, (one) =>
+    shows(one, `${order}. [${outcome}]`),
+  );
+}
+
+describe("REPL journey: three entries, one command", () => {
+  it("EJ1: a draft survives a refusal, inherits, fails, and is followed", function* () {
+    const { terminal, install } = recordingTerminal();
+    let ended: ReplOutcome | undefined;
+
+    yield* scoped(function* (): Operation<void> {
+      yield* install();
+      yield* immediateClock();
+      yield* useTempFileCompiler();
+      const root = yield* useTemporaryHost();
+
+      const running = yield* spawn(function* (): Operation<void> {
+        const ran = yield* runReplProgram({ profile: PROFILE });
+        if (!ran.ok) {
+          throw ran.error;
+        }
+        ended = ran.value;
+      });
+      yield* untilDrawn(terminal);
+      const files = yield* histories(root);
+
+      // 1. Entry 1, which publishes a value and then stops at its question.
+      yield* submitted(terminal, JOURNEY_ONE);
+      yield* awaitingDrawer(terminal, "decision: go");
+      const held = yield* records(root, files[0]);
+      expect(held.length).toBeGreaterThan(0);
+
+      // 2. The next entry is drafted while that one is still running. The
+      //    drawer owns focus while it is up, so it is dismissed first — the
+      //    question stays open, which is what keeps Entry 1 live.
+      terminal.feed("\x1b");
+      yield* settled(30);
+      yield* focusDraft(terminal);
+      terminal.bytes(BYTES.encode(JOURNEY_TWO));
+      yield* settled(60);
+      expect(locationOn(terminal)).toContain("draft=");
+      terminal.feed("\r");
+      yield* settled(120);
+
+      // Refused, because Entry 1 has not finished. Nothing was admitted, the
+      // history did not move, and the draft is exactly where it was.
+      expect(shows(terminal, "has not finished")).toBe(true);
+      expect(yield* records(root, files[0])).toEqual(held);
+      expect(locationOn(terminal)).toContain("draft=");
+      const drafted = decodeLocation(locationOn(terminal));
+      expect(drafted.ok).toBe(true);
+      if (drafted.ok) {
+        expect(drafted.value.draft).toBe(JOURNEY_TWO);
+      }
+
+      // 3. Answer the question, and Entry 1 settles.
+      yield* activate(terminal, "? Ready?");
+      yield* awaitingDrawer(terminal, "decision: go");
+      terminal.bytes(BYTES.encode("go"));
+      yield* settled(30);
+      terminal.feed("\r");
+      yield* settledEntry(terminal, 1, "ok");
+      expect(shows(terminal, "One: alpha/go")).toBe(true);
+
+      // 4. The same draft, still carrying every character, becomes Entry 2.
+      yield* focusDraft(terminal);
+      terminal.feed("\r");
+      yield* admittedDraft(terminal);
+      yield* settledEntry(terminal, 2, "err");
+
+      // It read what Entry 1 published, and it failed after publishing its own.
+      const afterTwo = yield* projectionOf(root, files[0]);
+      expect(afterTwo.entries.map((entry) => entry.key)).toEqual(["entry-1", "entry-2"]);
+      expect(afterTwo.entries[1]?.source).toBe(JOURNEY_TWO);
+      expect(afterTwo.entries[1]?.terminal?.status).toBe("err");
+      expect(afterTwo.entries[1]?.bindings.find((binding) => binding.name === "seen")?.value).toBe(
+        "alpha-two",
+      );
+      // Entry 1's own values are untouched by the failure beside them.
+      expect(afterTwo.entries[0]?.bindings.find((binding) => binding.name === "token")?.value).toBe(
+        "alpha",
+      );
+
+      // 5. Entry 3 follows the failure, and still reads Entry 1's value.
+      yield* submitted(terminal, JOURNEY_THREE);
+      yield* settledEntry(terminal, 3, "ok");
+      expect(shows(terminal, "Three: alpha-three")).toBe(true);
+
+      // Three entries, in admission order, with the outcomes they reached —
+      // which is not the order their outcomes would sort in.
+      const settledModel = yield* projectionOf(root, files[0]);
+      expect(settledModel.entries.map((entry) => entry.key)).toEqual([
+        "entry-1",
+        "entry-2",
+        "entry-3",
+      ]);
+      expect(settledModel.entries.map((entry) => entry.terminal?.status)).toEqual([
+        "ok",
+        "err",
+        "ok",
+      ]);
+      for (const [at, outcome] of ["ok", "err", "ok"].entries()) {
+        expect([at, shows(terminal, `${at + 1}. [${outcome}]`)]).toEqual([at, true]);
+      }
+
+      // 6. The first entry is still selectable, and selecting it is a locus.
+      yield* activate(terminal, "1. [ok] entry-1");
+      expect(locationOn(terminal)).toContain("/entry-1");
+      yield* awaiting(terminal, "entry 1's own transcript", (one) => shows(one, "One: alpha/go"));
+      expect(shows(terminal, "Three: alpha-three")).toBe(false);
+
+      terminal.end();
+      yield* running;
+    });
+
+    expect(ended?.location).toBeDefined();
+    expect(terminal.resets).toBe(1);
+  });
+});
+
+/** Two entries, the second reading what the first published, with no question. */
+const COLD_ONE = ["```js eval", 'const token = "alpha";', "```", "", "One: {token}", ""].join("\n");
+
+const COLD_TWO = [
+  "```js eval",
+  "const carried = `${token}-again`;",
+  "```",
+  "",
+  "Two: {carried}",
+  "",
+].join("\n");
+
+describe("REPL journey: a cold process over a multi-entry journal", () => {
+  it("EC1: the same catalog and the same selected entry, with no work and no append", function* () {
+    const first = recordingTerminal();
+    let root: string | undefined;
+    let files: string[] = [];
+
+    // Two entries through one command, and then the process is over.
+    yield* scoped(function* (): Operation<void> {
+      yield* first.install();
+      yield* immediateClock();
+      yield* useTempFileCompiler();
+      root = yield* useTemporaryHost();
+
+      const running = yield* spawn(function* (): Operation<void> {
+        const ran = yield* runReplProgram({ profile: PROFILE });
+        if (!ran.ok) {
+          throw ran.error;
+        }
+      });
+      yield* untilDrawn(first.terminal);
+      files = yield* histories(root);
+
+      yield* submitted(first.terminal, COLD_ONE);
+      yield* settledEntry(first.terminal, 1, "ok");
+      yield* submitted(first.terminal, COLD_TWO);
+      yield* settledEntry(first.terminal, 2, "ok");
+      expect(shows(first.terminal, "Two: alpha-again")).toBe(true);
+
+      first.terminal.end();
+      yield* running;
+    });
+    expect(first.terminal.resets).toBe(1);
+    expect(first.terminal.readers).toBe(0);
+
+    const retained = root;
+    if (retained === undefined) {
+      throw new Error("the first process created a repository");
+    }
+    const path = join(retained, "xmd", "repl", files[0]);
+    const before = yield* until(readFile(path, "utf8"));
+    const execution = files[0].replace(/\.jsonl$/, "");
+
+    const live = yield* projectionOf(retained, files[0]);
+    expect(live.entries.map((entry) => entry.key)).toEqual(["entry-1", "entry-2"]);
+
+    // A location that names the *second* entry, so what comes back has to be a
+    // catalog and a selection rather than whatever happens to be first.
+    const location = encodeLocation({
+      execution,
+      surface: "repl",
+      scopes: ["entry-2"],
+      drawers: [],
+      at: undefined,
+      inspect: false,
+      draft: undefined,
+      session: undefined,
+    });
+
+    const second = recordingTerminal();
+    let performed: Performed | undefined;
+    yield* scoped(function* (): Operation<void> {
+      yield* second.install();
+      yield* immediateClock();
+      yield* installReplHost({
+        dataRoot: () => retained,
+        identify: () => {
+          throw new Error("a reopened execution mints no identifier");
+        },
+        createExclusive: () => Promise.reject(new Error("a reopened execution creates no file")),
+        appendRecord: (appendPath, record) => appendFile(appendPath, record),
+      });
+      performed = yield* countPerformed();
+
+      const running = yield* spawn(function* (): Operation<void> {
+        const ran = yield* runReplProgram({ location, profile: PROFILE });
+        if (!ran.ok) {
+          throw ran.error;
+        }
+      });
+      yield* untilDrawn(second.terminal);
+
+      // Both entries, in admission order, with the outcomes the file holds —
+      // and the one the location named is the locus.
+      expect(shows(second.terminal, "1. [ok] entry-1")).toBe(true);
+      expect(shows(second.terminal, "2. [ok] entry-2")).toBe(true);
+      expect(locationOn(second.terminal)).toContain("/entry-2");
+      expect(shows(second.terminal, "Two: alpha-again")).toBe(true);
+      // Entry 2's locus, not the whole execution's: the first entry's output
+      // belongs to the row above, and selecting one is selecting a transcript.
+      expect(shows(second.terminal, "One: alpha")).toBe(false);
+
+      // The value the first entry published is still what the second inherited,
+      // read back from the file rather than from anything this process ran.
+      const cold = yield* projectionOf(retained, files[0]);
+      expect(cold.entries[1]?.bindings.find((binding) => binding.name === "carried")?.value).toBe(
+        "alpha-again",
+      );
+
+      second.terminal.end();
+      yield* running;
+    });
+
+    // Nothing was performed to do it: no entry source compiled, no component
+    // source read, and no provider reached.
+    expect(performed?.compiles).toBe(0);
+    expect(performed?.reads.filter((one) => one.endsWith(".md"))).toEqual([]);
+    // And the file is the file. A cold process reads; it does not append.
+    expect(yield* until(readFile(path, "utf8"))).toBe(before);
+    expect(second.terminal.resets).toBe(1);
   });
 });

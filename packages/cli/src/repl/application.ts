@@ -49,7 +49,14 @@ import type {
   ReplSelection,
   ReplSurface,
 } from "./route.ts";
-import type { ReplAgentPermission, ReplAgentTurn, ReplModel, ReplRow, ReplScope } from "./model.ts";
+import type {
+  ReplAgentPermission,
+  ReplAgentTurn,
+  ReplEntry,
+  ReplModel,
+  ReplRow,
+  ReplScope,
+} from "./model.ts";
 import type { ReplFormField, ReplQuestion, ReplQuestionForm } from "./elicitation.ts";
 import type {
   ReplAgentReading,
@@ -330,8 +337,9 @@ export type ReplFocusRestore =
  * Process-local, and deliberately not in the route: where somebody scrolled to
  * is not a place another process can be sent to, and a location carrying it
  * would reopen somewhere else at a row describing a different reading. Two
- * separate numbers because both windows are open at once — a drawer scrolls the
- * request it is asking while the reading behind it keeps the row it was left on.
+ * separate numbers because the windows are open at once — a wide frame carries
+ * both readings in its sidebar, and a drawer scrolls the request it is asking
+ * while the reading behind it keeps the row it was left on.
  *
  * Each is clamped where it is read, because publication, a filter, a background
  * change and a resize all change how many rows there are with nobody pressing
@@ -340,17 +348,26 @@ export type ReplFocusRestore =
 export interface ReplViewports {
   /** Rows the Sessions reading is scrolled by. */
   readonly sessions: number;
+  /** Rows the Entries catalog is scrolled by. */
+  readonly entries: number;
   /** Rows the open permission drawer is scrolled by. */
   readonly permission: number;
 }
 
-/** Both windows at their first row, which is where a fresh reading starts. */
-export const AT_TOP: ReplViewports = Object.freeze({ sessions: 0, permission: 0 });
+/** Every window at its first row, which is where a fresh reading starts. */
+export const AT_TOP: ReplViewports = Object.freeze({ sessions: 0, entries: 0, permission: 0 });
 
 /** Everything typed and not yet committed anywhere. */
 export interface ReplState {
   readonly route: ReplRoute;
-  /** The entry draft, before an entry exists. */
+  /**
+   * The text of the entry that would be submitted next.
+   *
+   * Execution-wide, and independent of what is selected: an admitted entry is
+   * immutable, so this is always the *next* one. It survives a refused
+   * submission, remains editable while an entry is running and while a history
+   * position is being inspected, and leaves only when it has become an entry.
+   */
   readonly draft: string;
   /** The form being filled into the waiting question. */
   readonly form: ReplFormState;
@@ -528,6 +545,46 @@ export function permissionWithdrawn(state: ReplState): ReplState {
       ),
     }),
     viewports: Object.freeze({ ...state.viewports, permission: 0 }),
+  });
+}
+
+/**
+ * The state to adopt at a history position the selected entry predates, or none.
+ *
+ * A prefix earlier than an entry's admission holds no such entry, so the entry
+ * and the nested scopes beneath it name nothing there. The position is what was
+ * asked for, so what goes is the suffix that has become invalid — and nothing
+ * guesses another entry in its place, because the person chose a position
+ * rather than a selection.
+ *
+ * Everything else stands: the draft, the surface, the conversation filter and
+ * the marker itself. The drawers that go are the two that open over a scope; the
+ * History drawer is how a person reached this position and belongs to no scope
+ * at all.
+ *
+ * Only at a frozen position, and only when the entry is really absent. A
+ * directly opened location naming an entry its prefix never admitted refuses
+ * whole rather than arriving somewhere adjacent, and that path never comes here.
+ */
+export function withoutAbsentEntry(state: ReplState, model: ReplModel): ReplState | undefined {
+  const selected = state.route.scopes[0];
+  if (state.route.at === undefined || selected === undefined) {
+    return undefined;
+  }
+  if (model.entries.some((entry) => entry.key === selected)) {
+    return undefined;
+  }
+  return Object.freeze({
+    ...state,
+    route: Object.freeze({
+      ...state.route,
+      scopes: Object.freeze([]),
+      drawers: Object.freeze(
+        state.route.drawers.filter(
+          (drawer) => drawer.kind === "history" || drawer.kind === "live-permission",
+        ),
+      ),
+    }),
   });
 }
 
@@ -727,12 +784,12 @@ export function reduceRepl(
   const answering = state.route.drawers.some((drawer) => drawer.kind === "live-elicit");
 
   switch (action.kind) {
+    // Typing is always typing the *next* entry. Which entry is selected, and
+    // whether one is running, decide nothing here: an admitted entry is
+    // immutable, so there is never an entry these keystrokes could be editing.
     case "type": {
       if (answering) {
         return editing(state, live, action.field, (value) => value + action.text);
-      }
-      if (model.entries.length > 0) {
-        return refuse(state, "this execution has admitted its entry, and an entry is immutable.");
       }
       return drafting(state, state.draft + action.text);
     }
@@ -740,21 +797,26 @@ export function reduceRepl(
       if (answering) {
         return editing(state, live, action.field, shortened);
       }
-      if (model.entries.length > 0) {
-        return refuse(state, "this execution has admitted its entry, and an entry is immutable.");
-      }
       return drafting(state, shortened(state.draft));
     }
     case "submit": {
-      if (model.entries.length > 0) {
-        return refuse(state, "this REPL admits one entry, and this execution has admitted it.");
+      if (state.route.at !== undefined) {
+        // Inspection freezes durable state, not the draft. Submitting from here
+        // would have to choose an inheritance boundary, and the only one that is
+        // not a fork is the live head — which is not what this view is of.
+        return refuse(
+          state,
+          "this view is frozen at an earlier history position. Return to the live head to submit.",
+        );
       }
       if (state.draft.length === 0) {
         return refuse(state, "there is nothing to submit yet.");
       }
       // The draft stays until the entry exists. Clearing it here would lose
       // somebody's document to a preflight refusal, which is the one moment they
-      // most need it back.
+      // most need it back — and whether this is a moment to submit at all is the
+      // session's to answer, because only it knows whether the entry before this
+      // one has both settled and joined.
       return {
         state: Object.freeze({ ...state, refusal: undefined }),
         intent: { kind: "submit", source: state.draft },
@@ -873,6 +935,22 @@ export function reduceRepl(
       return settled({
         ...state,
         viewports: Object.freeze({ ...state.viewports, sessions }),
+        refusal: undefined,
+      });
+    }
+    case "scroll-entries": {
+      // The same clamp as the Sessions window, over the catalog's own rows, and
+      // applied from where the frame is rather than from the number that was
+      // stored: a resize changes what this window holds, and the region is
+      // already drawing the clamped position.
+      const furthest = Math.max(
+        0,
+        entryContent(model, undefined).length - entriesWindow(state, model, size).capacity,
+      );
+      const entries = clamped(clamped(state.viewports.entries, furthest) + action.delta, furthest);
+      return settled({
+        ...state,
+        viewports: Object.freeze({ ...state.viewports, entries }),
         refusal: undefined,
       });
     }
@@ -1518,41 +1596,48 @@ function described(view: ReplView): readonly Described[] {
       ),
     );
   }
-  // Read whether or not this frame draws the entry list: the footer's draft says
-  // whether an entry exists at every size and on either surface.
-  const entry = model.entries[0]?.scope;
   if (!narrow) {
     items.push(toEntries);
   }
   if (showEntry) {
-    if (entry === undefined) {
-      items.push(line("entry:none", "  1. (not submitted)"));
-    } else {
+    // One window over the whole catalog, for the same reason the Sessions
+    // reading has one: a list that described every entry and every nested scope
+    // beneath them would have its tail placed nowhere, and a row layout cannot
+    // place is not one a person can see, focus or point at. The controls sit
+    // outside the thing they move, and exist only where there is more catalog
+    // than this frame can hold.
+    const catalog = entryContent(model, view.focused);
+    const window = entriesWindow(state, model, view.size);
+    const from = clamped(state.viewports.entries, Math.max(0, catalog.length - window.capacity));
+    if (window.windowed) {
       items.push(
         row(
-          "entry:1",
-          `  1. ${entry.name}`,
-          { select: "scope", scopes: [entry.key] },
+          "entries:earlier",
+          "  [^ earlier]",
+          { select: "scroll-entries", delta: -1 },
           { here: view.focused },
         ),
       );
-      for (const scope of nested(entry, [entry.key])) {
-        items.push(
-          row(
-            `scope:${scope.path.join("/")}`,
-            `    ${scope.label}`,
-            {
-              select: "scope",
-              scopes: scope.path,
-            },
-            { here: view.focused },
-          ),
-        );
-      }
+    }
+    items.push(...catalog.slice(from, from + window.capacity));
+    if (window.windowed) {
+      items.push(
+        row(
+          "entries:later",
+          "  [v later]",
+          { select: "scroll-entries", delta: 1 },
+          { here: view.focused },
+        ),
+      );
     }
   }
 
-  for (const [index, transcript] of showEntry ? model.transcript.entries() : []) {
+  // The transcript of whatever is selected. Selecting an entry *is* selecting a
+  // transcript locus, so the rows are that entry's own — not every entry's
+  // concatenated, which would make the catalog a list of things that all show
+  // the same reading. With nothing selected the whole execution is the locus,
+  // which is what a one-entry execution has always shown.
+  for (const [index, transcript] of showEntry ? transcriptOf(model, selection).entries() : []) {
     // One cell is one row, so a recorded row that holds several lines of output
     // becomes several cells. A cell given more than one line would show only the
     // first, which is the whole of what a reader would then believe was there.
@@ -1563,7 +1648,12 @@ function described(view: ReplView): readonly Described[] {
   // The live overlay, explicitly below the recorded rows and explicitly labelled.
   // Once the durable close exists its recorded output is in the transcript and
   // this is empty, so the two never both claim to be the output.
-  if (showEntry && live.output.length > 0) {
+  //
+  // It belongs to the entry producing it, which is the last one this prefix
+  // admitted — nothing earlier can still be running. A reader who has selected
+  // an earlier entry is reading a settled transcript, and text from a run that
+  // is not the one they are looking at would be attributed to it.
+  if (showEntry && live.output.length > 0 && livesHere(model, selection)) {
     for (const [offset, text] of live.output.split("\n").entries()) {
       items.push(line(`line:live:${offset}`, `… ${text}`));
     }
@@ -1672,7 +1762,10 @@ function described(view: ReplView): readonly Described[] {
     items.push(line("footer:refused", `! ${state.refusal.split("\n").join(" ")}`));
   }
 
-  // The draft, which is where typing goes until an entry exists.
+  // The draft, which is where typing goes. Always the next entry's text: an
+  // admitted entry is immutable, so there is never one these keystrokes could
+  // be editing, and a person may go on typing while an entry runs and while a
+  // history position is being read.
   //
   // It claims focus only while nothing holds it. A claim is where focus *starts*,
   // not an assertion repeated every frame: the tree re-reads the claim at each
@@ -1685,8 +1778,8 @@ function described(view: ReplView): readonly Described[] {
   items.push(
     field(
       "footer:input",
-      entry === undefined ? "> " : "  ",
-      entry === undefined ? state.draft : "(one entry admitted)",
+      "> ",
+      state.draft,
       "draft",
       claiming ? { focus: true, here: view.focused } : { here: view.focused },
     ),
@@ -1697,6 +1790,34 @@ function described(view: ReplView): readonly Described[] {
     items.push(drawer);
   }
   return items;
+}
+
+/**
+ * The transcript rows the selected locus holds.
+ *
+ * An entry's own rows when one is selected, and the whole execution's when none
+ * is. The model keeps both, so this chooses between two readings it already
+ * holds rather than filtering one into the other.
+ */
+function transcriptOf(model: ReplModel, selection: ReplSelection): readonly ReplRow[] {
+  const key = selection.entry?.key;
+  if (key === undefined) {
+    return model.transcript;
+  }
+  return model.entries.find((entry) => entry.key === key)?.transcript ?? model.transcript;
+}
+
+/**
+ * Whether the entry producing live output is the one being read.
+ *
+ * Only the last entry a prefix admitted can still be running — entries are
+ * serial, and an earlier one settled before this one was admitted. So output
+ * this process has not retained belongs there, and nowhere else. Selecting
+ * nothing is reading the execution, which includes whatever is running in it.
+ */
+function livesHere(model: ReplModel, selection: ReplSelection): boolean {
+  const key = selection.entry?.key;
+  return key === undefined || key === model.entries[model.entries.length - 1]?.key;
 }
 
 /**
@@ -1872,19 +1993,124 @@ function sessionContentRows(state: ReplState, model: ReplModel, live: ReplLive):
  */
 function sessionsCapacity(state: ReplState, model: ReplModel, size: ReplTerminalSize): number {
   const narrow = profileFor(size) === "narrow";
-  const shared = narrow ? locationRows(encodeLocation(state.route), size).length : entryRows(model);
+  const shared = narrow
+    ? locationRows(encodeLocation(state.route), size).length
+    : entriesFootprint(state, model, size);
   // Both controls in a narrow frame, where they are one bar above the outlet.
   // In a sidebar the entry list brings its own heading, counted with it.
   const navigation = narrow ? 2 : 1;
-  /** `[^ earlier]` and `[v later]`, which are how the window moves. */
-  const controls = 2;
-  return Math.max(1, sessionsHeight(size) - shared - navigation - controls);
+  return Math.max(1, sessionsHeight(size) - shared - navigation - WINDOW_CONTROLS);
 }
 
-/** How many rows the entry list takes in a sidebar, its heading included. */
-function entryRows(model: ReplModel): number {
-  const entry = model.entries[0]?.scope;
-  return entry === undefined ? 2 : 2 + nested(entry, [entry.key]).length;
+/** `[^ earlier]` and `[v later]`, which are how either window moves. */
+const WINDOW_CONTROLS = 2;
+
+/**
+ * The most of a sidebar the Entries catalog may take from the reading beside it.
+ *
+ * A share rather than whatever the catalog happens to need: both lists are in
+ * one column, and a catalog that sized itself by its own length would push the
+ * Sessions reading — and then the Entries heading itself — off the bottom as
+ * entries accumulated. Halving it is what makes the two independent, so neither
+ * window has to be computed from the other.
+ */
+const SIDEBAR_SHARE = 2;
+
+/** One window over the catalog: what it can place, and how to reach the rest. */
+interface ReplEntriesWindow {
+  readonly capacity: number;
+  /** Whether the window controls are needed, which is what they cost a row for. */
+  readonly windowed: boolean;
+}
+
+/**
+ * How many catalog rows one frame can place, and whether it must scroll.
+ *
+ * The room is what is left of the region after everything that is not the
+ * moving window: in a narrow frame the canonical location and both surface
+ * controls, and in a sidebar this catalog's own share of the column, less its
+ * heading. A catalog that fits takes exactly its own length and no controls, so
+ * a one-entry execution draws precisely what it always drew.
+ */
+function entriesWindow(
+  state: ReplState,
+  model: ReplModel,
+  size: ReplTerminalSize,
+): ReplEntriesWindow {
+  const content = entryContent(model, undefined).length;
+  const narrow = profileFor(size) === "narrow";
+  const room = narrow
+    ? sessionsHeight(size) - locationRows(encodeLocation(state.route), size).length - 2
+    : Math.floor(sessionsHeight(size) / SIDEBAR_SHARE) - 1;
+  const placeable = Math.max(1, room);
+  return content <= placeable
+    ? { capacity: content, windowed: false }
+    : { capacity: Math.max(1, placeable - WINDOW_CONTROLS), windowed: true };
+}
+
+/** How many rows the catalog occupies in a sidebar, its heading included. */
+function entriesFootprint(state: ReplState, model: ReplModel, size: ReplTerminalSize): number {
+  const window = entriesWindow(state, model, size);
+  return 1 + window.capacity + (window.windowed ? WINDOW_CONTROLS : 0);
+}
+
+/**
+ * The Entries catalog, as rows, in immutable admission order.
+ *
+ * Admission order and nothing else: not completion, not terminal outcome, not
+ * publication and not latest activity. An entry's place in this list is a fact
+ * about when it was admitted, so a row cannot move out from under somebody
+ * because a later entry finished first.
+ *
+ * Each row is keyed by its entry's own stable key rather than by where it sits
+ * in whatever window is showing, so scrolling moves the window and changes the
+ * identity of nothing in it. Its nested scopes follow it, keyed by the path
+ * that selects them — which begins with that entry, so two entries holding the
+ * same component cannot collide.
+ *
+ * The outcome comes before the name, because the name is unbounded and the
+ * column is not. A sidebar is 28 columns at its narrowest, and this row is the
+ * one place a reader is promised an entry's outcome — put it after an
+ * arbitrarily long root name and a long enough name takes the promise away.
+ */
+function entryContent(model: ReplModel, focused: string | undefined): readonly Described[] {
+  if (model.entries.length === 0) {
+    return [line("entry:none", "  1. (not submitted)")];
+  }
+  const items: Described[] = [];
+  for (const entry of model.entries) {
+    items.push(
+      row(
+        `entry:${entry.key}`,
+        `  ${entry.order}. [${outcomeOfEntry(entry)}] ${entry.scope.name}`,
+        { select: "scope", scopes: [entry.key] },
+        { here: focused },
+      ),
+    );
+    for (const scope of nested(entry.scope, [entry.key])) {
+      items.push(
+        row(
+          `scope:${scope.path.join("/")}`,
+          `    ${scope.label}`,
+          { select: "scope", scopes: scope.path },
+          { here: focused },
+        ),
+      );
+    }
+  }
+  return items;
+}
+
+/**
+ * What one catalog row says this entry came to.
+ *
+ * Four readings, because those are the four a reader has to tell apart: an
+ * entry whose root has not closed is unfinished — running here, or interrupted
+ * before it settled — and the three outcomes a root close carries are three
+ * different answers rather than one "done".
+ */
+function outcomeOfEntry(entry: ReplEntry): string {
+  return entry.terminal === undefined ? "unfinished" : entry.terminal.status;
 }
 
 /**

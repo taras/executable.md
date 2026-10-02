@@ -26,7 +26,7 @@ export type ReplAction =
   | { readonly kind: "type"; readonly text: string; readonly field?: string }
   /** Remove the last Unicode scalar value from one named field, or the draft. */
   | { readonly kind: "erase"; readonly field?: string }
-  /** Admit the draft as this execution's one entry. */
+  /** Admit the draft as this execution's next entry. */
   | { readonly kind: "submit" }
   | { readonly kind: "select-surface"; readonly surface: ReplSurface }
   /** Select a structural scope by its key path, outermost first. */
@@ -63,6 +63,14 @@ export type ReplAction =
    * whichever the reducer guessed.
    */
   | { readonly kind: "scroll-sessions"; readonly delta: number }
+  /**
+   * Move the Entries catalog by whole rows.
+   *
+   * Its own member for the same reason `scroll-sessions` is: a wide frame has
+   * both readings open at once, and one action meaning either would move
+   * whichever the reducer guessed rather than the list the control belongs to.
+   */
+  | { readonly kind: "scroll-entries"; readonly delta: number }
   /**
    * Show only the conversation this provider session key names.
    *

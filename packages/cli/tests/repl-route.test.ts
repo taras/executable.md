@@ -17,7 +17,12 @@ import type { DurableEvent } from "@executablemd/durable-streams";
 import { projectRepl } from "../src/repl/model.ts";
 import type { ReplModel } from "../src/repl/model.ts";
 import { decodeLocation, encodeLocation, NO_LIVE, resolveLocation } from "../src/repl/route.ts";
-import type { ReplLiveAvailability, ReplRoute, ReplSelection } from "../src/repl/route.ts";
+import type {
+  ReplDrawerRef,
+  ReplLiveAvailability,
+  ReplRoute,
+  ReplSelection,
+} from "../src/repl/route.ts";
 import { agentReferenceEvents, referenceEvents } from "./fixtures/repl/reference.ts";
 
 function decoded(location: string): ReplRoute {
@@ -163,11 +168,7 @@ describe("REPL route: the grammar", () => {
       "scopes precede its drawers",
     );
     expect(refused(`xmd://repl/${EXECUTION}/repl/entry-1/+notes`)).toContain("names a drawer");
-    expect(refused(`xmd://repl/${EXECUTION}/repl/entry-1?draft=text`)).toContain("a draft is text");
-    expect(refused(`xmd://repl/${EXECUTION}/repl?draft=text&at=yield:root:0`)).toContain(
-      "a draft is text",
-    );
-    expect(refused(`xmd://repl/${EXECUTION}/sessions/entry-1`)).toContain("Sessions surface");
+    expect(refused(`xmd://repl/${EXECUTION}/sessions/+binding:plan`)).toContain("Sessions surface");
     expect(refused(`xmd://repl/${EXECUTION}/repl?pause=1`)).toContain("query");
     expect(refused(`xmd://repl/${EXECUTION}/repl#top`)).toContain("no fragment");
     expect(refused("xmd://repl/../repl")).toContain("opaque identifier");
@@ -179,12 +180,47 @@ describe("REPL route: the grammar", () => {
 
     expect(() => encodeLocation({ ...route, at: undefined })).toThrow();
     expect(() => encodeLocation({ ...route, execution: "../escape" })).toThrow();
+    // Superseded: a selected entry beside the Sessions surface used to be
+    // unspellable. Which surface is being read and which entry is selected are
+    // independent members of one location (#827 Slice C), so what cannot be
+    // spelled on Sessions is a drawer that opens over a scope.
+    // Declared, so the drawer this spells is the one the grammar defines rather
+    // than a shape this row asserts into place.
+    const binding: ReplDrawerRef = { kind: "binding", name: "plan" };
     expect(() =>
-      encodeLocation({ ...route, at: undefined, inspect: false, draft: "typing" }),
+      encodeLocation({ ...route, surface: "sessions", drawers: Object.freeze([binding]) }),
     ).toThrow();
-    expect(() =>
-      encodeLocation({ ...route, surface: "sessions", at: undefined, inspect: false }),
-    ).toThrow();
+  });
+
+  it("ER1: one location carries entry, scope, draft, surface, drawer, filter and position", function* () {
+    // Everything at once, through one canonical spelling and back. The draft is
+    // the *next* entry's text, so it accompanies a selected entry, a scope
+    // beneath it, a drawer stack, a conversation filter and a frozen position
+    // rather than being a state an execution can only be in before its first
+    // entry.
+    const location =
+      `xmd://repl/${EXECUTION}/repl/entry-2/Checklist-1/+binding:plan` +
+      `?at=yield:root:6&inspect&draft=another%20entry&session=stub:planner`;
+    const route = decoded(location);
+
+    expect(route.scopes).toEqual(["entry-2", "Checklist-1"]);
+    expect(route.drawers).toEqual([{ kind: "binding", name: "plan" }]);
+    expect(route.at).toBe("yield:root:6");
+    expect(route.inspect).toBe(true);
+    expect(route.draft).toBe("another entry");
+    expect(route.session).toBe("stub:planner");
+    expect(route.surface).toBe("repl");
+
+    // One canonical spelling, and reading it again is the same route.
+    expect(encodeLocation(route)).toBe(location);
+    expect(decoded(encodeLocation(route))).toEqual(route);
+
+    // And the same on the Sessions surface, which holds no entry but the same
+    // execution-wide draft and position.
+    const sessions =
+      `xmd://repl/${EXECUTION}/sessions/+permission` +
+      `?at=yield:root:6&inspect&draft=more&session=stub:planner`;
+    expect(encodeLocation(decoded(sessions))).toBe(sessions);
   });
 });
 
@@ -341,15 +377,70 @@ describe("REPL route: resolving against one model", () => {
     expect(sessions.drawers).toEqual([]);
   });
 
-  it("R2: refuses a draft against an execution that has admitted its entry", function* () {
+  it("ER1: a draft resolves beside an admitted entry, its scope and a frozen position", function* () {
+    // Superseded `R2: refuses a draft against an execution that has admitted
+    // its entry`. An admitted entry is immutable, so a draft is never text that
+    // could be editing it — it is the next entry's, and it coexists.
+    const events = yield* referenceEvents();
+    const model = projected(events);
+    const entry = model.entries[0]?.scope;
+    if (entry === undefined) {
+      throw new Error("the reference journal admits an entry");
+    }
+
+    const beside = resolved(model, `xmd://repl/${EXECUTION}/repl/entry-1?draft=another%20entry`);
+    expect(beside.entry).toBe(entry);
+    expect(beside.route.draft).toBe("another entry");
+
+    // The same beside a nested scope, and beside a conversation filter.
+    const nested = resolved(
+      model,
+      `xmd://repl/${EXECUTION}/repl/entry-1/Checklist-1?draft=another%20entry`,
+    );
+    expect(nested.scope?.key).toBe("Checklist-1");
+    expect(nested.route.draft).toBe("another entry");
+
+    // And at a frozen position, where inspection freezes durable state and not
+    // what is being typed.
+    const marker = model.checkpoints[1]?.marker;
+    if (marker === undefined) {
+      throw new Error("the reference journal offers more than one position");
+    }
+    const frozen = projected(events, marker);
+    const inspecting = resolved(
+      frozen,
+      `xmd://repl/${EXECUTION}/repl?at=${encodeURIComponent(marker)}&inspect&draft=typed`,
+    );
+    expect(inspecting.route.draft).toBe("typed");
+    expect(inspecting.route.inspect).toBe(true);
+
+    // An execution with no entry still resolves its own draft, as it always did.
+    expect(resolved(projected([]), `xmd://repl/${EXECUTION}/repl?draft=first%20entry`).entry).toBe(
+      undefined,
+    );
+  });
+
+  it("ER1: an entry absent from the selected prefix refuses, whole", function* () {
     const events = yield* referenceEvents();
     const model = projected(events);
 
-    expect(unresolved(model, `xmd://repl/${EXECUTION}/repl?draft=another%20entry`)).toContain(
-      "already admitted its entry",
+    // Nothing partial: the refusal carries no selection at all, so there is no
+    // entry, ancestry or scope for a caller to read past it and no adjacent
+    // entry guessed in the absent one's place.
+    const attempt = resolveLocation(
+      model,
+      decoded(`xmd://repl/${EXECUTION}/repl/entry-2/Checklist-1`),
+      NO_LIVE,
     );
-    expect(resolved(projected([]), `xmd://repl/${EXECUTION}/repl?draft=first%20entry`).entry).toBe(
-      undefined,
+    if (attempt.ok) {
+      throw new Error("a prefix that admitted no entry-2 must refuse a location naming it");
+    }
+    expect(attempt.error.message).toContain("no entry-2");
+    expect(Object.hasOwn(attempt, "value")).toBe(false);
+
+    // The entry it does hold is still exactly the one it held before.
+    expect(resolved(model, `xmd://repl/${EXECUTION}/repl/entry-1`).entry).toBe(
+      model.entries[0]?.scope,
     );
   });
 });
@@ -414,8 +505,11 @@ describe("REPL route: the conversation filter", () => {
     expect(refused(`xmd://repl/${EXECUTION}/sessions?session`)).toContain("query");
     expect(refused(`xmd://repl/${EXECUTION}/sessions?session=%zz`)).toContain("query");
     // Not a path segment. A conversation is a filter over what Sessions lists,
-    // not a place inside it, and a segment would make one URL mean two things.
-    expect(refused(`xmd://repl/${EXECUTION}/sessions/xmd:v1:a`)).toContain("Sessions surface");
+    // and a path segment is the entry a reader will come back to — so one URL
+    // still means one thing, and spelling a key there selects no conversation.
+    const segmented = decoded(`xmd://repl/${EXECUTION}/sessions/xmd:v1:a`);
+    expect(segmented.session).toBe(undefined);
+    expect(segmented.scopes).toEqual(["xmd:v1:a"]);
 
     const route = decoded(`xmd://repl/${EXECUTION}/sessions?session=one`);
     expect(() => encodeLocation({ ...route, session: "" })).toThrow();

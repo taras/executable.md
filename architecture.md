@@ -5486,6 +5486,19 @@ concurrent Prompts that publish out of order do not reorder each other. The
 slot, its order and its live key are process-local — no route, model, Journal
 record or public Core Api carries one.
 
+A Prompt's sequence number is local to the execution that recorded it, so it
+restarts with every entry and two entries may each hold sequence `0`. Turns are
+therefore ordered by entry admission first and by sequence within that entry,
+and uniqueness is required only inside the owning entry. Both retained and live
+turns carry their entry beside their scope, and a publication is correlated by
+the pair — a durable Prompt name says where it was written, so two entries
+running one source hold the same name at the same position, and correlating by
+the name alone shows one turn twice and the other not at all.
+
+Sessions stays one execution-wide chronology grouped by the provider's session
+key and by nothing else. Selecting an entry changes which transcript is being
+read and never which conversations are listed.
+
 Filtering is by the conversation key a provider actually issued; an authored
 `<Session>` name is not one. Selecting or clearing changes `route.session` and
 nothing else, and background Agent work never changes it.
@@ -5608,7 +5621,8 @@ DurableEvents -> frozen ReplModel -> resolved immutable view
 | `model.ts` | projecting one validated Journal prefix into a frozen model |
 | `route.ts` | the location grammar, and resolving one against a model |
 | `journal.ts` | the retained NDJSON stream and the repository over a root |
-| `session.ts` | admitting one entry, reopening one history, and the live overlay |
+| `session.ts` | admitting entries in turn, reopening one history, and the live overlay |
+| `entries.ts` | partitioning one physical journal into entry segments, and the private stream view over one of them |
 | `expansion.ts` | pausing and continuing expansion over the public seams |
 | `elicitation.ts` | the one question shape this REPL presents |
 | `description.ts` | opaque immutable descriptions and the closed action boundary |
@@ -5621,6 +5635,53 @@ DurableEvents -> frozen ReplModel -> resolved immutable view
 | `terminal.ts` · `terminal-host.ts` · `screen.ts` | the terminal Api, its portable half, and the one owner of its modes |
 | `components/` · `application.ts` | the screens, and the one state transition boundary |
 | `storage.ts` · `program.ts` | where histories live, and the command as one scope |
+
+### Sequential entries over one physical journal
+
+One execution is one append-only stream, and entries are ranges of it. A segment
+begins at the root `import_component` admission and ends at that root's `Close`;
+only the final one may be unfinished. Each live execution is given a private
+view over exactly its own segment, so a repeated root name and a reused
+coroutine id cannot correlate across entries — the view reads only its range,
+delegates every append to the physical stream, updates what it believes only
+after that append is acknowledged, and refuses to write at all once its segment
+is closed or is no longer the final one. No physical offset reaches Core; the
+command's own observer holds the acknowledged prefix and computes the resulting
+marker. This partitioning is private to the CLI: `DurableStream` is unchanged
+and there is no physical-offset API.
+
+The whole prefix is partitioned and validated before any entry is projected, and
+a malformed boundary refuses the model whole rather than yielding a partial
+catalog — work before the first admission, a nested or repeated admission inside
+an unfinished segment, a close with no open segment, work between a terminal
+close and the next admission, a second unfinished segment, or a segment the
+one-entry reader cannot read.
+
+Entry keys are `entry-1`, `entry-2`, and so on, from immutable admission order;
+they are not Journal markers. The first entry keeps every marker spelling it
+ever had, so every location written before this existed still resolves, and
+later entries namespace their segment-local markers with their key. Projection
+converts between the two at that private boundary, and Core sees only the
+segment-local history it already understands.
+
+Values cross between entries through one trusted-host input: `executeInstalled()`
+takes the root environment's initial bare bindings beside the source, exported
+from `@executablemd/core/host` and from nowhere else — not a Context, component,
+middleware answer, document prop or durable record, and not on ordinary
+`execute()`. Core parses, name-validates and recursively copies the whole record
+before any installation or document code runs, and the detached values are
+ordinarily mutable inside the execution that receives them. The REPL derives
+that record only from values durably retained before the new entry's admission,
+so replay derives the identical record from the identical bytes.
+
+The session owns at most one entry task. Starting another needs two separate
+facts — the preceding entry has a retained terminal close, *and* its task has
+completely torn down and joined — because observing a terminal outcome is not
+the same as the work being over. There is no queue: a submission that arrives
+before both hold is refused, having started nothing, and teardown stops a
+pending one from starting rather than appending on its behalf. Settled segments
+are projected and never replayed; only an unfinished final segment is given back
+to Core to continue.
 
 A location is resolved against the retained history before a session opens.
 Opening one starts or resumes the execution, and replay past the retained prefix

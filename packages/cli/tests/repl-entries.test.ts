@@ -48,6 +48,24 @@ import { entryInitialBindings, projectRepl } from "../src/repl/model.ts";
 import type { ReplModel } from "../src/repl/model.ts";
 import { openReplSession, submitReplEntry } from "../src/repl/session.ts";
 import type { ReplSession } from "../src/repl/session.ts";
+import {
+  admitted,
+  describeApplication,
+  initialState,
+  NO_AGENT,
+  reduceRepl,
+  replSurface,
+  viewFor,
+  withoutAbsentEntry,
+} from "../src/repl/application.ts";
+import type { ReplAction, ReplLive, ReplState, ReplView } from "../src/repl/application.ts";
+import { layout, NARROW } from "../src/repl/layout.ts";
+import type { ReplPlacedCell, ReplSemanticFrame } from "../src/repl/layout.ts";
+import type { ReplTerminalSize } from "../src/repl/terminal.ts";
+import { fields, readDescription } from "../src/repl/description.ts";
+import type { ReplDescription } from "../src/repl/description.ts";
+import { useReplTree } from "../src/repl/reconcile.ts";
+import type { ReplTree } from "../src/repl/reconcile.ts";
 
 /** One entry that publishes two root values and renders one of them. */
 const FIRST = [
@@ -1402,6 +1420,1079 @@ describe("REPL entries: one session, one entry task, in turn", () => {
       expect(session.live).toBe(false);
       expect(session.agent.turns).toEqual([]);
       expect(started(yield* holder.stream.readAll())).toBe(1);
+    });
+  });
+});
+
+/**
+ * The widest accepted frame, stated here because layout keeps it private.
+ *
+ * The two sizes below are the two this Story's catalog has to work at: the
+ * sidebar, where the catalog shares a column with the Sessions reading, and the
+ * narrow outlet, where it has the screen to itself under the location and the
+ * two surface controls.
+ */
+const WIDE: ReplTerminalSize = { columns: 160, rows: 36 };
+
+/** A process holding nothing live, which is also what a frozen prefix shows. */
+const NOTHING_LIVE: ReplLive = Object.freeze({
+  output: "",
+  question: undefined,
+  expansion: "playing",
+  pausable: false,
+  agent: NO_AGENT,
+});
+
+/** This process's overlay, exactly as the program reads it into a view. */
+function liveReading(session: ReplSession): ReplLive {
+  return {
+    output: session.overlay.output,
+    question: session.overlay.question,
+    expansion: session.expansion.state,
+    pausable: session.controller !== undefined,
+    agent: session.agent,
+  };
+}
+
+/** The view this state reads as, or the failure that stopped it. */
+function reading(
+  state: ReplState,
+  model: ReplModel,
+  live: ReplLive = NOTHING_LIVE,
+  size: ReplTerminalSize = NARROW,
+  focused?: string,
+): ReplView {
+  const resolved = viewFor(state, model, live, size, focused);
+  if (!resolved.ok) {
+    throw resolved.error;
+  }
+  return resolved.value;
+}
+
+/** Why this state has no view at all, which is what an atomic refusal leaves. */
+function unreadable(state: ReplState, model: ReplModel): string {
+  const resolved = viewFor(state, model, NOTHING_LIVE, NARROW);
+  if (resolved.ok) {
+    throw new Error("this state produced a view, and this model cannot answer it");
+  }
+  return resolved.error.message;
+}
+
+/** Every described row, flattened, with its key and label. */
+function rowsOf(descriptions: readonly ReplDescription<ReplAction>[]): Array<{
+  key: string;
+  label: string;
+}> {
+  const found: Array<{ key: string; label: string }> = [];
+  const walk = (description: ReplDescription<ReplAction>): void => {
+    const read = readDescription(description);
+    const named = fields(read.input);
+    const label = named?.["label"] ?? named?.["text"] ?? "";
+    found.push({ key: read.key, label: typeof label === "string" ? label : "" });
+    for (const child of read.children ?? []) {
+      walk(child);
+    }
+  };
+  for (const description of descriptions) {
+    walk(description);
+  }
+  return found;
+}
+
+/** The keys this view describes, in order. */
+function keysOf(view: ReplView): string[] {
+  return rowsOf(describeApplication(view)).map((one) => one.key);
+}
+
+/** The catalog rows this view describes, in the order it describes them. */
+function catalogOf(view: ReplView): Array<{ key: string; label: string }> {
+  return rowsOf(describeApplication(view)).filter(
+    (one) => one.key.startsWith("entry:") || one.key.startsWith("scope:"),
+  );
+}
+
+/** Commit one view into the real tree, refusing to assert past a rejected set. */
+function* applied(tree: ReplTree<ReplAction>, view: ReplView): Operation<void> {
+  const result = yield* tree.apply(describeApplication(view));
+  if (!result.ok) {
+    throw result.error;
+  }
+}
+
+/** The mounted node this key names, or none, which is what absence looks like. */
+function nodeOf(tree: ReplTree<ReplAction>, key: string): string | undefined {
+  return tree.mounted().find((id) => tree.keyOf(id) === key);
+}
+
+/** The cell this frame placed for one key, or none, which is what a map holds. */
+function placedFor(
+  tree: ReplTree<ReplAction>,
+  frame: ReplSemanticFrame,
+  key: string,
+): ReplPlacedCell | undefined {
+  return frame.cells.find((cell) => tree.keyOf(cell.node) === key);
+}
+
+/** Mount one view and lay it out at one size, the way the program does. */
+function* drawn(
+  tree: ReplTree<ReplAction>,
+  view: ReplView,
+  size: ReplTerminalSize,
+): Operation<ReplSemanticFrame> {
+  yield* applied(tree, view);
+  return layout(size, replSurface(tree, view));
+}
+
+/**
+ * Point at one key the way the renderer's map resolves a pointer.
+ *
+ * Through the frame rather than through the tree: a cell the frame did not
+ * place, or placed and did not offer, is in no target map at all, so reaching
+ * for the node directly would prove something no pointer can do.
+ */
+function* pointed(
+  tree: ReplTree<ReplAction>,
+  frame: ReplSemanticFrame,
+  key: string,
+): Operation<ReplAction> {
+  const cell = placedFor(tree, frame, key);
+  if (cell === undefined) {
+    throw new Error(`this frame placed no cell for ${key}`);
+  }
+  if (!cell.targetable) {
+    throw new Error(`${key} is placed but is in no target map`);
+  }
+  const dispatched = yield* tree.dispatch({
+    kind: "pointer",
+    target: cell.node,
+    frame: tree.frame().id,
+  });
+  if (!dispatched.ok || dispatched.value.outcome !== "action") {
+    throw new Error(`the pointer on ${key} produced no action`);
+  }
+  return dispatched.value.action;
+}
+
+/** Tab until the control this key names holds focus, the way a person reaches it. */
+function* focusTo(tree: ReplTree<ReplAction>, key: string): Operation<void> {
+  for (let press = 0; press < 400; press += 1) {
+    const node = tree.focused();
+    if (node !== undefined && tree.keyOf(node) === key) {
+      return;
+    }
+    yield* tree.dispatch({ kind: "key", key: "Tab" });
+  }
+  throw new Error(`focus never reached ${key}`);
+}
+
+/** Activate the focused control, and answer what it asked for. */
+function* activated(tree: ReplTree<ReplAction>): Operation<ReplAction> {
+  const dispatched = yield* tree.dispatch({ kind: "key", key: "Enter" });
+  if (!dispatched.ok || dispatched.value.outcome !== "action") {
+    throw new Error("the focused control produced no action");
+  }
+  return dispatched.value.action;
+}
+
+/** One action reduced, refusing to carry a refusal forward unnoticed. */
+function acted(
+  state: ReplState,
+  action: ReplAction,
+  model: ReplModel,
+  live: ReplLive = NOTHING_LIVE,
+  size: ReplTerminalSize = NARROW,
+): ReplState {
+  const next = reduceRepl(state, action, model, live, size);
+  if (next.state.refusal !== undefined) {
+    throw new Error(`${action.kind} was refused: ${next.state.refusal}`);
+  }
+  return next.state;
+}
+
+/** The same state carrying one draft, in the state and in the location together. */
+function drafting(state: ReplState, draft: string): ReplState {
+  return Object.freeze({
+    ...state,
+    draft,
+    route: Object.freeze({ ...state.route, draft: draft.length === 0 ? undefined : draft }),
+  });
+}
+
+/** The same state selecting one entry and the scopes beneath it. */
+function selecting(state: ReplState, ...scopes: readonly string[]): ReplState {
+  return Object.freeze({
+    ...state,
+    route: Object.freeze({ ...state.route, scopes: Object.freeze([...scopes]) }),
+  });
+}
+
+/** The same state frozen at one history position, the way the action freezes it. */
+function frozenAt(state: ReplState, marker: string): ReplState {
+  return Object.freeze({
+    ...state,
+    route: Object.freeze({ ...state.route, at: marker, inspect: true }),
+  });
+}
+
+const EXECUTION = "entries";
+
+/**
+ * Enough entries that no accepted frame can place the whole catalog.
+ *
+ * Each one is trivial and settles immediately: what these rows are about is how
+ * many rows the catalog has, not what any of them did.
+ */
+function* manyEntries(count: number): Operation<DurableEvent[]> {
+  const physical = new InMemoryStream();
+  for (let at = 1; at <= count; at += 1) {
+    yield* runEntry(physical, `Entry ${at}.\n`);
+  }
+  return yield* physical.readAll();
+}
+
+describe("REPL entries: the draft, the gate and the position", () => {
+  beforeAll(() => useTempFileCompiler());
+
+  it("ER1: the draft stays editable while an entry runs and while history is read", function* () {
+    const holder = replExecution();
+    yield* scoped(function* () {
+      const session = opened(yield* submitReplEntry({ execution: holder, source: ASKS }));
+      const question = yield* asking(session);
+      // An entry is running: the question is what is holding it open.
+      expect(session.live).toBe(true);
+      expect(session.model.entries[0]?.settled).toBe(false);
+
+      // Typing reaches the draft, not the entry. An admitted entry is
+      // immutable, so there was never one these keystrokes could edit.
+      const live = liveReading(session);
+      let state = initialState(EXECUTION);
+      for (const text of ["next", " entry"]) {
+        state = acted(state, { kind: "type", text }, session.model, live);
+      }
+      expect(state.draft).toBe("next entry");
+      // And the location says so, which is how a second process arrives at it.
+      expect(state.route.draft).toBe("next entry");
+      expect(reading(state, session.model, live).location).toContain("draft=next%20entry");
+
+      // Backspace is the same keystroke on the same field.
+      state = acted(state, { kind: "erase" }, session.model, live);
+      expect(state.draft).toBe("next entr");
+
+      // The same while a history position is being inspected: inspection
+      // freezes durable state, and the draft is not durable state.
+      const marker = session.model.checkpoints[0]?.marker;
+      if (marker === undefined) {
+        throw new Error("a running entry has offered at least one position");
+      }
+      const prefix = projected(yield* holder.stream.readAll(), marker);
+      let inspecting = frozenAt(drafting(initialState(EXECUTION), "typed"), marker);
+      inspecting = acted(inspecting, { kind: "type", text: " more" }, prefix);
+      expect(inspecting.draft).toBe("typed more");
+      expect(inspecting.route.at).toBe(marker);
+      expect(inspecting.route.inspect).toBe(true);
+
+      question.submit({ decision: "go" });
+      yield* session.join();
+    });
+  });
+
+  it("ER1: Run refuses at every closed gate, starts nothing and keeps the exact draft", function* () {
+    const holder = replExecution();
+    const entered = gate();
+    const release = gate();
+    const DRAFT = "One: {token}\n";
+    try {
+      yield* scoped(function* () {
+        try {
+          const session = opened(
+            yield* submitReplEntry({
+              execution: holder,
+              source: ASKS,
+              installations: [holdingTeardown(entered, release)],
+            }),
+          );
+          const question = yield* asking(session);
+          const standing = drafting(initialState(EXECUTION), DRAFT);
+
+          // [1] While the entry is running. The reducer asks for the
+          // submission, because whether this is a moment to submit is the
+          // session's to answer; the session refuses and starts nothing, and
+          // the draft is exactly as it was typed.
+          const whileRunning = reduceRepl(
+            standing,
+            { kind: "submit" },
+            session.model,
+            liveReading(session),
+            NARROW,
+          );
+          expect(whileRunning.intent).toEqual({ kind: "submit", source: DRAFT });
+          expect(whileRunning.state.draft).toBe(DRAFT);
+          const running = refusedSubmission(yield* session.submit(DRAFT));
+          expect(running.name).toBe("ReplLifecycleError");
+          expect(running.message).toContain("has not finished");
+          expect(started(yield* holder.stream.readAll())).toBe(1);
+
+          // [2] Terminal, and not yet joined. The history says the entry
+          // settled and the session still owns the task that settled it.
+          question.submit({ decision: "go" });
+          yield* awaiting("the first entry reaching its own teardown", entered.opened);
+          expect(session.model.entries[0]?.settled).toBe(true);
+          expect(session.live).toBe(true);
+          const unjoined = refusedSubmission(yield* session.submit(DRAFT));
+          expect(unjoined.name).toBe("ReplLifecycleError");
+          expect(started(yield* holder.stream.readAll())).toBe(1);
+
+          // [3] At a frozen position, where the reducer itself refuses: there
+          // is no inheritance boundary here that is not a fork, so no intent
+          // leaves this screen at all.
+          const marker = session.model.entries[0]?.scope.marker;
+          if (marker === undefined) {
+            throw new Error("an admitted entry has an admission marker");
+          }
+          const historical = reduceRepl(
+            frozenAt(standing, marker),
+            { kind: "submit" },
+            projected(yield* holder.stream.readAll(), marker),
+            NOTHING_LIVE,
+            NARROW,
+          );
+          expect(historical.intent).toEqual({ kind: "none" });
+          expect(historical.state.refusal).toContain("Return to the live head");
+          expect(historical.state.draft).toBe(DRAFT);
+          // Byte for byte, and everything beside it stands: the route, the
+          // selection, the surface and the position are all untouched.
+          expect(historical.state.route.draft).toBe(DRAFT);
+          expect(historical.state.route.at).toBe(marker);
+          expect(historical.state.route.surface).toBe("repl");
+          expect(started(yield* holder.stream.readAll())).toBe(1);
+        } finally {
+          release.open();
+        }
+      });
+    } finally {
+      release.open();
+    }
+    expect(started(yield* holder.stream.readAll())).toBe(1);
+  });
+
+  it("ER1: the preserved draft becomes the exact next entry, and only then clears", function* () {
+    const holder = replExecution();
+    yield* scoped(function* () {
+      const session = opened(yield* submitReplEntry({ execution: holder, source: FIRST }));
+      yield* session.join();
+
+      const standing = drafting(initialState(EXECUTION), INHERITING);
+      const asked = reduceRepl(
+        standing,
+        { kind: "submit" },
+        session.model,
+        liveReading(session),
+        NARROW,
+      );
+      expect(asked.intent).toEqual({ kind: "submit", source: INHERITING });
+      // Still there while the submission is in flight: a preflight refusal is
+      // the one moment somebody most needs their document back.
+      expect(asked.state.draft).toBe(INHERITING);
+
+      accepted(yield* session.submit(INHERITING));
+      yield* session.join();
+
+      // The source the journal retained is the draft, character for character.
+      const admittedEntry = session.model.entries[1];
+      expect(admittedEntry?.source).toBe(INHERITING);
+      // And the key is the one the session really assigned, not a constant.
+      expect(admittedEntry?.key).toBe("entry-2");
+      expect(session.model.entries.map((entry) => entry.key)).toEqual(["entry-1", "entry-2"]);
+
+      // Only now does it clear — from the state and from the location together.
+      const after = admitted(asked.state);
+      expect(after.draft).toBe("");
+      expect(after.route.draft).toBe(undefined);
+
+      // And the entry that was just admitted is the one navigation reaches.
+      const key = admittedEntry?.key ?? "";
+      const selected = acted(after, { kind: "select-scope", scopes: [key] }, session.model);
+      expect(selected.route.scopes).toEqual([key]);
+      expect(reading(selected, session.model).selection.entry?.key).toBe(key);
+    });
+  });
+
+  it("ER1: a prefix before the selected entry clears only that suffix", function* () {
+    const { events } = yield* twoEntries();
+    const head = projected(events);
+    const second = head.entries[1];
+    if (second === undefined) {
+      throw new Error("this journal admits two entries");
+    }
+    // A position strictly before the second entry's admission: the first
+    // entry's own close, which is the last thing that happened before it.
+    const before = head.entries[0]?.terminal === undefined ? undefined : "close:root";
+    if (before === undefined) {
+      throw new Error("the first entry settled");
+    }
+    const prefix = projected(events, before);
+    expect(prefix.entries.map((entry) => entry.key)).toEqual(["entry-1"]);
+
+    // Standing on the second entry, with a draft, on this surface.
+    const standing = frozenAt(
+      selecting(drafting(initialState(EXECUTION), "still typing"), second.key),
+      before,
+    );
+    // Nothing resolves there, which is what makes the clearing necessary rather
+    // than cosmetic.
+    expect(unreadable(standing, prefix)).toContain("no entry-2");
+
+    const cleared = withoutAbsentEntry(standing, prefix);
+    if (cleared === undefined) {
+      throw new Error("a selected entry absent from this prefix has a suffix to clear");
+    }
+    // Exactly the suffix, and no replacement guessed in its place.
+    expect(cleared.route.scopes).toEqual([]);
+    expect(reading(cleared, prefix).selection.entry).toBe(undefined);
+    // Everything else stands.
+    expect(cleared.draft).toBe("still typing");
+    expect(cleared.route.draft).toBe("still typing");
+    expect(cleared.route.surface).toBe("repl");
+    expect(cleared.route.at).toBe(before);
+    expect(cleared.route.inspect).toBe(true);
+    expect(cleared.route.session).toBe(standing.route.session);
+
+    // A prefix that still holds the selected entry has nothing to clear, so
+    // this never fires on an ordinary history action.
+    expect(withoutAbsentEntry(frozenAt(selecting(standing, "entry-1"), before), prefix)).toBe(
+      undefined,
+    );
+    // And it is the history action's remedy alone: a location opened directly
+    // at the live head naming an absent entry is refused whole, never adjusted.
+    expect(withoutAbsentEntry(selecting(initialState(EXECUTION), "entry-9"), head)).toBe(undefined);
+  });
+
+  it("ER1: returning live restores the catalog and keeps the draft", function* () {
+    const { events } = yield* twoEntries();
+    const head = projected(events);
+    const prefix = projected(events, "close:root");
+
+    const standing = frozenAt(drafting(initialState(EXECUTION), "kept"), "close:root");
+    // One entry is all this prefix holds.
+    expect(catalogOf(reading(standing, prefix)).map((one) => one.key)).toEqual(["entry:entry-1"]);
+
+    const live = acted(standing, { kind: "go-live" }, prefix);
+    expect(live.route.at).toBe(undefined);
+    expect(live.route.inspect).toBe(false);
+    // The head catalog is back, whole.
+    expect(catalogOf(reading(live, head)).map((one) => one.key)).toEqual([
+      "entry:entry-1",
+      "entry:entry-2",
+    ]);
+    // And the draft came with it, in the state and in the location.
+    expect(live.draft).toBe("kept");
+    expect(live.route.draft).toBe("kept");
+    expect(reading(live, head).location).toContain("draft=kept");
+  });
+
+  it("ER1: submission inherits from the live head, never from the inspected prefix", function* () {
+    const holder = replExecution();
+    yield* scoped(function* () {
+      const session = opened(yield* submitReplEntry({ execution: holder, source: FIRST }));
+      yield* session.join();
+
+      const head = session.model;
+      const before = head.entries[0]?.scope.marker;
+      if (before === undefined) {
+        throw new Error("an admitted entry has an admission marker");
+      }
+      // A prefix at the first entry's admission, where it has published nothing
+      // at all. If a historical prefix could become an inheritance boundary,
+      // this is the one that would show it.
+      const prefix = projected(yield* holder.stream.readAll(), before);
+      expect(entryInitialBindings(prefix)).toEqual({});
+      expect(entryInitialBindings(head)).toEqual({ token: "alpha", kept: "first" });
+
+      // Submitted while that prefix is what the screen is showing. The entry
+      // reads `token` and `kept`, which only the live head holds.
+      accepted(yield* session.submit(INHERITING));
+      yield* session.join();
+      expect(session.model.entries[1]?.terminal?.status).toBe("ok");
+      expect(session.model.entries[1]?.terminal?.output).toContain("Three: alpha/first");
+    });
+  });
+});
+
+describe("REPL entries: the catalog a person reads and reaches", () => {
+  beforeAll(() => useTempFileCompiler());
+
+  it("EU1: entries stay in admission order while their outcomes disagree", function* () {
+    const { events } = yield* threeEntries();
+    const model = projected(events);
+    // Three outcomes that do not sort the way admission does: ok, err, ok.
+    expect(model.entries.map((entry) => entry.terminal?.status)).toEqual(["ok", "err", "ok"]);
+
+    const catalog = catalogOf(reading(initialState(EXECUTION), model, NOTHING_LIVE, WIDE));
+    expect(catalog.map((one) => one.key)).toEqual([
+      "entry:entry-1",
+      "entry:entry-2",
+      "entry:entry-3",
+    ]);
+    // Each row carries its own place and its own outcome, so the four states a
+    // reader must tell apart are told apart.
+    expect(catalog.map((one) => one.label.trim().split(" ")[0])).toEqual(["1.", "2.", "3."]);
+    expect(catalog[0]?.label).toContain("ok");
+    expect(catalog[1]?.label).toContain("err");
+    expect(catalog[2]?.label).toContain("ok");
+
+    // An entry whose root has not closed says so rather than borrowing an
+    // outcome: at its own admission, the third entry has settled nothing.
+    const admission = model.entries[2]?.scope.marker;
+    if (admission === undefined) {
+      throw new Error("an admitted entry has an admission marker");
+    }
+    const unfinished = projected(events, admission);
+    const last = catalogOf(
+      reading(frozenAt(initialState(EXECUTION), admission), unfinished, NOTHING_LIVE, WIDE),
+    );
+    expect(last.map((one) => one.key)).toEqual(["entry:entry-1", "entry:entry-2", "entry:entry-3"]);
+    expect(last[2]?.label).toContain("unfinished");
+  });
+
+  it("EU1: wide and narrow keep the input and both surface selectors reachable", function* () {
+    const events = yield* manyEntries(14);
+    const model = projected(events);
+    const state = drafting(initialState(EXECUTION), "typing the next one");
+    const tree = yield* useReplTree<ReplAction>();
+
+    for (const size of [WIDE, NARROW]) {
+      const view = reading(state, model, NOTHING_LIVE, size);
+      const frame = yield* drawn(tree, view, size);
+      for (const key of ["footer:input", "sessions:heading", "entries:heading"]) {
+        const placed = placedFor(tree, frame, key);
+        expect([size.columns, key, placed !== undefined]).toEqual([size.columns, key, true]);
+        expect([size.columns, key, placed?.targetable]).toEqual([size.columns, key, true]);
+      }
+      // Both selectors really take somebody to the other surface.
+      expect(yield* pointed(tree, frame, "sessions:heading")).toEqual({
+        kind: "select-surface",
+        surface: "sessions",
+      });
+      expect(yield* pointed(tree, frame, "entries:heading")).toEqual({
+        kind: "select-surface",
+        surface: "repl",
+      });
+    }
+  });
+
+  it("EU1: a catalog longer than one window places and targets every row", function* () {
+    const events = yield* manyEntries(14);
+    const model = projected(events);
+    const whole = model.entries.map((entry) => `entry:${entry.key}`);
+    const tree = yield* useReplTree<ReplAction>();
+
+    let state = initialState(EXECUTION);
+    const first = reading(state, model, NOTHING_LIVE, NARROW);
+    const shown = catalogOf(first).map((one) => one.key);
+    // More catalog than this frame can place, and what it places is a prefix of
+    // the whole thing rather than a sample of it.
+    expect(whole.length).toBeGreaterThan(shown.length);
+    expect(whole.slice(0, shown.length)).toEqual(shown);
+
+    // Walked from the first clamped position to the last, through the real tree
+    // and the real placement boundary. Only a placed, offered cell counts.
+    const reached = new Set<string>();
+    for (let press = 0; press < 60; press += 1) {
+      const view = reading(state, model, NOTHING_LIVE, NARROW);
+      const frame = yield* drawn(tree, view, NARROW);
+      for (const key of whole) {
+        const placed = placedFor(tree, frame, key);
+        if (placed !== undefined && placed.targetable) {
+          reached.add(key);
+        }
+      }
+      const next = acted(state, { kind: "scroll-entries", delta: 1 }, model, NOTHING_LIVE, NARROW);
+      if (next.viewports.entries === state.viewports.entries) {
+        break;
+      }
+      state = next;
+    }
+    expect([...whole].filter((key) => !reached.has(key))).toEqual([]);
+
+    // And scrolling back recovers the first window rather than travelling one
+    // way only.
+    let back = state;
+    for (let press = 0; press < 60 && back.viewports.entries > 0; press += 1) {
+      back = acted(back, { kind: "scroll-entries", delta: -1 }, model, NOTHING_LIVE, NARROW);
+    }
+    expect(back.viewports.entries).toBe(0);
+    expect(catalogOf(reading(back, model, NOTHING_LIVE, NARROW)).map((one) => one.key)).toEqual(
+      shown,
+    );
+    // None of it reached the location: where somebody scrolled to is this
+    // process's, and no second process can be sent to a row of it.
+    expect(state.viewports.entries).toBeGreaterThan(0);
+    expect(reading(state, model, NOTHING_LIVE, NARROW).location).toBe(
+      reading(back, model, NOTHING_LIVE, NARROW).location,
+    );
+  });
+
+  it("EU1: Enter and a frame-resolved pointer on one row ask for the same thing", function* () {
+    const events = yield* manyEntries(14);
+    const model = projected(events);
+    const tree = yield* useReplTree<ReplAction>();
+    const view = reading(initialState(EXECUTION), model, NOTHING_LIVE, NARROW);
+    const frame = yield* drawn(tree, view, NARROW);
+
+    const key = catalogOf(view)[2]?.key;
+    if (key === undefined) {
+      throw new Error("this window places more than two catalog rows");
+    }
+    yield* focusTo(tree, key);
+    const pressed = yield* activated(tree);
+    expect(yield* pointed(tree, frame, key)).toEqual(pressed);
+    expect(pressed).toEqual({ kind: "select-scope", scopes: [key.slice("entry:".length)] });
+  });
+
+  it("EU1: a row outside the window is unmounted, unplaced and in no target map", function* () {
+    const events = yield* manyEntries(14);
+    const model = projected(events);
+    const tree = yield* useReplTree<ReplAction>();
+    const state = initialState(EXECUTION);
+    const view = reading(state, model, NOTHING_LIVE, NARROW);
+    const shown = catalogOf(view).map((one) => one.key);
+
+    const beyond = model.entries
+      .map((entry) => `entry:${entry.key}`)
+      .find((key) => !shown.includes(key));
+    if (beyond === undefined) {
+      throw new Error("every entry was inside the first window");
+    }
+    const frame = yield* drawn(tree, view, NARROW);
+    // Not described, so not mounted, not focusable, not drawn and in no map.
+    expect(keysOf(view)).not.toContain(beyond);
+    expect(nodeOf(tree, beyond)).toBe(undefined);
+    expect(placedFor(tree, frame, beyond)).toBe(undefined);
+    // The controls that move the window never scroll away from whoever uses them.
+    expect(placedFor(tree, frame, "entries:earlier")).toBeDefined();
+    expect(placedFor(tree, frame, "entries:later")).toBeDefined();
+
+    // Reached by scrolling, it is mounted, placed and offered.
+    let at = state;
+    for (let press = 0; press < 60; press += 1) {
+      const reachedView = reading(at, model, NOTHING_LIVE, NARROW);
+      if (catalogOf(reachedView).some((one) => one.key === beyond)) {
+        const reachedFrame = yield* drawn(tree, reachedView, NARROW);
+        expect(nodeOf(tree, beyond)).toBeDefined();
+        expect(placedFor(tree, reachedFrame, beyond)?.targetable).toBe(true);
+        return;
+      }
+      at = acted(at, { kind: "scroll-entries", delta: 1 }, model, NOTHING_LIVE, NARROW);
+    }
+    throw new Error(`scrolling never reached ${beyond}`);
+  });
+
+  it("EU1: a resize clamps the drawn offset before the first scroll after it", function* () {
+    const events = yield* manyEntries(14);
+    const model = projected(events);
+
+    // Scrolled to the end of the narrow window, where the offset is as large as
+    // that frame allows.
+    let narrow = initialState(EXECUTION);
+    for (let press = 0; press < 60; press += 1) {
+      const next = acted(narrow, { kind: "scroll-entries", delta: 1 }, model, NOTHING_LIVE, NARROW);
+      if (next.viewports.entries === narrow.viewports.entries) {
+        break;
+      }
+      narrow = next;
+    }
+    expect(narrow.viewports.entries).toBeGreaterThan(0);
+
+    // The sidebar holds more of the catalog, so the furthest this offset may go
+    // is smaller there — and what was stored is now past it.
+    const atEnd = acted(narrow, { kind: "scroll-entries", delta: 1 }, model, NOTHING_LIVE, WIDE);
+    const furthest = atEnd.viewports.entries;
+    expect(furthest).toBeLessThan(narrow.viewports.entries);
+
+    // One press back from the clamped position the frame is drawing, not from
+    // the stale larger number: the screen moves on the first press rather than
+    // spending it normalizing state nobody can see.
+    const stepped = acted(narrow, { kind: "scroll-entries", delta: -1 }, model, NOTHING_LIVE, WIDE);
+    expect(stepped.viewports.entries).toBe(furthest - 1);
+    expect(
+      catalogOf(reading(stepped, model, NOTHING_LIVE, WIDE)).map((one) => one.key),
+    ).not.toEqual(catalogOf(reading(narrow, model, NOTHING_LIVE, WIDE)).map((one) => one.key));
+  });
+});
+
+/**
+ * One entry that prints before it waits on a question.
+ *
+ * The prose above the question is output the Journal has not settled, so a
+ * session holding this entry at its question has a real live overlay — which
+ * is the thing a reader looking at an *earlier* entry must not be shown.
+ */
+const PRINTS_THEN_ASKS = [
+  "CHARLIE-LIVE",
+  "",
+  "```js eval",
+  "const schema = {",
+  '  type: "object",',
+  '  properties: { decision: { type: "string", enum: ["go"] } },',
+  '  required: ["decision"],',
+  "  additionalProperties: false,",
+  "};",
+  "```",
+  "",
+  '<Elicit schema={schema} as="answer">Go?</Elicit>',
+  "",
+].join("\n");
+
+/** One entry whose output names itself and nothing else. */
+function saying(what: string): string {
+  return `${what}\n`;
+}
+
+/** The transcript lines this view draws, in order. */
+function transcriptOf(view: ReplView): string[] {
+  return rowsOf(describeApplication(view))
+    .filter((one) => one.key.startsWith("line:") && !one.key.startsWith("line:live:"))
+    .map((one) => one.label.trim())
+    .filter((label) => label.length > 0);
+}
+
+/** The live overlay lines this view draws, in order. */
+function overlayOf(view: ReplView): string[] {
+  return rowsOf(describeApplication(view))
+    .filter((one) => one.key.startsWith("line:live:"))
+    .map((one) => one.label.trim());
+}
+
+/** The Sessions rows this view draws, in order, with their labels. */
+function sessionsOf(view: ReplView): Array<{ key: string; label: string }> {
+  return rowsOf(describeApplication(view)).filter((one) => one.key.startsWith("sessions:"));
+}
+
+describe("REPL entries: the transcript belongs to the entry that is selected", () => {
+  beforeAll(() => useTempFileCompiler());
+
+  it("EU1: each entry shows its own retained transcript, and no other entry's", function* () {
+    const physical = new InMemoryStream();
+    yield* runEntry(physical, saying("ALPHA-ONE"));
+    yield* runEntry(physical, saying("BRAVO-TWO"));
+    const model = projected(yield* physical.readAll());
+    expect(model.entries.map((entry) => entry.key)).toEqual(["entry-1", "entry-2"]);
+
+    const standing = initialState(EXECUTION);
+    // Nothing selected is the whole execution, which is what a one-entry
+    // execution has always shown and what this must not change.
+    const whole = transcriptOf(reading(standing, model, NOTHING_LIVE, WIDE));
+    expect(whole).toContain("ALPHA-ONE");
+    expect(whole).toContain("BRAVO-TWO");
+
+    const first = transcriptOf(reading(selecting(standing, "entry-1"), model, NOTHING_LIVE, WIDE));
+    expect(first).toContain("ALPHA-ONE");
+    expect(first).not.toContain("BRAVO-TWO");
+
+    const second = transcriptOf(reading(selecting(standing, "entry-2"), model, NOTHING_LIVE, WIDE));
+    expect(second).toContain("BRAVO-TWO");
+    expect(second).not.toContain("ALPHA-ONE");
+
+    // Selecting is what moved it, and it really is a different reading rather
+    // than the same one twice.
+    expect(first).not.toEqual(second);
+  });
+
+  it("EU1: a live overlay belongs to the entry running it, not to the one being read", function* () {
+    const holder = replExecution();
+    yield* scoped(function* () {
+      const session = opened(
+        yield* submitReplEntry({ execution: holder, source: saying("ALPHA-ONE") }),
+      );
+      yield* session.join();
+      accepted(yield* session.submit(PRINTS_THEN_ASKS));
+      const question = yield* asking(session);
+
+      // A real overlay: the second entry has printed and the Journal has not
+      // settled that text, which is exactly the state this row is about.
+      const live = liveReading(session);
+      expect(live.output).toContain("CHARLIE-LIVE");
+      const model = session.model;
+      expect(model.entries.map((entry) => entry.key)).toEqual(["entry-1", "entry-2"]);
+
+      const standing = initialState(EXECUTION);
+      // Reading the entry that is running: the overlay is its own, so it shows.
+      const running = reading(selecting(standing, "entry-2"), model, live, WIDE);
+      expect(overlayOf(running)).toContain("… CHARLIE-LIVE");
+
+      // Reading the settled entry before it: the overlay is somebody else's
+      // run, and attributing it here would show text this entry never produced.
+      const earlier = reading(selecting(standing, "entry-1"), model, live, WIDE);
+      expect(overlayOf(earlier)).toEqual([]);
+      expect(transcriptOf(earlier)).toContain("ALPHA-ONE");
+      expect(transcriptOf(earlier)).not.toContain("CHARLIE-LIVE");
+
+      // With nothing selected the locus is the execution, which includes
+      // whatever is running in it — unchanged from a one-entry execution.
+      expect(overlayOf(reading(standing, model, live, WIDE))).toContain("… CHARLIE-LIVE");
+
+      // Sessions is execution-wide and the same reading under every selection,
+      // row for row and label for label.
+      const sessions = sessionsOf(reading(standing, model, live, WIDE));
+      expect(sessionsOf(running)).toEqual(sessions);
+      expect(sessionsOf(earlier)).toEqual(sessions);
+
+      question.submit({ decision: "go" });
+      yield* session.join();
+    });
+  });
+});
+
+describe("REPL entries: the catalog keeps its promise at the narrowest sidebar", () => {
+  beforeAll(() => useTempFileCompiler());
+
+  /** The widest sidebar is 32 and the narrowest is 28, so this is the frame to prove. */
+  const MEDIUM: ReplTerminalSize = { columns: 120, rows: 30 };
+
+  /** A root name longer than any sidebar, which is what the promise has to survive. */
+  const LONG = "a-root-name-nobody-would-choose-but-nothing-forbids";
+
+  it("EU1: every outcome stays inside the drawn row, whatever the entry is called", function* () {
+    // Four entries, one per outcome a reader has to tell apart. The cancelled
+    // close is doctored exactly as Slice A doctors it — cancelling a live run
+    // is the lifecycle boundary, and what this row is about is the drawing.
+    const physical = new InMemoryStream();
+    yield* runEntry(physical, saying("one"));
+    yield* runEntry(physical, FAILING);
+    yield* runEntry(physical, saying("three"));
+    yield* runEntry(physical, saying("four"));
+    const written = yield* physical.readAll();
+    const segments = partitioned(written);
+    const third = segments[2];
+    if (third === undefined) {
+      throw new Error("this journal holds four segments");
+    }
+    const events = withClose(written, third, cancelled("root"));
+    const model = projected(events);
+    expect(model.entries.map((entry) => entry.terminal?.status)).toEqual([
+      "ok",
+      "err",
+      "cancelled",
+      "ok",
+    ]);
+
+    // Every entry renamed to something no column can hold. The name is the
+    // model's, so this is done by reading the catalog against a model whose
+    // roots really are called that.
+    const named: ReplModel = Object.freeze({
+      ...model,
+      entries: Object.freeze(
+        model.entries.map((entry) =>
+          Object.freeze({
+            ...entry,
+            scope: Object.freeze({ ...entry.scope, name: `${LONG}-${entry.order}` }),
+          }),
+        ),
+      ),
+    });
+
+    const tree = yield* useReplTree<ReplAction>();
+    const view = reading(initialState(EXECUTION), named, NOTHING_LIVE, MEDIUM);
+    const frame = yield* drawn(tree, view, MEDIUM);
+
+    // Read from the placed cell, clipped to its own bounds: what a renderer may
+    // draw is exactly the text inside the region layout gave the row, so a
+    // promise that falls outside it is a promise this frame does not keep.
+    for (const [at, outcome] of ["ok", "err", "cancelled", "ok"].entries()) {
+      const key = `entry:entry-${at + 1}`;
+      const cell = placedFor(tree, frame, key);
+      if (cell === undefined) {
+        throw new Error(`this frame placed no cell for ${key}`);
+      }
+      const visible = cell.text.slice(0, cell.bounds.width);
+      expect([key, visible.includes(`[${outcome}]`)]).toEqual([key, true]);
+      // And the name really was too long to have left room after it.
+      expect([key, visible.includes(LONG)]).toEqual([key, false]);
+    }
+
+    // The fourth reading, from a prefix where the last entry has not closed.
+    const admission = model.entries[3]?.scope.marker;
+    if (admission === undefined) {
+      throw new Error("an admitted entry has an admission marker");
+    }
+    const open = projected(events, admission);
+    const renamedOpen: ReplModel = Object.freeze({
+      ...open,
+      entries: Object.freeze(
+        open.entries.map((entry) =>
+          Object.freeze({
+            ...entry,
+            scope: Object.freeze({ ...entry.scope, name: `${LONG}-${entry.order}` }),
+          }),
+        ),
+      ),
+    });
+    const frozen = frozenAt(initialState(EXECUTION), admission);
+    const openFrame = yield* drawn(
+      tree,
+      reading(frozen, renamedOpen, NOTHING_LIVE, MEDIUM),
+      MEDIUM,
+    );
+    const last = placedFor(tree, openFrame, "entry:entry-4");
+    if (last === undefined) {
+      throw new Error("this frame placed no cell for entry:entry-4");
+    }
+    expect(last.text.slice(0, last.bounds.width)).toContain("[unfinished]");
+  });
+});
+
+describe("REPL entries: going to Sessions keeps the entry you came from", () => {
+  beforeAll(() => useTempFileCompiler());
+
+  it("ER1: the selected entry survives both surfaces, and comes back with you", function* () {
+    const { events } = yield* twoEntries();
+    const model = projected(events);
+    const standing = selecting(drafting(initialState(EXECUTION), "next"), "entry-2");
+
+    // Going to Sessions keeps the entry. It used to be unspellable there, so
+    // the location this produced could not be encoded at all.
+    const sessions = acted(standing, { kind: "select-surface", surface: "sessions" }, model);
+    expect(sessions.route.surface).toBe("sessions");
+    expect(sessions.route.scopes).toEqual(["entry-2"]);
+    expect(sessions.draft).toBe("next");
+    const onSessions = reading(sessions, model, NOTHING_LIVE, WIDE);
+    expect(onSessions.location).toContain("/sessions/entry-2");
+    expect(onSessions.selection.entry?.key).toBe("entry-2");
+
+    // And coming back lands on the entry that was left, rather than on nothing.
+    const back = acted(sessions, { kind: "select-surface", surface: "repl" }, model);
+    expect(back.route.surface).toBe("repl");
+    expect(back.route.scopes).toEqual(["entry-2"]);
+    expect(reading(back, model, NOTHING_LIVE, WIDE).selection.entry?.key).toBe("entry-2");
+    expect(back.draft).toBe("next");
+
+    // The round trip is one location either way, and it reads back the same.
+    expect(reading(back, model, NOTHING_LIVE, WIDE).location).toBe(
+      reading(standing, model, NOTHING_LIVE, WIDE).location,
+    );
+  });
+});
+
+describe("REPL entries: what each prefix of a two-entry history shows", () => {
+  beforeAll(() => useTempFileCompiler());
+
+  it("EH1: before an admission, at it, and at the outcome, with the draft throughout", function* () {
+    const physical = new InMemoryStream();
+    yield* runEntry(physical, saying("ALPHA-ONE"));
+    yield* runEntry(physical, saying("BRAVO-TWO"));
+    const events = yield* physical.readAll();
+    const head = projected(events);
+    expect(head.entries.map((entry) => entry.key)).toEqual(["entry-1", "entry-2"]);
+
+    const admission = head.entries[1]?.scope.marker;
+    const terminal = head.entries[1]?.checkpoints[head.entries[1].checkpoints.length - 1]?.marker;
+    if (admission === undefined || terminal === undefined) {
+      throw new Error("the second entry has an admission and a terminal position");
+    }
+    // A position strictly before the second entry was admitted: the first
+    // entry's own close, which is the last thing that happened before it.
+    const before = "close:root";
+
+    /** What one prefix's catalog says, as a reader reads it. */
+    const catalogAt = (marker: string): string[] => {
+      const state = frozenAt(drafting(initialState(EXECUTION), "still typing"), marker);
+      const model = projected(events, marker);
+      return catalogOf(reading(state, model, NOTHING_LIVE, WIDE)).map((one) => one.label.trim());
+    };
+
+    // [1] Before the admission: one entry, settled, and no sign of the next.
+    expect(catalogAt(before)).toEqual(["1. [ok] entry-1"]);
+
+    // [2] At the admission: the row exists and says it has settled nothing.
+    expect(catalogAt(admission)).toEqual(["1. [ok] entry-1", "2. [unfinished] entry-2"]);
+
+    // [3] At its terminal position: the same row, now carrying its outcome.
+    expect(catalogAt(terminal)).toEqual(["1. [ok] entry-1", "2. [ok] entry-2"]);
+
+    // Each prefix shows only what it retained. The second entry's output is in
+    // none of the readings before its own close.
+    const linesAt = (marker: string): string[] => {
+      const state = frozenAt(drafting(initialState(EXECUTION), "still typing"), marker);
+      return transcriptOf(reading(state, projected(events, marker), NOTHING_LIVE, WIDE));
+    };
+    expect(linesAt(before)).toContain("ALPHA-ONE");
+    expect(linesAt(before)).not.toContain("BRAVO-TWO");
+    expect(linesAt(admission)).not.toContain("BRAVO-TWO");
+    expect(linesAt(terminal)).toContain("BRAVO-TWO");
+
+    // The draft is current route state throughout: it is not a thing a prefix
+    // retained, so freezing the durable view does not freeze it.
+    for (const marker of [before, admission, terminal]) {
+      const state = frozenAt(drafting(initialState(EXECUTION), "still typing"), marker);
+      const view = reading(state, projected(events, marker), NOTHING_LIVE, WIDE);
+      expect([marker, view.state.draft]).toEqual([marker, "still typing"]);
+      expect([marker, view.location.includes("draft=still%20typing")]).toEqual([marker, true]);
+      // And it is still editable at every one of them.
+      const typed = acted(
+        state,
+        { kind: "type", text: "!" },
+        projected(events, marker),
+        NOTHING_LIVE,
+        WIDE,
+      );
+      expect([marker, typed.draft]).toEqual([marker, "still typing!"]);
+    }
+
+    // Returning live from any of them restores the head catalog and keeps it.
+    for (const marker of [before, admission, terminal]) {
+      const state = frozenAt(drafting(initialState(EXECUTION), "still typing"), marker);
+      const live = acted(state, { kind: "go-live" }, projected(events, marker), NOTHING_LIVE, WIDE);
+      expect(live.route.at).toBe(undefined);
+      expect(live.draft).toBe("still typing");
+      expect(
+        catalogOf(reading(live, head, NOTHING_LIVE, WIDE)).map((one) => one.label.trim()),
+      ).toEqual(["1. [ok] entry-1", "2. [ok] entry-2"]);
+    }
+  });
+});
+
+/** One entry that reads the inherited value again, and reports what it got. */
+const READS_INHERITED_AGAIN = [
+  "```js eval",
+  "const third = `${plan.steps.join('/')}/${plan.counts.runs}`;",
+  "```",
+  "",
+  "Three: {third}",
+  "",
+].join("\n");
+
+describe("REPL entries: a third entry inherits the file, not the run before it", () => {
+  beforeAll(() => useTempFileCompiler());
+
+  it("EC1: an edit the entry before it never published reaches no successor", function* () {
+    const holder = replExecution();
+    yield* scoped(function* () {
+      // Entry 1 publishes a nested value. Entry 2 inherits it and edits what it
+      // inherited — ordinary mutation of an ordinary binding, which publishes
+      // nothing, so the two readings of `plan` diverge from here on: the file
+      // holds what Entry 1 retained and this process holds what Entry 2 made of
+      // it.
+      const session = opened(
+        yield* submitReplEntry({ execution: holder, source: PUBLISHES_NESTED }),
+      );
+      yield* session.join();
+      accepted(yield* session.submit(EDITS_INHERITED));
+      yield* session.join();
+      expect(session.model.entries[1]?.terminal?.output).toContain("Two: draft/build/2");
+      // Entry 2 published `seen` and no new `plan`, so the last durably
+      // published `plan` is still the one Entry 1 wrote.
+      expect(session.model.entries[1]?.bindings.map((one) => one.name)).toContain("seen");
+      expect(value(session.model.entries[1].bindings, "plan")).toEqual({
+        steps: ["draft"],
+        counts: { runs: 1 },
+      });
+
+      // Entry 3 therefore starts from the file's value, not from the array the
+      // run before it was holding when it ended.
+      accepted(yield* session.submit(READS_INHERITED_AGAIN));
+      yield* session.join();
+      expect(session.model.entries[2]?.terminal?.output).toContain("Three: draft/1");
+      expect(session.model.entries[2]?.terminal?.output).not.toContain("build");
     });
   });
 });

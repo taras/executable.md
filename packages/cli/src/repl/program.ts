@@ -54,6 +54,7 @@ import {
   replSurface,
   stateFor,
   viewFor,
+  withoutAbsentEntry,
 } from "./application.ts";
 import type { Json, NormalizedIssue } from "@executablemd/core";
 import type {
@@ -553,9 +554,24 @@ function* drive(
       let view: ReplView;
       const attempted = yield* reproject(state, model, execution);
       const drawnAt = yield* screen.size();
-      const built = viewFor(attempted.state, attempted.model, liveOf(current), drawnAt, focused);
+      let adopting = attempted.state;
+      let built = viewFor(adopting, attempted.model, liveOf(current), drawnAt, focused);
+      if (!built.ok) {
+        // A position earlier than the selected entry's admission has no such
+        // entry in it. The position is what was asked for, so the invalid entry
+        // and scope suffix goes and nothing guesses a replacement — the draft,
+        // the surface, the conversation filter and the marker all stand.
+        const cleared = withoutAbsentEntry(adopting, attempted.model);
+        if (cleared !== undefined) {
+          const without = viewFor(cleared, attempted.model, liveOf(current), drawnAt, focused);
+          if (without.ok) {
+            adopting = cleared;
+            built = without;
+          }
+        }
+      }
       if (built.ok) {
-        state = attempted.state;
+        state = adopting;
         model = attempted.model;
         view = built.value;
       } else {
