@@ -69,13 +69,35 @@ const BURST = "abcdefghijklmnopqrstuvwxyz0123456789";
 const SENTINEL = "XMD-PTY-EXIT=";
 
 /**
- * Run one program and answer whether it succeeded, with what it said.
+ * What running one program came to: whether it worked, and everything it said.
+ *
+ * The whole outcome rather than the output of a successful run, because the
+ * allocator's failures are this row's own failures and a row that discards them
+ * reports a product defect it has no evidence for. `tmux would not start a
+ * session` was all #872 had to go on; tmux had said `server exited unexpectedly`
+ * and nothing kept it.
+ */
+interface Attempt {
+  /** The command line, so a report names what was actually run. */
+  readonly command: string;
+  /** Zero when the program succeeded, and none when it never ran. */
+  readonly status: number | undefined;
+  /** Everything it wrote to either stream. */
+  readonly output: string;
+  /** What stopped it before it could run, if anything did. */
+  readonly failure: Error | undefined;
+  /** It ran, and it succeeded. */
+  readonly ok: boolean;
+}
+
+/**
+ * Run one program and keep its whole outcome.
  *
  * Scoped, so a cancelled probe leaves no client of its own behind: these are
  * short-lived, and a short-lived process is still a process somebody owns.
  */
-function* ran(command: string, args: string[]): Operation<string | undefined> {
-  return yield* scoped(function* (): Operation<string | undefined> {
+function* attempted(command: string, args: string[]): Operation<Attempt> {
+  return yield* scoped(function* (): Operation<Attempt> {
     const owned = yield* ownedChild(() =>
       spawnChild(command, args, { stdio: ["ignore", "pipe", "pipe"] }),
     );
@@ -83,8 +105,34 @@ function* ran(command: string, args: string[]): Operation<string | undefined> {
     // it: one closing per child, removed by the one cleanup that owns it.
     yield* owned.closing;
     const status = owned.child.exitCode;
-    return status === 0 && owned.failure() === undefined ? owned.written() : undefined;
+    const failure = owned.failure();
+    return {
+      command: [command, ...args].join(" "),
+      status: status ?? undefined,
+      output: owned.written(),
+      failure,
+      ok: status === 0 && failure === undefined,
+    };
   });
+}
+
+/**
+ * What an attempt did, in the words of the program that made it.
+ *
+ * A spawn that never happened and a program that refused are different
+ * conditions, and an allocator that cannot be driven has to say which one it
+ * met — so both are spelled out here rather than collapsed into a failure.
+ */
+function described(attempt: Attempt): string {
+  const ended =
+    attempt.failure !== undefined
+      ? `could not be started (${attempt.failure.message})`
+      : `exited ${attempt.status ?? "without a status"}`;
+  const said = attempt.output.trim();
+  return (
+    `\`${attempt.command}\` ${ended} and said ` +
+    `${said.length === 0 ? "nothing" : JSON.stringify(said)}`
+  );
 }
 
 /**
@@ -228,11 +276,11 @@ function* allocate(line: string, home: string): Operation<Pty> {
     `printf '${SENTINEL}%s\\n' "$?"`,
   ].join("; ");
 
-  if ((yield* ran("tmux", ["-V"])) !== undefined) {
-    return yield* tmuxPty(inside);
+  if ((yield* attempted("tmux", ["-V"])).ok) {
+    return yield* tmuxPty(inside, home);
   }
-  const flavour = yield* ran("script", ["--version"]);
-  if (flavour !== undefined && flavour.includes("util-linux")) {
+  const flavour = yield* attempted("script", ["--version"]);
+  if (flavour.ok && flavour.output.includes("util-linux")) {
     return yield* scriptPty(inside);
   }
   throw new Error(
@@ -242,53 +290,106 @@ function* allocate(line: string, home: string): Operation<Pty> {
   );
 }
 
-/** A tmux pane, which is a pty with a window and a screen that can be read. */
-function* tmuxPty(inside: string): Operation<Pty> {
+/**
+ * A tmux pane, which is a pty with a window and a screen that can be read.
+ *
+ * ## A server of this row's own
+ *
+ * tmux without `-S` is one server per user, shared by every session on the
+ * machine — the operator's own windows, the pane-worker proofs, a hand-driven
+ * `xmd repl`, and this same row running in another worktree. **That server
+ * exits with its last session**, so any one of those parties finishing takes the
+ * server down, and a `new-session` that happens to be in that window fails with
+ * `server exited unexpectedly` before the product has run. It is intermittent by
+ * construction: whether it happens depends on who else was finishing.
+ *
+ * So this row allocates against a socket inside the temporary home it already
+ * owns. Nobody else is on it, which is also why the teardown is `kill-server`:
+ * the server belongs to this row, so leaving it running would leak a process,
+ * and the socket file — which outlives the server — goes away with the directory
+ * holding it. `-f /dev/null` is the same isolation for configuration: a window
+ * size or a `default-shell` from whoever's `~/.tmux.conf` is foreign state this
+ * row would otherwise be reading.
+ */
+function* tmuxPty(inside: string, home: string): Operation<Pty> {
   const name = `xmd-pty-${randomBytes(6).toString("hex")}`;
-  // Registered before the session exists, and it waits for the session to be
+  const socket = join(home, "tmux.sock");
+  /** Every tmux invocation for this row's own server, configured by nobody. */
+  const control = (...args: string[]): string[] => ["-S", socket, "-f", "/dev/null", ...args];
+  // Registered before the server exists, and it waits for the session to be
   // gone rather than for the kill to be accepted: a kill that was sent is not a
   // pane that has closed, and the pty belongs to the pane.
   yield* ensure(function* (): Operation<void> {
-    yield* ran("tmux", ["kill-session", "-t", name]);
+    yield* attempted("tmux", control("kill-server"));
     for (let attempt = 0; attempt < 100; attempt += 1) {
-      if ((yield* ran("tmux", ["has-session", "-t", name])) === undefined) {
+      if (!(yield* attempted("tmux", control("has-session", "-t", name))).ok) {
         return;
       }
       yield* sleep(50);
     }
-    throw new Error(`the tmux session ${name} would not go away`);
+    throw new Error(`the tmux session ${name} on ${socket} would not go away`);
   });
-  const started = yield* ran("tmux", [
-    "new-session",
-    "-d",
-    "-s",
-    name,
-    "-x",
-    String(WINDOW.columns),
-    "-y",
-    String(WINDOW.rows),
-    "-c",
-    process.cwd(),
-    // Held open after the command ends, because tmux takes the pane away with
-    // the last process in it — and the status and the printed location are on
-    // that pane. The teardown below kills the session either way.
-    `${inside}; sleep 300`,
-  ]);
-  if (started === undefined) {
-    throw new Error("tmux would not start a session for this row");
+  const started = yield* attempted(
+    "tmux",
+    control(
+      "new-session",
+      "-d",
+      "-s",
+      name,
+      "-x",
+      String(WINDOW.columns),
+      "-y",
+      String(WINDOW.rows),
+      "-c",
+      process.cwd(),
+      // Held open after the command ends, because tmux takes the pane away with
+      // the last process in it — and the status and the printed location are on
+      // that pane. The teardown above kills the server either way.
+      `${inside}; sleep 300`,
+    ),
+  );
+  if (!started.ok) {
+    throw new Error(
+      `tmux would not start a session for this row: ${described(started)}. ` +
+        // The socket's length because a unix path is capped at 104 bytes and a
+        // longer one fails here, which is a condition of this row's own making
+        // rather than anything tmux can explain.
+        `socket=${socket} (${socket.length} of the 104 bytes a unix socket path may use), ` +
+        `session=${name}, window=${WINDOW.columns}x${WINDOW.rows}.`,
+    );
+  }
+  /** The screen, or the reason there is no reading it — never a blank one. */
+  function* captured(): Operation<string> {
+    const pane = yield* attempted(
+      "tmux",
+      control("capture-pane", "-p", "-N", "-S", "-200", "-t", name),
+    );
+    if (!pane.ok) {
+      // An unreadable screen used to read as an empty one, which this file then
+      // reported as the REPL never drawing. A pane that cannot be captured is a
+      // pty that has gone, and that is the fact worth printing.
+      throw new Error(`the tmux pane for this row could not be read: ${described(pane)}.`);
+    }
+    return pane.output;
   }
   return {
     *shows(): Operation<string[]> {
-      const pane = yield* ran("tmux", ["capture-pane", "-p", "-N", "-S", "-200", "-t", name]);
-      return (pane ?? "").split("\n");
+      return (yield* captured()).split("\n");
     },
     *type(bytes: string): Operation<void> {
       // Literal, so what the decoder receives is what a keyboard sends.
-      yield* ran("tmux", ["send-keys", "-t", name, "-l", "--", bytes]);
+      const sent = yield* attempted("tmux", control("send-keys", "-t", name, "-l", "--", bytes));
+      if (!sent.ok) {
+        // Typing that did not arrive is not typing: without this the row waits
+        // out its deadline and blames the REPL for not reacting to a keystroke
+        // it never received.
+        throw new Error(
+          `${JSON.stringify(bytes)} could not be typed into this row: ${described(sent)}.`,
+        );
+      }
     },
     *status(): Operation<number | undefined> {
-      const pane = yield* ran("tmux", ["capture-pane", "-p", "-N", "-S", "-200", "-t", name]);
-      const found = (pane ?? "").match(new RegExp(`${SENTINEL}([0-9]+)`));
+      const found = (yield* captured()).match(new RegExp(`${SENTINEL}([0-9]+)`));
       return found === null ? undefined : Number(found[1]);
     },
   };
