@@ -23,8 +23,16 @@
 
 import { beforeAll, describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { scoped, sleep, spawn, until as untilResolved } from "effection";
-import type { Operation, Task } from "effection";
+import {
+  ensure,
+  resource,
+  scoped,
+  sleep,
+  spawn,
+  until as untilResolved,
+  withResolvers,
+} from "effection";
+import type { Operation, Stream, Subscription, Task } from "effection";
 import { useTempFileCompiler } from "@executablemd/core";
 import { API, useHostFiles } from "@executablemd/runtime";
 import { appendFile, mkdtemp, open, readdir, readFile } from "node:fs/promises";
@@ -217,6 +225,8 @@ describe("J1 — the Story, from one entry to one README", () => {
       });
 
       // The review is the REPL's own drawer, over the draft the Agent returned.
+      // It announces itself first; activating that announcement opens it.
+      yield* openQuestion(terminal);
       yield* showing(terminal, "Request changes");
       expect(shows(terminal, "A first draft")).toBe(true);
 
@@ -239,11 +249,14 @@ describe("J1 — the Story, from one entry to one README", () => {
       expect(fake.prompts[1]).toContain(FEEDBACK);
       expect(new Set(fake.turns.map((turn) => turn.handle.sessionKey)).size).toBe(1);
 
-      // Approved: the revision is what `<Evaluate>` admits.
+      // Approved: the revision is what `<Evaluate>` admits. The revised review is
+      // a new question, so it announces itself and is opened again.
+      yield* openQuestion(terminal);
       yield* showing(terminal, "Approve");
       yield* click(terminal, "( ) Approve");
 
       // The first question the generated program asks.
+      yield* openQuestion(terminal);
       yield* showing(terminal, "Name the project");
       const admitted = admission(yield* journal(hostRoot));
       // The approved text, byte for byte, inside the document's own whitespace:
@@ -269,6 +282,7 @@ describe("J1 — the Story, from one entry to one README", () => {
 
       // The preview: the complete proposed file, in the confirmation's own
       // request, before anything has been written.
+      yield* openQuestion(terminal);
       yield* showing(terminal, "Write this README?");
       for (const line of ["# The project", '"project": "Ledger"', '"summary": "A tiny ledger."']) {
         expect([line, shows(terminal, line)]).toEqual([line, true]);
@@ -338,6 +352,7 @@ describe("J1 — the Story, from one entry to one README", () => {
       terminal.feed("\r");
 
       // The same review, the same feedback, the same approved program.
+      yield* openQuestion(terminal);
       yield* showing(terminal, "Request changes");
       yield* click(terminal, "( ) Request changes");
       yield* settled(40);
@@ -346,15 +361,18 @@ describe("J1 — the Story, from one entry to one README", () => {
       yield* settled(20);
       yield* click(terminal, "[submit]");
       yield* until(() => fake.prompts.length >= 2, "the revision was never asked for");
+      yield* openQuestion(terminal);
       yield* showing(terminal, "Approve");
       yield* click(terminal, "( ) Approve");
 
+      yield* openQuestion(terminal);
       yield* showing(terminal, "Name the project");
       yield* answer(terminal, "Project name", "Ledger");
       yield* answer(terminal, "One-sentence description", "A tiny ledger.");
       yield* submit(terminal);
 
       // The same preview, reached the same way.
+      yield* openQuestion(terminal);
       yield* showing(terminal, "Write this README?");
       expect(shows(terminal, '"project": "Ledger"')).toBe(true);
       expect(yield* untilResolved(readdir(workspace))).toEqual([]);
@@ -1199,6 +1217,40 @@ describe("X1 — how this command ends, with work still in flight", () => {
       expect(terminal.resets).toBe(1);
     });
   });
+
+  it("UI2: [exit] while a request is waiting denies nothing and answers nothing", function* () {
+    const fake = createFakeAcp();
+    fake.script({ reply: PARTIAL, requestsTool: "rm -rf /", manual: true });
+    const { terminal, install } = recordingTerminal({ columns: 200, rows: 60 });
+
+    yield* scoped(function* (): Operation<void> {
+      const workspace = yield* useWorkspace();
+      yield* install();
+      yield* immediateClock();
+      const hostRoot = yield* useTemporaryHost();
+      const ending = yield* commanding(fake, workspace);
+      yield* untilDrawn(terminal);
+      yield* typed(terminal, ASKING);
+      yield* showing(terminal, "rm -rf /");
+      const before = recorded(yield* journal(hostRoot));
+
+      // Left from the control on the screen, rather than by cancelling the scope
+      // from outside it. The decision a person did not make is still not made: a
+      // command that denied a request on the way out would be recording one.
+      yield* click(terminal, "[exit]");
+      yield* until(() => ending.over, "the command never ended");
+      yield* settled(40);
+
+      expect(fake.decisions).toEqual([]);
+      expect(recorded(yield* journal(hostRoot))).toEqual(before);
+      expect(terminal.raw).toEqual([true, false]);
+      expect(terminal.resets).toBe(1);
+      // The location it ended at carries no drawer only this process could mount.
+      expect(ending.location).toBeDefined();
+      expect(ending.location).not.toContain("+permission");
+      expect(ending.location).not.toContain("+elicit");
+    });
+  });
 });
 
 /**
@@ -1217,6 +1269,9 @@ function* takeTheJourney(
   terminal.bytes(BYTES.encode(STORY));
   yield* settled(20);
   terminal.feed("\r");
+  // Each question announces itself and opens nothing, so every one of them is
+  // reached by activating that announcement first.
+  yield* openQuestion(terminal);
   yield* showing(terminal, "Request changes");
   yield* click(terminal, "( ) Request changes");
   yield* settled(40);
@@ -1225,12 +1280,15 @@ function* takeTheJourney(
   yield* settled(20);
   yield* click(terminal, "[submit]");
   yield* until(() => fake.prompts.length >= 2, "the revision was never asked for");
+  yield* openQuestion(terminal);
   yield* showing(terminal, "Approve");
   yield* click(terminal, "( ) Approve");
+  yield* openQuestion(terminal);
   yield* showing(terminal, "Name the project");
   yield* answer(terminal, "Project name", "Ledger");
   yield* answer(terminal, "One-sentence description", "A tiny ledger.");
   yield* submit(terminal);
+  yield* openQuestion(terminal);
   yield* showing(terminal, "Write this README?");
   yield* click(terminal, "( ) Approve");
   yield* showing(terminal, "Created README.md.");
@@ -1290,22 +1348,37 @@ function* history(hostRoot: string): Operation<string> {
 interface Ending {
   readonly task: Task<void>;
   readonly over: boolean;
+  /** The location it ended at, once it has ended on its own rather than been cancelled. */
+  readonly location: string | undefined;
 }
 
 function* commanding(fake: FakeAcp, workspace: string): Operation<Ending> {
-  const ending = { task: undefined as unknown as Task<void>, over: false };
+  // What the run reports, in a record typed as what it holds. The task is read
+  // from the spawn rather than filled in afterwards, so nothing here has to begin
+  // life as a value of the wrong type.
+  const reported: { over: boolean; location: string | undefined } = {
+    over: false,
+    location: undefined,
+  };
   const task = yield* spawn(function* (): Operation<void> {
     try {
-      yield* start(fake, holds([]), workspace);
+      reported.location = yield* start(fake, holds([]), workspace);
     } catch {
       // The ending is what the row is about; how it was reported is the row's
       // own business and not this helper's.
     } finally {
-      ending.over = true;
+      reported.over = true;
     }
   });
-  ending.task = task;
-  return ending;
+  return {
+    task,
+    get over(): boolean {
+      return reported.over;
+    },
+    get location(): string | undefined {
+      return reported.location;
+    },
+  };
 }
 
 /** Start the program the way the command does, with the profile it assembles. */
@@ -1437,6 +1510,11 @@ function holds(asked: readonly string[]): Holds {
             events: {
               [Symbol.asyncIterator]() {
                 const events = inner[Symbol.asyncIterator]();
+                /** The one ending this wrapper may have to produce itself. */
+                const finished: IteratorResult<Awaited<ReturnType<typeof events.next>>["value"]> = {
+                  done: true,
+                  value: undefined,
+                };
                 let first = true;
                 return {
                   next() {
@@ -1446,8 +1524,7 @@ function holds(asked: readonly string[]): Holds {
                     first = false;
                     return hold.deltas.opened.then(() => events.next());
                   },
-                  return: () =>
-                    events.return?.() ?? Promise.resolve({ done: true as const, value: undefined }),
+                  return: () => events.return?.() ?? Promise.resolve(finished),
                 };
               },
             },
@@ -1585,7 +1662,7 @@ function recordingTerminal(
 } {
   const queue: Uint8Array[] = [];
   const watchers = new Set<() => void>();
-  let waiting: ((result: IteratorResult<Uint8Array, undefined>) => void) | undefined;
+  let waiting: ((result: IteratorResult<Uint8Array, void>) => void) | undefined;
   let ended = false;
 
   let holding = false;
@@ -1642,18 +1719,20 @@ function recordingTerminal(
   const host: ReplTerminalCapabilities = {
     interactive: () => interactive,
     size: () => terminal.size,
-    write(bytes: Uint8Array): Promise<void> {
+    *write(bytes: Uint8Array): Operation<void> {
       if (writeFailure !== undefined) {
-        return Promise.reject(writeFailure);
+        throw writeFailure;
       }
       terminal.presented.push(new Uint8Array(bytes));
       if (!holding) {
-        return Promise.resolve();
+        // A write that completed, which still costs the caller a turn.
+        yield* sleep(0);
+        return;
       }
       holding = false;
-      return new Promise<void>((resolve) => {
-        terminal.holdPresent = { release: resolve };
-      });
+      const held = withResolvers<void>();
+      terminal.holdPresent = { release: held.resolve };
+      yield* held.operation;
     },
     writeNow(): void {
       terminal.resets += 1;
@@ -1661,36 +1740,46 @@ function recordingTerminal(
     setRaw(raw: boolean): void {
       terminal.raw.push(raw);
     },
-    bytes(): AsyncIterable<Uint8Array> {
-      return {
-        [Symbol.asyncIterator](): AsyncIterator<Uint8Array, undefined> {
-          terminal.readers += 1;
-          return {
-            next(): Promise<IteratorResult<Uint8Array, undefined>> {
-              if (inputFailure !== undefined) {
-                return Promise.reject(inputFailure);
-              }
-              const head = queue.shift();
-              if (head !== undefined) {
-                return Promise.resolve({ done: false, value: head });
-              }
-              if (ended) {
-                return Promise.resolve({ done: true, value: undefined });
-              }
-              return new Promise((resolve) => {
-                waiting = resolve;
-              });
-            },
-            return(): Promise<IteratorResult<Uint8Array, undefined>> {
-              terminal.readers -= 1;
-              const resolve = waiting;
-              waiting = undefined;
-              resolve?.({ done: true, value: undefined });
-              return Promise.resolve({ done: true, value: undefined });
-            },
-          };
-        },
-      };
+    input(): Stream<Uint8Array, void> {
+      return resource<Subscription<Uint8Array, void>>(function* (provide) {
+        let open = false;
+        // Registered before the reader is taken, so a scope cancelled between
+        // the two leaves nothing holding this terminal's input.
+        yield* ensure(() => {
+          if (!open) {
+            return;
+          }
+          open = false;
+          terminal.readers -= 1;
+          // Actively cancelled: a cleanup that waited for the outstanding read
+          // to end on its own would need another keystroke to get one.
+          const resolve = waiting;
+          waiting = undefined;
+          resolve?.({ done: true, value: undefined });
+        });
+        terminal.readers += 1;
+        open = true;
+        yield* provide({
+          *next(): Operation<IteratorResult<Uint8Array, void>> {
+            if (inputFailure !== undefined) {
+              throw inputFailure;
+            }
+            // Always one suspension per chunk, buffered or not: the reader turns
+            // one chunk into many decoded events, and draining a buffer without
+            // yielding hands them over faster than the scanner takes them.
+            const pending = withResolvers<IteratorResult<Uint8Array, void>>();
+            const head = queue.shift();
+            if (head !== undefined) {
+              pending.resolve({ done: false, value: head });
+            } else if (ended) {
+              pending.resolve({ done: true, value: undefined });
+            } else {
+              waiting = pending.resolve;
+            }
+            return yield* pending.operation;
+          },
+        });
+      });
     },
     onResize(listener: () => void): () => void {
       watchers.add(listener);
@@ -1939,9 +2028,31 @@ function* untilDrawn(terminal: Terminal): Operation<void> {
   );
 }
 
-/** Wait until the screen shows this text, or say it never did. */
+/**
+ * Wait until the screen shows this text, or say it never did — and show it.
+ *
+ * The rendered frame goes in the message, because "never showed X" on its own
+ * says nothing about what it showed instead, and what it showed instead is the
+ * whole of the evidence when a journey stalls.
+ */
 function* showing(terminal: Terminal, expected: string): Operation<void> {
-  yield* until(() => shows(terminal, expected), `the screen never showed ${expected}`);
+  const deadline = Date.now() + DEADLOCK_MS;
+  while (!shows(terminal, expected)) {
+    if (Date.now() > deadline) {
+      // Read now rather than passed in: the frame that matters is the one on the
+      // screen when the wait gave up, not the one it started from.
+      throw new Error(
+        `the screen never showed ${expected}. rendered=` +
+          JSON.stringify(
+            screenOf(terminal)
+              .map((line) => line.trimEnd())
+              .filter((line) => line.trim().length > 0),
+          ),
+      );
+    }
+    yield* sleep(5);
+    yield* settled(10);
+  }
 }
 
 /** Where on the screen one label is, if it is there. */
@@ -1969,6 +2080,45 @@ function* click(terminal: Terminal, label: string): Operation<void> {
   const at = coordinateOf(terminal, label);
   if (at === undefined) {
     throw new Error(`no control labelled ${label} is on the screen`);
+  }
+  terminal.feed(`\x1b[<0;${at.column + 1};${at.row + 1}M`);
+  yield* settled(30);
+}
+
+/**
+ * Where the waiting-question control is, once this process is asking.
+ *
+ * On the footer's one action row, found by the control that is on it in every
+ * state — the question's own text also appears in the transcript, and only one of
+ * the two is something to activate.
+ */
+function askedRow(
+  terminal: Terminal,
+): { readonly column: number; readonly row: number } | undefined {
+  for (const [row, line] of screenOf(terminal).entries()) {
+    if (!line.includes("[exit]")) {
+      continue;
+    }
+    const column = line.indexOf("[answer]");
+    if (column !== -1) {
+      return { column, row };
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Open the waiting question's drawer, the way a person does.
+ *
+ * A question announces itself and opens nothing: activating the announcement is
+ * what opens the form. So every question in a journey is two acts, and one that
+ * follows an answered question announces itself again.
+ */
+function* openQuestion(terminal: Terminal): Operation<void> {
+  yield* until(() => askedRow(terminal) !== undefined, "the question never announced itself");
+  const at = askedRow(terminal);
+  if (at === undefined) {
+    throw new Error("the waiting question's control left the screen before it was activated");
   }
   terminal.feed(`\x1b[<0;${at.column + 1};${at.row + 1}M`);
   yield* settled(30);

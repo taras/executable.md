@@ -347,6 +347,13 @@ export function fixtureSurface(tree: ReplTree<Surfaced>, state: ReplFixtureState
     inspection,
   };
 
+  // The footer's own three parts, which placement keeps apart: the action row,
+  // the History band and the draft. The draft is named rather than left as the
+  // last of a list, because a drawer reparents footer controls and so decides
+  // what comes after it in the committed frame.
+  const footer = collected.get("footer") ?? [];
+  const draft = footer.find((cell) => tree.keyOf(cell.node) === "footer:input");
+
   return {
     // The route picks one. Everything else stays mounted and stays off the
     // narrow frame, which is what makes it unreachable there rather than hidden.
@@ -356,7 +363,8 @@ export function fixtureSurface(tree: ReplTree<Surfaced>, state: ReplFixtureState
     transcript,
     inspection,
     drawer: collected.get("drawer") ?? [],
-    footer: collected.get("footer") ?? [],
+    actions: footer.filter((cell) => cell !== draft),
+    draft,
     history: state.history,
   };
 }

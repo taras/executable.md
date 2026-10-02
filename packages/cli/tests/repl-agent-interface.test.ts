@@ -16,7 +16,9 @@
 import { beforeAll, describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import {
+  ensure,
   race,
+  resource,
   scoped,
   sleep,
   spawn,
@@ -24,7 +26,7 @@ import {
   useScope,
   withResolvers,
 } from "effection";
-import type { Operation, Result, Stream } from "effection";
+import type { Operation, Result, Stream, Subscription } from "effection";
 import { DurableContext, InMemoryStream } from "@executablemd/durable-streams";
 import {
   Agent,
@@ -70,7 +72,8 @@ import type {
 } from "../src/repl/application.ts";
 import { layout, NARROW, surfaceWidth } from "../src/repl/layout.ts";
 import type { ReplPlacedCell, ReplSemanticFrame } from "../src/repl/layout.ts";
-import { decodeLocation, encodeLocation } from "../src/repl/route.ts";
+import { decodeLocation, encodeLocation, NO_LIVE, resolveLocation } from "../src/repl/route.ts";
+import type { ReplRoute } from "../src/repl/route.ts";
 import { installReplHost } from "../src/repl-assembly.ts";
 import { installReplTerminal } from "../src/repl/terminal-host.ts";
 import type { ReplTerminalCapabilities } from "../src/repl/terminal-host.ts";
@@ -1659,12 +1662,18 @@ describe("U3 — what each accepted frame mounts, and nothing else", () => {
       yield* tree.dispatch({ kind: "key", key: "Tab" });
     }
     for (const key of seen) {
-      expect(key === "drawer:open" || key.startsWith("drawer:") || key === "footer:history").toBe(
-        true,
-      );
+      expect(
+        key === "drawer:open" ||
+          key.startsWith("drawer:") ||
+          key === "footer:history" ||
+          key === "footer:exit",
+      ).toBe(true);
     }
     // The one History node, reachable from inside rather than duplicated beside.
     expect([...seen]).toContain("footer:history");
+    // And the way out, on the same terms: a modal contains focus, so leaving the
+    // command has to be reachable from inside it or not at all.
+    expect([...seen]).toContain("footer:exit");
     expect(
       tree
         .mounted()
@@ -2743,7 +2752,7 @@ function recordingTerminal(
 } {
   const queue: Uint8Array[] = [];
   const watchers = new Set<() => void>();
-  let waiting: ((result: IteratorResult<Uint8Array, undefined>) => void) | undefined;
+  let waiting: ((result: IteratorResult<Uint8Array, void>) => void) | undefined;
   let ended = false;
 
   let holding = false;
@@ -2789,15 +2798,17 @@ function recordingTerminal(
   const host: ReplTerminalCapabilities = {
     interactive: () => interactive,
     size: () => terminal.size,
-    write(bytes: Uint8Array): Promise<void> {
+    *write(bytes: Uint8Array): Operation<void> {
       terminal.presented.push(new Uint8Array(bytes));
       if (!holding) {
-        return Promise.resolve();
+        // A write that completed, which still costs the caller a turn.
+        yield* sleep(0);
+        return;
       }
       holding = false;
-      return new Promise<void>((resolve) => {
-        terminal.holdPresent = { release: resolve };
-      });
+      const held = withResolvers<void>();
+      terminal.holdPresent = { release: held.resolve };
+      yield* held.operation;
     },
     writeNow(): void {
       terminal.resets += 1;
@@ -2805,33 +2816,43 @@ function recordingTerminal(
     setRaw(raw: boolean): void {
       terminal.raw.push(raw);
     },
-    bytes(): AsyncIterable<Uint8Array> {
-      return {
-        [Symbol.asyncIterator](): AsyncIterator<Uint8Array, undefined> {
-          terminal.readers += 1;
-          return {
-            next(): Promise<IteratorResult<Uint8Array, undefined>> {
-              const head = queue.shift();
-              if (head !== undefined) {
-                return Promise.resolve({ done: false, value: head });
-              }
-              if (ended) {
-                return Promise.resolve({ done: true, value: undefined });
-              }
-              return new Promise((resolve) => {
-                waiting = resolve;
-              });
-            },
-            return(): Promise<IteratorResult<Uint8Array, undefined>> {
-              terminal.readers -= 1;
-              const resolve = waiting;
-              waiting = undefined;
-              resolve?.({ done: true, value: undefined });
-              return Promise.resolve({ done: true, value: undefined });
-            },
-          };
-        },
-      };
+    input(): Stream<Uint8Array, void> {
+      return resource<Subscription<Uint8Array, void>>(function* (provide) {
+        let open = false;
+        // Registered before the reader is taken, so a scope cancelled between
+        // the two leaves nothing holding this terminal's input.
+        yield* ensure(() => {
+          if (!open) {
+            return;
+          }
+          open = false;
+          terminal.readers -= 1;
+          // Actively cancelled: a cleanup that waited for the outstanding read
+          // to end on its own would need another keystroke to get one.
+          const resolve = waiting;
+          waiting = undefined;
+          resolve?.({ done: true, value: undefined });
+        });
+        terminal.readers += 1;
+        open = true;
+        yield* provide({
+          *next(): Operation<IteratorResult<Uint8Array, void>> {
+            // Always one suspension per chunk, buffered or not: the reader turns
+            // one chunk into many decoded events, and draining a buffer without
+            // yielding hands them over faster than the scanner takes them.
+            const pending = withResolvers<IteratorResult<Uint8Array, void>>();
+            const head = queue.shift();
+            if (head !== undefined) {
+              pending.resolve({ done: false, value: head });
+            } else if (ended) {
+              pending.resolve({ done: true, value: undefined });
+            } else {
+              waiting = pending.resolve;
+            }
+            return yield* pending.operation;
+          },
+        });
+      });
     },
     onResize(listener: () => void): () => void {
       watchers.add(listener);
@@ -3170,6 +3191,55 @@ describe("EU1 — selecting an entry moves the transcript locus and nothing else
     );
     return { session, stub, holder };
   }
+
+  /** One location as a route, failing the test rather than the assertion. */
+  function decodeRoute(location: string): ReplRoute {
+    const decoded = decodeLocation(location);
+    if (!decoded.ok) {
+      throw decoded.error;
+    }
+    return decoded.value;
+  }
+
+  it("UI4: a live question belongs to the entry that is still running", function* () {
+    const { session, stub } = yield* twoRecordedEntries();
+    stub.record("root");
+    yield* until(session, "the second entry's turn being recorded", () => recorded(session) === 2);
+    yield* session.join();
+
+    // The head, where the second entry is the one that could still be asking.
+    const model = session.model;
+    expect(model.entries.map((entry) => entry.key)).toEqual(["entry-1", "entry-2"]);
+    const live = { ...NO_LIVE, elicit: true };
+
+    // Entries are serial, so only the last one a prefix admitted can still be
+    // asking. A route naming an earlier one beside this drawer would draw a live
+    // question over a settled transcript and attribute it to that entry.
+    const wrong = resolveLocation(
+      model,
+      {
+        ...decodeRoute(`xmd://repl/agent-interface/repl/entry-1`),
+        drawers: [{ kind: "live-elicit" }],
+      },
+      live,
+    );
+    expect(wrong.ok).toBe(false);
+    if (wrong.ok) {
+      throw new Error("a settled entry holds no live question");
+    }
+    expect(wrong.error.message).toContain("has settled");
+
+    // And the entry that is running does hold it.
+    const right = resolveLocation(
+      model,
+      {
+        ...decodeRoute(`xmd://repl/agent-interface/repl/entry-2`),
+        drawers: [{ kind: "live-elicit" }],
+      },
+      live,
+    );
+    expect(right.ok).toBe(true);
+  });
 
   it("EU1: selecting an entry changes the locus, and leaves Sessions global", function* () {
     const { session, stub } = yield* twoRecordedEntries();

@@ -816,16 +816,31 @@ describe("F3 — complete content and reachable navigation", () => {
     expect(inside).toBe(true);
   });
 
-  it("F3: the footer trigger is one bounded line, and the drawer holds it all", function* () {
+  it("F3: the footer trigger is one fixed control, and the drawer holds the message", function* () {
     const asked = yield* askingFor(PLAN_SCHEMA, DRAFT);
     const live = asking(asked.question);
-    // Closed: the footer offers the question without becoming the transcript.
+    // Closed: one fixed spelling, taking none of its width from the question.
+    // A message is as long as its author made it and the action row is only as
+    // wide as the terminal, so a trigger sized by the message is one the
+    // narrowest supported frame drops — and a dropped announcement is a waiting
+    // question nobody can reach.
     const closed = framed(initialState("forms"), live);
     const trigger = closed.find((one) => one.key === "footer:asked");
     expect(trigger).toBeDefined();
+    expect(trigger?.label).toBe("[answer]");
+    // Bounded, and now carrying no part of the message at all.
     expect(trigger?.label.includes("\n")).toBe(false);
-    expect(trigger?.label).toContain("draft line 0");
-    expect(trigger?.label).not.toContain("draft line 1");
+    expect(trigger?.label).not.toContain("draft line");
+
+    // Which costs nothing, because the message is where there is room for it:
+    // the drawer this one control opens. The row above walks all forty lines of
+    // it; this one holds the two halves together, so a trigger that stopped
+    // announcing cannot be mistaken for a question that stopped being readable.
+    const opening = framed(opened(live), live);
+    const message = opening
+      .filter((one) => one.key.startsWith("drawer:message:"))
+      .map((one) => one.label.trim());
+    expect(message[0]).toBe("draft line 0");
   });
 });
 

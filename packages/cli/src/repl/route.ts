@@ -268,6 +268,19 @@ function misplacedDrawer(
 }
 
 /**
+ * Which surface owns one drawer.
+ *
+ * The same rule {@link misplacedDrawer} enforces, asked the other way round, so
+ * that activating a control can take somebody to the surface its drawer belongs
+ * to instead of refusing them there. One function, because two spellings of one
+ * ownership rule is how a route came to be adopted on a surface that could not
+ * spell it.
+ */
+export function surfaceForDrawer(drawer: ReplDrawerRef): ReplSurface {
+  return drawer.kind === "live-permission" ? "sessions" : "repl";
+}
+
+/**
  * The one canonical spelling of a route.
  *
  * Canonical means one answer: segments in structural order, drawers after them
@@ -342,6 +355,15 @@ export function resolveLocation(
           "prefix the route names before resolving against it.",
       ),
     );
+  }
+  // The same structural rule decoding applies, so a route is refused here —
+  // where a caller is choosing whether to adopt it — rather than at the moment
+  // something asks for its canonical spelling. Resolution used to accept a
+  // drawer this surface cannot hold, the reducer adopted it, and the next frame
+  // raised out of `encodeLocation` and ended the command.
+  const misplaced = misplacedDrawer(route.surface, route.drawers);
+  if (misplaced !== undefined) {
+    return Err(new ReplRouteError(`${misplaced}.`));
   }
   const filtered = selectConversation(model, route, live);
   if (!filtered.ok) {
@@ -508,11 +530,33 @@ function openDrawer(
     return Ok({ kind: "binding", name: reference.name, binding });
   }
   if (reference.kind === "live-elicit") {
+    if (route.surface !== "repl") {
+      return Err(
+        new ReplRouteError(
+          "a live question belongs to the entry that is asking it, which is read on the Entries " +
+            "surface. Activate the waiting question to go there.",
+        ),
+      );
+    }
     if (route.at !== undefined) {
       return Err(
         new ReplRouteError(
           "a live question belongs to the running expansion, and this view is frozen at an " +
             "earlier position. Return to the live head to answer it.",
+        ),
+      );
+    }
+    // Entries are serial, so only the last one a prefix admitted can still be
+    // asking. A route naming an earlier entry beside this drawer describes a
+    // settled transcript with a live question drawn over it, which is somebody
+    // else's question attributed to the entry being read.
+    const asking = model.entries[model.entries.length - 1];
+    const selected = route.scopes[0];
+    if (selected !== undefined && asking !== undefined && selected !== asking.key) {
+      return Err(
+        new ReplRouteError(
+          `${selected} has settled, and a live question belongs to ${asking.key}, which is the ` +
+            "entry still running. Select that entry to answer it.",
         ),
       );
     }

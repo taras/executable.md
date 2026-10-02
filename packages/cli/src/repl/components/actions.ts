@@ -90,4 +90,14 @@ export type ReplAction =
       readonly option: string;
     }
   /** Dismiss the selected request, which denies it while the session runs on. */
-  | { readonly kind: "dismiss-permission"; readonly request: string };
+  | { readonly kind: "dismiss-permission"; readonly request: string }
+  /**
+   * Leave the REPL.
+   *
+   * Lifecycle and nothing else. It is not an answer to a question, a decision
+   * about a permission request or an outcome for an entry: a person who is
+   * finished with a terminal has not said yes, no, or cancelled to anything that
+   * was waiting, and a command that recorded one of those on their behalf would
+   * be inventing a decision nobody made.
+   */
+  | { readonly kind: "exit" };

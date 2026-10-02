@@ -308,6 +308,138 @@ describe("REPL boundaries: what production code cannot reach", () => {
   });
 });
 
+describe("REPL terminal entrypoints: one corrected stream, four installations", () => {
+  /** One runtime-named adapter's code, without its prose. */
+  function adapter(name: string): Operation<string> {
+    return code(join(CLI, "src", name));
+  }
+
+  it("UI2: every entrypoint installs an owned input stream and none builds its own reader", function* () {
+    const names = [
+      "deno-repl-terminal.ts",
+      "compiled-repl-terminal.ts",
+      "node-repl-terminal.ts",
+      "bun-repl-terminal.ts",
+    ];
+    for (const name of names) {
+      const text = yield* adapter(name);
+      // The capability each one supplies is the stream, not an async iterable:
+      // releasing a terminal has to be something a scope can do.
+      expect([name, /\binput\b/.test(text)]).toEqual([name, true]);
+      expect([name, text.includes("AsyncIterable")]).toEqual([name, false]);
+      expect([name, text.includes("bytes()")]).toEqual([name, false]);
+      // And none of them reaches past the shared seam to take a reader itself.
+      expect([name, text.includes("getReader")]).toEqual([name, false]);
+      expect([name, text.includes("Symbol.asyncIterator")]).toEqual([name, false]);
+    }
+  });
+
+  it("UI2: nothing on the REPL's exit path ends through a host primitive", function* () {
+    // Leaving unwinds the scope that owns the session, the observer, every entry
+    // task, the reader and the frame subscription. A host exit returns none of
+    // that: it stops the process where it stands, so the terminal keeps the modes
+    // it was given, the location nobody printed is lost, and work that was owned
+    // is abandoned rather than joined.
+    const PRIMITIVES = ["Deno.exit", "process.exit", "process.abort", "process.kill", "Deno.kill"];
+    const onThePath = [
+      join(CLI, "src", "repl", "program.ts"),
+      join(CLI, "src", "repl", "terminal-host.ts"),
+      join(CLI, "src", "deno-terminal-surface.ts"),
+      join(CLI, "src", "deno-repl-terminal.ts"),
+      join(CLI, "src", "compiled-repl-terminal.ts"),
+      join(CLI, "src", "node-repl-terminal.ts"),
+      join(CLI, "src", "bun-repl-terminal.ts"),
+    ];
+
+    const offences: string[] = [];
+    for (const path of onThePath) {
+      const text = yield* code(path);
+      for (const primitive of PRIMITIVES) {
+        if (text.includes(primitive)) {
+          offences.push(`${path.slice(CLI.length)} ends through ${primitive}`);
+        }
+      }
+    }
+    expect(offences).toEqual([]);
+
+    // And positively: the program's endings are outcomes it returns. Absence on
+    // its own would still be satisfied by a program that ended some third way.
+    const program = yield* code(join(CLI, "src", "repl", "program.ts"));
+    const returned = program.match(/return Ok\(\{ location: exitLocation\(state\)/g) ?? [];
+    // One for end of input, one for the control, one for a closed reader.
+    expect(returned.length).toBeGreaterThanOrEqual(3);
+  });
+
+  it("UI2: every owned reader registers its release before it acquires anything", function* () {
+    // The ordering is the contract and it is not observable after the fact: a
+    // scope cancelled between acquiring and registering unwinds with no cleanup
+    // on it at all, and nothing afterwards can tell that window from a clean one.
+    // So it is read where it is written, the same way the exit path is.
+    const ordered = [
+      // The private host's shared Node-shaped reader.
+      { path: join(CLI, "src", "repl", "terminal-host.ts"), opens: "stdin.on(" },
+      // This host's own reader.
+      {
+        path: join(CLI, "src", "deno-terminal-surface.ts"),
+        opens: 'callable(source, "getReader")',
+      },
+      // And the pty child the exit regression owns, which is held to the same
+      // claim it exists to make.
+      { path: join(CLI, "tests", "repl-exit-pty.test.ts"), opens: "const spawned = start();" },
+    ];
+    for (const { path, opens } of ordered) {
+      const text = yield* code(path);
+      const acquires = text.indexOf(opens);
+      expect([path, acquires]).not.toEqual([path, -1]);
+      const registers = text.lastIndexOf("yield* ensure(", acquires);
+      expect([path, registers]).not.toEqual([path, -1]);
+      expect([path, registers < acquires]).toEqual([path, true]);
+    }
+  });
+
+  it("UI2: the compiled binary installs the same Deno stream the source entrypoint does", function* () {
+    const compiled = yield* adapter("compiled-repl-terminal.ts");
+    const source = yield* adapter("deno-repl-terminal.ts");
+
+    // The compiled binary is Deno, so its input is Deno's — read from the one
+    // surface both of them share rather than built again beside it. A second
+    // implementation is how one of two identical hosts comes to be corrected.
+    for (const text of [compiled, source]) {
+      expect(text).toContain("denoTerminalSurface");
+      expect(text).toContain("host.input()");
+    }
+
+    // And that surface is where the cancellation lives, so correcting it
+    // corrects both. Stated against the surface's own code.
+    const surface = yield* code(join(CLI, "src", "deno-terminal-surface.ts"));
+    expect(surface).toContain("getReader");
+    expect(surface).toContain("cancel");
+    expect(surface).toContain("releaseLock");
+    // Registered before the reader is acquired: the ordering is the contract, and
+    // it is read inside the stream's own body — the first `getReader` in this
+    // file is the validation that the host offers one at all.
+    const body = surface.slice(surface.indexOf("function readerStream"));
+    expect(body).not.toBe("");
+    expect(body.indexOf("ensure(")).toBeGreaterThan(-1);
+    expect(body.indexOf("ensure(")).toBeLessThan(body.indexOf('callable(source, "getReader")'));
+  });
+
+  it("UI2: Node and Bun share one structural reader and detect no runtime", function* () {
+    const shared = yield* code(join(CLI, "src", "repl", "terminal-host.ts"));
+    // The helper takes its standard input by value, so two runtimes that spell
+    // theirs the same way share the code without either being detected.
+    expect(shared).toContain("nodeInputStream");
+    expect(shared).toContain("NodeShapedInput");
+    for (const name of ["Deno", "Bun", "process.platform", "navigator.userAgent"]) {
+      expect([name, shared.includes(name)]).toEqual([name, false]);
+    }
+    for (const name of ["node-repl-terminal.ts", "bun-repl-terminal.ts"]) {
+      const text = yield* adapter(name);
+      expect([name, text.includes("nodeInputStream")]).toEqual([name, true]);
+    }
+  });
+});
+
 describe("REPL documentation: what it says is what the code does", () => {
   it("D1: every command example in the spec is one the parser accepts", function* () {
     const spec = yield* read(join(CLI, "..", "..", "specs", "repl-spec.md"));

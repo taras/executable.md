@@ -41,7 +41,13 @@ import {
 } from "./layout.ts";
 import type { ReplSurface as ReplPlacedSurface, ReplSurfaceCell } from "./layout.ts";
 import type { ReplTerminalSize } from "./terminal.ts";
-import { decodeLocation, encodeLocation, NO_LIVE, resolveLocation } from "./route.ts";
+import {
+  decodeLocation,
+  encodeLocation,
+  NO_LIVE,
+  resolveLocation,
+  surfaceForDrawer,
+} from "./route.ts";
 import type {
   ReplDrawerRef,
   ReplLiveAvailability,
@@ -412,7 +418,15 @@ export type ReplIntent =
       readonly request: string;
       readonly option: string | undefined;
       readonly turn: string;
-    };
+    }
+  /**
+   * End the command.
+   *
+   * The root's to perform because only the root owns the scope that holds the
+   * session, the observer, each entry task and the terminal. Nothing is appended
+   * for it: ending is the absence of further work, not an outcome.
+   */
+  | { readonly kind: "exit" };
 
 /** One reduction: the state that stands now, and what the root owes. */
 export interface ReplTransition {
@@ -691,6 +705,7 @@ export function refusedView(
   state: ReplState,
   reason: string,
   size: ReplTerminalSize = NARROW,
+  focused?: string,
 ): ReplView {
   return Object.freeze({
     state,
@@ -714,7 +729,9 @@ export function refusedView(
     location: encodeLocation(state.route),
     refusal: reason,
     size,
-    focused: "refusal",
+    // Where focus actually is, once a commit has said: this screen has a control
+    // on it, and a marker that named a different node would draw it on nothing.
+    focused: focused ?? "refusal",
   });
 }
 
@@ -822,6 +839,16 @@ export function reduceRepl(
         intent: { kind: "submit", source: state.draft },
       };
     }
+    case "exit": {
+      // No guard, from any state. Leaving is available while an entry runs, while
+      // a question waits, while a request is pending and while a position is being
+      // inspected — a person who cannot leave the screen they are on has not been
+      // given a way out, they have been given four.
+      return {
+        state: Object.freeze({ ...state, refusal: undefined }),
+        intent: { kind: "exit" },
+      };
+    }
     case "select-surface": {
       return navigate(state, model, { ...state.route, surface: action.surface, drawers: [] }, live);
     }
@@ -845,17 +872,39 @@ export function reduceRepl(
         if (state.route.at !== undefined) {
           return refuse(
             state,
-            "a historical view cannot answer the question this process is asking.",
+            "a historical view cannot answer the question this process is asking. " +
+              "Activate [live] to return to the head.",
           );
         }
         if (live.question === undefined) {
           return refuse(state, "nothing is being asked right now.");
         }
       }
+      // A drawer belongs to one surface, so activating a control that opens one
+      // goes to that surface as part of the same explicit act. The alternative is
+      // refusing somebody on the surface they are standing on for asking to see
+      // something that exists — which is what a waiting question on Sessions used
+      // to be. A surface this crosses starts a fresh stack: a drawer was opened
+      // over a surface, and carrying it to another one would stack it over a
+      // screen it was never in front of.
+      const owning = surfaceForDrawer(action.drawer);
+      const crossing = owning !== state.route.surface;
       return navigate(
         state,
         model,
-        { ...state.route, drawers: Object.freeze([...state.route.drawers, action.drawer]) },
+        {
+          ...state.route,
+          surface: owning,
+          // The question belongs to the entry still running, and that is the entry
+          // whose transcript it has to be read against.
+          scopes:
+            action.drawer.kind === "live-elicit"
+              ? askingEntry(model, state.route.scopes)
+              : state.route.scopes,
+          drawers: Object.freeze(
+            crossing ? [action.drawer] : [...state.route.drawers, action.drawer],
+          ),
+        },
         live,
       );
     }
@@ -945,7 +994,8 @@ export function reduceRepl(
       // already drawing the clamped position.
       const furthest = Math.max(
         0,
-        entryContent(model, undefined).length - entriesWindow(state, model, size).capacity,
+        entryContent(model, undefined, undefined).length -
+          entriesWindow(state, model, size).capacity,
       );
       const entries = clamped(clamped(state.viewports.entries, furthest) + action.delta, furthest);
       return settled({
@@ -1234,6 +1284,66 @@ function clamped(offset: number, furthest: number): number {
   return Math.min(Math.max(0, offset), furthest);
 }
 
+/**
+ * The entry root a live question is answered against.
+ *
+ * The last entry this prefix admitted, because entries are serial and only that
+ * one can still be asking. The scopes already selected are kept when they are
+ * already inside it, so opening the drawer from a nested scope of the running
+ * entry does not throw away the place somebody was reading.
+ */
+function askingEntry(model: ReplModel, scopes: readonly string[]): readonly string[] {
+  const asking = model.entries[model.entries.length - 1];
+  if (asking === undefined) {
+    return scopes;
+  }
+  return scopes[0] === asking.key ? scopes : Object.freeze([asking.key]);
+}
+
+/**
+ * The same route without the drawers only this process could mount.
+ *
+ * A waiting question and a pending request exist in this process and in no
+ * history, so a location naming one is a location nobody — including this
+ * machine, a moment later — can reopen. Printing the route a person left is only
+ * useful if it is a route they can come back to, so the live-only members come
+ * off on the way out. Nothing is settled to do it: the drawer is removed, not
+ * answered, and what the file holds is untouched.
+ */
+export function withoutLiveDrawers(state: ReplState): ReplState {
+  const remaining = state.route.drawers.filter(
+    (drawer) => drawer.kind !== "live-elicit" && drawer.kind !== "live-permission",
+  );
+  if (remaining.length === state.route.drawers.length) {
+    return state;
+  }
+  return Object.freeze({
+    ...state,
+    route: Object.freeze({ ...state.route, drawers: Object.freeze(remaining) }),
+  });
+}
+
+/**
+ * The same state once the question its drawer was asking has gone.
+ *
+ * Teardown and a settlement elsewhere can both end a question while its drawer is
+ * up. The drawer and what was typed into it go, and neither becomes an answer:
+ * the form is discarded rather than submitted, because a person who was still
+ * filling it in never offered it.
+ */
+export function elicitWithdrawn(state: ReplState): ReplState {
+  const remaining = state.route.drawers.filter((drawer) => drawer.kind !== "live-elicit");
+  if (remaining.length === state.route.drawers.length) {
+    return state;
+  }
+  return Object.freeze({
+    ...state,
+    form: EMPTY_FORM,
+    restore: undefined,
+    route: Object.freeze({ ...state.route, drawers: Object.freeze(remaining) }),
+  });
+}
+
 /** The same state with the Sessions reading back at its first row. */
 function atFirstRow(state: ReplState): ReplState {
   return Object.freeze({
@@ -1442,11 +1552,65 @@ function sameJson(left: Json, right: Json): boolean {
   });
 }
 
+/**
+ * Two columns saying whether this row is the one being read.
+ *
+ * Its own channel, beside the focus marker rather than sharing it: focus is where
+ * the next keystroke goes and selection is what the screen is showing, and a
+ * reader who has tabbed away from the entry they are reading still needs to know
+ * which one that is. Driven by the resolved route, so it survives focus moving,
+ * a background repaint and a resize.
+ */
+function selected(on: boolean): string {
+  return on ? "* " : "  ";
+}
+
 function line(key: string, label: string): Described {
   return {
     key,
     description: describeNode<ReplAction>({ key, component: LINE, input: { label } }),
   };
+}
+
+/**
+ * What this screen can be operated with, right now.
+ *
+ * Contextual rather than a legend, because a legend is a promise: it names the
+ * same keys on every screen, and on most screens some of them do nothing. What
+ * this says is read off what is mounted — Escape appears when there is a drawer
+ * for it to close, Enter is described by what the focused control would actually
+ * do, and the way back to the draft is offered exactly when a person's keystrokes
+ * would otherwise reach nothing.
+ *
+ * It sits above the surface rather than in the footer, which is seven rows that
+ * belong to the controls, the History band and the draft.
+ */
+function guidance(view: ReplView): string {
+  const focused = view.focused;
+  const modal = view.selection.drawers.length > 0;
+  const editing = focused === undefined || focused === "footer:input";
+  const field = focused !== undefined && focused.startsWith("drawer:field:");
+  const move = "Tab/Shift+Tab move";
+  if (field) {
+    return `Type here · Enter answers · ${move} · Esc closes`;
+  }
+  if (modal) {
+    return `Enter or click activates · ${move} · Esc closes`;
+  }
+  if (!editing) {
+    // The one place this screen used to say nothing at all: a person typing at a
+    // control watched their characters reach neither the draft nor an error.
+    return `Enter or click activates · ${move} · Tab to the draft to type`;
+  }
+  if (view.state.route.at !== undefined) {
+    // Frozen, so there is nothing to submit into. What the draft holds survives
+    // the position, and the way back to submitting it is a control on the screen
+    // rather than a key. Named without its brackets: a bracketed label in prose
+    // reads as a control, and a person — or a pointer looking for one — would
+    // try to activate a sentence.
+    return `Type here · ${move} · activate live to return to the head`;
+  }
+  return `Type here · Enter submits · ${move}`;
 }
 
 /**
@@ -1502,22 +1666,55 @@ export function describeApplication(view: ReplView): readonly ReplDescription<Re
 
 function described(view: ReplView): readonly Described[] {
   if (view.refusal !== undefined) {
-    return [
+    // A reason as long as its sentence, over rows that fit: a refusal is the only
+    // thing on this screen, and one clipped to a single row is a refusal that has
+    // not been given.
+    const [first, ...rest] = chunked(view.refusal, surfaceWidth(view.size));
+    // Where somewhere to go exists, the refusal itself is focusable and takes the
+    // claim; otherwise focus starts on the way out. Declared, so the claim is a
+    // typed member rather than a literal that has to be asserted into one.
+    const claiming: { readonly focus?: true } =
+      view.state.route.at === undefined ? {} : { focus: true };
+    const items: Described[] = [
       {
         key: "refusal",
         description: describeNode<ReplAction>({
           key: "refusal",
           component: REFUSAL,
           input: {
-            label: view.refusal,
+            label: first,
             // Somewhere to go only when there is somewhere: a cold open of a
             // history that cannot be read has no earlier view to return to.
             ...(view.state.route.at === undefined ? {} : { back: "live" }),
           },
-          focus: true,
+          ...claiming,
         }),
       },
     ];
+    for (const [offset, part] of rest.entries()) {
+      items.push(line(`refusal:${offset}`, part));
+    }
+    // And the way out, because this screen offers nothing else to do — at every
+    // size this REPL draws at. A valid session that could only be left by a key
+    // nobody documented would be one a person has to guess their way out of.
+    //
+    // Below the minimum there is no frame to place it in: that screen draws its
+    // refusal and nothing else, so a control described there would be a focus
+    // stop drawing nothing and a target behind nothing. It teaches Escape in the
+    // sentence instead, which is the one thing it can offer.
+    if (profileFor(view.size) !== "too-small") {
+      items.push(
+        row(
+          "footer:exit",
+          "[exit]",
+          { select: "exit" },
+          view.state.route.at === undefined
+            ? { focus: true, here: view.focused }
+            : { here: view.focused },
+        ),
+      );
+    }
+    return items;
   }
 
   const items: Described[] = [];
@@ -1540,13 +1737,13 @@ function described(view: ReplView): readonly Described[] {
   // decides which outlet's rows follow them, never whether they exist.
   const toSessions = row(
     "sessions:heading",
-    "Sessions",
+    `${selected(routed === "sessions")}Sessions`,
     { select: "surface", surface: "sessions" },
     { here: view.focused },
   );
   const toEntries = row(
     "entries:heading",
-    "Entries",
+    `${selected(routed === "repl")}Entries`,
     { select: "surface", surface: "repl" },
     { here: view.focused },
   );
@@ -1606,7 +1803,7 @@ function described(view: ReplView): readonly Described[] {
     // place is not one a person can see, focus or point at. The controls sit
     // outside the thing they move, and exist only where there is more catalog
     // than this frame can hold.
-    const catalog = entryContent(model, view.focused);
+    const catalog = entryContent(model, view.focused, selection.entry?.key);
     const window = entriesWindow(state, model, view.size);
     const from = clamped(state.viewports.entries, Math.max(0, catalog.length - window.capacity));
     if (window.windowed) {
@@ -1705,9 +1902,22 @@ function described(view: ReplView): readonly Described[] {
       here: view.focused,
     },
   );
+  // The way out, on every screen and in every state. Like `[history]` it is one
+  // node: while a drawer is mounted it is reparented into the modal branch, so it
+  // stays reachable without reaching past the focus trap, and layout still draws
+  // it in the footer where it always is.
+  const exit = row("footer:exit", "[exit]", { select: "exit" }, { here: view.focused });
+  // Not below the minimum size: that frame places no cell at all, so a control
+  // described there is a focus stop that draws nothing and a target behind
+  // nothing. The screen says Escape leaves instead, which is the one way out a
+  // window too small to draw in can offer.
+  const drawable = profileFor(view.size) !== "too-small";
   const modal = view.selection.drawers.length > 0;
   if (!modal) {
     items.push(history);
+    if (drawable) {
+      items.push(exit);
+    }
   }
   if (state.route.at !== undefined) {
     items.push(row("footer:live", "[live]", { select: "live" }, { here: view.focused }));
@@ -1738,14 +1948,20 @@ function described(view: ReplView): readonly Described[] {
     items.push(
       row(
         "footer:asked",
-        // One line, bounded. The whole message is in the drawer this opens; a
-        // footer that drew every line of a Plan draft would be the transcript.
-        `? ${headline(live.question.message)}`,
+        // One fixed spelling, not a headline. A question's message is as long as
+        // its author made it, and the action row is as wide as the terminal: a
+        // control whose width came from the message is one the narrowest
+        // supported frame drops, and a control that has been dropped is a waiting
+        // question nobody can reach. The whole message is in the drawer this
+        // opens, which is where there is room for it.
+        "[answer]",
         { select: "live-elicit" },
         { here: view.focused, claim },
       ),
     );
   }
+
+  items.push(line("guidance", guidance(view)));
 
   // The canonical location: how a person comes back to exactly this view, here
   // or in another process. It goes above whatever surface is being shown rather
@@ -1785,7 +2001,7 @@ function described(view: ReplView): readonly Described[] {
     ),
   );
 
-  const drawer = drawerFor(view, history);
+  const drawer = drawerFor(view, history, exit, drawable);
   if (drawer !== undefined) {
     items.push(drawer);
   }
@@ -1993,9 +2209,7 @@ function sessionContentRows(state: ReplState, model: ReplModel, live: ReplLive):
  */
 function sessionsCapacity(state: ReplState, model: ReplModel, size: ReplTerminalSize): number {
   const narrow = profileFor(size) === "narrow";
-  const shared = narrow
-    ? locationRows(encodeLocation(state.route), size).length
-    : entriesFootprint(state, model, size);
+  const shared = narrow ? aboveOutlet(state, size) : entriesFootprint(state, model, size);
   // Both controls in a narrow frame, where they are one bar above the outlet.
   // In a sidebar the entry list brings its own heading, counted with it.
   const navigation = narrow ? 2 : 1;
@@ -2004,6 +2218,22 @@ function sessionsCapacity(state: ReplState, model: ReplModel, size: ReplTerminal
 
 /** `[^ earlier]` and `[v later]`, which are how either window moves. */
 const WINDOW_CONTROLS = 2;
+
+/**
+ * How many rows sit above a narrow frame's routed outlet.
+ *
+ * The contextual guidance and the canonical location, both of which a narrow
+ * frame draws in the one region it gives the outlet. Asked by each window that
+ * has to decide how many rows it may describe: a window sized as though these
+ * were not there has its last rows placed nowhere, which is a control a person
+ * can scroll to and never reach.
+ */
+function aboveOutlet(state: ReplState, size: ReplTerminalSize): number {
+  return GUIDANCE_ROWS + locationRows(encodeLocation(state.route), size).length;
+}
+
+/** The contextual guidance, which is one row at every size. */
+const GUIDANCE_ROWS = 1;
 
 /**
  * The most of a sidebar the Entries catalog may take from the reading beside it.
@@ -2037,10 +2267,10 @@ function entriesWindow(
   model: ReplModel,
   size: ReplTerminalSize,
 ): ReplEntriesWindow {
-  const content = entryContent(model, undefined).length;
+  const content = entryContent(model, undefined, undefined).length;
   const narrow = profileFor(size) === "narrow";
   const room = narrow
-    ? sessionsHeight(size) - locationRows(encodeLocation(state.route), size).length - 2
+    ? sessionsHeight(size) - aboveOutlet(state, size) - 2
     : Math.floor(sessionsHeight(size) / SIDEBAR_SHARE) - 1;
   const placeable = Math.max(1, room);
   return content <= placeable
@@ -2073,7 +2303,11 @@ function entriesFootprint(state: ReplState, model: ReplModel, size: ReplTerminal
  * one place a reader is promised an entry's outcome — put it after an
  * arbitrarily long root name and a long enough name takes the promise away.
  */
-function entryContent(model: ReplModel, focused: string | undefined): readonly Described[] {
+function entryContent(
+  model: ReplModel,
+  focused: string | undefined,
+  reading: string | undefined,
+): readonly Described[] {
   if (model.entries.length === 0) {
     return [line("entry:none", "  1. (not submitted)")];
   }
@@ -2082,7 +2316,10 @@ function entryContent(model: ReplModel, focused: string | undefined): readonly D
     items.push(
       row(
         `entry:${entry.key}`,
-        `  ${entry.order}. [${outcomeOfEntry(entry)}] ${entry.scope.name}`,
+        // The outcome still comes before the name, and the marker takes the two
+        // columns the indent already had — so a row that is not being read is
+        // exactly as wide as it was.
+        `${selected(reading === entry.key)}${entry.order}. [${outcomeOfEntry(entry)}] ${entry.scope.name}`,
         { select: "scope", scopes: [entry.key] },
         { here: focused },
       ),
@@ -2148,7 +2385,12 @@ function outcomeOf(audit: ReplAgentPermission): string {
  * cell is a row: a label holding three lines would show one of them, and a reader
  * would have no way to know the other two existed.
  */
-function drawerFor(view: ReplView, history: Described): Described | undefined {
+function drawerFor(
+  view: ReplView,
+  history: Described,
+  exit: Described,
+  drawable: boolean,
+): Described | undefined {
   const open = view.selection.drawers[view.selection.drawers.length - 1];
   if (open === undefined) {
     return undefined;
@@ -2208,7 +2450,7 @@ function drawerFor(view: ReplView, history: Described): Described | undefined {
     children.push(
       row(
         "drawer:scroll:up",
-        pad("[^ earlier]", width),
+        padControl("[^ earlier]", width),
         { select: "scroll", delta: -1 },
         { here: view.focused },
       ).description,
@@ -2219,7 +2461,7 @@ function drawerFor(view: ReplView, history: Described): Described | undefined {
     children.push(
       row(
         "drawer:scroll:down",
-        pad("[v later]", width),
+        padControl("[v later]", width),
         { select: "scroll", delta: 1 },
         { here: view.focused },
       ).description,
@@ -2231,7 +2473,7 @@ function drawerFor(view: ReplView, history: Described): Described | undefined {
       children.push(
         row(
           `drawer:marker:${checkpoint.marker}`,
-          width < 1 ? checkpoint.label : checkpoint.label.padEnd(width, " "),
+          padControl(checkpoint.label, width),
           {
             select: "marker",
             marker: checkpoint.marker,
@@ -2267,7 +2509,7 @@ function drawerFor(view: ReplView, history: Described): Described | undefined {
     children.push(
       row(
         "drawer:scroll:up",
-        pad("[^ earlier]", width),
+        padControl("[^ earlier]", width),
         { select: "scroll", delta: -1 },
         {
           here: view.focused,
@@ -2291,7 +2533,7 @@ function drawerFor(view: ReplView, history: Described): Described | undefined {
       content.push(
         row(
           `drawer:field:${one.name}`,
-          pad(`${marked}${label}: ${value}`, width),
+          padControl(`${marked}${label}: ${value}`, width),
           { select: "form-field", field: one.name },
           { here: view.focused },
         ).description,
@@ -2316,7 +2558,7 @@ function drawerFor(view: ReplView, history: Described): Described | undefined {
         content.push(
           row(
             `drawer:choice:${one.name}:${option}`,
-            pad(`  ${value === option ? "(x)" : "( )"} ${option}`, width),
+            padControl(`  ${value === option ? "(x)" : "( )"} ${option}`, width),
             { select: "form-choice", field: one.name, option },
             { here: view.focused },
           ).description,
@@ -2353,7 +2595,7 @@ function drawerFor(view: ReplView, history: Described): Described | undefined {
     content.push(
       row(
         "drawer:form:submit",
-        pad("[submit]", width),
+        padControl("[submit]", width),
         { select: "form-submit" },
         {
           here: view.focused,
@@ -2368,7 +2610,7 @@ function drawerFor(view: ReplView, history: Described): Described | undefined {
     children.push(
       row(
         "drawer:scroll:down",
-        pad("[v later]", width),
+        padControl("[v later]", width),
         { select: "scroll", delta: 1 },
         {
           here: view.focused,
@@ -2378,11 +2620,18 @@ function drawerFor(view: ReplView, history: Described): Described | undefined {
   }
 
   // The same node the footer would have drawn, inside the modal focus root.
+  // The two nodes the footer would have drawn, inside the modal focus root. A
+  // modal contains focus, so a way out mounted beside it would be one Tab could
+  // not reach — and a drawer a person cannot leave the command from is a drawer
+  // that has taken their terminal.
   children.push(history.description);
+  if (drawable) {
+    children.push(exit.description);
+  }
   children.push(
     row(
       "drawer:close",
-      width < 1 ? "[close]" : "[close]".padEnd(width, " "),
+      padControl("[close]", width),
       dismissing === undefined
         ? { select: "close" }
         : { select: "permission-dismiss", request: dismissing },
@@ -2441,7 +2690,7 @@ function permissionContent(
     content.push(
       row(
         `drawer:permission:choice:${choice.optionId}`,
-        pad(`[${choice.name}]${lasting(choice.kind)}`, width),
+        padControl(`[${choice.name}]${lasting(choice.kind)}`, width),
         { select: "permission-choice", request: request.key, option: choice.optionId },
         { here: focused },
       ).description,
@@ -2540,6 +2789,21 @@ function pad(label: string, width: number): string {
 }
 
 /**
+ * Pad one *control's* label so the row it draws is exactly as wide as its box.
+ *
+ * A control is marked when it holds focus, and the marker is two columns wide, so
+ * a label padded to the full width draws two columns past the box it is in. The
+ * overflow is clipped, which means the last two columns of the box are never
+ * written — and what was behind the drawer there stays on the screen.
+ */
+function padControl(label: string, width: number): string {
+  return pad(label, width - FOCUS_MARKER);
+}
+
+/** The two columns `marked()` puts in front of a control's label. */
+const FOCUS_MARKER = 2;
+
+/**
  * Whether this field is required as the form currently stands.
  *
  * The root's own `required`, plus whatever the one conditional adds while its
@@ -2628,8 +2892,13 @@ export function replSurface(tree: ReplTree<ReplAction>, view: ReplView): ReplPla
   const transcript: ReplSurfaceCell[] = [];
   const inspection: ReplSurfaceCell[] = [];
   const drawer: ReplSurfaceCell[] = [];
-  const footer: ReplSurfaceCell[] = [];
-  /** The location rows, which sit above whatever surface is being shown. */
+  /** The controls of the footer's one action row, in priority order. */
+  const acting: ReplSurfaceCell[] = [];
+  /** The contextual status that shares that row, after the controls. */
+  const status: ReplSurfaceCell[] = [];
+  /** The draft, which owns the footer's last row. */
+  let draft: ReplSurfaceCell | undefined;
+  /** The guidance and location rows, which sit above whatever surface is shown. */
   const located: ReplSurfaceCell[] = [];
   for (const cell of tree.frame().cells) {
     const key = tree.keyOf(cell.node);
@@ -2643,8 +2912,18 @@ export function replSurface(tree: ReplTree<ReplAction>, view: ReplView): ReplPla
     };
     if (key.startsWith("drawer:")) {
       drawer.push(placed);
-    } else if (key.startsWith("location:")) {
+    } else if (key === "guidance" || key.startsWith("location:")) {
       located.push(placed);
+    } else if (key === "footer:input") {
+      draft = placed;
+    } else if (key === "footer:refused" || key === "footer:asked") {
+      // Status, so it follows every control: a row too narrow for both keeps the
+      // way out and loses the sentence, never the other way round. `footer:asked`
+      // is a control as well as a status, which is why it is here rather than
+      // ahead of them — the drawer it opens is also reachable by Tab.
+      status.push(placed);
+    } else if (key.startsWith("footer:")) {
+      acting.push(placed);
     } else if (key === "sessions:heading" || key === "entries:heading") {
       // In both: a sidebar keeps each heading with the list it names, and a
       // narrow frame shows the pair as the bar above whichever outlet is routed.
@@ -2660,8 +2939,10 @@ export function replSurface(tree: ReplTree<ReplAction>, view: ReplView): ReplPla
       transcript.push(placed);
     } else if (key.startsWith("binding:") || key.startsWith("elicit:")) {
       inspection.push(placed);
-    } else if (key.startsWith("footer:") || key === "refusal") {
-      footer.push(placed);
+    } else if (key === "refusal" || key.startsWith("refusal:")) {
+      // Above the surface, where there is a row's full width for a sentence. On
+      // the action row it would be one truncated line beside the control.
+      located.push(placed);
     }
   }
 
@@ -2679,7 +2960,8 @@ export function replSurface(tree: ReplTree<ReplAction>, view: ReplView): ReplPla
     transcript: [...located, ...transcript],
     inspection,
     drawer,
-    footer,
+    actions: [...acting, ...status],
+    draft,
     // The band's labels come from the model rather than from mounted nodes: a
     // history position is a place in the file, and offering twenty of them as
     // twenty focus stops in a seven-row footer would bury the controls that are

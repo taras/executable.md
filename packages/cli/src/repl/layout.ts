@@ -80,7 +80,25 @@ export interface ReplSurface {
   readonly inspection: readonly ReplSurfaceCell[];
   /** Absent when no drawer is open. */
   readonly drawer: readonly ReplSurfaceCell[];
-  readonly footer: readonly ReplSurfaceCell[];
+  /**
+   * The contextual status and action row, in reading order.
+   *
+   * One row, so the cells are placed side by side rather than stacked: the
+   * footer's other six rows belong to the History band and the draft, and an
+   * action that took a row of its own would take one of theirs. Order is
+   * priority — a row too narrow to hold everything places what comes first and
+   * leaves the rest out of the frame entirely, because a control drawn half-way
+   * off a row is one a person can see and cannot reliably hit.
+   */
+  readonly actions: readonly ReplSurfaceCell[];
+  /**
+   * The draft, which owns the last footer row and shares it with nothing.
+   *
+   * Its own member rather than the last of a list, because what a person is
+   * typing may not be displaced by however many controls a state happens to
+   * offer. Absent only where the tree mounts no draft at all.
+   */
+  readonly draft: ReplSurfaceCell | undefined;
   readonly history: readonly ReplSurfaceMarker[];
 }
 
@@ -112,6 +130,15 @@ export interface ReplSemanticFrame {
   readonly cells: readonly ReplPlacedCell[];
   /** Exactly five rows, whatever the size. */
   readonly historyRows: readonly string[];
+  /**
+   * Where those five rows are drawn, or none for a refusal.
+   *
+   * Stated, because the band is the one thing on this screen that is not a cell:
+   * its labels come from the model rather than from a mounted node, so nothing
+   * else can tell a renderer where to put it. A renderer left to place it on its
+   * own put it at the top-left corner of the terminal, over the sidebar.
+   */
+  readonly historyBounds: ReplBounds | undefined;
   readonly markers: readonly ReplPlacedMarker[];
   /** The sentence a too-small frame shows, and nothing else it shows. */
   readonly refusal: string | undefined;
@@ -122,10 +149,23 @@ export const NARROW: ReplTerminalSize = { columns: 72, rows: 20 };
 const MEDIUM: ReplTerminalSize = { columns: 120, rows: 30 };
 const WIDE: ReplTerminalSize = { columns: 160, rows: 36 };
 
-/** The footer is one border row, five History rows and one input row. */
+/**
+ * The footer is one contextual status and action row, five History rows and the
+ * draft.
+ *
+ * Fixed in that order at every size. The draft is last because it is the thing a
+ * person is looking at while they type, and the action row is first because what
+ * it offers changes while the two rows around it do not.
+ */
 const FOOTER_ROWS = 7;
 /** The History band's own five rows. */
 export const HISTORY_ROWS = 5;
+/** Which footer row the status and action cells share. */
+const ACTIONS_ROW = 0;
+/** Which footer row the History band starts on. */
+const BAND_ROW = ACTIONS_ROW + 1;
+/** Which footer row the draft owns. */
+const DRAFT_ROW = BAND_ROW + HISTORY_ROWS;
 
 /** How wide a column is at each profile that has one. */
 interface ColumnWidths {
@@ -273,7 +313,10 @@ export function layout(size: ReplTerminalSize, surface: ReplSurface): ReplSemant
   }
 
   regions.push({ region: "footer", bounds: footer });
-  place(cells, "footer", footer, surface.footer);
+  alongside(cells, footer, surface.actions);
+  if (surface.draft !== undefined) {
+    place(cells, "footer", { ...footer, y: footer.y + DRAFT_ROW, height: 1 }, [surface.draft]);
+  }
 
   const band = grouped(surface.history, size.columns);
   return Object.freeze({
@@ -284,8 +327,76 @@ export function layout(size: ReplTerminalSize, surface: ReplSurface): ReplSemant
     ),
     cells: Object.freeze(cells),
     historyRows: Object.freeze(rowsFor(band, size.columns)),
+    historyBounds: Object.freeze({
+      x: footer.x,
+      y: footer.y + BAND_ROW,
+      width: footer.width,
+      height: HISTORY_ROWS,
+    }),
     markers: Object.freeze(band),
     refusal: undefined,
+  });
+}
+
+/**
+ * Place one row's worth of cells side by side, in order, dropping what overruns.
+ *
+ * A cell is as wide as its own text, so a pointer landing on `[exit]` reaches
+ * `[exit]` and not the control beside it. One space separates neighbours. A cell
+ * the remaining width cannot hold whole is left out of the frame rather than
+ * truncated: a clipped control is in the target map at a size that disagrees with
+ * what is drawn, which is worse than a control that is honestly not there.
+ */
+function alongside(
+  into: ReplPlacedCell[],
+  bounds: ReplBounds,
+  contents: readonly ReplSurfaceCell[],
+): void {
+  const edge = bounds.x + bounds.width;
+  let x = bounds.x;
+  for (const content of contents) {
+    const units = [...content.text];
+    if (units.length === 0) {
+      continue;
+    }
+    const room = edge - x;
+    if (room < 1) {
+      return;
+    }
+    if (units.length > room) {
+      if (content.targetable === true) {
+        // Order is priority, and the row has no room left for this control. It is
+        // left out of the frame rather than cut down: a clipped control is in the
+        // target map at a width that disagrees with what is drawn, and a person
+        // aiming at the half of it that is missing reaches whatever is behind.
+        continue;
+      }
+      // A sentence, which the row may shorten. Said with an ellipsis, so a reader
+      // can tell a truncated reason from a complete one.
+      const shown = room < 2 ? units.slice(0, room) : [...units.slice(0, room - 1), "…"];
+      into.push(onRow(content, { x, y: bounds.y + ACTIONS_ROW, width: room, height: 1 }, shown));
+      return;
+    }
+    into.push(
+      onRow(content, { x, y: bounds.y + ACTIONS_ROW, width: units.length, height: 1 }, units),
+    );
+    x += units.length + 1;
+  }
+}
+
+/** One cell of the action row, as wide as the text it ended up showing. */
+function onRow(
+  content: ReplSurfaceCell,
+  bounds: ReplBounds,
+  text: readonly string[],
+): ReplPlacedCell {
+  return Object.freeze({
+    id: `footer:${content.node}`,
+    node: content.node,
+    region: "footer",
+    text: text.join(""),
+    bounds: Object.freeze(bounds),
+    targetable: content.targetable === true,
   });
 }
 
@@ -300,10 +411,17 @@ function refuse(size: ReplTerminalSize): ReplSemanticFrame {
     // that is not in the frame is not in its target map either.
     cells: Object.freeze([]),
     historyRows: Object.freeze(new Array<string>(HISTORY_ROWS).fill("")),
+    // No band, because there is nowhere to draw one. Stated rather than left at a
+    // zero rectangle, which a renderer would dutifully draw five rows into.
+    historyBounds: undefined,
     markers: Object.freeze([]),
+    // Both ways out, because this is the one screen with no control on it. A
+    // person whose window cannot be grown still has to be able to leave, and a
+    // refusal that only said to resize would be a terminal they cannot get back.
     refusal:
       `This REPL needs at least ${NARROW.columns}x${NARROW.rows}; this terminal is ` +
-      `${size.columns}x${size.rows}. Make the window larger.`,
+      `${size.columns}x${size.rows}. Make the window larger to carry on, or press ` +
+      `Escape to leave the REPL.`,
   });
 }
 
@@ -383,5 +501,8 @@ function rowsFor(markers: readonly ReplPlacedMarker[], columns: number): string[
     const next = rows[row] === "" ? label : `${rows[row]} ${label}`;
     rows[row] = next.length <= columns ? next : rows[row];
   });
-  return rows;
+  // Padded to the full width, for the same reason the location rows are: a
+  // renderer writes what changed, so a band row that got shorter would keep the
+  // tail of the position that used to be there.
+  return rows.map((row) => (columns < 1 ? row : row.padEnd(columns, " ")));
 }

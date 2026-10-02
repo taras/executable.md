@@ -266,15 +266,27 @@ function opsFor(snapshot: ReplRenderSnapshot): Op[] {
     ops.push(close());
   }
 
-  ops.push(
-    open("repl:history", {
-      layout: { width: fixed(frame.size.columns), height: fixed(frame.historyRows.length) },
-    }),
-  );
-  for (let row of frame.historyRows) {
-    ops.push(text(row));
+  // One floating element per band row, at the geometry layout decided. Five
+  // `text` ops inside one element put all five on one line and, as the only
+  // element in the tree without a position, that line landed at the terminal's
+  // top-left corner — over the sidebar, where the band's text showed through from
+  // where each sidebar row's own text stopped.
+  let band = frame.historyBounds;
+  if (band !== undefined) {
+    for (let [row, line] of frame.historyRows.entries()) {
+      if (row >= band.height) {
+        continue;
+      }
+      ops.push(
+        open(`repl:history:${row}`, {
+          layout: { width: fixed(band.width), height: fixed(1) },
+          floating: { x: band.x, y: band.y + row, attachTo: "root" },
+        }),
+      );
+      ops.push(text(line));
+      ops.push(close());
+    }
   }
-  ops.push(close());
 
   ops.push(close());
   return ops;

@@ -13,18 +13,32 @@
  * halfway through taking one.
  */
 
+import { ensure, type Operation, resource, type Stream, type Subscription, until } from "effection";
+
 /** What a Deno host offers a terminal. */
 export interface DenoTerminalSurface {
   /** Whether both of this host's standard streams are a terminal. */
   interactive(): boolean;
   consoleSize(): { readonly columns: number; readonly rows: number };
-  /** Hand bytes over, resolving with how many it took. */
-  write(bytes: Uint8Array): Promise<number>;
+  /**
+   * Hand bytes over, answering with how many it took.
+   *
+   * An operation: the host's own write is a promise, and this is where it crosses
+   * into one — so nothing above here chains onto a promise or holds one.
+   */
+  write(bytes: Uint8Array): Operation<number>;
   /** Hand bytes over with no suspension point inside the call. */
   writeSync(bytes: Uint8Array): number;
   setRaw(raw: boolean): void;
-  /** The byte source. One source, so one subscriber consumes it. */
-  bytes(): AsyncIterable<Uint8Array>;
+  /**
+   * The byte source, as a stream whose resource owns the reader.
+   *
+   * One source, so one subscriber consumes it. A stream rather than an async
+   * iterable because releasing this terminal has to be something a scope can
+   * do: a reader's `return()` queues behind its own pending read, and this
+   * host's standard input has no next read until somebody presses a key.
+   */
+  input(): Stream<Uint8Array, void>;
   /** Watch for size changes; the returned function stops watching. */
   onResize(listener: () => void): () => void;
 }
@@ -86,7 +100,7 @@ export function denoTerminalSurface(): DenoTerminalSurface | undefined {
     writingTerminal === undefined ||
     typeof readable !== "object" ||
     readable === null ||
-    !(Symbol.asyncIterator in readable)
+    typeof Reflect.get(readable, "getReader") !== "function"
   ) {
     return undefined;
   }
@@ -110,8 +124,12 @@ export function denoTerminalSurface(): DenoTerminalSurface | undefined {
       }
       return { columns, rows };
     },
-    write(bytes: Uint8Array): Promise<number> {
-      return Promise.resolve(write(bytes)).then((taken) => numeric(taken) ?? 0);
+    *write(bytes: Uint8Array): Operation<number> {
+      // `Reflect.apply` answers with `unknown`, so the host's own promise is
+      // wrapped once to be awaited and the count is then parsed rather than
+      // asserted.
+      const taken: unknown = yield* until(Promise.resolve(write(bytes)));
+      return numeric(taken) ?? 0;
     },
     writeSync(bytes: Uint8Array): number {
       return numeric(writeSync(bytes)) ?? 0;
@@ -119,46 +137,8 @@ export function denoTerminalSurface(): DenoTerminalSurface | undefined {
     setRaw(raw: boolean): void {
       setRaw(raw);
     },
-    bytes(): AsyncIterable<Uint8Array> {
-      // Checked above: this object declares the async-iterable protocol, which
-      // is the whole of what the shared reader asks of it.
-      return {
-        [Symbol.asyncIterator](): AsyncIterator<Uint8Array> {
-          const method: unknown = Reflect.get(source, Symbol.asyncIterator);
-          if (typeof method !== "function") {
-            throw new Error("this host's standard input is not iterable after all");
-          }
-          const iterator: unknown = Reflect.apply(method, source, []);
-          if (typeof iterator !== "object" || iterator === null) {
-            throw new Error("this host's standard input produced no iterator");
-          }
-          const next = callable(iterator, "next");
-          const back = callable(iterator, "return");
-          if (next === undefined) {
-            throw new Error("this host's standard input produced no reader");
-          }
-          return {
-            next(): Promise<IteratorResult<Uint8Array>> {
-              return Promise.resolve(next()).then((result) => {
-                if (typeof result !== "object" || result === null) {
-                  return { done: true, value: undefined };
-                }
-                const value: unknown = Reflect.get(result, "value");
-                return Reflect.get(result, "done") === true || !(value instanceof Uint8Array)
-                  ? { done: true, value: undefined }
-                  : { done: false, value };
-              });
-            },
-            ...(back === undefined
-              ? {}
-              : {
-                  return(): Promise<IteratorResult<Uint8Array>> {
-                    return Promise.resolve(back()).then(() => ({ done: true, value: undefined }));
-                  },
-                }),
-          };
-        },
-      };
+    input(): Stream<Uint8Array, void> {
+      return readerStream(source);
     },
     onResize(listener: () => void): () => void {
       addSignalListener("SIGWINCH", listener);
@@ -167,4 +147,103 @@ export function denoTerminalSurface(): DenoTerminalSurface | undefined {
       };
     },
   };
+}
+
+/**
+ * One owned stream over a readable this host supplied.
+ *
+ * Exported for the evidence that its release cannot be silent. The release is the
+ * whole contract here — cancel the outstanding read, release the lock, and raise
+ * when either could not be done — and a contract that can only be exercised
+ * through `Deno.stdin` is one no row can put a failing reader behind.
+ *
+ * The reader is acquired *after* its release is registered, and the release
+ * cancels it: cancelling a reader with a read outstanding settles that read and
+ * stops the underlying source, which is what lets a command that decided to
+ * leave finish without the person pressing one more key. `return()` on an
+ * iterator cannot do that — it is queued behind the very read it needs to end.
+ *
+ * Cancellation is awaited, never fired and forgotten, and is idempotent: a
+ * second teardown finds no reader and releases nothing twice.
+ */
+export function readerStream(source: object): Stream<Uint8Array, void> {
+  return resource<Subscription<Uint8Array, void>>(function* (provide) {
+    let reader: object | undefined;
+
+    yield* ensure(function* (): Operation<void> {
+      const open = reader;
+      if (open === undefined) {
+        return;
+      }
+      // Cleared first, so a second pass through this cleanup releases nothing a
+      // second time.
+      reader = undefined;
+
+      // Both steps are attempted, and neither failure is swallowed. Cancelling
+      // is what settles the read this stream was holding, so a cancellation that
+      // failed leaves a native read outstanding — and a command that reported an
+      // orderly exit over one would be claiming it had joined work it had not.
+      // Releasing the lock is what lets whatever runs next read this terminal at
+      // all, so it is attempted even when cancelling failed rather than skipped
+      // along with it.
+      let failure: Error | undefined;
+      const cancel = callable(open, "cancel");
+      if (cancel !== undefined) {
+        try {
+          yield* until(Promise.resolve(cancel()));
+        } catch (error) {
+          failure = asFailure(error, "cancel the read it was holding");
+        }
+      }
+      const release = callable(open, "releaseLock");
+      if (release !== undefined) {
+        try {
+          release();
+        } catch (error) {
+          // The first failure is the one that explains the rest: a lock that
+          // cannot be released after a cancellation that failed is a consequence
+          // of it, not a second independent fact.
+          failure = failure ?? asFailure(error, "release its reader");
+        }
+      }
+      if (failure !== undefined) {
+        throw failure;
+      }
+    });
+
+    const acquire = callable(source, "getReader");
+    if (acquire === undefined) {
+      throw new Error("this host's standard input offers no reader");
+    }
+    const acquired: unknown = acquire();
+    if (typeof acquired !== "object" || acquired === null) {
+      throw new Error("this host's standard input produced no reader");
+    }
+    reader = acquired;
+    const read = callable(acquired, "read");
+    if (read === undefined) {
+      throw new Error("this host's standard input produced a reader that cannot read");
+    }
+
+    yield* provide({
+      *next(): Operation<IteratorResult<Uint8Array, void>> {
+        const result: unknown = yield* until(Promise.resolve(read()));
+        if (typeof result !== "object" || result === null) {
+          return { done: true, value: undefined };
+        }
+        const value: unknown = Reflect.get(result, "value");
+        return Reflect.get(result, "done") === true || !(value instanceof Uint8Array)
+          ? { done: true, value: undefined }
+          : { done: false, value };
+      },
+    });
+  });
+}
+
+/** One cleanup failure, named for the step that could not be completed. */
+function asFailure(cause: unknown, step: string): Error {
+  const because = cause instanceof Error ? cause.message : String(cause);
+  const failure = new Error(`this terminal could not ${step}: ${because}`);
+  failure.name = "ReplTerminalReleaseError";
+  return failure;
 }

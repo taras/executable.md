@@ -14,8 +14,8 @@
 
 import { writeSync } from "node:fs";
 import process from "node:process";
-import type { Operation } from "effection";
-import { decodedChunks, installReplTerminal, writeThrough } from "./repl/terminal-host.ts";
+import type { Operation, Stream } from "effection";
+import { installReplTerminal, nodeInputStream, writeThrough } from "./repl/terminal-host.ts";
 import type { ReplTerminalSize } from "./repl/terminal.ts";
 
 /** Install the Bun-backed terminal for the calling scope. */
@@ -29,7 +29,7 @@ export function useBunReplTerminal(): Operation<void> {
     size(): ReplTerminalSize {
       return { columns: process.stdout.columns, rows: process.stdout.rows };
     },
-    write(bytes: Uint8Array): Promise<void> {
+    write(bytes: Uint8Array): Operation<void> {
       return writeThrough((chunk, done) => process.stdout.write(chunk, done), bytes);
     },
     writeNow(bytes: Uint8Array): void {
@@ -43,9 +43,8 @@ export function useBunReplTerminal(): Operation<void> {
     setRaw(raw: boolean): void {
       process.stdin.setRawMode(raw);
     },
-    bytes(): AsyncIterable<Uint8Array> {
-      process.stdin.resume();
-      return decodedChunks(process.stdin);
+    input(): Stream<Uint8Array, void> {
+      return nodeInputStream(process.stdin);
     },
     onResize(listener: () => void): () => void {
       process.on("SIGWINCH", listener);

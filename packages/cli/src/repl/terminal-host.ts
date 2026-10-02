@@ -14,13 +14,16 @@
  */
 
 import {
+  action,
   createSignal,
   ensure,
   type Operation,
   resource,
+  sleep,
   type Stream,
   type Subscription,
   until,
+  withResolvers,
 } from "effection";
 import { ReplTerminal, type ReplTerminalSize } from "./terminal.ts";
 
@@ -43,23 +46,34 @@ export interface ReplTerminalCapabilities {
   /** The size right now. */
   size(): ReplTerminalSize;
   /**
-   * Hand bytes to the terminal, resolving once it has them.
+   * Hand bytes to the terminal, returning once it has them.
    *
-   * A promise rather than a fire-and-forget call, so a slow terminal slows the
-   * renderer down instead of queueing frames the user will never see.
+   * An operation rather than a fire-and-forget call, so a slow terminal slows
+   * the renderer down instead of queueing frames the user will never see — and
+   * an operation rather than a promise, because the wait belongs to the scope
+   * doing it. Whatever the host's own write is shaped like, it is converted
+   * where it crosses into this one.
    */
-  write(bytes: Uint8Array): Promise<void>;
+  write(bytes: Uint8Array): Operation<void>;
   /** Hand bytes over with no suspension point inside the call. */
   writeNow(bytes: Uint8Array): void;
   /** Turn raw mode on or off. */
   setRaw(raw: boolean): void;
   /**
-   * Open the byte source.
+   * The byte source, as a stream whose resource owns the native reader.
    *
-   * Called once per subscriber and closed when that subscriber's scope ends,
-   * which is what releases the terminal's input for whatever runs next.
+   * A stream rather than an async iterable, because releasing the terminal has
+   * to be something a scope can *do* rather than something it can only ask for.
+   * An iterator's `return()` is queued behind its own pending `next()`, so a
+   * command that decided to leave while a read was outstanding waited for the
+   * next keystroke before it finished — the person had already left.
+   *
+   * The resource is therefore the contract: it registers its cleanup before it
+   * acquires anything, and that cleanup actively cancels the outstanding read
+   * and waits for the cancellation, so teardown needs no further input. Closing
+   * normally means end of input; a read that fails raises.
    */
-  bytes(): AsyncIterable<Uint8Array>;
+  input(): Stream<Uint8Array, void>;
   /** Watch for size changes; the returned function stops watching. */
   onResize(listener: () => void): () => void;
 }
@@ -77,7 +91,7 @@ export function installReplTerminal(host: ReplTerminalCapabilities): Operation<v
         return host.size();
       },
       *write([bytes]: [Uint8Array]): Operation<void> {
-        yield* until(host.write(bytes));
+        yield* host.write(bytes);
       },
       writeNow([bytes]: [Uint8Array]): void {
         host.writeNow(bytes);
@@ -87,7 +101,10 @@ export function installReplTerminal(host: ReplTerminalCapabilities): Operation<v
         host.setRaw(raw);
       },
       input(): Stream<Uint8Array, void> {
-        return byteStream(host);
+        // The host's own stream, passed through rather than wrapped: the thing
+        // that owns the native reader is the thing that has to be able to cancel
+        // it, and that is the runtime adapter.
+        return host.input();
       },
       resizes(): Stream<ReplTerminalSize, never> {
         return sizeStream(host);
@@ -98,41 +115,110 @@ export function installReplTerminal(host: ReplTerminalCapabilities): Operation<v
 }
 
 /**
- * The host's bytes, pulled one chunk at a time.
+ * A Node-shaped standard input, stated structurally.
  *
- * Pulled, not pushed: the subscriber's `next()` is what asks the host for more,
- * so an input burst cannot outrun whatever is decoding it and nothing has to
- * buffer on its behalf.
+ * By value, like every other capability here: this module names no runtime, and
+ * two runtimes that happen to spell their standard input the same way may share
+ * the code that reads it without either of them being detected.
  */
-function byteStream(host: ReplTerminalCapabilities): Stream<Uint8Array, void> {
-  return resource<Subscription<Uint8Array, void>>(function* (provide) {
-    // Declared first, released second, opened third. Opening the source before
-    // its release was registered leaves a window where a cancellation abandons a
-    // reader holding the terminal's input, and nothing is left that knows to
-    // close it.
-    let iterator: AsyncIterator<Uint8Array> | undefined;
-    yield* ensure(function* () {
-      const open = iterator;
-      if (open === undefined) {
-        return;
-      }
-      const close = open.return;
-      if (close !== undefined) {
-        // Releasing the source is what lets the next thing to run read the
-        // terminal; a reader left open holds input away from it.
-        yield* until(close.call(open));
-      }
-    });
-    iterator = host.bytes()[Symbol.asyncIterator]();
+export interface NodeShapedInput {
+  // Deliberately loose in the listener's own parameters: what each event carries
+  // is checked where it arrives, and a narrower signature here only makes the
+  // real `EventEmitter` fail to match a shape it satisfies.
+  // oxlint-disable-next-line typescript/no-explicit-any
+  on(event: string, listener: (...args: any[]) => void): unknown;
+  // oxlint-disable-next-line typescript/no-explicit-any
+  off(event: string, listener: (...args: any[]) => void): unknown;
+  resume(): unknown;
+  pause(): unknown;
+}
 
-    const reading = iterator;
+/**
+ * One owned stream over a Node-shaped standard input.
+ *
+ * Push-based, because that is what the source is: there is no outstanding read
+ * to cancel, only listeners to remove, and removing them is synchronous — so
+ * teardown settles without another byte by construction. What arrives before a
+ * subscriber asks for it is held rather than dropped: a paste is hundreds of
+ * bytes in a few chunks, and a reading that lost the ones nobody had asked for
+ * yet would lose most of somebody's entry.
+ *
+ * The removal is registered before the listeners exist, so a scope cancelled
+ * between the two leaves nothing attached: an `ensure` yielded afterwards has
+ * established nothing at the moment it is needed.
+ */
+export function nodeInputStream(stdin: NodeShapedInput): Stream<Uint8Array, void> {
+  return resource<Subscription<Uint8Array, void>>(function* (provide) {
+    const held: Uint8Array[] = [];
+    const encoder = new TextEncoder();
+    let ended = false;
+    let failure: Error | undefined;
+    let ready = withResolvers<void>();
+    const wake = (): void => {
+      ready.resolve();
+    };
+
+    const onData = (chunk: string | Uint8Array): void => {
+      held.push(typeof chunk === "string" ? encoder.encode(chunk) : chunk);
+      wake();
+    };
+    const onEnd = (): void => {
+      ended = true;
+      wake();
+    };
+    const onError = (cause?: unknown): void => {
+      failure = cause instanceof Error ? cause : new Error(String(cause));
+      wake();
+    };
+
+    let attached = false;
+    yield* ensure(() => {
+      if (attached) {
+        stdin.off("data", onData);
+        stdin.off("end", onEnd);
+        stdin.off("error", onError);
+        stdin.pause();
+        attached = false;
+      }
+      // Whoever is suspended on the next chunk is being torn down with this
+      // resource, and a wait nothing will ever settle is a teardown that hangs.
+      ended = true;
+      wake();
+    });
+
+    stdin.on("data", onData);
+    stdin.on("end", onEnd);
+    stdin.on("error", onError);
+    attached = true;
+    stdin.resume();
+
     yield* provide({
       *next(): Operation<IteratorResult<Uint8Array, void>> {
-        const result = yield* until(reading.next());
-        if (result.done === true) {
-          return { done: true, value: undefined };
+        while (true) {
+          if (failure !== undefined) {
+            // A live terminal that failed mid-read is a failure, not an ending:
+            // the difference decides whether the command ends or raises.
+            throw failure;
+          }
+          const head = held.shift();
+          if (head !== undefined) {
+            // One suspension per chunk whether it was buffered or not: whoever
+            // reads this turns one chunk into many decoded events, and a reader
+            // that drained the buffer without yielding would hand them over
+            // faster than they are taken and lose the tail. `sleep(0)` because
+            // the suspension has to be real — an already-settled resolver reads
+            // like a yield point and is completed synchronously, which is no
+            // yield point at all.
+            yield* sleep(0);
+            return { done: false, value: head };
+          }
+          if (ended) {
+            yield* sleep(0);
+            return { done: true, value: undefined };
+          }
+          yield* ready.operation;
+          ready = withResolvers<void>();
         }
-        return { done: false, value: result.value };
       },
     });
   });
@@ -169,38 +255,35 @@ function sizeStream(host: ReplTerminalCapabilities): Stream<ReplTerminalSize, ne
  * terminal means escape sequences cut in the middle. Portable because it is the
  * same loop on every runtime whose write returns a count.
  */
-export function writeAllTo(
-  sink: (chunk: Uint8Array) => Promise<number>,
+export function* writeAllTo(
+  sink: (chunk: Uint8Array) => Operation<number>,
   bytes: Uint8Array,
-): Promise<void> {
+): Operation<void> {
   let written = 0;
-  const step = (): Promise<void> => {
-    if (written >= bytes.length) {
-      return Promise.resolve();
+  while (written < bytes.length) {
+    const count = yield* sink(bytes.subarray(written));
+    if (count <= 0) {
+      throw new Error("the terminal accepted none of the bytes it was given");
     }
-    return sink(bytes.subarray(written)).then((count) => {
-      if (count <= 0) {
-        return Promise.reject(new Error("the terminal accepted none of the bytes it was given"));
-      }
-      written += count;
-      return step();
-    });
-  };
-  return step();
+    written += count;
+  }
 }
 
 /**
  * The same sink for a host whose write takes a callback instead of returning.
  *
- * Node-shaped streams report completion rather than a count and handle partial
- * writes themselves, so there is nothing to loop over — only a callback to turn
- * into the promise the capability promises.
+ * Node-shaped streams report completion rather than returning a count, and they
+ * handle partial writes themselves — so there is nothing to loop over, only a
+ * callback to adapt. `action` is the adapter: the callback settles the operation,
+ * and a caller cancelled while waiting stops waiting without the stream being
+ * told anything, which is all this can honestly promise about a write already
+ * handed to a stream.
  */
 export function writeThrough(
   sink: (chunk: Uint8Array, done: (error?: Error | null) => void) => unknown,
   bytes: Uint8Array,
-): Promise<void> {
-  return new Promise<void>((resolve, reject) => {
+): Operation<void> {
+  return action<void>((resolve, reject) => {
     sink(bytes, (error) => {
       if (error === undefined || error === null) {
         resolve();
@@ -208,46 +291,11 @@ export function writeThrough(
         reject(error);
       }
     });
+    // Nothing to undo. The bytes are with the stream and the callback is its own
+    // one-shot: a cancelled caller stops waiting, and nobody can unsend a write.
+    return noop;
   });
 }
 
-/**
- * A byte source built from one that may hand back text.
- *
- * Node-shaped standard input yields strings when an encoding was set on it, and
- * the decoder downstream reads bytes; converting here keeps that difference out
- * of the shared input path. Written with promise combinators rather than `async
- * function*`, which this repository does not use.
- */
-export function decodedChunks(
-  source: AsyncIterable<string | Uint8Array>,
-): AsyncIterable<Uint8Array> {
-  const encoder = new TextEncoder();
-  return {
-    [Symbol.asyncIterator](): AsyncIterator<Uint8Array> {
-      const iterator = source[Symbol.asyncIterator]();
-      const close = iterator.return;
-      return {
-        next(): Promise<IteratorResult<Uint8Array>> {
-          return iterator.next().then((result) => {
-            if (result.done === true) {
-              return { done: true, value: undefined };
-            }
-            const chunk = result.value;
-            return {
-              done: false,
-              value: typeof chunk === "string" ? encoder.encode(chunk) : chunk,
-            };
-          });
-        },
-        ...(close === undefined
-          ? {}
-          : {
-              return(): Promise<IteratorResult<Uint8Array>> {
-                return close.call(iterator).then(() => ({ done: true, value: undefined }));
-              },
-            }),
-      };
-    },
-  };
-}
+/** The one thing a write has to undo, which is nothing. */
+function noop(): void {}

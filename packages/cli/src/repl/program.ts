@@ -44,6 +44,7 @@ import type { ReplExecutionProfile } from "../repl-profile.ts";
 import {
   admitted,
   answered,
+  elicitWithdrawn,
   focusSettled,
   permissionSettled,
   permissionWithdrawn,
@@ -55,6 +56,7 @@ import {
   stateFor,
   viewFor,
   withoutAbsentEntry,
+  withoutLiveDrawers,
 } from "./application.ts";
 import type { Json, NormalizedIssue } from "@executablemd/core";
 import type {
@@ -72,11 +74,12 @@ import { openReplSession } from "./session.ts";
 import type { ReplSession } from "./session.ts";
 import { useReplFrames } from "./frame.ts";
 import type { ReplFrames } from "./frame.ts";
-import { layout } from "./layout.ts";
+import { layout, profileFor } from "./layout.ts";
 import { resolvePointer, snapshotRender, useReplRenderer } from "./renderer.ts";
 import type { ReplRendered, ReplRenderer } from "./renderer.ts";
 import { useReplScreen } from "./screen.ts";
 import type { ReplScreen, ReplScreenEvent } from "./screen.ts";
+import type { ReplInputEvent } from "./description.ts";
 import { useReplTree } from "./reconcile.ts";
 import type { ReplTree } from "./reconcile.ts";
 import { projectRepl } from "./model.ts";
@@ -240,7 +243,6 @@ function* stateOf(location: string): Operation<ReplState> {
  * silently; and only a screen, because there is nothing behind it to act on.
  */
 function* refuse(state: ReplState, reason: string): Operation<Result<ReplOutcome>> {
-  const view = refusedView(state, reason);
   yield* scoped(function* (): Operation<void> {
     const screen = yield* useReplScreen();
     const events: Subscription<ReplScreenEvent, void> = yield* screen.events();
@@ -249,7 +251,22 @@ function* refuse(state: ReplState, reason: string): Operation<Result<ReplOutcome
     const size = yield* screen.size();
     const renderer = yield* useReplRenderer({ columns: size.columns, rows: size.rows });
 
-    yield* paint(frames, tree, renderer, screen, view);
+    // Drawn, then drawn again with where focus actually settled: the marker comes
+    // from the tree's own answer, and the tree answers only after a commit.
+    let focused: string | undefined;
+    let view = refusedView(state, reason, size, focused);
+    let shown = yield* paint(frames, tree, renderer, screen, view);
+    const settle = function* (): Operation<void> {
+      const now = keyOfFocus(tree);
+      if (now === focused) {
+        return;
+      }
+      focused = now;
+      view = refusedView(state, reason, yield* screen.size(), focused);
+      shown = yield* paint(frames, tree, renderer, screen, view);
+    };
+    yield* settle();
+
     while (true) {
       const next = yield* events.next();
       if (next.done === true || next.value.kind === "eof") {
@@ -259,19 +276,53 @@ function* refuse(state: ReplState, reason: string): Operation<Result<ReplOutcome
         // A refusal recovers on resize like any other screen: the terminal
         // growing is the remedy for the one refusal that has no other.
         renderer.resize(next.value.size);
-        yield* paint(frames, tree, renderer, screen, view);
+        view = refusedView(state, reason, next.value.size, focused);
+        shown = yield* paint(frames, tree, renderer, screen, view);
         continue;
       }
-      if (
-        next.value.kind === "input" &&
-        next.value.event.kind === "key" &&
-        next.value.event.key === "Escape"
-      ) {
+      if (next.value.kind === "pointer") {
+        // Resolved against the frame that produced these coordinates, like every
+        // other pointer: this screen has a control on it, and a control a pointer
+        // cannot reach is one half of a control.
+        const aimed = resolvePointer(shown, next.value.at);
+        if (aimed !== undefined && (yield* leaves(tree, aimed))) {
+          return;
+        }
+        yield* settle();
+        continue;
+      }
+      if (next.value.kind !== "input") {
+        continue;
+      }
+      if (yield* leaves(tree, next.value.event)) {
         return;
       }
+      // Escape as well, because the one screen with no control placed on it — a
+      // window too small to draw in — offers this and nothing else.
+      if (next.value.event.kind === "key" && next.value.event.key === "Escape") {
+        return;
+      }
+      // Drawn again, because Tab moved focus and a marker nobody redrew is a
+      // control a person cannot see themselves reaching.
+      yield* settle();
     }
   });
   return Err(new ReplRefusedError(reason, encodeLocation(state.route)));
+}
+
+/**
+ * Whether this event asked to leave, according to the screen that is mounted.
+ *
+ * Through the tree, so the refusal screen's control means the same thing there as
+ * it does everywhere else and a pointer on it asks for what Enter on it asks for.
+ */
+function* leaves(tree: ReplTree<ReplAction>, event: ReplInputEvent): Operation<boolean> {
+  const dispatched = yield* tree.dispatch(event);
+  return (
+    dispatched.ok &&
+    dispatched.value.outcome === "action" &&
+    dispatched.value.action.kind === "exit"
+  );
 }
 
 /** A location this command cannot show. */
@@ -343,8 +394,6 @@ function* drive(
   const current: ReplSession = session;
   let model: ReplModel = session.model;
   let rendered: ReplRendered | undefined;
-  /** The question whose drawer has already been offered. */
-  let offered: unknown;
 
   const outcome = yield* scoped(function* (): Operation<Result<ReplOutcome>> {
     const screen = yield* useReplScreen();
@@ -374,6 +423,62 @@ function* drive(
 
     yield* watch(current, wakes);
 
+    /**
+     * Take one normalized event through the tree and apply whatever it asked for.
+     *
+     * One place, because a keystroke and a pointer landing on the same control
+     * mean the same thing: two copies of this sequence is two places an outcome
+     * can be forgotten in, and a pointer that quietly skipped one of them would be
+     * a control that behaves differently depending on how it was reached.
+     *
+     * Answers with whether the person asked to leave. Ending the command is the
+     * loop's to do — it owns the scope — so this reports it rather than performing
+     * it.
+     */
+    function* act(event: ReplInputEvent): Operation<boolean> {
+      const dispatched = yield* tree.dispatch(event);
+      if (!dispatched.ok || dispatched.value.outcome !== "action") {
+        return false;
+      }
+      const transition = reduceRepl(
+        state,
+        dispatched.value.action,
+        model,
+        liveOf(current),
+        yield* screen.size(),
+      );
+      state = transition.state;
+      const performed = yield* perform(transition.intent, current, execution, options, wakes);
+      if (performed.submitted === true) {
+        model = current.model;
+        // The entry exists now, so the draft that became it is finished.
+        state = admitted(state);
+      }
+      if (performed.answered !== undefined) {
+        // The question took it, so the drawer that was asking is over. The model
+        // here is the history without this answer in it yet, which is what makes
+        // the record it adds recognisable.
+        state = answered(state, model, performed.answered);
+      }
+      if (performed.settled !== undefined) {
+        // The authority answered it, so the request is gone and the drawer over it
+        // goes too.
+        state = permissionSettled(state, performed.settled);
+      }
+      if (performed.messages !== undefined) {
+        // Still the same question. What the schema said goes under the form, and
+        // every value stays where it was typed.
+        state = Object.freeze({
+          ...state,
+          form: Object.freeze({ ...state.form, messages: Object.freeze([...performed.messages]) }),
+        });
+      }
+      if (performed.refusal !== undefined) {
+        state = Object.freeze({ ...state, refusal: performed.refusal });
+      }
+      return performed.exited === true;
+    }
+
     let focused: string | undefined;
     rendered = yield* paint(
       frames,
@@ -395,12 +500,14 @@ function* drive(
     while (true) {
       const taken = yield* wakes.take();
       if (taken.length === 0) {
-        return Ok({ location: encodeLocation(state.route), refusal: undefined });
+        return Ok({ location: exitLocation(state), refusal: undefined });
       }
 
       // What stands now, to return to if what is attempted does not resolve.
       const standing = state;
       let ended = false;
+      /** Whether the person asked to leave, as opposed to input having ended. */
+      let departing = false;
       for (const wake of taken) {
         if (wake.kind === "session") {
           model = current.model;
@@ -415,108 +522,46 @@ function* drive(
           const aimed =
             rendered === undefined ? undefined : resolvePointer(rendered, wake.event.at);
           if (aimed !== undefined) {
-            const dispatched = yield* tree.dispatch(aimed);
-            if (dispatched.ok && dispatched.value.outcome === "action") {
-              const transition = reduceRepl(
-                state,
-                dispatched.value.action,
-                model,
-                liveOf(current),
-                yield* screen.size(),
-              );
-              state = transition.state;
-              const performed = yield* perform(
-                transition.intent,
-                current,
-                execution,
-                options,
-                wakes,
-              );
-              if (performed.submitted === true) {
-                model = current.model;
-                // The entry exists now, so the draft that became it is finished.
-                state = admitted(state);
-              }
-              if (performed.answered !== undefined) {
-                // The question took it, so the drawer that was asking is over.
-                // The model here is the history without this answer in it yet,
-                // which is what makes the record it adds recognisable.
-                state = answered(state, model, performed.answered);
-              }
-              if (performed.settled !== undefined) {
-                // The authority answered it, so the request is gone and the
-                // drawer over it goes too.
-                state = permissionSettled(state, performed.settled);
-              }
-              if (performed.messages !== undefined) {
-                // Still the same question. What the schema said goes under the
-                // form, and every value stays where it was typed.
-                state = Object.freeze({
-                  ...state,
-                  form: Object.freeze({
-                    ...state.form,
-                    messages: Object.freeze([...performed.messages]),
-                  }),
-                });
-              }
-              if (performed.refusal !== undefined) {
-                state = Object.freeze({ ...state, refusal: performed.refusal });
-              }
+            if (yield* act(aimed)) {
+              departing = true;
             }
           }
         } else if (wake.event.kind === "input") {
           const delivered = wake.event.event;
-          if (delivered !== undefined) {
-            const dispatched = yield* tree.dispatch(delivered);
-            if (dispatched.ok && dispatched.value.outcome === "action") {
-              const transition = reduceRepl(
-                state,
-                dispatched.value.action,
-                model,
-                liveOf(current),
-                yield* screen.size(),
-              );
-              state = transition.state;
-              const performed = yield* perform(
-                transition.intent,
-                current,
-                execution,
-                options,
-                wakes,
-              );
-              if (performed.submitted === true) {
-                model = current.model;
-                // The entry exists now, so the draft that became it is finished.
-                state = admitted(state);
-              }
-              if (performed.answered !== undefined) {
-                // The question took it, so the drawer that was asking is over.
-                // The model here is the history without this answer in it yet,
-                // which is what makes the record it adds recognisable.
-                state = answered(state, model, performed.answered);
-              }
-              if (performed.settled !== undefined) {
-                // The authority answered it, so the request is gone and the
-                // drawer over it goes too.
-                state = permissionSettled(state, performed.settled);
-              }
-              if (performed.messages !== undefined) {
-                // Still the same question. What the schema said goes under the
-                // form, and every value stays where it was typed.
-                state = Object.freeze({
-                  ...state,
-                  form: Object.freeze({
-                    ...state.form,
-                    messages: Object.freeze([...performed.messages]),
-                  }),
-                });
-              }
-              if (performed.refusal !== undefined) {
-                state = Object.freeze({ ...state, refusal: performed.refusal });
-              }
-            }
+          if (delivered === undefined) {
+            continue;
+          }
+          // A window too small to draw in shows a refusal and places no cell, so
+          // the `[exit]` control a person would reach for is deliberately not in
+          // the frame. Escape is the way out it offers instead, and it is taken
+          // here rather than through the tree, which is still holding a screen
+          // nothing can show — and would answer Escape by closing a drawer the
+          // person cannot see.
+          if (
+            profileFor(yield* screen.size()) === "too-small" &&
+            delivered.kind === "key" &&
+            delivered.key === "Escape"
+          ) {
+            departing = true;
+            continue;
+          }
+          if (yield* act(delivered)) {
+            departing = true;
           }
         }
+      }
+
+      if (departing) {
+        // Asked for, so there is nothing more to show: the next thing this person
+        // sees is their shell. Returning here unwinds the scope that owns the
+        // session, the observer, every entry task, the reader and the frame
+        // subscription, and joins all of them before the outcome is handed back.
+        //
+        // Before the frame rather than after it, because a frame is drawn on an
+        // acknowledged tick and a settled screen schedules no timer — so a last
+        // frame nobody will look at can wait for a tick that never comes, and a
+        // person who asked to leave would still be here.
+        return Ok({ location: exitLocation(state), refusal: undefined });
       }
 
       // A request nobody answered can still stop existing: the turn that was
@@ -531,20 +576,15 @@ function* drive(
         state = permissionWithdrawn(state);
       }
 
-      // A question is the interaction, not a place to go looking for one: when
-      // this process starts asking, its drawer is offered once. Dismissing it
-      // with Escape is final for that question, because the offer is remembered
-      // by the question itself rather than by a flag somebody has to clear.
-      const asking = current.overlay.question;
-      if (asking !== undefined && asking !== offered && state.route.at === undefined) {
-        offered = asking;
-        const opening = reduceRepl(
-          state,
-          { kind: "open-drawer", drawer: { kind: "live-elicit" } },
-          model,
-          liveOf(current),
-        );
-        state = opening.state;
+      // A question that has gone while its drawer was up. Teardown and a
+      // settlement elsewhere can both end one, and the drawer over it then
+      // resolves to nothing — so it is withdrawn here rather than left to fail
+      // resolution, and nothing becomes an answer, because none was given.
+      if (
+        state.route.drawers.some((drawer) => drawer.kind === "live-elicit") &&
+        current.overlay.question === undefined
+      ) {
+        state = elicitWithdrawn(state);
       }
 
       // A route that names a history position needs the model projected *at* that
@@ -607,14 +647,30 @@ function* drive(
         focused = settledFocus;
       }
       if (ended) {
-        // End of input is a lifecycle outcome: the last frame is drawn, and then
-        // the command is over.
-        return Ok({ location: encodeLocation(state.route), refusal: undefined });
+        // Ending is a lifecycle outcome, whether end of input or `[exit]` brought
+        // it about: the last frame is drawn, and then the command is over. Nothing
+        // is appended for it, and returning here unwinds the scope that owns the
+        // session, the observer, every entry task and the terminal.
+        return Ok({ location: exitLocation(state), refusal: undefined });
       }
     }
   });
 
   return outcome;
+}
+
+/**
+ * The location to print on the way out.
+ *
+ * The route a person left, minus the drawers only this process could have
+ * mounted. A waiting question and a pending request are in no history, so a
+ * location naming one reopens into a refusal — which makes the one thing this
+ * command prints the one thing it cannot be handed back. Everything a second
+ * process can reconstruct stays: the position, the surface, the selected entry,
+ * the conversation filter and the draft.
+ */
+function exitLocation(state: ReplState): string {
+  return encodeLocation(withoutLiveDrawers(state).route);
 }
 
 /**
@@ -785,6 +841,15 @@ interface Performed {
    * waiting.
    */
   readonly settled?: string;
+  /**
+   * Whether the person asked to leave.
+   *
+   * The same lifecycle outcome end of input produces, so it is reported rather
+   * than acted on here: ending the command means returning from the loop that
+   * owns the scope, and a helper that tore the scope down from inside it would be
+   * cancelling the task it was running in.
+   */
+  readonly exited?: true;
   /** Why it could not be done, for the screen to say. */
   readonly refusal?: string;
 }
@@ -807,6 +872,11 @@ function* perform(
   switch (intent.kind) {
     case "none":
       return {};
+    case "exit":
+      // Nothing. No append, no close, no cancellation, no denial, no answer: a
+      // person leaving has not decided anything that was waiting, and an entry
+      // whose root never closed stays unfinished because that is what it is.
+      return { exited: true };
     case "pause":
       session.controller?.pause();
       wakes.send({ kind: "session" });
