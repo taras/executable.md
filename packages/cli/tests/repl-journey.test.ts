@@ -4327,3 +4327,133 @@ describe("REPL first use: UI8", () => {
     expect(terminal.resets).toBe(1);
   });
 });
+
+/**
+ * The whole first-use path at the narrowest supported frame (#870 C1).
+ *
+ * `UI8` walks this path at `160x36`, where there is a transcript column to read
+ * the answer's output in. A narrow frame has no transcript region at all — it
+ * mounts one routed outlet — so this row proves the other half of the claim: that
+ * everything a person has to *do* is reachable at `72x20`, found from the labels
+ * and the one guidance row, with no hidden key and no semantic lookup.
+ *
+ * Every control here is reached the way a person reaches it: Tab to it and press
+ * Enter, or click the exact cell the frame drew. Nothing addresses a node by key.
+ */
+describe("REPL first use: C1 narrow", () => {
+  it("C1: submit, answer, dismiss, reopen, settle, Sessions, History, live and exit at 72x20", function* () {
+    const { terminal, install } = recordingTerminal(NARROW);
+    let ended: ReplOutcome | undefined;
+    yield* scoped(function* (): Operation<void> {
+      yield* install();
+      yield* immediateClock();
+      yield* useTempFileCompiler();
+      yield* useTemporaryHost();
+
+      const running = yield* spawn(function* (): Operation<void> {
+        const ran = yield* runReplProgram({ profile: PROFILE });
+        if (!ran.ok) {
+          throw ran.error;
+        }
+        ended = ran.value;
+      });
+      yield* untilDrawn(terminal);
+
+      // 1. What the screen says it is for, before anything has been typed.
+      expect(guidanceRow(terminal)).toBe(
+        "Ready for Entry 1 · Enter submits · Type here · Tab/Shift+Tab move",
+      );
+
+      // 2. One entry, submitted the way the row said to submit it.
+      yield* submitted(terminal, SHORT_QUESTION);
+      yield* until_(terminal, "the waiting question", (one) => askedRow(one) !== undefined);
+
+      // 3. The screen now says what the execution is doing, and what to activate.
+      expect(guidanceRow(terminal)).toBe(
+        "Entry 1 question · activate answer · Type here · Tab/Shift+Tab move",
+      );
+
+      // 4. Reached by pointer, against the exact cell the frame drew for it.
+      const at = askedRow(terminal);
+      if (at === undefined) {
+        throw new Error("the question announced itself");
+      }
+      yield* clickAt(terminal, at);
+      yield* until_(terminal, "the question's form", (one) => formShowing(one));
+
+      // 5. Escape dismisses without answering, and leaves focus somewhere real.
+      terminal.feed("\x1b");
+      yield* until_(terminal, "the drawer closing", (one) => !formShowing(one));
+      expect(askedRow(terminal)).toBeDefined();
+      // Focus is derived from the tree, so it lands on the next frame rather than
+      // in the same one the drawer left. Waited for, with a deadline, because the
+      // claim is that it arrives somewhere real — on the control still asking.
+      yield* until_(terminal, "focus returning to the waiting question", (one) =>
+        focusedOn(one, "[answer]"),
+      );
+
+      // 6. Reopened with Enter this time, because dismissing answered nothing.
+      yield* activate(terminal, "[answer]");
+      yield* until_(terminal, "the question's form again", (one) => formShowing(one));
+
+      // 7. Answered by typing into the field that holds focus, then submitting.
+      terminal.bytes(BYTES.encode("go"));
+      yield* settled(30);
+      yield* activate(terminal, "[submit]");
+      yield* until_(terminal, "the entry settling", (one) => shows(one, "Ready for Entry 2"));
+      expect(shows(terminal, "1. [ok] entry-1")).toBe(true);
+
+      // 8. Sessions and back, with the entry still the one being read.
+      yield* activate(terminal, "Sessions");
+      yield* until_(terminal, "the Sessions surface", (one) => marked(one, "Sessions"));
+      yield* activate(terminal, "Entries");
+      yield* until_(terminal, "the Entries surface", (one) => marked(one, "Entries"));
+
+      // 9. A draft that has to survive a position, and a position to survive.
+      yield* focusDraft(terminal);
+      terminal.bytes(BYTES.encode("entry two"));
+      yield* settled(30);
+      yield* activate(terminal, "[history]");
+      yield* until_(terminal, "the History drawer", (one) => shows(one, "[close]"));
+      const positions = drawerMarkers(terminal);
+      expect(positions.length).toBeGreaterThan(0);
+      yield* activate(terminal, positions[0] ?? "");
+
+      // 10. Frozen: it says so, says Enter is not a submission, and offers back.
+      // Read from the guidance row rather than the location, because at 72
+      // columns the location is drawn over several rows and says how much of
+      // itself it is not showing — the sentence is what a person reads here.
+      // The position is taken while the drawer is still up, and the row already
+      // names the state it put the screen in rather than waiting to be dismissed.
+      yield* until_(terminal, "the frozen state inside the drawer", (one) =>
+        guidanceRow(one).startsWith("History · "),
+      );
+      expect(guidanceRow(terminal)).toContain("Esc closes");
+
+      // 10. Dismissed, and back in the draft — which a frozen position leaves
+      // editable — the row says what this position cannot do and how to leave it.
+      terminal.feed("\x1b");
+      yield* until_(terminal, "the drawer closing", (one) => !shows(one, "[close]"));
+      yield* focusDraft(terminal);
+      yield* until_(terminal, "the frozen guidance", (one) =>
+        guidanceRow(one).startsWith("History · Enter unavailable"),
+      );
+      expect(guidanceRow(terminal)).toContain("activate live");
+      expect(shows(terminal, "entry two")).toBe(true);
+
+      // 11. Back to the head, and the draft submits from there.
+      yield* activate(terminal, "[live]");
+      yield* until_(terminal, "the head being ready again", (one) =>
+        guidanceRow(one).startsWith("Ready for Entry 2"),
+      );
+      yield* focusDraft(terminal);
+      terminal.feed("\r");
+      yield* until_(terminal, "the second entry", (one) => shows(one, "2. "));
+
+      // 12. And out, from a control on the screen.
+      yield* activate(terminal, "[exit]");
+      yield* running;
+    });
+    expect(ended?.location).toContain("xmd://repl/");
+  });
+});
