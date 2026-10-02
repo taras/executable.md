@@ -126,7 +126,14 @@ const EMPTY_MODEL: ReplModel = Object.freeze({
 
 /** A live reading with one question waiting. */
 function asking(question: ReplQuestion | undefined): ReplLive {
-  return { output: "", question, expansion: "playing", pausable: false, agent: NO_AGENT };
+  return {
+    output: "",
+    question,
+    expansion: "playing",
+    pausable: false,
+    running: false,
+    agent: NO_AGENT,
+  };
 }
 
 describe("F1 — the bounded language is exact", () => {
@@ -662,24 +669,26 @@ function framed(state: ReplState, live: ReplLive, size = NARROW, focused?: strin
 
 const DRAFT = Array.from({ length: 40 }, (_, line) => `draft line ${line}`).join("\n");
 
-describe("F3 — complete content and reachable navigation", () => {
-  /** Every key layout actually placed, with whether it can be pointed at. */
-  function* placedKeys(
-    tree: ReplTree<ReplAction>,
-    view: ReplView,
-  ): Operation<Map<string, boolean>> {
-    yield* applied(tree, view);
-    const frame = layout(NARROW, replSurface(tree, view));
-    const keys = new Map<string, boolean>();
-    for (const cell of frame.cells) {
-      const key = tree.keyOf(cell.node);
-      if (key !== undefined) {
-        keys.set(key, cell.targetable);
-      }
+/**
+ * Every key layout actually placed, with whether it can be pointed at.
+ *
+ * At module scope because two describes need the same answer: what a pointer can
+ * reach is also the set a keystroke has to be able to reach.
+ */
+function* placedKeys(tree: ReplTree<ReplAction>, view: ReplView): Operation<Map<string, boolean>> {
+  yield* applied(tree, view);
+  const frame = layout(NARROW, replSurface(tree, view));
+  const keys = new Map<string, boolean>();
+  for (const cell of frame.cells) {
+    const key = tree.keyOf(cell.node);
+    if (key !== undefined) {
+      keys.set(key, cell.targetable);
     }
-    return keys;
   }
+  return keys;
+}
 
+describe("F3 — complete content and reachable navigation", () => {
   /** The essential Plan controls a person has to be able to reach. */
   const ESSENTIAL = [
     "drawer:field:decision",
@@ -1086,6 +1095,7 @@ function liveReading(session: ReplSession): ReplLive {
     question: session.overlay.question,
     expansion: session.expansion.state,
     pausable: session.controller !== undefined,
+    running: session.live,
     agent: session.agent,
   };
 }
@@ -1246,5 +1256,193 @@ describe("F1 — the form's conditional means exactly what Core validates", () =
     // A form that waited for `a === "x"` before asking for `b` would never ask
     // for a field Core already requires, so the reader refuses.
     expect(yield* readingOf(schema)).toContain("$.if.required");
+  });
+});
+
+/**
+ * The modal ring holds every control the modal places (#870 UI10/UI16).
+ *
+ * A drawn control Tab cannot reach is a control only a pointer-using person has,
+ * and this product's keyboard path is meant to be complete. The ring is recorded
+ * from the tree's own answer rather than from the screen, because a focus marker
+ * is one frame behind and `>` appears on the screen for other reasons.
+ */
+/**
+ * Every key the open drawer owns, read from the described tree.
+ *
+ * The modal's subtree and nothing else. A control the footer still places while a
+ * drawer is open — the announcement that opens it, for one — is on the screen but
+ * is deliberately not in the ring: focus that walked out of an open drawer would
+ * let a keystroke reach what the drawer is covering.
+ */
+function modalKeys(view: ReplView): Set<string> {
+  const found = new Set<string>();
+  const collect = (description: ReplDescription<ReplAction>): void => {
+    const read = readDescription(description);
+    found.add(read.key);
+    for (const child of read.children ?? []) {
+      collect(child);
+    }
+  };
+  const walk = (description: ReplDescription<ReplAction>): void => {
+    const read = readDescription(description);
+    if (read.key === "drawer:open") {
+      for (const child of read.children ?? []) {
+        collect(child);
+      }
+      return;
+    }
+    for (const child of read.children ?? []) {
+      walk(child);
+    }
+  };
+  for (const description of describeApplication(view)) {
+    walk(description);
+  }
+  return found;
+}
+
+describe("F3 — every placed modal control is in the ring", () => {
+  beforeAll(() => useTempFileCompiler());
+
+  it("UI16: Tab walks one whole cycle and Backtab walks it in reverse, inside the modal", function* () {
+    // A short question, so the form's own fields and choices are placed in the
+    // same frame as the drawer's controls: the ring has to hold both kinds.
+    const asked = yield* askingFor(CONFIRM_SCHEMA);
+    const live = asking(asked.question);
+    const tree = yield* useReplTree<ReplAction>();
+    // A real one-entry history under it, so the row names the entry the question
+    // belongs to rather than a readiness with no entry in it.
+    const recorded = yield* retained();
+    const state = opened(live);
+    const view = reading(state, live, recorded.model, NARROW, undefined);
+    yield* applied(tree, view);
+
+    // Every control this frame actually placed and can be pointed at. What a
+    // pointer can reach is the set a keystroke has to be able to reach too.
+    const placed = yield* placedKeys(tree, view);
+    const inside = modalKeys(view);
+    const targetable = [...placed.entries()]
+      .filter(([key, can]) => can && inside.has(key))
+      .map(([key]) => key);
+    expect(targetable.length).toBeGreaterThan(4);
+
+    // One complete cycle: Tab until focus returns where it started.
+    const forward: string[] = [];
+    const first = keyed(tree);
+    expect(first).toBeDefined();
+    forward.push(first ?? "");
+    for (let press = 0; press < 200; press++) {
+      const at = yield* tabbed(tree);
+      if (at === first) {
+        break;
+      }
+      expect(at).toBeDefined();
+      forward.push(at ?? "");
+    }
+
+    // Nothing the modal placed is missing from it.
+    for (const key of targetable) {
+      expect([key, forward.includes(key)]).toEqual([key, true]);
+    }
+    // Named, so a regression that drops one of these says which.
+    for (const key of ["drawer:close", "footer:history", "footer:exit", "drawer:form:submit"]) {
+      expect([key, forward.includes(key)]).toEqual([key, true]);
+    }
+    // And nothing outside the modal is in it: a ring that walked out of an open
+    // drawer would let a keystroke reach the screen the drawer is covering.
+    for (const key of forward) {
+      expect([key, inside.has(key), placed.get(key)]).toEqual([key, true, true]);
+    }
+
+    // The reverse cycle visits the same ring the other way round.
+    const backward: string[] = [];
+    for (let press = 0; press < 200; press++) {
+      yield* tree.dispatch({ kind: "key", key: "Backtab" });
+      const at = keyed(tree);
+      if (at === first) {
+        break;
+      }
+      backward.push(at ?? "");
+    }
+    expect([...backward].reverse()).toEqual(forward.slice(1));
+
+    // And what the row says while each of those nodes really holds focus. The
+    // drawer reparents the footer's two controls into itself, so asking the
+    // drawer what Enter does would tell somebody standing on `[exit]` that Enter
+    // answers a question — and the next thing they do is press it.
+    const promised: readonly { readonly key: string; readonly action: string }[] = [
+      { key: "drawer:close", action: "Enter closes" },
+      { key: "footer:exit", action: "Enter exits" },
+      { key: "footer:history", action: "Enter opens" },
+      { key: "drawer:form:submit", action: "Enter answers" },
+      { key: "drawer:scroll:down", action: "Enter scrolls" },
+      { key: "drawer:choice:decision:Approve", action: "Enter chooses" },
+    ];
+    for (const { key, action } of promised) {
+      yield* focusTo(tree, key);
+      expect(keyed(tree)).toBe(key);
+      const row = rowsOf(
+        describeApplication(reading(state, live, recorded.model, NARROW, key)),
+      ).find((one) => one.key === "guidance");
+      // This reading's one recorded entry has settled, so the row names the
+      // readiness rather than the question. The `Entry 1 question` spelling is
+      // asserted where an entry is really waiting, in the rendered journey.
+      expect([key, row?.label]).toEqual([
+        key,
+        `Ready for Entry 2 · ${action} · Esc closes · Tab/Shift+Tab move`,
+      ]);
+      expect([key, (row?.label ?? "").length <= NARROW.columns]).toEqual([key, true]);
+    }
+  });
+});
+
+/**
+ * Form validation and lifecycle readiness are two channels (#870 UI17).
+ *
+ * A schema rejecting an answer and the execution refusing a submission are
+ * different refusals of different things, and they are shown in different places:
+ * what the schema said goes under the field it is about, and what the readiness
+ * said goes in the one row that says what the execution is doing. A screen that
+ * put either in the other's place would answer a question nobody asked.
+ */
+describe("F2 — an invalid answer is not a lifecycle refusal", () => {
+  beforeAll(() => useTempFileCompiler());
+
+  it("UI17: the field keeps its own explanation, and the state row still says the state", function* () {
+    // A short question, so the whole form — the message under its field included
+    // — is inside the drawer's window rather than scrolled out of it.
+    const asked = yield* askingFor(CONFIRM_SCHEMA);
+    const live = asking(asked.question);
+    const recorded = yield* retained();
+
+    // What the schema said about one field, carried where the reducer carries it.
+    const invalid = Object.freeze({
+      ...opened(live),
+      form: Object.freeze({
+        ...opened(live).form,
+        messages: Object.freeze([{ field: "decision", message: "decision is required" }]),
+      }),
+    });
+    const rows = rowsOf(
+      describeApplication(reading(invalid, live, recorded.model, NARROW, undefined)),
+    );
+
+    // Under the form, about the field, in its own row.
+    const under = rows.find((one) => one.key.startsWith("drawer:invalid:"));
+    expect(under?.label).toContain("decision is required");
+
+    // And the state row is untouched by it: it says what the execution is doing,
+    // which is not "your answer was rejected".
+    const guidance = rows.find((one) => one.key === "guidance")?.label ?? "";
+    expect(guidance).not.toContain("decision is required");
+    expect(guidance).not.toContain("required");
+    // Still the drawer's own sentence, with the way out and the keys.
+    expect(guidance).toContain("Esc closes");
+    expect(guidance.length).toBeLessThanOrEqual(NARROW.columns);
+
+    // The two live in different places, so neither can be mistaken for the other.
+    expect(invalid.refusal).toBe(undefined);
+    expect(invalid.form.messages.length).toBe(1);
   });
 });

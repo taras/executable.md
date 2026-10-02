@@ -89,6 +89,16 @@ export interface ReplLive {
   /** Whether this process holds the continuations, and so may pause at all. */
   readonly pausable: boolean;
   /**
+   * Whether an entry's execution is still running in this process.
+   *
+   * The durable side cannot answer this. A root close is recorded the moment the
+   * document settles, while the task that produced it is still unwinding — so a
+   * screen reading only `model.settled` would offer the next entry during a
+   * teardown that has not finished, and announce readiness the session would
+   * refuse. Readiness is a fact about both halves, and this is the live half.
+   */
+  readonly running: boolean;
+  /**
    * What this process knows about Agent work no record holds yet.
    *
    * Empty for a replay, a document with no Agent work and a frozen prefix — a
@@ -682,6 +692,10 @@ export function viewFor(
           question: undefined,
           expansion: live.expansion,
           pausable: false,
+          // A frozen prefix is a reading of the file, not of this process: it
+          // fills nothing from the live head, and what the head is doing is not
+          // a fact about the position being inspected.
+          running: false,
           agent: NO_AGENT,
         };
   return Ok(
@@ -724,6 +738,7 @@ export function refusedView(
       question: undefined,
       expansion: "playing",
       pausable: false,
+      running: false,
       agent: NO_AGENT,
     }),
     location: encodeLocation(state.route),
@@ -1573,44 +1588,323 @@ function line(key: string, label: string): Described {
 }
 
 /**
- * What this screen can be operated with, right now.
+ * What the execution is doing, and what that means for submitting.
  *
- * Contextual rather than a legend, because a legend is a promise: it names the
- * same keys on every screen, and on most screens some of them do nothing. What
- * this says is read off what is mounted — Escape appears when there is a drawer
- * for it to close, Enter is described by what the focused control would actually
- * do, and the way back to the draft is offered exactly when a person's keystrokes
- * would otherwise reach nothing.
+ * One value, because the sentence a person reads and the decision about whether
+ * a standing refusal still applies are the same judgement. Two functions each
+ * deciding it separately is how a screen comes to say "Ready for Entry 2" above
+ * a refusal explaining that Entry 1 has not finished.
+ */
+export type ReplReadiness =
+  /** Frozen at an earlier position: nothing here submits, whatever the head does. */
+  | { readonly kind: "history" }
+  /** No entry and nothing running. */
+  | { readonly kind: "first" }
+  | { readonly kind: "running"; readonly order: number }
+  | { readonly kind: "answer"; readonly order: number }
+  | { readonly kind: "permission"; readonly order: number }
+  /** Admitted, no outcome, and nothing running it. Nothing may follow. */
+  | { readonly kind: "unfinished"; readonly order: number }
+  /** The close is recorded and the task that produced it is still unwinding. */
+  | { readonly kind: "settling"; readonly order: number }
+  | { readonly kind: "ready"; readonly next: number };
+
+/**
+ * Read it from both halves: the file, and this process.
  *
- * It sits above the surface rather than in the footer, which is seven rows that
- * belong to the controls, the History band and the draft.
+ * Derived on the way to a frame and nothing more. It is in no location and no
+ * record — a screen that explained itself differently would still be the same
+ * execution.
+ */
+export function readinessOf(view: ReplView): ReplReadiness {
+  const { state, model, live } = view;
+  if (state.route.at !== undefined) {
+    // A frozen position first, before any live fact is read. What the head is
+    // doing is not a fact about the prefix being inspected, and a reading that
+    // borrowed it would describe an execution this view is not of.
+    return { kind: "history" };
+  }
+  const entries = model.entries;
+  const last = entries[entries.length - 1];
+  if (last === undefined) {
+    return { kind: "first" };
+  }
+  const order = last.order;
+  if (!model.settled) {
+    if (live.question !== undefined) {
+      return { kind: "answer", order };
+    }
+    if (live.agent.requests.length > 0) {
+      return { kind: "permission", order };
+    }
+    // Admitted, no outcome, nothing running it: whatever was doing the work is
+    // gone and the file still says the entry never finished. The Journal decides
+    // that, so no successor can start however idle this looks.
+    return live.running ? { kind: "running", order } : { kind: "unfinished", order };
+  }
+  // The outcome is recorded. Whether anything may follow it is still the live
+  // half's to answer: the close is appended while the task that produced it is
+  // unwinding, and a submission taken in that window has nowhere to go.
+  return live.running ? { kind: "settling", order } : { kind: "ready", next: order + 1 };
+}
+
+/** Whether this readiness is one a submission would be admitted into. */
+export function admitsSubmission(readiness: ReplReadiness): boolean {
+  return readiness.kind === "first" || readiness.kind === "ready";
+}
+
+/**
+ * The state, as one phrase.
+ *
+ * First in the row, and before any key guidance, because the row is as wide as
+ * the terminal and the terminal decides where it stops: a sentence truncated
+ * after "Entry 1 running" still told somebody the thing they could not have
+ * worked out, while one truncated after "Tab/Shift+Tab move" told them what the
+ * keys do and left them pressing Enter at an entry that cannot accept it.
+ */
+function statePhrase(readiness: ReplReadiness, narrow: boolean): string {
+  switch (readiness.kind) {
+    case "history":
+      return "History";
+    case "first":
+      return "Ready for Entry 1";
+    case "running":
+      return `Entry ${readiness.order} running`;
+    case "answer":
+      // `question` rather than `waiting for an answer` where the row is 72
+      // columns: thirteen columns back, which is the difference between the
+      // movement hint being on the screen and being off it.
+      return narrow
+        ? `Entry ${readiness.order} question`
+        : `Entry ${readiness.order} waiting for an answer`;
+    case "permission":
+      return narrow
+        ? `Entry ${readiness.order} permission`
+        : `Entry ${readiness.order} waiting for permission`;
+    case "unfinished":
+      return `Entry ${readiness.order} unfinished`;
+    case "settling":
+      return `Entry ${readiness.order} settling`;
+    case "ready":
+      return `Ready for Entry ${readiness.next}`;
+  }
+}
+
+/**
+ * What that state means for the keys, when it means anything.
+ *
+ * Only the facts a person acts on. A state whose keys work the ordinary way adds
+ * nothing here, because a row explaining every state at every moment is one
+ * nobody reads.
+ */
+function stateAdvice(readiness: ReplReadiness, narrow: boolean): string | undefined {
+  switch (readiness.kind) {
+    case "history":
+      // Named without its brackets: a bracketed label in prose reads as a
+      // control, and a person — or a pointer looking for one — would try to
+      // activate a sentence.
+      return narrow
+        ? "Enter unavailable · activate live"
+        : "Enter unavailable · activate live to return to the head";
+    case "first":
+    case "ready":
+      return undefined;
+    case "running":
+      return narrow ? "Enter unavailable" : "Enter unavailable until it finishes";
+    case "answer":
+      return "activate answer";
+    case "permission":
+      // Named, not routed to. The request belongs to Sessions and the control
+      // that answers it is there; saying so is not the same as going.
+      return "open Sessions";
+    case "unfinished":
+      return narrow ? "no successor" : "no successor can start";
+    case "settling":
+      return narrow ? "Enter unavailable" : "Enter unavailable until teardown finishes";
+  }
+}
+
+/**
+ * The state as a drawer says it.
+ *
+ * A drawer is already the thing that is waiting, so the sentence above it does
+ * not have to describe the waiting — it has to name which entry, and leave the
+ * row enough columns for the keys. `Entry 1 question` instead of `Entry 1
+ * waiting for an answer` is thirteen columns back, which is the difference
+ * between `Esc closes` being on a 72-column screen and being off it.
+ */
+function drawerState(view: ReplView, readiness: ReplReadiness): string {
+  const open = view.selection.drawers[view.selection.drawers.length - 1];
+  const order = "order" in readiness ? readiness.order : undefined;
+  if (order !== undefined && open?.kind === "live-elicit") {
+    return `Entry ${order} question`;
+  }
+  if (order !== undefined && open?.kind === "live-permission") {
+    return `Entry ${order} permission`;
+  }
+  // The compact spelling at every size, because a drawer is already the thing
+  // that is waiting: what the row still has to name is which entry.
+  return statePhrase(readiness, true);
+}
+
+/**
+ * What Enter does on the node that actually holds focus.
+ *
+ * Classified by the focused node first, and by the drawer it sits in only after
+ * every node it could be has been ruled out. The order is the whole point: a
+ * permission drawer reparents the footer's own way out and way to History into
+ * itself, so asking the *drawer* what Enter does would tell somebody standing on
+ * `[exit]` that Enter decides a permission — and the next thing they do is press
+ * it. A drawer's ring is not all one kind of control, so neither is this answer.
+ */
+function primaryAction(view: ReplView, narrow: boolean): string {
+  const focused = view.focused;
+  if (focused === "footer:history") {
+    // Shortened where the row is 72 columns and not otherwise. The control under
+    // the cursor is labelled `[history]`, so the narrow form is not vague — it is
+    // the one word the label already supplies, given back to the keys.
+    return narrow ? "Enter opens" : "Enter opens History";
+  }
+  if (focused === "footer:exit") {
+    return "Enter exits";
+  }
+  if (focused === "drawer:close") {
+    return "Enter closes";
+  }
+  if (focused !== undefined && focused.startsWith("drawer:permission:choice:")) {
+    // An option the provider offered. Taking it settles the request, and only a
+    // control that is one of those may say so.
+    return "Enter decides";
+  }
+  if (focused !== undefined && focused.startsWith("drawer:scroll:")) {
+    // It moves the window over a message too long to draw at once. Saying this
+    // answers the question would promise an answer to somebody reading it.
+    return "Enter scrolls";
+  }
+  if (focused !== undefined && focused.startsWith("drawer:choice:")) {
+    // One offered value. Taking it fills the field rather than answering the
+    // question, which still needs submitting.
+    return "Enter chooses";
+  }
+  if (
+    focused === "drawer:form:submit" ||
+    (focused !== undefined &&
+      (focused.startsWith("drawer:field:") || focused.startsWith("drawer:value:")))
+  ) {
+    // The field the answer is typed into, the row that names it, and the control
+    // that sends it: all three are how this question gets answered.
+    return "Enter answers";
+  }
+  // Nothing more specific is known about this node, so this says only what is
+  // true of every control. Pointer equivalence is worth saying where there is
+  // room for it, and the narrow row has other things to spend those columns on.
+  return narrow ? "Enter activates" : "Enter or click activates";
+}
+
+/** What joins the parts of the guidance row. */
+const GUIDANCE_SEPARATOR = " · ";
+
+/** One part of the guidance row, and whether the row may be drawn without it. */
+interface GuidancePart {
+  readonly text: string;
+  /** A part the row must carry: it is dropped only if nothing else can go. */
+  readonly required?: true;
+}
+
+/**
+ * One row, assembled so that what it must say is what survives.
+ *
+ * The parts are given in the order they are read, and an optional one is kept
+ * only while the row still fits with every required part that follows it. So a
+ * row that cannot hold everything loses its least important fact by decision
+ * here, in its proper place, rather than its last characters by accident in the
+ * renderer — which would cut `Esc closes` in half and leave nothing to say it
+ * had been there.
+ *
+ * It takes a width rather than a size class because the arithmetic has to be
+ * total: the parts hold an entry number, so a composition that fits for `Entry 1`
+ * is a column longer for `Entry 10`, and this has to keep its promise for an
+ * execution of any length.
+ */
+function fitted(width: number, parts: readonly GuidancePart[]): string {
+  const kept: string[] = [];
+  for (const [index, part] of parts.entries()) {
+    if (part.required === true) {
+      kept.push(part.text);
+      continue;
+    }
+    const after = parts
+      .slice(index + 1)
+      .filter((one) => one.required === true)
+      .map((one) => one.text);
+    const candidate = [...kept, part.text, ...after].join(GUIDANCE_SEPARATOR);
+    if (candidate.length <= width) {
+      kept.push(part.text);
+    }
+  }
+  return kept.join(GUIDANCE_SEPARATOR);
+}
+
+/**
+ * The one guidance row, composed for the width it will be drawn at.
+ *
+ * Composed rather than written long and left to the renderer, because a row the
+ * renderer cuts is a row whose last fact is missing with nothing to say that it
+ * is missing. At `72x20` every required part is chosen to fit together; the wider
+ * frames say the same things in full.
+ *
+ * What never moves is the order: the state, then what focus actually does, then
+ * the way out, then movement.
  */
 function guidance(view: ReplView): string {
   const focused = view.focused;
   const modal = view.selection.drawers.length > 0;
   const editing = focused === undefined || focused === "footer:input";
-  const field = focused !== undefined && focused.startsWith("drawer:field:");
-  const move = "Tab/Shift+Tab move";
-  if (field) {
-    return `Type here · Enter answers · ${move} · Esc closes`;
-  }
+  const narrow = view.size.columns <= NARROW.columns;
+  const width = Math.max(1, view.size.columns);
+  const move: GuidancePart = { text: "Tab/Shift+Tab move" };
+  const readiness = readinessOf(view);
   if (modal) {
-    return `Enter or click activates · ${move} · Esc closes`;
+    // A drawer holds focus, so `Esc closes` is required and movement is not: Tab
+    // is discoverable by pressing it, and being shut inside a modal whose way out
+    // was cut from the row is not. The state stays, because a question does not
+    // stop an entry from running and a reader still needs to know that it is.
+    return fitted(width, [
+      { text: drawerState(view, readiness), required: true },
+      { text: primaryAction(view, narrow), required: true },
+      { text: "Esc closes", required: true },
+      move,
+    ]);
   }
+  const state: GuidancePart = { text: statePhrase(readiness, narrow), required: true };
   if (!editing) {
-    // The one place this screen used to say nothing at all: a person typing at a
-    // control watched their characters reach neither the draft nor an error.
-    return `Enter or click activates · ${move} · Tab to the draft to type`;
+    // No word here about submitting. Enter activates the control that has focus,
+    // so a row explaining why Enter cannot submit would describe a key this node
+    // does not use that way. The way back to the draft is required — it is the
+    // one thing this screen used to say nothing about at all.
+    return fitted(width, [
+      state,
+      { text: primaryAction(view, narrow), required: true },
+      move,
+      { text: narrow ? "Tab to draft" : "Tab to the draft to type", required: true },
+    ]);
   }
-  if (view.state.route.at !== undefined) {
-    // Frozen, so there is nothing to submit into. What the draft holds survives
-    // the position, and the way back to submitting it is a control on the screen
-    // rather than a key. Named without its brackets: a bracketed label in prose
-    // reads as a control, and a person — or a pointer looking for one — would
-    // try to activate a sentence.
-    return `Type here · ${move} · activate live to return to the head`;
+  const advice = stateAdvice(readiness, narrow);
+  const said: GuidancePart[] =
+    advice === undefined ? [state] : [state, { text: advice, required: true }];
+  if (readiness.kind === "history") {
+    // The draft survives a frozen position and stays editable, but the fact a
+    // person needs here is the way back to the head rather than that typing
+    // works. The draft row below is visibly holding their text either way.
+    return fitted(width, [...said, move]);
   }
-  return `Type here · Enter submits · ${move}`;
+  // Focus is in the draft. Only here is Enter a submission, and only when the
+  // readiness would take one — a row promising it in any other state is the one
+  // thing this slice exists to stop saying.
+  const enter: GuidancePart[] = admitsSubmission(readiness)
+    ? [{ text: "Enter submits", required: true }]
+    : [];
+  return fitted(width, [...said, ...enter, { text: "Type here" }, move]);
 }
 
 /**
@@ -1838,7 +2132,9 @@ function described(view: ReplView): readonly Described[] {
     // One cell is one row, so a recorded row that holds several lines of output
     // becomes several cells. A cell given more than one line would show only the
     // first, which is the whole of what a reader would then believe was there.
-    for (const [offset, text] of describeRow(transcript).split("\n").entries()) {
+    for (const [offset, text] of describeRow(transcript, surfaceWidth(view.size))
+      .split("\n")
+      .entries()) {
       items.push(line(`line:${index}:${offset}`, text));
     }
   }
@@ -2848,7 +3144,7 @@ function nested(scope: ReplScope, path: readonly string[]): readonly NestedScope
 }
 
 /** One transcript row, as a line. */
-function describeRow(entry: ReplRow): string {
+function describeRow(entry: ReplRow, width: number): string {
   switch (entry.kind) {
     case "entry":
       return `entry ${entry.path}`;
@@ -2866,9 +3162,51 @@ function describeRow(entry: ReplRow): string {
       return `agent ${entry.turn.agent} ${entry.turn.status}`;
     case "effect":
       return `${entry.type} ${entry.status}`;
-    case "terminal":
-      return entry.output.length > 0 ? entry.output : `closed ${entry.status}`;
+    case "terminal": {
+      const closed = entry.output.length > 0 ? entry.output : `closed ${entry.status}`;
+      // Only a failure that recorded a reason, and only for a failure: an `ok`,
+      // a cancellation and an entry that never settled have no reason to show,
+      // and inventing text for them would describe a failure that did not happen.
+      if (entry.status !== "err" || entry.message === undefined) {
+        return closed;
+      }
+      // Its own line, so the outcome and the reason are two rows a window can
+      // scroll rather than one row a region has to clip in the middle.
+      return `${closed}\n${failedLine(entry.message, width)}`;
+    }
   }
+}
+
+/** What a failure row is introduced by, counted because it is part of the row. */
+const FAILED_PREFIX = "failed: ";
+
+/**
+ * One recorded failure, as a single line that fits where it will be drawn.
+ *
+ * A message is whatever the thing that failed said, and what failed may be a
+ * compiler: the measured ones run to hundreds of characters and embed a whole
+ * `data:` URI of the generated module. Two things follow. It is flattened,
+ * because every newline in a transcript row becomes another cell and a reason
+ * that paid itself out over forty of them would push the footer and every
+ * control below the screen. And it is cut to the region, *including* its own
+ * introduction — bounding only the message would hand a 76-column row to a
+ * 64-column column, where the renderer cuts it again and takes the ellipsis with
+ * it, so the row would end mid-word with nothing saying it had been shortened.
+ *
+ * The whole of it stays in the Journal, which is where something unbounded
+ * belongs.
+ */
+function failedLine(message: string, width: number): string {
+  const flattened = message.replace(/\s+/g, " ").trim();
+  // A reason that is only whitespace says nothing a reader can act on, and
+  // `failed:` with nothing after it reads like the text went missing.
+  const said = flattened.length === 0 ? "(no reason recorded)" : flattened;
+  const line = `${FAILED_PREFIX}${said}`;
+  if (width < 1 || line.length <= width) {
+    return line;
+  }
+  // One column for the mark that says there is more.
+  return `${line.slice(0, Math.max(FAILED_PREFIX.length, width - 1))}…`;
 }
 
 /**

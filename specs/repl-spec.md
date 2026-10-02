@@ -378,6 +378,70 @@ fixed, so it never names an action this screen does not have — and when focus 
 a control rather than a field it says how to get back to the draft, because that
 is the one moment a person's keystrokes reach nothing.
 
+## What the screen says the execution is doing
+
+One row says it, and it says the state first. That row is the contextual guidance
+above the surface, beside the canonical location — not a new row, and not one of
+the footer's. The footer is unchanged and still holds exactly what it held: its
+action row, the five History rows, and the draft.
+
+The state comes first because the row is as wide as the terminal and the terminal
+decides where it stops. A sentence cut after "Entry 1 running" still told somebody
+the thing they could not have worked out; one cut after the key guidance told them
+what the keys do and left them pressing Enter at an entry that cannot accept it.
+What follows the state is what the state means for the keys, then what the focused
+node does, then the way out, then movement. At the narrowest supported frame the
+row is composed to fit rather than written long and cut, because a row the
+renderer cuts loses its last fact with nothing to say that it is missing.
+
+**Readiness is read from the file and from this process together.** The durable
+side cannot answer it alone: a root close is recorded the moment a document
+settles, while the task that produced it is still coming down, and a submission
+taken in that window has nowhere to go. So there is a state between "settled" and
+"ready" — the close is retained, the entry's task has not been joined, and no
+successor may start yet. It resolves without anybody typing: when the teardown
+finishes, the row says the next entry may start.
+
+The states a person can tell apart: no entry yet; an entry running; an entry
+waiting for an answer; an entry waiting for a permission; an entry whose close is
+retained while its teardown finishes; an entry admitted that never reached an
+outcome, which no successor may follow; and a settled execution ready for the next
+entry. A frozen position is its own state and says so before any of them.
+
+**A refusal that was only ever true of a moment stops being shown.** When the
+readiness refuses a submission it says why, keeps the draft exactly as it is,
+starts nothing and appends nothing. When the entry it named finishes, that refusal
+goes rather than contradicting the sentence above it. A document that cannot be
+admitted and an answer a schema rejected are refusals of the thing itself: they
+stay until the thing changes, and the schema's complaint stays under the field it
+is about rather than in the row that says what the execution is doing.
+
+**A failed entry says what it failed with.** The reason the Journal recorded is
+drawn beside the compact outcome, on its own row, flattened to one line and cut to
+the region it is drawn in — the whole of it, introduction included. A reason is
+whatever the thing that failed said, and what failed may be a compiler; the
+unbounded text stays in the file, which is where something unbounded belongs. An
+entry that did not fail is given no failure text.
+
+**A waiting permission is announced, not taken.** Permission belongs to Sessions.
+A request arriving while another surface is being read says that it is waiting and
+where it is answered; it moves no route, opens no drawer, takes no focus, and
+changes neither the selected entry, the conversation filter, the draft nor the
+history position. The control that answers it is the one Sessions already had.
+
+**A frozen position says what it cannot do.** It begins by naming itself, states
+that submitting is unavailable there, and offers the way back to the head as a
+control on the screen. The live head's status does not reach it — not what is
+running, not what is waiting, not what could be paused — because a prefix is a
+reading of the file and the head is not part of it. The draft belongs to no
+position and is unchanged.
+
+None of this is retained. The status, the guidance and the emphasis are computed
+on the way to a frame from the resolved view; they are in no location member and
+no record, and replay neither produces nor consumes them. A cold reopen shows the
+same state because the file and the location say the same things, not because
+anything stored what a previous process was displaying.
+
 ## Sequential entries, and nothing else
 
 One execution admits entries in submission order, one at a time, into one

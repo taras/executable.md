@@ -42,6 +42,7 @@ import {
 import type { ReplExecutionProfile } from "../repl-profile.ts";
 
 import {
+  admitsSubmission,
   admitted,
   answered,
   elicitWithdrawn,
@@ -50,6 +51,7 @@ import {
   permissionWithdrawn,
   describeApplication,
   initialState,
+  readinessOf,
   reduceRepl,
   refusedView,
   replSurface,
@@ -70,7 +72,7 @@ import type {
 import { decodeLocation, encodeLocation, resolveLocation } from "./route.ts";
 import { replRepository } from "./journal.ts";
 import type { ReplExecution } from "./journal.ts";
-import { openReplSession } from "./session.ts";
+import { lifecycleRefusal, openReplSession } from "./session.ts";
 import type { ReplSession } from "./session.ts";
 import { useReplFrames } from "./frame.ts";
 import type { ReplFrames } from "./frame.ts";
@@ -424,6 +426,16 @@ function* drive(
     yield* watch(current, wakes);
 
     /**
+     * Whether the refusal now standing is one the readiness gave.
+     *
+     * Loop-local, because it is bookkeeping about what is being presented rather
+     * than a fact about the execution: it belongs to neither the model, the
+     * route, nor the state the reducer answers with, and nothing durable or
+     * canonical carries it.
+     */
+    let refusedByReadiness = false;
+
+    /**
      * Take one normalized event through the tree and apply whatever it asked for.
      *
      * One place, because a keystroke and a pointer landing on the same control
@@ -475,6 +487,11 @@ function* drive(
       }
       if (performed.refusal !== undefined) {
         state = Object.freeze({ ...state, refusal: performed.refusal });
+        refusedByReadiness = performed.refusedByReadiness === true;
+      } else if (transition.state.refusal === undefined) {
+        // The action was taken, or refused for its own reasons and then cleared.
+        // Either way whatever the readiness last refused is not what is showing.
+        refusedByReadiness = false;
       }
       return performed.exited === true;
     }
@@ -614,6 +631,23 @@ function* drive(
         state = adopting;
         model = attempted.model;
         view = built.value;
+        // The readiness may have moved while that refusal was on the screen: the
+        // entry it named has finished, or the teardown it named has completed.
+        // A refusal that is no longer true is worse than no refusal, because it
+        // contradicts the sentence above it — and a person reading both has to
+        // guess which half of their screen is current.
+        if (
+          refusedByReadiness &&
+          state.refusal !== undefined &&
+          admitsSubmission(readinessOf(view))
+        ) {
+          state = Object.freeze({ ...state, refusal: undefined });
+          refusedByReadiness = false;
+          const again = viewFor(state, model, liveOf(current), drawnAt, focused);
+          if (again.ok) {
+            view = again.value;
+          }
+        }
       } else {
         // The reason the *reprojection* refused, when there was one: it is the
         // first thing that went wrong, and the resolution failure below it is a
@@ -707,6 +741,7 @@ function liveOf(session: ReplSession): ReplLive {
     question: session.overlay.question,
     expansion: session.expansion.state,
     pausable: session.controller !== undefined,
+    running: session.live,
     agent: session.agent,
   };
 }
@@ -852,6 +887,18 @@ interface Performed {
   readonly exited?: true;
   /** Why it could not be done, for the screen to say. */
   readonly refusal?: string;
+  /**
+   * Whether that refusal was this execution's readiness refusing a submission.
+   *
+   * Reported rather than recognized from the message, because what becomes of a
+   * refusal depends on where it came from. One the readiness gave is true only
+   * of the moment it was given — the entry it named finishes, the teardown it
+   * named completes — so the loop drops it once a submission would be admitted,
+   * rather than leave the screen explaining that Entry 1 has not finished above
+   * a sentence announcing that Entry 2 may start. Every other refusal is about
+   * the action somebody took and stands until they take another.
+   */
+  readonly refusedByReadiness?: true;
 }
 
 /**
@@ -926,7 +973,28 @@ function* perform(
       if (!submitted.ok) {
         // A refusal leaves the draft exactly as it was and the history as it
         // was: nothing was admitted, so there is nothing to undo.
-        return { refusal: submitted.error.message };
+        //
+        // Two different refusals arrive here and only one of them goes stale.
+        // The readiness refusing is true of a moment: the entry it named
+        // finishes and it stops being true. A document that cannot be admitted
+        // is true of the document, and readiness moving on does not make it
+        // admissible — dropping that one would take away the only explanation of
+        // why the draft is still sitting there.
+        //
+        // Read from the structural mark the throw site installed, not from the
+        // class and not from the name: `instanceof` answers no across loaded
+        // copies, and `name` is writable, so any error at all could claim to be
+        // a refusal this session never gave.
+        //
+        // And the *reason* comes from the mark as well, not from `message`. The
+        // mark carries the sentence the session normalized when it refused;
+        // `message` is an ordinary writable property that anything holding the
+        // error can change afterwards. Showing one and authenticating the other
+        // would let the screen display text the session never said.
+        const readiness = lifecycleRefusal(submitted.error);
+        return readiness === undefined
+          ? { refusal: submitted.error.message }
+          : { refusal: readiness, refusedByReadiness: true };
       }
       return { submitted: true };
     }

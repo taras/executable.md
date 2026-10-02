@@ -53,7 +53,14 @@ import { runReplProgram } from "../src/repl/program.ts";
 import type { ReplExecutionProfile } from "../src/repl-profile.ts";
 import type { ReplOutcome } from "../src/repl/program.ts";
 import { parseDurableEvent, serializeDurableEvent } from "@executablemd/durable-streams";
-import { drawerWidth, HISTORY_ROWS, NARROW, surfaceWidth } from "../src/repl/layout.ts";
+import {
+  drawerHeight,
+  drawerWidth,
+  HISTORY_ROWS,
+  NARROW,
+  sessionsHeight,
+  surfaceWidth,
+} from "../src/repl/layout.ts";
 import { projectRepl } from "../src/repl/model.ts";
 import type { ReplModel } from "../src/repl/model.ts";
 import { decodeLocation, encodeLocation } from "../src/repl/route.ts";
@@ -657,6 +664,16 @@ function* openQuestion(terminal: Terminal): Operation<void> {
 }
 
 /** Whether a question's form is drawn, whichever of these suites' questions it is. */
+/**
+ * The contextual guidance row, as drawn.
+ *
+ * Row 0, which is where a narrow frame puts it: these rows are all at `72x20`,
+ * where the guidance has the row to itself rather than sharing it with a sidebar.
+ */
+function guidanceRow(terminal: Terminal): string {
+  return (screenOf(terminal)[0] ?? "").trimEnd();
+}
+
 function formShowing(terminal: Terminal): boolean {
   return (
     shows(terminal, "decision: approve | decline") ||
@@ -743,23 +760,59 @@ function* until_(
 }
 
 /**
- * Every position the open History drawer lists, in the order it lists them.
+ * The rectangle the layout places the drawer in, at one size.
  *
- * Read from the drawer rather than from the compact band: the band shares labels
- * when space is short, and what is being compared is the exact set.
+ * The same arithmetic the placement uses, read back from what layout exports:
+ * the body is everything above the footer, and the drawer is inset an eighth of
+ * it on every side.
+ */
+function drawerBox(size: ReplTerminalSize): {
+  top: number;
+  bottom: number;
+  left: number;
+  right: number;
+} {
+  const top = Math.floor(sessionsHeight(size) / 8);
+  const left = Math.floor(size.columns / 8);
+  return { top, bottom: top + drawerHeight(size), left, right: left + drawerWidth(size) };
+}
+
+/**
+ * Every position the open drawer lists, read out of the drawer's own rectangle.
+ *
+ * In the order the drawer lists them, read from the drawer rather than from the
+ * compact band: the band shares labels when space is short, and what is being
+ * compared is the exact set.
+ *
+ * Found by where the layout put it rather than by a word it contains. The
+ * guidance row legitimately says "History" now — it is the state at a frozen
+ * position (#870 UI15) — and a helper that searched the screen for that string
+ * read the sentence about the position instead of the list of positions, from the
+ * wrong column, and answered with fragments of the transcript behind it. Prose a
+ * row may say is not an anchor; a placed rectangle is.
  */
 function drawerMarkers(terminal: Terminal): string[] {
   const found: string[] = [];
   const rows = screenOf(terminal);
-  const title = rows.findIndex((line) => line.includes("History"));
-  if (title === -1) {
-    return found;
-  }
-  const at = rows[title].indexOf("History");
-  for (let row = title + 1; row < rows.length; row += 1) {
-    const text = (rows[row] ?? "").slice(at, at + drawerWidth(terminal.size)).trimEnd();
+  const box = drawerBox(terminal.size);
+  let title = false;
+  for (let row = box.top; row < box.bottom; row += 1) {
+    const text = (rows[row] ?? "").slice(box.left, box.right).trimEnd();
     const label = text.replace(/^>\s*/, "").trim();
-    if (label.length === 0 || label === "[close]") {
+    if (label.length === 0) {
+      // Before the drawer's first row there is nothing of it to read; after its
+      // last, the box is taller than what it drew.
+      if (title) {
+        break;
+      }
+      continue;
+    }
+    if (!title) {
+      // Its own heading, which names the drawer rather than a position in it.
+      title = true;
+      continue;
+    }
+    if (label === "[close]") {
       break;
     }
     found.push(label);
@@ -1892,10 +1945,12 @@ describe("REPL journey: the same product at every size", () => {
         // None of it shows through: every row of the drawer's box reaches the
         // box's own right edge, so what it is in front of is behind it.
         const rows = screenOf(terminal);
-        const title = rows.findIndex((line) => line.includes("History"));
-        expect(title).toBeGreaterThanOrEqual(0);
-        const left = Math.floor(size.columns / 8);
-        const right = left + drawerWidth(terminal.size);
+        // The placed rectangle, for the same reason `drawerMarkers` uses it: the
+        // guidance row says "History" at a frozen position, so searching the
+        // screen for that word can find the sentence rather than the drawer.
+        const box = drawerBox(terminal.size);
+        const title = box.top;
+        const { left, right } = box;
         // The drawer's own rows: its title, one per position it lists, and its
         // close control. A drawer draws rows rather than filling its box, so the
         // rows below its last one are the transcript and are meant to be.
@@ -2331,6 +2386,7 @@ describe("REPL journey: what it settles before it acts", () => {
       question: undefined,
       expansion: "pausing",
       pausable: true,
+      running: true,
       agent: NO_AGENT,
     });
     expect(pausing.intent.kind).toBe("none");
@@ -2341,6 +2397,7 @@ describe("REPL journey: what it settles before it acts", () => {
       question: undefined,
       expansion: "paused",
       pausable: true,
+      running: true,
       agent: NO_AGENT,
     });
     expect(held.intent.kind).toBe("continue");
@@ -2856,6 +2913,23 @@ const SIBLING_FAILS = [
 ].join("\n");
 
 /** One entry whose question is far wider than the narrowest supported frame. */
+/** One short question, so the whole drawer — its control included — is drawn. */
+const SHORT_QUESTION = [
+  "```js eval",
+  "const schema = {",
+  '  type: "object",',
+  '  properties: { decision: { type: "string", enum: ["go"] } },',
+  '  required: ["decision"],',
+  "  additionalProperties: false,",
+  "};",
+  "```",
+  "",
+  '<Elicit schema={schema} as="answer">Go?</Elicit>',
+  "",
+  "Decision: {answer.decision}",
+  "",
+].join("\n");
+
 const LONG_QUESTION = [
   "```js eval",
   "const schema = {",
@@ -3112,16 +3186,41 @@ describe("REPL first use: UI1", () => {
         expect(shows(terminal, "Type here")).toBe(true);
         expect(shows(terminal, "Enter submits")).toBe(true);
         expect(shows(terminal, "Tab/Shift+Tab move")).toBe(true);
+        // And the state it says that about, which is what makes "Enter submits"
+        // a fact rather than a legend (#870 UI10).
+        expect(shows(terminal, "Ready for Entry 1")).toBe(true);
         // Escape closes a drawer, and there is no drawer. A legend naming it here
         // would advertise an action nothing mounts.
         expect(shows(terminal, "Esc closes")).toBe(false);
 
-        // Both ways out of the draft, and both are on the screen at both sizes.
+        // Both ways out of the draft. Enter does not submit from a control, at
+        // either size, and the row says so by not saying otherwise.
         yield* focusOn(terminal, "[exit]");
-        expect(shows(terminal, "Enter or click activates")).toBe(true);
-        // The one thing this screen used to say nothing about at all.
-        expect(shows(terminal, "Tab to the draft to type")).toBe(true);
         expect(shows(terminal, "Enter submits")).toBe(false);
+        // What Enter does on this node, rather than what it does on controls in
+        // general: `[exit]` leaves the command (#870 UI16).
+        expect(shows(terminal, "Enter exits")).toBe(true);
+        // The state survives moving focus, which is the whole point of putting it
+        // first: it is the one fact a person cannot work out from the keys.
+        expect(shows(terminal, "Ready for Entry 1")).toBe(true);
+        // Both say what Enter does and both say how to get back to the draft.
+        // The narrow row says each in fewer columns, because it is composed to
+        // fit 72 rather than written once and cut (#870 UI10/UI16): pointer
+        // equivalence and the longer way of saying "Tab to the draft" are what
+        // the extra columns of a wide frame buy.
+        if (size.columns > NARROW.columns) {
+          expect(shows(terminal, "Tab to the draft to type")).toBe(true);
+        } else {
+          expect(shows(terminal, "Tab to draft")).toBe(true);
+        }
+        // The generic spelling, on a control with nothing particular to say.
+        yield* focusOn(terminal, "Sessions");
+        expect(
+          shows(
+            terminal,
+            size.columns > NARROW.columns ? "Enter or click activates" : "Enter activates",
+          ),
+        ).toBe(true);
 
         // With a drawer up, Escape is a thing that does something, and it says so.
         yield* activate(terminal, "[history]");
@@ -3424,6 +3523,265 @@ describe("REPL first use: UI1 selection", () => {
         yield* running;
       });
     }
+  });
+});
+
+/**
+ * The narrow guidance row is composed, not cut (#870 UI10/UI16).
+ *
+ * Asserted by exact equality, because the claim is about the whole row. A row
+ * written long and left to the renderer loses its last fact with nothing to say
+ * that it has — and the facts at the end are the way out of a modal and the way
+ * back to the draft. Equality catches both the overflow and the silent cut.
+ */
+describe("REPL first use: UI10 narrow guidance", () => {
+  it("UI10: at 72x20 the row says the state, what Enter does, and the way back, whole", function* () {
+    const { terminal, install } = recordingTerminal(NARROW);
+    yield* scoped(function* (): Operation<void> {
+      yield* install();
+      yield* immediateClock();
+      yield* useTemporaryHost();
+
+      const running = yield* spawn(function* (): Operation<void> {
+        const ran = yield* runReplProgram({ profile: PROFILE });
+        if (!ran.ok) {
+          throw ran.error;
+        }
+      });
+      yield* untilDrawn(terminal);
+
+      // Focus starts in the draft. The state comes first, then what Enter does
+      // there, then that typing goes to the draft, then movement.
+      expect(guidanceRow(terminal)).toBe(
+        "Ready for Entry 1 · Enter submits · Type here · Tab/Shift+Tab move",
+      );
+      expect(guidanceRow(terminal).length).toBeLessThanOrEqual(NARROW.columns);
+
+      // On a control, Enter activates the control rather than submitting, so the
+      // row stops saying it submits and starts saying how to get back. `Sessions`
+      // because it is a control with nothing particular to say about itself —
+      // this is the generic spelling.
+      yield* focusOn(terminal, "Sessions");
+      expect(guidanceRow(terminal)).toBe(
+        "Ready for Entry 1 · Enter activates · Tab/Shift+Tab move · Tab to draft",
+      );
+      expect(guidanceRow(terminal).length).toBeLessThanOrEqual(NARROW.columns);
+
+      // And a control that does have something particular to say says it instead,
+      // because a row naming an action the focused node does not perform is worse
+      // than one naming none: the person presses the key it promised.
+      yield* focusOn(terminal, "[exit]");
+      expect(guidanceRow(terminal)).toBe(
+        "Ready for Entry 1 · Enter exits · Tab/Shift+Tab move · Tab to draft",
+      );
+      yield* focusOn(terminal, "[history]");
+      expect(guidanceRow(terminal)).toBe(
+        "Ready for Entry 1 · Enter opens · Tab/Shift+Tab move · Tab to draft",
+      );
+      expect(guidanceRow(terminal).length).toBeLessThanOrEqual(NARROW.columns);
+
+      terminal.end();
+      yield* running;
+    });
+  });
+});
+
+/**
+ * A drawer keeps the state and keeps the way out (#870 UI10/UI16).
+ *
+ * Inside a modal the order earns its keep: the drawer holds focus, so `Esc
+ * closes` is the one key a person must be told about, and it is required ahead of
+ * movement. The state stays because a question does not stop an entry from
+ * running and a reader still needs to know that it is.
+ */
+describe("REPL first use: UI10 narrow drawer guidance", () => {
+  it("UI10: at 72x20 a focused field and a focused drawer control each say state, action, Esc and movement", function* () {
+    const { terminal, install } = recordingTerminal(NARROW);
+    yield* scoped(function* (): Operation<void> {
+      yield* install();
+      yield* immediateClock();
+      yield* useTempFileCompiler();
+      yield* useTemporaryHost();
+
+      const running = yield* spawn(function* (): Operation<void> {
+        const ran = yield* runReplProgram({ profile: PROFILE });
+        if (!ran.ok) {
+          throw ran.error;
+        }
+      });
+      yield* untilDrawn(terminal);
+
+      yield* submitted(terminal, SHORT_QUESTION);
+      yield* until_(terminal, "the waiting question", (one) => askedRow(one) !== undefined);
+      yield* activate(terminal, "[answer]");
+      yield* until_(terminal, "the question's form", (one) => formShowing(one));
+
+      // A field holds focus: Enter answers, and the entry is still named.
+      const onField = guidanceRow(terminal);
+      expect(onField).toBe("Entry 1 question · Enter answers · Esc closes · Tab/Shift+Tab move");
+
+      // The question's submit: the same promise, because activating it is how the
+      // question gets answered.
+      yield* focusOn(terminal, "[submit]");
+      const onSubmit = guidanceRow(terminal);
+      expect(onSubmit).toBe("Entry 1 question · Enter answers · Esc closes · Tab/Shift+Tab move");
+
+      // And a control in the same drawer that does something else entirely. It
+      // moves the window over a message too long to draw at once, so the row says
+      // that instead of promising an answer to somebody who is still reading.
+      yield* focusOn(terminal, "[v later]");
+      const onScroll = guidanceRow(terminal);
+      expect(onScroll).toBe("Entry 1 question · Enter scrolls · Esc closes · Tab/Shift+Tab move");
+
+      // Whichever node holds focus: the state, the action that node performs, the
+      // way out, and movement — all four on one 72-column row, none of them cut.
+      for (const row of [onField, onSubmit, onScroll]) {
+        expect(row.startsWith("Entry 1 question · Enter ")).toBe(true);
+        expect(row).toContain("Esc closes");
+        expect(row).toContain("Tab/Shift+Tab move");
+        expect(row.length).toBeLessThanOrEqual(NARROW.columns);
+      }
+
+      terminal.end();
+      yield* running;
+    });
+  });
+});
+
+/** One entry that does not finish the instant it is admitted. */
+const SLOW_ENTRY = ["```ts eval", "yield* sleep(800)", "```", ""].join("\n");
+
+/**
+ * A refused submission keeps the draft, and stops being shown when it stops
+ * being true (#870 UI12).
+ *
+ * Driven through the running command, and — the part that matters — with no
+ * keystroke between the refusal and the readiness changing. Every action clears
+ * the refusal on its way through the reducer, so a row that pressed anything to
+ * make the entry finish would prove that pressing a key clears refusals and
+ * nothing about staleness. Here the entry finishes by itself and nobody touches
+ * the terminal, which is also how a person meets this: they press Enter, read why
+ * not, and watch the entry end.
+ */
+/**
+ * The drawer is found by where it is, not by what it says (#870 UI15, adj 3).
+ *
+ * `drawerMarkers()` used to locate the History drawer by the first line holding
+ * the word "History". The state sentence is that word at a frozen position, so
+ * the helper read the sentence instead of the list — from the wrong column, and
+ * answered with fragments of the transcript behind it. This row stands in exactly
+ * that frame: the guidance says "History" outside the drawer while the drawer
+ * lists positions inside it, and the helper has to answer with the positions.
+ */
+describe("REPL first use: UI15 drawer geometry", () => {
+  it("UI15: guidance saying History does not move what reading the drawer answers", function* () {
+    const { terminal, install } = recordingTerminal({ columns: 160, rows: 36 });
+    yield* scoped(function* (): Operation<void> {
+      yield* install();
+      yield* immediateClock();
+      yield* useTempFileCompiler();
+      yield* useTemporaryHost();
+
+      const running = yield* spawn(function* (): Operation<void> {
+        const ran = yield* runReplProgram({ profile: PROFILE });
+        if (!ran.ok) {
+          throw ran.error;
+        }
+      });
+      yield* untilDrawn(terminal);
+
+      yield* submitted(terminal, "one");
+      yield* until_(terminal, "the entry settling", (one) => shows(one, "Ready for Entry 2"));
+
+      // Into a position, so the state sentence becomes the word the old helper
+      // searched for.
+      yield* activate(terminal, "[history]");
+      yield* until_(terminal, "the History drawer", (one) => shows(one, "[close]"));
+      const listed = drawerMarkers(terminal);
+      expect(listed.length).toBeGreaterThan(0);
+      yield* activate(terminal, listed[0] ?? "");
+      yield* until_(terminal, "the frozen position", (one) => locationOn(one).includes("inspect"));
+
+      // Reopened over a frozen position: now both are true at once.
+      yield* activate(terminal, "[history]");
+      yield* until_(terminal, "the History drawer again", (one) => shows(one, "[close]"));
+      const saying = screenOf(terminal).findIndex((line) => line.includes("History ·"));
+      expect(saying).toBeGreaterThanOrEqual(0);
+      // Above the drawer's own rows — which is exactly what made the old anchor
+      // read the wrong one. It shares columns with the box at this size, so the
+      // row is the distinction and the column is not.
+      const box = drawerBox(terminal.size);
+      expect(saying).toBeLessThan(box.top);
+
+      // And the helper still answers with the drawer's own rows: every one of
+      // them is a position this history holds, and none is a piece of the
+      // sentence or of the transcript behind the box.
+      // The positions this frozen prefix holds — fewer than the live head's, which
+      // is what a prefix is — and every one of them a position rather than a
+      // piece of the sentence or of the transcript behind the box.
+      const markers = drawerMarkers(terminal);
+      expect(markers.length).toBeGreaterThan(0);
+      expect(markers).toContain("Entry 1 admitted");
+      expect(markers.length).toBeLessThanOrEqual(listed.length);
+      for (const marker of markers) {
+        expect([marker, marker.includes("·")]).toEqual([marker, false]);
+        expect([marker, marker.startsWith("History")]).toEqual([marker, false]);
+      }
+
+      terminal.end();
+      yield* running;
+    });
+  });
+});
+
+describe("REPL first use: UI12 refusal", () => {
+  it("UI12: a lifecycle refusal keeps the draft and goes when the entry it named ends, untouched", function* () {
+    const { terminal, install } = recordingTerminal({ columns: 160, rows: 36 });
+    yield* scoped(function* (): Operation<void> {
+      yield* install();
+      yield* immediateClock();
+      yield* useTempFileCompiler();
+      yield* useTemporaryHost();
+
+      const running = yield* spawn(function* (): Operation<void> {
+        const ran = yield* runReplProgram({ profile: PROFILE });
+        if (!ran.ok) {
+          throw ran.error;
+        }
+      });
+      yield* untilDrawn(terminal);
+
+      // One entry that is still running, so there is something for the next
+      // submission to be refused into.
+      yield* submitted(terminal, SLOW_ENTRY);
+
+      // A second document typed while the first is still going.
+      const DRAFT_TEXT = "second entry, typed while the first is running";
+      yield* focusDraft(terminal);
+      terminal.bytes(BYTES.encode(DRAFT_TEXT));
+      yield* settled(30);
+      terminal.feed("\r");
+      yield* until_(terminal, "the refusal", (one) => shows(one, "has not finished"));
+
+      // Refused, with its reason, and nothing taken from the person: the draft is
+      // exactly what they typed, and the history is exactly one entry.
+      expect(shows(terminal, DRAFT_TEXT)).toBe(true);
+      expect(shows(terminal, "2. ")).toBe(false);
+
+      // Nothing is pressed from here. The entry ends on its own.
+      yield* until_(terminal, "the next entry being ready", (one) =>
+        shows(one, "Ready for Entry 2"),
+      );
+
+      // The refusal is gone, because it stopped being true — and what replaced it
+      // says the opposite of what it said.
+      expect(shows(terminal, "has not finished")).toBe(false);
+      // And the draft is still theirs.
+      expect(shows(terminal, DRAFT_TEXT)).toBe(true);
+
+      terminal.end();
+      yield* running;
+    });
   });
 });
 

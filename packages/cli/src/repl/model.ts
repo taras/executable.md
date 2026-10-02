@@ -298,6 +298,16 @@ export type ReplRow =
       readonly marker: string;
       readonly status: "ok" | "err" | "cancelled";
       readonly output: string;
+      /**
+       * Why it failed, for an `err` outcome that recorded a reason.
+       *
+       * The same already-parsed message `ReplTerminal` holds — the message alone,
+       * never the serialized stack. It is here so a reader of the transcript is
+       * told what a reader of the catalog's `[err]` cannot be: an outcome without
+       * its reason is a reader being shown that something went wrong and being
+       * sent to the file to find out what.
+       */
+      readonly message: string | undefined;
     };
 
 /**
@@ -758,7 +768,13 @@ function buildEntry(segment: EntrySegment, markers: readonly string[]): Result<E
         );
       }
       terminal = settled;
-      transcript.push({ kind: "terminal", marker, status: settled.status, output: settled.output });
+      transcript.push({
+        kind: "terminal",
+        marker,
+        status: settled.status,
+        output: settled.output,
+        message: settled.message,
+      });
       checkpoints.push({ marker, kind: "terminal", label: "Settled" });
       continue;
     }

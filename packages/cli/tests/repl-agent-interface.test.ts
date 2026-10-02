@@ -453,6 +453,7 @@ function liveReading(session: ReplSession): ReplLive {
     question: session.overlay.question,
     expansion: session.expansion.state,
     pausable: session.controller !== undefined,
+    running: session.live,
     agent: session.agent,
   };
 }
@@ -3499,5 +3500,64 @@ describe("EU1 — selecting an entry moves the transcript locus and nothing else
     expect(catalogLabel(after, "entry-2")).not.toContain("unfinished");
     yield* applied(tree, after);
     expect(["entry-1", "entry-2"].map((key) => nodeOf(tree, `entry:${key}`))).toEqual(nodes);
+  });
+});
+
+/**
+ * A permission arriving on Entries says so and takes nothing (#870 UI14).
+ *
+ * Permission stays Sessions-owned. Arrival is a fact on the turn that is waiting,
+ * and the screen's whole job here is to say that the fact exists and where it is
+ * answered — not to go there. A screen that routed, opened the drawer or moved
+ * focus would take a person off the entry they were reading to answer something
+ * they had not asked to see.
+ */
+describe("U2 — a pending permission announces itself without taking the screen", () => {
+  beforeAll(() => useTempFileCompiler());
+
+  it("UI14: the frame says a permission waits in Sessions, and changes no route or focus", function* () {
+    const { session } = yield* asking({
+      review: { streaming: true, permission: { toolCallId: "call-1", kind: "edit" } },
+    });
+
+    // Reading an entry, with a draft, before anything is pending.
+    const before = Object.freeze({
+      ...initialState("agents"),
+      draft: "a draft nobody may take",
+      route: Object.freeze({ ...initialState("agents").route, draft: "a draft nobody may take" }),
+    });
+    const quiet = reading(before, session);
+    const surface = quiet.state.route.surface;
+
+    yield* until(session, "a request waiting", () => session.agent.requests.length === 1);
+
+    // The same state, read again now that a request is pending. Nothing about
+    // where the person is has changed.
+    const after = reading(before, session);
+    expect(after.state.route.surface).toBe(surface);
+    expect(after.state.route.drawers).toEqual([]);
+    expect(after.state.route.session).toBe(before.route.session);
+    expect(after.state.route.at).toBe(before.route.at);
+    expect(after.state.draft).toBe("a draft nobody may take");
+    expect(after.state.permission).toBe(before.permission);
+    // The location is the same string it was: a pending request is process-local
+    // and is carried in no canonical member.
+    expect(after.location).toBe(quiet.location);
+
+    // And the frame says it, naming where it is answered rather than going there.
+    const rows = rowsOf(describeApplication(after));
+    const guidance = rows.find((one) => one.key === "guidance")?.label ?? "";
+    expect(guidance).toContain("waiting for permission");
+    expect(guidance).toContain("open Sessions");
+    // Said, not done: the permission drawer is not mounted on this surface.
+    expect(rows.some((one) => one.key.startsWith("drawer:permission:"))).toBe(false);
+
+    // The control that answers it is the one Sessions already had. Crossing to it
+    // is a thing the person does, and then the request is there to be settled.
+    const moved = onSessions(session, before);
+    const sessions = rowsOf(describeApplication(reading(moved, session)));
+    expect(sessions.some((one) => one.key.startsWith("sessions:request:"))).toBe(true);
+    // And the draft crossed with them.
+    expect(moved.draft).toBe("a draft nobody may take");
   });
 });

@@ -5778,6 +5778,48 @@ return causes — no host exit call, and no halt left unjoined. The route it pri
 drops the drawers only a running process could have mounted, because a location
 naming a waiting question is one nothing can reopen.
 
+**What the screen says the execution is doing is read from two halves.** The
+projected history answers what the file holds; this process answers what it is
+still doing. Neither is sufficient alone, and the gap between them is a real
+state rather than a rounding error: a root close is appended when a document
+settles, while the task that produced it is still unwinding, so a reading that
+took `settled` for "ready" would offer the next entry into a teardown that has
+not finished. The session's existing liveness reaches the view for that reason
+and no other, and the two are resolved into one value — because the sentence a
+person reads and the decision about whether a standing refusal still applies are
+one judgement, and two places deciding it separately is how a screen comes to
+announce that the next entry may start directly above a refusal explaining that
+the last one has not finished.
+
+That value is derived presentation, like the guidance beside it: computed on the
+way to a frame, in no location member and no record, produced and consumed by
+nothing durable. It is also what decides when a refusal expires. A refusal the
+readiness gave is true of a moment, so it is dropped once a submission would be
+admitted; a refusal of a document that cannot be admitted, or of an answer a
+schema rejected, is true of the thing itself and stays. Telling them apart cannot
+be done by class — a separately loaded copy has its own, and `instanceof` answers
+no across the boundary — nor by `name`, which is writable and so can be worn by
+any failure at all. The session marks its own refusals with a namespaced,
+non-enumerable own property at the point of raising, carrying the sentence it
+normalized, and the screen reads both the classification and the text back from
+that mark: authenticating one while displaying the other would show text the
+session never said.
+
+A recorded failure's reason is presented the same way and bounded the same way.
+The parsed message is already in the model; what the transcript adds is a row for
+it beside the compact outcome, flattened to one line and cut to the region it is
+drawn in, introduction included. A reason is whatever failed, and what failed may
+be a compiler: bounding only the message hands an over-wide row to a narrower
+column, where the renderer cuts it again and takes the mark that said it was
+shortened with it.
+
+Permission announcement follows the same rule in the other direction: the fact
+that a request is waiting is presentation, and the authority that answers it is
+Sessions'. Saying where a request is answered moves no route, opens no drawer and
+takes no focus. And a frozen prefix reads none of it — not the running entry, not
+the waiting question, not the pause capability — because a prefix is a reading of
+the file and the live head is not part of that file's past.
+
 **Terminal input is an owned stream, and that ownership is what makes leaving
 possible.** A runtime supplies the REPL's input as an Effection `Stream` whose
 resource holds the native reader, and it registers that resource's release before
