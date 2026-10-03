@@ -17,8 +17,10 @@ import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import {
   ensure,
+  Err,
   type Operation,
   resource,
+  type Result,
   scoped,
   sleep,
   spawn,
@@ -29,10 +31,14 @@ import {
   withResolvers,
 } from "effection";
 
-import { HISTORY_ROWS, layout, NARROW, profileFor } from "../src/repl/layout.ts";
-import type { ReplBounds, ReplRegion, ReplSemanticFrame, ReplSurface } from "../src/repl/layout.ts";
-import { resolvePointer, snapshotRender, useReplRenderer } from "../src/repl/renderer.ts";
-import type { ReplRendered, ReplRenderSnapshot } from "../src/repl/renderer.ts";
+import { HISTORY_ROWS, NARROW, profileFor } from "../src/repl/layout.ts";
+import type { ReplBounds, ReplRegion } from "../src/repl/layout.ts";
+import { ReplRenderError, resolvePointer, useReplRenderer } from "../src/repl/renderer.ts";
+import type { ReplMeasured, ReplRendered, ReplRenderer } from "../src/repl/renderer.ts";
+import { createGrid, useCommitter } from "./fixtures/repl/presentation.ts";
+import type { Drawn, TerminalGrid } from "./fixtures/repl/presentation.ts";
+import { close, fixed, open, percent, text } from "@bomb.sh/tty";
+import type { Op } from "@bomb.sh/tty";
 import { nearestCommonAncestor, ReplClock, useReplFrames } from "../src/repl/frame.ts";
 import type { ReplFrameSubscription } from "../src/repl/frame.ts";
 import { replModes, useReplScreen } from "../src/repl/screen.ts";
@@ -46,8 +52,8 @@ import type { ReplDispatched, ReplTree } from "../src/repl/reconcile.ts";
 import type { ReplInputEvent } from "../src/repl/description.ts";
 import {
   EMPTY,
-  fixtureDescriptions,
-  fixtureSurface,
+  fixturePairs,
+  STANDING_ACTIONS,
   type ReplFixtureState,
   type Surfaced,
 } from "./fixtures/repl/surface.ts";
@@ -68,7 +74,12 @@ const FILLED: ReplFixtureState = {
     { marker: "close:__root__", label: "root close" },
   ],
   drawer: undefined,
+  drawerLines: ["Close"],
+  actions: STANDING_ACTIONS,
+  windowed: false,
   draft: "",
+  offsets: {},
+  capture: "capture",
 };
 
 /** Let every task that is ready take its turn. */
@@ -78,16 +89,16 @@ function* settled(): Operation<void> {
   yield* sleep(0);
 }
 
-function bounds(frame: ReplSemanticFrame, region: ReplRegion): ReplBounds | undefined {
-  return frame.regions.find((placed) => placed.region === region)?.bounds;
+function bounds(frame: Drawn<Surfaced>, region: ReplRegion): ReplBounds | undefined {
+  return frame.boundsOfRegion(region);
 }
 
-function regions(frame: ReplSemanticFrame): ReplRegion[] {
-  return frame.regions.map((placed) => placed.region);
+function regions(frame: Drawn<Surfaced>): string[] {
+  return [...frame.regions];
 }
 
-function textsIn(frame: ReplSemanticFrame, region: ReplRegion): string[] {
-  return frame.cells.filter((cell) => cell.region === region).map((cell) => cell.text);
+function textsIn(frame: Drawn<Surfaced>, region: ReplRegion): string[] {
+  return frame.inRegion(region).map((key) => frame.cellOf(key) ?? "");
 }
 
 function committed(outcome: { ok: boolean; error?: Error }): void {
@@ -143,56 +154,81 @@ function isSurfaced(value: unknown): value is Surfaced {
   );
 }
 
-/** Mount one fixture state and hand back the tree and its surface. */
+/**
+ * Commit one fixture state at one size, through the product's own pipeline.
+ *
+ * Measured, admitted, reconciled and drawn: the four steps in the order the
+ * screen itself does them. What comes back is the frame that was drawn, so every
+ * number asserted against it is a number the engine gave.
+ */
 function* mounted(
   state: ReplFixtureState,
-): Operation<{ tree: ReplTree<Surfaced>; surface: ReplSurface }> {
+  size: ReplTerminalSize = { columns: 160, rows: 36 },
+): Operation<{
+  readonly tree: ReplTree<Surfaced>;
+  readonly frame: Drawn<Surfaced>;
+  readonly grid: TerminalGrid;
+  readonly renderer: ReplRenderer;
+}> {
+  const renderer = yield* useReplRenderer(size);
   const tree = yield* useReplTree<Surfaced>();
-  committed(yield* tree.apply(fixtureDescriptions(state)));
-  return { tree, surface: fixtureSurface(tree, state) };
-}
-
-/** A render input for one laid-out frame and one mounted tree. */
-function input(frame: ReplSemanticFrame, tree: ReplTree<Surfaced>): ReplRenderSnapshot {
-  return snapshotRender({
-    frame,
-    tree: tree.frame().id,
-    mounted: tree.mounted(),
-    deltaTime: 0,
-    pointer: undefined,
+  const grid = createGrid();
+  const committer = yield* useCommitter<Surfaced>({
+    size,
+    tree,
+    renderer,
+    source: fixturePairs(state, size),
+    grid,
   });
+  return { tree, frame: yield* committer.commit(), grid, renderer };
 }
 
-/** Render one frame, failing the test if the renderer refused it. */
-function* drawn(
-  renderer: {
-    render(
-      snapshot: ReplRenderSnapshot,
-    ): Operation<{ ok: boolean; value?: ReplRendered; error?: Error }>;
-  },
-  snapshot: ReplRenderSnapshot,
-): Operation<ReplRendered> {
-  const outcome = yield* renderer.render(snapshot);
-  if (!outcome.ok || outcome.value === undefined) {
-    throw outcome.error ?? new Error("the renderer refused a frame this test expects it to draw");
-  }
-  return outcome.value;
+/**
+ * A committer one test can drive across several states and sizes.
+ *
+ * The same engine pair and the same tree throughout, because what a later frame
+ * writes is the difference from the frame before it — which is the whole subject
+ * of the isolation and stale-text rows.
+ */
+function* driving(size: ReplTerminalSize): Operation<{
+  readonly tree: ReplTree<Surfaced>;
+  readonly renderer: ReplRenderer;
+  readonly grid: TerminalGrid;
+  commit(state: ReplFixtureState, at?: ReplTerminalSize): Operation<Drawn<Surfaced>>;
+}> {
+  const renderer = yield* useReplRenderer(size);
+  const tree = yield* useReplTree<Surfaced>();
+  const grid = createGrid();
+  return {
+    tree,
+    renderer,
+    grid,
+    *commit(state, at = size) {
+      const committer = yield* useCommitter<Surfaced>({
+        size: at,
+        tree,
+        renderer,
+        source: fixturePairs(state, at),
+        grid,
+      });
+      return yield* committer.commit();
+    },
+  };
 }
 
 describe("REPL terminal: responsive semantic frames", () => {
   it("F1: a wide frame carries the sidebar, transcript, inspection and fixed footer", function* () {
-    const { tree, surface } = yield* mounted(FILLED);
-    const frame = layout({ columns: 160, rows: 36 }, surface);
+    const { tree, frame } = yield* mounted(FILLED, { columns: 160, rows: 36 });
 
-    expect(frame.profile).toBe("wide");
+    expect(frame.manifest.profile).toBe("wide");
     expect(regions(frame)).toEqual(["sidebar", "transcript", "inspection", "footer"]);
     expect(bounds(frame, "sidebar")).toEqual({ x: 0, y: 0, width: 32, height: 29 });
     expect(bounds(frame, "transcript")).toEqual({ x: 32, y: 0, width: 92, height: 29 });
     expect(bounds(frame, "inspection")).toEqual({ x: 124, y: 0, width: 36, height: 29 });
     // Full width and pinned to the bottom, at every size.
     expect(bounds(frame, "footer")).toEqual({ x: 0, y: 29, width: 160, height: 7 });
-    expect(frame.historyRows).toHaveLength(HISTORY_ROWS);
-    expect(frame.refusal).toBeUndefined();
+    expect(frame.manifest.history.rows).toHaveLength(HISTORY_ROWS);
+    expect(frame.manifest.profile).not.toBe("too-small");
 
     expect(textsIn(frame, "sidebar")).toEqual([
       "Sessions",
@@ -207,35 +243,46 @@ describe("REPL terminal: responsive semantic frames", () => {
       "Decision: approve",
     ]);
     expect(textsIn(frame, "inspection")).toEqual(["plan = ship it", "response = approve"]);
-    expect(textsIn(frame, "footer")).toEqual(["root 1", "root close", "> "]);
-    expect(tree.mounted()).toHaveLength(frame.cells.length);
+    // The footer's own mounted rows: the action row's controls and the draft.
+    // The History band is not among them — its labels come from the model rather
+    // than from a node, so it is text the frame places and no row contributed.
+    // Where those five rows land is asserted on its own, below.
+    expect(textsIn(frame, "footer")).toEqual(["[history]", "[exit]", "> "]);
+    expect(tree.mounted()).toHaveLength(frame.keys.length);
   });
 
   it("F1: a medium frame keeps every region, narrower", function* () {
-    const { surface } = yield* mounted(FILLED);
-    const frame = layout({ columns: 120, rows: 30 }, surface);
+    const { frame } = yield* mounted(FILLED, { columns: 120, rows: 30 });
 
-    expect(frame.profile).toBe("medium");
+    expect(frame.manifest.profile).toBe("medium");
     expect(regions(frame)).toEqual(["sidebar", "transcript", "inspection", "footer"]);
     expect(bounds(frame, "sidebar")).toEqual({ x: 0, y: 0, width: 28, height: 23 });
     expect(bounds(frame, "transcript")).toEqual({ x: 28, y: 0, width: 64, height: 23 });
     expect(bounds(frame, "inspection")).toEqual({ x: 92, y: 0, width: 28, height: 23 });
     expect(bounds(frame, "footer")).toEqual({ x: 0, y: 23, width: 120, height: 7 });
-    expect(frame.historyRows).toHaveLength(HISTORY_ROWS);
+    expect(frame.manifest.history.rows).toHaveLength(HISTORY_ROWS);
   });
 
   it("F1: a narrow frame routes one content surface and keeps the drawer and footer", function* () {
-    const { surface } = yield* mounted({ ...FILLED, drawer: "Binding: plan" });
-    const frame = layout(NARROW, surface);
+    const { frame } = yield* mounted({ ...FILLED, drawer: "Binding: plan" }, NARROW);
 
-    expect(frame.profile).toBe("narrow");
+    expect(frame.manifest.profile).toBe("narrow");
     expect(regions(frame)).toEqual(["content", "drawer", "footer"]);
     expect(bounds(frame, "content")).toEqual({ x: 0, y: 0, width: 72, height: 13 });
     // The same footer contract as the wide frame: full width, five History rows.
     expect(bounds(frame, "footer")).toEqual({ x: 0, y: 13, width: 72, height: 7 });
-    expect(frame.historyRows).toHaveLength(HISTORY_ROWS);
+    expect(frame.manifest.history.rows).toHaveLength(HISTORY_ROWS);
     expect(bounds(frame, "drawer")).toEqual({ x: 9, y: 1, width: 54, height: 11 });
-    expect(textsIn(frame, "drawer")).toEqual(["Binding: plan", "Close"]);
+    // Its title, both window controls, its one content row and the way out.
+    // The two window controls are new (#875 R1): every drawer scrolls, and they
+    // sit outside the content they move.
+    expect(textsIn(frame, "drawer")).toEqual([
+      "Binding: plan",
+      "[^ earlier]",
+      "Close",
+      "[v later]",
+      "[close]",
+    ]);
     // One surface, the routed one, and nothing from the others.
     expect(textsIn(frame, "content")).toEqual([
       "Entries",
@@ -251,74 +298,69 @@ describe("REPL terminal: responsive semantic frames", () => {
     const routes = [
       { route: "sessions", shown: ["Sessions", "kf39sla2"], hidden: "entry-1" },
       {
-        route: "transcript",
-        shown: ["About to evaluate: the plan", "Decision: approve"],
+        route: "entries",
+        shown: ["Entries", "entry-1", "entry-1/component", "entry-1/generated"],
         hidden: "kf39sla2",
       },
     ] as const;
 
     for (const { route, shown, hidden } of routes) {
-      const state: ReplFixtureState = { ...FILLED, route };
-      const { tree, surface } = yield* mounted(state);
-      const frame = layout(NARROW, surface);
-      const renderer = yield* useReplRenderer(NARROW);
-      const rendered = yield* drawn(renderer, input(frame, tree));
+      yield* scoped(function* (): Operation<void> {
+        const state: ReplFixtureState = { ...FILLED, route };
+        const { tree, frame } = yield* mounted(state, NARROW);
 
-      expect(textsIn(frame, "content")).toEqual(shown);
+        // Only the routed surface's rows.
+        expect(textsIn(frame, "content")).toEqual(shown);
 
-      // The other surfaces are still mounted — routing is presentation — and
-      // that is exactly why the proof has to be that they are not in the frame
-      // and not in its map.
-      const inactive = tree.mounted().filter((id) => {
-        const key = tree.keyOf(id);
-        return key !== undefined && key.endsWith(hidden);
-      });
-      expect(inactive.length).toBeGreaterThan(0);
-      for (const node of inactive) {
-        expect(frame.cells.map((cell) => cell.node)).not.toContain(node);
-        expect(rendered.map.targets.map((target) => target.node)).not.toContain(node);
-        expect(rendered.map.nodeOf(`content:${node}`)).toBeUndefined();
-      }
+        // The other surface is **absent**, not hidden. A narrow frame has one
+        // region, so a row of the surface it is not showing would be mounted and
+        // focusable with nowhere to be drawn — which is why it is not described
+        // at all rather than described and left out of the frame.
+        const other = tree.mounted().filter((id) => {
+          const key = tree.keyOf(id);
+          return key !== undefined && key.endsWith(hidden);
+        });
+        expect(other).toEqual([]);
+        expect(frame.keys.filter((key) => key.endsWith(hidden))).toEqual([]);
 
-      // And nowhere a pointer can land reaches one of them.
-      for (let row = 0; row < NARROW.rows; row += 1) {
-        for (let column = 0; column < NARROW.columns; column += 8) {
-          const pointer = resolvePointer(rendered, { column, row });
-          if (pointer !== undefined) {
-            expect(inactive).not.toContain(pointer.target);
+        // And nowhere a pointer can land reaches one of them.
+        for (let row = 0; row < NARROW.rows; row += 1) {
+          for (let column = 0; column < NARROW.columns; column += 8) {
+            const pointer = resolvePointer(frame.rendered, { column, row });
+            if (pointer !== undefined) {
+              expect(tree.keyOf(pointer.target)?.endsWith(hidden) ?? false).toBe(false);
+            }
           }
         }
-      }
+      });
     }
   });
 
   it("F1: below the minimum the frame is an explicit refusal with nothing targetable", function* () {
-    const { surface } = yield* mounted(FILLED);
-
     for (const size of [
       { columns: 71, rows: 20 },
       { columns: 72, rows: 19 },
       { columns: 40, rows: 10 },
     ]) {
-      const frame = layout(size, surface);
-      expect(profileFor(size)).toBe("too-small");
-      expect(frame.profile).toBe("too-small");
-      expect(frame.refusal).toContain("at least 72x20");
-      expect(frame.refusal).toContain(`${size.columns}x${size.rows}`);
-      expect(regions(frame)).toEqual(["refusal"]);
-      // A control that is not in the frame cannot be in its target map either.
-      expect(frame.cells).toEqual([]);
-      expect(frame.historyRows).toHaveLength(HISTORY_ROWS);
+      yield* scoped(function* (): Operation<void> {
+        const { frame } = yield* mounted(FILLED, size);
+        expect(profileFor(size)).toBe("too-small");
+        expect(frame.manifest.profile).toBe("too-small");
+        expect(regions(frame)).toEqual(["refusal"]);
+        // A control that is not in the frame cannot be in its target map either.
+        expect(frame.targets).toEqual([]);
+        expect(frame.keys).toEqual([]);
+        expect(frame.manifest.history.rows).toHaveLength(HISTORY_ROWS);
+      });
     }
   });
 
   it("F1: Sessions says so when there is nothing in it", function* () {
-    const { surface } = yield* mounted(EMPTY);
-    const frame = layout({ columns: 160, rows: 36 }, surface);
+    const { frame } = yield* mounted(EMPTY, { columns: 160, rows: 36 });
 
     expect(textsIn(frame, "sidebar")).toEqual(["Sessions: none yet", "Entries"]);
     expect(textsIn(frame, "transcript")).toEqual([]);
-    expect(frame.refusal).toBeUndefined();
+    expect(frame.manifest.profile).toBe("wide");
   });
 
   it("F1: compact geometry groups marker labels and keeps every marker's identity", function* () {
@@ -326,178 +368,221 @@ describe("REPL terminal: responsive semantic frames", () => {
       marker: `yield:entry-1:${index}`,
       label: `entry-1 yield ${index}`,
     }));
-    const { surface } = yield* mounted({ ...FILLED, history });
-
-    const wide = layout({ columns: 160, rows: 36 }, surface);
-    const narrow = layout(NARROW, surface);
+    const wide = (yield* mounted({ ...FILLED, history }, { columns: 160, rows: 36 })).frame;
+    const narrow = yield* scoped(function* () {
+      return (yield* mounted({ ...FILLED, history }, NARROW)).frame;
+    });
 
     // Every marker survives at both sizes, once each, under its own name.
     for (const frame of [wide, narrow]) {
-      expect(frame.markers.map((marker) => marker.marker)).toEqual(
+      expect(frame.manifest.history.markers.map((marker) => marker.marker)).toEqual(
         history.map((one) => one.marker),
       );
-      expect(frame.historyRows).toHaveLength(HISTORY_ROWS);
+      expect(frame.manifest.history.rows).toHaveLength(HISTORY_ROWS);
     }
     // Wide has room for its own labels; narrow shares them.
-    expect(wide.markers.every((marker) => marker.grouped.length === 0)).toBe(true);
-    expect(narrow.markers.some((marker) => marker.grouped.length > 0)).toBe(true);
-    const shared = narrow.markers.filter((marker) => marker.label === narrow.markers[0].label);
+    expect(wide.manifest.history.markers.every((marker) => marker.grouped.length === 0)).toBe(true);
+    expect(narrow.manifest.history.markers.some((marker) => marker.grouped.length > 0)).toBe(true);
+    const shared = narrow.manifest.history.markers.filter(
+      (marker) => marker.label === narrow.manifest.history.markers[0].label,
+    );
     expect(shared.length).toBeGreaterThan(1);
     // A grouped marker names the others it shares a label with, so the identity
     // of a compact position is still recoverable.
-    expect(narrow.markers[0].grouped).toEqual(shared.slice(1).map((marker) => marker.marker));
-    expect(narrow.markers[0].label).toContain("+");
+    expect(narrow.manifest.history.markers[0].grouped).toEqual(
+      shared.slice(1).map((marker) => marker.marker),
+    );
+    expect(narrow.manifest.history.markers[0].label).toContain("+");
   });
 
   it("F1: resizing through every profile keeps selection, nodes and action identity", function* () {
-    const { tree, surface } = yield* mounted(FILLED);
-    const before = tree.mounted();
-    const focused = tree.focused();
-    const frameId = tree.frame().id;
-
+    const driver = yield* driving({ columns: 160, rows: 36 });
     const sizes = [
       { columns: 160, rows: 36 },
       { columns: 120, rows: 30 },
       NARROW,
       { columns: 40, rows: 10 },
     ];
-    const laid = sizes.map((size) => layout(size, surface));
+    const first = yield* driver.commit(FILLED, sizes[0]);
+    const focused = driver.tree.focused();
+    /** Which node each key is mounted under, for one frame. */
+    const identities = (frame: Drawn<Surfaced>): Map<string, string> =>
+      new Map(frame.keys.map((key) => [key, frame.nodeOf(key) ?? ""]));
+    const before = identities(first);
+    expect(before.size).toBeGreaterThan(0);
 
-    expect(laid.map((frame) => frame.profile)).toEqual(["wide", "medium", "narrow", "too-small"]);
-    // Laying out is presentation: it reads the tree and tells it nothing.
-    expect(tree.mounted()).toEqual(before);
-    expect(tree.focused()).toBe(focused);
-    expect(tree.frame().id).toBe(frameId);
+    // Across the three drawable profiles, a smaller frame admits fewer rows —
+    // that is what measured admission is for. What resizing must not do is
+    // *rename* anything: every row that is still shown is the same node it
+    // was, so the selection and the focus survive the move.
+    const profiles = [first.manifest.profile];
+    for (const size of sizes.slice(1, 3)) {
+      driver.renderer.resize(size);
+      const frame = yield* driver.commit(FILLED, size);
+      profiles.push(frame.manifest.profile);
 
-    // And the same control still means the same thing.
-    for (const _frame of laid) {
-      const outcome = acted(yield* tree.dispatch({ kind: "key", key: "Enter" }));
+      const now = identities(frame);
+      const shared = [...now.keys()].filter((key) => before.has(key));
+      expect(shared.length).toBeGreaterThan(0);
+      for (const key of shared) {
+        expect([key, now.get(key)]).toEqual([key, before.get(key)]);
+      }
+      expect(driver.tree.focused()).toBe(focused);
+      // And the same control still means the same thing.
+      const outcome = acted(yield* driver.tree.dispatch({ kind: "key", key: "Enter" }));
       expect(outcome.outcome).toBe("action");
       if (outcome.outcome === "action") {
         expect(outcome.action).toEqual({ kind: "submit" });
       }
     }
+
+    // Below the minimum there is nothing to keep: that frame draws its refusal
+    // and places no control, so the tree it commits holds no control either.
+    driver.renderer.resize(sizes[3]);
+    const refused = yield* driver.commit(FILLED, sizes[3]);
+    profiles.push(refused.manifest.profile);
+    expect(profiles).toEqual(["wide", "medium", "narrow", "too-small"]);
+    expect(refused.targets).toEqual([]);
+
+    // And it recovers: growing the window back shows exactly the rows it
+    // showed before. Their node ids are new, because the refusal unmounted
+    // them — a screen that places nothing holds nothing — so what recovery
+    // means here is the same screen, not the same nodes.
+    driver.renderer.resize(sizes[0]);
+    const back = yield* driver.commit(FILLED, sizes[0]);
+    expect([...identities(back).keys()].sort()).toEqual([...before.keys()].sort());
+    expect(back.targets.length).toBeGreaterThan(0);
   });
 
   it("UI5: the History band is placed in the footer, not at the frame's origin", function* () {
-    const { surface } = yield* mounted(FILLED);
-
     for (const size of [{ columns: 160, rows: 36 }, NARROW]) {
-      const frame = layout(size, surface);
-      const footer = bounds(frame, "footer");
-      expect(footer).toBeDefined();
-      if (footer === undefined) {
-        throw new Error("every drawable frame has a footer");
-      }
+      yield* scoped(function* (): Operation<void> {
+        const { frame, grid } = yield* mounted(FILLED, size);
+        const footer = bounds(frame, "footer");
+        expect(footer).toBeDefined();
+        if (footer === undefined) {
+          throw new Error("every drawable frame has a footer");
+        }
 
-      // Five rows, in the footer, between the one action row above them and the
-      // draft below them. Stated as geometry rather than as a count: a band with
-      // five rows and nowhere to put them is what drew over the sidebar.
-      expect(frame.historyRows).toHaveLength(HISTORY_ROWS);
-      expect(frame.historyBounds).toEqual({
-        x: footer.x,
-        y: footer.y + 1,
-        width: footer.width,
-        height: HISTORY_ROWS,
+        // Five rows, in the footer, between the one action row above them and
+        // the draft below them. Read from where the band's own rows were
+        // actually drawn: a band with five rows and nowhere to put them is what
+        // drew over the sidebar.
+        expect(frame.manifest.history.rows).toHaveLength(HISTORY_ROWS);
+        const placed = Array.from({ length: HISTORY_ROWS }, (_unused, row) =>
+          frame.regionOf(`box:band:${row}`),
+        );
+        for (const [row, at] of placed.entries()) {
+          expect(at).toEqual({
+            x: footer.x,
+            y: footer.y + 1 + row,
+            width: footer.width,
+            height: 1,
+          });
+          // Inside the footer, and never at the origin, which is the sidebar's.
+          expect(at?.y).toBeGreaterThan(footer.y);
+          expect(at?.y).toBeLessThan(footer.y + footer.height - 1);
+        }
+
+        // Each row is the full width, so a band that gets shorter cannot leave
+        // the tail of the position that used to be there.
+        for (const row of frame.manifest.history.rows) {
+          expect(row).toHaveLength(size.columns);
+        }
+        // And what the terminal actually holds on those rows is the band.
+        const band = grid.textIn({
+          x: footer.x,
+          y: footer.y + 1,
+          width: footer.width,
+          height: HISTORY_ROWS,
+        });
+        expect(band[0]).toContain("root 1");
       });
-      // Inside the footer, and never at the origin, which is the sidebar's.
-      expect(frame.historyBounds?.y).toBeGreaterThan(footer.y);
-      expect((frame.historyBounds?.y ?? 0) + HISTORY_ROWS).toBeLessThan(footer.y + footer.height);
-
-      // Each row is the full width, so a band that gets shorter cannot leave the
-      // tail of the position that used to be there.
-      for (const row of frame.historyRows) {
-        expect(row).toHaveLength(size.columns);
-      }
     }
   });
 
   it("UI5: a refusal has no band to place and no cell to aim at", function* () {
-    const { surface } = yield* mounted(FILLED);
-    const frame = layout({ columns: 40, rows: 10 }, surface);
+    const { frame, grid } = yield* mounted(FILLED, { columns: 40, rows: 10 });
 
-    expect(frame.profile).toBe("too-small");
-    // No rectangle at all rather than an empty one: a renderer given a zero
-    // rectangle draws five rows into it.
-    expect(frame.historyBounds).toBeUndefined();
-    expect(frame.cells).toEqual([]);
-    // Both ways out of a window that cannot be drawn in.
-    expect(frame.refusal).toContain("larger");
-    expect(frame.refusal).toContain("Escape");
+    expect(frame.manifest.profile).toBe("too-small");
+    // No band row placed at all rather than an empty rectangle: a renderer given
+    // a zero rectangle draws five rows into it.
+    expect(frame.regionOf("box:band:0")).toBeUndefined();
+    // The sentence and nothing else. It is the frame's own — below the minimum
+    // there is no row to describe — so it is read off the terminal rather than
+    // off a mounted node, and nothing on this screen is a target.
+    expect(frame.keys).toEqual([]);
+    expect(frame.targets).toEqual([]);
+    const shown = grid.rows().join(" ");
+    expect(shown).toContain("larger");
+    expect(shown).toContain("Escape");
   });
 
   it("UI5: every visible action has its own geometry in the frame's target map", function* () {
-    const { tree, surface } = yield* mounted(FILLED);
-    const frame = layout({ columns: 160, rows: 36 }, surface);
+    const { frame } = yield* mounted(FILLED, { columns: 160, rows: 36 });
     const footer = bounds(frame, "footer");
     if (footer === undefined) {
       throw new Error("every drawable frame has a footer");
     }
+    const { map } = frame.rendered;
 
-    yield* scoped(function* (): Operation<void> {
-      const renderer = yield* useReplRenderer({ columns: 160, rows: 36 });
-      const rendered = yield* drawn(renderer, input(frame, tree));
-
-      // The action row's controls sit side by side on one row, each as wide as
-      // its own label — so a pointer on one reaches that one and not its
-      // neighbour. Stacked rows would have cost the band and the draft theirs.
-      const reachable = frame.cells.filter((cell) => cell.region === "footer" && cell.targetable);
-      // The draft owns the last footer row and shares it with nothing, so it is
-      // not one of the action row's cells even though a pointer reaches it too.
-      const draft = reachable.filter((cell) => cell.bounds.y === footer.y + footer.height - 1);
-      expect(draft).toHaveLength(1);
-      expect(rendered.map.boundsOf(draft[0].id)).toEqual(draft[0].bounds);
-
-      const placed = reachable.filter((cell) => cell.bounds.y === footer.y);
-      expect(placed.length).toBeGreaterThan(1);
-      expect(placed.length + draft.length).toBe(reachable.length);
-      for (const cell of placed) {
-        expect(cell.bounds.y).toBe(footer.y);
-        expect(cell.bounds.height).toBe(1);
-        // What the engine measured, not what layout asked for: the map a pointer
-        // is answered from is built from the measurement.
-        expect(rendered.map.boundsOf(cell.id)).toEqual(cell.bounds);
-        // And every column of it answers with this node and no other.
-        for (let x = cell.bounds.x; x < cell.bounds.x + cell.bounds.width; x += 1) {
-          expect([x, rendered.map.at(x, cell.bounds.y)]).toEqual([x, cell.node]);
-        }
-      }
-
-      // No two of them overlap, which is what makes the column a pointer lands on
-      // an unambiguous answer.
-      const sorted = [...placed].sort((one, other) => one.bounds.x - other.bounds.x);
-      for (let at = 1; at < sorted.length; at += 1) {
-        const left = sorted[at - 1].bounds;
-        expect(sorted[at].bounds.x).toBeGreaterThanOrEqual(left.x + left.width);
-      }
-
-      // The band is not a control: it is read, and the positions it labels are
-      // selected in the History drawer. So no column of it answers a pointer.
-      const band = frame.historyBounds;
-      if (band === undefined) {
-        throw new Error("a drawable frame places its band");
-      }
-      for (let y = band.y; y < band.y + band.height; y += 1) {
-        expect([y, rendered.map.at(0, y)]).toEqual([y, undefined]);
-      }
+    // The action row's controls sit side by side on one row, each as wide as
+    // its own label — so a pointer on one reaches that one and not its
+    // neighbour. Stacked rows would have cost the band and the draft theirs.
+    const reachable = frame.targets.filter((target) => {
+      const at = target.bounds;
+      return at.y >= footer.y && at.y < footer.y + footer.height;
     });
+    // The draft owns the last footer row and shares it with nothing, so it is
+    // not one of the action row's controls even though a pointer reaches it.
+    const draft = reachable.filter((one) => one.bounds.y === footer.y + footer.height - 1);
+    expect(draft).toHaveLength(1);
+    expect(map.boundsOf(draft[0].id)).toEqual(draft[0].bounds);
+
+    const placed = reachable.filter((one) => one.bounds.y === footer.y);
+    expect(placed.length).toBeGreaterThan(1);
+    expect(placed.length + draft.length).toBe(reachable.length);
+    for (const one of placed) {
+      expect(one.bounds.height).toBe(1);
+      // And every column of it answers with this node and no other.
+      for (let x = one.bounds.x; x < one.bounds.x + one.bounds.width; x += 1) {
+        expect([x, map.at(x, one.bounds.y)]).toEqual([x, one.node]);
+      }
+    }
+
+    // No two of them overlap, which is what makes the column a pointer lands
+    // on an unambiguous answer.
+    const sorted = [...placed].sort((one, other) => one.bounds.x - other.bounds.x);
+    for (let at = 1; at < sorted.length; at += 1) {
+      const left = sorted[at - 1].bounds;
+      expect(sorted[at].bounds.x).toBeGreaterThanOrEqual(left.x + left.width);
+    }
+
+    // The band is not a control: it is read, and the positions it labels are
+    // selected in the History drawer. So no column of it answers a pointer.
+    for (let row = 0; row < HISTORY_ROWS; row += 1) {
+      const at = frame.regionOf(`box:band:${row}`);
+      expect(at).toBeDefined();
+      expect([row, map.at(0, at?.y ?? -1)]).toEqual([row, undefined]);
+    }
   });
 
   it("F1: a pointer against a control the refusal hides reaches nothing", function* () {
-    const { tree, surface } = yield* mounted(FILLED);
-    const renderer = yield* useReplRenderer(NARROW);
-
-    const visible = yield* drawn(renderer, input(layout(NARROW, surface), tree));
-    const footer = visible.map.targets.find((target) => tree.keyOf(target.node) === "footer:input");
+    const driver = yield* driving(NARROW);
+    const visible = yield* driver.commit(FILLED, NARROW);
+    const footer = visible.targets.find(
+      (target) => driver.tree.keyOf(target.node) === "footer:input",
+    );
     expect(footer).toBeDefined();
     if (footer === undefined) {
       throw new Error("the narrow frame draws the footer input");
     }
     // The same place, now under a refusal.
-    const refused = yield* drawn(renderer, input(layout({ columns: 40, rows: 10 }, surface), tree));
-    expect(refused.map.targets).toEqual([]);
+    driver.renderer.resize({ columns: 40, rows: 10 });
+    const refused = yield* driver.commit(FILLED, { columns: 40, rows: 10 });
+    expect(refused.targets).toEqual([]);
     expect(
-      resolvePointer(refused, { column: footer.bounds.x, row: footer.bounds.y }),
+      resolvePointer(refused.rendered, { column: footer.bounds.x, row: footer.bounds.y }),
     ).toBeUndefined();
   });
 });
@@ -792,76 +877,76 @@ describe("REPL terminal: frame and renderer ownership", () => {
   });
 
   it("H1: rendered bytes are copied out before the engine reuses its view", function* () {
-    const { tree, surface } = yield* mounted(FILLED);
-    const renderer = yield* useReplRenderer(NARROW);
-
-    const narrow = yield* drawn(renderer, input(layout(NARROW, surface), tree));
-    const held = narrow.output;
+    const driver = yield* driving(NARROW);
+    const narrow = yield* driver.commit(FILLED, NARROW);
+    const held = narrow.rendered.output;
     const witnessed = Array.from(held);
     expect(witnessed.length).toBeGreaterThan(0);
 
-    // A second render writes over the engine's output region, and a resize grows
-    // its memory, which detaches every view into the old buffer.
-    yield* drawn(renderer, input(layout({ columns: 120, rows: 30 }, surface), tree));
-    renderer.resize({ columns: 160, rows: 36 });
-    yield* drawn(renderer, input(layout({ columns: 160, rows: 36 }, surface), tree));
+    // A second render writes over the engine's output region, and a resize
+    // grows its memory, which detaches every view into the old buffer.
+    driver.renderer.resize({ columns: 120, rows: 30 });
+    yield* driver.commit(FILLED, { columns: 120, rows: 30 });
+    driver.renderer.resize({ columns: 160, rows: 36 });
+    yield* driver.commit(FILLED, { columns: 160, rows: 36 });
 
     expect(Array.from(held)).toEqual(witnessed);
   });
 
   it("H1: what a caller does to bytes it holds cannot change a later render", function* () {
-    const { tree, surface } = yield* mounted(FILLED);
     // The same three frames through two renderers. One caller scribbles over
     // every result it is handed; the other leaves them alone. A renderer whose
     // result aliased the engine's memory would have the scribbling corrupt the
     // state the next frame is diffed against, and the two sequences would part.
-    const sequence = [
-      layout(NARROW, surface),
-      layout({ columns: 120, rows: 30 }, surface),
-      layout(NARROW, surface),
-    ];
+    const sequence: readonly ReplTerminalSize[] = [NARROW, { columns: 120, rows: 30 }, NARROW];
 
     const tampered: number[][] = [];
-    const scribbling = yield* useReplRenderer(NARROW);
-    for (const frame of sequence) {
-      const rendered = yield* drawn(scribbling, input(frame, tree));
-      tampered.push(Array.from(rendered.output));
-      rendered.output.fill(0);
-    }
+    yield* scoped(function* (): Operation<void> {
+      const driver = yield* driving(NARROW);
+      for (const size of sequence) {
+        driver.renderer.resize(size);
+        const rendered = (yield* driver.commit(FILLED, size)).rendered;
+        tampered.push(Array.from(rendered.output));
+        rendered.output.fill(0);
+      }
+    });
 
     const clean: number[][] = [];
-    const untouched = yield* useReplRenderer(NARROW);
-    for (const frame of sequence) {
-      const rendered = yield* drawn(untouched, input(frame, tree));
-      clean.push(Array.from(rendered.output));
-    }
+    yield* scoped(function* (): Operation<void> {
+      const driver = yield* driving(NARROW);
+      for (const size of sequence) {
+        driver.renderer.resize(size);
+        clean.push(Array.from((yield* driver.commit(FILLED, size)).rendered.output));
+      }
+    });
 
     expect(tampered[0].length).toBeGreaterThan(0);
     expect(tampered).toEqual(clean);
   });
 
-  it("H1: a frame laid out before a removal draws only what is still mounted", function* () {
-    const { tree, surface } = yield* mounted(FILLED);
-    const renderer = yield* useReplRenderer({ columns: 160, rows: 36 });
-    // Laid out while the row was there.
-    const frame = layout({ columns: 160, rows: 36 }, surface);
-    const going = tree.mounted().find((id) => tree.keyOf(id) === "scope:entry-1/generated");
+  it("H1: a frame drawn after a removal draws only what is still mounted", function* () {
+    const driver = yield* driving({ columns: 160, rows: 36 });
+    const before = yield* driver.commit(FILLED, { columns: 160, rows: 36 });
+    const going = driver.tree
+      .mounted()
+      .find((id) => driver.tree.keyOf(id) === "scope:entry-1/generated");
     if (going === undefined) {
       throw new Error("the generated scope row is mounted before the removal");
     }
-    expect(frame.cells.map((cell) => cell.node)).toContain(going);
+    expect(before.keys).toContain("scope:entry-1/generated");
 
-    // And the tree moved on before anything was drawn.
-    committed(yield* tree.apply(fixtureDescriptions({ ...FILLED, scopes: ["entry-1/component"] })));
-    expect(tree.mounted()).not.toContain(going);
+    // The reading loses that row, and the next frame is committed from it.
+    const after = yield* driver.commit(
+      { ...FILLED, scopes: ["entry-1/component"] },
+      { columns: 160, rows: 36 },
+    );
+    expect(driver.tree.mounted()).not.toContain(going);
 
-    const rendered = yield* drawn(renderer, input(frame, tree));
-
-    // The mounted tree is the only source of renderable nodes: a cell naming a
-    // node that has gone is not drawn, and is therefore not a target either.
-    expect(rendered.map.targets.map((target) => target.node)).not.toContain(going);
-    expect(rendered.map.nodeOf(`sidebar:${going}`)).toBeUndefined();
-    expect(rendered.map.targets.length).toBeGreaterThan(0);
+    // The mounted tree is the only source of renderable nodes: a row that has
+    // gone is not drawn, and is therefore not a target either.
+    expect(after.rendered.map.targets.map((target) => target.node)).not.toContain(going);
+    expect(after.keys).not.toContain("scope:entry-1/generated");
+    expect(after.rendered.map.targets.length).toBeGreaterThan(0);
   });
 
   it("H1: capacity replacement redraws the identical logical frame", function* () {
@@ -873,28 +958,34 @@ describe("REPL terminal: frame and renderer ownership", () => {
       name: `binding-${index}`,
       value: `a fairly long recorded value for binding number ${index}`,
     }));
-    const { tree, surface } = yield* mounted({ ...FILLED, bindings });
-    const frame = layout({ columns: 160, rows: 1010 }, surface);
-    expect(frame.cells.length).toBeGreaterThan(900);
+    const huge: ReplTerminalSize = { columns: 160, rows: 1010 };
+    yield* scoped(function* (): Operation<void> {
+      // Built for a terminal far smaller than the frame it is about to be given.
+      const driver = yield* driving({ columns: 20, rows: 5 });
+      const rendered = yield* driver.commit({ ...FILLED, bindings }, huge);
 
-    const renderer = yield* useReplRenderer({ columns: 20, rows: 5 });
-    const snapshot = input(frame, tree);
-    const rendered = yield* drawn(renderer, snapshot);
+      expect(rendered.keys.length).toBeGreaterThan(900);
+      expect(rendered.rendered.recovered).toBe(true);
+      // The same logical frame: the same tree and real targets. Recovery is
+      // invisible above this line.
+      expect(rendered.rendered.tree).toBe(driver.tree.frame().id);
+      expect(rendered.rendered.map.targets.length).toBeGreaterThan(0);
 
-    expect(rendered.recovered).toBe(true);
-    // The same logical frame: the same tree, the same targets, the same
-    // geometry. Recovery is invisible above this line.
-    expect(rendered.tree).toBe(tree.frame().id);
-    expect(rendered.map.targets.length).toBeGreaterThan(0);
-    expect(renderer.last()).toEqual(snapshot);
+      // One replacement each, and no more: a frame this much larger than the
+      // terminal these engines were built for overflows both arenas, so each
+      // refuses once on its own pass and is rebuilt at the frame's own size.
+      expect(driver.renderer.engines()).toEqual({ measuring: 2, drawing: 2 });
 
-    const repeated = yield* drawn(renderer, snapshot);
-    expect(repeated.recovered).toBe(false);
-    expect(repeated.map.targets.map((target) => target.id)).toEqual(
-      rendered.map.targets.map((target) => target.id),
-    );
-    expect(tree.focused()).toBe(tree.focused());
-    expect(tree.mounted()).toHaveLength(frame.cells.length);
+      // Drawn again at the same size, it needs no recovery and places the same
+      // controls under the same ids.
+      const repeated = yield* driver.commit({ ...FILLED, bindings }, huge);
+      expect(repeated.rendered.recovered).toBe(false);
+      expect(repeated.rendered.map.targets.map((target) => target.id)).toEqual(
+        rendered.rendered.map.targets.map((target) => target.id),
+      );
+      // Reused, not rebuilt: drawing the same frame again creates nothing.
+      expect(driver.renderer.engines()).toEqual({ measuring: 2, drawing: 2 });
+    });
   });
 });
 
@@ -1971,12 +2062,8 @@ describe("REPL terminal: what the host normalizes, and what it refuses to guess"
   });
 
   it("I1: a key and a click on one control produce one action", function* () {
-    const { tree, surface } = yield* mounted(FILLED);
-    const renderer = yield* useReplRenderer({ columns: 160, rows: 36 });
-    const rendered = yield* drawn(
-      renderer,
-      input(layout({ columns: 160, rows: 36 }, surface), tree),
-    );
+    const { tree, frame } = yield* mounted(FILLED, { columns: 160, rows: 36 });
+    const rendered = frame.rendered;
 
     const byKey = acted(yield* tree.dispatch({ kind: "key", key: "Enter" }));
     expect(byKey.outcome).toBe("action");
@@ -1999,12 +2086,8 @@ describe("REPL terminal: what the host normalizes, and what it refuses to guess"
 
   it("I1: a pointer outside the open drawer reaches nothing", function* () {
     const state = { ...FILLED, drawer: "Binding: plan" };
-    const { tree, surface } = yield* mounted(state);
-    const renderer = yield* useReplRenderer({ columns: 160, rows: 36 });
-    const rendered = yield* drawn(
-      renderer,
-      input(layout({ columns: 160, rows: 36 }, surface), tree),
-    );
+    const { tree, frame } = yield* mounted(state, { columns: 160, rows: 36 });
+    const rendered = frame.rendered;
 
     const behind = rendered.map.targets.find(
       (target) => tree.keyOf(target.node) === "session:kf39sla2",
@@ -2025,12 +2108,8 @@ describe("REPL terminal: what the host normalizes, and what it refuses to guess"
   });
 
   it("I1: a pointer resolved against a frame the tree has moved past reaches nothing", function* () {
-    const { tree, surface } = yield* mounted(FILLED);
-    const renderer = yield* useReplRenderer({ columns: 160, rows: 36 });
-    const rendered = yield* drawn(
-      renderer,
-      input(layout({ columns: 160, rows: 36 }, surface), tree),
-    );
+    const { tree, frame } = yield* mounted(FILLED, { columns: 160, rows: 36 });
+    const rendered = frame.rendered;
 
     const control = rendered.map.targets.find(
       (target) => tree.keyOf(target.node) === "entry:entry-1",
@@ -2044,7 +2123,14 @@ describe("REPL terminal: what the host normalizes, and what it refuses to guess"
     }
 
     // The screen moved on.
-    committed(yield* tree.apply(fixtureDescriptions({ ...FILLED, draft: "yes" })));
+    committed(
+      yield* tree.apply(
+        fixturePairs({ ...FILLED, draft: "yes" }, { columns: 160, rows: 36 }).build({
+          measuring: false,
+          admission: frame.admission,
+        }).descriptions,
+      ),
+    );
     expect(tree.frame().id).not.toBe(pointer.frame);
 
     const outcome = acted(yield* tree.dispatch(pointer));
@@ -2055,12 +2141,10 @@ describe("REPL terminal: what the host normalizes, and what it refuses to guess"
   });
 
   it("I1: a pointer naming a node the tree removed reaches nothing", function* () {
-    const { tree, surface } = yield* mounted(FILLED);
-    const renderer = yield* useReplRenderer({ columns: 160, rows: 36 });
-    const rendered = yield* drawn(
-      renderer,
-      input(layout({ columns: 160, rows: 36 }, surface), tree),
-    );
+    const driver = yield* driving({ columns: 160, rows: 36 });
+    const frame = yield* driver.commit(FILLED, { columns: 160, rows: 36 });
+    const tree = driver.tree;
+    const rendered = frame.rendered;
 
     const removed = rendered.map.targets.find(
       (target) => tree.keyOf(target.node) === "scope:entry-1/generated",
@@ -2069,7 +2153,10 @@ describe("REPL terminal: what the host normalizes, and what it refuses to guess"
       throw new Error("the generated scope row is drawn and targetable");
     }
 
-    committed(yield* tree.apply(fixtureDescriptions({ ...FILLED, scopes: ["entry-1/component"] })));
+    const shorter = yield* driver.commit(
+      { ...FILLED, scopes: ["entry-1/component"] },
+      { columns: 160, rows: 36 },
+    );
     expect(tree.mounted()).not.toContain(removed.node);
 
     // Carrying the current frame's number, so what is under test is the node and
@@ -2082,11 +2169,475 @@ describe("REPL terminal: what the host normalizes, and what it refuses to guess"
       expect(outcome.reason).toContain("no longer holds");
     }
 
-    // And redrawing does not offer it either.
-    const after = yield* drawn(
-      renderer,
-      input(layout({ columns: 160, rows: 36 }, fixtureSurface(tree, FILLED)), tree),
+    // And the frame that replaced it does not offer the node either.
+    expect(shorter.rendered.map.targets.map((target) => target.node)).not.toContain(removed.node);
+  });
+});
+
+describe("REPL terminal: what a drawer covers, and what it cannot reach", () => {
+  /** A reading long enough that the drawer's rectangle lands on top of it. */
+  const BUSY: ReplFixtureState = {
+    ...FILLED,
+    transcript: Array.from({ length: 24 }, (_unused, at) => `TRANSCRIPT-ROW-${at}`),
+    bindings: Array.from({ length: 24 }, (_unused, at) => ({
+      name: `binding-${at}`,
+      value: `INSPECTION-VALUE-${at}`,
+    })),
+  };
+
+  it("TL6: a drawer obscures the whole of its rectangle, blank cells included", function* () {
+    const size = { columns: 160, rows: 36 };
+    const driver = yield* driving(size);
+    const before = yield* driver.commit(BUSY, size);
+    const rect = bounds(before, "drawer");
+    expect(rect).toBeUndefined();
+
+    // Pre-assert: the cells the drawer is about to cover really have text in
+    // them. Without this the assertion below would pass on an empty screen.
+    const open = { ...BUSY, drawer: "Binding: plan", drawerLines: ["one line, and no more"] };
+    const after = yield* driver.commit(open, size);
+    const covered = bounds(after, "drawer");
+    expect(covered).toEqual({ x: 20, y: 3, width: 120, height: 23 });
+    if (covered === undefined) {
+      return;
+    }
+
+    // Every transcript row the rectangle covers was on the screen first.
+    const under = before.keys.filter((key) => key.startsWith("line:"));
+    const hidden = under.filter((key) => {
+      const at = before.boundsOf(key);
+      return at !== undefined && at.y >= covered.y && at.y < covered.y + covered.height;
+    });
+    expect(hidden.length).toBeGreaterThan(0);
+
+    // And none of their text is anywhere inside the rectangle now. The drawer
+    // holds one short line, so most of what it covers is its own blank space —
+    // which is exactly the part a drawer without a background lets through.
+    const inside = driver.grid.textIn(covered).join("\n");
+    for (const key of hidden) {
+      const text = (before.cellOf(key) ?? "").trim();
+      expect([key, inside.includes(text)]).toEqual([key, false]);
+    }
+    // The drawer's own text is there instead.
+    expect(inside).toContain("one line, and no more");
+  });
+
+  it("TL6: the footer is never covered, and a narrow start behaves the same", function* () {
+    for (const size of [{ columns: 160, rows: 36 }, NARROW]) {
+      yield* scoped(function* (): Operation<void> {
+        const driver = yield* driving(size);
+        const open = { ...BUSY, drawer: "Binding: plan", drawerLines: ["short"] };
+        const frame = yield* driver.commit(open, size);
+        const rect = bounds(frame, "drawer");
+        const footer = bounds(frame, "footer");
+        expect(rect).toBeDefined();
+        expect(footer).toBeDefined();
+        if (rect === undefined || footer === undefined) {
+          return;
+        }
+        // Above the footer rather than across it: the draft is the thing the
+        // question is about, and a modal that covered it would hide it.
+        expect(rect.y + rect.height).toBeLessThanOrEqual(footer.y);
+        // And the draft is still drawn, on the footer's last row.
+        expect(frame.boundsOf("footer:input")?.y).toBe(size.rows - 1);
+      });
+    }
+  });
+
+  it("TL6: a resize round trip keeps the drawer covering what it covers", function* () {
+    const driver = yield* driving({ columns: 160, rows: 36 });
+    const open = { ...BUSY, drawer: "Binding: plan", drawerLines: ["short"] };
+    yield* driver.commit(open, { columns: 160, rows: 36 });
+    driver.renderer.resize(NARROW);
+    const narrow = yield* driver.commit(open, NARROW);
+    expect(bounds(narrow, "drawer")).toEqual({ x: 9, y: 1, width: 54, height: 11 });
+    driver.renderer.resize({ columns: 160, rows: 36 });
+    const wide = yield* driver.commit(open, { columns: 160, rows: 36 });
+    expect(bounds(wide, "drawer")).toEqual({ x: 20, y: 3, width: 120, height: 23 });
+
+    // Nothing of the body is left showing through the rectangle after the
+    // round trip, which is where a diffing renderer leaves stale text.
+    const rect = bounds(wide, "drawer");
+    if (rect === undefined) {
+      return;
+    }
+    const inside = driver.grid.textIn(rect).join("\n");
+    expect(inside).not.toContain("TRANSCRIPT-ROW-");
+    expect(inside).not.toContain("INSPECTION-VALUE-");
+  });
+
+  it("TL7: with engine capture off, dispatch behind the modal is still dropped", function* () {
+    const size = { columns: 160, rows: 36 };
+    // Capture deliberately off: the engine's own hit test no longer narrows
+    // over the drawer's rectangle, so what refuses a press behind the modal
+    // has to be the reconciler. Containment is not the engine's to own.
+    const open: ReplFixtureState = {
+      ...FILLED,
+      drawer: "Binding: plan",
+      drawerLines: ["one"],
+      capture: "passthrough",
+    };
+    const { tree, frame } = yield* mounted(open, size);
+
+    const behind = frame.targets.find((target) => tree.keyOf(target.node) === "session:kf39sla2");
+    expect(behind).toBeDefined();
+    if (behind === undefined) {
+      return;
+    }
+    const outcome = acted(
+      yield* tree.dispatch({ kind: "pointer", target: behind.node, frame: tree.frame().id }),
     );
-    expect(after.map.targets.map((target) => target.node)).not.toContain(removed.node);
+    expect(outcome.outcome).toBe("dropped");
+    if (outcome.outcome === "dropped") {
+      expect(outcome.reason).toContain("behind the open drawer");
+    }
+
+    // And the modal's own control still answers, so capture-off has not
+    // broken the product — only the engine's narrowing.
+    const close = frame.targets.find((target) => tree.keyOf(target.node) === "drawer:close");
+    expect(close).toBeDefined();
+    if (close === undefined) {
+      return;
+    }
+    const inside = acted(
+      yield* tree.dispatch({ kind: "pointer", target: close.node, frame: tree.frame().id }),
+    );
+    expect(inside.outcome).toBe("action");
+  });
+
+  it("TL7: traversal inside an open drawer visits only its own descendants", function* () {
+    const open: ReplFixtureState = {
+      ...FILLED,
+      drawer: "Binding: plan",
+      drawerLines: ["one"],
+    };
+    const { tree, frame } = yield* mounted(open, { columns: 160, rows: 36 });
+    expect(frame.keys).toContain("drawer:close");
+
+    const visited: string[] = [];
+    for (let press = 0; press < 40; press += 1) {
+      const moved = yield* tree.dispatch({ kind: "key", key: "Tab" });
+      if (!moved.ok || moved.value.outcome !== "focus") {
+        break;
+      }
+      const node = moved.value.focused;
+      const key = node === undefined ? undefined : tree.keyOf(node);
+      if (key === undefined || visited.includes(key)) {
+        break;
+      }
+      visited.push(key);
+    }
+    expect(visited.length).toBeGreaterThan(0);
+    // Every stop is the drawer's. Nothing behind it is reachable by keyboard
+    // either, which is the same containment the pointer met above.
+    for (const key of visited) {
+      expect([key, key.startsWith("drawer:")]).toEqual([key, true]);
+    }
+  });
+});
+
+describe("REPL terminal: committed geometry, and what it promises", () => {
+  it("TL8: every target's bounds are whole cells at every profile", function* () {
+    for (const size of [{ columns: 160, rows: 36 }, { columns: 120, rows: 30 }, NARROW]) {
+      yield* scoped(function* (): Operation<void> {
+        const { frame } = yield* mounted(FILLED, size);
+        expect(frame.targets.length).toBeGreaterThan(0);
+        for (const target of frame.targets) {
+          const { x, y, width, height } = target.bounds;
+          for (const [name, value] of [
+            ["x", x],
+            ["y", y],
+            ["width", width],
+            ["height", height],
+          ]) {
+            expect([size.columns, target.id, name, Number.isInteger(value)]).toEqual([
+              size.columns,
+              target.id,
+              name,
+              true,
+            ]);
+          }
+          // Inside the terminal, so no target names a column or row that is not
+          // on the screen.
+          expect(x).toBeGreaterThanOrEqual(0);
+          expect(y).toBeGreaterThanOrEqual(0);
+          expect(x + width).toBeLessThanOrEqual(size.columns);
+          expect(y + height).toBeLessThanOrEqual(size.rows);
+        }
+      });
+    }
+  });
+
+  it("TL8: the trailing edge of a target belongs to whatever is after it", function* () {
+    const size = { columns: 160, rows: 36 };
+    const { frame } = yield* mounted(FILLED, size);
+    const { map } = frame.rendered;
+    for (const target of frame.targets) {
+      const { x, y, width, height } = target.bounds;
+      // Every interior cell answers with this node.
+      expect([target.id, map.at(x, y)]).toEqual([target.id, target.node]);
+      expect([target.id, map.at(x + width - 1, y + height - 1)]).toEqual([target.id, target.node]);
+      // And the cell just past each trailing edge does not. The engine's own
+      // hit test includes it, which is why resolution is half-open: without
+      // that, every row of a stacked list is claimed by two neighbours.
+      expect([target.id, map.at(x + width, y)]).not.toEqual([target.id, target.node]);
+      expect([target.id, map.at(x, y + height)]).not.toEqual([target.id, target.node]);
+    }
+  });
+
+  it("TL8: an older frame's geometry does not move when a later frame is drawn", function* () {
+    const driver = yield* driving({ columns: 160, rows: 36 });
+    const first = yield* driver.commit(FILLED, { columns: 160, rows: 36 });
+    // Copied out of the result, which is what a caller retains.
+    const held = first.targets.map((target) => ({ ...target, bounds: { ...target.bounds } }));
+    const bytes = Array.from(first.rendered.output);
+    expect(held.length).toBeGreaterThan(0);
+
+    // Two more frames, one of them at a different size, which both reuse the
+    // engine and invalidate whatever its last result pointed at.
+    driver.renderer.resize(NARROW);
+    yield* driver.commit(FILLED, NARROW);
+    driver.renderer.resize({ columns: 160, rows: 36 });
+    yield* driver.commit({ ...FILLED, draft: "typed since" }, { columns: 160, rows: 36 });
+
+    // The first frame answers exactly what it answered.
+    for (const target of held) {
+      expect([target.id, first.rendered.map.boundsOf(target.id)]).toEqual([
+        target.id,
+        target.bounds,
+      ]);
+    }
+    expect(Array.from(first.rendered.output)).toEqual(bytes);
+  });
+
+  it("TL11: exactly two engines are acquired, and reused for every frame", function* () {
+    const driver = yield* driving({ columns: 160, rows: 36 });
+    // Two on acquisition: one that measures and one that draws.
+    expect(driver.renderer.engines()).toEqual({ measuring: 1, drawing: 1 });
+
+    // Twelve frames across three profiles, with resizes between them. Each one
+    // measures at least once and draws once, so a renderer that built an
+    // engine per frame would be far past two by now.
+    for (let round = 0; round < 4; round += 1) {
+      for (const size of [{ columns: 160, rows: 36 }, { columns: 120, rows: 30 }, NARROW]) {
+        driver.renderer.resize(size);
+        yield* driver.commit({ ...FILLED, draft: `round ${round}` }, size);
+      }
+    }
+    expect(driver.renderer.engines()).toEqual({ measuring: 1, drawing: 1 });
+  });
+});
+
+describe("REPL terminal: a measurement that does not commit", () => {
+  /**
+   * A renderer whose measurement can be held open.
+   *
+   * The seam TL9 needs, and nothing production has: `measure` suspends on a
+   * latch, so a test can look at the tree, the focus and the display *while* a
+   * frame is owed and nothing has been admitted yet.
+   */
+  function holding(renderer: ReplRenderer): {
+    readonly renderer: ReplRenderer;
+    /** Release every measurement waiting right now. */
+    release(): void;
+    /** How many measurements have been asked for. */
+    asked(): number;
+  } {
+    let waiters: (() => void)[] = [];
+    let asked = 0;
+    let holdingNow = true;
+    return {
+      renderer: {
+        *measure(ops, size) {
+          asked += 1;
+          if (holdingNow) {
+            const waiter = withResolvers<void>();
+            waiters.push(() => waiter.resolve());
+            yield* waiter.operation;
+          }
+          return yield* renderer.measure(ops, size);
+        },
+        draw: (request) => renderer.draw(request),
+        resize: (size) => renderer.resize(size),
+        last: () => renderer.last(),
+        engines: () => renderer.engines(),
+      },
+      release() {
+        holdingNow = false;
+        const releasing = waiters;
+        waiters = [];
+        for (const one of releasing) {
+          one();
+        }
+      },
+      asked: () => asked,
+    };
+  }
+
+  it("TL9: a held measurement mounts nothing, draws nothing and acknowledges nothing", function* () {
+    const size = { columns: 160, rows: 36 };
+    const renderer = yield* useReplRenderer(size);
+    const tree = yield* useReplTree<Surfaced>();
+    const grid = createGrid();
+    const held = holding(renderer);
+
+    const committer = yield* useCommitter<Surfaced>({
+      size,
+      tree,
+      renderer: held.renderer,
+      source: fixturePairs(FILLED, size),
+      grid,
+    });
+
+    // Nothing has happened yet, and this is what "nothing" looks like.
+    const revision = tree.frame().id;
+    const mounted = tree.mounted();
+    const focused = tree.focused();
+    expect(mounted).toEqual([]);
+
+    const running = yield* spawn(() => committer.commit());
+    yield* settled();
+
+    // The measurement is outstanding. The tree has not moved, nothing is
+    // focused that was not, nothing has been painted, and the renderer has
+    // committed no frame — so there is nothing to acknowledge either.
+    expect(held.asked()).toBeGreaterThan(0);
+    expect(tree.frame().id).toBe(revision);
+    expect(tree.mounted()).toEqual(mounted);
+    expect(tree.focused()).toBe(focused);
+    expect(grid.rows()).toEqual([]);
+    expect(renderer.last()).toBeUndefined();
+
+    // Released, the same commit goes through and only then is any of that true.
+    held.release();
+    const drawn = yield* running;
+    expect(drawn.targets.length).toBeGreaterThan(0);
+    expect(tree.frame().id).not.toBe(revision);
+    expect(grid.rows().length).toBeGreaterThan(0);
+    expect(renderer.last()).toBeDefined();
+  });
+
+  it("TL9: a measurement that fails mounts nothing and publishes no target", function* () {
+    const size = { columns: 160, rows: 36 };
+    const renderer = yield* useReplRenderer(size);
+    const tree = yield* useReplTree<Surfaced>();
+    const grid = createGrid();
+
+    /** A renderer whose measurement refuses for a reason no retry fixes. */
+    const refusing: ReplRenderer = {
+      // deno-lint-ignore require-yield
+      *measure(): Operation<Result<ReplMeasured>> {
+        return Err(new ReplRenderError("this measurement cannot be taken"));
+      },
+      draw: (request) => renderer.draw(request),
+      resize: (next) => renderer.resize(next),
+      last: () => renderer.last(),
+      engines: () => renderer.engines(),
+    };
+
+    const committer = yield* useCommitter<Surfaced>({
+      size,
+      tree,
+      renderer: refusing,
+      source: fixturePairs(FILLED, size),
+      grid,
+    });
+
+    let raised: Error | undefined;
+    try {
+      yield* committer.commit();
+    } catch (error) {
+      raised = error instanceof Error ? error : new Error(String(error));
+    }
+    expect(raised?.message).toContain("cannot be taken");
+
+    // Nothing was mounted, nothing was painted, and no frame was committed:
+    // a failure before admission leaves no half-interactive screen behind.
+    expect(tree.mounted()).toEqual([]);
+    expect(grid.rows()).toEqual([]);
+    expect(renderer.last()).toBeUndefined();
+  });
+});
+
+describe("REPL terminal: a frame that cannot be placed on cell boundaries", () => {
+  /**
+   * The shapes this engine answers with half a cell.
+   *
+   * Measured: centring a twelve-row element in a twenty-nine-row parent puts it
+   * at `y=8.5`; a four-column element centred in nine columns lands at `x=2.5`;
+   * and a third of ten columns is `3.3333334922790527` wide. Each of them is a
+   * bound naming a row or column that does not exist.
+   */
+  const SHAPES: readonly { readonly name: string; readonly ops: readonly Op[] }[] = Object.freeze([
+    {
+      name: "a centred odd span",
+      ops: [
+        open("root", { layout: { width: fixed(60), height: fixed(40), direction: "ttb" } }),
+        open("parent", {
+          layout: { width: fixed(29), height: fixed(29), direction: "ttb", alignY: "center" },
+        }),
+        open("target", { layout: { width: fixed(12), height: fixed(12) } }),
+        text("x"),
+        close(),
+        close(),
+        close(),
+      ],
+    },
+    {
+      name: "a width stated as a share",
+      ops: [
+        open("root", { layout: { width: fixed(60), height: fixed(40), direction: "ttb" } }),
+        open("parent", { layout: { width: fixed(10), height: fixed(10), direction: "ttb" } }),
+        open("target", { layout: { width: percent(1 / 3), height: percent(1 / 3) } }),
+        text("x"),
+        close(),
+        close(),
+        close(),
+      ],
+    },
+  ]);
+
+  it("TL8: a fractional placement is refused, not rounded into a hit box", function* () {
+    for (const shape of SHAPES) {
+      yield* scoped(function* (): Operation<void> {
+        const size = { columns: 60, rows: 40 };
+        const renderer = yield* useReplRenderer(size);
+
+        // The engine really does answer with half a cell here, which is what
+        // makes this a test rather than an assertion about nothing.
+        const measured = yield* renderer.measure(shape.ops, size);
+        if (!measured.ok) {
+          throw measured.error;
+        }
+        const raw = measured.value.boundsOf("target");
+        expect(raw).toBeDefined();
+        const whole =
+          raw === undefined
+            ? true
+            : Number.isInteger(raw.x) &&
+              Number.isInteger(raw.y) &&
+              Number.isInteger(raw.width) &&
+              Number.isInteger(raw.height);
+        expect([shape.name, whole]).toEqual([shape.name, false]);
+
+        // Drawing it is refused. A rounded hit box would disagree with the text
+        // underneath it, and a person aiming at the half that is not there would
+        // reach whatever is behind — so this frame is not drawn at all.
+        const drawn = yield* renderer.draw({
+          ops: shape.ops,
+          boxes: [{ id: "target", node: "target", control: true }],
+          regions: ["parent"],
+          tree: 1,
+          size,
+          deltaTime: 0,
+          pointer: undefined,
+        });
+        expect([shape.name, drawn.ok]).toEqual([shape.name, false]);
+        if (!drawn.ok) {
+          expect(drawn.error.message).toContain("fractional position");
+          expect(drawn.error.name).toBe("ReplRenderError");
+        }
+      });
+    }
   });
 });

@@ -57,16 +57,25 @@ import type { ReplSession } from "../src/repl/session.ts";
 import {
   admitted,
   describeApplication,
+  ENTRIES_WINDOW,
+  entriesRowCount,
+  focusClaim,
   initialState,
   NO_AGENT,
   reduceRepl,
-  replSurface,
+  presentationFor,
   viewFor,
   withoutAbsentEntry,
 } from "../src/repl/application.ts";
 import type { ReplAction, ReplLive, ReplState, ReplView } from "../src/repl/application.ts";
-import { layout, NARROW, surfaceWidth } from "../src/repl/layout.ts";
-import type { ReplPlacedCell, ReplSemanticFrame } from "../src/repl/layout.ts";
+import { flatten, inspectionWidth, NARROW, sidebarWidth } from "../src/repl/layout.ts";
+import type { ReplBounds, ReplRegion } from "../src/repl/layout.ts";
+import type { ReplPresentationContext } from "../src/repl/application.ts";
+import { commitReplFrame } from "../src/repl/program.ts";
+import type { ReplCommitted } from "../src/repl/program.ts";
+import { useReplRenderer } from "../src/repl/renderer.ts";
+import type { ReplRenderer } from "../src/repl/renderer.ts";
+import { committedContext } from "./fixtures/repl/presentation.ts";
 import type { ReplTerminalSize } from "../src/repl/terminal.ts";
 import { fields, readDescription } from "../src/repl/description.ts";
 import type { ReplDescription } from "../src/repl/description.ts";
@@ -1507,24 +1516,89 @@ function rowsOf(descriptions: readonly ReplDescription<ReplAction>[]): Array<{
   return found;
 }
 
+/**
+ * Measure one view with a real engine pair, as the product does.
+ *
+ * A window's rows are the rows the measurement left room for, so a test asking
+ * what a view describes has to measure it. An engine may be handed in where one
+ * test takes many frames; otherwise one is built for the question.
+ */
+function* measuring<T>(
+  size: ReplTerminalSize,
+  engine: ReplRenderer | undefined,
+  body: (renderer: ReplRenderer) => Operation<T>,
+): Operation<T> {
+  if (engine !== undefined) {
+    return yield* body(engine);
+  }
+  return yield* scoped(function* (): Operation<T> {
+    return yield* body(yield* useReplRenderer(size));
+  });
+}
+
+/** What one view's frame settled on: its measured widths and its admission. */
+function* contextOf(view: ReplView, engine?: ReplRenderer): Operation<ReplPresentationContext> {
+  return yield* measuring(view.size, engine, (renderer) => committedContext(renderer, view));
+}
+
+/** The descriptions this view produces, measured. */
+function* describedBy(view: ReplView, engine?: ReplRenderer) {
+  return rowsOf(presentationFor(view, yield* contextOf(view, engine)).descriptions);
+}
+
 /** The keys this view describes, in order. */
-function keysOf(view: ReplView): string[] {
-  return rowsOf(describeApplication(view)).map((one) => one.key);
+function* keysOf(view: ReplView, engine?: ReplRenderer): Operation<string[]> {
+  return (yield* describedBy(view, engine)).map((one) => one.key);
 }
 
 /** The catalog rows this view describes, in the order it describes them. */
-function catalogOf(view: ReplView): Array<{ key: string; label: string }> {
-  return rowsOf(describeApplication(view)).filter(
+function* catalogOf(
+  view: ReplView,
+  engine?: ReplRenderer,
+): Operation<Array<{ key: string; label: string }>> {
+  return (yield* describedBy(view, engine)).filter(
     (one) => one.key.startsWith("entry:") || one.key.startsWith("scope:"),
   );
 }
 
+/**
+ * One committed frame, as a test reads it back.
+ *
+ * Everything here comes from the frame that was drawn: which boxes the manifest
+ * placed, which of them mounted a live node, and the geometry the engine gave
+ * each one. Nothing works out where a row ought to be.
+ */
+interface Frame {
+  readonly committed: ReplCommitted;
+  /** The live node one placed key mounted, or none. */
+  node(key: string): string | undefined;
+  /** Whether this frame placed that key and offered it to a pointer. */
+  targetable(key: string): boolean;
+  /**
+   * What one placed row drew, clipped to the width the frame gave it.
+   *
+   * The cell its own node contributed, cut to the geometry the engine reported:
+   * a region clips horizontally, so text past its edge is painted nowhere. A
+   * promise that falls outside the row is a promise this frame does not keep.
+   */
+  visible(key: string): string | undefined;
+  /** The whole cell one placed row contributed, before any clipping. */
+  cell(key: string): string | undefined;
+  /** The geometry one placed row was given, or none. */
+  bounds(key: string): ReplBounds | undefined;
+  /** Where one named region landed, read from the committed frame. */
+  region(name: ReplRegion): ReplBounds | undefined;
+  /** Every key this frame placed. */
+  readonly keys: readonly string[];
+}
+
 /** Commit one view into the real tree, refusing to assert past a rejected set. */
-function* applied(tree: ReplTree<ReplAction>, view: ReplView): Operation<void> {
-  const result = yield* tree.apply(describeApplication(view));
-  if (!result.ok) {
-    throw result.error;
-  }
+function* applied(
+  tree: ReplTree<ReplAction>,
+  view: ReplView,
+  engine?: ReplRenderer,
+): Operation<void> {
+  yield* drawn(tree, view, view.size, engine);
 }
 
 /** The mounted node this key names, or none, which is what absence looks like. */
@@ -1532,47 +1606,99 @@ function nodeOf(tree: ReplTree<ReplAction>, key: string): string | undefined {
   return tree.mounted().find((id) => tree.keyOf(id) === key);
 }
 
-/** The cell this frame placed for one key, or none, which is what a map holds. */
-function placedFor(
-  tree: ReplTree<ReplAction>,
-  frame: ReplSemanticFrame,
-  key: string,
-): ReplPlacedCell | undefined {
-  return frame.cells.find((cell) => tree.keyOf(cell.node) === key);
-}
-
-/** Mount one view and lay it out at one size, the way the program does. */
+/** Mount one view and draw it at one size, exactly the way the program does. */
 function* drawn(
   tree: ReplTree<ReplAction>,
   view: ReplView,
-  size: ReplTerminalSize,
-): Operation<ReplSemanticFrame> {
-  yield* applied(tree, view);
-  return layout(size, replSurface(tree, view));
+  _size: ReplTerminalSize,
+  engine?: ReplRenderer,
+): Operation<Frame> {
+  const committed = yield* measuring(view.size, engine, (renderer) =>
+    commitReplFrame(tree, renderer, view, 0, undefined),
+  );
+  if (!committed.ok) {
+    throw committed.error;
+  }
+  const mounted = new Set(tree.mounted());
+  const nodeByKey = new Map<string, string>();
+  for (const node of mounted) {
+    const key = tree.keyOf(node);
+    if (key !== undefined) {
+      nodeByKey.set(key, node);
+    }
+  }
+  const placed = new Map<string, { node: string; control: boolean }>();
+  for (const box of flatten(committed.value.manifest.root)) {
+    if (box.key === undefined) {
+      continue;
+    }
+    const node = nodeByKey.get(box.key);
+    if (node !== undefined) {
+      placed.set(box.key, { node, control: box.control });
+    }
+  }
+  const cells = new Map<string, string>();
+  for (const cell of tree.frame().cells) {
+    cells.set(cell.node, cell.cell);
+  }
+  return {
+    committed: committed.value,
+    node: (key: string) => placed.get(key)?.node,
+    targetable: (key: string) => placed.get(key)?.control === true,
+    visible(key: string) {
+      const node = placed.get(key)?.node;
+      if (node === undefined) {
+        return undefined;
+      }
+      const text = cells.get(node) ?? "";
+      const { map } = committed.value.rendered;
+      const bounds = map.boundsOf(node) ?? map.regionOf(node);
+      return bounds === undefined ? text : text.slice(0, bounds.width);
+    },
+    cell(key: string) {
+      const node = placed.get(key)?.node;
+      return node === undefined ? undefined : cells.get(node);
+    },
+    bounds(key: string) {
+      const node = placed.get(key)?.node;
+      if (node === undefined) {
+        return undefined;
+      }
+      // A control's geometry is in the target map; every other drawn row's is
+      // published beside it, because where a row landed and whether it can be
+      // activated are two different questions.
+      const { map } = committed.value.rendered;
+      return map.boundsOf(node) ?? map.regionOf(node);
+    },
+    region(name: ReplRegion) {
+      const found = committed.value.manifest.regions.find((one) => one.region === name);
+      return found === undefined ? undefined : committed.value.rendered.map.regionOf(found.id);
+    },
+    keys: Object.freeze([...placed.keys()]),
+  };
 }
 
 /**
  * Point at one key the way the renderer's map resolves a pointer.
  *
- * Through the frame rather than through the tree: a cell the frame did not
- * place, or placed and did not offer, is in no target map at all, so reaching
- * for the node directly would prove something no pointer can do.
+ * Through the frame rather than through the tree: a row the frame did not place,
+ * or placed and did not offer, is in no target map at all, so reaching for the
+ * node directly would prove something no pointer can do.
  */
-function* pointed(
-  tree: ReplTree<ReplAction>,
-  frame: ReplSemanticFrame,
-  key: string,
-): Operation<ReplAction> {
-  const cell = placedFor(tree, frame, key);
-  if (cell === undefined) {
+function* pointed(tree: ReplTree<ReplAction>, frame: Frame, key: string): Operation<ReplAction> {
+  const node = frame.node(key);
+  if (node === undefined) {
     throw new Error(`this frame placed no cell for ${key}`);
   }
-  if (!cell.targetable) {
+  if (!frame.targetable(key)) {
     throw new Error(`${key} is placed but is in no target map`);
+  }
+  if (frame.committed.rendered.map.boundsOf(node) === undefined) {
+    throw new Error(`${key} is a control this frame published no geometry for`);
   }
   const dispatched = yield* tree.dispatch({
     kind: "pointer",
-    target: cell.node,
+    target: node,
     frame: tree.frame().id,
   });
   if (!dispatched.ok || dispatched.value.outcome !== "action") {
@@ -1603,14 +1729,19 @@ function* activated(tree: ReplTree<ReplAction>): Operation<ReplAction> {
 }
 
 /** One action reduced, refusing to carry a refusal forward unnoticed. */
-function acted(
+function* acted(
   state: ReplState,
   action: ReplAction,
   model: ReplModel,
   live: ReplLive = NOTHING_LIVE,
   size: ReplTerminalSize = NARROW,
-): ReplState {
-  const next = reduceRepl(state, action, model, live, size);
+  engine?: ReplRenderer,
+): Operation<ReplState> {
+  // Measured for the state this action is answered at, which is what the program
+  // does before it reduces: a window moves within the capacity the screen is
+  // showing, not one left over from an earlier size or reading.
+  const view = reading(state, model, live, size);
+  const next = reduceRepl(state, action, model, live, (yield* contextOf(view, engine)).admission);
   if (next.state.refusal !== undefined) {
     throw new Error(`${action.kind} was refused: ${next.state.refusal}`);
   }
@@ -1675,7 +1806,7 @@ describe("REPL entries: the draft, the gate and the position", () => {
       const live = liveReading(session);
       let state = initialState(EXECUTION);
       for (const text of ["next", " entry"]) {
-        state = acted(state, { kind: "type", text }, session.model, live);
+        state = yield* acted(state, { kind: "type", text }, session.model, live);
       }
       expect(state.draft).toBe("next entry");
       // And the location says so, which is how a second process arrives at it.
@@ -1683,7 +1814,7 @@ describe("REPL entries: the draft, the gate and the position", () => {
       expect(reading(state, session.model, live).location).toContain("draft=next%20entry");
 
       // Backspace is the same keystroke on the same field.
-      state = acted(state, { kind: "erase" }, session.model, live);
+      state = yield* acted(state, { kind: "erase" }, session.model, live);
       expect(state.draft).toBe("next entr");
 
       // The same while a history position is being inspected: inspection
@@ -1694,7 +1825,7 @@ describe("REPL entries: the draft, the gate and the position", () => {
       }
       const prefix = projected(yield* holder.stream.readAll(), marker);
       let inspecting = frozenAt(drafting(initialState(EXECUTION), "typed"), marker);
-      inspecting = acted(inspecting, { kind: "type", text: " more" }, prefix);
+      inspecting = yield* acted(inspecting, { kind: "type", text: " more" }, prefix);
       expect(inspecting.draft).toBe("typed more");
       expect(inspecting.route.at).toBe(marker);
       expect(inspecting.route.inspect).toBe(true);
@@ -1731,7 +1862,6 @@ describe("REPL entries: the draft, the gate and the position", () => {
             { kind: "submit" },
             session.model,
             liveReading(session),
-            NARROW,
           );
           expect(whileRunning.intent).toEqual({ kind: "submit", source: DRAFT });
           expect(whileRunning.state.draft).toBe(DRAFT);
@@ -1762,7 +1892,6 @@ describe("REPL entries: the draft, the gate and the position", () => {
             { kind: "submit" },
             projected(yield* holder.stream.readAll(), marker),
             NOTHING_LIVE,
-            NARROW,
           );
           expect(historical.intent).toEqual({ kind: "none" });
           expect(historical.state.refusal).toContain("Return to the live head");
@@ -1790,13 +1919,7 @@ describe("REPL entries: the draft, the gate and the position", () => {
       yield* session.join();
 
       const standing = drafting(initialState(EXECUTION), INHERITING);
-      const asked = reduceRepl(
-        standing,
-        { kind: "submit" },
-        session.model,
-        liveReading(session),
-        NARROW,
-      );
+      const asked = reduceRepl(standing, { kind: "submit" }, session.model, liveReading(session));
       expect(asked.intent).toEqual({ kind: "submit", source: INHERITING });
       // Still there while the submission is in flight: a preflight refusal is
       // the one moment somebody most needs their document back.
@@ -1819,7 +1942,7 @@ describe("REPL entries: the draft, the gate and the position", () => {
 
       // And the entry that was just admitted is the one navigation reaches.
       const key = admittedEntry?.key ?? "";
-      const selected = acted(after, { kind: "select-scope", scopes: [key] }, session.model);
+      const selected = yield* acted(after, { kind: "select-scope", scopes: [key] }, session.model);
       expect(selected.route.scopes).toEqual([key]);
       expect(reading(selected, session.model).selection.entry?.key).toBe(key);
     });
@@ -1882,13 +2005,15 @@ describe("REPL entries: the draft, the gate and the position", () => {
 
     const standing = frozenAt(drafting(initialState(EXECUTION), "kept"), "close:root");
     // One entry is all this prefix holds.
-    expect(catalogOf(reading(standing, prefix)).map((one) => one.key)).toEqual(["entry:entry-1"]);
+    expect((yield* catalogOf(reading(standing, prefix))).map((one) => one.key)).toEqual([
+      "entry:entry-1",
+    ]);
 
-    const live = acted(standing, { kind: "go-live" }, prefix);
+    const live = yield* acted(standing, { kind: "go-live" }, prefix);
     expect(live.route.at).toBe(undefined);
     expect(live.route.inspect).toBe(false);
     // The head catalog is back, whole.
-    expect(catalogOf(reading(live, head)).map((one) => one.key)).toEqual([
+    expect((yield* catalogOf(reading(live, head))).map((one) => one.key)).toEqual([
       "entry:entry-1",
       "entry:entry-2",
     ]);
@@ -1935,7 +2060,7 @@ describe("REPL entries: the catalog a person reads and reaches", () => {
     // Three outcomes that do not sort the way admission does: ok, err, ok.
     expect(model.entries.map((entry) => entry.terminal?.status)).toEqual(["ok", "err", "ok"]);
 
-    const catalog = catalogOf(reading(initialState(EXECUTION), model, NOTHING_LIVE, WIDE));
+    const catalog = yield* catalogOf(reading(initialState(EXECUTION), model, NOTHING_LIVE, WIDE));
     expect(catalog.map((one) => one.key)).toEqual([
       "entry:entry-1",
       "entry:entry-2",
@@ -1955,7 +2080,7 @@ describe("REPL entries: the catalog a person reads and reaches", () => {
       throw new Error("an admitted entry has an admission marker");
     }
     const unfinished = projected(events, admission);
-    const last = catalogOf(
+    const last = yield* catalogOf(
       reading(frozenAt(initialState(EXECUTION), admission), unfinished, NOTHING_LIVE, WIDE),
     );
     expect(last.map((one) => one.key)).toEqual(["entry:entry-1", "entry:entry-2", "entry:entry-3"]);
@@ -1972,9 +2097,9 @@ describe("REPL entries: the catalog a person reads and reaches", () => {
       const view = reading(state, model, NOTHING_LIVE, size);
       const frame = yield* drawn(tree, view, size);
       for (const key of ["footer:input", "sessions:heading", "entries:heading"]) {
-        const placed = placedFor(tree, frame, key);
+        const placed = frame.node(key);
         expect([size.columns, key, placed !== undefined]).toEqual([size.columns, key, true]);
-        expect([size.columns, key, placed?.targetable]).toEqual([size.columns, key, true]);
+        expect([size.columns, key, frame.targetable(key)]).toEqual([size.columns, key, true]);
       }
       // Both selectors really take somebody to the other surface.
       expect(yield* pointed(tree, frame, "sessions:heading")).toEqual({
@@ -1996,7 +2121,7 @@ describe("REPL entries: the catalog a person reads and reaches", () => {
 
     let state = initialState(EXECUTION);
     const first = reading(state, model, NOTHING_LIVE, NARROW);
-    const shown = catalogOf(first).map((one) => one.key);
+    const shown = (yield* catalogOf(first)).map((one) => one.key);
     // More catalog than this frame can place, and what it places is a prefix of
     // the whole thing rather than a sample of it.
     expect(whole.length).toBeGreaterThan(shown.length);
@@ -2009,12 +2134,18 @@ describe("REPL entries: the catalog a person reads and reaches", () => {
       const view = reading(state, model, NOTHING_LIVE, NARROW);
       const frame = yield* drawn(tree, view, NARROW);
       for (const key of whole) {
-        const placed = placedFor(tree, frame, key);
-        if (placed !== undefined && placed.targetable) {
+        const placed = frame.node(key);
+        if (placed !== undefined && frame.targetable(key)) {
           reached.add(key);
         }
       }
-      const next = acted(state, { kind: "scroll-entries", delta: 1 }, model, NOTHING_LIVE, NARROW);
+      const next = yield* acted(
+        state,
+        { kind: "scroll-entries", delta: 1 },
+        model,
+        NOTHING_LIVE,
+        NARROW,
+      );
       if (next.viewports.entries === state.viewports.entries) {
         break;
       }
@@ -2026,12 +2157,12 @@ describe("REPL entries: the catalog a person reads and reaches", () => {
     // way only.
     let back = state;
     for (let press = 0; press < 60 && back.viewports.entries > 0; press += 1) {
-      back = acted(back, { kind: "scroll-entries", delta: -1 }, model, NOTHING_LIVE, NARROW);
+      back = yield* acted(back, { kind: "scroll-entries", delta: -1 }, model, NOTHING_LIVE, NARROW);
     }
     expect(back.viewports.entries).toBe(0);
-    expect(catalogOf(reading(back, model, NOTHING_LIVE, NARROW)).map((one) => one.key)).toEqual(
-      shown,
-    );
+    expect(
+      (yield* catalogOf(reading(back, model, NOTHING_LIVE, NARROW))).map((one) => one.key),
+    ).toEqual(shown);
     // None of it reached the location: where somebody scrolled to is this
     // process's, and no second process can be sent to a row of it.
     expect(state.viewports.entries).toBeGreaterThan(0);
@@ -2047,7 +2178,7 @@ describe("REPL entries: the catalog a person reads and reaches", () => {
     const view = reading(initialState(EXECUTION), model, NOTHING_LIVE, NARROW);
     const frame = yield* drawn(tree, view, NARROW);
 
-    const key = catalogOf(view)[2]?.key;
+    const key = (yield* catalogOf(view))[2]?.key;
     if (key === undefined) {
       throw new Error("this window places more than two catalog rows");
     }
@@ -2063,7 +2194,7 @@ describe("REPL entries: the catalog a person reads and reaches", () => {
     const tree = yield* useReplTree<ReplAction>();
     const state = initialState(EXECUTION);
     const view = reading(state, model, NOTHING_LIVE, NARROW);
-    const shown = catalogOf(view).map((one) => one.key);
+    const shown = (yield* catalogOf(view)).map((one) => one.key);
 
     const beyond = model.entries
       .map((entry) => `entry:${entry.key}`)
@@ -2073,24 +2204,24 @@ describe("REPL entries: the catalog a person reads and reaches", () => {
     }
     const frame = yield* drawn(tree, view, NARROW);
     // Not described, so not mounted, not focusable, not drawn and in no map.
-    expect(keysOf(view)).not.toContain(beyond);
+    expect(yield* keysOf(view)).not.toContain(beyond);
     expect(nodeOf(tree, beyond)).toBe(undefined);
-    expect(placedFor(tree, frame, beyond)).toBe(undefined);
+    expect(frame.node(beyond)).toBe(undefined);
     // The controls that move the window never scroll away from whoever uses them.
-    expect(placedFor(tree, frame, "entries:earlier")).toBeDefined();
-    expect(placedFor(tree, frame, "entries:later")).toBeDefined();
+    expect(frame.node("entries:earlier")).toBeDefined();
+    expect(frame.node("entries:later")).toBeDefined();
 
     // Reached by scrolling, it is mounted, placed and offered.
     let at = state;
     for (let press = 0; press < 60; press += 1) {
       const reachedView = reading(at, model, NOTHING_LIVE, NARROW);
-      if (catalogOf(reachedView).some((one) => one.key === beyond)) {
+      if ((yield* catalogOf(reachedView)).some((one) => one.key === beyond)) {
         const reachedFrame = yield* drawn(tree, reachedView, NARROW);
         expect(nodeOf(tree, beyond)).toBeDefined();
-        expect(placedFor(tree, reachedFrame, beyond)?.targetable).toBe(true);
+        expect(reachedFrame.targetable(beyond)).toBe(true);
         return;
       }
-      at = acted(at, { kind: "scroll-entries", delta: 1 }, model, NOTHING_LIVE, NARROW);
+      at = yield* acted(at, { kind: "scroll-entries", delta: 1 }, model, NOTHING_LIVE, NARROW);
     }
     throw new Error(`scrolling never reached ${beyond}`);
   });
@@ -2103,7 +2234,13 @@ describe("REPL entries: the catalog a person reads and reaches", () => {
     // that frame allows.
     let narrow = initialState(EXECUTION);
     for (let press = 0; press < 60; press += 1) {
-      const next = acted(narrow, { kind: "scroll-entries", delta: 1 }, model, NOTHING_LIVE, NARROW);
+      const next = yield* acted(
+        narrow,
+        { kind: "scroll-entries", delta: 1 },
+        model,
+        NOTHING_LIVE,
+        NARROW,
+      );
       if (next.viewports.entries === narrow.viewports.entries) {
         break;
       }
@@ -2113,18 +2250,32 @@ describe("REPL entries: the catalog a person reads and reaches", () => {
 
     // The sidebar holds more of the catalog, so the furthest this offset may go
     // is smaller there — and what was stored is now past it.
-    const atEnd = acted(narrow, { kind: "scroll-entries", delta: 1 }, model, NOTHING_LIVE, WIDE);
+    const atEnd = yield* acted(
+      narrow,
+      { kind: "scroll-entries", delta: 1 },
+      model,
+      NOTHING_LIVE,
+      WIDE,
+    );
     const furthest = atEnd.viewports.entries;
     expect(furthest).toBeLessThan(narrow.viewports.entries);
 
     // One press back from the clamped position the frame is drawing, not from
     // the stale larger number: the screen moves on the first press rather than
     // spending it normalizing state nobody can see.
-    const stepped = acted(narrow, { kind: "scroll-entries", delta: -1 }, model, NOTHING_LIVE, WIDE);
+    const stepped = yield* acted(
+      narrow,
+      { kind: "scroll-entries", delta: -1 },
+      model,
+      NOTHING_LIVE,
+      WIDE,
+    );
     expect(stepped.viewports.entries).toBe(furthest - 1);
     expect(
-      catalogOf(reading(stepped, model, NOTHING_LIVE, WIDE)).map((one) => one.key),
-    ).not.toEqual(catalogOf(reading(narrow, model, NOTHING_LIVE, WIDE)).map((one) => one.key));
+      (yield* catalogOf(reading(stepped, model, NOTHING_LIVE, WIDE))).map((one) => one.key),
+    ).not.toEqual(
+      (yield* catalogOf(reading(narrow, model, NOTHING_LIVE, WIDE))).map((one) => one.key),
+    );
   });
 });
 
@@ -2157,23 +2308,23 @@ function saying(what: string): string {
 }
 
 /** The transcript lines this view draws, in order. */
-function transcriptOf(view: ReplView): string[] {
-  return rowsOf(describeApplication(view))
+function* transcriptOf(view: ReplView): Operation<string[]> {
+  return (yield* describedBy(view))
     .filter((one) => one.key.startsWith("line:") && !one.key.startsWith("line:live:"))
     .map((one) => one.label.trim())
     .filter((label) => label.length > 0);
 }
 
 /** The live overlay lines this view draws, in order. */
-function overlayOf(view: ReplView): string[] {
-  return rowsOf(describeApplication(view))
+function* overlayOf(view: ReplView): Operation<string[]> {
+  return (yield* describedBy(view))
     .filter((one) => one.key.startsWith("line:live:"))
     .map((one) => one.label.trim());
 }
 
 /** The Sessions rows this view draws, in order, with their labels. */
-function sessionsOf(view: ReplView): Array<{ key: string; label: string }> {
-  return rowsOf(describeApplication(view)).filter((one) => one.key.startsWith("sessions:"));
+function* sessionsOf(view: ReplView): Operation<Array<{ key: string; label: string }>> {
+  return (yield* describedBy(view)).filter((one) => one.key.startsWith("sessions:"));
 }
 
 describe("REPL entries: the transcript belongs to the entry that is selected", () => {
@@ -2189,15 +2340,19 @@ describe("REPL entries: the transcript belongs to the entry that is selected", (
     const standing = initialState(EXECUTION);
     // Nothing selected is the whole execution, which is what a one-entry
     // execution has always shown and what this must not change.
-    const whole = transcriptOf(reading(standing, model, NOTHING_LIVE, WIDE));
+    const whole = yield* transcriptOf(reading(standing, model, NOTHING_LIVE, WIDE));
     expect(whole).toContain("ALPHA-ONE");
     expect(whole).toContain("BRAVO-TWO");
 
-    const first = transcriptOf(reading(selecting(standing, "entry-1"), model, NOTHING_LIVE, WIDE));
+    const first = yield* transcriptOf(
+      reading(selecting(standing, "entry-1"), model, NOTHING_LIVE, WIDE),
+    );
     expect(first).toContain("ALPHA-ONE");
     expect(first).not.toContain("BRAVO-TWO");
 
-    const second = transcriptOf(reading(selecting(standing, "entry-2"), model, NOTHING_LIVE, WIDE));
+    const second = yield* transcriptOf(
+      reading(selecting(standing, "entry-2"), model, NOTHING_LIVE, WIDE),
+    );
     expect(second).toContain("BRAVO-TWO");
     expect(second).not.toContain("ALPHA-ONE");
 
@@ -2226,27 +2381,88 @@ describe("REPL entries: the transcript belongs to the entry that is selected", (
       const standing = initialState(EXECUTION);
       // Reading the entry that is running: the overlay is its own, so it shows.
       const running = reading(selecting(standing, "entry-2"), model, live, WIDE);
-      expect(overlayOf(running)).toContain("… CHARLIE-LIVE");
+      expect(yield* overlayOf(running)).toContain("… CHARLIE-LIVE");
 
       // Reading the settled entry before it: the overlay is somebody else's
       // run, and attributing it here would show text this entry never produced.
       const earlier = reading(selecting(standing, "entry-1"), model, live, WIDE);
-      expect(overlayOf(earlier)).toEqual([]);
-      expect(transcriptOf(earlier)).toContain("ALPHA-ONE");
-      expect(transcriptOf(earlier)).not.toContain("CHARLIE-LIVE");
+      expect(yield* overlayOf(earlier)).toEqual([]);
+      expect(yield* transcriptOf(earlier)).toContain("ALPHA-ONE");
+      expect(yield* transcriptOf(earlier)).not.toContain("CHARLIE-LIVE");
 
       // With nothing selected the locus is the execution, which includes
       // whatever is running in it — unchanged from a one-entry execution.
-      expect(overlayOf(reading(standing, model, live, WIDE))).toContain("… CHARLIE-LIVE");
+      expect(yield* overlayOf(reading(standing, model, live, WIDE))).toContain("… CHARLIE-LIVE");
 
       // Sessions is execution-wide and the same reading under every selection,
       // row for row and label for label.
-      const sessions = sessionsOf(reading(standing, model, live, WIDE));
-      expect(sessionsOf(running)).toEqual(sessions);
-      expect(sessionsOf(earlier)).toEqual(sessions);
+      const sessions = yield* sessionsOf(reading(standing, model, live, WIDE));
+      expect(yield* sessionsOf(running)).toEqual(sessions);
+      expect(yield* sessionsOf(earlier)).toEqual(sessions);
 
       question.submit({ decision: "go" });
       yield* session.join();
+    });
+  });
+});
+
+describe("REPL entries: restoring an answer at a narrow size (#875 R1)", () => {
+  beforeAll(() => useTempFileCompiler());
+
+  it("EU1: focus returns to the owning entry, revealed through the catalog's own window", function* () {
+    const holder = replExecution();
+    yield* scoped(function* (): Operation<void> {
+      // One entry that records an answer, then enough trivial entries after it
+      // that no narrow window can hold the catalog — so the entry that owns the
+      // record is below the window a reader has scrolled to the end of.
+      const session = opened(yield* submitReplEntry({ execution: holder, source: ASKS }));
+      const question = yield* asking(session);
+      expect(question.submit({ decision: "go" }).kind).toBe("answered");
+      yield* session.join();
+      for (let more = 0; more < 16; more += 1) {
+        accepted(yield* session.submit(PLAIN));
+        yield* session.join();
+      }
+
+      const model = session.model;
+      const entry = model.entries[0];
+      const answered = entry?.scope.elicitations[0];
+      expect(answered).toBeDefined();
+      if (entry === undefined || answered === undefined) {
+        return;
+      }
+      const base = initialState(EXECUTION);
+      const total = entriesRowCount(model);
+      const scrolled = Object.freeze({
+        ...base,
+        route: Object.freeze({ ...base.route, scopes: Object.freeze([entry.scope.key]) }),
+        restore: Object.freeze({
+          kind: "answered" as const,
+          known: Object.freeze([]),
+          answer: answered.answer,
+        }),
+        viewports: Object.freeze({ ...base.viewports, entries: total }),
+      });
+
+      const tree = yield* useReplTree<ReplAction>();
+      const view = reading(scrolled, model, NOTHING_LIVE, NARROW);
+      // A narrow frame draws no inspection region, so the claim is the entry that
+      // owns the record rather than the record's own row.
+      expect(focusClaim(view)).toBe(`entry:${entry.key}`);
+
+      const window = (yield* contextOf(view)).admission.windows.get(ENTRIES_WINDOW);
+      expect(window).toBeDefined();
+      // Pre-assert: the catalog is longer than this window, so the offset above
+      // really did put the claimed row outside it.
+      expect(total).toBeGreaterThan(window?.count ?? 0);
+      // Revealed by moving the existing offset as far as it takes, and no
+      // further: the claimed row is the first one the window holds.
+      expect(window?.from).toBe(0);
+
+      yield* applied(tree, view);
+      expect(nodeOf(tree, `entry:${entry.key}`)).toBeDefined();
+      const landed = tree.focused();
+      expect(landed === undefined ? undefined : tree.keyOf(landed)).toBe(`entry:${entry.key}`);
     });
   });
 });
@@ -2308,11 +2524,11 @@ describe("REPL entries: the catalog keeps its promise at the narrowest sidebar",
     // promise that falls outside it is a promise this frame does not keep.
     for (const [at, outcome] of ["ok", "err", "cancelled", "ok"].entries()) {
       const key = `entry:entry-${at + 1}`;
-      const cell = placedFor(tree, frame, key);
+      const cell = frame.node(key);
       if (cell === undefined) {
         throw new Error(`this frame placed no cell for ${key}`);
       }
-      const visible = cell.text.slice(0, cell.bounds.width);
+      const visible = frame.visible(key) ?? "";
       expect([key, visible.includes(`[${outcome}]`)]).toEqual([key, true]);
       // And the name really was too long to have left room after it.
       expect([key, visible.includes(LONG)]).toEqual([key, false]);
@@ -2341,11 +2557,11 @@ describe("REPL entries: the catalog keeps its promise at the narrowest sidebar",
       reading(frozen, renamedOpen, NOTHING_LIVE, MEDIUM),
       MEDIUM,
     );
-    const last = placedFor(tree, openFrame, "entry:entry-4");
+    const last = openFrame.node("entry:entry-4");
     if (last === undefined) {
       throw new Error("this frame placed no cell for entry:entry-4");
     }
-    expect(last.text.slice(0, last.bounds.width)).toContain("[unfinished]");
+    expect(openFrame.visible("entry:entry-4") ?? "").toContain("[unfinished]");
   });
 });
 
@@ -2359,7 +2575,7 @@ describe("REPL entries: going to Sessions keeps the entry you came from", () => 
 
     // Going to Sessions keeps the entry. It used to be unspellable there, so
     // the location this produced could not be encoded at all.
-    const sessions = acted(standing, { kind: "select-surface", surface: "sessions" }, model);
+    const sessions = yield* acted(standing, { kind: "select-surface", surface: "sessions" }, model);
     expect(sessions.route.surface).toBe("sessions");
     expect(sessions.route.scopes).toEqual(["entry-2"]);
     expect(sessions.draft).toBe("next");
@@ -2368,7 +2584,7 @@ describe("REPL entries: going to Sessions keeps the entry you came from", () => 
     expect(onSessions.selection.entry?.key).toBe("entry-2");
 
     // And coming back lands on the entry that was left, rather than on nothing.
-    const back = acted(sessions, { kind: "select-surface", surface: "repl" }, model);
+    const back = yield* acted(sessions, { kind: "select-surface", surface: "repl" }, model);
     expect(back.route.surface).toBe("repl");
     expect(back.route.scopes).toEqual(["entry-2"]);
     expect(reading(back, model, NOTHING_LIVE, WIDE).selection.entry?.key).toBe("entry-2");
@@ -2402,31 +2618,33 @@ describe("REPL entries: what each prefix of a two-entry history shows", () => {
     const before = "close:root";
 
     /** What one prefix's catalog says, as a reader reads it. */
-    const catalogAt = (marker: string): string[] => {
+    const catalogAt = function* (marker: string): Operation<string[]> {
       const state = frozenAt(drafting(initialState(EXECUTION), "still typing"), marker);
       const model = projected(events, marker);
-      return catalogOf(reading(state, model, NOTHING_LIVE, WIDE)).map((one) => one.label.trim());
+      return (yield* catalogOf(reading(state, model, NOTHING_LIVE, WIDE))).map((one) =>
+        one.label.trim(),
+      );
     };
 
     // [1] Before the admission: one entry, settled, and no sign of the next.
-    expect(catalogAt(before)).toEqual(["1. [ok] entry-1"]);
+    expect(yield* catalogAt(before)).toEqual(["1. [ok] entry-1"]);
 
     // [2] At the admission: the row exists and says it has settled nothing.
-    expect(catalogAt(admission)).toEqual(["1. [ok] entry-1", "2. [unfinished] entry-2"]);
+    expect(yield* catalogAt(admission)).toEqual(["1. [ok] entry-1", "2. [unfinished] entry-2"]);
 
     // [3] At its terminal position: the same row, now carrying its outcome.
-    expect(catalogAt(terminal)).toEqual(["1. [ok] entry-1", "2. [ok] entry-2"]);
+    expect(yield* catalogAt(terminal)).toEqual(["1. [ok] entry-1", "2. [ok] entry-2"]);
 
     // Each prefix shows only what it retained. The second entry's output is in
     // none of the readings before its own close.
-    const linesAt = (marker: string): string[] => {
+    const linesAt = function* (marker: string): Operation<string[]> {
       const state = frozenAt(drafting(initialState(EXECUTION), "still typing"), marker);
-      return transcriptOf(reading(state, projected(events, marker), NOTHING_LIVE, WIDE));
+      return yield* transcriptOf(reading(state, projected(events, marker), NOTHING_LIVE, WIDE));
     };
-    expect(linesAt(before)).toContain("ALPHA-ONE");
-    expect(linesAt(before)).not.toContain("BRAVO-TWO");
-    expect(linesAt(admission)).not.toContain("BRAVO-TWO");
-    expect(linesAt(terminal)).toContain("BRAVO-TWO");
+    expect(yield* linesAt(before)).toContain("ALPHA-ONE");
+    expect(yield* linesAt(before)).not.toContain("BRAVO-TWO");
+    expect(yield* linesAt(admission)).not.toContain("BRAVO-TWO");
+    expect(yield* linesAt(terminal)).toContain("BRAVO-TWO");
 
     // The draft is current route state throughout: it is not a thing a prefix
     // retained, so freezing the durable view does not freeze it.
@@ -2436,7 +2654,7 @@ describe("REPL entries: what each prefix of a two-entry history shows", () => {
       expect([marker, view.state.draft]).toEqual([marker, "still typing"]);
       expect([marker, view.location.includes("draft=still%20typing")]).toEqual([marker, true]);
       // And it is still editable at every one of them.
-      const typed = acted(
+      const typed = yield* acted(
         state,
         { kind: "type", text: "!" },
         projected(events, marker),
@@ -2449,11 +2667,17 @@ describe("REPL entries: what each prefix of a two-entry history shows", () => {
     // Returning live from any of them restores the head catalog and keeps it.
     for (const marker of [before, admission, terminal]) {
       const state = frozenAt(drafting(initialState(EXECUTION), "still typing"), marker);
-      const live = acted(state, { kind: "go-live" }, projected(events, marker), NOTHING_LIVE, WIDE);
+      const live = yield* acted(
+        state,
+        { kind: "go-live" },
+        projected(events, marker),
+        NOTHING_LIVE,
+        WIDE,
+      );
       expect(live.route.at).toBe(undefined);
       expect(live.draft).toBe("still typing");
       expect(
-        catalogOf(reading(live, head, NOTHING_LIVE, WIDE)).map((one) => one.label.trim()),
+        (yield* catalogOf(reading(live, head, NOTHING_LIVE, WIDE))).map((one) => one.label.trim()),
       ).toEqual(["1. [ok] entry-1", "2. [ok] entry-2"]);
     }
   });
@@ -2621,13 +2845,13 @@ describe("REPL entries: what the screen says the execution is doing", () => {
   beforeAll(() => useTempFileCompiler());
 
   /** The contextual guidance this view describes, at one size. */
-  function stateRow(
+  function* stateRow(
     state: ReplState,
     model: ReplModel,
     live: ReplLive,
     size: ReplTerminalSize,
-  ): string {
-    const row = rowsOf(describeApplication(reading(state, model, live, size))).find(
+  ): Operation<string> {
+    const row = (yield* describedBy(reading(state, model, live, size))).find(
       (one) => one.key === "guidance",
     );
     if (row === undefined) {
@@ -2647,7 +2871,7 @@ describe("REPL entries: what the screen says the execution is doing", () => {
       // Nothing admitted and nothing running.
       const empty = initialState(EXECUTION);
       for (const size of [WIDE, NARROW]) {
-        expect([size.columns, stateRow(empty, EMPTY_MODEL, NOTHING_LIVE, size)]).toEqual([
+        expect([size.columns, yield* stateRow(empty, EMPTY_MODEL, NOTHING_LIVE, size)]).toEqual([
           size.columns,
           `Ready for Entry 1 · Enter submits · Type here · Tab/Shift+Tab move`,
         ]);
@@ -2664,20 +2888,20 @@ describe("REPL entries: what the screen says the execution is doing", () => {
 
       // Waiting for an answer: the long spelling where there is room, the short
       // one where there is not, and the way to reach it either way.
-      expect(stateRow(state, unsettled, waiting, WIDE)).toContain(
+      expect(yield* stateRow(state, unsettled, waiting, WIDE)).toContain(
         "Entry 1 waiting for an answer · activate answer",
       );
-      expect(stateRow(state, unsettled, waiting, NARROW)).toBe(
+      expect(yield* stateRow(state, unsettled, waiting, NARROW)).toBe(
         "Entry 1 question · activate answer · Type here · Tab/Shift+Tab move",
       );
 
       // The same history with no question outstanding: running, and Enter is not
       // a submission until it finishes.
       const busy: ReplLive = { ...waiting, question: undefined };
-      expect(stateRow(state, unsettled, busy, WIDE)).toContain(
+      expect(yield* stateRow(state, unsettled, busy, WIDE)).toContain(
         "Entry 1 running · Enter unavailable until it finishes",
       );
-      expect(stateRow(state, unsettled, busy, NARROW)).toBe(
+      expect(yield* stateRow(state, unsettled, busy, NARROW)).toBe(
         "Entry 1 running · Enter unavailable · Type here · Tab/Shift+Tab move",
       );
 
@@ -2685,10 +2909,10 @@ describe("REPL entries: what the screen says the execution is doing", () => {
       // that an entry never finished, so no successor may start however idle it
       // looks — this is the cold and interrupted case.
       const abandoned: ReplLive = { ...busy, running: false };
-      expect(stateRow(state, unsettled, abandoned, WIDE)).toContain(
+      expect(yield* stateRow(state, unsettled, abandoned, WIDE)).toContain(
         "Entry 1 unfinished · no successor can start",
       );
-      expect(stateRow(state, unsettled, abandoned, NARROW)).toBe(
+      expect(yield* stateRow(state, unsettled, abandoned, NARROW)).toBe(
         "Entry 1 unfinished · no successor · Type here · Tab/Shift+Tab move",
       );
 
@@ -2700,7 +2924,7 @@ describe("REPL entries: what the screen says the execution is doing", () => {
       expect(session.live).toBe(false);
 
       // The close is recorded and the task is joined: the next entry may start.
-      expect(stateRow(state, settled, liveReading(session), WIDE)).toContain(
+      expect(yield* stateRow(state, settled, liveReading(session), WIDE)).toContain(
         "Ready for Entry 2 · Enter submits",
       );
 
@@ -2708,21 +2932,21 @@ describe("REPL entries: what the screen says the execution is doing", () => {
       // unwinding. This is the one distinction the durable side cannot make, and
       // the reason the view carries the live half at all.
       const tearing: ReplLive = { ...liveReading(session), running: true };
-      expect(stateRow(state, settled, tearing, WIDE)).toContain(
+      expect(yield* stateRow(state, settled, tearing, WIDE)).toContain(
         "Entry 1 settling · Enter unavailable until teardown finishes",
       );
-      expect(stateRow(state, settled, tearing, NARROW)).toBe(
+      expect(yield* stateRow(state, settled, tearing, NARROW)).toBe(
         "Entry 1 settling · Enter unavailable · Type here · Tab/Shift+Tab move",
       );
 
       // And every one of them is a different sentence.
       const said = new Set([
-        stateRow(empty, EMPTY_MODEL, NOTHING_LIVE, NARROW),
-        stateRow(state, unsettled, waiting, NARROW),
-        stateRow(state, unsettled, busy, NARROW),
-        stateRow(state, unsettled, abandoned, NARROW),
-        stateRow(state, settled, liveReading(session), NARROW),
-        stateRow(state, settled, tearing, NARROW),
+        yield* stateRow(empty, EMPTY_MODEL, NOTHING_LIVE, NARROW),
+        yield* stateRow(state, unsettled, waiting, NARROW),
+        yield* stateRow(state, unsettled, busy, NARROW),
+        yield* stateRow(state, unsettled, abandoned, NARROW),
+        yield* stateRow(state, settled, liveReading(session), NARROW),
+        yield* stateRow(state, settled, tearing, NARROW),
       ]);
       expect(said.size).toBe(6);
       for (const row of said) {
@@ -2779,7 +3003,7 @@ describe("REPL entries: what a frozen position says is unavailable", () => {
         throw prefix.error;
       }
       for (const size of [WIDE, NARROW]) {
-        const rows = rowsOf(describeApplication(reading(frozen, prefix.value, head, size)));
+        const rows = yield* describedBy(reading(frozen, prefix.value, head, size));
         const guidance = rows.find((one) => one.key === "guidance")?.label ?? "";
         // The state is the position, and it says Enter is not a submission here.
         expect([size.columns, guidance.startsWith("History · Enter unavailable")]).toEqual([
@@ -2807,7 +3031,7 @@ describe("REPL entries: what a frozen position says is unavailable", () => {
 
       // Returning to the head restores the readiness of the head, with the same
       // draft still in hand.
-      const live = rowsOf(describeApplication(reading(typed, model, liveReading(session), WIDE)));
+      const live = yield* describedBy(reading(typed, model, liveReading(session), WIDE));
       expect(live.find((one) => one.key === "guidance")?.label).toContain("Ready for Entry 2");
       expect(live.find((one) => one.key === "footer:input")?.label).toBe(DRAFT_TEXT);
     });
@@ -2832,8 +3056,8 @@ describe("REPL entries: a retained close while the task is still coming down", (
   beforeAll(() => useTempFileCompiler());
 
   /** The contextual guidance this view describes. */
-  function guidanceOf(state: ReplState, model: ReplModel, live: ReplLive): string {
-    const row = rowsOf(describeApplication(reading(state, model, live, WIDE))).find(
+  function* guidanceOf(state: ReplState, model: ReplModel, live: ReplLive): Operation<string> {
+    const row = (yield* describedBy(reading(state, model, live, WIDE))).find(
       (one) => one.key === "guidance",
     );
     if (row === undefined) {
@@ -2878,7 +3102,7 @@ describe("REPL entries: a retained close while the task is still coming down", (
         });
 
         // The screen says settling, and says that Enter is not a submission yet.
-        const settling = guidanceOf(typed, session.model, liveReading(session));
+        const settling = yield* guidanceOf(typed, session.model, liveReading(session));
         expect(settling).toContain("Entry 1 settling");
         expect(settling).toContain("Enter unavailable until teardown finishes");
         expect(settling).not.toContain("Enter submits");
@@ -2902,7 +3126,7 @@ describe("REPL entries: a retained close while the task is still coming down", (
 
         // The same state, the same draft, the same form message: the screen now
         // reads ready, because the other half of the fact changed.
-        const ready = guidanceOf(typed, session.model, liveReading(session));
+        const ready = yield* guidanceOf(typed, session.model, liveReading(session));
         expect(ready).toContain("Ready for Entry 2");
         expect(ready).toContain("Enter submits");
         expect(ready).not.toContain("settling");
@@ -2936,8 +3160,8 @@ describe("REPL entries: what a failed entry says it failed with", () => {
   beforeAll(() => useTempFileCompiler());
 
   /** The transcript rows this model describes, by label. */
-  function transcript(model: ReplModel): string[] {
-    return rowsOf(describeApplication(reading(initialState(EXECUTION), model, NOTHING_LIVE, WIDE)))
+  function* transcript(model: ReplModel): Operation<string[]> {
+    return (yield* describedBy(reading(initialState(EXECUTION), model, NOTHING_LIVE, WIDE)))
       .filter((one) => one.key.startsWith("line:"))
       .map((one) => one.label);
   }
@@ -2957,7 +3181,7 @@ describe("REPL entries: what a failed entry says it failed with", () => {
       const recorded = terminal?.message ?? "";
       expect(recorded.length).toBeGreaterThan(80);
 
-      const live = transcript(session.model);
+      const live = yield* transcript(session.model);
       const failed = live.find((one) => one.startsWith("failed: "));
       expect(failed).toBeDefined();
       // The compact outcome is still there, beside the reason rather than
@@ -2968,7 +3192,9 @@ describe("REPL entries: what a failed entry says it failed with", () => {
       // constant: the row that carries it is cut to where it lands, and the row
       // below asserts that against the real placement at three sizes.
       expect(failed?.includes("\n")).toBe(false);
-      expect((failed ?? "").length).toBeLessThanOrEqual(surfaceWidth(WIDE));
+      expect((failed ?? "").length).toBeLessThanOrEqual(
+        WIDE.columns - (sidebarWidth(WIDE) ?? 0) - (inspectionWidth(WIDE) ?? 0),
+      );
       // What is drawn is the *recorded* reason, flattened and cut — compared
       // against the message this run actually produced rather than against a
       // phrase. The phrase is the engine's: Deno compiles an eval block with V8
@@ -2990,7 +3216,9 @@ describe("REPL entries: what a failed entry says it failed with", () => {
         throw cold.error;
       }
       expect(cold.value.entries[0]?.terminal?.message).toBe(recorded);
-      expect(transcript(cold.value).find((one) => one.startsWith("failed: "))).toBe(failed);
+      expect((yield* transcript(cold.value)).find((one) => one.startsWith("failed: "))).toBe(
+        failed,
+      );
     });
   });
 
@@ -3017,15 +3245,13 @@ describe("REPL entries: what a failed entry says it failed with", () => {
       for (const size of [WIDE, { columns: 120, rows: 30 }, NARROW]) {
         const tree = yield* useReplTree<ReplAction>();
         const view = reading(state, session.model, NOTHING_LIVE, size);
-        yield* applied(tree, view);
-        const frame = layout(size, replSurface(tree, view));
+        const frame = yield* drawn(tree, view, size);
 
-        const cells = frame.cells.filter((cell) => {
-          const key = tree.keyOf(cell.node);
-          return key !== undefined && key.startsWith("line:");
-        });
+        const cells = frame.keys
+          .filter((key) => key.startsWith("line:"))
+          .map((key) => ({ key, text: frame.cell(key) ?? "", bounds: frame.bounds(key) }));
         const failed = cells.find((cell) => cell.text.startsWith("failed: "));
-        const region = frame.regions.find((one) => one.region === "transcript")?.bounds;
+        const region = frame.region("transcript");
 
         if (region === undefined) {
           // The narrow profile mounts one routed outlet, and the transcript is
@@ -3057,7 +3283,7 @@ describe("REPL entries: what a failed entry says it failed with", () => {
 
         // The footer is exactly where it always is: the reason did not push a
         // single row of it anywhere.
-        const footer = frame.regions.find((one) => one.region === "footer")?.bounds;
+        const footer = frame.region("footer");
         expect([size.columns, footer?.height]).toEqual([size.columns, 7]);
         expect([size.columns, footer?.y]).toEqual([size.columns, size.rows - 7]);
         expect([size.columns, footer?.width]).toEqual([size.columns, size.columns]);
@@ -3073,7 +3299,7 @@ describe("REPL entries: what a failed entry says it failed with", () => {
       expect(session.model.entries[0]?.terminal?.status).toBe("ok");
       // Nothing invented: an `ok` outcome has no reason, and a row saying it
       // failed would describe a failure that did not happen.
-      for (const row of transcript(session.model)) {
+      for (const row of yield* transcript(session.model)) {
         expect([row, row.startsWith("failed: ")]).toEqual([row, false]);
       }
     });

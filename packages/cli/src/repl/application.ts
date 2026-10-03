@@ -29,17 +29,47 @@ import { Ok, type Result } from "effection";
 import type { Json } from "@executablemd/durable-streams";
 
 import { describe as describeNode, fields, readDescription } from "./description.ts";
-import type { ReplDescription } from "./description.ts";
+import type { ReplComponent, ReplDescription, ReplViewData } from "./description.ts";
 import {
-  drawerHeight,
-  drawerWidth,
+  actionRowProps,
+  bandProps,
+  bodyProps,
+  box,
+  columnProps,
+  stackProps,
+  CONTROL_PROPS,
+  drawerLayerProps,
+  drawerRect,
+  footerProps,
+  historyBand,
   HISTORY_ROWS,
+  inspectionWidth,
   NARROW,
   profileFor,
-  sessionsHeight,
-  surfaceWidth,
+  refusalProps,
+  refusalText,
+  rootProps,
+  rowProps,
+  sharedColumnRows,
+  sidebarWidth,
+  viewportProps,
 } from "./layout.ts";
-import type { ReplSurface as ReplPlacedSurface, ReplSurfaceCell } from "./layout.ts";
+import type {
+  ReplBounds,
+  ReplBox,
+  ReplBoxProps,
+  ReplLayoutManifest,
+  ReplRegion,
+  ReplViewportSlot,
+} from "./layout.ts";
+import {
+  admitActions,
+  admitRows,
+  capacityOf,
+  NOTHING_ADMITTED,
+  scrolled,
+} from "./layout-admission.ts";
+import type { ReplAdmission, ReplWindow } from "./layout-admission.ts";
 import type { ReplTerminalSize } from "./terminal.ts";
 import {
   decodeLocation,
@@ -74,7 +104,15 @@ import type {
 } from "./agent.ts";
 import type { ExpansionState } from "./expansion.ts";
 import type { ReplTree } from "./reconcile.ts";
-import { DRAWER, FIELD, LINE, REFUSAL, SELECT_ROW } from "./components/rows.ts";
+import {
+  DRAWER,
+  FIELD,
+  fieldText,
+  focusPrefixed,
+  LINE,
+  REFUSAL,
+  SELECT_ROW,
+} from "./components/rows.ts";
 import type { ReplAction } from "./components/actions.ts";
 
 export type { ReplAction };
@@ -368,10 +406,28 @@ export interface ReplViewports {
   readonly entries: number;
   /** Rows the open permission drawer is scrolled by. */
   readonly permission: number;
+  /**
+   * Rows each retained drawer reading is scrolled by, one per reading.
+   *
+   * Keyed by what the reading **is** — the execution, the prefix being read, and
+   * the binding or occurrence being shown — rather than by the drawer's title or
+   * its position in the stack. Two bindings with the same name in different
+   * scopes are different readings and keep different offsets, and revisiting one
+   * finds its own position again instead of wherever the last drawer was left.
+   *
+   * Process-local, like every other window: no location, record or Journal holds
+   * one, so a location read in another process opens each reading at its start.
+   */
+  readonly readings: Readonly<Record<string, number>>;
 }
 
 /** Every window at its first row, which is where a fresh reading starts. */
-export const AT_TOP: ReplViewports = Object.freeze({ sessions: 0, entries: 0, permission: 0 });
+export const AT_TOP: ReplViewports = Object.freeze({
+  sessions: 0,
+  entries: 0,
+  permission: 0,
+  readings: Object.freeze({}),
+});
 
 /** Everything typed and not yet committed anywhere. */
 export interface ReplState {
@@ -804,10 +860,12 @@ export function reduceRepl(
   action: ReplAction,
   model: ReplModel,
   live: ReplLive,
-  // What the frame can hold, for the one decision that depends on it: how far
-  // the drawer's content may be scrolled. Narrow is the smallest accepted
-  // frame, so a caller that states none clamps to the tightest capacity.
-  size: ReplTerminalSize = NARROW,
+  // What the frame measured and admitted, for the decisions that depend on it:
+  // how far each window may move, and from where. It is the same answer the
+  // descriptions were built from, so a scroll cannot clamp against a capacity
+  // the screen is not showing. A caller that states none moves no window — an
+  // unmeasured frame has admitted nothing.
+  admission: ReplAdmission = NOTHING_ADMITTED,
 ): ReplTransition {
   // Whoever pressed this key has moved on from wherever the last drawer put
   // focus, so the claim does not outlive the commit it was made for.
@@ -982,40 +1040,32 @@ export function reduceRepl(
       return navigate(atFirstRow(state), model, { ...state.route, session: undefined }, live);
     }
     case "scroll-sessions": {
-      // Clamped against the reading this state actually has, and stored clamped:
-      // an offset kept past the last window would take several presses to have
-      // any visible effect, so what is held is what the region is showing.
-      const rows = sessionContentRows(state, model, live);
-      const furthest = Math.max(0, rows - sessionsCapacity(state, model, size));
-      // From where the frame is, not from the number that was stored. A resize
-      // changes what a window holds, and the region is already drawing the
-      // clamped position — so a delta added to a stale larger number would
-      // spend a press normalizing state nobody can see, and the screen would
-      // not move.
-      const sessions = clamped(
-        clamped(state.viewports.sessions, furthest) + action.delta,
-        furthest,
-      );
+      // From the clamp the frame is **showing**, over the window it measured for
+      // the size and reading this action is being answered at. A delta added to
+      // a stored number instead would spend a press normalizing state nobody can
+      // see — a resize or a filter changes what the window holds, and the region
+      // is already drawing the clamped position.
+      const window = admission.windows.get(SESSIONS_WINDOW);
+      if (window === undefined) {
+        // Nothing measured a window here, so there is nothing to move. A reading
+        // that fits its region is not scrolled; it is shown.
+        return settled({ ...state, refusal: undefined });
+      }
       return settled({
         ...state,
-        viewports: Object.freeze({ ...state.viewports, sessions }),
+        viewports: Object.freeze({ ...state.viewports, sessions: scrolled(window, action.delta) }),
         refusal: undefined,
       });
     }
     case "scroll-entries": {
-      // The same clamp as the Sessions window, over the catalog's own rows, and
-      // applied from where the frame is rather than from the number that was
-      // stored: a resize changes what this window holds, and the region is
-      // already drawing the clamped position.
-      const furthest = Math.max(
-        0,
-        entryContent(model, undefined, undefined).length -
-          entriesWindow(state, model, size).capacity,
-      );
-      const entries = clamped(clamped(state.viewports.entries, furthest) + action.delta, furthest);
+      // The same rule over the catalog's own measured window.
+      const window = admission.windows.get(ENTRIES_WINDOW);
+      if (window === undefined) {
+        return settled({ ...state, refusal: undefined });
+      }
       return settled({
         ...state,
-        viewports: Object.freeze({ ...state.viewports, entries }),
+        viewports: Object.freeze({ ...state.viewports, entries: scrolled(window, action.delta) }),
         refusal: undefined,
       });
     }
@@ -1180,43 +1230,60 @@ export function reduceRepl(
     }
     case "scroll": {
       const open = state.route.drawers[state.route.drawers.length - 1];
-      if (open?.kind === "live-permission") {
+      if (open === undefined) {
+        return refuse(state, "no drawer is open to scroll.");
+      }
+      // The window the frame measured for the drawer that is open. One viewport
+      // moves at a time, because one drawer is read at a time; which offset the
+      // new position is stored in is decided by what is being read.
+      const window = admission.windows.get(DRAWER_WINDOW);
+      if (open.kind === "live-permission") {
         const pending =
           state.permission === undefined ? undefined : offered(state, live, state.permission);
         if (pending === undefined) {
           return refuse(state, "no permission request is being answered.");
         }
-        // The same clamp, over the drawer's own ordered content: the kind, the
-        // call, whose turn is waiting, every choice the provider offered and
-        // what closing does.
-        const rows = permissionContentRows(model, live, pending);
-        const furthest = Math.max(0, rows - drawerCapacity(size));
-        // From where the drawer is, for the same reason.
-        const permission = clamped(
-          clamped(state.viewports.permission, furthest) + action.delta,
-          furthest,
-        );
+        if (window === undefined) {
+          return settled({ ...state, refusal: undefined });
+        }
         return settled({
           ...state,
-          viewports: Object.freeze({ ...state.viewports, permission }),
+          viewports: Object.freeze({
+            ...state.viewports,
+            permission: scrolled(window, action.delta),
+          }),
           refusal: undefined,
         });
       }
-      if (!answering) {
-        return refuse(state, "nothing is being asked right now.");
+      if (open.kind === "live-elicit") {
+        if (!answering) {
+          return refuse(state, "nothing is being asked right now.");
+        }
+        if (window === undefined) {
+          return settled({ ...state, refusal: undefined });
+        }
+        return settled({
+          ...state,
+          form: Object.freeze({ ...state.form, offset: scrolled(window, action.delta) }),
+          refusal: undefined,
+        });
       }
-      // Clamped at both ends, and stored clamped. An offset kept past the last
-      // window would take several presses to have any visible effect, so the
-      // value held is the one the region is actually showing.
-      // Clamped against the whole ordered content, not only the message: the
-      // viewport is what moves, and the form rows are inside it.
-      const rows = drawerContentRows(live.question, state.form);
-      const capacity = drawerCapacity(size);
-      const furthest = Math.max(0, rows - capacity);
-      const offset = Math.min(Math.max(0, state.form.offset + action.delta), furthest);
+      // A retained reading: History, a binding's value or a recorded answer.
+      // Scrolling one changes that reading's own offset and nothing else — no
+      // canonical location, no Journal, no History selection and no answer.
+      const reading = readingKeyOf(state, open);
+      if (reading === undefined || window === undefined) {
+        return settled({ ...state, refusal: undefined });
+      }
       return settled({
         ...state,
-        form: Object.freeze({ ...state.form, offset }),
+        viewports: Object.freeze({
+          ...state.viewports,
+          readings: Object.freeze({
+            ...state.viewports.readings,
+            [reading]: scrolled(window, action.delta),
+          }),
+        }),
         refusal: undefined,
       });
     }
@@ -1508,7 +1575,19 @@ export function focusClaim(view: ReplView): string | undefined {
   const caused = (selection.scope?.elicitations ?? []).find(
     (one) => !known.has(one.marker) && sameJson(one.answer, answer),
   );
-  return caused === undefined ? undefined : `elicit:${caused.marker}`;
+  if (caused === undefined) {
+    return undefined;
+  }
+  // A narrow frame has no inspection region, so the record's own row is not one
+  // this screen offers. Focus goes to the entry that owns the record instead:
+  // the control the reader can see, in the one outlet a narrow frame draws. The
+  // claim stays silent while that outlet is showing the other surface, exactly as
+  // it does for any row this view does not draw.
+  if (profileFor(view.size) === "narrow") {
+    const owner = selection.entry?.key;
+    return owner === undefined ? undefined : `entry:${owner}`;
+  }
+  return `elicit:${caused.marker}`;
 }
 
 /**
@@ -1948,22 +2027,29 @@ function field(
 }
 
 /**
- * Describe the whole screen.
+ * Describe the whole screen, for one measured frame.
  *
  * One flat set with keyed children for the drawer, because placement is not
  * nesting: where a row appears is the layout's decision, and the only nesting
  * that matters to the tree is what a modal must contain.
+ *
+ * The descriptions and the constraints that place them come from `presentationFor`
+ * in one walk. This is the same walk asked only for the tree, which is what a
+ * caller reconciling without drawing wants.
  */
-export function describeApplication(view: ReplView): readonly ReplDescription<ReplAction>[] {
-  return described(view).map((one) => one.description);
+export function describeApplication(
+  view: ReplView,
+  context: ReplPresentationContext,
+): readonly ReplDescription<ReplAction>[] {
+  return presentationFor(view, context).descriptions;
 }
 
-function described(view: ReplView): readonly Described[] {
+function described(view: ReplView, context: ReplPresentationContext): readonly Described[] {
   if (view.refusal !== undefined) {
     // A reason as long as its sentence, over rows that fit: a refusal is the only
     // thing on this screen, and one clipped to a single row is a refusal that has
     // not been given.
-    const [first, ...rest] = chunked(view.refusal, surfaceWidth(view.size));
+    const [first, ...rest] = chunked(view.refusal, context.widths?.surface ?? 0);
     // Where somewhere to go exists, the refusal itself is focusable and takes the
     // claim; otherwise focus starts on the way out. Declared, so the claim is a
     // typed member rather than a literal that has to be asserted into one.
@@ -2060,9 +2146,11 @@ function described(view: ReplView): readonly Described[] {
     // and request is built in order and then windowed: a list that described all
     // of them would have its tail placed nowhere, and a row layout cannot place
     // is not one a person can see, focus or point at.
-    const content = sessionRows(state, turns, view.focused, claim);
-    const capacity = sessionsCapacity(state, model, view.size);
-    const from = clamped(state.viewports.sessions, Math.max(0, content.length - capacity));
+    //
+    // The window is what the frame measured, not what this boundary could work
+    // out from the region's height — the rows above and below it are described
+    // here, so only the engine knows what is left for the rows inside.
+    const content = sessionRows(state, turns, view.focused, claim, context.widths?.list);
     // Outside the thing they move, like the drawer's: a control inside the
     // window would scroll away from whoever was reaching for it.
     items.push(
@@ -2075,7 +2163,7 @@ function described(view: ReplView): readonly Described[] {
         },
       ),
     );
-    items.push(...content.slice(from, from + capacity));
+    items.push(...shown(content, context, SESSIONS_WINDOW));
     items.push(
       row(
         "sessions:later",
@@ -2097,10 +2185,14 @@ function described(view: ReplView): readonly Described[] {
     // place is not one a person can see, focus or point at. The controls sit
     // outside the thing they move, and exist only where there is more catalog
     // than this frame can hold.
-    const catalog = entryContent(model, view.focused, selection.entry?.key);
-    const window = entriesWindow(state, model, view.size);
-    const from = clamped(state.viewports.entries, Math.max(0, catalog.length - window.capacity));
-    if (window.windowed) {
+    const catalog = entryContent(
+      model,
+      view.focused,
+      selection.entry?.key,
+      context.widths?.list,
+      claim,
+    );
+    if (context.entriesWindowed) {
       items.push(
         row(
           "entries:earlier",
@@ -2110,8 +2202,8 @@ function described(view: ReplView): readonly Described[] {
         ),
       );
     }
-    items.push(...catalog.slice(from, from + window.capacity));
-    if (window.windowed) {
+    items.push(...shown(catalog, context, ENTRIES_WINDOW));
+    if (context.entriesWindowed) {
       items.push(
         row(
           "entries:later",
@@ -2128,11 +2220,19 @@ function described(view: ReplView): readonly Described[] {
   // concatenated, which would make the catalog a list of things that all show
   // the same reading. With nothing selected the whole execution is the locus,
   // which is what a one-entry execution has always shown.
-  for (const [index, transcript] of showEntry ? transcriptOf(model, selection).entries() : []) {
+  const inspectable = showEntry;
+  // Not until a width has been measured. A transcript row is bounded to the
+  // region it lands in, and an unbounded one makes that region wider than its
+  // share — which would corrupt the very measurement that is about to answer
+  // how wide it is.
+  const surface = context.widths?.surface;
+  for (const [index, transcript] of inspectable && surface !== undefined
+    ? transcriptOf(model, selection).entries()
+    : []) {
     // One cell is one row, so a recorded row that holds several lines of output
     // becomes several cells. A cell given more than one line would show only the
     // first, which is the whole of what a reader would then believe was there.
-    for (const [offset, text] of describeRow(transcript, surfaceWidth(view.size))
+    for (const [offset, text] of describeRow(transcript, surface ?? 0)
       .split("\n")
       .entries()) {
       items.push(line(`line:${index}:${offset}`, text));
@@ -2146,19 +2246,28 @@ function described(view: ReplView): readonly Described[] {
   // admitted — nothing earlier can still be running. A reader who has selected
   // an earlier entry is reading a settled transcript, and text from a run that
   // is not the one they are looking at would be attributed to it.
-  if (showEntry && live.output.length > 0 && livesHere(model, selection)) {
+  if (inspectable && live.output.length > 0 && livesHere(model, selection)) {
     for (const [offset, text] of live.output.split("\n").entries()) {
       items.push(line(`line:live:${offset}`, `… ${text}`));
     }
   }
 
-  const scope = showEntry ? selection.scope : undefined;
+  // The inspection controls, and only where there is an inspection region to put
+  // them in. A narrow frame has one routed outlet, so a binding row or a recorded
+  // answer row described there would be mounted, focusable and placed nowhere — a
+  // Tab stop that draws no cell and a pointer target behind nothing. What is
+  // selected and which route is showing are unchanged: this is what the frame
+  // offers, not what the reader has chosen.
+  const scope = inspectable && !narrow ? selection.scope : undefined;
   if (scope !== undefined) {
     for (const binding of scope.bindings) {
       items.push(
         row(
           `binding:${binding.name}`,
-          `${binding.name} = ${summarize(binding.value)}`,
+          fitControl(
+            [{ text: `${binding.name} = ` }, { text: summarize(binding.value), elide: true }],
+            context.widths?.inspection,
+          ),
           {
             select: "binding",
             name: binding.name,
@@ -2171,7 +2280,10 @@ function described(view: ReplView): readonly Described[] {
       items.push(
         row(
           `elicit:${elicitation.marker}`,
-          `answered ${elicitation.location}`,
+          fitControl(
+            [{ text: "answered " }, { text: elicitation.location, elide: true }],
+            context.widths?.inspection,
+          ),
           {
             select: "recorded-elicit",
             marker: elicitation.marker,
@@ -2203,6 +2315,13 @@ function described(view: ReplView): readonly Described[] {
   // stays reachable without reaching past the focus trap, and layout still draws
   // it in the footer where it always is.
   const exit = row("footer:exit", "[exit]", { select: "exit" }, { here: view.focused });
+  // Whether the action row holds one control at all. A control the measured row
+  // cannot hold whole is not described, so it mounts nothing: describing it and
+  // leaving it out of the frame would be a focus stop that draws nothing and a
+  // target behind nothing. The measuring pass offers every candidate, because
+  // what each one costs is the question that pass is asking.
+  const offering = (key: string): boolean =>
+    context.measuring || context.admission.actions.has(key);
   // Not below the minimum size: that frame places no cell at all, so a control
   // described there is a focus stop that draws nothing and a target behind
   // nothing. The screen says Escape leaves instead, which is the one way out a
@@ -2210,37 +2329,41 @@ function described(view: ReplView): readonly Described[] {
   const drawable = profileFor(view.size) !== "too-small";
   const modal = view.selection.drawers.length > 0;
   if (!modal) {
-    items.push(history);
-    if (drawable) {
+    if (offering("footer:history")) {
+      items.push(history);
+    }
+    if (drawable && offering("footer:exit")) {
       items.push(exit);
     }
   }
-  if (state.route.at !== undefined) {
+  if (state.route.at !== undefined && offering("footer:live")) {
     items.push(row("footer:live", "[live]", { select: "live" }, { here: view.focused }));
   }
   if (live.pausable) {
-    items.push(
-      // The control is what it does; the state is what expansion is doing. One
-      // label that changed between them would rename a control out from under
-      // whoever was reaching for it.
-      row(
-        "footer:pause",
-        live.expansion === "playing" ? "[pause]" : `[pause] ${live.expansion}`,
-        { select: "pause" },
-        { here: view.focused },
-      ),
-    );
+    if (offering("footer:pause")) {
+      items.push(
+        // The control is what it does; the state is what expansion is doing. One
+        // label that changed between them would rename a control out from under
+        // whoever was reaching for it.
+        row(
+          "footer:pause",
+          live.expansion === "playing" ? "[pause]" : `[pause] ${live.expansion}`,
+          { select: "pause" },
+          { here: view.focused },
+        ),
+      );
+    }
     // Continue releases a continuation, so it exists exactly while one is
     // held. Expansion that is *pausing* holds nothing yet — the walks it asked
     // to stop have not all stopped — and a Continue offered there would cancel
     // the pause somebody just asked for rather than resume anything.
-    if (live.expansion === "paused") {
+    if (live.expansion === "paused" && offering("footer:continue")) {
       items.push(
         row("footer:continue", "[continue]", { select: "continue" }, { here: view.focused }),
       );
     }
   }
-  if (live.question !== undefined && state.route.at === undefined) {
+  if (live.question !== undefined && state.route.at === undefined && offering("footer:asked")) {
     items.push(
       row(
         "footer:asked",
@@ -2257,21 +2380,43 @@ function described(view: ReplView): readonly Described[] {
     );
   }
 
-  items.push(line("guidance", guidance(view)));
+  // Bounded to the surface it lands in, like every other row above it. The
+  // sentence is as long as the state it describes, and the medium profile's
+  // transcript column is narrower than the longest of them — a row wider than
+  // its column is one the column beside it loses space to.
+  if (surface !== undefined) {
+    items.push(line("guidance", guidance(view)));
+  }
 
   // The canonical location: how a person comes back to exactly this view, here
   // or in another process. It goes above whatever surface is being shown rather
   // than in the footer, which is seven rows and has controls in them.
-  for (const [offset, part] of locationRows(view.location, view.size).entries()) {
+  for (const [offset, part] of locationRows(view.location, view.size, context.widths).entries()) {
     items.push(line(`location:${offset}`, part));
   }
 
   // Why the last thing asked for changed nothing. Shown rather than swallowed: a
   // refusal nobody can read is a keystroke that appeared to do nothing.
-  if (state.refusal !== undefined) {
+  if (state.refusal !== undefined && offering("footer:refused")) {
     // One line: the footer is seven rows and the controls live in them, so a
     // refusal that wrapped would push the draft off the screen it is about.
-    items.push(line("footer:refused", `! ${state.refusal.split("\n").join(" ")}`));
+    //
+    // Cut to whatever the measured row had left, with an ellipsis, so a reader
+    // can tell a shortened reason from a complete one. The controls come first:
+    // a row too narrow for both keeps the way out and loses the sentence.
+    const said = `! ${state.refusal.split("\n").join(" ")}`;
+    const room =
+      context.admission.shortened?.key === "footer:refused"
+        ? context.admission.shortened.width
+        : undefined;
+    items.push(
+      line(
+        "footer:refused",
+        room === undefined || said.length <= room
+          ? said
+          : `${said.slice(0, Math.max(1, room - 1))}…`,
+      ),
+    );
   }
 
   // The draft, which is where typing goes. Always the next entry's text: an
@@ -2297,11 +2442,35 @@ function described(view: ReplView): readonly Described[] {
     ),
   );
 
-  const drawer = drawerFor(view, history, exit, drawable);
+  const drawer = drawerFor(view, context, history, exit, drawable);
   if (drawer !== undefined) {
     items.push(drawer);
   }
   return items;
+}
+
+/**
+ * The rows one measured window shows, of a whole ordered reading.
+ *
+ * Nothing at all while the frame is being measured: a viewport's capacity is
+ * what the flow around it left, so the pass that asks describes the region empty
+ * and the rows follow once there is an answer. A reading with no measured window
+ * shows nothing rather than everything — "show all" is how a list comes to
+ * describe rows the frame cannot place.
+ */
+function shown(
+  content: readonly Described[],
+  context: ReplPresentationContext,
+  window: string,
+): readonly Described[] {
+  if (context.measuring) {
+    return [];
+  }
+  const held = context.admission.windows.get(window);
+  if (held === undefined) {
+    return [];
+  }
+  return content.slice(held.from, held.from + held.count);
 }
 
 /**
@@ -2344,6 +2513,14 @@ function sessionRows(
   turns: readonly ReplSessionTurn[],
   focused: string | undefined,
   claim: string | undefined,
+  /**
+   * How wide the frame measured the region these rows land in.
+   *
+   * None where there is nothing to fit to: counting the reading needs the same
+   * rows and no width, because what a label gives up does not change how many
+   * rows there are.
+   */
+  width: number | undefined,
 ): readonly Described[] {
   const items: Described[] = [];
   const filter = state.route.session;
@@ -2364,7 +2541,10 @@ function sessionRows(
       items.push(
         row(
           `sessions:conversation:${key}`,
-          `  ${filter === key ? "> " : ""}${headline(key)}`,
+          fitControl(
+            [{ text: `  ${filter === key ? "> " : ""}` }, { text: headline(key), elide: true }],
+            width,
+          ),
           { select: "session", session: key },
           { here: focused },
         ),
@@ -2378,7 +2558,17 @@ function sessionRows(
     items.push(
       row(
         `sessions:turn:${turn.key}`,
-        `  ${headline(turn.prompt)} · ${stateOf(turn)}`,
+        // The state comes last and stays: it is why this row is on the screen,
+        // and a prompt nobody bounded must not be what takes it off.
+        fitControl(
+          [
+            { text: "  " },
+            { text: headline(turn.prompt), elide: true },
+            { text: " · " },
+            { text: stateOf(turn), keep: true },
+          ],
+          width,
+        ),
         // A turn is read at the position its record holds; a live one has none
         // to go to yet, so it selects the surface it is already on.
         turn.marker === undefined
@@ -2391,16 +2581,36 @@ function sessionRows(
     );
     if (turn.agent !== undefined || turn.sessionKey !== undefined) {
       const said = [turn.agent, turn.sessionKey].filter((fact) => fact !== undefined);
-      items.push(line(`sessions:turn:${turn.key}:whose`, `    ${said.join(" · ")}`));
+      items.push(
+        line(
+          `sessions:turn:${turn.key}:whose`,
+          fitLine([{ text: "    " }, { text: said.join(" · "), elide: true }], width),
+        ),
+      );
     }
     if (turn.text.length > 0) {
-      items.push(line(`sessions:turn:${turn.key}:text`, `    ${headline(turn.text)}`));
+      items.push(
+        line(
+          `sessions:turn:${turn.key}:text`,
+          fitLine([{ text: "    " }, { text: headline(turn.text), elide: true }], width),
+        ),
+      );
     }
     if (turn.stopReason !== undefined) {
-      items.push(line(`sessions:turn:${turn.key}:stop`, `    stopped: ${turn.stopReason}`));
+      items.push(
+        line(
+          `sessions:turn:${turn.key}:stop`,
+          fitLine([{ text: "    stopped: " }, { text: turn.stopReason, elide: true }], width),
+        ),
+      );
     }
     if (turn.failure !== undefined) {
-      items.push(line(`sessions:turn:${turn.key}:failed`, `    ${headline(turn.failure)}`));
+      items.push(
+        line(
+          `sessions:turn:${turn.key}:failed`,
+          fitLine([{ text: "    " }, { text: headline(turn.failure), elide: true }], width),
+        ),
+      );
     }
     const request = turn.request;
     if (request !== undefined) {
@@ -2409,16 +2619,19 @@ function sessionRows(
       // Sessions surface, and a control that refused when activated would be a
       // target that does nothing. Either way, arriving here opens nothing —
       // somebody activates it.
-      const label = `    asks: ${headline(request.title ?? request.toolCallId)}`;
+      const asks: readonly ReplLabelPart[] = [
+        { text: "    asks: " },
+        { text: headline(request.title ?? request.toolCallId), elide: true },
+      ];
       items.push(
         state.route.surface === "sessions"
           ? row(
               `sessions:request:${request.key}`,
-              label,
+              fitControl(asks, width),
               { select: "permission", request: request.key },
               { here: focused },
             )
-          : line(`sessions:request:${request.key}`, label),
+          : line(`sessions:request:${request.key}`, fitLine(asks, width)),
       );
     }
     for (const [at, audit] of turn.audits.entries()) {
@@ -2427,7 +2640,17 @@ function sessionRows(
       items.push(
         line(
           `sessions:audit:${turn.key}:${at}`,
-          `    granted: ${headline(audit.title ?? audit.toolCallId)} — ${outcomeOf(audit)}`,
+          // The outcome comes last and stays, for the same reason a turn's state
+          // does: it is the whole of what a retained audit says.
+          fitLine(
+            [
+              { text: "    granted: " },
+              { text: headline(audit.title ?? audit.toolCallId), elide: true },
+              { text: " — " },
+              { text: outcomeOf(audit), keep: true },
+            ],
+            width,
+          ),
         ),
       );
     }
@@ -2459,8 +2682,17 @@ const NARROW_LOCATION_ROWS = 3;
  * person whose controls are all off the bottom of the screen cannot do
  * anything at all.
  */
-function locationRows(location: string, size: ReplTerminalSize): readonly string[] {
-  const rows = chunked(location, surfaceWidth(size));
+function locationRows(
+  location: string,
+  size: ReplTerminalSize,
+  widths: ReplMeasuredWidths | undefined,
+): readonly string[] {
+  if (widths === undefined) {
+    // No width yet, and this is the longest unbounded thing on the screen: one
+    // row of it would make the column it lands in as wide as the whole location.
+    return Object.freeze([]);
+  }
+  const rows = chunked(location, widths.surface);
   if (profileFor(size) !== "narrow" || rows.length <= NARROW_LOCATION_ROWS) {
     return rows;
   }
@@ -2476,7 +2708,7 @@ function locationRows(location: string, size: ReplTerminalSize): readonly string
   // its behavior, and this is the contract.
   return Object.freeze([
     ...shown,
-    pad(`… ${hidden} more characters, in a wider window`, surfaceWidth(size)),
+    pad(`… ${hidden} more characters, in a wider window`, widths.surface),
   ]);
 }
 
@@ -2488,96 +2720,7 @@ function locationRows(location: string, size: ReplTerminalSize): readonly string
  * what the reading is, asked twice.
  */
 function sessionContentRows(state: ReplState, model: ReplModel, live: ReplLive): number {
-  return sessionRows(state, chronology(model, live), undefined, undefined).length;
-}
-
-/**
- * How many rows of the Sessions reading one frame can place.
- *
- * The region carries more than the reading. A narrow content region also holds
- * the canonical location and both surface controls; a sidebar also holds the
- * entry list under its own heading. Whatever is not the moving window is
- * subtracted, because a window sized by the whole region would push exactly
- * those controls out of the frame — and a described row nothing places is a
- * focus stop that draws nothing.
- *
- * At least one row: a window showing nothing would say the reading is empty.
- */
-function sessionsCapacity(state: ReplState, model: ReplModel, size: ReplTerminalSize): number {
-  const narrow = profileFor(size) === "narrow";
-  const shared = narrow ? aboveOutlet(state, size) : entriesFootprint(state, model, size);
-  // Both controls in a narrow frame, where they are one bar above the outlet.
-  // In a sidebar the entry list brings its own heading, counted with it.
-  const navigation = narrow ? 2 : 1;
-  return Math.max(1, sessionsHeight(size) - shared - navigation - WINDOW_CONTROLS);
-}
-
-/** `[^ earlier]` and `[v later]`, which are how either window moves. */
-const WINDOW_CONTROLS = 2;
-
-/**
- * How many rows sit above a narrow frame's routed outlet.
- *
- * The contextual guidance and the canonical location, both of which a narrow
- * frame draws in the one region it gives the outlet. Asked by each window that
- * has to decide how many rows it may describe: a window sized as though these
- * were not there has its last rows placed nowhere, which is a control a person
- * can scroll to and never reach.
- */
-function aboveOutlet(state: ReplState, size: ReplTerminalSize): number {
-  return GUIDANCE_ROWS + locationRows(encodeLocation(state.route), size).length;
-}
-
-/** The contextual guidance, which is one row at every size. */
-const GUIDANCE_ROWS = 1;
-
-/**
- * The most of a sidebar the Entries catalog may take from the reading beside it.
- *
- * A share rather than whatever the catalog happens to need: both lists are in
- * one column, and a catalog that sized itself by its own length would push the
- * Sessions reading — and then the Entries heading itself — off the bottom as
- * entries accumulated. Halving it is what makes the two independent, so neither
- * window has to be computed from the other.
- */
-const SIDEBAR_SHARE = 2;
-
-/** One window over the catalog: what it can place, and how to reach the rest. */
-interface ReplEntriesWindow {
-  readonly capacity: number;
-  /** Whether the window controls are needed, which is what they cost a row for. */
-  readonly windowed: boolean;
-}
-
-/**
- * How many catalog rows one frame can place, and whether it must scroll.
- *
- * The room is what is left of the region after everything that is not the
- * moving window: in a narrow frame the canonical location and both surface
- * controls, and in a sidebar this catalog's own share of the column, less its
- * heading. A catalog that fits takes exactly its own length and no controls, so
- * a one-entry execution draws precisely what it always drew.
- */
-function entriesWindow(
-  state: ReplState,
-  model: ReplModel,
-  size: ReplTerminalSize,
-): ReplEntriesWindow {
-  const content = entryContent(model, undefined, undefined).length;
-  const narrow = profileFor(size) === "narrow";
-  const room = narrow
-    ? sessionsHeight(size) - aboveOutlet(state, size) - 2
-    : Math.floor(sessionsHeight(size) / SIDEBAR_SHARE) - 1;
-  const placeable = Math.max(1, room);
-  return content <= placeable
-    ? { capacity: content, windowed: false }
-    : { capacity: Math.max(1, placeable - WINDOW_CONTROLS), windowed: true };
-}
-
-/** How many rows the catalog occupies in a sidebar, its heading included. */
-function entriesFootprint(state: ReplState, model: ReplModel, size: ReplTerminalSize): number {
-  const window = entriesWindow(state, model, size);
-  return 1 + window.capacity + (window.windowed ? WINDOW_CONTROLS : 0);
+  return sessionRows(state, chronology(model, live), undefined, undefined, undefined).length;
 }
 
 /**
@@ -2603,6 +2746,17 @@ function entryContent(
   model: ReplModel,
   focused: string | undefined,
   reading: string | undefined,
+  /** How wide the frame measured the region these rows land in, if it has. */
+  width: number | undefined,
+  /**
+   * The key this frame restores focus to, for the entry row that turns out to be
+   * it.
+   *
+   * A narrow frame draws no inspection region, so an answer given there is
+   * restored to the entry that owns the record rather than to the record's own
+   * row — which is the control a reader can actually see.
+   */
+  claim?: string | undefined,
 ): readonly Described[] {
   if (model.entries.length === 0) {
     return [line("entry:none", "  1. (not submitted)")];
@@ -2615,16 +2769,24 @@ function entryContent(
         // The outcome still comes before the name, and the marker takes the two
         // columns the indent already had — so a row that is not being read is
         // exactly as wide as it was.
-        `${selected(reading === entry.key)}${entry.order}. [${outcomeOfEntry(entry)}] ${entry.scope.name}`,
+        fitControl(
+          [
+            {
+              text: `${selected(reading === entry.key)}${entry.order}. [${outcomeOfEntry(entry)}] `,
+            },
+            { text: entry.scope.name, elide: true },
+          ],
+          width,
+        ),
         { select: "scope", scopes: [entry.key] },
-        { here: focused },
+        { here: focused, claim },
       ),
     );
     for (const scope of nested(entry.scope, [entry.key])) {
       items.push(
         row(
           `scope:${scope.path.join("/")}`,
-          `    ${scope.label}`,
+          fitControl([{ text: "    " }, { text: scope.label, elide: true }], width),
           { select: "scope", scopes: scope.path },
           { here: focused },
         ),
@@ -2677,25 +2839,112 @@ function outcomeOf(audit: ReplAgentPermission): string {
 /**
  * The innermost open drawer, as a modal branch holding its own controls.
  *
+ * Every reading it can show — a binding's value, a recorded answer, History's
+ * positions, a pending permission, the waiting question's form — is built as one
+ * ordered list and shown through one measured window. Only what that window
+ * holds is described, so a row outside it contributes no mounted node, no drawn
+ * cell, no keyboard stop and no pointer target. The title, both window controls
+ * and `[close]` stay outside the thing they move, because a control inside a
+ * window scrolls away from whoever was reaching for it.
+ *
  * Its detail is one child per line rather than one multi-line label, because a
  * cell is a row: a label holding three lines would show one of them, and a reader
  * would have no way to know the other two existed.
  */
 function drawerFor(
   view: ReplView,
+  context: ReplPresentationContext,
   history: Described,
   exit: Described,
   drawable: boolean,
 ): Described | undefined {
+  const held = drawerContent(view, context.widths?.drawer ?? 0);
+  if (held === undefined) {
+    return undefined;
+  }
+  const { title, dismissing, entering, content } = held;
+  const width = context.widths?.drawer ?? 0;
+  const children: ReplDescription<ReplAction>[] = [];
+  children.push(
+    row(
+      "drawer:scroll:up",
+      padControl("[^ earlier]", width),
+      { select: "scroll", delta: -1 },
+      { here: view.focused },
+    ).description,
+  );
+  for (const placed of windowed(content, context, entering, view.focused)) {
+    children.push(placed);
+  }
+  children.push(
+    row(
+      "drawer:scroll:down",
+      padControl("[v later]", width),
+      { select: "scroll", delta: 1 },
+      { here: view.focused },
+    ).description,
+  );
+
+  // The two nodes the footer would have drawn, inside the modal focus root. A
+  // modal contains focus, so a way out mounted beside it would be one Tab could
+  // not reach — and a drawer a person cannot leave the command from is a drawer
+  // that has taken their terminal.
+  //
+  // Reparented, but still admitted: the action row is where their cells land, so
+  // a control that row cannot hold whole is not described here either.
+  const offered = (key: string): boolean => context.measuring || context.admission.actions.has(key);
+  if (offered("footer:history")) {
+    children.push(history.description);
+  }
+  if (drawable && offered("footer:exit")) {
+    children.push(exit.description);
+  }
+  children.push(
+    row(
+      "drawer:close",
+      padControl("[close]", width),
+      dismissing === undefined
+        ? { select: "close" }
+        : { select: "permission-dismiss", request: dismissing },
+      { here: view.focused },
+    ).description,
+  );
+  return {
+    key: "drawer:open",
+    description: describeNode<ReplAction>({
+      key: "drawer:open",
+      component: DRAWER,
+      input: { label: width < 1 ? title : title.padEnd(width, " ") },
+      children,
+      modal: true,
+    }),
+  };
+}
+
+/** What one drawer reading holds, before any window decides what is shown. */
+interface DrawerContent {
+  readonly title: string;
+  readonly dismissing: string | undefined;
+  readonly entering: boolean;
+  readonly content: readonly DrawerRow[];
+}
+
+/**
+ * Everything the innermost open drawer holds, in order, or none if it has gone.
+ *
+ * One builder, asked twice: once for the rows a window shows and once for how
+ * many rows there are to window. A second counter is how a clamp comes to
+ * disagree with the list it is clamping.
+ */
+function drawerContent(view: ReplView, width: number): DrawerContent | undefined {
   const open = view.selection.drawers[view.selection.drawers.length - 1];
   if (open === undefined) {
     return undefined;
   }
-  const children: ReplDescription<ReplAction>[] = [];
   // Every row of this drawer reaches its own right edge. A modal that wrote only
   // its own text would let what it is in front of show through from where that
   // text stopped, because a renderer writes what changed and nothing else.
-  const width = drawerWidth(view.size);
+  const content: DrawerRow[] = [];
   let title: string;
   /**
    * The request this drawer's close control denies, when it is one.
@@ -2705,24 +2954,26 @@ function drawerFor(
    * than the generic close action that means "this changed nothing".
    */
   let dismissing: string | undefined;
+  /** Whether a field line may take the focus claim this drawer opens with. */
+  let entering = false;
 
   if (open.kind === "binding") {
     title = open.name;
     for (const [offset, text] of detail(open.binding.value).entries()) {
-      children.push(drawerLine(`drawer:value:${offset}`, text, width).description);
+      content.push({ description: drawerLine(`drawer:value:${offset}`, text, width).description });
     }
   } else if (open.kind === "recorded-elicit") {
     title = open.elicitation.location;
     // The whole of what was asked and the whole of what was answered. A drawer is
     // where the retained value is, so a summary here would leave a reader with no
     // way to see what the record actually holds.
-    children.push(drawerLine("drawer:schema", "schema", width).description);
+    content.push({ description: drawerLine("drawer:schema", "schema", width).description });
     for (const [offset, text] of detail(open.elicitation.schema).entries()) {
-      children.push(drawerLine(`drawer:schema:${offset}`, text, width).description);
+      content.push({ description: drawerLine(`drawer:schema:${offset}`, text, width).description });
     }
-    children.push(drawerLine("drawer:answered", "answer", width).description);
+    content.push({ description: drawerLine("drawer:answered", "answer", width).description });
     for (const [offset, text] of detail(open.elicitation.answer).entries()) {
-      children.push(drawerLine(`drawer:answer:${offset}`, text, width).description);
+      content.push({ description: drawerLine(`drawer:answer:${offset}`, text, width).description });
     }
   } else if (open.kind === "live-permission") {
     // The request this screen selected, read again here: a drawer draws what is
@@ -2740,43 +2991,25 @@ function drawerFor(
     // bounds how many it offers: a drawer that described every choice would have
     // layout clip the last ones, which are exactly the ones a person scrolled
     // down to find.
-    const content = permissionContent(view.model, view.live, request, width, view.focused);
-    const capacity = drawerCapacity(view.size);
-    const from = clamped(view.state.viewports.permission, Math.max(0, content.length - capacity));
-    children.push(
-      row(
-        "drawer:scroll:up",
-        padControl("[^ earlier]", width),
-        { select: "scroll", delta: -1 },
-        { here: view.focused },
-      ).description,
-    );
-    for (const placed of content.slice(from, from + capacity)) {
-      children.push(placed);
+    for (const placed of permissionContent(view.model, view.live, request, width, view.focused)) {
+      content.push({ description: placed });
     }
-    children.push(
-      row(
-        "drawer:scroll:down",
-        padControl("[v later]", width),
-        { select: "scroll", delta: 1 },
-        { here: view.focused },
-      ).description,
-    );
     dismissing = request.key;
   } else if (open.kind === "history") {
     title = "History";
+    // Every retained position, through the same window. A marker outside it is
+    // not described, so it is not a cell, not a target and not a Tab stop —
+    // which is what makes reaching the last one a thing the controls do rather
+    // than something clipping hides.
     for (const checkpoint of view.model.checkpoints) {
-      children.push(
-        row(
+      content.push({
+        description: row(
           `drawer:marker:${checkpoint.marker}`,
           padControl(checkpoint.label, width),
-          {
-            select: "marker",
-            marker: checkpoint.marker,
-          },
+          { select: "marker", marker: checkpoint.marker },
           { here: view.focused },
         ).description,
-      );
+      });
     }
   } else {
     const question = view.live.question;
@@ -2785,167 +3018,146 @@ function drawerFor(
     }
     const form = question.form;
     title = form.title ?? "Answer";
-    // The whole message, every line of it, through a window that scrolls. A
-    // drawer that showed only the first line — or only the first window —
-    // would be hiding the draft the question is about.
     // One viewport over the whole ordered content. Everything a person has to
-    // read or reach — the complete message, the form's description, every
-    // field with its annotation, options, editable value, every validation
-    // message and [submit] — is built in order and then windowed. A drawer too
-    // short to hold all of it scrolls, rather than describing rows that layout
-    // has no frame to place.
-    const lines = question.message.split("\n");
-    const capacity = drawerCapacity(view.size);
-    const last = Math.max(0, drawerContentRows(question, view.state.form) - capacity);
-    const from = Math.min(Math.max(0, view.state.form.offset), last);
-    const until = from + capacity;
-    const content: ReplDescription<ReplAction>[] = [];
-    /** Whether the row about to be built lands inside the viewport. */
-    const showing = (): boolean => content.length >= from && content.length < until;
-    children.push(
-      row(
-        "drawer:scroll:up",
-        padControl("[^ earlier]", width),
-        { select: "scroll", delta: -1 },
-        {
-          here: view.focused,
-        },
-      ).description,
-    );
-    for (const [offset, text] of lines.entries()) {
-      content.push(drawerLine(`drawer:message:${offset}`, text, width).description);
+    // read or reach — the complete message, the form's description, every field
+    // with its annotation, options, editable value, every validation message and
+    // [submit] — is built in order and then windowed. A drawer too short to hold
+    // all of it scrolls, rather than describing rows that have no frame to be
+    // placed in.
+    for (const [offset, text] of question.message.split("\n").entries()) {
+      content.push({
+        description: drawerLine(`drawer:message:${offset}`, text, width).description,
+      });
     }
     if (form.description !== undefined) {
-      content.push(drawerLine("drawer:form:about", form.description, width).description);
+      content.push({
+        description: drawerLine("drawer:form:about", form.description, width).description,
+      });
     }
     // The same rule inside the modal: the first control claims focus when the
     // drawer opens, and afterwards traversal inside the drawer owns it.
-    const entering = view.focused === undefined || !view.focused.startsWith("drawer:");
-    let claimed = false;
+    entering = view.focused === undefined || !view.focused.startsWith("drawer:");
     for (const one of form.fields) {
       const value = view.state.form.values[one.name] ?? "";
       const marked = requiredNow(form, view.state.form.values, one) ? "*" : " ";
       const label = one.title ?? one.name;
-      content.push(
-        row(
+      content.push({
+        description: row(
           `drawer:field:${one.name}`,
           padControl(`${marked}${label}: ${value}`, width),
           { select: "form-field", field: one.name },
           { here: view.focused },
         ).description,
-      );
+      });
       if (one.description !== undefined) {
-        content.push(
-          drawerLine(`drawer:field:${one.name}:about`, `  ${one.description}`, width).description,
-        );
+        content.push({
+          description: drawerLine(`drawer:field:${one.name}:about`, `  ${one.description}`, width)
+            .description,
+        });
       }
       if (one.choices !== undefined) {
-        // What this field accepts, said once. The controls below are how a
-        // value is chosen; this is the line that names the whole set, and it
-        // is what a reader scanning the form reads first.
-        content.push(
-          drawerLine(`drawer:form:${one.name}`, `${one.name}: ${one.choices.join(" | ")}`, width)
-            .description,
-        );
+        // What this field accepts, said once. The controls below are how a value
+        // is chosen; this is the line that names the whole set, and it is what a
+        // reader scanning the form reads first.
+        content.push({
+          description: drawerLine(
+            `drawer:form:${one.name}`,
+            `${one.name}: ${one.choices.join(" | ")}`,
+            width,
+          ).description,
+        });
       }
       // Every offered value, each its own control. A form that drew only the
       // first would be offering a choice nobody could make.
       for (const option of one.choices ?? []) {
-        content.push(
-          row(
+        content.push({
+          description: row(
             `drawer:choice:${one.name}:${option}`,
             padControl(`  ${value === option ? "(x)" : "( )"} ${option}`, width),
             { select: "form-choice", field: one.name, option },
             { here: view.focused },
           ).description,
-        );
+        });
       }
       // The one editable line for this field, which is where text and Backspace
       // land while it has focus. The first field's line claims focus when the
       // drawer opens — including an enum's, because typing an offered value and
       // pressing Enter is still a way to answer.
-      // Claimed only by a row the viewport actually shows: focusing one that
-      // scrolled out would put focus where nothing is placed.
-      const takes = entering && !claimed && showing();
-      const focus: { readonly focus?: true } = takes ? { focus: true } : {};
-      if (takes) {
-        claimed = true;
-      }
-      content.push(
-        field(`drawer:value:${one.name}`, "  = ", value, "answer", {
-          ...focus,
+      content.push({
+        description: field(`drawer:value:${one.name}`, "  = ", value, "answer", {
           here: view.focused,
         }).description,
-      );
+        field: { name: one.name, value },
+      });
     }
     // What the last submission was told, under the form it is about.
     for (const [offset, message] of view.state.form.messages.entries()) {
-      content.push(
-        drawerLine(
+      content.push({
+        description: drawerLine(
           `drawer:invalid:${offset}`,
           message.field === undefined ? message.message : `${message.field}: ${message.message}`,
           width,
         ).description,
-      );
+      });
     }
-    content.push(
-      row(
+    content.push({
+      description: row(
         "drawer:form:submit",
         padControl("[submit]", width),
         { select: "form-submit" },
-        {
-          here: view.focused,
-        },
+        { here: view.focused },
       ).description,
-    );
-    // Only what the viewport holds becomes a placed cell. A row outside it is
-    // not described at all, so it is neither drawn nor pointable.
-    for (const placed of content.slice(from, until)) {
-      children.push(placed);
-    }
-    children.push(
-      row(
-        "drawer:scroll:down",
-        padControl("[v later]", width),
-        { select: "scroll", delta: 1 },
-        {
-          here: view.focused,
-        },
-      ).description,
-    );
+    });
   }
 
-  // The same node the footer would have drawn, inside the modal focus root.
-  // The two nodes the footer would have drawn, inside the modal focus root. A
-  // modal contains focus, so a way out mounted beside it would be one Tab could
-  // not reach — and a drawer a person cannot leave the command from is a drawer
-  // that has taken their terminal.
-  children.push(history.description);
-  if (drawable) {
-    children.push(exit.description);
+  return { title, dismissing, entering, content };
+}
+
+/**
+ * One row of a drawer's ordered content, and what it would take to focus it.
+ *
+ * A field's editable line is built unfocused and the claim is placed afterwards,
+ * once the window is known: focusing a row that scrolled out would put focus
+ * where nothing is drawn, and which row is first inside the window is not
+ * something the loop that builds them can see.
+ */
+interface DrawerRow {
+  readonly description: ReplDescription<ReplAction>;
+  readonly field?: { readonly name: string; readonly value: string };
+}
+
+/**
+ * The rows one drawer's measured window shows.
+ *
+ * Nothing while the frame is being measured, because the window is what that
+ * pass is asking about. The drawer's opening focus claim goes to the first field
+ * line the window actually holds.
+ */
+function windowed(
+  content: readonly DrawerRow[],
+  context: ReplPresentationContext,
+  entering: boolean,
+  focused: string | undefined,
+): readonly ReplDescription<ReplAction>[] {
+  if (context.measuring) {
+    return [];
   }
-  children.push(
-    row(
-      "drawer:close",
-      padControl("[close]", width),
-      dismissing === undefined
-        ? { select: "close" }
-        : { select: "permission-dismiss", request: dismissing },
-      {
-        here: view.focused,
-      },
-    ).description,
-  );
-  return {
-    key: "drawer:open",
-    description: describeNode<ReplAction>({
-      key: "drawer:open",
-      component: DRAWER,
-      input: { label: width < 1 ? title : title.padEnd(width, " ") },
-      children,
-      modal: true,
-    }),
-  };
+  const held = context.admission.windows.get(DRAWER_WINDOW);
+  if (held === undefined) {
+    return [];
+  }
+  const rows = content.slice(held.from, held.from + held.count);
+  const index = entering ? rows.findIndex((candidate) => candidate.field !== undefined) : -1;
+  return rows.map((candidate, at) => {
+    const named = candidate.field;
+    if (at !== index || named === undefined) {
+      return candidate.description;
+    }
+    return field(`drawer:value:${named.name}`, "  = ", named.value, "answer", {
+      focus: true,
+      here: focused,
+    }).description;
+  });
 }
 
 /**
@@ -3030,27 +3242,6 @@ function lasting(kind: ReplLiveChoice["kind"]): string {
 }
 
 /**
- * The rows the drawer keeps whatever the viewport shows.
- *
- * Its own title row, the two scroll controls and `[close]`: how a person moves
- * the viewport and leaves, so none of them is ever inside the thing it moves.
- * `[history]` is not among them — it is reparented into the drawer's subtree so
- * it stays inside the active focus root, but layout places it in the footer
- * region, where it costs the drawer no row.
- */
-const FIXED_DRAWER_ROWS = 4;
-
-/**
- * How many rows of ordered content this drawer can place at this size.
- *
- * At least one, because a viewport showing nothing would say the question was
- * empty.
- */
-function drawerCapacity(size: ReplTerminalSize): number {
-  return Math.max(1, drawerHeight(size) - FIXED_DRAWER_ROWS);
-}
-
-/**
  * How many rows the drawer's ordered content holds in total.
  *
  * The complete message, the form's description, every field with its
@@ -3082,6 +3273,111 @@ function headline(message: string): string {
 
 function pad(label: string, width: number): string {
   return width < 1 ? label : label.padEnd(width, " ");
+}
+
+/** One piece of a row's label, and whether a long one gives up its columns. */
+interface ReplLabelPart {
+  readonly text: string;
+  /**
+   * This part is a name nothing in this product bounds.
+   *
+   * How long a root name, a prompt, a tool call or a provider session key is
+   * belongs to whoever wrote it, so these are the parts that shorten when a row
+   * cannot hold the whole label. The rest is the row's own vocabulary and stays.
+   */
+  readonly elide?: true;
+  /**
+   * This part is the fact the row exists to carry.
+   *
+   * A row too narrow for its own vocabulary keeps this and loses the rest,
+   * never the other way round: a sidebar is thirty-two columns and a turn's
+   * state can be twenty-seven of them, so there are rows where the name and the
+   * state cannot both be there. Which one a reader can act on is the state.
+   */
+  readonly keep?: true;
+}
+
+/**
+ * One row's label, fitted to the room the frame measured for its row.
+ *
+ * A row's rectangle bounds its box and not its characters: the engine draws the
+ * text it is given and clips none of it, so a label wider than its row paints
+ * into the column beside it — or onto the row below — while the target map still
+ * publishes the row's own bounds. A reader then sees a turn's state somewhere it
+ * cannot be pointed at, over a cell belonging to something else.
+ *
+ * Fitted by part rather than cut at the end, because the end is where a row says
+ * what it is *about*: the state a turn is in, the outcome an audit recorded.
+ * Cutting there takes the one fact the row exists to carry and keeps the name
+ * that pushed it off.
+ */
+function fitLabel(
+  parts: readonly ReplLabelPart[],
+  width: number | undefined,
+  reserved: number,
+): string {
+  const whole = parts.map((part) => part.text).join("");
+  // Unmeasured. The passes that answer what the widths are describe no windowed
+  // row, so a row that reaches a person always has a width; a caller counting
+  // rows has none and needs none, because fitting changes no count.
+  if (width === undefined || width < 1) {
+    return whole;
+  }
+  const room = width - reserved;
+  if (whole.length <= room) {
+    return whole;
+  }
+  const elidable = parts.filter((part) => part.elide === true);
+  const bounded = parts.reduce(
+    (total, part) => total + (part.elide === true ? 0 : part.text.length),
+    0,
+  );
+  if (elidable.length === 0 || bounded >= room) {
+    const kept = parts
+      .filter((part) => part.keep === true)
+      .map((part) => part.text)
+      .join("");
+    if (kept === "" || kept.length >= room) {
+      // Nothing here is a name, or nothing was named as the fact to keep, or
+      // keeping it would take the whole row. The row keeps what it can.
+      return whole.slice(0, Math.max(0, room));
+    }
+    // The row's own vocabulary does not fit. What it named survives whole — a
+    // state cut in half is a row saying something untrue — and the names keep
+    // what is left in front of it, because two rows that are only their state
+    // are two rows a reader cannot tell apart.
+    const names = elidable.map((part) => part.text).join(" ");
+    return `${elided(names, room - kept.length - 1)} ${kept}`;
+  }
+  const share = Math.floor((room - bounded) / elidable.length);
+  let spare = room - bounded - share * elidable.length;
+  const given = new Map<ReplLabelPart, number>();
+  for (const part of elidable) {
+    const extra = spare > 0 ? 1 : 0;
+    spare -= extra;
+    given.set(part, share + extra);
+  }
+  return parts
+    .map((part) => (part.elide === true ? elided(part.text, given.get(part) ?? 0) : part.text))
+    .join("");
+}
+
+/** One name in the columns it was given, with a mark where it was cut. */
+function elided(text: string, room: number): string {
+  if (text.length <= room) {
+    return text;
+  }
+  return room < 1 ? "" : `${text.slice(0, room - 1)}\u2026`;
+}
+
+/** A selectable row's label, fitted to its measured row behind the marker. */
+function fitControl(parts: readonly ReplLabelPart[], width: number | undefined): string {
+  return fitLabel(parts, width, FOCUS_MARKER);
+}
+
+/** A plain line's label, fitted to its measured row. */
+function fitLine(parts: readonly ReplLabelPart[], width: number | undefined): string {
+  return fitLabel(parts, width, 0);
 }
 
 /**
@@ -3209,112 +3505,287 @@ function failedLine(message: string, width: number): string {
   return `${line.slice(0, Math.max(FAILED_PREFIX.length, width - 1))}…`;
 }
 
-/**
- * The surface one committed tree presents.
- *
- * Read from the frame, so a node the tree removed contributes nothing, and keyed
- * by the description's own key so the region a row belongs to is decided in one
- * place. The live node id travels with every cell, because that id is what a
- * pointer resolved against the drawn frame has to name.
- */
-export function replSurface(tree: ReplTree<ReplAction>, view: ReplView): ReplPlacedSurface {
-  const controls = controlsOf(view);
-  /** The two surface controls, which belong to neither outlet. */
-  const navigation: ReplSurfaceCell[] = [];
-  const sessions: ReplSurfaceCell[] = [];
-  /** The Sessions outlet without the heading above it. */
-  const sessionsBody: ReplSurfaceCell[] = [];
-  const entries: ReplSurfaceCell[] = [];
-  /** The entry outlet without the heading above it. */
-  const entriesBody: ReplSurfaceCell[] = [];
-  const transcript: ReplSurfaceCell[] = [];
-  const inspection: ReplSurfaceCell[] = [];
-  const drawer: ReplSurfaceCell[] = [];
-  /** The controls of the footer's one action row, in priority order. */
-  const acting: ReplSurfaceCell[] = [];
-  /** The contextual status that shares that row, after the controls. */
-  const status: ReplSurfaceCell[] = [];
-  /** The draft, which owns the footer's last row. */
-  let draft: ReplSurfaceCell | undefined;
-  /** The guidance and location rows, which sit above whatever surface is shown. */
-  const located: ReplSurfaceCell[] = [];
-  for (const cell of tree.frame().cells) {
-    const key = tree.keyOf(cell.node);
-    if (key === undefined) {
-      continue;
-    }
-    const placed: ReplSurfaceCell = {
-      node: cell.node,
-      text: cell.cell,
-      ...(controls.has(key) ? { targetable: true } : {}),
-    };
-    if (key.startsWith("drawer:")) {
-      drawer.push(placed);
-    } else if (key === "guidance" || key.startsWith("location:")) {
-      located.push(placed);
-    } else if (key === "footer:input") {
-      draft = placed;
-    } else if (key === "footer:refused" || key === "footer:asked") {
-      // Status, so it follows every control: a row too narrow for both keeps the
-      // way out and loses the sentence, never the other way round. `footer:asked`
-      // is a control as well as a status, which is why it is here rather than
-      // ahead of them — the drawer it opens is also reachable by Tab.
-      status.push(placed);
-    } else if (key.startsWith("footer:")) {
-      acting.push(placed);
-    } else if (key === "sessions:heading" || key === "entries:heading") {
-      // In both: a sidebar keeps each heading with the list it names, and a
-      // narrow frame shows the pair as the bar above whichever outlet is routed.
-      navigation.push(placed);
-      (key === "sessions:heading" ? sessions : entries).push(placed);
-    } else if (key.startsWith("sessions:")) {
-      sessions.push(placed);
-      sessionsBody.push(placed);
-    } else if (key.startsWith("entries:") || key.startsWith("entry:") || key.startsWith("scope:")) {
-      entries.push(placed);
-      entriesBody.push(placed);
-    } else if (key.startsWith("line:")) {
-      transcript.push(placed);
-    } else if (key.startsWith("binding:") || key.startsWith("elicit:")) {
-      inspection.push(placed);
-    } else if (key === "refusal" || key.startsWith("refusal:")) {
-      // Above the surface, where there is a row's full width for a sentence. On
-      // the action row it would be one truncated line beside the control.
-      located.push(placed);
-    }
-  }
+/** The Sessions reading's window. */
+export const SESSIONS_WINDOW = "sessions";
+/** The Entries catalog's window. */
+export const ENTRIES_WINDOW = "entries";
+/** The open drawer's content window, whichever reading it is showing. */
+export const DRAWER_WINDOW = "drawer";
+/** The action row's own structural id, which admission measures against. */
+export const ACTION_ROW = "box:footer:actions";
 
-  return {
-    // Narrow shows exactly the surface the route selected, under navigation that
-    // is on neither of them: the outlet is what the route chooses, and the way
-    // out of it cannot be inside it.
-    content: [
-      ...located,
-      ...navigation,
-      ...(view.state.route.surface === "sessions" ? sessionsBody : entriesBody),
-    ],
-    sessions,
-    entries,
-    transcript: [...located, ...transcript],
-    inspection,
-    drawer,
-    actions: [...acting, ...status],
-    draft,
-    // The band's labels come from the model rather than from mounted nodes: a
-    // history position is a place in the file, and offering twenty of them as
-    // twenty focus stops in a seven-row footer would bury the controls that are
-    // actually there. Selecting an exact one is what the History drawer is for.
-    history: view.model.checkpoints.map((checkpoint) => ({
-      marker: checkpoint.marker,
-      label: checkpoint.label,
-    })),
-  };
+/**
+ * How wide each region that text must fit is, as the engine measured it.
+ *
+ * Asked by whoever has to *write* something that must land in one: a row longer
+ * than its region is reflowed into rows the layout never allocated, and a
+ * sentence shorter than its region leaves the text it covers showing through
+ * from where it stops. Measured rather than recomputed, because a second width
+ * calculator is a second answer to a question with one.
+ */
+export interface ReplMeasuredWidths {
+  /** The surface carrying content: the transcript column, or the narrow outlet. */
+  readonly surface: number;
+  /** The column the Sessions reading and the Entries catalog share. */
+  readonly list: number;
+  /** The bindings and recorded-answer column. */
+  readonly inspection: number;
+  /** The drawer's own interior. */
+  readonly drawer: number;
 }
 
 /**
- * Which of this view's rows a pointer may activate.
+ * What one paint has measured and admitted.
  *
- * Read from what each row *is* — the component it was described with — rather
+ * The same value reaches the description builder and the reducer, so what a
+ * scroll clamps against is what the screen is showing.
+ */
+export interface ReplPresentationContext {
+  /**
+   * The region widths this frame measured, or none before it has measured any.
+   *
+   * The first measurement's whole job is to answer this, and text is what makes
+   * that answer unreliable: a column that grows into what is left still takes
+   * its minimum from its content, so one unbounded row makes the column wider
+   * than its share and squeezes the column beside it. Measured: an unwrapped
+   * canonical location made a 92-column transcript report 128 and paint over the
+   * inspection column. So the pass that asks describes no width-dependent text
+   * at all, and every pass after it has a width to bound that text to.
+   */
+  readonly widths: ReplMeasuredWidths | undefined;
+  readonly admission: ReplAdmission;
+  /**
+   * Whether this is the pass that asks the engine for geometry.
+   *
+   * It describes every scrolling viewport empty and offers every candidate
+   * action control, so the answer it gets back describes the region rather than
+   * whatever is currently overflowing it. Its descriptions are never reconciled.
+   */
+  readonly measuring: boolean;
+  /** Whether the Entries catalog reserves its two window controls. */
+  readonly entriesWindowed: boolean;
+  /**
+   * The catalog's own height when it fits, or none when it is windowed.
+   *
+   * Carried rather than counted from the rows this pass describes, because the
+   * measuring pass describes none: a viewport sized by what the skeleton holds
+   * would be a viewport of nothing.
+   */
+  readonly entriesRows: number | undefined;
+  /**
+   * Whether the drawer layer takes the engine's pointer off what it covers.
+   *
+   * Narrowing the engine's own hit test, and nothing more: a pointer is resolved
+   * against this frame's detached bounds and containment is the reconciler's, so
+   * turning this off must not make a control behind the modal reachable.
+   */
+  readonly capture: "capture" | "passthrough";
+}
+
+/** One reading's descriptions, paired with where the engine places them. */
+export interface ReplPresentation {
+  readonly descriptions: readonly ReplDescription<ReplAction>[];
+  readonly manifest: ReplLayoutManifest;
+}
+
+/**
+ * Which reading one retained drawer is showing, as its own identity.
+ *
+ * Not the title and not the position in the stack: two bindings called `name` in
+ * different scopes are different readings and must not share a window position,
+ * and a drawer reopened over the same reading must find the position it was left
+ * at. The live question and a pending permission have their own offsets already,
+ * so they have no key here.
+ */
+export function readingKeyOf(state: ReplState, open: ReplDrawerRef): string | undefined {
+  // The prefix being read is part of the identity: the same binding at two
+  // history positions is two readings of two different files.
+  const at = state.route.at ?? "head";
+  const execution = state.route.execution;
+  if (open.kind === "history") {
+    return `history:${execution}:${at}`;
+  }
+  if (open.kind === "binding") {
+    return `binding:${execution}:${at}:${state.route.scopes.join("/")}:${open.name}`;
+  }
+  if (open.kind === "recorded-elicit") {
+    return `elicit:${execution}:${at}:${open.marker}`;
+  }
+  return undefined;
+}
+
+/**
+ * How far the open drawer's window is scrolled.
+ *
+ * A new reading starts at its first row; a reading being revisited uses its own
+ * stored position, which admission then clamps against what this size and this
+ * content actually allow.
+ */
+export function drawerOffsetOf(state: ReplState, open: ReplDrawerRef | undefined): number {
+  if (open === undefined) {
+    return 0;
+  }
+  if (open.kind === "live-elicit") {
+    return state.form.offset;
+  }
+  if (open.kind === "live-permission") {
+    return state.viewports.permission;
+  }
+  const reading = readingKeyOf(state, open);
+  return reading === undefined ? 0 : (state.viewports.readings[reading] ?? 0);
+}
+
+/**
+ * Which part of the frame one description belongs to.
+ *
+ * Read from the key the description was built with, which is the one place the
+ * region a row belongs to is decided. A row's slot says whether it moves inside
+ * a window or stays put around one — the distinction a measured capacity depends
+ * on, because the rows that stay put are exactly what the viewport does not get.
+ */
+type ReplSlot =
+  | "located"
+  | "navigation"
+  | "sessions-fixed"
+  | "sessions"
+  | "entries-fixed"
+  | "entries"
+  | "transcript"
+  | "inspection"
+  | "drawer-above"
+  | "drawer-below"
+  | "drawer"
+  | "drawer-title"
+  | "action"
+  | "status"
+  | "draft";
+
+function slotOf(key: string): ReplSlot | undefined {
+  if (key === "drawer:open") {
+    return "drawer-title";
+  }
+  if (key === "drawer:scroll:up") {
+    return "drawer-above";
+  }
+  if (key === "drawer:scroll:down" || key === "drawer:close") {
+    return "drawer-below";
+  }
+  if (key.startsWith("drawer:")) {
+    return "drawer";
+  }
+  if (key === "footer:input") {
+    return "draft";
+  }
+  // Status, so it follows every control: a row too narrow for both keeps the way
+  // out and loses the sentence, never the other way round. `footer:asked` is a
+  // control as well as a status, which is why it is here rather than ahead of
+  // them — the drawer it opens is also reachable by Tab.
+  if (key === "footer:refused" || key === "footer:asked") {
+    return "status";
+  }
+  if (key.startsWith("footer:")) {
+    return "action";
+  }
+  if (key === "sessions:heading" || key === "entries:heading") {
+    return "navigation";
+  }
+  // The empty placeholder and both window controls stay put around the window
+  // rather than inside it, so a measured viewport is the moving part alone.
+  if (key === "sessions:empty" || key === "sessions:earlier" || key === "sessions:later") {
+    return "sessions-fixed";
+  }
+  if (key.startsWith("sessions:")) {
+    return "sessions";
+  }
+  if (key === "entries:earlier" || key === "entries:later" || key === "entry:none") {
+    return "entries-fixed";
+  }
+  if (key.startsWith("entries:") || key.startsWith("entry:") || key.startsWith("scope:")) {
+    return "entries";
+  }
+  if (key.startsWith("line:")) {
+    return "transcript";
+  }
+  if (key.startsWith("binding:") || key.startsWith("elicit:")) {
+    return "inspection";
+  }
+  if (key === "guidance" || key.startsWith("location:")) {
+    return "located";
+  }
+  // Above the surface, where there is a row's full width for a sentence. On the
+  // action row it would be one truncated line beside the control.
+  if (key === "refusal" || key.startsWith("refusal:")) {
+    return "located";
+  }
+  return undefined;
+}
+
+/** One classified candidate: what it is, and what measurement would draw. */
+interface ReplCandidate {
+  readonly key: string;
+  readonly slot: ReplSlot;
+  readonly text: string;
+  readonly control: boolean;
+}
+
+/**
+ * Every described row, classified, in the order it was described.
+ *
+ * Walked rather than read off the committed frame, because measurement happens
+ * before anything is mounted: the pass that asks how many rows a region holds
+ * cannot consult a tree that does not yet have them.
+ */
+function candidatesOf(
+  descriptions: readonly ReplDescription<ReplAction>[],
+): readonly ReplCandidate[] {
+  const found: ReplCandidate[] = [];
+  const walk = (description: ReplDescription<ReplAction>): void => {
+    const read = readDescription(description);
+    const slot = slotOf(read.key);
+    if (slot !== undefined) {
+      found.push({
+        key: read.key,
+        slot,
+        text: measurementTextOf(read.component, read.input),
+        control: isControl(read.component, read.input),
+      });
+    }
+    for (const child of read.children) {
+      walk(child);
+    }
+  };
+  for (const description of descriptions) {
+    walk(description);
+  }
+  return found;
+}
+
+/**
+ * What one row would draw, for the pass that has no mounted node to ask.
+ *
+ * The same pure formatting the mounted component uses, so a control measured
+ * without its focus prefix cannot come out two columns narrower than the one
+ * drawn in its place.
+ */
+function measurementTextOf(component: ReplComponent<ReplAction>, input: ReplViewData): string {
+  const named = fields(input);
+  const focused = named?.["focused"] === true;
+  if (component === FIELD) {
+    const prompt = typeof named?.["prompt"] === "string" ? named["prompt"] : "";
+    const text = typeof named?.["text"] === "string" ? named["text"] : "";
+    return fieldText(prompt, text, focused);
+  }
+  const label = typeof named?.["label"] === "string" ? named["label"] : "";
+  if (component === SELECT_ROW) {
+    return focusPrefixed(label, focused);
+  }
+  return label;
+}
+
+/**
+ * Whether one row is a control.
+ *
+ * Read from what the row *is* — the component it was described with — rather
  * than from how its key happens to be spelled. A turn's own facts, a retained
  * audit, the location somebody copies and the reason the last action changed
  * nothing are lines, and a line has nothing to activate; every control answers
@@ -3326,24 +3797,474 @@ export function replSurface(tree: ReplTree<ReplAction>, view: ReplView): ReplPla
  * suffixes — and a row that draws a control and refuses the pointer is a control
  * that is not one.
  */
-function controlsOf(view: ReplView): ReadonlySet<string> {
-  const keys = new Set<string>();
-  const walk = (description: ReplDescription<ReplAction>): void => {
-    const read = readDescription(description);
-    if (read.component === SELECT_ROW || read.component === FIELD) {
-      keys.add(read.key);
-    } else if (read.component === REFUSAL && fields(read.input)?.["back"] !== undefined) {
-      // A refusal is a control only when it offers somewhere to go back to.
-      keys.add(read.key);
-    }
-    for (const child of read.children) {
-      walk(child);
-    }
-  };
-  for (const description of describeApplication(view)) {
-    walk(description);
+function isControl(component: ReplComponent<ReplAction>, input: ReplViewData): boolean {
+  if (component === SELECT_ROW || component === FIELD) {
+    return true;
   }
-  return keys;
+  // A refusal is a control only when it offers somewhere to go back to.
+  return component === REFUSAL && fields(input)?.["back"] !== undefined;
+}
+
+/**
+ * One stacked row box, keyed by the description whose node draws it.
+ *
+ * As wide as the region it lands in, which the frame measured. A row that left
+ * its width to the flow would take it from its own text instead, and a row
+ * wider than its column both widens that column and publishes a hit box
+ * reaching into the next one.
+ */
+function rowBox(candidate: ReplCandidate, region: ReplRegion, width: number | undefined): ReplBox {
+  return box({
+    id: `box:${region}:${candidate.key}`,
+    key: candidate.key,
+    region,
+    props: rowProps(width),
+    text: candidate.text,
+    control: candidate.control,
+  });
+}
+
+/**
+ * One reading's descriptions and the constraints that place them.
+ *
+ * Built from one walk, so a drawn element and a mounted node cannot drift apart.
+ * The measuring pass and the committed pass call this with the same view and
+ * differ only in what they were told was admitted — which is what makes the
+ * measured region and the region drawn into it the same region.
+ */
+export function presentationFor(
+  view: ReplView,
+  context: ReplPresentationContext,
+): ReplPresentation {
+  const descriptions = described(view, context).map((item) => item.description);
+  const size = view.size;
+  const profile = profileFor(size);
+  const band = historyBand(
+    view.model.checkpoints.map((checkpoint) => ({
+      marker: checkpoint.marker,
+      label: checkpoint.label,
+    })),
+    size.columns,
+  );
+  if (profile === "too-small") {
+    // No cell beyond the sentence, so nothing this frame hides can be pointed
+    // at: a control that is not in the frame is not in its target map either.
+    return {
+      descriptions,
+      manifest: Object.freeze({
+        profile,
+        size: Object.freeze({ ...size }),
+        root: box({
+          id: "box:root",
+          props: rootProps(size),
+          children: [
+            box({
+              id: "box:refusal",
+              // No key, because there is no row: below the minimum this is a
+              // *layout* refusal, and the sentence is the frame's own rather
+              // than something a described node contributed. A view-level
+              // refusal at a drawable size is an ordinary row and goes with the
+              // rest of them, above the surface.
+              region: "refusal",
+              props: refusalProps(),
+              text: refusalText(size),
+            }),
+          ],
+        }),
+        viewports: Object.freeze([]),
+        actions: undefined,
+        regions: Object.freeze([Object.freeze({ region: "refusal", id: "box:refusal" })]),
+        history: band,
+      }),
+    };
+  }
+
+  const candidates = candidatesOf(descriptions);
+  const viewports: ReplViewportSlot[] = [];
+  const regions: { region: ReplRegion; id: string }[] = [];
+  /**
+   * How wide one region is, as this frame measured it.
+   *
+   * The footer is the exception and needs no measurement: it is a growing child
+   * of a root fixed at the terminal's own size, so it is the terminal wide.
+   */
+  const widthOfRegion = (region: ReplRegion): number | undefined => {
+    if (region === "footer") {
+      return size.columns;
+    }
+    if (region === "drawer") {
+      return context.widths?.drawer;
+    }
+    if (region === "inspection") {
+      return context.widths?.inspection;
+    }
+    if (region === "transcript") {
+      return context.widths?.surface;
+    }
+    // The sidebar and the narrow outlet both carry the two list readings.
+    return context.widths?.list;
+  };
+  const of = (slot: ReplSlot): readonly ReplCandidate[] =>
+    candidates.filter((candidate) => candidate.slot === slot);
+
+  /** One list region: the rows that stay put, and the window they surround. */
+  const listColumn = (
+    region: ReplRegion,
+    fixedSlot: ReplSlot,
+    rowSlot: ReplSlot,
+    window: string,
+    rows?: number,
+  ): readonly ReplBox[] => {
+    const fixed = of(fixedSlot);
+    // The window controls sit outside the thing they move, so they are siblings
+    // of the viewport rather than rows inside it.
+    const above = fixed.filter((candidate) => candidate.key.endsWith(":earlier"));
+    const below = fixed.filter((candidate) => candidate.key.endsWith(":later"));
+    const rest = fixed.filter(
+      (candidate) => !candidate.key.endsWith(":earlier") && !candidate.key.endsWith(":later"),
+    );
+    const id = `box:${window}:viewport`;
+    viewports.push(Object.freeze({ id, region, window }));
+    return [
+      ...rest.map((candidate) => rowBox(candidate, region, widthOfRegion(region))),
+      ...above.map((candidate) => rowBox(candidate, region, widthOfRegion(region))),
+      box({
+        id,
+        region,
+        props: viewportProps(rows),
+        children: of(rowSlot).map((candidate) => rowBox(candidate, region, widthOfRegion(region))),
+      }),
+      ...below.map((candidate) => rowBox(candidate, region, widthOfRegion(region))),
+    ];
+  };
+
+  const located = of("located").map((candidate) =>
+    rowBox(candidate, profile === "narrow" ? "content" : "transcript", context.widths?.surface),
+  );
+  const heading = (key: string, region: ReplRegion): readonly ReplBox[] => {
+    const found = of("navigation").filter((candidate) => candidate.key === key);
+    return found.map((candidate) => rowBox(candidate, region, widthOfRegion(region)));
+  };
+
+  const columns: ReplBox[] = [];
+  if (profile === "narrow") {
+    // Exactly the routed surface, and nothing else. A narrow screen that stacked
+    // every region would be a wide screen with the columns removed: the reader
+    // would scroll past three lists to reach the one they asked for, and every
+    // row of the other two would still be a target.
+    const routed =
+      view.state.route.surface === "sessions"
+        ? listColumn("content", "sessions-fixed", "sessions", SESSIONS_WINDOW)
+        : listColumn("content", "entries-fixed", "entries", ENTRIES_WINDOW);
+    regions.push({ region: "content", id: "box:content" });
+    columns.push(
+      box({
+        id: "box:content",
+        region: "content",
+        props: columnProps(undefined),
+        children: [
+          ...located,
+          // Which surface to be on belongs to neither surface, so the way out of
+          // an outlet cannot be inside it.
+          ...heading("sessions:heading", "content"),
+          ...heading("entries:heading", "content"),
+          ...routed,
+        ],
+      }),
+    );
+  } else {
+    regions.push(
+      { region: "sidebar", id: "box:sidebar" },
+      { region: "transcript", id: "box:transcript" },
+      { region: "inspection", id: "box:inspection" },
+    );
+    columns.push(
+      box({
+        id: "box:sidebar",
+        region: "sidebar",
+        props: columnProps(sidebarWidth(size)),
+        children: [
+          // Two groups, and only one of them grows: the Sessions reading takes
+          // whatever the column has left, and the catalog states its own height.
+          // Two growing siblings would split the remainder in the engine's
+          // arithmetic, which is not whole.
+          //
+          // A sidebar keeps each heading with the list it names, which is where
+          // a reader looks for it.
+          box({
+            id: "box:sidebar:sessions",
+            region: "sidebar",
+            props: stackProps("grow"),
+            children: [
+              ...heading("sessions:heading", "sidebar"),
+              ...listColumn("sidebar", "sessions-fixed", "sessions", SESSIONS_WINDOW),
+            ],
+          }),
+          box({
+            id: "box:sidebar:entries",
+            region: "sidebar",
+            // A catalog that fits takes exactly its own length, so a one-entry
+            // execution draws one row instead of claiming half a column it does
+            // not need. One that does not takes its share and no more, which is
+            // what keeps the two readings in this column independent.
+            props: stackProps(context.entriesRows === undefined ? sharedColumnRows(size) : "fit"),
+            children: [
+              ...heading("entries:heading", "sidebar"),
+              ...listColumn(
+                "sidebar",
+                "entries-fixed",
+                "entries",
+                ENTRIES_WINDOW,
+                context.entriesRows,
+              ),
+            ],
+          }),
+        ],
+      }),
+      box({
+        id: "box:transcript",
+        region: "transcript",
+        props: columnProps(undefined),
+        children: [
+          ...located,
+          box({
+            id: "box:transcript:viewport",
+            region: "transcript",
+            props: viewportProps(),
+            children: of("transcript").map((candidate) =>
+              rowBox(candidate, "transcript", context.widths?.surface),
+            ),
+          }),
+        ],
+      }),
+      box({
+        id: "box:inspection",
+        region: "inspection",
+        props: columnProps(inspectionWidth(size)),
+        children: [
+          box({
+            id: "box:inspection:viewport",
+            region: "inspection",
+            props: viewportProps(),
+            children: of("inspection").map((candidate) =>
+              rowBox(candidate, "inspection", context.widths?.inspection),
+            ),
+          }),
+        ],
+      }),
+    );
+  }
+
+  const rect = drawerRect(size);
+  const [title] = of("drawer-title");
+  if (rect !== undefined && title !== undefined) {
+    const id = `box:${DRAWER_WINDOW}:viewport`;
+    viewports.push(Object.freeze({ id, region: "drawer", window: DRAWER_WINDOW }));
+    regions.push({ region: "drawer", id: "box:drawer:layer" });
+    columns.push(
+      box({
+        id: "box:drawer:layer",
+        region: "drawer",
+        props: drawerLayerProps(rect, context.capture),
+        children: [
+          rowBox(title, "drawer", context.widths?.drawer),
+          ...of("drawer-above").map((candidate) =>
+            rowBox(candidate, "drawer", context.widths?.drawer),
+          ),
+          box({
+            id,
+            region: "drawer",
+            props: viewportProps(),
+            children: of("drawer").map((candidate) =>
+              rowBox(candidate, "drawer", context.widths?.drawer),
+            ),
+          }),
+          ...of("drawer-below").map((candidate) =>
+            rowBox(candidate, "drawer", context.widths?.drawer),
+          ),
+        ],
+      }),
+    );
+  }
+
+  const offered = [...of("action"), ...of("status")];
+  // Every candidate while measuring, so each one's own width is an answer the
+  // engine has given; only the admitted prefix once there is one.
+  const placed = offered.filter(
+    (candidate) => context.measuring || context.admission.actions.has(candidate.key),
+  );
+  const [draft] = of("draft");
+  regions.push({ region: "footer", id: "box:footer" });
+
+  return {
+    descriptions,
+    manifest: Object.freeze({
+      profile,
+      size: Object.freeze({ ...size }),
+      root: box({
+        id: "box:root",
+        props: rootProps(size),
+        children: [
+          box({ id: "box:body", props: bodyProps(), children: columns }),
+          box({
+            id: "box:footer",
+            region: "footer",
+            props: footerProps(),
+            children: [
+              box({
+                id: ACTION_ROW,
+                region: "footer",
+                props: actionRowProps(),
+                children: placed.map((candidate) =>
+                  box({
+                    id: `box:action:${candidate.key}`,
+                    key: candidate.key,
+                    region: "footer",
+                    props: CONTROL_PROPS,
+                    text: candidate.text,
+                    control: candidate.control,
+                  }),
+                ),
+              }),
+              box({
+                id: "box:footer:band",
+                region: "footer",
+                props: bandProps(),
+                children: band.rows.map((text, at) =>
+                  box({
+                    id: `box:band:${at}`,
+                    region: "footer",
+                    props: rowProps(size.columns),
+                    text,
+                  }),
+                ),
+              }),
+              ...(draft === undefined ? [] : [rowBox(draft, "footer", size.columns)]),
+            ],
+          }),
+        ],
+      }),
+      viewports: Object.freeze(viewports),
+      actions: Object.freeze({
+        id: ACTION_ROW,
+        controls: Object.freeze(
+          offered.map((candidate) => ({
+            key: candidate.key,
+            id: `box:action:${candidate.key}`,
+            control: candidate.control,
+          })),
+        ),
+      }),
+      regions: Object.freeze(regions.map((region) => Object.freeze(region))),
+      history: band,
+    }),
+  };
+}
+
+/**
+ * What this frame admits, from what the engine measured.
+ *
+ * Capacity is the measured viewport, floored and bounded at zero; the row count
+ * is the reading's own, counted by the builder that produces those rows. Nothing
+ * here subtracts a heading, a control or a footer: that is the arithmetic the
+ * measurement replaced.
+ */
+export function admissionFor(input: {
+  readonly view: ReplView;
+  readonly manifest: ReplLayoutManifest;
+  readonly widths: ReplMeasuredWidths;
+  readonly boundsOf: (id: string) => ReplBounds | undefined;
+}): ReplAdmission {
+  const { view, manifest, widths, boundsOf } = input;
+  const windows = new Map<string, ReplWindow>();
+  for (const slot of manifest.viewports) {
+    const capacity = capacityOf(boundsOf(slot.id));
+    windows.set(
+      slot.window,
+      admitRows({
+        offset: offsetFor(view, slot.window, capacity),
+        total: totalOf(view, widths, slot.window),
+        capacity,
+      }),
+    );
+  }
+  const actions = manifest.actions;
+  if (actions === undefined) {
+    return Object.freeze({ windows, actions: new Set<string>(), shortened: undefined });
+  }
+  const row = admitActions({ row: boundsOf(actions.id), controls: actions.controls, boundsOf });
+  return Object.freeze({ windows, actions: row.admitted, shortened: row.shortened });
+}
+
+/**
+ * How many rows the Entries catalog holds, whatever a window shows.
+ *
+ * Asked by the preparation that decides whether the catalog needs its window
+ * controls at all: a catalog shorter than the room it has keeps its natural
+ * footprint and takes no row for a control nothing would scroll.
+ */
+export function entriesRowCount(model: ReplModel): number {
+  return entryContent(model, undefined, undefined, undefined).length;
+}
+
+/**
+ * How far one window is scrolled, with a row this frame claims focus for shown.
+ *
+ * The offset this process is holding, moved only as far as it takes to put a
+ * claimed row inside the window: a claim naming a row the window does not hold
+ * would be focus asked for on behalf of nothing, and an answer given at a narrow
+ * size is restored to the entry that owns it — which may be above or below what
+ * the catalog is showing. The window itself is the existing one and the offset is
+ * the existing process-local one; nothing new scrolls and nothing is added to the
+ * frame.
+ */
+function offsetFor(view: ReplView, window: string, capacity: number): number {
+  const held = offsetOf(view, window);
+  if (window !== ENTRIES_WINDOW || capacity < 1) {
+    return held;
+  }
+  const claimed = focusClaim(view);
+  if (claimed === undefined || !claimed.startsWith("entry:")) {
+    return held;
+  }
+  const at = entryContent(view.model, undefined, undefined, undefined).findIndex(
+    (item) => item.key === claimed,
+  );
+  if (at < 0) {
+    return held;
+  }
+  // As little as it takes: a claimed row above the window brings it up to that
+  // row, one below brings it down until that row is the last one shown, and a row
+  // the window already holds moves nothing.
+  return Math.min(Math.max(held, at - capacity + 1), at);
+}
+
+/** How far one window is scrolled, as this process is holding it. */
+function offsetOf(view: ReplView, window: string): number {
+  if (window === SESSIONS_WINDOW) {
+    return view.state.viewports.sessions;
+  }
+  if (window === ENTRIES_WINDOW) {
+    return view.state.viewports.entries;
+  }
+  return drawerOffsetOf(view.state, view.state.route.drawers[view.state.route.drawers.length - 1]);
+}
+
+/**
+ * How many rows one reading holds, counted by whatever builds those rows.
+ *
+ * The view's own live overlay, which is the one the descriptions were built
+ * from: a frozen prefix shows nothing of the present, so counting against the
+ * live head would clamp a historical reading against rows it does not have.
+ */
+function totalOf(view: ReplView, widths: ReplMeasuredWidths, window: string): number {
+  if (window === SESSIONS_WINDOW) {
+    return sessionContentRows(view.state, view.model, view.live);
+  }
+  if (window === ENTRIES_WINDOW) {
+    return entriesRowCount(view.model);
+  }
+  return drawerContent(view, widths?.drawer ?? 0)?.content.length ?? 0;
 }
 
 export { HISTORY_ROWS };

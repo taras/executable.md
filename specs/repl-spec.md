@@ -267,6 +267,35 @@ shows the audit without offering to decide anything. Ending the command answers
 nothing: a torn-down process does not fabricate a denial, a selection or a
 cancelled audit on the person's behalf.
 
+## Every drawer is a window
+
+A drawer shows as much of what it holds as the frame has room for, and its
+earlier and later controls reach the rest. That is true of all five readings a
+drawer can show: the question being asked, a pending permission request, a
+History position, a binding's retained value and a recorded answer. A retained
+value is as long as whatever produced it — a compiler's reason, a whole JSON
+document — so a drawer that described all of it at once would have its tail
+placed nowhere, which is the one part you opened the drawer to read.
+
+Only what is in the window is on the screen. A row above or below it is in no
+cell, reaches no pointer and is no stop for Tab, so the last position in a long
+History is genuinely absent until the window reaches it — and then it is an
+ordinary control that selects that position. Scrolling is only scrolling: it
+moves the window and changes nothing else. It selects no position, answers no
+question, writes nothing to the file and does not touch the location, so moving
+through a long record cannot change what you are reading.
+
+The title, both window controls and `[close]` stay outside the thing they move,
+and the footer keeps its own seven rows — `[history]` and `[exit]` stay reachable
+from inside an open drawer, where they belong to that drawer.
+
+How far each reading is scrolled belongs to that reading, and to this process
+alone. Two bindings that happen to share a name in different scopes are two
+readings and keep two positions; a reading you come back to opens where you left
+it, bounded by what the window now holds; and a reading you have not opened
+starts at its first row. No location and no record carries any of it, so another
+process opening the same URL opens each reading at its start.
+
 ## The form language a question is drawn in
 
 A question's schema is read whole before anybody is asked. What this REPL draws
@@ -337,11 +366,26 @@ selected entry, the conversation filter and the draft.
 | `72x20` and larger | one routed surface — the one the route selected — under the two surface controls, with the same drawer and footer |
 | smaller than `72x20` | a refusal saying the minimum, that growing the window recovers, and that Escape leaves; it shows nothing else, and offers no control to point at |
 
+Resizing the window is ordinary. Dragging a corner produces a stream of sizes,
+and each one redraws the screen for the size that is actually there: the
+execution you are in, the surface you are on, what you had selected and what you
+had typed all survive it, and none of it ends the command. A size this REPL does
+not support shows the refusal above and recovers when the window grows.
+
 At narrow, the surface the route did not select is still there in the model and
 is not on the screen: it is in no cell, in no target map, and no pointer reaches
 it. What stays is the way between them: both surface controls are on the screen
 at every size, because a screen you cannot leave is not one this route may put
 you on.
+
+A narrow frame has no inspection column, so the bindings and the recorded
+questions are not on it in any sense — not drawn, not something a pointer can
+reach, and not a stop Tab or Shift+Tab visits. What a wider window shows there,
+the narrow one does not pretend to offer. Answering a question at that size
+therefore leaves you on the entry the answer belongs to, which is a control you
+can see, and the catalog moves as far as it has to for that entry to be showing.
+Which entry and which scope you had selected does not change, and a wider window
+shows the record itself again.
 
 The location is drawn in full wherever there is room for it. A narrow frame
 draws it in at most three rows and says how much it is not showing: there, the
@@ -362,7 +406,28 @@ The action row holds the controls that are available now, side by side, each as
 wide as its own label so a pointer on one reaches that one. Order is priority: a
 row too narrow for everything keeps the controls and shortens the sentence beside
 them, and a control that will not fit whole is not drawn at all rather than drawn
-half off the row.
+half off the row. It is not there in any sense — not a cell, not something a
+pointer can reach, and not a stop Tab visits — because a control you can neither
+see nor hit is worse than one that is honestly absent. The controls it keeps are
+the first ones in that order, without exception: where a wide control will not
+fit, a narrower one after it is left out too, so the row you read at one size is
+a prefix of the row you read at a larger one and nothing moves under your hand.
+
+Every row says what it has room to say. A row is as wide as the region the frame
+measured for it, and so is its text: a name nobody bounded — a prompt, a root, a
+tool call — is shortened with an ellipsis so that what the row is *about* stays
+on it. A turn keeps its state, a retained grant keeps its outcome, an entry keeps
+its outcome, and where a row is too narrow even for that, the fact survives and
+the name keeps whatever is left in front of it. What the row shows is shortened;
+what the product holds is not, and the whole of it is still in the record, the
+transcript and the drawer that shows it.
+
+What fits is measured rather than counted. The screen asks the terminal how much
+room each region actually has — with every scrolling list empty, but with the
+headings, the window controls and the complete labels in place — and only then
+decides which rows and which controls exist. So what you can see, focus and click
+are the same set, at every size, and a row the frame has no room for is never
+described as though it had somewhere to be.
 
 A refusal of one action — a submission the entry ahead of it has not made room
 for, a navigation that selects nothing, a pause this process cannot perform —

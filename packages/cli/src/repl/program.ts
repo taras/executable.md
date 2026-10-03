@@ -42,19 +42,21 @@ import {
 import type { ReplExecutionProfile } from "../repl-profile.ts";
 
 import {
+  admissionFor,
   admitsSubmission,
   admitted,
   answered,
   elicitWithdrawn,
+  ENTRIES_WINDOW,
+  entriesRowCount,
   focusSettled,
+  initialState,
   permissionSettled,
   permissionWithdrawn,
-  describeApplication,
-  initialState,
+  presentationFor,
   readinessOf,
   reduceRepl,
   refusedView,
-  replSurface,
   stateFor,
   viewFor,
   withoutAbsentEntry,
@@ -66,6 +68,9 @@ import type {
   ReplFormMessage,
   ReplIntent,
   ReplLive,
+  ReplMeasuredWidths,
+  ReplPresentation,
+  ReplPresentationContext,
   ReplState,
   ReplView,
 } from "./application.ts";
@@ -76,9 +81,12 @@ import { lifecycleRefusal, openReplSession } from "./session.ts";
 import type { ReplSession } from "./session.ts";
 import { useReplFrames } from "./frame.ts";
 import type { ReplFrames } from "./frame.ts";
-import { layout, profileFor } from "./layout.ts";
-import { resolvePointer, snapshotRender, useReplRenderer } from "./renderer.ts";
-import type { ReplRendered, ReplRenderer } from "./renderer.ts";
+import { committedOps, flatten, profileFor, skeletonOps } from "./layout.ts";
+import type { ReplBox, ReplLayoutManifest, ReplRegion } from "./layout.ts";
+import { capacityOf, NOTHING_ADMITTED } from "./layout-admission.ts";
+import type { ReplAdmission } from "./layout-admission.ts";
+import { resolvePointer, useReplRenderer } from "./renderer.ts";
+import type { ReplDrawnBox, ReplMeasured, ReplRendered, ReplRenderer } from "./renderer.ts";
 import { useReplScreen } from "./screen.ts";
 import type { ReplScreen, ReplScreenEvent } from "./screen.ts";
 import type { ReplInputEvent } from "./description.ts";
@@ -256,16 +264,19 @@ function* refuse(state: ReplState, reason: string): Operation<Result<ReplOutcome
     // Drawn, then drawn again with where focus actually settled: the marker comes
     // from the tree's own answer, and the tree answers only after a commit.
     let focused: string | undefined;
-    let view = refusedView(state, reason, size, focused);
-    let shown = yield* paint(frames, tree, renderer, screen, view);
+    // Composed per frame rather than built once, so a terminal that moves while
+    // this screen is being drawn is redrawn at the size it moved to.
+    const compose: ReplCompose = function* (at) {
+      return refusedView(state, reason, at, focused);
+    };
+    let shown = (yield* paint(frames, tree, renderer, screen, compose)).rendered;
     const settle = function* (): Operation<void> {
       const now = keyOfFocus(tree);
       if (now === focused) {
         return;
       }
       focused = now;
-      view = refusedView(state, reason, yield* screen.size(), focused);
-      shown = yield* paint(frames, tree, renderer, screen, view);
+      shown = (yield* paint(frames, tree, renderer, screen, compose)).rendered;
     };
     yield* settle();
 
@@ -276,10 +287,9 @@ function* refuse(state: ReplState, reason: string): Operation<Result<ReplOutcome
       }
       if (next.value.kind === "resize") {
         // A refusal recovers on resize like any other screen: the terminal
-        // growing is the remedy for the one refusal that has no other.
-        renderer.resize(next.value.size);
-        view = refusedView(state, reason, next.value.size, focused);
-        shown = yield* paint(frames, tree, renderer, screen, view);
+        // growing is the remedy for the one refusal that has no other. The
+        // frame reads the size itself, so there is nothing to hand it here.
+        shown = (yield* paint(frames, tree, renderer, screen, compose)).rendered;
         continue;
       }
       if (next.value.kind === "pointer") {
@@ -452,12 +462,24 @@ function* drive(
       if (!dispatched.ok || dispatched.value.outcome !== "action") {
         return false;
       }
+      // Measured for the size and the reading this action is being answered at,
+      // before the action runs. A scroll moves from the clamp the screen is
+      // showing, so the capacity it moves within has to be this frame's and not
+      // the one a resize or a filter left behind. This preparation subscribes to
+      // no frame and acknowledges nothing — it is a question about geometry.
+      const ready = yield* prepareFrame(
+        renderer,
+        yield* build(state, model, current, yield* screen.size(), focused),
+      );
+      if (!ready.ok) {
+        throw ready.error;
+      }
       const transition = reduceRepl(
         state,
         dispatched.value.action,
         model,
         liveOf(current),
-        yield* screen.size(),
+        ready.value.admission,
       );
       state = transition.state;
       const performed = yield* perform(transition.intent, current, execution, options, wakes);
@@ -497,22 +519,14 @@ function* drive(
     }
 
     let focused: string | undefined;
-    rendered = yield* paint(
-      frames,
-      tree,
-      renderer,
-      screen,
-      yield* build(state, model, current, yield* screen.size(), focused),
-    );
+    // Composed per frame: every branch below leaves `state` and `model` such
+    // that this reproduces the view it resolved, at whatever size the terminal
+    // turns out to be when the frame is drawn.
+    const compose: ReplCompose = (at) => build(state, model, current, at, focused);
+    rendered = (yield* paint(frames, tree, renderer, screen, compose)).rendered;
     focused = keyOfFocus(tree);
     // The first frame has the same obligation as every other one.
-    rendered = yield* paint(
-      frames,
-      tree,
-      renderer,
-      screen,
-      yield* build(state, model, current, yield* screen.size(), focused),
-    );
+    rendered = (yield* paint(frames, tree, renderer, screen, compose)).rendered;
 
     while (true) {
       const taken = yield* wakes.take();
@@ -608,7 +622,9 @@ function* drive(
       // position: a prefix is a different reading of the same file rather than a
       // filter over the head. Reprojected, then verified — and a route that does
       // not resolve there leaves the standing one exactly as it was.
-      let view: ReplView;
+      //
+      // Resolution settles `state` and `model`; the view itself is composed per
+      // frame, because a resize between here and the commit rebuilds it.
       const attempted = yield* reproject(state, model, execution);
       const drawnAt = yield* screen.size();
       let adopting = attempted.state;
@@ -630,7 +646,6 @@ function* drive(
       if (built.ok) {
         state = adopting;
         model = attempted.model;
-        view = built.value;
         // The readiness may have moved while that refusal was on the screen: the
         // entry it named has finished, or the teardown it named has completed.
         // A refusal that is no longer true is worse than no refusal, because it
@@ -639,14 +654,10 @@ function* drive(
         if (
           refusedByReadiness &&
           state.refusal !== undefined &&
-          admitsSubmission(readinessOf(view))
+          admitsSubmission(readinessOf(built.value))
         ) {
           state = Object.freeze({ ...state, refusal: undefined });
           refusedByReadiness = false;
-          const again = viewFor(state, model, liveOf(current), drawnAt, focused);
-          if (again.ok) {
-            view = again.value;
-          }
         }
       } else {
         // The reason the *reprojection* refused, when there was one: it is the
@@ -658,10 +669,12 @@ function* drive(
         });
         const back = yield* reproject(state, model, execution);
         model = back.model;
-        const again = viewFor(state, model, liveOf(current), drawnAt, focused);
-        view = again.ok ? again.value : refusedView(state, again.error.message, drawnAt);
       }
-      rendered = yield* paint(frames, tree, renderer, screen, view);
+      const painted = yield* paint(frames, tree, renderer, screen, compose);
+      rendered = painted.rendered;
+      // Focus is read against the view that was committed, which a resize may
+      // have rebuilt from the one resolved above.
+      const view = painted.view;
       // Focus is the tree's answer, and the tree only answers after the commit —
       // so a frame built before it can be marking the wrong control. When it has
       // moved, draw once more with where it actually is. Otherwise the marker is
@@ -674,10 +687,10 @@ function* drive(
       state = focusSettled(view, settledFocus);
       if (settledFocus !== focused) {
         focused = settledFocus;
-        const redrawn = yield* build(state, model, current, yield* screen.size(), focused);
-        rendered = yield* paint(frames, tree, renderer, screen, redrawn);
+        const again = yield* paint(frames, tree, renderer, screen, compose);
+        rendered = again.rendered;
         settledFocus = keyOfFocus(tree);
-        state = focusSettled(redrawn, settledFocus);
+        state = focusSettled(again.view, settledFocus);
         focused = settledFocus;
       }
       if (ended) {
@@ -1017,46 +1030,386 @@ function* perform(
  * update has taken the person's terminal and stopped telling them anything.
  * Raising unwinds the scope that owns the terminal, which is the only thing
  * that puts the modes back.
+ *
+ * ## A frame the terminal invalidated is deferred, never presented
+ *
+ * Every preparation is revalidated against the size the terminal reports now,
+ * without exception, and an invalidated one is abandoned before anything is
+ * mounted. The work of rebuilding is bounded *per frame* rather than overall:
+ * a frame whose whole budget went to preparations the terminal outran releases
+ * its subscription without applying the timestamp and the next frame starts
+ * again from the size that is there. Nothing presents geometry measured for a
+ * terminal that has already changed, and nothing ends because a window moved.
  */
 function* paint(
   frames: ReplFrames,
   tree: ReplTree<ReplAction>,
   renderer: ReplRenderer,
   screen: ReplScreen,
-  view: ReplView,
-): Operation<ReplRendered> {
-  return yield* scoped(function* (): Operation<ReplRendered> {
+  compose: ReplCompose,
+): Operation<ReplPainted> {
+  while (true) {
+    const painted = yield* prepared(frames, tree, renderer, screen, compose);
+    if (painted !== undefined) {
+      return painted;
+    }
+    // Deferred, not given up on and not presented stale. The subscription went
+    // with the scope and the timestamp was never applied, so the stream is not
+    // held by a frame nobody drew — and the next one is prepared for whatever
+    // size the terminal has settled on by then.
+  }
+}
+
+/**
+ * One frame's worth of attempts: the painted frame, or none to defer.
+ *
+ * Scoped, so the subscription this frame owes is released however it leaves —
+ * presented, deferred or cancelled.
+ */
+function* prepared(
+  frames: ReplFrames,
+  tree: ReplTree<ReplAction>,
+  renderer: ReplRenderer,
+  screen: ReplScreen,
+  compose: ReplCompose,
+): Operation<ReplPainted | undefined> {
+  return yield* scoped(function* (): Operation<ReplPainted | undefined> {
     const held = yield* frames.subscribe({ owner: "repl", participants: [["repl"]] });
     if (!held.ok) {
       throw held.error;
     }
     const tick = yield* held.value.next();
 
-    // 1. The immutable view is already in hand. 2. Commit it and wait for that
-    // exact handoff.
-    const committed = yield* tree.apply(describeApplication(view));
-    if (!committed.ok) {
-      throw committed.error;
+    for (let attempt = 0; attempt < PREPARATIONS; attempt += 1) {
+      // The size this frame is for, read now and told to both engines before
+      // anything is measured against it.
+      const size = yield* screen.size();
+      renderer.resize(size);
+      const view = yield* compose(size);
+
+      // 1. Measure. 2. Admit. 3. Reconcile exactly what was admitted. 4. Draw.
+      //
+      // The current size is handed to every attempt. There is no last attempt
+      // that skips it: a frame drawn from a measurement the terminal has
+      // already invalidated publishes targets naming rows nobody can see, and
+      // presenting it would put that on the screen as though it were current.
+      const committed = yield* commitReplFrame(tree, renderer, view, tick.delta, undefined, () =>
+        screen.size(),
+      );
+      if (committed.ok) {
+        // 5. Present the copied bytes. 6. The caller retains the returned map.
+        // And only then 7. acknowledge that this timestamp has been applied.
+        yield* screen.present(committed.value.rendered.output);
+        held.value.acknowledge();
+        return { rendered: committed.value.rendered, view };
+      }
+      if (!isStaleFrame(committed.error)) {
+        throw committed.error;
+      }
+      // The terminal moved while this frame was being prepared. Nothing was
+      // mounted and nothing was published — abandonment costs exactly nothing —
+      // so build the frame again for the size that is actually there. Resizing
+      // is ordinary: a person dragging a window corner produces a stream of
+      // these, and a command that ended on one would be a command that cannot
+      // be resized.
     }
-    // 3. Only the mounted tree, laid out for the terminal as it is now.
-    const size = yield* screen.size();
-    const frame = layout(size, replSurface(tree, view));
-    const drawn = yield* renderer.render(
-      snapshotRender({
-        frame,
-        tree: tree.frame().id,
-        mounted: tree.mounted(),
-        deltaTime: tick.delta,
-        pointer: undefined,
-      }),
-    );
-    if (!drawn.ok) {
-      throw drawn.error;
-    }
-    // 4. Present the copied bytes. 5. The caller retains the returned map. And
-    // only then 6. acknowledge that this timestamp has been applied.
-    yield* screen.present(drawn.value.output);
-    held.value.acknowledge();
-    return drawn.value;
+    // Every attempt this frame had was invalidated. Deferred to the next frame,
+    // which is the only answer that neither presents what the terminal has
+    // already contradicted nor stops drawing.
+    return undefined;
   });
+}
+
+/** One painted frame, and the view it actually drew. */
+interface ReplPainted {
+  readonly rendered: ReplRendered;
+  /**
+   * The view this frame drew.
+   *
+   * Handed back because a resize may have rebuilt it: whoever reads focus out of
+   * the commit has to read it against the view that was committed, not the one
+   * they first composed.
+   */
+  readonly view: ReplView;
+}
+
+/**
+ * How one frame's view is built, for whatever size the terminal is now.
+ *
+ * A view is built for one exact size, so whoever paints has to be able to build
+ * it again when that size moves. Handing the frame a way to compose its view is
+ * what makes a resize recoverable rather than fatal.
+ */
+type ReplCompose = (size: ReplTerminalSize) => Operation<ReplView>;
+
+/**
+ * How many preparations one frame may spend on a size that moved under it.
+ *
+ * Bounded per frame rather than overall, so a terminal resizing faster than
+ * this product can draw gives up its subscription instead of the loop: the
+ * budget is what this frame owes the stream, and exhausting it defers to the
+ * next frame rather than presenting a measurement the terminal has already
+ * contradicted.
+ */
+const PREPARATIONS = 8;
+
+/** The one failure a caller recovers from by building the frame again. */
+export class ReplStaleFrameError extends Error {
+  override name = "ReplStaleFrameError";
+}
+
+/**
+ * Whether one failure is a size that moved rather than a frame that cannot be
+ * drawn.
+ *
+ * Read from the name rather than with `instanceof`, because a class identity is
+ * not reliable across separately loaded copies of a module and this decides
+ * whether the command carries on or ends.
+ */
+export function isStaleFrame(error: Error): boolean {
+  return error.name === "ReplStaleFrameError";
+}
+
+/** What one committed frame measured, admitted and drew. */
+export interface ReplCommitted {
+  readonly rendered: ReplRendered;
+  readonly manifest: ReplLayoutManifest;
+  readonly admission: ReplAdmission;
+}
+
+/**
+ * Measure, admit, reconcile and draw one view. The frame's whole middle.
+ *
+ * Everything between holding a frame's demand and presenting its bytes, in the
+ * one order this product allows, and in one place: the screen's own paint and
+ * any other caller that needs a committed frame go through here, so there is no
+ * second assembly of these four steps to disagree with this one.
+ *
+ * It subscribes to nothing and acknowledges nothing. Presentation and
+ * acknowledgement belong to whoever is holding the frame.
+ */
+export function* commitReplFrame(
+  tree: ReplTree<ReplAction>,
+  renderer: ReplRenderer,
+  view: ReplView,
+  deltaTime: number,
+  pointer: { readonly x: number; readonly y: number; readonly down: boolean } | undefined,
+  /**
+   * The terminal's size now, for revalidating what the measurement assumed.
+   *
+   * Measurement suspends, and a size that moved while it did makes every
+   * capacity it reported describe a terminal that no longer exists. A caller
+   * that can rebuild its view supplies this; one that cannot — a test holding
+   * one exact size — leaves it out.
+   */
+  sizeNow?: () => Operation<ReplTerminalSize>,
+): Operation<Result<ReplCommitted>> {
+  // Measure before anything is mounted: this asks the engine how much room each
+  // region has, so what a window shows is the frame's answer rather than this
+  // boundary's guess. It mounts nothing and publishes nothing.
+  const prepared = yield* prepareFrame(renderer, view);
+  if (!prepared.ok) {
+    return prepared;
+  }
+  // Revalidated here: after the measurement, and before anything is mounted.
+  // This is the last moment abandoning the frame is free — one statement later
+  // the tree holds controls measured for a terminal that has already changed,
+  // and the targets published from them would name rows nobody can see.
+  if (sizeNow !== undefined) {
+    const now = yield* sizeNow();
+    if (now.columns !== view.size.columns || now.rows !== view.size.rows) {
+      return Err(
+        new ReplStaleFrameError(
+          `this frame was measured for ${view.size.columns}x${view.size.rows} and the ` +
+            `terminal is now ${now.columns}x${now.rows}`,
+        ),
+      );
+    }
+  }
+
+  // Only what was admitted is offered, so a row outside a window mounts nothing
+  // and a control the row cannot hold whole is not in the tree.
+  const { presentation, admission } = prepared.value;
+  const applied = yield* tree.apply(presentation.descriptions);
+  if (!applied.ok) {
+    return applied;
+  }
+
+  // Bind the admitted manifest to the revision just reconciled, and draw its
+  // contributed cells. What an element says is the cell its own mounted node
+  // produced; a box whose node is not mounted is not drawn at all.
+  const mounted = new Set(tree.mounted());
+  const nodeByKey = new Map<string, string>();
+  for (const node of mounted) {
+    const key = tree.keyOf(node);
+    if (key !== undefined) {
+      nodeByKey.set(key, node);
+    }
+  }
+  const cells = new Map<string, string>();
+  for (const cell of tree.frame().cells) {
+    cells.set(cell.node, cell.cell);
+  }
+  const root = presentation.manifest.root;
+  const drawn = yield* renderer.draw({
+    ops: committedOps(root, nodeByKey, mounted, cells),
+    boxes: drawnBoxesOf(root, nodeByKey, mounted),
+    // Every region and every viewport, so where one landed is a fact the frame
+    // carries rather than something a later caller works out again.
+    // Every structural box the manifest placed: the regions, the viewports, the
+    // action row and the band's own rows. None of them is a target — a region is
+    // not something a person activates — but where each one landed is the only
+    // honest answer to how much room it had, so the frame carries it.
+    regions: flatten(root)
+      .filter((box) => box.key === undefined)
+      .map((box) => box.id),
+    tree: tree.frame().id,
+    size: view.size,
+    deltaTime,
+    pointer,
+  });
+  if (!drawn.ok) {
+    return drawn;
+  }
+  return Ok({ rendered: drawn.value, manifest: presentation.manifest, admission });
+}
+
+/** Which boxes this frame may publish a target for, and under which node. */
+function drawnBoxesOf(
+  root: ReplBox,
+  nodeByKey: ReadonlyMap<string, string>,
+  mounted: ReadonlySet<string>,
+): readonly ReplDrawnBox[] {
+  const found: ReplDrawnBox[] = [];
+  for (const box of flatten(root)) {
+    if (box.key === undefined) {
+      continue;
+    }
+    const node = nodeByKey.get(box.key);
+    if (node === undefined || !mounted.has(node)) {
+      continue;
+    }
+    found.push({ id: node, node, control: box.control });
+  }
+  return found;
+}
+
+/** What one bounded preparation measured, and the frame it decided on. */
+export interface ReplPrepared {
+  readonly context: ReplPresentationContext;
+  readonly presentation: ReplPresentation;
+  readonly admission: ReplAdmission;
+}
+
+/** One measuring context, which describes every scrolling viewport empty. */
+function measuringAt(
+  widths: ReplMeasuredWidths | undefined,
+  entriesWindowed: boolean,
+  entriesRows: number | undefined,
+): ReplPresentationContext {
+  return {
+    widths,
+    admission: NOTHING_ADMITTED,
+    measuring: true,
+    entriesWindowed,
+    entriesRows,
+    capture: "capture",
+  };
+}
+
+/**
+ * Measure one view at its own size, and decide what the frame admits.
+ *
+ * Bounded, and in a fixed order, because each answer the engine gives is what
+ * the next question needs. The region widths come first, since the text a row
+ * holds has to fit one. Then the Entries catalog is measured without its window
+ * controls, because whether it needs them is what decides whether they take a
+ * row away from it. Then every region is measured once more with everything that
+ * stays put in place — headings, both window controls, the complete action
+ * labels — and what is left over is what the moving windows get.
+ *
+ * None of these renders is a committed frame. They mount nothing, publish no
+ * target, acknowledge nothing and leave the drawn display exactly as it was,
+ * which is why they run on the measuring engine and their bytes are discarded.
+ */
+export function* prepareFrame(
+  renderer: ReplRenderer,
+  view: ReplView,
+): Operation<Result<ReplPrepared>> {
+  // No widths at all for the pass that answers what the widths are. Every row
+  // whose text has to fit a region is left out of it, because a growing column
+  // takes its minimum from its widest child: one unbounded row would make the
+  // column wider than its share and squeeze the column beside it, and the number
+  // this pass reports would be the number that row caused.
+  const probe = presentationFor(view, measuringAt(undefined, false, undefined));
+  const first = yield* renderer.measure(skeletonOps(probe.manifest.root), view.size);
+  if (!first.ok) {
+    return first;
+  }
+  const widths = widthsOf(probe.manifest, first.value);
+
+  // The catalog without its controls: if it fits, it keeps its natural footprint
+  // and the column keeps the rows those controls would have taken.
+  const trial = presentationFor(view, measuringAt(widths, false, undefined));
+  const second = yield* renderer.measure(skeletonOps(trial.manifest.root), view.size);
+  if (!second.ok) {
+    return second;
+  }
+  const catalog = entriesRowCount(view.model);
+  const windowed = catalog > capacityOf(second.value.boundsOf(entriesViewportOf(trial.manifest)));
+  const entriesRows = windowed ? undefined : catalog;
+
+  const measured = presentationFor(view, measuringAt(widths, windowed, entriesRows));
+  const third = yield* renderer.measure(skeletonOps(measured.manifest.root), view.size);
+  if (!third.ok) {
+    return third;
+  }
+  const admission = admissionFor({
+    view,
+    manifest: measured.manifest,
+    widths,
+    boundsOf: (id: string) => third.value.boundsOf(id),
+  });
+  const context: ReplPresentationContext = {
+    widths,
+    admission,
+    measuring: false,
+    entriesWindowed: windowed,
+    entriesRows,
+    capture: "capture",
+  };
+  return Ok({ context, admission, presentation: presentationFor(view, context) });
+}
+
+/** Which region's width the text that must fit one is bounded by. */
+function widthsOf(manifest: ReplLayoutManifest, measured: ReplMeasured): ReplMeasuredWidths {
+  const of = (...names: readonly ReplRegion[]): number => {
+    for (const name of names) {
+      const found = manifest.regions.find((region) => region.region === name);
+      if (found !== undefined) {
+        return widthOf(measured, found.id);
+      }
+    }
+    return 0;
+  };
+  return {
+    // Narrow has one routed outlet and no columns, so every row that would land
+    // in a column lands there instead.
+    surface: of("transcript", "content"),
+    list: of("sidebar", "content"),
+    inspection: of("inspection", "content"),
+    drawer: widthOf(measured, manifest.viewports.find((slot) => slot.region === "drawer")?.id),
+  };
+}
+
+function widthOf(measured: ReplMeasured, id: string | undefined): number {
+  if (id === undefined) {
+    return 0;
+  }
+  return Math.max(0, Math.floor(measured.boundsOf(id)?.width ?? 0));
+}
+
+/** The Entries viewport's structural id, or one nothing measures. */
+function entriesViewportOf(manifest: ReplLayoutManifest): string {
+  return manifest.viewports.find((slot) => slot.window === ENTRIES_WINDOW)?.id ?? "";
 }

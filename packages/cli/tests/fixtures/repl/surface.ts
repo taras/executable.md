@@ -1,16 +1,25 @@
 /**
  * A semantic REPL screen, described through the composition factories.
  *
- * Enough of a screen to lay out and render: a Sessions list that can be empty,
- * Entries, the selected entry's scopes, a transcript, a bindings/history
- * inspection column, an optional drawer and a footer holding History and an
- * input. Every one of them is an ordinary described node, so what is under test
- * is placement and rendering rather than a screen this fixture invented.
+ * Enough of a screen to measure, admit, mount and draw: a Sessions list that can
+ * be empty, Entries, the selected entry's scopes, a transcript, a
+ * bindings/history inspection column, an optional drawer and a footer holding
+ * the action row, the History band and the draft. Every row is an ordinary
+ * described node, so what is under test is placement and rendering rather than a
+ * screen this fixture invented.
  *
- * The region a node belongs to is decided **here**, from its key, and the text
- * it shows comes from the committed frame. Presentation therefore reads the
- * tree; it never tells the tree anything, which is what keeps a resize from
- * touching identity.
+ * ## One walk, two things
+ *
+ * The descriptions and the boxes that place them are built together, from the
+ * same classification, exactly as the application builds its own. A box carries
+ * the structural id the measuring pass draws it under and the description key
+ * whose live node the committed pass draws it under, so a measured region and
+ * the region drawn into it cannot be two different regions.
+ *
+ * This fixture computes **no** cell coordinate and **no** capacity. Every
+ * rectangle comes from `layout.ts`'s shared constraints and every window comes
+ * from what the engine measured — which is the point: a fixture with its own
+ * layout arithmetic would agree with itself and disagree with the product.
  */
 
 import { component, describe as describeNode, fields } from "../../../src/repl/description.ts";
@@ -21,13 +30,37 @@ import type {
   ReplNode,
   ReplViewData,
 } from "../../../src/repl/description.ts";
-import type {
-  ReplRegion,
-  ReplSurface,
-  ReplSurfaceCell,
-  ReplSurfaceMarker,
+import {
+  actionRowProps,
+  bandProps,
+  bodyProps,
+  box,
+  columnProps,
+  CONTROL_PROPS,
+  drawerLayerProps,
+  drawerRect,
+  footerProps,
+  historyBand,
+  inspectionWidth,
+  profileFor,
+  refusalProps,
+  refusalText,
+  rootProps,
+  ROW_PROPS,
+  sharedColumnRows,
+  sidebarWidth,
+  stackProps,
+  viewportProps,
 } from "../../../src/repl/layout.ts";
-import type { ReplTree } from "../../../src/repl/reconcile.ts";
+import type {
+  ReplBox,
+  ReplLayoutManifest,
+  ReplRegion,
+  ReplSurfaceMarker,
+  ReplViewportSlot,
+} from "../../../src/repl/layout.ts";
+import type { ReplTerminalSize } from "../../../src/repl/terminal.ts";
+import type { PairBuilder, Pass } from "./presentation.ts";
 
 /** Everything this screen's controls can ask the root to do. */
 export type Surfaced =
@@ -36,10 +69,17 @@ export type Surfaced =
   | { readonly kind: "select-scope"; readonly key: string }
   | { readonly kind: "select-marker"; readonly key: string }
   | { readonly kind: "close-drawer" }
+  | { readonly kind: "scroll"; readonly window: string; readonly delta: number }
+  | { readonly kind: "act"; readonly key: string }
   | { readonly kind: "submit" }
   /** Text the person typed or pasted, for the draft to append. */
   | { readonly kind: "insert"; readonly text: string }
   | { readonly kind: "erase" };
+
+/** The windows this screen scrolls, named as the production ones are. */
+export const SESSIONS = "sessions";
+export const ENTRIES = "entries";
+export const DRAWER = "drawer";
 
 /** The one string field every fixture component is given. */
 function text(input: ReplViewData): string {
@@ -50,13 +90,11 @@ function text(input: ReplViewData): string {
   return value;
 }
 
-/**
- * A selectable row.
- *
- * Its action comes from its key, which does not change when its text does — so
- * redescribing a row for a narrower screen cannot change what activating it
- * means.
- */
+function optional(input: ReplViewData, name: string): string | undefined {
+  const value = fields(input)?.[name];
+  return typeof value === "string" ? value : undefined;
+}
+
 /** The actions a selectable row can produce. */
 type Selecting = "select-session" | "select-entry" | "select-scope" | "select-marker";
 
@@ -74,6 +112,13 @@ function selected(kind: Selecting, key: string): Surfaced {
   }
 }
 
+/**
+ * A selectable row.
+ *
+ * Its action comes from its key, which does not change when its text does — so
+ * redescribing a row for a narrower screen cannot change what activating it
+ * means.
+ */
 function row(kind: Selecting | "close-drawer"): ReplComponent<Surfaced> {
   return component<Surfaced>({
     name: `row:${kind}`,
@@ -98,6 +143,30 @@ function row(kind: Selecting | "close-drawer"): ReplComponent<Surfaced> {
   });
 }
 
+/** A control of the action row, or of a window. */
+const CONTROL: ReplComponent<Surfaced> = component<Surfaced>({
+  name: "control",
+  attach(node: ReplNode<Surfaced>): void {
+    node.focusable();
+    node.render(text(node.input));
+    node.onInput((input: ReplViewData) => node.render(text(input)));
+    node.claim((event: ReplInputEvent): Surfaced | undefined => {
+      if (event.kind === "text") {
+        return undefined;
+      }
+      if (event.kind !== "pointer" && event.key !== "Enter") {
+        return undefined;
+      }
+      const window = optional(node.input, "window");
+      const delta = fields(node.input)?.["delta"];
+      if (window !== undefined && typeof delta === "number") {
+        return { kind: "scroll", window, delta };
+      }
+      return { kind: "act", key: node.key };
+    });
+  },
+});
+
 /** A line of text nobody can select. */
 const LINE: ReplComponent<Surfaced> = component<Surfaced>({
   name: "line",
@@ -117,7 +186,7 @@ const SECTION: ReplComponent<Surfaced> = component<Surfaced>({
 });
 
 /** A drawer: a modal branch that closes on Escape. */
-const DRAWER: ReplComponent<Surfaced> = component<Surfaced>({
+const DRAWER_COMPONENT: ReplComponent<Surfaced> = component<Surfaced>({
   name: "drawer",
   attach(node: ReplNode<Surfaced>): void {
     node.render(text(node.input));
@@ -163,7 +232,6 @@ const DRAFT: ReplComponent<Surfaced> = component<Surfaced>({
 const SESSION_ROW = row("select-session");
 const ENTRY_ROW = row("select-entry");
 const SCOPE_ROW = row("select-scope");
-const MARKER_ROW = row("select-marker");
 const CLOSE_ROW = row("close-drawer");
 
 /**
@@ -172,7 +240,19 @@ const CLOSE_ROW = row("close-drawer");
  * A route, not a preference: the application decides it, and placement is told
  * rather than asked.
  */
-export type ReplFixtureRoute = "sessions" | "entries" | "transcript" | "inspection";
+export type ReplFixtureRoute = "sessions" | "entries";
+
+/** One offered action of the footer's row, in priority order. */
+export interface ReplFixtureAction {
+  readonly key: string;
+  readonly label: string;
+}
+
+/** The footer's two standing controls, which every screen offers. */
+export const STANDING_ACTIONS: readonly ReplFixtureAction[] = Object.freeze([
+  Object.freeze({ key: "footer:history", label: "[history]" }),
+  Object.freeze({ key: "footer:exit", label: "[exit]" }),
+]);
 
 /** What the screen is showing. */
 export interface ReplFixtureState {
@@ -186,21 +266,42 @@ export interface ReplFixtureState {
   readonly history: readonly ReplSurfaceMarker[];
   /** The open drawer's title, or none. */
   readonly drawer: string | undefined;
+  /** The drawer's own ordered content, which its window shows part of. */
+  readonly drawerLines: readonly string[];
+  /** The action row's controls, in priority order. */
+  readonly actions: readonly ReplFixtureAction[];
+  /**
+   * Whether each list offers its two window controls.
+   *
+   * Off by default, so a test about placement gets the plainest screen that
+   * places anything. The admission tests turn it on, because what a window
+   * control costs its own region a row for is the thing they are measuring.
+   */
+  readonly windowed: boolean;
   readonly draft: string;
+  /** How far each window is scrolled, by window name. */
+  readonly offsets: Readonly<Record<string, number>>;
+  /** Whether the drawer layer takes the engine's pointer off what it covers. */
+  readonly capture: "capture" | "passthrough";
 }
 
 /** A state with nothing in it yet, which is a screen the REPL really shows. */
-export const EMPTY: ReplFixtureState = {
+export const EMPTY: ReplFixtureState = Object.freeze({
   route: "sessions",
-  sessions: [],
-  entries: [],
-  scopes: [],
-  transcript: [],
-  bindings: [],
-  history: [],
+  sessions: Object.freeze([]),
+  entries: Object.freeze([]),
+  scopes: Object.freeze([]),
+  transcript: Object.freeze([]),
+  bindings: Object.freeze([]),
+  history: Object.freeze([]),
   drawer: undefined,
+  drawerLines: Object.freeze([]),
+  actions: STANDING_ACTIONS,
+  windowed: false,
   draft: "",
-};
+  offsets: Object.freeze({}),
+  capture: "capture",
+});
 
 function leaf(
   kind: ReplComponent<Surfaced>,
@@ -209,162 +310,427 @@ function leaf(
   options: {
     readonly modal?: true;
     readonly focus?: true;
+    readonly extra?: Readonly<Record<string, number | string>>;
     readonly children?: readonly ReplDescription<Surfaced>[];
   } = {},
 ): ReplDescription<Surfaced> {
   return describeNode<Surfaced>({
     key,
     component: kind,
-    input: { text: body },
+    input: { text: body, ...(options.extra ?? {}) },
     ...(options.children === undefined ? {} : { children: options.children }),
     ...(options.modal === undefined ? {} : { modal: options.modal }),
     ...(options.focus === undefined ? {} : { focus: options.focus }),
   });
 }
 
-/** Describe the whole screen. One flat set: placement is not nesting. */
-export function fixtureDescriptions(state: ReplFixtureState): readonly ReplDescription<Surfaced>[] {
-  const described: ReplDescription<Surfaced>[] = [];
-
-  described.push(
-    state.sessions.length === 0
-      ? // An empty list is a thing the screen says, not a thing it omits.
-        leaf(SECTION, "sessions:empty", "Sessions: none yet")
-      : leaf(SECTION, "sessions:heading", "Sessions"),
-  );
-  for (const session of state.sessions) {
-    described.push(leaf(SESSION_ROW, `session:${session}`, session));
-  }
-  described.push(leaf(SECTION, "entries:heading", "Entries"));
-  for (const entry of state.entries) {
-    described.push(leaf(ENTRY_ROW, `entry:${entry}`, entry));
-  }
-  for (const scope of state.scopes) {
-    described.push(leaf(SCOPE_ROW, `scope:${scope}`, scope));
-  }
-  for (const [index, line] of state.transcript.entries()) {
-    described.push(leaf(LINE, `line:${index}`, line));
-  }
-  for (const binding of state.bindings) {
-    described.push(leaf(LINE, `binding:${binding.name}`, `${binding.name} = ${binding.value}`));
-  }
-  for (const marker of state.history) {
-    described.push(leaf(MARKER_ROW, `marker:${marker.marker}`, marker.label));
-  }
-  // Focus follows the innermost modal. An open drawer holds it, because the
-  // composition kernel refuses a focus claim its open modal does not contain —
-  // which is the same reason the drawer's own control is its child rather than
-  // its sibling.
-  described.push(
-    state.drawer === undefined
-      ? leaf(DRAFT, "footer:input", `> ${state.draft}`, { focus: true })
-      : leaf(DRAFT, "footer:input", `> ${state.draft}`),
-  );
-  if (state.drawer !== undefined) {
-    described.push(
-      leaf(DRAWER, "drawer:open", state.drawer, {
-        modal: true,
-        children: [leaf(CLOSE_ROW, "drawer:close", "Close", { focus: true })],
-      }),
-    );
-  }
-  return described;
+/** One described row paired with the box that places it. */
+interface Paired {
+  readonly description: ReplDescription<Surfaced>;
+  readonly box: ReplBox;
 }
 
-/** Which region a key belongs to, and whether a pointer may activate it. */
-function regionOf(
+function paired(
+  kind: ReplComponent<Surfaced>,
   key: string,
-): { readonly region: ReplRegion; readonly targetable: boolean } | undefined {
-  if (key.startsWith("sessions:") || key.startsWith("entries:")) {
-    return { region: "sidebar", targetable: false };
+  body: string,
+  region: ReplRegion,
+  options: {
+    readonly control?: boolean;
+    readonly focus?: true;
+    readonly extra?: Readonly<Record<string, number | string>>;
+    readonly props?: typeof ROW_PROPS;
+  } = {},
+): Paired {
+  return {
+    description: leaf(kind, key, body, {
+      ...(options.focus === undefined ? {} : { focus: options.focus }),
+      ...(options.extra === undefined ? {} : { extra: options.extra }),
+    }),
+    box: box({
+      id: `box:${region}:${key}`,
+      key,
+      region,
+      props: options.props ?? ROW_PROPS,
+      text: body,
+      control: options.control === true,
+    }),
+  };
+}
+
+function descriptionsOf(parts: readonly Paired[]): readonly ReplDescription<Surfaced>[] {
+  return parts.map((part) => part.description);
+}
+
+function boxesOf(parts: readonly Paired[]): readonly ReplBox[] {
+  return parts.map((part) => part.box);
+}
+
+/** The rows one measured window shows, or none while the frame is measured. */
+function shown<T>(rows: readonly T[], pass: Pass, window: string): readonly T[] {
+  if (pass.measuring) {
+    return [];
   }
-  if (key.startsWith("session:") || key.startsWith("entry:") || key.startsWith("scope:")) {
-    return { region: "sidebar", targetable: true };
-  }
-  if (key.startsWith("line:")) {
-    return { region: "transcript", targetable: false };
-  }
-  if (key.startsWith("binding:")) {
-    return { region: "inspection", targetable: false };
-  }
-  if (key.startsWith("marker:")) {
-    return { region: "footer", targetable: true };
-  }
-  if (key.startsWith("footer:")) {
-    return { region: "footer", targetable: true };
-  }
-  if (key.startsWith("drawer:")) {
-    return { region: "drawer", targetable: true };
-  }
-  return undefined;
+  const held = pass.admission.windows.get(window);
+  return held === undefined ? [] : rows.slice(held.from, held.from + held.count);
 }
 
 /**
- * The surface a committed tree presents.
+ * The paired screen one fixture state describes at one size.
  *
- * Read from the frame, so a node the tree has removed contributes nothing and a
- * cell nobody rendered is not in it. The live node id travels with every cell,
- * because that id is what a pointer resolved against the drawn frame has to name.
+ * Hands back a builder rather than a pair, because measuring and committing are
+ * the same walk given different answers: the committer calls it twice and the
+ * second call is the one that mounts.
  */
-export function fixtureSurface(tree: ReplTree<Surfaced>, state: ReplFixtureState): ReplSurface {
-  const collected = new Map<ReplRegion, ReplSurfaceCell[]>([
-    ["sidebar", []],
-    ["transcript", []],
-    ["inspection", []],
-    ["drawer", []],
-    ["footer", []],
-  ]);
-
-  for (const cell of tree.frame().cells) {
-    const key = tree.keyOf(cell.node);
-    if (key === undefined) {
-      continue;
-    }
-    const placed = regionOf(key);
-    if (placed === undefined) {
-      continue;
-    }
-    collected.get(placed.region)?.push({
-      node: cell.node,
-      text: cell.cell,
-      ...(placed.targetable ? { targetable: true } : {}),
-    });
-  }
-
-  const sidebar = collected.get("sidebar") ?? [];
-  const sessions = sidebar.filter((cell) => {
-    const key = tree.keyOf(cell.node);
-    return key !== undefined && (key.startsWith("sessions:") || key.startsWith("session:"));
-  });
-  const entries = sidebar.filter((cell) => !sessions.includes(cell));
-  const transcript = collected.get("transcript") ?? [];
-  const inspection = collected.get("inspection") ?? [];
-
-  const routed: { readonly [route in ReplFixtureRoute]: readonly ReplSurfaceCell[] } = {
-    sessions,
-    entries,
-    transcript,
-    inspection,
-  };
-
-  // The footer's own three parts, which placement keeps apart: the action row,
-  // the History band and the draft. The draft is named rather than left as the
-  // last of a list, because a drawer reparents footer controls and so decides
-  // what comes after it in the committed frame.
-  const footer = collected.get("footer") ?? [];
-  const draft = footer.find((cell) => tree.keyOf(cell.node) === "footer:input");
+export function fixturePairs(
+  state: ReplFixtureState,
+  size: ReplTerminalSize,
+): PairBuilder<Surfaced> {
+  const sessionRows = state.sessions;
+  const entryRows = [
+    ...state.entries.map((entry) => ({ key: `entry:${entry}`, label: entry, kind: ENTRY_ROW })),
+    ...state.scopes.map((scope) => ({ key: `scope:${scope}`, label: scope, kind: SCOPE_ROW })),
+  ];
 
   return {
-    // The route picks one. Everything else stays mounted and stays off the
-    // narrow frame, which is what makes it unreachable there rather than hidden.
-    content: routed[state.route],
-    sessions,
-    entries,
-    transcript,
-    inspection,
-    drawer: collected.get("drawer") ?? [],
-    actions: footer.filter((cell) => cell !== draft),
-    draft,
-    history: state.history,
+    total(window) {
+      if (window === SESSIONS) {
+        return sessionRows.length;
+      }
+      if (window === ENTRIES) {
+        return entryRows.length;
+      }
+      return state.drawerLines.length;
+    },
+    offset(window) {
+      return state.offsets[window] ?? 0;
+    },
+    build(pass) {
+      const profile = profileFor(size);
+      const band = historyBand(state.history, size.columns);
+      if (profile === "too-small") {
+        return {
+          descriptions: [leaf(LINE, "refusal", refusalText(size))],
+          manifest: Object.freeze({
+            profile,
+            size: Object.freeze({ ...size }),
+            root: box({
+              id: "box:root",
+              props: rootProps(size),
+              children: [
+                box({
+                  id: "box:refusal",
+                  region: "refusal",
+                  props: refusalProps(),
+                  text: refusalText(size),
+                }),
+              ],
+            }),
+            viewports: Object.freeze([]),
+            actions: undefined,
+            regions: Object.freeze([Object.freeze({ region: "refusal", id: "box:refusal" })]),
+            history: band,
+          }),
+        };
+      }
+
+      const viewports: ReplViewportSlot[] = [];
+      const regions: { region: ReplRegion; id: string }[] = [];
+      const descriptions: ReplDescription<Surfaced>[] = [];
+
+      /** One list region: its heading, its window controls and the window. */
+      const list = (
+        region: ReplRegion,
+        window: string,
+        heading: Paired,
+        rows: readonly Paired[],
+        windowed: boolean,
+      ): readonly ReplBox[] => {
+        const id = `box:${window}:viewport`;
+        viewports.push(Object.freeze({ id, region, window }));
+        const less = paired(CONTROL, `${window}:earlier`, "[^ earlier]", region, {
+          control: true,
+          extra: { window, delta: -1 },
+        });
+        const more = paired(CONTROL, `${window}:later`, "[v later]", region, {
+          control: true,
+          extra: { window, delta: 1 },
+        });
+        descriptions.push(heading.description);
+        if (windowed) {
+          descriptions.push(less.description);
+        }
+        descriptions.push(...descriptionsOf(rows));
+        if (windowed) {
+          descriptions.push(more.description);
+        }
+        return [
+          heading.box,
+          ...(windowed ? [less.box] : []),
+          box({ id, region, props: viewportProps(), children: boxesOf(rows) }),
+          ...(windowed ? [more.box] : []),
+        ];
+      };
+
+      const sessionHeading = (region: ReplRegion): Paired =>
+        state.sessions.length === 0
+          ? // An empty list is a thing the screen says, not a thing it omits.
+            paired(SECTION, "sessions:empty", "Sessions: none yet", region)
+          : paired(SECTION, "sessions:heading", "Sessions", region);
+
+      const sessionWindow = (region: ReplRegion): readonly Paired[] =>
+        shown(sessionRows, pass, SESSIONS).map((session) =>
+          paired(SESSION_ROW, `session:${session}`, session, region, { control: true }),
+        );
+
+      const entryWindow = (region: ReplRegion): readonly Paired[] =>
+        shown(entryRows, pass, ENTRIES).map((entry) =>
+          paired(entry.kind, entry.key, entry.label, region, { control: true }),
+        );
+
+      const columns: ReplBox[] = [];
+      if (profile === "narrow") {
+        const routed =
+          state.route === "sessions"
+            ? list(
+                "content",
+                SESSIONS,
+                sessionHeading("content"),
+                sessionWindow("content"),
+                state.windowed,
+              )
+            : list(
+                "content",
+                ENTRIES,
+                paired(SECTION, "entries:heading", "Entries", "content"),
+                entryWindow("content"),
+                state.windowed,
+              );
+        regions.push({ region: "content", id: "box:content" });
+        columns.push(
+          box({
+            id: "box:content",
+            region: "content",
+            props: columnProps(undefined),
+            children: routed,
+          }),
+        );
+      } else {
+        const transcript = state.transcript.map((line, at) =>
+          paired(LINE, `line:${at}`, line, "transcript"),
+        );
+        const inspection = state.bindings.map((one) =>
+          paired(LINE, `binding:${one.name}`, `${one.name} = ${one.value}`, "inspection"),
+        );
+        regions.push(
+          { region: "sidebar", id: "box:sidebar" },
+          { region: "transcript", id: "box:transcript" },
+          { region: "inspection", id: "box:inspection" },
+        );
+        const sessionsGroup = list(
+          "sidebar",
+          SESSIONS,
+          sessionHeading("sidebar"),
+          sessionWindow("sidebar"),
+          state.windowed,
+        );
+        const entriesGroup = list(
+          "sidebar",
+          ENTRIES,
+          paired(SECTION, "entries:heading", "Entries", "sidebar"),
+          entryWindow("sidebar"),
+          state.windowed,
+        );
+        descriptions.push(...descriptionsOf(transcript), ...descriptionsOf(inspection));
+        columns.push(
+          box({
+            id: "box:sidebar",
+            region: "sidebar",
+            props: columnProps(sidebarWidth(size)),
+            children: [
+              // Only one of the two grows. Two growing siblings split the
+              // remainder in the engine's own arithmetic, which is not whole.
+              box({
+                id: "box:sidebar:sessions",
+                region: "sidebar",
+                props: stackProps("grow"),
+                children: sessionsGroup,
+              }),
+              box({
+                id: "box:sidebar:entries",
+                region: "sidebar",
+                props: stackProps(sharedColumnRows(size)),
+                children: entriesGroup,
+              }),
+            ],
+          }),
+          box({
+            id: "box:transcript",
+            region: "transcript",
+            props: columnProps(undefined),
+            children: [
+              box({
+                id: "box:transcript:viewport",
+                region: "transcript",
+                props: viewportProps(),
+                children: boxesOf(transcript),
+              }),
+            ],
+          }),
+          box({
+            id: "box:inspection",
+            region: "inspection",
+            props: columnProps(inspectionWidth(size)),
+            children: [
+              box({
+                id: "box:inspection:viewport",
+                region: "inspection",
+                props: viewportProps(),
+                children: boxesOf(inspection),
+              }),
+            ],
+          }),
+        );
+      }
+
+      const rect = drawerRect(size);
+      if (state.drawer !== undefined && rect !== undefined) {
+        const id = `box:${DRAWER}:viewport`;
+        viewports.push(Object.freeze({ id, region: "drawer", window: DRAWER }));
+        regions.push({ region: "drawer", id: "box:drawer:layer" });
+        const less = paired(CONTROL, "drawer:earlier", "[^ earlier]", "drawer", {
+          control: true,
+          extra: { window: DRAWER, delta: -1 },
+        });
+        const more = paired(CONTROL, "drawer:later", "[v later]", "drawer", {
+          control: true,
+          extra: { window: DRAWER, delta: 1 },
+        });
+        const lines = shown(state.drawerLines, pass, DRAWER).map((line, at) =>
+          paired(LINE, `drawer:line:${at}`, line, "drawer"),
+        );
+        const close = paired(CLOSE_ROW, "drawer:close", "[close]", "drawer", { control: true });
+        // Focus follows the innermost modal. An open drawer holds it, because the
+        // composition kernel refuses a focus claim its open modal does not
+        // contain — which is why the drawer's controls are its children.
+        descriptions.push(
+          describeNode<Surfaced>({
+            key: "drawer:open",
+            component: DRAWER_COMPONENT,
+            input: { text: state.drawer },
+            modal: true,
+            children: [
+              less.description,
+              ...descriptionsOf(lines),
+              more.description,
+              leaf(CLOSE_ROW, "drawer:close", "[close]", { focus: true }),
+            ],
+          }),
+        );
+        columns.push(
+          box({
+            id: "box:drawer:layer",
+            region: "drawer",
+            props: drawerLayerProps(rect, state.capture),
+            children: [
+              box({
+                id: "box:drawer:drawer:open",
+                key: "drawer:open",
+                region: "drawer",
+                props: ROW_PROPS,
+                text: state.drawer,
+                control: false,
+              }),
+              less.box,
+              box({
+                id,
+                region: "drawer",
+                props: viewportProps(),
+                children: boxesOf(lines),
+              }),
+              more.box,
+              close.box,
+            ],
+          }),
+        );
+      }
+
+      const offered = state.actions.map((action) =>
+        paired(CONTROL, action.key, action.label, "footer", {
+          control: true,
+          props: CONTROL_PROPS,
+        }),
+      );
+      // Every candidate while measuring, so each one's own width is an answer
+      // the engine has given; only the admitted prefix once there is one. A
+      // control described but left out of the frame would be a focus stop that
+      // draws nothing, which is the thing admission exists to prevent.
+      const placed = offered.filter(
+        (one) => pass.measuring || pass.admission.actions.has(one.box.key ?? ""),
+      );
+      descriptions.push(...descriptionsOf(placed));
+      const draft = paired(DRAFT, "footer:input", `> ${state.draft}`, "footer", { control: true });
+      descriptions.push(
+        state.drawer === undefined
+          ? leaf(DRAFT, "footer:input", `> ${state.draft}`, { focus: true })
+          : draft.description,
+      );
+      regions.push({ region: "footer", id: "box:footer" });
+
+      return {
+        descriptions,
+        manifest: Object.freeze({
+          profile,
+          size: Object.freeze({ ...size }),
+          root: box({
+            id: "box:root",
+            props: rootProps(size),
+            children: [
+              box({ id: "box:body", props: bodyProps(), children: columns }),
+              box({
+                id: "box:footer",
+                region: "footer",
+                props: footerProps(),
+                children: [
+                  box({
+                    id: "box:footer:actions",
+                    region: "footer",
+                    props: actionRowProps(),
+                    children: boxesOf(placed),
+                  }),
+                  box({
+                    id: "box:footer:band",
+                    region: "footer",
+                    props: bandProps(),
+                    children: band.rows.map((line, at) =>
+                      box({
+                        id: `box:band:${at}`,
+                        region: "footer",
+                        props: ROW_PROPS,
+                        text: line,
+                      }),
+                    ),
+                  }),
+                  draft.box,
+                ],
+              }),
+            ],
+          }),
+          viewports: Object.freeze(viewports),
+          actions: Object.freeze({
+            id: "box:footer:actions",
+            controls: Object.freeze(
+              offered.map((one) => ({
+                key: one.box.key ?? "",
+                id: one.box.id,
+                control: one.box.control,
+              })),
+            ),
+          }),
+          regions: Object.freeze(regions.map((region) => Object.freeze(region))),
+          history: band,
+        }),
+      };
+    },
   };
 }

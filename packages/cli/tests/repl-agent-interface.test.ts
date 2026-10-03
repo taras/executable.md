@@ -57,13 +57,12 @@ import { readdir } from "@effectionx/fs";
 import { useTempDirectory } from "@executablemd/test-support/temp";
 import type { ReplModel } from "../src/repl/model.ts";
 import {
-  describeApplication,
   focusClaim,
   focusSettled,
   initialState,
   permissionSettled,
   reduceRepl,
-  replSurface,
+  presentationFor,
   viewFor,
 } from "../src/repl/application.ts";
 import type {
@@ -73,8 +72,13 @@ import type {
   ReplState,
   ReplView,
 } from "../src/repl/application.ts";
-import { layout, NARROW, surfaceWidth } from "../src/repl/layout.ts";
-import type { ReplPlacedCell, ReplSemanticFrame } from "../src/repl/layout.ts";
+import { flatten, inspectionWidth, NARROW, sidebarWidth } from "../src/repl/layout.ts";
+import type { ReplBounds, ReplRegion } from "../src/repl/layout.ts";
+import type { ReplAdmission } from "../src/repl/layout-admission.ts";
+import type { ReplPresentationContext } from "../src/repl/application.ts";
+import { commitReplFrame } from "../src/repl/program.ts";
+import type { ReplCommitted } from "../src/repl/program.ts";
+import { createGrid, committedContext } from "./fixtures/repl/presentation.ts";
 import { decodeLocation, encodeLocation, NO_LIVE, resolveLocation } from "../src/repl/route.ts";
 import type { ReplRoute } from "../src/repl/route.ts";
 import { installReplHost } from "../src/repl-assembly.ts";
@@ -91,7 +95,7 @@ import { join } from "node:path";
 import { randomBytes } from "node:crypto";
 import { fields, readDescription } from "../src/repl/description.ts";
 import type { ReplDescription } from "../src/repl/description.ts";
-import { snapshotRender, useReplRenderer } from "../src/repl/renderer.ts";
+import { useReplRenderer } from "../src/repl/renderer.ts";
 import type { ReplRenderer } from "../src/repl/renderer.ts";
 import { useReplTree } from "../src/repl/reconcile.ts";
 import type { ReplTree } from "../src/repl/reconcile.ts";
@@ -506,17 +510,150 @@ function rowsOf(descriptions: readonly ReplDescription<ReplAction>[]): Array<{
   return found;
 }
 
+/**
+ * Measure one view with a real engine pair, as the product does.
+ *
+ * A window's rows are the rows the measurement left room for, so a test asking
+ * what a view describes has to measure it.
+ */
+function* measuring<T>(
+  size: ReplTerminalSize,
+  engine: ReplRenderer | undefined,
+  body: (renderer: ReplRenderer) => Operation<T>,
+): Operation<T> {
+  if (engine !== undefined) {
+    return yield* body(engine);
+  }
+  return yield* scoped(function* (): Operation<T> {
+    return yield* body(yield* useReplRenderer(size));
+  });
+}
+
+/** What one view's frame settled on: its measured widths and its admission. */
+function* contextOf(view: ReplView, engine?: ReplRenderer): Operation<ReplPresentationContext> {
+  return yield* measuring(view.size, engine, (renderer) => committedContext(renderer, view));
+}
+
+/** The described rows of one view, measured. */
+function* describedBy(view: ReplView, engine?: ReplRenderer) {
+  return rowsOf(presentationFor(view, yield* contextOf(view, engine)).descriptions);
+}
+
+/**
+ * What this state admits at this size, which is what a scroll moves within.
+ *
+ * Measured for the state the action is answered at, which is what the program
+ * does before it reduces: a window moves within the capacity the screen is
+ * showing, not one left over from an earlier size or reading.
+ */
+function* admissionOf(
+  state: ReplState,
+  session: ReplSession,
+  size = NARROW,
+  model: ReplModel = session.model,
+  engine?: ReplRenderer,
+): Operation<ReplAdmission> {
+  const view = reading(state, session, size, undefined, model);
+  return (yield* contextOf(view, engine)).admission;
+}
+
 /** The keys this state describes, in order. */
-function keysOf(view: ReplView): string[] {
-  return rowsOf(describeApplication(view)).map((one) => one.key);
+function* keysOf(view: ReplView, engine?: ReplRenderer): Operation<string[]> {
+  return (yield* describedBy(view, engine)).map((one) => one.key);
+}
+
+/**
+ * One committed frame, as a test reads it back.
+ *
+ * Everything here comes from the frame that was drawn: which boxes the manifest
+ * placed, which of them mounted a live node, the geometry the engine gave each
+ * one, and the bytes it wrote.
+ */
+interface Frame {
+  readonly committed: ReplCommitted;
+  /** The bytes this frame presented. */
+  readonly bytes: Uint8Array;
+  /** The live node one placed key mounted, or none. */
+  node(key: string): string | undefined;
+  /** Whether this frame placed that key and offered it to a pointer. */
+  targetable(key: string): boolean;
+  /** The cell one placed row contributed. */
+  cell(key: string): string | undefined;
+  /** Where one placed row's own cell landed. */
+  boundsOf(key: string): ReplBounds | undefined;
+  /** The keys this frame placed in one region, in placement order. */
+  inRegion(name: ReplRegion): string[];
+  /** Where one named region landed. */
+  region(name: ReplRegion): ReplBounds | undefined;
+  /** Every key this frame placed. */
+  readonly keys: readonly string[];
+}
+
+/** Mount one view and draw it, exactly the way the program does. */
+function* drawn(
+  tree: ReplTree<ReplAction>,
+  view: ReplView,
+  engine?: ReplRenderer,
+): Operation<Frame> {
+  const committed = yield* measuring(view.size, engine, (renderer) =>
+    commitReplFrame(tree, renderer, view, 0, undefined),
+  );
+  if (!committed.ok) {
+    throw committed.error;
+  }
+  const mounted = new Set(tree.mounted());
+  const nodeByKey = new Map<string, string>();
+  for (const node of mounted) {
+    const key = tree.keyOf(node);
+    if (key !== undefined) {
+      nodeByKey.set(key, node);
+    }
+  }
+  const placed: Array<{ key: string; node: string; control: boolean; region?: ReplRegion }> = [];
+  for (const box of flatten(committed.value.manifest.root)) {
+    if (box.key === undefined) {
+      continue;
+    }
+    const node = nodeByKey.get(box.key);
+    if (node !== undefined) {
+      placed.push({ key: box.key, node, control: box.control, region: box.region });
+    }
+  }
+  const byKey = new Map(placed.map((one) => [one.key, one]));
+  const { map } = committed.value.rendered;
+  return {
+    committed: committed.value,
+    bytes: committed.value.rendered.output,
+    node: (key: string) => byKey.get(key)?.node,
+    targetable: (key: string) => byKey.get(key)?.control === true,
+    cell(key: string) {
+      const node = byKey.get(key)?.node;
+      if (node === undefined) {
+        return undefined;
+      }
+      return tree.frame().cells.find((one) => one.node === node)?.cell;
+    },
+    boundsOf(key: string) {
+      const node = byKey.get(key)?.node;
+      return node === undefined ? undefined : map.boundsOf(node);
+    },
+    inRegion: (name: ReplRegion) =>
+      placed.filter((one) => one.region === name).map((one) => one.key),
+    region(name: ReplRegion) {
+      const found = committed.value.manifest.regions.find((one) => one.region === name);
+      return found === undefined ? undefined : map.regionOf(found.id);
+    },
+    keys: Object.freeze(placed.map((one) => one.key)),
+  };
 }
 
 /** Commit one view into the real tree, refusing to assert past a rejected set. */
-function* applied(tree: ReplTree<ReplAction>, view: ReplView): Operation<void> {
-  const result = yield* tree.apply(describeApplication(view));
-  if (!result.ok) {
-    throw result.error;
-  }
+function* applied(
+  tree: ReplTree<ReplAction>,
+  view: ReplView,
+  engine?: ReplRenderer,
+): Operation<void> {
+  yield* drawn(tree, view, engine);
 }
 
 /** The key of whatever holds focus now, as the root reads it. */
@@ -530,37 +667,24 @@ function mountedKeys(tree: ReplTree<ReplAction>): string[] {
   return tree.mounted().map((id) => tree.keyOf(id) ?? "");
 }
 
-/** The cell this frame placed for one key, or none, which is what a map holds. */
-function placedFor(
-  tree: ReplTree<ReplAction>,
-  frame: ReplSemanticFrame,
-  key: string,
-): ReplPlacedCell | undefined {
-  return frame.cells.find((cell) => tree.keyOf(cell.node) === key);
-}
-
 /**
  * Point at one key the way the renderer's map resolves a pointer.
  *
- * Through the frame rather than through the tree: a cell the frame did not
- * place, or placed and did not offer, is not in the map at all, so reaching for
- * the node directly would prove something no pointer can do.
+ * Through the frame rather than through the tree: a row the frame did not place,
+ * or placed and did not offer, is not in the map at all, so reaching for the
+ * node directly would prove something no pointer can do.
  */
-function* pointed(
-  tree: ReplTree<ReplAction>,
-  frame: ReplSemanticFrame,
-  key: string,
-): Operation<ReplAction> {
-  const cell = placedFor(tree, frame, key);
-  if (cell === undefined) {
+function* pointed(tree: ReplTree<ReplAction>, frame: Frame, key: string): Operation<ReplAction> {
+  const node = frame.node(key);
+  if (node === undefined) {
     throw new Error(`this frame placed no cell for ${key}`);
   }
-  if (!cell.targetable) {
+  if (!frame.targetable(key)) {
     throw new Error(`${key} is placed but is in no target map`);
   }
   const dispatched = yield* tree.dispatch({
     kind: "pointer",
-    target: cell.node,
+    target: node,
     frame: tree.frame().id,
   });
   if (!dispatched.ok || dispatched.value.outcome !== "action") {
@@ -570,13 +694,23 @@ function* pointed(
 }
 
 /** One action, reduced at one size, refusing to carry a refusal forward. */
-function acted(
+function* acted(
   state: ReplState,
   action: ReplAction,
   session: ReplSession,
   size = NARROW,
-): ReplState {
-  const next = reduceRepl(state, action, session.model, liveReading(session), size);
+  engine?: ReplRenderer,
+): Operation<ReplState> {
+  // Measured for the state this action is answered at, which is what the program
+  // does before it reduces.
+  const view = reading(state, session, size);
+  const next = reduceRepl(
+    state,
+    action,
+    session.model,
+    liveReading(session),
+    (yield* contextOf(view, engine)).admission,
+  );
   if (next.state.refusal !== undefined) {
     throw new Error(`${action.kind} was refused: ${next.state.refusal}`);
   }
@@ -584,8 +718,8 @@ function acted(
 }
 
 /** The Sessions rows this view describes, in order. */
-function sessionKeysOf(view: ReplView): string[] {
-  return keysOf(view).filter(
+function* sessionKeysOf(view: ReplView, engine?: ReplRenderer): Operation<string[]> {
+  return (yield* keysOf(view, engine)).filter(
     (key) =>
       key.startsWith("sessions:") &&
       key !== "sessions:heading" &&
@@ -595,8 +729,8 @@ function sessionKeysOf(view: ReplView): string[] {
 }
 
 /** The permission choices this view's drawer describes, in order. */
-function drawerKeysOf(view: ReplView): string[] {
-  return keysOf(view).filter((key) => key.startsWith("drawer:permission:choice:"));
+function* drawerKeysOf(view: ReplView, engine?: ReplRenderer): Operation<string[]> {
+  return (yield* keysOf(view, engine)).filter((key) => key.startsWith("drawer:permission:choice:"));
 }
 
 /** The same state carrying one draft, which is where a location gets long. */
@@ -608,25 +742,19 @@ function withDraft(state: ReplState, draft: string): ReplState {
   });
 }
 
-/** Draw one laid-out frame through this renderer, and keep what it wrote. */
+/**
+ * Commit one view through this renderer and keep the bytes it wrote.
+ *
+ * The same engine across calls, so the display-diff state between two frames is
+ * the product's own: what a later frame writes is the difference from the frame
+ * before it, which is the whole point of asking.
+ */
 function* painted(
   renderer: ReplRenderer,
-  frame: ReplSemanticFrame,
   tree: ReplTree<ReplAction>,
+  view: ReplView,
 ): Operation<Uint8Array> {
-  const drawn = yield* renderer.render(
-    snapshotRender({
-      frame,
-      tree: tree.frame().id,
-      mounted: tree.mounted(),
-      deltaTime: 0,
-      pointer: undefined,
-    }),
-  );
-  if (!drawn.ok) {
-    throw drawn.error;
-  }
-  return drawn.value.output;
+  return (yield* drawn(tree, view, renderer)).bytes;
 }
 
 /** The row this screen is showing the location's omission summary on. */
@@ -639,7 +767,7 @@ function summaryOn(rows: readonly string[]): string {
 }
 
 /** The keys this view describes with one `select`, which is what a row asks for. */
-function keysSelecting(view: ReplView, select: string): string[] {
+function* keysSelecting(view: ReplView, select: string): Operation<string[]> {
   const found: string[] = [];
   const walk = (description: ReplDescription<ReplAction>): void => {
     const read = readDescription(description);
@@ -650,25 +778,25 @@ function keysSelecting(view: ReplView, select: string): string[] {
       walk(child);
     }
   };
-  for (const description of describeApplication(view)) {
+  for (const description of presentationFor(view, yield* contextOf(view)).descriptions) {
     walk(description);
   }
   return found;
 }
 
 /** Everything inside the drawer's window, which is what moving it changes. */
-function drawerWindowOf(view: ReplView): string[] {
-  return keysOf(view).filter((key) => key.startsWith("drawer:permission:"));
+function* drawerWindowOf(view: ReplView): Operation<string[]> {
+  return (yield* keysOf(view)).filter((key) => key.startsWith("drawer:permission:"));
 }
 
 /** Scroll the Sessions window until it is showing this row, or say it never did. */
-function scrolledTo(state: ReplState, session: ReplSession, key: string): ReplState {
+function* scrolledTo(state: ReplState, session: ReplSession, key: string): Operation<ReplState> {
   let at = state;
   for (let press = 0; press < 60; press += 1) {
-    if (sessionKeysOf(reading(at, session, NARROW)).includes(key)) {
+    if ((yield* sessionKeysOf(reading(at, session, NARROW))).includes(key)) {
       return at;
     }
-    const next = acted(at, { kind: "scroll-sessions", delta: 1 }, session);
+    const next = yield* acted(at, { kind: "scroll-sessions", delta: 1 }, session);
     if (next.viewports.sessions === at.viewports.sessions) {
       break;
     }
@@ -741,24 +869,44 @@ function* clicked(tree: ReplTree<ReplAction>, key: string): Operation<ReplAction
  */
 const DETAILS = [":whose", ":text", ":stop", ":failed"];
 
-function turnRows(view: ReplView): Array<{ key: string; label: string }> {
-  return rowsOf(describeApplication(view)).filter(
+function* turnRows(view: ReplView): Operation<Array<{ key: string; label: string }>> {
+  return (yield* describedBy(view)).filter(
     (one) =>
       one.key.startsWith("sessions:turn:") && !DETAILS.some((suffix) => one.key.endsWith(suffix)),
   );
 }
 
 /** Every conversation control this view offers, sorted so order is its own row. */
-function conversationRows(view: ReplView): string[] {
-  return rowsOf(describeApplication(view))
+function* conversationRows(view: ReplView): Operation<string[]> {
+  return (yield* describedBy(view))
     .filter((one) => one.key.startsWith("sessions:conversation:"))
     .map((one) => one.key)
     .sort();
 }
 
+/**
+ * Whether this row's label shows this prompt, whole or shortened to fit.
+ *
+ * A row is fitted to the width the frame measured for it, and a sidebar is
+ * thirty-two columns: a turn whose state takes twenty-seven of them leaves the
+ * prompt a couple, marked where it was cut. So a lookup by prompt asks whether
+ * the row shows that prompt rather than whether it holds every letter of it.
+ */
+function showsPrompt(label: string, prompt: string): boolean {
+  if (label.includes(prompt)) {
+    return true;
+  }
+  for (let kept = prompt.length - 1; kept >= 1; kept -= 1) {
+    if (label.includes(`${prompt.slice(0, kept)}…`)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 /** The label of the turn control showing this prompt. */
-function labelOf(view: ReplView, prompt: string): string {
-  const row = turnRows(view).find((one) => one.label.includes(prompt));
+function* labelOf(view: ReplView, prompt: string): Operation<string> {
+  const row = (yield* turnRows(view)).find((one) => showsPrompt(one.label, prompt));
   if (row === undefined) {
     throw new Error(`no turn row shows the prompt "${prompt}"`);
   }
@@ -766,14 +914,14 @@ function labelOf(view: ReplView, prompt: string): string {
 }
 
 /** One of a turn's own detail lines, by suffix, or none when it has none. */
-function detailOf(view: ReplView, prompt: string, suffix: string): string | undefined {
-  const key = turnKeyed(view, prompt);
-  return rowsOf(describeApplication(view)).find((one) => one.key === `${key}:${suffix}`)?.label;
+function* detailOf(view: ReplView, prompt: string, suffix: string): Operation<string | undefined> {
+  const key = yield* turnKeyed(view, prompt);
+  return (yield* describedBy(view)).find((one) => one.key === `${key}:${suffix}`)?.label;
 }
 
 /** One turn row's key, by the prompt text its label starts with. */
-function turnKeyed(view: ReplView, prompt: string): string {
-  const row = turnRows(view).find((one) => one.label.includes(prompt));
+function* turnKeyed(view: ReplView, prompt: string): Operation<string> {
+  const row = (yield* turnRows(view)).find((one) => showsPrompt(one.label, prompt));
   if (row === undefined) {
     throw new Error(`no turn row shows the prompt "${prompt}"`);
   }
@@ -833,18 +981,18 @@ describe("U1 — one chronology, filtered, undisturbed by the background", () =>
     const view = reading(initialState("agents"), session);
     // Three slots, one screen: a recorded turn, a turn still streaming and a turn
     // that has not started, all present at once.
-    expect(turnRows(view)).toHaveLength(3);
-    expect(labelOf(view, "review")).toContain("completed, recorded");
-    expect(labelOf(view, "build")).toContain("streaming");
-    expect(labelOf(view, "check")).toContain("queued");
+    expect(yield* turnRows(view)).toHaveLength(3);
+    expect(yield* labelOf(view, "review")).toContain("completed, recorded");
+    expect(yield* labelOf(view, "build")).toContain("streaming");
+    expect(yield* labelOf(view, "check")).toContain("queued");
     // Each started turn says whose it is, and the queued one cannot: the provider
     // has not said which conversation it joined, and the authored
     // `<Session name>` is not an answer to that.
-    expect(detailOf(view, "review", "whose")).toContain("stub:reviewer");
-    expect(detailOf(view, "build", "whose")).toContain("stub:builder");
-    expect(detailOf(view, "check", "whose")).toBe(undefined);
+    expect(yield* detailOf(view, "review", "whose")).toContain("stub:reviewer");
+    expect(yield* detailOf(view, "build", "whose")).toContain("stub:builder");
+    expect(yield* detailOf(view, "check", "whose")).toBe(undefined);
     // So the conversations offered are exactly the two the provider started.
-    expect(conversationRows(view)).toEqual([
+    expect(yield* conversationRows(view)).toEqual([
       "sessions:conversation:stub:builder",
       "sessions:conversation:stub:reviewer",
     ]);
@@ -873,21 +1021,21 @@ describe("U1 — one chronology, filtered, undisturbed by the background", () =>
     yield* until(session, `${last} being recorded`, () => recorded(session) === 1);
 
     const before = reading(initialState("agents"), session);
-    expect(turnRows(before)).toHaveLength(3);
-    expect(labelOf(before, first)).toContain("not recorded yet");
-    expect(labelOf(before, last)).toContain("completed, recorded");
+    expect(yield* turnRows(before)).toHaveLength(3);
+    expect(yield* labelOf(before, first)).toContain("not recorded yet");
+    expect(yield* labelOf(before, last)).toContain("completed, recorded");
     // The earlier turn is still live and the later one is already in the
     // history, and the earlier one is still first. Appending the live list to
     // the retained one would put it last.
-    const shown = turnRows(before).map((one) => one.label);
-    expect(shown.findIndex((label) => label.includes(first))).toBeLessThan(
-      shown.findIndex((label) => label.includes(last)),
+    const shown = (yield* turnRows(before)).map((one) => one.label);
+    expect(shown.findIndex((label) => showsPrompt(label, first))).toBeLessThan(
+      shown.findIndex((label) => showsPrompt(label, last)),
     );
 
     // Focus the live turn, then let it record underneath the person looking at it.
     const tree = yield* useReplTree<ReplAction>();
     yield* applied(tree, before);
-    const mounted = turnKeyed(before, first);
+    const mounted = yield* turnKeyed(before, first);
     yield* focusTo(tree, mounted);
     expect(keyed(tree)).toBe(mounted);
 
@@ -896,13 +1044,13 @@ describe("U1 — one chronology, filtered, undisturbed by the background", () =>
     const after = reading(initialState("agents"), session, WIDE, keyed(tree));
     // The same node: publication changed where its facts come from, not which
     // turn a person is looking at.
-    expect(turnKeyed(after, first)).toBe(mounted);
-    expect(turnRows(after)).toHaveLength(3);
-    expect(labelOf(after, first)).toContain("completed, recorded");
+    expect(yield* turnKeyed(after, first)).toBe(mounted);
+    expect(yield* turnRows(after)).toHaveLength(3);
+    expect(yield* labelOf(after, first)).toContain("completed, recorded");
     // And it is still in the same place, before the one that recorded first.
-    const later = turnRows(after).map((one) => one.label);
-    expect(later.findIndex((label) => label.includes(first))).toBeLessThan(
-      later.findIndex((label) => label.includes(last)),
+    const later = (yield* turnRows(after)).map((one) => one.label);
+    expect(later.findIndex((label) => showsPrompt(label, first))).toBeLessThan(
+      later.findIndex((label) => showsPrompt(label, last)),
     );
     yield* applied(tree, after);
     expect(keyed(tree)).toBe(mounted);
@@ -939,7 +1087,7 @@ describe("U1 — one chronology, filtered, undisturbed by the background", () =>
 
     const standing = initialState("agents");
     const view = reading(standing, session);
-    expect(conversationOrder(view)).toEqual([
+    expect(yield* conversationOrder(view)).toEqual([
       `sessions:conversation:stub:${whose(earlier)}`,
       `sessions:conversation:stub:${whose(later)}`,
     ]);
@@ -951,7 +1099,7 @@ describe("U1 — one chronology, filtered, undisturbed by the background", () =>
       { kind: "select-session", session: `stub:${whose(later)}` },
       session.model,
       liveReading(session),
-      WIDE,
+      yield* admissionOf(standing, session, WIDE),
     );
     expect(transition.intent.kind).toBe("none");
     expect(transition.state.route).toEqual({
@@ -961,10 +1109,14 @@ describe("U1 — one chronology, filtered, undisturbed by the background", () =>
     // Only the Sessions rows narrow. The entry, its scopes and the transcript are
     // the same reading they were.
     const filtered = reading(transition.state, session);
-    expect(turnRows(filtered).map((one) => one.label.includes(later))).toEqual([true]);
+    expect((yield* turnRows(filtered)).map((one) => one.label.includes(later))).toEqual([true]);
     expect(
-      keysOf(filtered).filter((key) => key.startsWith("entry:") || key.startsWith("line:")),
-    ).toEqual(keysOf(view).filter((key) => key.startsWith("entry:") || key.startsWith("line:")));
+      (yield* keysOf(filtered)).filter(
+        (key) => key.startsWith("entry:") || key.startsWith("line:"),
+      ),
+    ).toEqual(
+      (yield* keysOf(view)).filter((key) => key.startsWith("entry:") || key.startsWith("line:")),
+    );
 
     // And All puts every turn back, removing only the filter.
     const cleared = reduceRepl(
@@ -972,10 +1124,10 @@ describe("U1 — one chronology, filtered, undisturbed by the background", () =>
       { kind: "all-sessions" },
       session.model,
       liveReading(session),
-      WIDE,
+      yield* admissionOf(transition.state, session, WIDE),
     );
     expect(cleared.state.route).toEqual(standing.route);
-    expect(turnRows(reading(cleared.state, session))).toHaveLength(3);
+    expect(yield* turnRows(reading(cleared.state, session))).toHaveLength(3);
   });
 
   it("U1: background Agent work changes no route, no filter and not where focus is", function* () {
@@ -998,12 +1150,11 @@ describe("U1 — one chronology, filtered, undisturbed by the background", () =>
       { kind: "select-session", session: `stub:${whose(earlier)}` },
       session.model,
       liveReading(session),
-      WIDE,
     ).state;
     const before = reading(filtered, session);
     const tree = yield* useReplTree<ReplAction>();
     yield* applied(tree, before);
-    const held = turnKeyed(before, earlier);
+    const held = yield* turnKeyed(before, earlier);
     yield* focusTo(tree, held);
 
     // Now everything happens in the *other* turns: one starts, one asks for
@@ -1040,7 +1191,7 @@ describe("U1 — one chronology, filtered, undisturbed by the background", () =>
     );
 
     const head = reading(initialState("agents"), session);
-    expect(turnRows(head)).toHaveLength(3);
+    expect(yield* turnRows(head)).toHaveLength(3);
     const recordedTurn = session.model.turns[0];
     if (recordedTurn === undefined) {
       throw new Error("the reviewer's turn was not projected");
@@ -1053,21 +1204,20 @@ describe("U1 — one chronology, filtered, undisturbed by the background", () =>
       { kind: "select-marker", marker: recordedTurn.marker },
       session.model,
       liveReading(session),
-      WIDE,
     ).state;
     const at = yield* projectedAt(holder, recordedTurn.marker);
     const past = reading(frozen, session, WIDE, undefined, at);
-    expect(turnRows(past)).toHaveLength(1);
-    expect(labelOf(past, recordedTurn.input)).toContain("recorded");
+    expect(yield* turnRows(past)).toHaveLength(1);
+    expect(yield* labelOf(past, recordedTurn.input)).toContain("recorded");
     // No live request is reachable there, whatever the head holds.
-    expect(keysOf(past).some((key) => key.startsWith("sessions:request:"))).toBe(false);
+    expect((yield* keysOf(past)).some((key) => key.startsWith("sessions:request:"))).toBe(false);
     // And a conversation only this process knows about cannot be selected there.
     const refused = reduceRepl(
       frozen,
       { kind: "select-session", session: "stub:checker" },
       at,
       liveReading(session),
-      WIDE,
+      yield* admissionOf(frozen, session, WIDE, at),
     );
     expect(refused.state.route).toEqual(frozen.route);
     expect(refused.state.refusal).toBeDefined();
@@ -1109,8 +1259,8 @@ function whose(prompt: string): string {
 }
 
 /** Every conversation control, in the order this view draws them. */
-function conversationOrder(view: ReplView): string[] {
-  return rowsOf(describeApplication(view))
+function* conversationOrder(view: ReplView): Operation<string[]> {
+  return (yield* describedBy(view))
     .filter((one) => one.key.startsWith("sessions:conversation:"))
     .map((one) => one.key);
 }
@@ -1204,7 +1354,7 @@ describe("U2 — one action path, and one owner for a pending request", () => {
     // the focused control, once with a pointer resolved against the frame that
     // drew it. A router that decided at the target rather than through mounted
     // dispatch would answer differently to one of them.
-    const conversation = conversationOrder(view)[0];
+    const conversation = (yield* conversationOrder(view))[0];
     if (conversation === undefined) {
       throw new Error("no conversation control was drawn");
     }
@@ -1220,7 +1370,7 @@ describe("U2 — one action path, and one owner for a pending request", () => {
       { kind: "select-permission", request: request.key },
       session.model,
       liveReading(session),
-      WIDE,
+      yield* admissionOf(standing, session, WIDE),
     ).state;
     yield* applied(tree, reading(opened, session));
     for (const choice of request.choices) {
@@ -1262,8 +1412,8 @@ describe("U2 — one action path, and one owner for a pending request", () => {
     const after = reading(standing, session, WIDE, keyed(tree));
     yield* applied(tree, after);
     // It is there to be seen, on the turn that is waiting.
-    expect(keysOf(after)).toContain(`sessions:request:${request.key}`);
-    expect(turnKeyed(after, "build")).toBe(`sessions:turn:${request.turn}`);
+    expect(yield* keysOf(after)).toContain(`sessions:request:${request.key}`);
+    expect(yield* turnKeyed(after, "build")).toBe(`sessions:turn:${request.turn}`);
     // And it opened nothing, selected nothing and took nothing.
     expect(after.state.route).toEqual(before.state.route);
     expect(after.state.permission).toBe(undefined);
@@ -1292,7 +1442,13 @@ describe("U2 — one action path, and one owner for a pending request", () => {
     const asked = yield* activate(tree);
     expect(asked).toEqual({ kind: "select-permission", request: request.key });
 
-    const opening = reduceRepl(standing, asked, session.model, liveReading(session), WIDE);
+    const opening = reduceRepl(
+      standing,
+      asked,
+      session.model,
+      liveReading(session),
+      yield* admissionOf(standing, session, WIDE),
+    );
     expect(opening.state.permission).toBe(request.key);
     // The route says a permission drawer is open and nothing about which request:
     // a live key in a location would publish an identity nothing else can use.
@@ -1304,20 +1460,26 @@ describe("U2 — one action path, and one owner for a pending request", () => {
     // Every choice the provider offered is drawn, scoped to this session where it
     // is a lasting one.
     const drawer = reading(opening.state, session);
-    const drawn = rowsOf(describeApplication(drawer)).filter((one) =>
+    const shownRows = (yield* describedBy(drawer)).filter((one) =>
       one.key.startsWith("drawer:permission:choice:"),
     );
-    expect(drawn).toHaveLength(request.choices.length);
-    expect(drawn.find((one) => one.key.endsWith("always"))?.label).toContain(
+    expect(shownRows).toHaveLength(request.choices.length);
+    expect(shownRows.find((one) => one.key.endsWith("always"))?.label).toContain(
       "for this Agent session",
     );
-    expect(JSON.stringify(drawn)).not.toContain("machine");
+    expect(JSON.stringify(shownRows)).not.toContain("machine");
 
     // Choosing one: the reducer decides, the root calls the authority once.
     yield* applied(tree, drawer);
     yield* focusTo(tree, "drawer:permission:choice:once");
     const chose = yield* activate(tree);
-    const settling = reduceRepl(opening.state, chose, session.model, liveReading(session), WIDE);
+    const settling = reduceRepl(
+      opening.state,
+      chose,
+      session.model,
+      liveReading(session),
+      yield* admissionOf(opening.state, session, WIDE),
+    );
     expect(settling.intent).toEqual({
       kind: "settle-permission",
       request: request.key,
@@ -1360,7 +1522,6 @@ describe("U2 — one action path, and one owner for a pending request", () => {
       { kind: "select-permission", request: request.key },
       session.model,
       liveReading(session),
-      WIDE,
     ).state;
     const tree = yield* useReplTree<ReplAction>();
     yield* applied(tree, reading(opened, session));
@@ -1376,7 +1537,7 @@ describe("U2 — one action path, and one owner for a pending request", () => {
       dismissed.value.action,
       session.model,
       liveReading(session),
-      WIDE,
+      yield* admissionOf(opened, session, WIDE),
     );
     expect(transition.intent).toEqual({
       kind: "settle-permission",
@@ -1413,7 +1574,6 @@ describe("U2 — one action path, and one owner for a pending request", () => {
       { kind: "select-permission", request: request.key },
       session.model,
       liveReading(session),
-      WIDE,
     ).state;
 
     // A key this screen never selected, an option the provider never offered, and
@@ -1425,7 +1585,13 @@ describe("U2 — one action path, and one owner for a pending request", () => {
       { kind: "dismiss-permission", request: "nobody" },
     ];
     for (const action of stale) {
-      const refused = reduceRepl(opened, action, session.model, liveReading(session), WIDE);
+      const refused = reduceRepl(
+        opened,
+        action,
+        session.model,
+        liveReading(session),
+        yield* admissionOf(opened, session, WIDE),
+      );
       expect(refused.intent.kind).toBe("none");
       expect(refused.state.route).toEqual(opened.route);
       expect(refused.state.refusal).toBeDefined();
@@ -1451,7 +1617,7 @@ describe("U2 — one action path, and one owner for a pending request", () => {
     const recordedAudits = session.model.turns.flatMap((turn) => turn.permissions);
     expect(recordedAudits.length).toBeGreaterThan(0);
     const view = reading(onSessions(session), session);
-    const audits = rowsOf(describeApplication(view)).filter((one) =>
+    const audits = (yield* describedBy(view)).filter((one) =>
       one.key.startsWith("sessions:audit:"),
     );
     expect(audits).toHaveLength(recordedAudits.length);
@@ -1470,18 +1636,19 @@ describe("U2 — one action path, and one owner for a pending request", () => {
     expect(aimed.ok && aimed.value.outcome === "action").toBe(false);
     // And no request is waiting on anybody: a replay asks nobody anything.
     expect(session.agent.requests).toEqual([]);
-    expect(keysOf(view).some((key) => key.startsWith("sessions:request:"))).toBe(false);
+    expect((yield* keysOf(view)).some((key) => key.startsWith("sessions:request:"))).toBe(false);
   });
 });
 
 /** The same state, on the surface a permission is answered from. */
 function onSessions(session: ReplSession, state = initialState("agents")): ReplState {
+  // No admission: choosing a surface moves no window, so there is nothing for a
+  // measured capacity to decide here.
   const moved = reduceRepl(
     state,
     { kind: "select-surface", surface: "sessions" },
     session.model,
     liveReading(session),
-    WIDE,
   );
   if (moved.state.refusal !== undefined) {
     throw new Error(`the Sessions surface refused: ${moved.state.refusal}`);
@@ -1525,7 +1692,7 @@ describe("U3 — what each accepted frame mounts, and nothing else", () => {
     const all = onSessions(session);
     // A conversation this reading actually offers: which turns have started is
     // the scheduler's business, so the filter is chosen from what is drawn.
-    const offered = conversationOrder(reading(all, session, WIDE))[0];
+    const offered = (yield* conversationOrder(reading(all, session, WIDE)))[0];
     if (offered === undefined) {
       throw new Error("no conversation control was drawn");
     }
@@ -1534,7 +1701,7 @@ describe("U3 — what each accepted frame mounts, and nothing else", () => {
       { kind: "select-session", session: offered.slice("sessions:conversation:".length) },
       session.model,
       liveReading(session),
-      WIDE,
+      yield* admissionOf(all, session, WIDE),
     ).state;
     expect(filtered.refusal).toBe(undefined);
     const drawered = reduceRepl(
@@ -1542,18 +1709,18 @@ describe("U3 — what each accepted frame mounts, and nothing else", () => {
       { kind: "select-permission", request: request.key },
       session.model,
       liveReading(session),
-      WIDE,
+      yield* admissionOf(all, session, WIDE),
     ).state;
 
     const placed: Array<{ sessions: string[]; transcript: string[]; inspection: string[] }> = [];
     for (const state of [all, filtered, drawered]) {
       const view = reading(state, session, WIDE);
-      yield* applied(tree, view);
-      const surface = replSurface(tree, view);
+      const frame = yield* drawn(tree, view);
+      // Read off the frame that was drawn: which keys it placed in each region.
       placed.push({
-        sessions: surface.sessions.map((cell) => tree.keyOf(cell.node) ?? ""),
-        transcript: surface.transcript.map((cell) => tree.keyOf(cell.node) ?? ""),
-        inspection: surface.inspection.map((cell) => tree.keyOf(cell.node) ?? ""),
+        sessions: frame.inRegion("sidebar").filter((key) => key.startsWith("sessions:")),
+        transcript: frame.inRegion("transcript"),
+        inspection: frame.inRegion("inspection"),
       });
     }
     // Sessions is in the sidebar at this size, and it holds the turns.
@@ -1576,8 +1743,7 @@ describe("U3 — what each accepted frame mounts, and nothing else", () => {
     yield* until(session, "a started turn", () => started(session) >= 1);
     const tree = yield* useReplTree<ReplAction>();
     const view = reading(onSessions(session), session, NARROW);
-    yield* applied(tree, view);
-    const frame = layout(NARROW, replSurface(tree, view));
+    const frame = yield* drawn(tree, view);
 
     // Absent, not clipped: the entry list, the transcript and the inspection
     // column are not mounted, so they are in no frame, no target map and no
@@ -1585,23 +1751,21 @@ describe("U3 — what each accepted frame mounts, and nothing else", () => {
     const mounted = tree.mounted().map((id) => tree.keyOf(id) ?? "");
     for (const prefix of ["entry:", "scope:", "line:", "binding:", "elicit:"]) {
       expect(mounted.filter((key) => key.startsWith(prefix))).toEqual([]);
-      expect(keysOf(view).filter((key) => key.startsWith(prefix))).toEqual([]);
+      expect((yield* keysOf(view)).filter((key) => key.startsWith(prefix))).toEqual([]);
     }
     // The entry *outlet* is absent; the control that goes to it is not part of
     // that outlet and stays, because a screen a person cannot leave is not one
     // this route may put them on.
     expect(mounted.filter((key) => key.startsWith("entries:"))).toEqual(["entries:heading"]);
-    const drawn = frame.cells.map((cell) => tree.keyOf(cell.node) ?? "");
-    expect(drawn.some((key) => key.startsWith("sessions:turn:"))).toBe(true);
-    expect(drawn).toContain("entries:heading");
-    expect(drawn.filter((key) => key.startsWith("entry:") || key.startsWith("line:"))).toEqual([]);
+    const placed = frame.keys;
+    expect(placed.some((key) => key.startsWith("sessions:turn:"))).toBe(true);
+    expect(placed).toContain("entries:heading");
+    expect(placed.filter((key) => key.startsWith("entry:") || key.startsWith("line:"))).toEqual([]);
     // Every target this frame offers is a control, and every one of them is
     // mounted: nothing offers itself to a pointer and then does nothing.
-    for (const cell of frame.cells.filter((one) => one.targetable)) {
-      const key = tree.keyOf(cell.node);
-      expect(key).toBeDefined();
-      expect(nodeOf(tree, key ?? "")).toBe(cell.node);
-      expect(TURN_FACT_SUFFIXES.some((suffix) => (key ?? "").endsWith(suffix))).toBe(false);
+    for (const key of placed.filter((one) => frame.targetable(one))) {
+      expect(frame.node(key)).toBe(nodeOf(tree, key));
+      expect(TURN_FACT_SUFFIXES.some((suffix) => key.endsWith(suffix))).toBe(false);
     }
   });
 
@@ -1624,10 +1788,9 @@ describe("U3 — what each accepted frame mounts, and nothing else", () => {
     expect(mounted.some((key) => key.startsWith("entries:"))).toBe(true);
     // And the way to the other surface is drawn and pointable from here, which
     // is the whole reason it is mounted.
-    const frame = layout(NARROW, replSurface(tree, view));
-    const drawn = frame.cells.filter((cell) => tree.keyOf(cell.node) === "sessions:heading");
-    expect(drawn).toHaveLength(1);
-    expect(drawn[0]?.targetable).toBe(true);
+    const frame = yield* drawn(tree, view);
+    expect(frame.keys.filter((key) => key === "sessions:heading")).toHaveLength(1);
+    expect(frame.targetable("sessions:heading")).toBe(true);
   });
 
   it("U3: the permission drawer traps focus, keeps History inside it and hides what is behind", function* () {
@@ -1653,7 +1816,7 @@ describe("U3 — what each accepted frame mounts, and nothing else", () => {
       { kind: "select-permission", request: request.key },
       session.model,
       liveReading(session),
-      WIDE,
+      yield* admissionOf(standing, session, WIDE),
     ).state;
     yield* applied(tree, reading(opened, session, WIDE));
 
@@ -1703,23 +1866,26 @@ describe("U3 — what each accepted frame mounts, and nothing else", () => {
     const tree = yield* useReplTree<ReplAction>();
     for (const size of [WIDE, { columns: 120, rows: 30 }, NARROW]) {
       const view = reading(onSessions(session), session, size);
-      yield* applied(tree, view);
-      const frame = layout(size, replSurface(tree, view));
-      const located = frame.cells.filter((cell) =>
-        (tree.keyOf(cell.node) ?? "").startsWith("location:"),
-      );
+      const frame = yield* drawn(tree, view);
+      const located = frame.keys.filter((key) => key.startsWith("location:"));
       // One canonical location, once — and not repeated inside the Sessions rows.
-      expect(located.map((cell) => cell.text).join("")).toContain(view.location);
-      expect(new Set(located.map((cell) => cell.region)).size).toBe(1);
+      expect(located.map((key) => frame.cell(key) ?? "").join("")).toContain(view.location);
+      // All of it in one region: the surface above whichever outlet is shown.
+      expect(
+        new Set(
+          located.map((key) =>
+            frame.inRegion("transcript").includes(key) ? "transcript" : "content",
+          ),
+        ).size,
+      ).toBe(1);
     }
     // Smaller than narrow draws its refusal and offers nothing to activate.
-    const tiny = layout(
-      { columns: 40, rows: 10 },
-      replSurface(tree, reading(onSessions(session), session, NARROW)),
+    const tiny = yield* drawn(
+      tree,
+      reading(onSessions(session), session, { columns: 40, rows: 10 }),
     );
-    expect(tiny.profile).toBe("too-small");
-    expect(tiny.refusal).toBeDefined();
-    expect(tiny.cells.filter((cell) => cell.targetable)).toEqual([]);
+    expect(tiny.committed.manifest.profile).toBe("too-small");
+    expect(tiny.committed.rendered.map.targets).toEqual([]);
   });
 });
 
@@ -1962,8 +2128,7 @@ describe("U5 — navigation is outside the outlet it leaves", () => {
     const onRepl = initialState("agents");
     const tree = yield* useReplTree<ReplAction>();
     const replView = reading(onRepl, session, NARROW);
-    yield* applied(tree, replView);
-    const replFrame = layout(NARROW, replSurface(tree, replView));
+    const replFrame = yield* drawn(tree, replView);
     expect(mountedKeys(tree).filter((key) => key.startsWith("sessions:"))).toEqual([
       "sessions:heading",
     ]);
@@ -1977,11 +2142,10 @@ describe("U5 — navigation is outside the outlet it leaves", () => {
     expect(aimed).toEqual(pressed);
 
     // Which takes the person to Sessions, where the way back is mounted too.
-    const onSessionsNow = acted(onRepl, pressed, session);
+    const onSessionsNow = yield* acted(onRepl, pressed, session);
     expect(onSessionsNow.route.surface).toBe("sessions");
     const sessionsView = reading(onSessionsNow, session, NARROW);
-    yield* applied(tree, sessionsView);
-    const sessionsFrame = layout(NARROW, replSurface(tree, sessionsView));
+    const sessionsFrame = yield* drawn(tree, sessionsView);
     // The entry outlet is absent; the control that goes to it is not.
     expect(mountedKeys(tree).filter((key) => key.startsWith("entry:"))).toEqual([]);
     expect(mountedKeys(tree).filter((key) => key.startsWith("scope:"))).toEqual([]);
@@ -1989,7 +2153,7 @@ describe("U5 — navigation is outside the outlet it leaves", () => {
     const back = yield* activate(tree);
     expect(back).toEqual({ kind: "select-surface", surface: "repl" });
     expect(yield* pointed(tree, sessionsFrame, "entries:heading")).toEqual(back);
-    expect(acted(onSessionsNow, back, session).route.surface).toBe("repl");
+    expect((yield* acted(onSessionsNow, back, session)).route.surface).toBe("repl");
   });
 
   it("U5: a request arriving on the other surface is still reachable from this one", function* () {
@@ -2016,11 +2180,11 @@ describe("U5 — navigation is outside the outlet it leaves", () => {
     // The person goes to Sessions through the mounted control, and the request
     // is there to activate.
     yield* focusTo(tree, "sessions:heading");
-    const moved = acted(onRepl, yield* activate(tree), session);
+    const moved = yield* acted(onRepl, yield* activate(tree), session);
     const sessionsView = reading(moved, session, NARROW);
     yield* applied(tree, sessionsView);
     const key = `sessions:request:${request.key}`;
-    const at = scrolledTo(moved, session, key);
+    const at = yield* scrolledTo(moved, session, key);
     const view = reading(at, session, NARROW);
     yield* applied(tree, view);
     yield* focusTo(tree, key);
@@ -2048,9 +2212,9 @@ describe("U6 — the Sessions reading is windowed", () => {
     yield* until(session, "all three requests waiting", () => session.agent.requests.length === 3);
 
     const standing = onSessions(session);
-    const whole = sessionKeysOf(reading(standing, session, WIDE));
+    const whole = yield* sessionKeysOf(reading(standing, session, WIDE));
     const first = reading(standing, session, NARROW);
-    const shown = sessionKeysOf(first);
+    const shown = yield* sessionKeysOf(first);
     // There is more reading than this frame can place, and what it places is a
     // prefix of the whole thing rather than a sample of it.
     expect(whole.length).toBeGreaterThan(shown.length);
@@ -2071,34 +2235,33 @@ describe("U6 — the Sessions reading is windowed", () => {
     const tree = yield* useReplTree<ReplAction>();
     yield* applied(tree, first);
     expect(nodeOf(tree, key)).toBe(undefined);
-    expect(placedFor(tree, layout(NARROW, replSurface(tree, first)), key)).toBe(undefined);
+    expect((yield* drawn(tree, first)).node(key)).toBe(undefined);
 
     // Scrolling reaches it, and the control it becomes is the exact one that
     // answers this request — by pointer, resolved from the frame that drew it.
-    const at = scrolledTo(standing, session, key);
+    const at = yield* scrolledTo(standing, session, key);
     const view = reading(at, session, NARROW);
-    yield* applied(tree, view);
-    const frame = layout(NARROW, replSurface(tree, view));
-    const placed = placedFor(tree, frame, key);
+    const frame = yield* drawn(tree, view);
+    const placed = frame.node(key);
     expect(placed).toBeDefined();
-    expect(placed?.targetable).toBe(true);
+    expect(frame.targetable(key)).toBe(true);
     expect(yield* pointed(tree, frame, key)).toEqual({
       kind: "select-permission",
       request: request.key,
     });
     // The window controls never scroll away from whoever is using them.
-    expect(placedFor(tree, frame, "sessions:earlier")).toBeDefined();
-    expect(placedFor(tree, frame, "sessions:later")).toBeDefined();
-    expect(placedFor(tree, frame, "sessions:heading")).toBeDefined();
+    expect(frame.node("sessions:earlier")).toBeDefined();
+    expect(frame.node("sessions:later")).toBeDefined();
+    expect(frame.node("sessions:heading")).toBeDefined();
 
     // And scrolling back recovers what was there before, rather than leaving a
     // window that only travels one way.
     let back = at;
     for (let press = 0; press < 40 && back.viewports.sessions > 0; press += 1) {
-      back = acted(back, { kind: "scroll-sessions", delta: -1 }, session);
+      back = yield* acted(back, { kind: "scroll-sessions", delta: -1 }, session);
     }
     expect(back.viewports.sessions).toBe(0);
-    expect(sessionKeysOf(reading(back, session, NARROW))).toEqual(shown);
+    expect(yield* sessionKeysOf(reading(back, session, NARROW))).toEqual(shown);
   });
 
   it("U6: the stored offset is clamped when the reading it was taken against changes", function* () {
@@ -2111,33 +2274,37 @@ describe("U6 — the Sessions reading is windowed", () => {
     yield* until(session, "all three turns being started", () => started(session) === 3);
     yield* until(session, "all three requests waiting", () => session.agent.requests.length === 3);
     const standing = onSessions(session);
-    const shown = sessionKeysOf(reading(standing, session, NARROW));
+    const shown = yield* sessionKeysOf(reading(standing, session, NARROW));
     const beyond = session.agent.requests.find(
       (candidate) => !shown.includes(`sessions:request:${candidate.key}`),
     );
     if (beyond === undefined) {
       throw new Error("every request was inside the first window");
     }
-    const scrolled = scrolledTo(standing, session, `sessions:request:${beyond.key}`);
+    const scrolled = yield* scrolledTo(standing, session, `sessions:request:${beyond.key}`);
     expect(scrolled.viewports.sessions).toBeGreaterThan(0);
 
     // Filtering is a different list, so the window starts again at its first
     // row rather than at a number taken against the other one.
-    const filtered = acted(scrolled, { kind: "select-session", session: "stub:builder" }, session);
+    const filtered = yield* acted(
+      scrolled,
+      { kind: "select-session", session: "stub:builder" },
+      session,
+    );
     expect(filtered.viewports.sessions).toBe(0);
-    expect(acted(filtered, { kind: "all-sessions" }, session).viewports.sessions).toBe(0);
+    expect((yield* acted(filtered, { kind: "all-sessions" }, session)).viewports.sessions).toBe(0);
 
     // A window cannot be scrolled past the end of the reading it is over, and
     // what is stored is what is being shown: one press back moves it.
     let far = scrolled;
     for (let press = 0; press < 60; press += 1) {
-      far = acted(far, { kind: "scroll-sessions", delta: 1 }, session);
+      far = yield* acted(far, { kind: "scroll-sessions", delta: 1 }, session);
     }
     const furthest = far.viewports.sessions;
-    const stepped = acted(far, { kind: "scroll-sessions", delta: -1 }, session);
+    const stepped = yield* acted(far, { kind: "scroll-sessions", delta: -1 }, session);
     expect(stepped.viewports.sessions).toBe(furthest - 1);
-    expect(sessionKeysOf(reading(stepped, session, NARROW))).not.toEqual(
-      sessionKeysOf(reading(far, session, NARROW)),
+    expect(yield* sessionKeysOf(reading(stepped, session, NARROW))).not.toEqual(
+      yield* sessionKeysOf(reading(far, session, NARROW)),
     );
     // Nothing about any of this reached the location.
     expect(reading(far, session, NARROW).location).not.toContain(String(furthest));
@@ -2171,18 +2338,14 @@ describe("U6 — the Sessions reading is windowed", () => {
     expect(view.location.length).toBeGreaterThan(1000);
 
     const tree = yield* useReplTree<ReplAction>();
-    yield* applied(tree, view);
-    const frame = layout(NARROW, replSurface(tree, view));
+    const frame = yield* drawn(tree, view);
     const body = NARROW.rows - 7;
-    expect(frame.cells.filter((cell) => cell.region === "content").length).toBeLessThanOrEqual(
-      body,
-    );
+    expect(frame.inRegion("content").length).toBeLessThanOrEqual(body);
 
     // Both ways off this screen are drawn and pointable.
     for (const key of ["sessions:heading", "entries:heading"]) {
-      const placed = placedFor(tree, frame, key);
-      expect(placed).toBeDefined();
-      expect(placed?.targetable).toBe(true);
+      expect(frame.node(key)).toBeDefined();
+      expect(frame.targetable(key)).toBe(true);
     }
     expect(yield* pointed(tree, frame, "entries:heading")).toEqual({
       kind: "select-surface",
@@ -2192,10 +2355,9 @@ describe("U6 — the Sessions reading is windowed", () => {
     // And so is the outlet the route selected — not merely present in it: a
     // control of the reading itself is placed, offered to a pointer, and asks
     // for what that turn asks for.
-    const drawn = frame.cells.map((cell) => tree.keyOf(cell.node) ?? "");
-    const turns = frame.cells
-      .filter((cell) => (tree.keyOf(cell.node) ?? "").startsWith("sessions:turn:"))
-      .map((cell) => ({ key: tree.keyOf(cell.node) ?? "", targetable: cell.targetable }));
+    const turns = frame.keys
+      .filter((key) => key.startsWith("sessions:turn:"))
+      .map((key) => ({ key, targetable: frame.targetable(key) }));
     expect(turns.length).toBeGreaterThan(0);
     // Every placed turn control is offered to a pointer, and the facts beneath
     // them are not.
@@ -2211,40 +2373,38 @@ describe("U6 — the Sessions reading is windowed", () => {
     const pressed = yield* activate(tree);
     expect(yield* pointed(tree, frame, control?.key ?? "")).toEqual(pressed);
 
-    expect(placedFor(tree, frame, "sessions:earlier")).toBeDefined();
-    expect(placedFor(tree, frame, "sessions:later")).toBeDefined();
+    expect(frame.node("sessions:earlier")).toBeDefined();
+    expect(frame.node("sessions:later")).toBeDefined();
     // The location says what it is not showing rather than showing none of it.
-    const location = drawn.filter((key) => key.startsWith("location:"));
-    expect(location.length).toBeLessThanOrEqual(3);
-    const shown = rowsOf(describeApplication(view))
+    expect(frame.keys.filter((key) => key.startsWith("location:")).length).toBeLessThanOrEqual(3);
+    const shown = (yield* describedBy(view))
       .filter((one) => one.key.startsWith("location:"))
       .map((one) => one.label);
     expect(shown.at(0)).toContain("xmd://repl/");
     expect(shown.at(-1)).toContain("more characters");
     // Every row this frame describes is one it places: nothing is mounted with
     // nowhere to be.
-    for (const key of keysOf(view).filter((one) => one.startsWith("sessions:"))) {
-      expect(placedFor(tree, frame, key)).toBeDefined();
+    for (const key of (yield* keysOf(view)).filter((one) => one.startsWith("sessions:"))) {
+      expect(frame.node(key)).toBeDefined();
     }
 
     // And the outlet stays usable at this size rather than merely present: the
     // recorded turn's own control is reached by walking the window, and asks
     // for a position in the history — the one action neither surface selector
     // can ask for.
-    const recordedKey = keysSelecting(reading(drafted, session, WIDE), "marker").find((key) =>
-      key.startsWith("sessions:turn:"),
+    const recordedKey = (yield* keysSelecting(reading(drafted, session, WIDE), "marker")).find(
+      (key) => key.startsWith("sessions:turn:"),
     );
     expect(recordedKey).toBeDefined();
-    const walked = scrolledTo(drafted, session, recordedKey ?? "");
+    const walked = yield* scrolledTo(drafted, session, recordedKey ?? "");
     const scrolled = reading(walked, session, NARROW);
-    yield* applied(tree, scrolled);
-    const scrolledFrame = layout(NARROW, replSurface(tree, scrolled));
-    expect(placedFor(tree, scrolledFrame, recordedKey ?? "")?.targetable).toBe(true);
+    const scrolledFrame = yield* drawn(tree, scrolled);
+    expect(scrolledFrame.targetable(recordedKey ?? "")).toBe(true);
     expect((yield* pointed(tree, scrolledFrame, recordedKey ?? "")).kind).toBe("select-marker");
     // Walking it changed no location and took no control off the screen.
     expect(scrolled.location).toBe(view.location);
     for (const key of ["sessions:heading", "entries:heading"]) {
-      expect(placedFor(tree, scrolledFrame, key)?.targetable).toBe(true);
+      expect(scrolledFrame.targetable(key)).toBe(true);
     }
   });
 
@@ -2272,9 +2432,7 @@ describe("U6 — the Sessions reading is windowed", () => {
     const written: Uint8Array[] = [];
 
     const first = reading(longer, session, NARROW);
-    yield* applied(tree, first);
-    const before = layout(NARROW, replSurface(tree, first));
-    written.push(yield* painted(renderer, before, tree));
+    written.push(yield* painted(renderer, tree, first));
     const four = summaryOn(screenFrom(written));
     expect(four).toMatch(/^… \d{4} more characters/);
 
@@ -2283,9 +2441,7 @@ describe("U6 — the Sessions reading is windowed", () => {
     // measured, and true of this renderer either way: it fills a placed cell to
     // its bounds, so it is not the padding below that makes this pass.
     const second = reading(shorter, session, NARROW);
-    yield* applied(tree, second);
-    const after = layout(NARROW, replSurface(tree, second));
-    written.push(yield* painted(renderer, after, tree));
+    written.push(yield* painted(renderer, tree, second));
 
     const three = summaryOn(screenFrom(written));
     expect(three).toMatch(/^… \d{3} more characters/);
@@ -2296,12 +2452,14 @@ describe("U6 — the Sessions reading is windowed", () => {
     // so it says what this renderer does, while this says what the application
     // owns — the same full-width contract `chunked` gives every other location
     // row, rather than one inherited from whatever draws it.
-    const located = rowsOf(describeApplication(second))
+    const located = (yield* describedBy(second))
       .filter((one) => one.key.startsWith("location:"))
       .map((one) => one.label);
     expect(located.length).toBe(3);
+    // As wide as the outlet the frame measured for them, which at this size is
+    // the whole terminal: narrow has one routed outlet and no columns.
     for (const row of located) {
-      expect(row.length).toBe(surfaceWidth(NARROW));
+      expect(row.length).toBe(NARROW.columns);
     }
     // Exactly the new summary, with nothing of the longer one left on the end
     // of it: the row is the row, not the row plus whatever it stopped short of.
@@ -2311,11 +2469,12 @@ describe("U6 — the Sessions reading is windowed", () => {
 
     // And the screen is still one a person can use: both ways off it, and a
     // control of the reading itself.
+    const after = yield* drawn(tree, second);
     for (const key of ["sessions:heading", "entries:heading"]) {
-      expect(placedFor(tree, after, key)?.targetable).toBe(true);
+      expect(after.targetable(key)).toBe(true);
     }
-    const outlet = after.cells.filter(
-      (cell) => (tree.keyOf(cell.node) ?? "").startsWith("sessions:turn:") && cell.targetable,
+    const outlet = after.keys.filter(
+      (key) => key.startsWith("sessions:turn:") && after.targetable(key),
     );
     expect(outlet.length).toBeGreaterThan(0);
   });
@@ -2332,7 +2491,7 @@ describe("U6 — the Sessions reading is windowed", () => {
     // As far down as the smallest frame goes.
     let at = onSessions(session);
     for (let press = 0; press < 60; press += 1) {
-      at = acted(at, { kind: "scroll-sessions", delta: 1 }, session);
+      at = yield* acted(at, { kind: "scroll-sessions", delta: 1 }, session);
     }
     const furthest = at.viewports.sessions;
     expect(furthest).toBeGreaterThan(0);
@@ -2341,10 +2500,10 @@ describe("U6 — the Sessions reading is windowed", () => {
     // earlier and the frame is already drawing that. The stored number is now
     // past it.
     const taller: ReplTerminalSize = { columns: NARROW.columns, rows: NARROW.rows + 1 };
-    const before = sessionKeysOf(reading(at, session, taller));
-    const pressed = acted(at, { kind: "scroll-sessions", delta: -1 }, session, taller);
+    const before = yield* sessionKeysOf(reading(at, session, taller));
+    const pressed = yield* acted(at, { kind: "scroll-sessions", delta: -1 }, session, taller);
     // Moved, rather than spending the press normalizing state nobody can see.
-    expect(sessionKeysOf(reading(pressed, session, taller))).not.toEqual(before);
+    expect(yield* sessionKeysOf(reading(pressed, session, taller))).not.toEqual(before);
     expect(pressed.viewports.sessions).toBeLessThan(furthest);
   });
 });
@@ -2373,7 +2532,7 @@ describe("U7 — the permission drawer is windowed", () => {
     }
     expect(request.choices).toHaveLength(SEVEN_CHOICES.length);
 
-    const opened = acted(
+    const opened = yield* acted(
       onSessions(session),
       { kind: "select-permission", request: request.key },
       session,
@@ -2381,22 +2540,21 @@ describe("U7 — the permission drawer is windowed", () => {
     const tree = yield* useReplTree<ReplAction>();
     // More content than the smallest accepted drawer can place, so the first
     // window is a prefix and the rest is reached by scrolling.
-    const firstWindow = drawerKeysOf(reading(opened, session, NARROW));
+    const firstWindow = yield* drawerKeysOf(reading(opened, session, NARROW));
     expect(firstWindow.length).toBeLessThan(SEVEN_CHOICES.length);
 
     const reached: string[] = [];
     let at = opened;
     for (let press = 0; press < 20; press += 1) {
       const view = reading(at, session, NARROW);
-      yield* applied(tree, view);
-      const frame = layout(NARROW, replSurface(tree, view));
+      const frame = yield* drawn(tree, view);
       for (const choice of SEVEN_CHOICES) {
         const key = `drawer:permission:choice:${choice.optionId}`;
-        const placed = placedFor(tree, frame, key);
+        const placed = frame.node(key);
         if (placed !== undefined && !reached.includes(choice.optionId)) {
           // Placed means pointable: a choice a person can read is a choice they
           // can take.
-          expect(placed.targetable).toBe(true);
+          expect(frame.targetable(key)).toBe(true);
           expect(yield* pointed(tree, frame, key)).toEqual({
             kind: "choose-permission",
             request: request.key,
@@ -2406,19 +2564,19 @@ describe("U7 — the permission drawer is windowed", () => {
         }
       }
       // Leaving is never scrolled away from, whatever the window is showing.
-      expect(placedFor(tree, frame, "drawer:close")).toBeDefined();
+      expect(frame.node("drawer:close")).toBeDefined();
       // What the window is not showing is in no target map at all.
       for (const key of drawerContentKeys) {
-        const described = keysOf(view).includes(key);
+        const described = (yield* keysOf(view)).includes(key);
         if (!described) {
-          expect(placedFor(tree, frame, key)).toBe(undefined);
+          expect(frame.node(key)).toBe(undefined);
           expect(nodeOf(tree, key)).toBe(undefined);
         }
       }
       if (reached.length === SEVEN_CHOICES.length) {
         break;
       }
-      at = acted(at, { kind: "scroll", delta: 1 }, session);
+      at = yield* acted(at, { kind: "scroll", delta: 1 }, session);
     }
     // Every one of them, in the order the provider offered them.
     expect(reached).toEqual(SEVEN_CHOICES.map((choice) => choice.optionId));
@@ -2429,7 +2587,7 @@ describe("U7 — the permission drawer is windowed", () => {
       { kind: "choose-permission", request: request.key, option: "never" },
       session.model,
       liveReading(session),
-      NARROW,
+      yield* admissionOf(at, session, NARROW),
     );
     expect(answer(session, chose.intent)).toBe(true);
     yield* until(session, "the request being answered", () => stub.outcomes.size === 1);
@@ -2459,24 +2617,29 @@ describe("U7 — the permission drawer is windowed", () => {
     if (request === undefined) {
       throw new Error("no request was published");
     }
-    let at = acted(
+    let at = yield* acted(
       onSessions(session),
       { kind: "select-permission", request: request.key },
       session,
     );
-    at = acted(at, { kind: "scroll", delta: 1 }, session);
-    at = acted(at, { kind: "scroll", delta: 1 }, session);
+    at = yield* acted(at, { kind: "scroll", delta: 1 }, session);
+    at = yield* acted(at, { kind: "scroll", delta: 1 }, session);
     expect(at.viewports.permission).toBeGreaterThan(0);
 
     const tree = yield* useReplTree<ReplAction>();
     const view = reading(at, session, NARROW);
-    yield* applied(tree, view);
-    const frame = layout(NARROW, replSurface(tree, view));
+    const frame = yield* drawn(tree, view);
     // Still there, whatever the window is showing, and it denies this request
     // rather than meaning "this changed nothing".
     const closing = yield* pointed(tree, frame, "drawer:close");
     expect(closing).toEqual({ kind: "dismiss-permission", request: request.key });
-    const dismissed = reduceRepl(at, closing, session.model, liveReading(session), NARROW);
+    const dismissed = reduceRepl(
+      at,
+      closing,
+      session.model,
+      liveReading(session),
+      yield* admissionOf(at, session, NARROW),
+    );
     expect(answer(session, dismissed.intent)).toBe(true);
     yield* until(session, "the request being denied", () => stub.outcomes.size === 1);
     expect(stub.answers.get("call-1")).toBe(1);
@@ -2504,13 +2667,13 @@ describe("U7 — the permission drawer is windowed", () => {
     if (request === undefined) {
       throw new Error("no request was published");
     }
-    let at = acted(
+    let at = yield* acted(
       onSessions(session),
       { kind: "select-permission", request: request.key },
       session,
     );
     for (let press = 0; press < 20; press += 1) {
-      at = acted(at, { kind: "scroll", delta: 1 }, session);
+      at = yield* acted(at, { kind: "scroll", delta: 1 }, session);
     }
     const furthest = at.viewports.permission;
     expect(furthest).toBeGreaterThan(0);
@@ -2519,9 +2682,9 @@ describe("U7 — the permission drawer is windowed", () => {
     // earlier and the drawer is already showing that. The stored number is now
     // past it, and the first press has to move what is drawn.
     const taller: ReplTerminalSize = { columns: NARROW.columns, rows: NARROW.rows + 1 };
-    const before = drawerWindowOf(reading(at, session, taller));
-    const pressed = acted(at, { kind: "scroll", delta: -1 }, session, taller);
-    expect(drawerWindowOf(reading(pressed, session, taller))).not.toEqual(before);
+    const before = yield* drawerWindowOf(reading(at, session, taller));
+    const pressed = yield* acted(at, { kind: "scroll", delta: -1 }, session, taller);
+    expect(yield* drawerWindowOf(reading(pressed, session, taller))).not.toEqual(before);
     expect(pressed.viewports.permission).toBeLessThan(furthest);
   });
 });
@@ -2558,22 +2721,24 @@ describe("U8 — a target is a control, whatever its key is spelled", () => {
     const standing = onSessions(session);
     const tree = yield* useReplTree<ReplAction>();
     const view = reading(standing, session, WIDE);
-    yield* applied(tree, view);
-    const frame = layout(WIDE, replSurface(tree, view));
+    const frame = yield* drawn(tree, view);
 
     // A conversation whose provider key ends in `:text`.
     const conversation = "sessions:conversation:stub:text";
-    expect(keysOf(view)).toContain(conversation);
+    expect(yield* keysOf(view)).toContain(conversation);
     yield* focusTo(tree, conversation);
     const pressed = yield* activate(tree);
     expect(pressed).toEqual({ kind: "select-session", session: "stub:text" });
     expect(yield* pointed(tree, frame, conversation)).toEqual(pressed);
 
     // And every option named after one of those facts.
-    const opened = acted(standing, { kind: "select-permission", request: request.key }, session);
+    const opened = yield* acted(
+      standing,
+      { kind: "select-permission", request: request.key },
+      session,
+    );
     const drawer = reading(opened, session, WIDE);
-    yield* applied(tree, drawer);
-    const drawerFrame = layout(WIDE, replSurface(tree, drawer));
+    const drawerFrame = yield* drawn(tree, drawer);
     for (const choice of NAMED_LIKE_FACTS) {
       const key = `drawer:permission:choice:${choice.optionId}`;
       yield* focusTo(tree, key);
@@ -2606,34 +2771,29 @@ describe("U8 — a target is a control, whatever its key is spelled", () => {
     // On the REPL surface the pending request is a fact: the grammar answers one
     // on Sessions, so a control here would be a target that refuses.
     const onRepl = reading(initialState("agents"), session, WIDE);
-    yield* applied(tree, onRepl);
-    const replFrame = layout(WIDE, replSurface(tree, onRepl));
-    const fact = placedFor(tree, replFrame, `sessions:request:${request.key}`);
+    const replFrame = yield* drawn(tree, onRepl);
+    const fact = replFrame.node(`sessions:request:${request.key}`);
     expect(fact).toBeDefined();
-    expect(fact?.targetable).toBe(false);
+    expect(replFrame.targetable(`sessions:request:${request.key}`)).toBe(false);
 
     // Inside the drawer, what a person decides *about* is read the same way.
-    const opened = acted(
+    const opened = yield* acted(
       onSessions(session),
       { kind: "select-permission", request: request.key },
       session,
     );
     const drawer = reading(opened, session, WIDE);
-    yield* applied(tree, drawer);
-    const drawerFrame = layout(WIDE, replSurface(tree, drawer));
+    const drawerFrame = yield* drawn(tree, drawer);
     for (const key of drawerContentKeys) {
-      const placed = placedFor(tree, drawerFrame, key);
-      expect(placed).toBeDefined();
-      expect(placed?.targetable).toBe(false);
+      expect(drawerFrame.node(key)).toBeDefined();
+      expect(drawerFrame.targetable(key)).toBe(false);
     }
     // A turn's own facts and a retained audit are lines wherever they appear.
     const sessions = reading(onSessions(session), session, WIDE);
-    yield* applied(tree, sessions);
-    const sessionsFrame = layout(WIDE, replSurface(tree, sessions));
-    for (const cell of sessionsFrame.cells) {
-      const key = tree.keyOf(cell.node) ?? "";
+    const sessionsFrame = yield* drawn(tree, sessions);
+    for (const key of sessionsFrame.keys) {
       if (TURN_FACT_SUFFIXES.some((suffix) => key.endsWith(suffix))) {
-        expect(cell.targetable).toBe(false);
+        expect(sessionsFrame.targetable(key)).toBe(false);
       }
     }
   });
@@ -3012,7 +3172,13 @@ function maybeLocation(terminal: Terminal): string | undefined {
   const at = rows[first].indexOf("xmd://repl/");
   const parts: string[] = [];
   for (let row = first; row < rows.length && row < first + 24; row += 1) {
-    const part = (rows[row] ?? "").slice(at, at + surfaceWidth(terminal.size));
+    const part = (rows[row] ?? "").slice(
+      at,
+      at +
+        terminal.size.columns -
+        (sidebarWidth(terminal.size) ?? 0) -
+        (inspectionWidth(terminal.size) ?? 0),
+    );
     if (part.trim().length === 0) {
       break;
     }
@@ -3106,6 +3272,65 @@ function onePromptAt(text: string): string {
   return `<Session name="planner"><Prompt text="${text}" /></Session>\n`;
 }
 
+describe("U1 — a row's rectangle does not bound its text (#875 R1)", () => {
+  beforeAll(() => useTempFileCompiler());
+
+  /** A prompt longer than any sidebar this product draws. */
+  const LONG = "deploy the whole fleet and then write up everything that happened";
+
+  it("TL11: a long turn label keeps its state inside the row's own measured cells", function* () {
+    const { session } = yield* asking({ [LONG]: { queued: true } }, "deny-all", onePromptAt(LONG));
+    yield* until(session, "the queued turn being observed", () => observed(session) === 1);
+
+    const tree = yield* useReplTree<ReplAction>();
+    const view = reading(initialState("agents"), session, WIDE);
+    const frame = yield* drawn(tree, view);
+    const key = yield* turnKeyed(view, LONG);
+    const at = frame.boundsOf(key);
+    const cell = frame.cell(key);
+    expect(at).toBeDefined();
+    expect(cell).toBeDefined();
+    if (at === undefined || cell === undefined) {
+      return;
+    }
+
+    // Pre-assert: the prompt really is longer than the row, so there is
+    // something for the row to have fitted.
+    expect(LONG.length).toBeGreaterThan(at.width);
+    // The cells first: what the engine actually wrote, inside the rectangle this
+    // frame published for this row and in the cells around it. A rectangle does
+    // not bound its text, so the row being the right width proves nothing on its
+    // own — the state has to be in the row's own cells, and nowhere else.
+    const grid = createGrid();
+    grid.apply(frame.committed.rendered.output);
+    const beside = {
+      x: at.x + at.width,
+      y: at.y,
+      width: view.size.columns - (at.x + at.width),
+      height: 1,
+    };
+    // Nothing of this row reached the column beside it or the row under it.
+    expect(grid.textIn(beside).join("")).not.toContain("queued");
+    expect(grid.textIn(beside).join("")).not.toContain("everything that happened");
+    // Nor onto the rows under it, where an unbounded label in a fixed-width row
+    // pays itself out.
+    expect(
+      grid.textIn({ x: at.x, y: at.y + 1, width: at.width, height: 3 }).join(""),
+    ).not.toContain("queued");
+    // And the state is in the row, where a reader looks for it and a pointer
+    // aimed at this row's published bounds reaches it.
+    expect(grid.textIn(at).join("")).toContain("queued");
+
+    // The row also says nothing wider than it is.
+    expect(cell).toContain("queued");
+    expect(cell.length).toBeLessThanOrEqual(at.width);
+
+    // The complete semantic turn data is unchanged. What the row shows is fitted;
+    // what the product holds is the whole prompt.
+    expect(session.agent.turns.map((turn) => turn.prompt)).toEqual([LONG]);
+  });
+});
+
 describe("U9 — two entries whose Prompts share one durable name", () => {
   beforeAll(() => useTempFileCompiler());
 
@@ -3134,12 +3359,12 @@ describe("U9 — two entries whose Prompts share one durable name", () => {
     // durable, the second entry's is terminal and unrecorded, and both are
     // mounted.
     const before = reading(initialState("agents"), session);
-    expect(turnRows(before)).toHaveLength(2);
-    const firstRow = turnKeyed(before, "one");
-    const secondRow = turnKeyed(before, "two");
+    expect(yield* turnRows(before)).toHaveLength(2);
+    const firstRow = yield* turnKeyed(before, "one");
+    const secondRow = yield* turnKeyed(before, "two");
     expect(firstRow).not.toBe(secondRow);
-    expect(labelOf(before, "one")).toContain("completed, recorded");
-    expect(labelOf(before, "two")).toContain("not recorded yet");
+    expect(yield* labelOf(before, "one")).toContain("completed, recorded");
+    expect(yield* labelOf(before, "two")).toContain("not recorded yet");
 
     stub.record("root");
     yield* until(session, "the second entry's turn being recorded", () => recorded(session) === 2);
@@ -3158,41 +3383,41 @@ describe("U9 — two entries whose Prompts share one durable name", () => {
     const after = reading(initialState("agents"), session);
     // Each turn exactly once — two rows, rather than one record shown twice and
     // the other not at all.
-    expect(turnRows(after)).toHaveLength(2);
-    expect(labelOf(after, "one")).toContain("completed, recorded");
-    expect(labelOf(after, "two")).toContain("completed, recorded");
+    expect(yield* turnRows(after)).toHaveLength(2);
+    expect(yield* labelOf(after, "one")).toContain("completed, recorded");
+    expect(yield* labelOf(after, "two")).toContain("completed, recorded");
     // Each row resolved to its own entry's record, so each shows its own prompt
     // and its own text.
-    expect(detailOf(after, "one", "text")).toContain("one done");
-    expect(detailOf(after, "two", "text")).toContain("two done");
+    expect(yield* detailOf(after, "one", "text")).toContain("one done");
+    expect(yield* detailOf(after, "two", "text")).toContain("two done");
     // Publication preserved each mounted slot: the rows a person was reading a
     // moment ago are the rows they are reading now.
-    expect(turnKeyed(after, "one")).toBe(firstRow);
-    expect(turnKeyed(after, "two")).toBe(secondRow);
+    expect(yield* turnKeyed(after, "one")).toBe(firstRow);
+    expect(yield* turnKeyed(after, "two")).toBe(secondRow);
     // And the conversation the provider named is still one conversation, holding
     // both entries' turns.
-    expect(conversationRows(after)).toEqual(["sessions:conversation:stub:planner"]);
+    expect(yield* conversationRows(after)).toEqual(["sessions:conversation:stub:planner"]);
     expect(session.model.sessions.map((one) => one.sessionKey)).toEqual(["stub:planner"]);
     expect(session.model.sessions[0]?.turns).toHaveLength(2);
   });
 });
 
 /** The transcript lines one view draws, in order, excluding the live overlay. */
-function transcriptLines(view: ReplView): string[] {
-  return rowsOf(describeApplication(view))
+function* transcriptLines(view: ReplView): Operation<string[]> {
+  return (yield* describedBy(view))
     .filter((one) => one.key.startsWith("line:") && !one.key.startsWith("line:live:"))
     .map((one) => one.label.trim())
     .filter((label) => label.length > 0);
 }
 
 /** The catalog rows one view describes, in the order it describes them. */
-function catalogRows(view: ReplView): Array<{ key: string; label: string }> {
-  return rowsOf(describeApplication(view)).filter((one) => one.key.startsWith("entry:"));
+function* catalogRows(view: ReplView): Operation<Array<{ key: string; label: string }>> {
+  return (yield* describedBy(view)).filter((one) => one.key.startsWith("entry:"));
 }
 
 /** The label of the catalog row for one entry key. */
-function catalogLabel(view: ReplView, entry: string): string {
-  const found = catalogRows(view).find((one) => one.key === `entry:${entry}`);
+function* catalogLabel(view: ReplView, entry: string): Operation<string> {
+  const found = (yield* catalogRows(view)).find((one) => one.key === `entry:${entry}`);
   if (found === undefined) {
     throw new Error(`this catalog has no row for ${entry}`);
   }
@@ -3286,15 +3511,15 @@ describe("EU1 — selecting an entry moves the transcript locus and nothing else
     // Standing with a draft, a conversation filter, and the first entry
     // selected: everything selecting another entry must leave alone.
     let standing = withDraft(initialState("agents"), "the next one");
-    standing = acted(standing, { kind: "select-scope", scopes: ["entry-1"] }, session);
-    standing = acted(standing, { kind: "select-session", session: "stub:planner" }, session);
+    standing = yield* acted(standing, { kind: "select-scope", scopes: ["entry-1"] }, session);
+    standing = yield* acted(standing, { kind: "select-session", session: "stub:planner" }, session);
     const before = reading(standing, session);
     expect(before.selection.entry?.key).toBe("entry-1");
-    const turnsBefore = turnRows(before);
-    const conversationsBefore = conversationRows(before);
+    const turnsBefore = yield* turnRows(before);
+    const conversationsBefore = yield* conversationRows(before);
     const appendsBefore = session.model.turns.length;
 
-    const selected = acted(standing, { kind: "select-scope", scopes: ["entry-2"] }, session);
+    const selected = yield* acted(standing, { kind: "select-scope", scopes: ["entry-2"] }, session);
     const after = reading(selected, session);
 
     // The locus moved, and the transcript moved with it — which is what
@@ -3304,8 +3529,8 @@ describe("EU1 — selecting an entry moves the transcript locus and nothing else
     expect(after.selection.entry?.key).toBe("entry-2");
     expect(after.selection.scope?.key).toBe("entry-2");
     expect(before.selection.entry?.key).toBe("entry-1");
-    const firstRows = transcriptLines(before);
-    const secondRows = transcriptLines(after);
+    const firstRows = yield* transcriptLines(before);
+    const secondRows = yield* transcriptLines(after);
     expect(firstRows.length).toBeGreaterThan(0);
     expect(secondRows.length).toBeGreaterThan(0);
     expect(firstRows).not.toEqual(secondRows);
@@ -3329,13 +3554,13 @@ describe("EU1 — selecting an entry moves the transcript locus and nothing else
     // Sessions is one execution-wide chronology and selecting an entry never
     // narrows it: both entries' turns are still in it, in the same order, under
     // the one conversation the provider named.
-    expect(turnRows(after)).toEqual(turnsBefore);
-    expect(conversationRows(after)).toEqual(conversationsBefore);
-    expect(conversationRows(after)).toEqual(["sessions:conversation:stub:planner"]);
+    expect(yield* turnRows(after)).toEqual(turnsBefore);
+    expect(yield* conversationRows(after)).toEqual(conversationsBefore);
+    expect(yield* conversationRows(after)).toEqual(["sessions:conversation:stub:planner"]);
     expect(session.model.sessions.map((one) => one.sessionKey)).toEqual(["stub:planner"]);
     expect(session.model.sessions[0]?.turns).toHaveLength(2);
-    expect(labelOf(after, "one")).toBe(labelOf(before, "one"));
-    expect(labelOf(after, "two")).toBe(labelOf(before, "two"));
+    expect(yield* labelOf(after, "one")).toBe(yield* labelOf(before, "one"));
+    expect(yield* labelOf(after, "two")).toBe(yield* labelOf(before, "two"));
 
     // And no live execution, Agent work or history was touched by a selection.
     expect(session.model.turns).toHaveLength(appendsBefore);
@@ -3343,14 +3568,13 @@ describe("EU1 — selecting an entry moves the transcript locus and nothing else
     expect(session.agent.requests).toEqual([]);
   });
 
-  /** Mount one view and lay it out, the way the program does before a pointer lands. */
+  /** Commit one view, the way the program does before a pointer lands. */
   function* framed(
     tree: ReplTree<ReplAction>,
     view: ReplView,
-    size: ReplTerminalSize,
-  ): Operation<ReplSemanticFrame> {
-    yield* applied(tree, view);
-    return layout(size, replSurface(tree, view));
+    _size: ReplTerminalSize,
+  ): Operation<Frame> {
+    return yield* drawn(tree, view);
   }
 
   /**
@@ -3367,9 +3591,8 @@ describe("EU1 — selecting an entry moves the transcript locus and nothing else
     key: string,
   ): Operation<ReplAction> {
     const frame = yield* framed(tree, view, size);
-    const placed = placedFor(tree, frame, key);
-    expect([key, placed !== undefined]).toEqual([key, true]);
-    expect([key, placed?.targetable]).toEqual([key, true]);
+    expect([key, frame.node(key) !== undefined]).toEqual([key, true]);
+    expect([key, frame.targetable(key)]).toEqual([key, true]);
     const pointer = yield* pointed(tree, frame, key);
     yield* focusTo(tree, key);
     const pressed = yield* activate(tree);
@@ -3378,14 +3601,20 @@ describe("EU1 — selecting an entry moves the transcript locus and nothing else
   }
 
   /** One action reduced against one explicit model, refusing to carry a refusal on. */
-  function reducedAt(
+  function* reducedAt(
     state: ReplState,
     action: ReplAction,
     model: ReplModel,
     session: ReplSession,
     size: ReplTerminalSize,
-  ): ReplState {
-    const next = reduceRepl(state, action, model, liveReading(session), size);
+  ): Operation<ReplState> {
+    const next = reduceRepl(
+      state,
+      action,
+      model,
+      liveReading(session),
+      yield* admissionOf(state, session, size, model),
+    );
     if (next.state.refusal !== undefined) {
       throw new Error(`${action.kind} was refused: ${next.state.refusal}`);
     }
@@ -3428,7 +3657,7 @@ describe("EU1 — selecting an entry moves the transcript locus and nothing else
       kind: "select-scope",
       scopes: ["entry-2"],
     });
-    const onEntry = reducedAt(
+    const onEntry = yield* reducedAt(
       standing,
       { kind: "select-scope", scopes: ["entry-2"] },
       model,
@@ -3438,7 +3667,7 @@ describe("EU1 — selecting an entry moves the transcript locus and nothing else
     const entryView = reading(onEntry, session, NARROW, undefined, model);
     expect(entryView.selection.entry?.key).toBe("entry-2");
     // The locus this round trip has to come back to.
-    const locus = transcriptLines(entryView);
+    const locus = yield* transcriptLines(entryView);
     expect(locus).toContain("two done");
     expect(locus).not.toContain("one done");
 
@@ -3448,7 +3677,7 @@ describe("EU1 — selecting an entry moves the transcript locus and nothing else
       kind: "select-surface",
       surface: "sessions",
     });
-    const onSessions = reducedAt(
+    const onSessions = yield* reducedAt(
       onEntry,
       { kind: "select-surface", surface: "sessions" },
       model,
@@ -3471,10 +3700,10 @@ describe("EU1 — selecting an entry moves the transcript locus and nothing else
     // Sessions is still the execution's whole chronology: both entries' turns,
     // under the one conversation the provider named — and exactly the reading it
     // is with no entry selected, so selecting one narrowed nothing.
-    expect(turnRows(sessionsView)).toHaveLength(2);
-    expect(labelOf(sessionsView, "one")).toContain("recorded");
-    expect(labelOf(sessionsView, "two")).toContain("recorded");
-    expect(conversationRows(sessionsView)).toEqual(["sessions:conversation:stub:planner"]);
+    expect(yield* turnRows(sessionsView)).toHaveLength(2);
+    expect(yield* labelOf(sessionsView, "one")).toContain("recorded");
+    expect(yield* labelOf(sessionsView, "two")).toContain("recorded");
+    expect(yield* conversationRows(sessionsView)).toEqual(["sessions:conversation:stub:planner"]);
     const unselected = reading(
       Object.freeze({ ...standing, route: Object.freeze({ ...onSessions.route, scopes: [] }) }),
       session,
@@ -3482,14 +3711,14 @@ describe("EU1 — selecting an entry moves the transcript locus and nothing else
       undefined,
       model,
     );
-    expect(sessionKeysOf(sessionsView)).toEqual(sessionKeysOf(unselected));
+    expect(yield* sessionKeysOf(sessionsView)).toEqual(yield* sessionKeysOf(unselected));
 
     // 3. And back, through the other mounted surface control, to the same locus.
     expect(yield* asked(tree, sessionsView, NARROW, "entries:heading")).toEqual({
       kind: "select-surface",
       surface: "repl",
     });
-    const back = reducedAt(
+    const back = yield* reducedAt(
       onSessions,
       { kind: "select-surface", surface: "repl" },
       model,
@@ -3503,7 +3732,7 @@ describe("EU1 — selecting an entry moves the transcript locus and nothing else
     expect(back.route.at).toBe(marker);
     const returned = reading(back, session, NARROW, undefined, model);
     expect(returned.selection.entry?.key).toBe("entry-2");
-    expect(transcriptLines(returned)).toEqual(locus);
+    expect(yield* transcriptLines(returned)).toEqual(locus);
     // One location either way.
     expect(returned.location).toBe(entryView.location);
   });
@@ -3515,9 +3744,12 @@ describe("EU1 — selecting an entry moves the transcript locus and nothing else
     // The second entry's root cannot close until its Prompt publishes, so the
     // catalog honestly says it has not settled.
     const before = reading(initialState("agents"), session);
-    expect(catalogRows(before).map((one) => one.key)).toEqual(["entry:entry-1", "entry:entry-2"]);
-    expect(catalogLabel(before, "entry-1")).toContain("ok");
-    expect(catalogLabel(before, "entry-2")).toContain("unfinished");
+    expect((yield* catalogRows(before)).map((one) => one.key)).toEqual([
+      "entry:entry-1",
+      "entry:entry-2",
+    ]);
+    expect(yield* catalogLabel(before, "entry-1")).toContain("ok");
+    expect(yield* catalogLabel(before, "entry-2")).toContain("unfinished");
     yield* applied(tree, before);
     const nodes = ["entry-1", "entry-2"].map((key) => nodeOf(tree, `entry:${key}`));
     expect(nodes.every((node) => node !== undefined)).toBe(true);
@@ -3530,9 +3762,12 @@ describe("EU1 — selecting an entry moves the transcript locus and nothing else
     // came from its place in the window would have moved, and a row keyed by
     // its entry does not.
     const after = reading(initialState("agents"), session);
-    expect(catalogRows(after).map((one) => one.key)).toEqual(["entry:entry-1", "entry:entry-2"]);
-    expect(catalogLabel(after, "entry-2")).toContain("ok");
-    expect(catalogLabel(after, "entry-2")).not.toContain("unfinished");
+    expect((yield* catalogRows(after)).map((one) => one.key)).toEqual([
+      "entry:entry-1",
+      "entry:entry-2",
+    ]);
+    expect(yield* catalogLabel(after, "entry-2")).toContain("ok");
+    expect(yield* catalogLabel(after, "entry-2")).not.toContain("unfinished");
     yield* applied(tree, after);
     expect(["entry-1", "entry-2"].map((key) => nodeOf(tree, `entry:${key}`))).toEqual(nodes);
   });
@@ -3580,7 +3815,7 @@ describe("U2 — a pending permission announces itself without taking the screen
     expect(after.location).toBe(quiet.location);
 
     // And the frame says it, naming where it is answered rather than going there.
-    const rows = rowsOf(describeApplication(after));
+    const rows = yield* describedBy(after);
     const guidance = rows.find((one) => one.key === "guidance")?.label ?? "";
     expect(guidance).toContain("waiting for permission");
     expect(guidance).toContain("open Sessions");
@@ -3590,7 +3825,7 @@ describe("U2 — a pending permission announces itself without taking the screen
     // The control that answers it is the one Sessions already had. Crossing to it
     // is a thing the person does, and then the request is there to be settled.
     const moved = onSessions(session, before);
-    const sessions = rowsOf(describeApplication(reading(moved, session)));
+    const sessions = yield* describedBy(reading(moved, session));
     expect(sessions.some((one) => one.key.startsWith("sessions:request:"))).toBe(true);
     // And the draft crossed with them.
     expect(moved.draft).toBe("a draft nobody may take");
