@@ -2969,9 +2969,16 @@ describe("REPL entries: what a failed entry says it failed with", () => {
       // below asserts that against the real placement at three sizes.
       expect(failed?.includes("\n")).toBe(false);
       expect((failed ?? "").length).toBeLessThanOrEqual(surfaceWidth(WIDE));
-      // It begins with what the reason begins with, which is the part a reader
-      // can act on, and it is not the serialized record.
-      expect(failed).toContain("Unexpected reserved word");
+      // What is drawn is the *recorded* reason, flattened and cut — compared
+      // against the message this run actually produced rather than against a
+      // phrase. The phrase is the engine's: Deno compiles an eval block with V8
+      // and says "Unexpected reserved word", while Node and Bun reach it through
+      // esbuild and say "Transform failed". Asserting either one makes this row a
+      // claim about whichever runtime happened to write it.
+      const shown = (failed ?? "").slice("failed: ".length).replace(/…$/, "");
+      expect(shown.length).toBeGreaterThan(0);
+      expect(recorded.replace(/\s+/g, " ").trim().startsWith(shown)).toBe(true);
+      // And it is the message, not the serialized record around it.
       expect(failed).not.toContain("stack");
       expect(failed).not.toContain('"name"');
 
