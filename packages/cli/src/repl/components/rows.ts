@@ -2,11 +2,19 @@
  * The things a REPL screen is made of.
  *
  * Each one renders exactly what its input says and claims exactly the input it
- * has a meaning for. A row that has no use for text lets text pass, so the
- * draft below still receives it; a row that has no use for Escape lets Escape
- * pass, so the drawer above it still closes. That is the whole reason claims are
- * per-node rather than a table somewhere: the answer to "what does this
- * keystroke mean" depends on what is under the cursor.
+ * has a meaning for. A row that has no use for Escape lets Escape pass, so the
+ * drawer above it still closes. That is the whole reason claims are per-node
+ * rather than a table somewhere: the answer to "what does this keystroke mean"
+ * depends on what is under the cursor.
+ *
+ * A row that has no use for text claims none, and text nothing claims reaches
+ * nothing: propagation runs up the ancestors of whatever holds focus, and the
+ * draft is a sibling of these rows rather than an ancestor of them. So typing at
+ * a control leaves the draft exactly as it was — which is the behavior, not an
+ * oversight, because a keystroke that silently edited a field nobody is looking
+ * at would be worse than one that does nothing. What makes it usable is that the
+ * screen says so: the guidance above the surface names the way back to the draft
+ * for as long as a control holds focus.
  *
  * No component here holds a `DurableEvent`, a stream, a session, a repository,
  * the route or a host operation. They are given detached view data and they
@@ -139,6 +147,9 @@ function activation(input: ReplViewData): ReplAction | undefined {
   }
   if (select === "close") {
     return { kind: "close-drawer" };
+  }
+  if (select === "exit") {
+    return { kind: "exit" };
   }
   if (select === "form-field") {
     const field = named["field"];

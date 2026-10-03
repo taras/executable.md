@@ -63,9 +63,12 @@ what you typed stays exactly as you typed it, character for character. When that
 entry has both settled and finished coming down, the same draft becomes the next
 entry — and only then does it leave the input and the location.
 
-When the entry asks a question, its drawer opens: the whole message, and then
-every field the schema declares, with its title, its description, whether it is
-required, and exactly the values it will accept. All of that is one ordered
+When the entry asks a question, the footer says so on one row and nothing else
+happens: no drawer opens itself, nothing takes focus, the route does not move and
+the Sessions filter does not change. Activate that row — with Enter or a pointer —
+and the question's drawer opens: the whole message, and then
+every field the schema declares, with its title, its description, whether it
+is required, and exactly the values it will accept. All of that is one ordered
 whole, and it is that whole — not the message alone — that scrolls when it is
 taller than the drawer. The earlier and later controls, the title and the close
 control stay put while the content moves beneath them, so however short the
@@ -75,10 +78,32 @@ press Enter from any of them to offer the whole object. The answer is recorded,
 and what the document renders after it changes because of the recorded answer
 rather than because of anything this process remembered. An answer the schema
 rejects keeps the question open and says what is wrong with it, under the field
-it belongs to. Escape closes the drawer without answering; the question stays
-open. An answer the schema accepts ends the question, and the drawer goes with
-it: it leaves the screen and it leaves the location, because a URL naming a
-drawer nothing mounts describes a view nobody can be shown.
+it belongs to. Escape closes the drawer without answering and discards what was
+typed into it; the question stays open, so the row that announces it is still
+there and activating it opens the drawer again. An answer the schema accepts ends
+the question, and the drawer goes with it: it leaves the screen and it leaves the
+location, because a URL naming a drawer nothing mounts describes a view nobody can
+be shown. A question that disappears some other way — teardown, or a settlement
+elsewhere — takes its drawer with it in the same way, and nothing becomes an
+answer, because none was given.
+
+A question belongs to the entry that is asking it, which is read on the Entries
+surface. Activating the announcement therefore goes to that surface, selects the
+entry still running, and leaves the draft and the Sessions filter where they
+were — so a question is reachable from either surface without the screen moving
+on its own first. A location naming that drawer beside Sessions, beside an earlier
+history position, or beside an entry that has already settled is refused.
+
+Press Enter on `[exit]` to leave. It is on the screen in every state — while an
+entry runs, while a question or a request waits, and while an earlier position is
+being read — and while a drawer is open it belongs to that drawer, so it is
+reachable without reaching past the modal. Leaving is lifecycle and nothing else:
+it answers no question, decides no permission request, and appends no close, no
+cancellation and no audit. An entry whose root never closed stays unfinished,
+because that is what it is. The command cancels and joins everything it owns,
+gives the terminal back once, prints the location it was at — minus the drawers
+only a running process could have mounted, so what it prints is a location a
+second process can be handed — and exits zero.
 
 Press Enter on `[pause]` to stop expansion at its next boundary. `[continue]`
 exists only while a continuation is actually held — not while a pause is still
@@ -278,22 +303,39 @@ appended: the history file is byte-identical before and after a cold run.
 
 ## How this command ends
 
-EOF, a renderer that cannot present, a terminal that fails mid-read and a
-cancelled command scope all end the same way: the owner cancels and joins every
-Prompt, provider task, pending permission operation, observer and frame
-subscription it started, appends nothing after that, and gives the terminal's
-modes back exactly once. Work that was interrupted leaves no record, because a
-record for it would be a record of something that did not happen. What was
-already appended stays readable, and is what a cold process shows.
+Activating `[exit]`, Escape on the too-small refusal, EOF, a renderer that cannot
+present, a terminal that fails mid-read and a cancelled command scope all end the
+same way: the owner cancels and joins every Prompt, provider task, pending
+permission operation, observer and frame subscription it started, appends nothing
+after that, and gives the terminal's modes back exactly once. Work that was
+interrupted leaves no record, because a record for it would be a record of
+something that did not happen. What was already appended stays readable, and is
+what a cold process shows.
+
+No chord ends it. A Control or Alt combination is dropped whole wherever it is
+pressed, so leaving is a control a person can see rather than a key they have to
+know — which is also why the one screen with no control on it, the refusal below
+the minimum size, says that Escape leaves.
+
+Leaving takes no further keystroke. The terminal's bytes arrive on a stream the
+command owns, and releasing it cancels the read it was holding rather than asking
+the terminal to finish one: a release that waited for the next key would make
+leaving cost the very thing the person has stopped doing.
+
+The location it prints is the one it was showing, minus the drawers only a running
+process could have mounted: a waiting question and a pending request are in no
+history, so a location naming one is a location nobody could reopen. Everything a
+second process can reconstruct stays — the history position, the surface, the
+selected entry, the conversation filter and the draft.
 
 ## What the screen does at each size
 
 | terminal | what it shows |
 | --- | --- |
-| `160x36` and larger | Sessions/Entries sidebar, transcript, bindings and recorded questions, the drawer layer, and a fixed full-width footer holding five History rows and the input |
+| `160x36` and larger | Sessions/Entries sidebar, transcript, bindings and recorded questions, the drawer layer, and a fixed full-width footer holding the contextual action row, five History rows and the draft |
 | `120x30` and larger | the same, with a narrower sidebar and inspection column |
 | `72x20` and larger | one routed surface — the one the route selected — under the two surface controls, with the same drawer and footer |
-| smaller than `72x20` | a refusal saying the minimum, showing nothing else; it recovers when the window grows |
+| smaller than `72x20` | a refusal saying the minimum, that growing the window recovers, and that Escape leaves; it shows nothing else, and offers no control to point at |
 
 At narrow, the surface the route did not select is still there in the model and
 is not on the screen: it is in no cell, in no target map, and no pointer reaches
@@ -310,10 +352,95 @@ window still shows all of it. The History band is five rows at every size; when 
 several positions cannot all fit, they share a label and every position keeps its
 own identity.
 
+The footer is seven rows at every size, in one order: the contextual status and
+action row, then the five History rows, then the draft. The draft owns the last of
+them and shares it with nothing, so what a person is typing stays visible however
+many controls a state happens to offer — and the drawer layer sits above the
+footer rather than across it, so a question and the draft are readable at once.
+
+The action row holds the controls that are available now, side by side, each as
+wide as its own label so a pointer on one reaches that one. Order is priority: a
+row too narrow for everything keeps the controls and shortens the sentence beside
+them, and a control that will not fit whole is not drawn at all rather than drawn
+half off the row.
+
 A refusal of one action — a submission the entry ahead of it has not made room
 for, a navigation that selects nothing, a pause this process cannot perform —
-appears in the footer beside the control that was refused. It does not replace
-the screen.
+appears on that row beside the control that was refused, shortened with an
+ellipsis when the row is too narrow for all of it. It does not replace the
+screen.
+
+Above whatever surface is showing, one row says how to operate what is in front
+of you: where typing goes, what Enter does on the control that has focus, that
+Tab and Shift+Tab move between controls, that a pointer does what Enter does, and
+how to close a drawer when one is open. It is read off what is mounted rather than
+fixed, so it never names an action this screen does not have — and when focus is on
+a control rather than a field it says how to get back to the draft, because that
+is the one moment a person's keystrokes reach nothing.
+
+## What the screen says the execution is doing
+
+One row says it, and it says the state first. That row is the contextual guidance
+above the surface, beside the canonical location — not a new row, and not one of
+the footer's. The footer is unchanged and still holds exactly what it held: its
+action row, the five History rows, and the draft.
+
+The state comes first because the row is as wide as the terminal and the terminal
+decides where it stops. A sentence cut after "Entry 1 running" still told somebody
+the thing they could not have worked out; one cut after the key guidance told them
+what the keys do and left them pressing Enter at an entry that cannot accept it.
+What follows the state is what the state means for the keys, then what the focused
+node does, then the way out, then movement. At the narrowest supported frame the
+row is composed to fit rather than written long and cut, because a row the
+renderer cuts loses its last fact with nothing to say that it is missing.
+
+**Readiness is read from the file and from this process together.** The durable
+side cannot answer it alone: a root close is recorded the moment a document
+settles, while the task that produced it is still coming down, and a submission
+taken in that window has nowhere to go. So there is a state between "settled" and
+"ready" — the close is retained, the entry's task has not been joined, and no
+successor may start yet. It resolves without anybody typing: when the teardown
+finishes, the row says the next entry may start.
+
+The states a person can tell apart: no entry yet; an entry running; an entry
+waiting for an answer; an entry waiting for a permission; an entry whose close is
+retained while its teardown finishes; an entry admitted that never reached an
+outcome, which no successor may follow; and a settled execution ready for the next
+entry. A frozen position is its own state and says so before any of them.
+
+**A refusal that was only ever true of a moment stops being shown.** When the
+readiness refuses a submission it says why, keeps the draft exactly as it is,
+starts nothing and appends nothing. When the entry it named finishes, that refusal
+goes rather than contradicting the sentence above it. A document that cannot be
+admitted and an answer a schema rejected are refusals of the thing itself: they
+stay until the thing changes, and the schema's complaint stays under the field it
+is about rather than in the row that says what the execution is doing.
+
+**A failed entry says what it failed with.** The reason the Journal recorded is
+drawn beside the compact outcome, on its own row, flattened to one line and cut to
+the region it is drawn in — the whole of it, introduction included. A reason is
+whatever the thing that failed said, and what failed may be a compiler; the
+unbounded text stays in the file, which is where something unbounded belongs. An
+entry that did not fail is given no failure text.
+
+**A waiting permission is announced, not taken.** Permission belongs to Sessions.
+A request arriving while another surface is being read says that it is waiting and
+where it is answered; it moves no route, opens no drawer, takes no focus, and
+changes neither the selected entry, the conversation filter, the draft nor the
+history position. The control that answers it is the one Sessions already had.
+
+**A frozen position says what it cannot do.** It begins by naming itself, states
+that submitting is unavailable there, and offers the way back to the head as a
+control on the screen. The live head's status does not reach it — not what is
+running, not what is waiting, not what could be paused — because a prefix is a
+reading of the file and the head is not part of it. The draft belongs to no
+position and is unchanged.
+
+None of this is retained. The status, the guidance and the emphasis are computed
+on the way to a frame from the resolved view; they are in no location member and
+no record, and replay neither produces nor consumes them. A cold reopen shows the
+same state because the file and the location say the same things, not because
+anything stored what a previous process was displaying.
 
 ## Sequential entries, and nothing else
 
@@ -367,8 +494,10 @@ a drawer contains it while it is open, and the control that has it is marked.
 
 Normalized input is decided once, at the host, which names an event shape and a
 position and never an action. Text is its own event and goes to whichever field
-has focus; a Control or Alt chord is dropped whole rather than typed as the letter
-it was pressed with. A pointer is resolved against the exact frame that produced
+has focus, and to nothing at all when a control has it rather than a field — so a
+keystroke never edits a field nobody is looking at, and the row above the surface
+says how to get back to the draft while that is the case. A Control or Alt chord
+is dropped whole rather than typed as the letter it was pressed with. A pointer is resolved against the exact frame that produced
 its coordinates, so a stale frame, a node that has gone and a target behind a
 drawer all reach nothing — and activating a control with a pointer produces the
 same action as pressing Enter on it.

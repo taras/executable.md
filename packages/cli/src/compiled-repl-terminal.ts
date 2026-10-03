@@ -23,7 +23,7 @@
 
 import type { Operation } from "effection";
 import { denoTerminalSurface } from "./deno-terminal-surface.ts";
-import { installReplTerminal } from "./repl/terminal-host.ts";
+import { installReplTerminal, writeAllTo } from "./repl/terminal-host.ts";
 import type { ReplTerminalSize } from "./repl/terminal.ts";
 
 /** Install the compiled binary's terminal for the calling scope. */
@@ -37,8 +37,8 @@ export function* useCompiledReplTerminal(): Operation<void> {
     size(): ReplTerminalSize {
       return host.consoleSize();
     },
-    write(bytes: Uint8Array): Promise<void> {
-      return writeAll(host, bytes);
+    write(bytes: Uint8Array): Operation<void> {
+      return writeAllTo((chunk) => host.write(chunk), bytes);
     },
     writeNow(bytes: Uint8Array): void {
       let written = 0;
@@ -56,33 +56,7 @@ export function* useCompiledReplTerminal(): Operation<void> {
     setRaw(raw: boolean): void {
       host.setRaw(raw);
     },
-    bytes: () => host.bytes(),
+    input: () => host.input(),
     onResize: (listener: () => void) => host.onResize(listener),
   });
-}
-
-/**
- * Write every byte, however few one call takes.
- *
- * A partial write nobody continued leaves a frame half drawn, which on a
- * terminal means escape sequences cut in the middle.
- */
-function writeAll(
-  host: { write(bytes: Uint8Array): Promise<number> },
-  bytes: Uint8Array,
-): Promise<void> {
-  let written = 0;
-  const step = (): Promise<void> => {
-    if (written >= bytes.length) {
-      return Promise.resolve();
-    }
-    return host.write(bytes.subarray(written)).then((count) => {
-      if (count <= 0) {
-        return Promise.reject(new Error("the terminal accepted none of the bytes it was given"));
-      }
-      written += count;
-      return step();
-    });
-  };
-  return step();
 }

@@ -16,7 +16,9 @@
 import { beforeAll, describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import {
+  ensure,
   race,
+  resource,
   scoped,
   sleep,
   spawn,
@@ -24,7 +26,7 @@ import {
   useScope,
   withResolvers,
 } from "effection";
-import type { Operation, Result, Stream } from "effection";
+import type { Operation, Result, Stream, Subscription } from "effection";
 import { DurableContext, InMemoryStream } from "@executablemd/durable-streams";
 import {
   Agent,
@@ -50,6 +52,9 @@ import { openReplSession, submitReplEntry } from "../src/repl/session.ts";
 import type { ReplSession } from "../src/repl/session.ts";
 import type { ReplExecution } from "../src/repl/journal.ts";
 import { projectRepl } from "../src/repl/model.ts";
+import { readRecords } from "../src/repl/journal.ts";
+import { readdir } from "@effectionx/fs";
+import { useTempDirectory } from "@executablemd/test-support/temp";
 import type { ReplModel } from "../src/repl/model.ts";
 import {
   describeApplication,
@@ -70,7 +75,8 @@ import type {
 } from "../src/repl/application.ts";
 import { layout, NARROW, surfaceWidth } from "../src/repl/layout.ts";
 import type { ReplPlacedCell, ReplSemanticFrame } from "../src/repl/layout.ts";
-import { decodeLocation, encodeLocation } from "../src/repl/route.ts";
+import { decodeLocation, encodeLocation, NO_LIVE, resolveLocation } from "../src/repl/route.ts";
+import type { ReplRoute } from "../src/repl/route.ts";
 import { installReplHost } from "../src/repl-assembly.ts";
 import { installReplTerminal } from "../src/repl/terminal-host.ts";
 import type { ReplTerminalCapabilities } from "../src/repl/terminal-host.ts";
@@ -79,7 +85,7 @@ import { ReplClock } from "../src/repl/frame.ts";
 import { runReplProgram } from "../src/repl/program.ts";
 import type { ReplExecutionProfile } from "../src/repl-profile.ts";
 import type { ReplOutcome } from "../src/repl/program.ts";
-import { appendFile, mkdtemp, open } from "node:fs/promises";
+import { appendFile, open } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomBytes } from "node:crypto";
@@ -450,6 +456,7 @@ function liveReading(session: ReplSession): ReplLive {
     question: session.overlay.question,
     expansion: session.expansion.state,
     pausable: session.controller !== undefined,
+    running: session.live,
     agent: session.agent,
   };
 }
@@ -1659,12 +1666,18 @@ describe("U3 — what each accepted frame mounts, and nothing else", () => {
       yield* tree.dispatch({ kind: "key", key: "Tab" });
     }
     for (const key of seen) {
-      expect(key === "drawer:open" || key.startsWith("drawer:") || key === "footer:history").toBe(
-        true,
-      );
+      expect(
+        key === "drawer:open" ||
+          key.startsWith("drawer:") ||
+          key === "footer:history" ||
+          key === "footer:exit",
+      ).toBe(true);
     }
     // The one History node, reachable from inside rather than duplicated beside.
     expect([...seen]).toContain("footer:history");
+    // And the way out, on the same terms: a modal contains focus, so leaving the
+    // command has to be reachable from inside it or not at all.
+    expect([...seen]).toContain("footer:exit");
     expect(
       tree
         .mounted()
@@ -2644,6 +2657,35 @@ function* showing(terminal: Terminal, expected: string): Operation<void> {
   }
 }
 
+/**
+ * Wait until the screen satisfies this, or say what it showed instead.
+ *
+ * Bounded by the same real-time deadline every other wait here uses, and it
+ * reports the rendered footer on timeout: a wait that only says it timed out
+ * leaves whoever reads it guessing which half of the claim failed.
+ */
+function* untilScreen(
+  terminal: Terminal,
+  what: string,
+  ready: (terminal: Terminal) => boolean,
+): Operation<void> {
+  const deadline = Date.now() + DEADLOCK_MS;
+  while (!ready(terminal)) {
+    if (Date.now() > deadline) {
+      throw new Error(
+        `the screen never reached ${what}. footer=` +
+          JSON.stringify(
+            screenOf(terminal)
+              .slice(-9)
+              .map((line) => line.trim()),
+          ),
+      );
+    }
+    yield* sleep(5);
+    yield* settled(10);
+  }
+}
+
 /** Wait until the provider has been told one decision, or say it never was. */
 function* answered(stub: Stub, toolCallId: string): Operation<void> {
   const deadline = Date.now() + DEADLOCK_MS;
@@ -2743,7 +2785,7 @@ function recordingTerminal(
 } {
   const queue: Uint8Array[] = [];
   const watchers = new Set<() => void>();
-  let waiting: ((result: IteratorResult<Uint8Array, undefined>) => void) | undefined;
+  let waiting: ((result: IteratorResult<Uint8Array, void>) => void) | undefined;
   let ended = false;
 
   let holding = false;
@@ -2789,15 +2831,17 @@ function recordingTerminal(
   const host: ReplTerminalCapabilities = {
     interactive: () => interactive,
     size: () => terminal.size,
-    write(bytes: Uint8Array): Promise<void> {
+    *write(bytes: Uint8Array): Operation<void> {
       terminal.presented.push(new Uint8Array(bytes));
       if (!holding) {
-        return Promise.resolve();
+        // A write that completed, which still costs the caller a turn.
+        yield* sleep(0);
+        return;
       }
       holding = false;
-      return new Promise<void>((resolve) => {
-        terminal.holdPresent = { release: resolve };
-      });
+      const held = withResolvers<void>();
+      terminal.holdPresent = { release: held.resolve };
+      yield* held.operation;
     },
     writeNow(): void {
       terminal.resets += 1;
@@ -2805,33 +2849,43 @@ function recordingTerminal(
     setRaw(raw: boolean): void {
       terminal.raw.push(raw);
     },
-    bytes(): AsyncIterable<Uint8Array> {
-      return {
-        [Symbol.asyncIterator](): AsyncIterator<Uint8Array, undefined> {
-          terminal.readers += 1;
-          return {
-            next(): Promise<IteratorResult<Uint8Array, undefined>> {
-              const head = queue.shift();
-              if (head !== undefined) {
-                return Promise.resolve({ done: false, value: head });
-              }
-              if (ended) {
-                return Promise.resolve({ done: true, value: undefined });
-              }
-              return new Promise((resolve) => {
-                waiting = resolve;
-              });
-            },
-            return(): Promise<IteratorResult<Uint8Array, undefined>> {
-              terminal.readers -= 1;
-              const resolve = waiting;
-              waiting = undefined;
-              resolve?.({ done: true, value: undefined });
-              return Promise.resolve({ done: true, value: undefined });
-            },
-          };
-        },
-      };
+    input(): Stream<Uint8Array, void> {
+      return resource<Subscription<Uint8Array, void>>(function* (provide) {
+        let open = false;
+        // Registered before the reader is taken, so a scope cancelled between
+        // the two leaves nothing holding this terminal's input.
+        yield* ensure(() => {
+          if (!open) {
+            return;
+          }
+          open = false;
+          terminal.readers -= 1;
+          // Actively cancelled: a cleanup that waited for the outstanding read
+          // to end on its own would need another keystroke to get one.
+          const resolve = waiting;
+          waiting = undefined;
+          resolve?.({ done: true, value: undefined });
+        });
+        terminal.readers += 1;
+        open = true;
+        yield* provide({
+          *next(): Operation<IteratorResult<Uint8Array, void>> {
+            // Always one suspension per chunk, buffered or not: the reader turns
+            // one chunk into many decoded events, and draining a buffer without
+            // yielding hands them over faster than the scanner takes them.
+            const pending = withResolvers<IteratorResult<Uint8Array, void>>();
+            const head = queue.shift();
+            if (head !== undefined) {
+              pending.resolve({ done: false, value: head });
+            } else if (ended) {
+              pending.resolve({ done: true, value: undefined });
+            } else {
+              waiting = pending.resolve;
+            }
+            return yield* pending.operation;
+          },
+        });
+      });
     },
     onResize(listener: () => void): () => void {
       watchers.add(listener);
@@ -2848,7 +2902,10 @@ function recordingTerminal(
 
 /** A REPL host over a temporary directory nothing else uses. */
 function* useTemporaryHost(): Operation<string> {
-  const root = yield* untilResolved(mkdtemp(join(tmpdir(), "xmd-repl-agents-")));
+  // Created and removed by the scope that uses it, like the terminal and the
+  // session beside it. A row that leaves a data root behind has not finished
+  // owning what it made, however green it is.
+  const root = yield* useTempDirectory("xmd-repl-agents-");
   yield* installReplHost({
     dataRoot: () => root,
     identify: () => randomBytes(8).toString("hex"),
@@ -3171,6 +3228,55 @@ describe("EU1 — selecting an entry moves the transcript locus and nothing else
     return { session, stub, holder };
   }
 
+  /** One location as a route, failing the test rather than the assertion. */
+  function decodeRoute(location: string): ReplRoute {
+    const decoded = decodeLocation(location);
+    if (!decoded.ok) {
+      throw decoded.error;
+    }
+    return decoded.value;
+  }
+
+  it("UI4: a live question belongs to the entry that is still running", function* () {
+    const { session, stub } = yield* twoRecordedEntries();
+    stub.record("root");
+    yield* until(session, "the second entry's turn being recorded", () => recorded(session) === 2);
+    yield* session.join();
+
+    // The head, where the second entry is the one that could still be asking.
+    const model = session.model;
+    expect(model.entries.map((entry) => entry.key)).toEqual(["entry-1", "entry-2"]);
+    const live = { ...NO_LIVE, elicit: true };
+
+    // Entries are serial, so only the last one a prefix admitted can still be
+    // asking. A route naming an earlier one beside this drawer would draw a live
+    // question over a settled transcript and attribute it to that entry.
+    const wrong = resolveLocation(
+      model,
+      {
+        ...decodeRoute(`xmd://repl/agent-interface/repl/entry-1`),
+        drawers: [{ kind: "live-elicit" }],
+      },
+      live,
+    );
+    expect(wrong.ok).toBe(false);
+    if (wrong.ok) {
+      throw new Error("a settled entry holds no live question");
+    }
+    expect(wrong.error.message).toContain("has settled");
+
+    // And the entry that is running does hold it.
+    const right = resolveLocation(
+      model,
+      {
+        ...decodeRoute(`xmd://repl/agent-interface/repl/entry-2`),
+        drawers: [{ kind: "live-elicit" }],
+      },
+      live,
+    );
+    expect(right.ok).toBe(true);
+  });
+
   it("EU1: selecting an entry changes the locus, and leaves Sessions global", function* () {
     const { session, stub } = yield* twoRecordedEntries();
     stub.record("root");
@@ -3430,4 +3536,281 @@ describe("EU1 — selecting an entry moves the transcript locus and nothing else
     yield* applied(tree, after);
     expect(["entry-1", "entry-2"].map((key) => nodeOf(tree, `entry:${key}`))).toEqual(nodes);
   });
+});
+
+/**
+ * A permission arriving on Entries says so and takes nothing (#870 UI14).
+ *
+ * Permission stays Sessions-owned. Arrival is a fact on the turn that is waiting,
+ * and the screen's whole job here is to say that the fact exists and where it is
+ * answered — not to go there. A screen that routed, opened the drawer or moved
+ * focus would take a person off the entry they were reading to answer something
+ * they had not asked to see.
+ */
+describe("U2 — a pending permission announces itself without taking the screen", () => {
+  beforeAll(() => useTempFileCompiler());
+
+  it("UI14: the frame says a permission waits in Sessions, and changes no route or focus", function* () {
+    const { session } = yield* asking({
+      review: { streaming: true, permission: { toolCallId: "call-1", kind: "edit" } },
+    });
+
+    // Reading an entry, with a draft, before anything is pending.
+    const before = Object.freeze({
+      ...initialState("agents"),
+      draft: "a draft nobody may take",
+      route: Object.freeze({ ...initialState("agents").route, draft: "a draft nobody may take" }),
+    });
+    const quiet = reading(before, session);
+    const surface = quiet.state.route.surface;
+
+    yield* until(session, "a request waiting", () => session.agent.requests.length === 1);
+
+    // The same state, read again now that a request is pending. Nothing about
+    // where the person is has changed.
+    const after = reading(before, session);
+    expect(after.state.route.surface).toBe(surface);
+    expect(after.state.route.drawers).toEqual([]);
+    expect(after.state.route.session).toBe(before.route.session);
+    expect(after.state.route.at).toBe(before.route.at);
+    expect(after.state.draft).toBe("a draft nobody may take");
+    expect(after.state.permission).toBe(before.permission);
+    // The location is the same string it was: a pending request is process-local
+    // and is carried in no canonical member.
+    expect(after.location).toBe(quiet.location);
+
+    // And the frame says it, naming where it is answered rather than going there.
+    const rows = rowsOf(describeApplication(after));
+    const guidance = rows.find((one) => one.key === "guidance")?.label ?? "";
+    expect(guidance).toContain("waiting for permission");
+    expect(guidance).toContain("open Sessions");
+    // Said, not done: the permission drawer is not mounted on this surface.
+    expect(rows.some((one) => one.key.startsWith("drawer:permission:"))).toBe(false);
+
+    // The control that answers it is the one Sessions already had. Crossing to it
+    // is a thing the person does, and then the request is there to be settled.
+    const moved = onSessions(session, before);
+    const sessions = rowsOf(describeApplication(reading(moved, session)));
+    expect(sessions.some((one) => one.key.startsWith("sessions:request:"))).toBe(true);
+    // And the draft crossed with them.
+    expect(moved.draft).toBe("a draft nobody may take");
+  });
+});
+
+/**
+ * Put focus on the entry draft, the way the guidance row says to (#870 C3).
+ *
+ * There is no label to aim at: what the draft draws is its own prompt, and a
+ * focused field renders its marker immediately before it. The draft's prompt is
+ * the only one on this screen that is itself a marker.
+ */
+function* focusTheDraft(terminal: Terminal, limit = 240): Operation<void> {
+  for (let press = 0; press <= limit; press += 1) {
+    if (screenOf(terminal).some((line) => line.includes(">> "))) {
+      return;
+    }
+    terminal.feed("\t");
+    yield* settled(12);
+  }
+  throw new Error(
+    `focus never reached the entry draft in ${limit} presses. screen=` +
+      JSON.stringify(
+        screenOf(terminal)
+          .slice(-9)
+          .map((line) => line.trim()),
+      ),
+  );
+}
+
+/**
+ * The exact source of every entry this execution admitted (#870 C3).
+ *
+ * Read from the file rather than from the screen, because what a catalog row
+ * proves is that an entry exists — not which bytes became it. The draft
+ * clearing and `2.` appearing are both true of an entry admitted from the wrong
+ * source, so neither is the claim.
+ *
+ * Through the product's own reader, so the records are *parsed* rather than
+ * trusted: a journal is whatever is on disk, and annotating `JSON.parse` would
+ * give those bytes a type without ever checking they have it.
+ */
+function* admittedSources(hostRoot: string): Operation<readonly string[]> {
+  const directory = join(hostRoot, "xmd", "repl");
+  const files = yield* readdir(directory);
+  // One execution, so one file. More than one would mean this row read a
+  // history it did not write, and picking the first would hide that.
+  expect(files).toHaveLength(1);
+  const events = yield* readRecords(join(directory, files[0] ?? ""));
+  const projected = projectRepl(events);
+  if (!projected.ok) {
+    throw projected.error;
+  }
+  return projected.value.entries.map((entry) => entry.source);
+}
+
+/**
+ * Exactly what the draft row is holding (#870 C3).
+ *
+ * Read off the bottom-most row that carries the draft's own prompt, because the
+ * draft owns the last footer row at every size and shares it with nothing. Exact
+ * rather than a containment check: the claim is that what somebody typed survived
+ * byte for byte, and `contains` would pass on a draft that had grown a character.
+ */
+function draftOn(terminal: Terminal): string {
+  const rows = screenOf(terminal);
+  for (let row = rows.length - 1; row >= 0; row -= 1) {
+    const line = rows[row] ?? "";
+    const at = line.lastIndexOf("> ");
+    if (at !== -1) {
+      return line.slice(at + 2).trimEnd();
+    }
+  }
+  return "";
+}
+
+/**
+ * A draft survives a permission and is still somebody's to finish (#870 C3).
+ *
+ * Preservation on arrival is proved elsewhere, and so is the settlement itself.
+ * What neither says is whether what a person had typed is still *theirs*
+ * afterwards — a draft that survived as an unreachable string on the screen
+ * would satisfy both of those rows and none of the promise. So this one keeps
+ * going: it answers the request, finds the draft again through the ordinary ring,
+ * types more into it, and submits it as the next entry.
+ *
+ * At both sizes, because the narrow frame is the one where the draft shares its
+ * region with every control on the screen.
+ */
+describe("U2 — a draft outlives a permission and is still editable", () => {
+  beforeAll(() => useTempFileCompiler());
+
+  for (const size of [{ columns: 160, rows: 36 }, NARROW]) {
+    it(`C3: at ${size.columns}x${size.rows} the draft survives settling, edits, and becomes Entry 2`, function* () {
+      const stub = createStub({
+        review: {
+          streaming: true,
+          permission: { toolCallId: "call-1", title: "Write", kind: "edit" },
+        },
+        build: { streaming: true },
+        check: { queued: true },
+      });
+      const { terminal, install } = recordingTerminal(size);
+
+      yield* scoped(function* (): Operation<void> {
+        yield* install();
+        yield* immediateClock();
+        yield* useStub(stub);
+        const hostRoot = yield* useTemporaryHost();
+
+        const running = yield* spawn(function* (): Operation<void> {
+          const ran = yield* runReplProgram({ profile: PROFILE });
+          if (!ran.ok) {
+            throw ran.error;
+          }
+        });
+        yield* untilDrawn(terminal);
+
+        // One entry, which is what will ask for the permission.
+        terminal.bytes(BYTES.encode(THREE_SPAWNS));
+        yield* settled(20);
+        terminal.feed("\r");
+        yield* settled(40);
+
+        // Given the turns to actually run the document's three spawns before the
+        // screen is read: the first Prompt has to reach the provider and come
+        // back, and polling from the turn after submission starves it.
+        yield* settled(60);
+        // That a request is waiting is read from the one row that says what the
+        // execution is doing, because that row is on the screen at both sizes —
+        // the chronology the request lives on is not: a narrow frame mounts one
+        // routed outlet, and this one is routed to Entries.
+        // Read from the one row that says what the execution is doing, because
+        // that row is on the screen at both sizes — the chronology the request
+        // lives on is not: a narrow frame mounts one routed outlet and this route
+        // selects Entries. Matched on the instruction rather than on the state
+        // phrase, because the narrow state is the compact `Entry 1 permission`
+        // and the wide one is `Entry 1 waiting for permission`.
+        yield* untilScreen(terminal, "the request being announced", (one) =>
+          shows(one, "open Sessions"),
+        );
+        // Arrival opened nothing, which is the row before this one's claim. Read
+        // off the screen rather than the location: at 72 columns the location is
+        // drawn over several rows and says how much of itself it is not showing,
+        // so there is no single line to parse it out of.
+        expect(shows(terminal, "[Allow once]")).toBe(false);
+
+        // 1. The next entry, typed while the request is waiting and before the
+        // drawer is opened over it. Focus returns to the draft on its own once
+        // the first entry is admitted.
+        const TYPED = "C3-KEPT";
+        yield* focusTheDraft(terminal);
+        terminal.bytes(BYTES.encode(TYPED));
+        yield* settled(30);
+        expect(draftOn(terminal)).toBe(TYPED);
+
+        // 2. Answered once, through the ordinary controls and the one authority.
+        yield* pressUntil(terminal, "Sessions");
+        terminal.feed("\r");
+        yield* settled(40);
+        yield* pressUntil(terminal, "asks: Write");
+        terminal.feed("\r");
+        yield* settled(40);
+        yield* untilScreen(terminal, "the permission drawer", (one) => shows(one, "[Allow once]"));
+        yield* pressUntil(terminal, "[Allow once]");
+        terminal.feed("\r");
+        yield* answered(stub, "call-1");
+        expect(stub.answers.get("call-1")).toBe(1);
+        yield* settled(40);
+
+        // 3. Byte for byte what was typed, and on the screen.
+        expect(draftOn(terminal)).toBe(TYPED);
+        expect(shows(terminal, TYPED)).toBe(true);
+
+        // 4. Found again the way the row says to find it, and still editable: a
+        // draft nobody can get back to is a draft that was not really kept.
+        yield* focusTheDraft(terminal);
+        const EDITED = `${TYPED}-EDITED`;
+        terminal.bytes(BYTES.encode("-EDITED"));
+        yield* settled(30);
+        expect(draftOn(terminal)).toBe(EDITED);
+
+        // 5. And it is the thing that becomes the next entry, once the one that
+        // asked for the permission has finished and been joined.
+        // Back to Entries to read its catalog, which a narrow frame only mounts
+        // when the route selects it.
+        yield* pressUntil(terminal, "Entries");
+        terminal.feed("\r");
+        yield* settled(40);
+        // Not `[ok]`, which is the retained close: a close is recorded while the
+        // task that wrote it is still coming down, and a submission taken in that
+        // window has nowhere to go. The row that says the next entry may start is
+        // the one that means the teardown finished too (#870 UI11).
+        yield* untilScreen(terminal, "the next entry becoming startable", (one) =>
+          shows(one, "Ready for Entry 2"),
+        );
+        expect(shows(terminal, "1. [ok] entry-1")).toBe(true);
+        yield* focusTheDraft(terminal);
+        terminal.feed("\r");
+        yield* untilScreen(terminal, "the second entry", (one) => shows(one, "2. "));
+        // Submitted means consumed: the draft is the *next* entry's, and there is
+        // no next one typed yet.
+        yield* untilScreen(terminal, "the draft being spent", (one) => draftOn(one) === "");
+
+        // And the file says which bytes became that entry. An entry appearing and
+        // a draft clearing are both true of one admitted from the wrong source,
+        // so this is the assertion that actually closes the journey.
+        const sources = yield* admittedSources(hostRoot);
+        expect(sources).toHaveLength(2);
+        expect(sources[1]).toBe(EDITED);
+        if (size.columns > NARROW.columns) {
+          // Where there is a transcript column, the exact source is readable as
+          // what the entry rendered.
+          yield* untilScreen(terminal, "the edited source having run", (one) => shows(one, EDITED));
+        }
+
+        terminal.end();
+        yield* running;
+      });
+    });
+  }
 });

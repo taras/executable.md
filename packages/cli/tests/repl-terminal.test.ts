@@ -15,7 +15,19 @@
 
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { type Operation, scoped, sleep, spawn, suspend, withResolvers } from "effection";
+import {
+  ensure,
+  type Operation,
+  resource,
+  scoped,
+  sleep,
+  spawn,
+  type Stream,
+  type Subscription,
+  suspend,
+  until,
+  withResolvers,
+} from "effection";
 
 import { HISTORY_ROWS, layout, NARROW, profileFor } from "../src/repl/layout.ts";
 import type { ReplBounds, ReplRegion, ReplSemanticFrame, ReplSurface } from "../src/repl/layout.ts";
@@ -25,8 +37,9 @@ import { nearestCommonAncestor, ReplClock, useReplFrames } from "../src/repl/fra
 import type { ReplFrameSubscription } from "../src/repl/frame.ts";
 import { replModes, useReplScreen } from "../src/repl/screen.ts";
 import type { ReplScreenEvent } from "../src/repl/screen.ts";
-import { installReplTerminal } from "../src/repl/terminal-host.ts";
-import type { ReplTerminalCapabilities } from "../src/repl/terminal-host.ts";
+import { installReplTerminal, nodeInputStream } from "../src/repl/terminal-host.ts";
+import { readerStream } from "../src/deno-terminal-surface.ts";
+import type { NodeShapedInput, ReplTerminalCapabilities } from "../src/repl/terminal-host.ts";
 import type { ReplTerminalSize } from "../src/repl/terminal.ts";
 import { useReplTree } from "../src/repl/reconcile.ts";
 import type { ReplDispatched, ReplTree } from "../src/repl/reconcile.ts";
@@ -364,6 +377,110 @@ describe("REPL terminal: responsive semantic frames", () => {
         expect(outcome.action).toEqual({ kind: "submit" });
       }
     }
+  });
+
+  it("UI5: the History band is placed in the footer, not at the frame's origin", function* () {
+    const { surface } = yield* mounted(FILLED);
+
+    for (const size of [{ columns: 160, rows: 36 }, NARROW]) {
+      const frame = layout(size, surface);
+      const footer = bounds(frame, "footer");
+      expect(footer).toBeDefined();
+      if (footer === undefined) {
+        throw new Error("every drawable frame has a footer");
+      }
+
+      // Five rows, in the footer, between the one action row above them and the
+      // draft below them. Stated as geometry rather than as a count: a band with
+      // five rows and nowhere to put them is what drew over the sidebar.
+      expect(frame.historyRows).toHaveLength(HISTORY_ROWS);
+      expect(frame.historyBounds).toEqual({
+        x: footer.x,
+        y: footer.y + 1,
+        width: footer.width,
+        height: HISTORY_ROWS,
+      });
+      // Inside the footer, and never at the origin, which is the sidebar's.
+      expect(frame.historyBounds?.y).toBeGreaterThan(footer.y);
+      expect((frame.historyBounds?.y ?? 0) + HISTORY_ROWS).toBeLessThan(footer.y + footer.height);
+
+      // Each row is the full width, so a band that gets shorter cannot leave the
+      // tail of the position that used to be there.
+      for (const row of frame.historyRows) {
+        expect(row).toHaveLength(size.columns);
+      }
+    }
+  });
+
+  it("UI5: a refusal has no band to place and no cell to aim at", function* () {
+    const { surface } = yield* mounted(FILLED);
+    const frame = layout({ columns: 40, rows: 10 }, surface);
+
+    expect(frame.profile).toBe("too-small");
+    // No rectangle at all rather than an empty one: a renderer given a zero
+    // rectangle draws five rows into it.
+    expect(frame.historyBounds).toBeUndefined();
+    expect(frame.cells).toEqual([]);
+    // Both ways out of a window that cannot be drawn in.
+    expect(frame.refusal).toContain("larger");
+    expect(frame.refusal).toContain("Escape");
+  });
+
+  it("UI5: every visible action has its own geometry in the frame's target map", function* () {
+    const { tree, surface } = yield* mounted(FILLED);
+    const frame = layout({ columns: 160, rows: 36 }, surface);
+    const footer = bounds(frame, "footer");
+    if (footer === undefined) {
+      throw new Error("every drawable frame has a footer");
+    }
+
+    yield* scoped(function* (): Operation<void> {
+      const renderer = yield* useReplRenderer({ columns: 160, rows: 36 });
+      const rendered = yield* drawn(renderer, input(frame, tree));
+
+      // The action row's controls sit side by side on one row, each as wide as
+      // its own label — so a pointer on one reaches that one and not its
+      // neighbour. Stacked rows would have cost the band and the draft theirs.
+      const reachable = frame.cells.filter((cell) => cell.region === "footer" && cell.targetable);
+      // The draft owns the last footer row and shares it with nothing, so it is
+      // not one of the action row's cells even though a pointer reaches it too.
+      const draft = reachable.filter((cell) => cell.bounds.y === footer.y + footer.height - 1);
+      expect(draft).toHaveLength(1);
+      expect(rendered.map.boundsOf(draft[0].id)).toEqual(draft[0].bounds);
+
+      const placed = reachable.filter((cell) => cell.bounds.y === footer.y);
+      expect(placed.length).toBeGreaterThan(1);
+      expect(placed.length + draft.length).toBe(reachable.length);
+      for (const cell of placed) {
+        expect(cell.bounds.y).toBe(footer.y);
+        expect(cell.bounds.height).toBe(1);
+        // What the engine measured, not what layout asked for: the map a pointer
+        // is answered from is built from the measurement.
+        expect(rendered.map.boundsOf(cell.id)).toEqual(cell.bounds);
+        // And every column of it answers with this node and no other.
+        for (let x = cell.bounds.x; x < cell.bounds.x + cell.bounds.width; x += 1) {
+          expect([x, rendered.map.at(x, cell.bounds.y)]).toEqual([x, cell.node]);
+        }
+      }
+
+      // No two of them overlap, which is what makes the column a pointer lands on
+      // an unambiguous answer.
+      const sorted = [...placed].sort((one, other) => one.bounds.x - other.bounds.x);
+      for (let at = 1; at < sorted.length; at += 1) {
+        const left = sorted[at - 1].bounds;
+        expect(sorted[at].bounds.x).toBeGreaterThanOrEqual(left.x + left.width);
+      }
+
+      // The band is not a control: it is read, and the positions it labels are
+      // selected in the History drawer. So no column of it answers a pointer.
+      const band = frame.historyBounds;
+      if (band === undefined) {
+        throw new Error("a drawable frame places its band");
+      }
+      for (let y = band.y; y < band.y + band.height; y += 1) {
+        expect([y, rendered.map.at(0, y)]).toEqual([y, undefined]);
+      }
+    });
   });
 
   it("F1: a pointer against a control the refusal hides reaches nothing", function* () {
@@ -797,6 +914,16 @@ interface TerminalLog {
   opened: number;
   /** Whether a read is outstanding right now. */
   reading: boolean;
+  /** How many times the input stream's cleanup has run. */
+  cleanups: number;
+  /** When set, the input stream's cleanup suspends on this until it is released. */
+  holdCleanup: Operation<void> | undefined;
+  /** Make the next cleanup suspend, so a test can prove the owner joins it. */
+  holdNextCleanup(): void;
+  /** Release a held cleanup. */
+  releaseCleanup(): void;
+  /** Fail the outstanding read, the way a terminal that broke mid-read does. */
+  fail(cause: Error): void;
   size: ReplTerminalSize;
   /** When set, a suspending write never completes. */
   hold: boolean;
@@ -812,8 +939,15 @@ function recordingTerminal(size: ReplTerminalSize = { columns: 160, rows: 36 }):
 } {
   const queue: Uint8Array[] = [];
   const watchers = new Set<() => void>();
-  let waiting: ((result: IteratorResult<Uint8Array, undefined>) => void) | undefined;
+  /** The outstanding read, which only the fake or its cleanup may settle. */
+  let waiting:
+    | {
+        resolve(result: IteratorResult<Uint8Array, void>): void;
+        reject(cause: Error): void;
+      }
+    | undefined;
   let ended = false;
+  let release: (() => void) | undefined;
 
   const log: TerminalLog = {
     raw: [],
@@ -823,25 +957,44 @@ function recordingTerminal(size: ReplTerminalSize = { columns: 160, rows: 36 }):
     readers: 0,
     opened: 0,
     reading: false,
+    cleanups: 0,
+    holdCleanup: undefined,
     size,
     hold: false,
+    holdNextCleanup(): void {
+      const held = withResolvers<void>();
+      release = held.resolve;
+      log.holdCleanup = held.operation;
+    },
+    releaseCleanup(): void {
+      const open = release;
+      release = undefined;
+      log.holdCleanup = undefined;
+      open?.();
+    },
+    fail(cause: Error): void {
+      const pending = waiting;
+      waiting = undefined;
+      log.reading = false;
+      pending?.reject(cause);
+    },
     feed(bytes: Uint8Array): void {
-      const resolve = waiting;
-      if (resolve === undefined) {
+      const pending = waiting;
+      if (pending === undefined) {
         queue.push(bytes);
         return;
       }
       waiting = undefined;
       log.reading = false;
-      resolve({ done: false, value: bytes });
+      pending.resolve({ done: false, value: bytes });
     },
     end(): void {
       ended = true;
-      const resolve = waiting;
-      if (resolve !== undefined) {
+      const pending = waiting;
+      if (pending !== undefined) {
         waiting = undefined;
         log.reading = false;
-        resolve({ done: true, value: undefined });
+        pending.resolve({ done: true, value: undefined });
       }
     },
     resized(next: ReplTerminalSize): void {
@@ -857,14 +1010,15 @@ function recordingTerminal(size: ReplTerminalSize = { columns: 160, rows: 36 }):
     size(): ReplTerminalSize {
       return log.size;
     },
-    write(_bytes: Uint8Array): Promise<void> {
+    *write(_bytes: Uint8Array): Operation<void> {
       if (log.hold) {
         // Never completes: what a terminal that has stopped accepting bytes
         // looks like from here, and where a cancellation can land.
-        return new Promise<void>(() => {});
+        yield* suspend();
       }
       log.writes += 1;
-      return Promise.resolve();
+      // A write that completed, which still costs the caller a turn.
+      yield* sleep(0);
     },
     writeNow(_bytes: Uint8Array): void {
       log.resets += 1;
@@ -872,39 +1026,51 @@ function recordingTerminal(size: ReplTerminalSize = { columns: 160, rows: 36 }):
     setRaw(raw: boolean): void {
       log.raw.push(raw);
     },
-    bytes(): AsyncIterable<Uint8Array> {
-      return {
-        [Symbol.asyncIterator](): AsyncIterator<Uint8Array, undefined> {
-          log.readers += 1;
-          log.opened += 1;
-          return {
-            next(): Promise<IteratorResult<Uint8Array, undefined>> {
-              const head = queue.shift();
-              if (head !== undefined) {
-                return Promise.resolve({ done: false, value: head });
-              }
-              if (ended) {
-                return Promise.resolve({ done: true, value: undefined });
-              }
+    input(): Stream<Uint8Array, void> {
+      return resource<Subscription<Uint8Array, void>>(function* (provide) {
+        let open = false;
+        // Registered before the reader is acquired: a scope cancelled between
+        // the two must leave nothing holding the terminal's input.
+        yield* ensure(function* (): Operation<void> {
+          log.cleanups += 1;
+          if (open) {
+            open = false;
+            log.readers -= 1;
+            // Actively cancelled. A cleanup that waited for this read to end on
+            // its own would need another keystroke to get one — which is the
+            // defect this stream exists to remove.
+            const pending = waiting;
+            waiting = undefined;
+            log.reading = false;
+            pending?.resolve({ done: true, value: undefined });
+          }
+          const held = log.holdCleanup;
+          if (held !== undefined) {
+            yield* held;
+          }
+        });
+        log.readers += 1;
+        log.opened += 1;
+        open = true;
+        yield* provide({
+          *next(): Operation<IteratorResult<Uint8Array, void>> {
+            // Always one suspension per chunk, buffered or not: the reader turns
+            // one chunk into many decoded events, and draining a buffer without
+            // yielding hands them over faster than the scanner takes them.
+            const pending = withResolvers<IteratorResult<Uint8Array, void>>();
+            const head = queue.shift();
+            if (head !== undefined) {
+              pending.resolve({ done: false, value: head });
+            } else if (ended) {
+              pending.resolve({ done: true, value: undefined });
+            } else {
               log.reading = true;
-              return new Promise<IteratorResult<Uint8Array, undefined>>((resolve) => {
-                waiting = resolve;
-              });
-            },
-            return(): Promise<IteratorResult<Uint8Array, undefined>> {
-              log.readers -= 1;
-              log.reading = false;
-              // Closing a source settles the read that was outstanding on it,
-              // the way a real reader does. A fake that abandoned the promise
-              // would leave the runtime holding one forever.
-              const resolve = waiting;
-              waiting = undefined;
-              resolve?.({ done: true, value: undefined });
-              return Promise.resolve({ done: true, value: undefined });
-            },
-          };
-        },
-      };
+              waiting = { resolve: pending.resolve, reject: pending.reject };
+            }
+            return yield* pending.operation;
+          },
+        });
+      });
     },
     onResize(listener: () => void): () => void {
       watchers.add(listener);
@@ -927,9 +1093,384 @@ function givenBack(log: TerminalLog): void {
   expect(log.listeners).toBe(0);
   expect(log.readers).toBe(0);
   expect(log.reading).toBe(false);
+  // One cleanup for each time the source was opened, and no more: a cleanup that
+  // ran twice would release something twice, and one that never ran would have
+  // left a reader on the terminal. A scope cancelled before the stream was ever
+  // subscribed opened nothing and so owes nothing — 0 and 0 is the same claim.
+  expect(log.cleanups).toBe(log.opened);
 }
 
 const BYTES = new TextEncoder();
+
+/** Wait for one screen event of this kind, over a bounded number of turns. */
+function* until_(
+  events: { next(): Operation<IteratorResult<ReplScreenEvent, void>> },
+  kind: ReplScreenEvent["kind"],
+): Operation<void> {
+  for (let turn = 0; turn < 40; turn += 1) {
+    const next = yield* events.next();
+    if (next.done === true) {
+      throw new Error(`the screen ended before it said ${kind}`);
+    }
+    if (next.value.kind === kind) {
+      return;
+    }
+  }
+  throw new Error(`the screen never said ${kind}`);
+}
+
+/**
+ * A readable whose reader fails the way a host's can.
+ *
+ * Structural, so a row can put a rejecting `cancel()` or a throwing
+ * `releaseLock()` behind the production stream — which `Deno.stdin` will never do
+ * on request, and which is exactly the case that decides whether a command
+ * reports an orderly exit over a read it never joined.
+ */
+function failingReadable(options: {
+  readonly cancel?: "reject" | "resolve";
+  readonly release?: "throw" | "return";
+}): {
+  readonly source: object;
+  readonly steps: () => string[];
+} {
+  const steps: string[] = [];
+  const source = {
+    getReader(): object {
+      return {
+        read(): Promise<IteratorResult<Uint8Array>> {
+          steps.push("read");
+          // Never settles on its own: what a terminal with nobody typing at it
+          // looks like, and the only state in which releasing it is interesting.
+          return new Promise<IteratorResult<Uint8Array>>(() => {});
+        },
+        cancel(): Promise<void> {
+          steps.push("cancel");
+          return options.cancel === "reject"
+            ? Promise.reject(new Error("the host would not cancel the read"))
+            : Promise.resolve();
+        },
+        releaseLock(): void {
+          steps.push("releaseLock");
+          if (options.release === "throw") {
+            throw new Error("the host would not release the lock");
+          }
+        },
+      };
+    },
+  };
+  return { source, steps: () => [...steps] };
+}
+
+describe("REPL terminal: releasing this host's standard input", () => {
+  it("UI2: a cancellation that fails is a terminal failure, not a quiet exit", function* () {
+    const readable = failingReadable({ cancel: "reject" });
+    let raised: Error | undefined;
+
+    try {
+      yield* scoped(function* (): Operation<void> {
+        const reading = yield* readerStream(readable.source);
+        yield* spawn(function* (): Operation<void> {
+          // One read outstanding, which nothing will ever satisfy.
+          yield* reading.next();
+        });
+        yield* sleep(0);
+      });
+    } catch (error) {
+      raised = error instanceof Error ? error : new Error(String(error));
+    }
+
+    // The failure is reported rather than swallowed: a command that returned an
+    // orderly outcome here would be claiming it joined a read it did not.
+    expect(raised).toBeDefined();
+    expect(raised?.message).toContain("would not cancel");
+    // And both steps were still attempted: the lock is what the next thing to run
+    // needs released, so it is not skipped because cancelling failed.
+    expect(readable.steps()).toEqual(["read", "cancel", "releaseLock"]);
+  });
+
+  it("UI2: a lock that will not release is a terminal failure too", function* () {
+    const readable = failingReadable({ release: "throw" });
+    let raised: Error | undefined;
+
+    try {
+      yield* scoped(function* (): Operation<void> {
+        const reading = yield* readerStream(readable.source);
+        yield* spawn(function* (): Operation<void> {
+          yield* reading.next();
+        });
+        yield* sleep(0);
+      });
+    } catch (error) {
+      raised = error instanceof Error ? error : new Error(String(error));
+    }
+
+    expect(raised?.message).toContain("would not release");
+    expect(readable.steps()).toEqual(["read", "cancel", "releaseLock"]);
+  });
+
+  it("UI2: a release that fails fabricates no end of input, and restores once", function* () {
+    const readable = failingReadable({ cancel: "reject" });
+    const terminal = recordingTerminal();
+    const clock = controllableClock();
+    const seen: string[] = [];
+    let raised: Error | undefined;
+
+    try {
+      yield* scoped(function* (): Operation<void> {
+        // The production stream, behind the production terminal host and screen,
+        // over a reader that cannot be released.
+        yield* installReplTerminal({
+          interactive: () => true,
+          size: () => terminal.log.size,
+          write: () => sleep(0),
+          writeNow: () => {
+            terminal.log.resets += 1;
+          },
+          setRaw: (raw: boolean) => {
+            terminal.log.raw.push(raw);
+          },
+          input: () => readerStream(readable.source),
+          onResize: () => () => {},
+        });
+        yield* clock.install();
+        const screen = yield* useReplScreen();
+        const events = yield* screen.events();
+        yield* spawn(function* (): Operation<void> {
+          while (true) {
+            const next = yield* events.next();
+            if (next.done === true) {
+              seen.push("closed");
+              return;
+            }
+            seen.push(next.value.kind);
+          }
+        });
+        yield* settled();
+      });
+    } catch (error) {
+      raised = error instanceof Error ? error : new Error(String(error));
+    }
+
+    expect(raised?.message).toContain("would not cancel");
+    // No end of input was invented on the way out. An `eof` here would tell the
+    // command the person had closed their terminal, which nobody did.
+    expect(seen).not.toContain("eof");
+    expect(seen).not.toContain("closed");
+    // And the modes still went back, exactly once, before the failure propagated.
+    expect(terminal.log.resets).toBe(1);
+    expect(terminal.log.raw[terminal.log.raw.length - 1]).toBe(false);
+  });
+
+  it("UI2: releasing is attempted once, however many times teardown runs", function* () {
+    const readable = failingReadable({});
+    yield* scoped(function* (): Operation<void> {
+      const reading = yield* readerStream(readable.source);
+      yield* spawn(function* (): Operation<void> {
+        yield* reading.next();
+      });
+      yield* sleep(0);
+    });
+    // One acquisition, one release of each kind: idempotent by construction,
+    // because the reader is cleared before either step is attempted.
+    expect(readable.steps()).toEqual(["read", "cancel", "releaseLock"]);
+  });
+});
+
+describe("REPL terminal: an owned input stream, and what releasing it costs", () => {
+  it("UI2: cleanup cancels the read it was holding, with no further byte", function* () {
+    const terminal = recordingTerminal();
+    const clock = controllableClock();
+
+    yield* scoped(function* (): Operation<void> {
+      yield* terminal.install();
+      yield* clock.install();
+      yield* useReplScreen();
+      // A read is outstanding and nothing will satisfy it: no byte is fed, and
+      // none is fed for the rest of this row.
+      yield* settled();
+      expect(terminal.log.reading).toBe(true);
+      expect(terminal.log.readers).toBe(1);
+    });
+
+    // The scope that owned the stream has gone, and it did not wait for a byte
+    // to do it. Cleanup cancelled the read instead, which is the whole change.
+    yield* settled();
+    expect(terminal.log.reading).toBe(false);
+    expect(terminal.log.readers).toBe(0);
+    expect(terminal.log.cleanups).toBe(1);
+  });
+
+  it("UI2: the owner does not return until the stream's cleanup has finished", function* () {
+    const terminal = recordingTerminal();
+    const clock = controllableClock();
+    let returned = false;
+
+    const owner = yield* spawn(function* (): Operation<void> {
+      yield* scoped(function* (): Operation<void> {
+        yield* terminal.install();
+        yield* clock.install();
+        yield* useReplScreen();
+        yield* settled();
+        expect(terminal.log.reading).toBe(true);
+        // Held from here on: the cleanup this scope is about to run suspends.
+        terminal.log.holdNextCleanup();
+      });
+      returned = true;
+    });
+
+    // Several turns with the cleanup held. The owner is unwinding and has not
+    // finished: a cleanup that were started and not awaited would let it.
+    yield* settled();
+    yield* settled();
+    expect(terminal.log.cleanups).toBe(1);
+    expect(returned).toBe(false);
+
+    terminal.log.releaseCleanup();
+    yield* owner;
+    expect(returned).toBe(true);
+    expect(terminal.log.readers).toBe(0);
+    expect(terminal.log.reading).toBe(false);
+  });
+
+  it("UI2: end of input closes the stream and leaves nothing holding the terminal", function* () {
+    const terminal = recordingTerminal();
+    const clock = controllableClock();
+
+    yield* scoped(function* (): Operation<void> {
+      yield* terminal.install();
+      yield* clock.install();
+      const screen = yield* useReplScreen();
+      const events = yield* screen.events();
+      // The first frame is the size this screen opened at.
+      expect((yield* events.next()).done).toBe(false);
+      yield* settled();
+      terminal.log.end();
+      // End of input is an ending, not a failure: the screen says so and the
+      // stream closes under it.
+      yield* until_(events, "eof");
+    });
+
+    yield* settled();
+    givenBack(terminal.log);
+  });
+
+  it("UI2: a read that fails is a terminal failure, and still releases everything", function* () {
+    const terminal = recordingTerminal();
+    const clock = controllableClock();
+    let raised: Error | undefined;
+
+    try {
+      yield* scoped(function* (): Operation<void> {
+        yield* terminal.install();
+        yield* clock.install();
+        const screen = yield* useReplScreen();
+        const events = yield* screen.events();
+        expect((yield* events.next()).done).toBe(false);
+        yield* settled();
+        // A live terminal that broke mid-read. Not an ending: a command that
+        // treated this as end of input would report an orderly finish for a
+        // terminal it can no longer read.
+        terminal.log.fail(new Error("the terminal stopped answering"));
+        yield* suspend();
+      });
+    } catch (error) {
+      raised = error instanceof Error ? error : new Error(String(error));
+    }
+
+    expect(raised?.message).toContain("stopped answering");
+    yield* settled();
+    // The same release a success owes, performed before the failure propagated.
+    expect(terminal.log.resets).toBe(1);
+    expect(terminal.log.raw[terminal.log.raw.length - 1]).toBe(false);
+    expect(terminal.log.listeners).toBe(0);
+    expect(terminal.log.readers).toBe(0);
+    expect(terminal.log.cleanups).toBe(1);
+  });
+});
+
+/**
+ * A Node-shaped standard input this row pushes into by hand.
+ *
+ * The real `process.stdin` decides for itself when a paste becomes one chunk or
+ * several, which is exactly what the claim below must not depend on. This one
+ * delivers precisely the chunks it is told to, so "two chunks were already
+ * waiting" is a fact of the row rather than a hope about the host.
+ */
+function pushableInput(): NodeShapedInput & { push(text: string): void } {
+  // oxlint-disable-next-line typescript/no-explicit-any
+  const listeners = new Map<string, Array<(...args: any[]) => void>>();
+  return {
+    // oxlint-disable-next-line typescript/no-explicit-any
+    on(event: string, listener: (...args: any[]) => void): unknown {
+      listeners.set(event, [...(listeners.get(event) ?? []), listener]);
+      return undefined;
+    },
+    // oxlint-disable-next-line typescript/no-explicit-any
+    off(event: string, listener: (...args: any[]) => void): unknown {
+      listeners.set(
+        event,
+        (listeners.get(event) ?? []).filter((one) => one !== listener),
+      );
+      return undefined;
+    },
+    resume(): unknown {
+      return undefined;
+    },
+    pause(): unknown {
+      return undefined;
+    },
+    push(text: string): void {
+      for (const listener of listeners.get("data") ?? []) {
+        listener(BYTES.encode(text));
+      }
+    },
+  };
+}
+
+describe("REPL terminal: one suspension per chunk, buffered or not", () => {
+  it("UI2: a ready continuation runs between two chunks that were already waiting", function* () {
+    const stdin = pushableInput();
+    const order: string[] = [];
+
+    yield* scoped(function* (): Operation<void> {
+      const subscription = yield* nodeInputStream(stdin);
+
+      // Two distinct chunks, both delivered before anything consumes either.
+      // This is the paste case: one chunk is not one keystroke, and the reader
+      // downstream turns each of these into several decoded events.
+      stdin.push("first");
+      stdin.push("second");
+
+      // A continuation that is ready the entire time. It is the measuring
+      // instrument: if handing over an already-buffered chunk completes without
+      // suspending, this never gets a turn between the two deliveries, and the
+      // reader has drained its buffer faster than anyone could take from it.
+      yield* spawn(function* (): Operation<void> {
+        while (true) {
+          order.push("other");
+          yield* sleep(0);
+        }
+      });
+
+      for (const expected of ["first", "second"]) {
+        const next = yield* subscription.next();
+        if (next.done) {
+          throw new Error(`the stream ended before delivering ${expected}`);
+        }
+        order.push(`chunk:${new TextDecoder().decode(next.value)}`);
+      }
+    });
+
+    const first = order.indexOf("chunk:first");
+    const second = order.indexOf("chunk:second");
+    expect(first).toBeGreaterThanOrEqual(0);
+    expect(second).toBeGreaterThan(first);
+    // The whole claim, and the one a settled resolver cannot satisfy: something
+    // else ran in between.
+    expect(order.slice(first + 1, second)).toContain("other");
+  });
+});
 
 describe("REPL terminal: giving the terminal back", () => {
   it("H2: a run that finishes stops the reader, drops every listener and resets once", function* () {

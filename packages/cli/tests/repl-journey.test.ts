@@ -15,7 +15,18 @@
 
 import { beforeAll, describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { type Operation, type Result, scoped, sleep, spawn, withResolvers } from "effection";
+import {
+  ensure,
+  type Operation,
+  resource,
+  type Result,
+  scoped,
+  sleep,
+  spawn,
+  type Stream,
+  type Subscription,
+  withResolvers,
+} from "effection";
 import { appendFile, mkdir, mkdtemp, open, readFile, readdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -30,12 +41,26 @@ import { installReplTerminal } from "../src/repl/terminal-host.ts";
 import type { ReplTerminalCapabilities } from "../src/repl/terminal-host.ts";
 import type { ReplTerminalSize } from "../src/repl/terminal.ts";
 import { ReplClock } from "../src/repl/frame.ts";
-import { initialState, NO_AGENT, reduceRepl } from "../src/repl/application.ts";
+import {
+  describeApplication,
+  initialState,
+  NO_AGENT,
+  reduceRepl,
+  refusedView,
+} from "../src/repl/application.ts";
+import { readDescription } from "../src/repl/description.ts";
 import { runReplProgram } from "../src/repl/program.ts";
 import type { ReplExecutionProfile } from "../src/repl-profile.ts";
 import type { ReplOutcome } from "../src/repl/program.ts";
 import { parseDurableEvent, serializeDurableEvent } from "@executablemd/durable-streams";
-import { drawerWidth, NARROW, surfaceWidth } from "../src/repl/layout.ts";
+import {
+  drawerHeight,
+  drawerWidth,
+  HISTORY_ROWS,
+  NARROW,
+  sessionsHeight,
+  surfaceWidth,
+} from "../src/repl/layout.ts";
 import { projectRepl } from "../src/repl/model.ts";
 import type { ReplModel } from "../src/repl/model.ts";
 import { decodeLocation, encodeLocation } from "../src/repl/route.ts";
@@ -189,7 +214,7 @@ function recordingTerminal(
 } {
   const queue: Uint8Array[] = [];
   const watchers = new Set<() => void>();
-  let waiting: ((result: IteratorResult<Uint8Array, undefined>) => void) | undefined;
+  let waiting: ((result: IteratorResult<Uint8Array, void>) => void) | undefined;
   let ended = false;
 
   let holding = false;
@@ -235,15 +260,17 @@ function recordingTerminal(
   const host: ReplTerminalCapabilities = {
     interactive: () => interactive,
     size: () => terminal.size,
-    write(bytes: Uint8Array): Promise<void> {
+    *write(bytes: Uint8Array): Operation<void> {
       terminal.presented.push(new Uint8Array(bytes));
       if (!holding) {
-        return Promise.resolve();
+        // A write that completed, which still costs the caller a turn.
+        yield* sleep(0);
+        return;
       }
       holding = false;
-      return new Promise<void>((resolve) => {
-        terminal.holdPresent = { release: resolve };
-      });
+      const held = withResolvers<void>();
+      terminal.holdPresent = { release: held.resolve };
+      yield* held.operation;
     },
     writeNow(): void {
       terminal.resets += 1;
@@ -251,33 +278,43 @@ function recordingTerminal(
     setRaw(raw: boolean): void {
       terminal.raw.push(raw);
     },
-    bytes(): AsyncIterable<Uint8Array> {
-      return {
-        [Symbol.asyncIterator](): AsyncIterator<Uint8Array, undefined> {
-          terminal.readers += 1;
-          return {
-            next(): Promise<IteratorResult<Uint8Array, undefined>> {
-              const head = queue.shift();
-              if (head !== undefined) {
-                return Promise.resolve({ done: false, value: head });
-              }
-              if (ended) {
-                return Promise.resolve({ done: true, value: undefined });
-              }
-              return new Promise((resolve) => {
-                waiting = resolve;
-              });
-            },
-            return(): Promise<IteratorResult<Uint8Array, undefined>> {
-              terminal.readers -= 1;
-              const resolve = waiting;
-              waiting = undefined;
-              resolve?.({ done: true, value: undefined });
-              return Promise.resolve({ done: true, value: undefined });
-            },
-          };
-        },
-      };
+    input(): Stream<Uint8Array, void> {
+      return resource<Subscription<Uint8Array, void>>(function* (provide) {
+        let open = false;
+        // Registered before the reader is taken, so a scope cancelled between
+        // the two leaves nothing holding this terminal's input.
+        yield* ensure(() => {
+          if (!open) {
+            return;
+          }
+          open = false;
+          terminal.readers -= 1;
+          // Actively cancelled: a cleanup that waited for the outstanding read
+          // to end on its own would need another keystroke to get one.
+          const resolve = waiting;
+          waiting = undefined;
+          resolve?.({ done: true, value: undefined });
+        });
+        terminal.readers += 1;
+        open = true;
+        yield* provide({
+          *next(): Operation<IteratorResult<Uint8Array, void>> {
+            // Always one suspension per chunk, buffered or not: the reader turns
+            // one chunk into many decoded events, and draining a buffer without
+            // yielding hands them over faster than the scanner takes them.
+            const pending = withResolvers<IteratorResult<Uint8Array, void>>();
+            const head = queue.shift();
+            if (head !== undefined) {
+              pending.resolve({ done: false, value: head });
+            } else if (ended) {
+              pending.resolve({ done: true, value: undefined });
+            } else {
+              waiting = pending.resolve;
+            }
+            return yield* pending.operation;
+          },
+        });
+      });
     },
     onResize(listener: () => void): () => void {
       watchers.add(listener);
@@ -472,12 +509,11 @@ function* focusDraft(terminal: Terminal, limit = 240): Operation<void> {
 function focusedOn(terminal: Terminal, label: string): boolean {
   for (const line of screenOf(terminal)) {
     for (let at = line.indexOf(">"); at !== -1; at = line.indexOf(">", at + 1)) {
-      if (
-        line
-          .slice(at + 1)
-          .trimStart()
-          .startsWith(label)
-      ) {
+      // Past the selection channel as well as the indent: a row can be both
+      // focused and the one being read, and the two markers are independent.
+      const after = line.slice(at + 1).trimStart();
+      const beyond = after.startsWith("* ") ? after.slice(2) : after;
+      if (after.startsWith(label) || beyond.startsWith(label)) {
         return true;
       }
     }
@@ -577,27 +613,86 @@ function* untilDrawn(terminal: Terminal): Operation<void> {
 }
 
 /**
- * Dismiss the question's drawer, which opens itself when the question appears.
+ * Where the waiting-question control is, once this process is asking.
+ *
+ * A question announces itself on one row and opens nothing: the drawer is what
+ * activating that row does. So reaching the question is two acts, and a helper
+ * that waited for a drawer to appear on its own would wait for ever.
+ */
+function askedRow(
+  terminal: Terminal,
+): { readonly column: number; readonly row: number } | undefined {
+  for (const [row, line] of screenOf(terminal).entries()) {
+    // The footer's one action row, found by the control that is on it in every
+    // state. The announcement is one fixed spelling rather than the question's
+    // own words: a control as wide as somebody's message is one the narrowest
+    // frame drops.
+    if (!line.includes("[exit]")) {
+      continue;
+    }
+    const column = line.indexOf("[answer]");
+    if (column !== -1) {
+      return { column, row };
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Open the waiting question's drawer, the way a person does.
+ *
+ * Waits for the announcement, activates it, and waits for the form it opens.
+ * Activation is by pointer because it needs no traversal, and a pointer on a
+ * control asks for exactly what Enter on it asks for.
+ */
+function* openQuestion(terminal: Terminal): Operation<void> {
+  // Bounded by real time, not by a count of turns: reaching the question compiles
+  // an eval block, and a compile is work off this interpreter rather than a turn
+  // on it. Said loudly when it never arrives, because a wait that gave up quietly
+  // would go on to click nothing and blame the drawer.
+  yield* awaiting(
+    terminal,
+    "the waiting question announcing itself",
+    (one) => askedRow(one) !== undefined,
+  );
+  const at = askedRow(terminal);
+  if (at === undefined) {
+    throw new Error("the waiting question's control left the screen before it was activated");
+  }
+  yield* clickAt(terminal, at);
+  yield* awaiting(terminal, "the question's form", (one) => formShowing(one));
+}
+
+/** Whether a question's form is drawn, whichever of these suites' questions it is. */
+/**
+ * The contextual guidance row, as drawn.
+ *
+ * Row 0, which is where a narrow frame puts it: these rows are all at `72x20`,
+ * where the guidance has the row to itself rather than sharing it with a sidebar.
+ */
+function guidanceRow(terminal: Terminal): string {
+  return (screenOf(terminal)[0] ?? "").trimEnd();
+}
+
+function formShowing(terminal: Terminal): boolean {
+  return (
+    shows(terminal, "decision: approve | decline") ||
+    shows(terminal, "decision: go") ||
+    shows(terminal, "[submit]")
+  );
+}
+
+/**
+ * Open the question's drawer and dismiss it again.
  *
  * A modal owns focus while it is up, so anything that means to reach a control
- * beneath it has to close it first — and it may not have opened yet when the
- * submission settles, so this waits for it rather than assuming.
+ * beneath it has to close it first — and dismissing one answers nothing, so the
+ * question is still waiting afterwards and can be opened again.
  */
 function* dismissQuestion(terminal: Terminal): Operation<void> {
-  for (let attempt = 0; attempt < 40; attempt += 1) {
-    // Keyed to the drawer's own form, because while it is up it covers the rows
-    // the location is drawn on — a modal is drawn over what it is in front of.
-    if (shows(terminal, "decision: approve | decline")) {
-      terminal.feed("\x1b");
-      yield* settled(30);
-      return;
-    }
-    // Real time, not only turns: reaching the question compiles an eval block,
-    // and a compile is work off this interpreter rather than a turn on it.
-    yield* sleep(10);
-    yield* settled(20);
-  }
-  throw new Error("the question's drawer never opened");
+  yield* openQuestion(terminal);
+  terminal.feed("\x1b");
+  yield* settled(30);
 }
 
 /**
@@ -665,23 +760,59 @@ function* until_(
 }
 
 /**
- * Every position the open History drawer lists, in the order it lists them.
+ * The rectangle the layout places the drawer in, at one size.
  *
- * Read from the drawer rather than from the compact band: the band shares labels
- * when space is short, and what is being compared is the exact set.
+ * The same arithmetic the placement uses, read back from what layout exports:
+ * the body is everything above the footer, and the drawer is inset an eighth of
+ * it on every side.
+ */
+function drawerBox(size: ReplTerminalSize): {
+  top: number;
+  bottom: number;
+  left: number;
+  right: number;
+} {
+  const top = Math.floor(sessionsHeight(size) / 8);
+  const left = Math.floor(size.columns / 8);
+  return { top, bottom: top + drawerHeight(size), left, right: left + drawerWidth(size) };
+}
+
+/**
+ * Every position the open drawer lists, read out of the drawer's own rectangle.
+ *
+ * In the order the drawer lists them, read from the drawer rather than from the
+ * compact band: the band shares labels when space is short, and what is being
+ * compared is the exact set.
+ *
+ * Found by where the layout put it rather than by a word it contains. The
+ * guidance row legitimately says "History" now — it is the state at a frozen
+ * position (#870 UI15) — and a helper that searched the screen for that string
+ * read the sentence about the position instead of the list of positions, from the
+ * wrong column, and answered with fragments of the transcript behind it. Prose a
+ * row may say is not an anchor; a placed rectangle is.
  */
 function drawerMarkers(terminal: Terminal): string[] {
   const found: string[] = [];
   const rows = screenOf(terminal);
-  const title = rows.findIndex((line) => line.includes("History"));
-  if (title === -1) {
-    return found;
-  }
-  const at = rows[title].indexOf("History");
-  for (let row = title + 1; row < rows.length; row += 1) {
-    const text = (rows[row] ?? "").slice(at, at + drawerWidth(terminal.size)).trimEnd();
+  const box = drawerBox(terminal.size);
+  let title = false;
+  for (let row = box.top; row < box.bottom; row += 1) {
+    const text = (rows[row] ?? "").slice(box.left, box.right).trimEnd();
     const label = text.replace(/^>\s*/, "").trim();
-    if (label.length === 0 || label === "[close]") {
+    if (label.length === 0) {
+      // Before the drawer's first row there is nothing of it to read; after its
+      // last, the box is taller than what it drew.
+      if (title) {
+        break;
+      }
+      continue;
+    }
+    if (!title) {
+      // Its own heading, which names the drawer rather than a position in it.
+      title = true;
+      continue;
+    }
+    if (label === "[close]") {
       break;
     }
     found.push(label);
@@ -839,7 +970,7 @@ describe("REPL journey: one entry, from raw bytes", () => {
       expect(admittedModel.entries.map((entry) => entry.key)).toEqual(["entry-1"]);
       expect(admittedModel.entries[0]?.source).toBe(source);
       expect(admittedModel.entries[0]?.settled).toBe(false);
-      expect(shows(terminal, "Approve Ship the REPL?")).toBe(true);
+      expect(askedRow(terminal)).toBeDefined();
 
       terminal.end();
       yield* running;
@@ -874,11 +1005,13 @@ describe("REPL journey: one entry, from raw bytes", () => {
       yield* settled(60);
       terminal.feed("\r");
       yield* settled(400);
-      expect(shows(terminal, "Approve Ship the REPL?")).toBe(true);
+      expect(askedRow(terminal)).toBeDefined();
 
-      // The question's drawer was offered when the question appeared: a blocked
-      // document is the interaction, not something to go hunting for.
-      // The drawer shows the retained schema as a form: one field, its choices.
+      // The question announces itself and opens nothing. Activating that
+      // announcement is what opens the drawer, and the drawer then shows the
+      // retained schema as a form: one field, its choices.
+      expect(shows(terminal, "decision: approve | decline")).toBe(false);
+      yield* openQuestion(terminal);
       expect(shows(terminal, "decision: approve | decline")).toBe(true);
 
       // Typed, as a person types it, into the field the drawer focused.
@@ -932,6 +1065,9 @@ describe("REPL journey: one entry, from raw bytes", () => {
       yield* settled(60);
       first.terminal.feed("\r");
       yield* settled(400);
+      // The question announces itself; activating that announcement is what opens
+      // the form the answer is typed into.
+      yield* openQuestion(first.terminal);
       first.terminal.bytes(BYTES.encode("approve"));
       yield* settled(30);
       first.terminal.feed("\r");
@@ -1472,7 +1608,7 @@ describe("REPL journey: the whole of it, from raw bytes", () => {
       expect(screenOf(terminal)).toEqual(heldScreen);
       // And it is still held rather than having drifted on.
       expect(shows(terminal, "[pause] paused")).toBe(true);
-      expect(shows(terminal, "Approve Ship the REPL?")).toBe(false);
+      expect(askedRow(terminal)).toBeUndefined();
 
       // 4. An earlier prefix, chosen through History.
       yield* activate(terminal, "[history]");
@@ -1493,15 +1629,14 @@ describe("REPL journey: the whole of it, from raw bytes", () => {
       yield* settled(30);
       yield* activate(terminal, "[live]");
       expect(locationOn(terminal)).not.toContain("at=");
-      expect(shows(terminal, "Approve Ship the REPL?")).toBe(false);
+      expect(askedRow(terminal)).toBeUndefined();
 
       yield* activate(terminal, "[continue]");
-      yield* until_(terminal, "the question", (t) => shows(t, "Approve Ship the REPL?"));
+      yield* until_(terminal, "the question", (t) => askedRow(t) !== undefined);
 
-      // 6. The same execution takes the typed answer and settles.
-      yield* until_(terminal, "the question's drawer", (t) =>
-        shows(t, "decision: approve | decline"),
-      );
+      // 6. The same execution takes the typed answer and settles, once the
+      // waiting announcement has been activated.
+      yield* openQuestion(terminal);
       terminal.bytes(BYTES.encode("approve"));
       yield* settled(30);
       terminal.feed("\r");
@@ -1810,10 +1945,12 @@ describe("REPL journey: the same product at every size", () => {
         // None of it shows through: every row of the drawer's box reaches the
         // box's own right edge, so what it is in front of is behind it.
         const rows = screenOf(terminal);
-        const title = rows.findIndex((line) => line.includes("History"));
-        expect(title).toBeGreaterThanOrEqual(0);
-        const left = Math.floor(size.columns / 8);
-        const right = left + drawerWidth(terminal.size);
+        // The placed rectangle, for the same reason `drawerMarkers` uses it: the
+        // guidance row says "History" at a frozen position, so searching the
+        // screen for that word can find the sentence rather than the drawer.
+        const box = drawerBox(terminal.size);
+        const title = box.top;
+        const { left, right } = box;
         // The drawer's own rows: its title, one per position it lists, and its
         // close control. A drawer draws rows rather than filling its box, so the
         // rows below its last one are the transcript and are meant to be.
@@ -1944,7 +2081,7 @@ describe("REPL journey: what it settles before it acts", () => {
       first.terminal.bytes(BYTES.encode(source));
       yield* settled(60);
       first.terminal.feed("\r");
-      yield* until_(first.terminal, "the question", (t) => shows(t, "Approve Ship the REPL?"));
+      yield* until_(first.terminal, "the question", (t) => askedRow(t) !== undefined);
 
       // Left unanswered on purpose.
       first.terminal.end();
@@ -2038,9 +2175,7 @@ describe("REPL journey: what it settles before it acts", () => {
       first.terminal.bytes(BYTES.encode(source));
       yield* settled(60);
       first.terminal.feed("\r");
-      yield* until_(first.terminal, "the question's drawer", (t) =>
-        shows(t, "decision: approve | decline"),
-      );
+      yield* openQuestion(first.terminal);
       first.terminal.bytes(BYTES.encode("approve"));
       yield* settled(30);
       first.terminal.feed("\r");
@@ -2176,12 +2311,14 @@ describe("REPL journey: what it settles before it acts", () => {
       terminal.bytes(BYTES.encode(source));
       yield* settled(60);
       terminal.feed("\r");
-      yield* until_(terminal, "the question", (t) => shows(t, "Approve Ship the REPL?"));
+      yield* until_(terminal, "the question", (t) => askedRow(t) !== undefined);
 
-      // The drawer is offered on its own, and the URL says so while it is up.
+      // Activating the announcement opens the drawer, and the URL says so while
+      // it is up.
+      yield* openQuestion(terminal);
       yield* until_(
         terminal,
-        "the question's drawer",
+        "the question's drawer in the location",
         (t) => maybeLocation(t)?.includes("+elicit") === true,
       );
       expect(shows(terminal, "[close]")).toBe(true);
@@ -2249,6 +2386,7 @@ describe("REPL journey: what it settles before it acts", () => {
       question: undefined,
       expansion: "pausing",
       pausable: true,
+      running: true,
       agent: NO_AGENT,
     });
     expect(pausing.intent.kind).toBe("none");
@@ -2259,6 +2397,7 @@ describe("REPL journey: what it settles before it acts", () => {
       question: undefined,
       expansion: "paused",
       pausable: true,
+      running: true,
       agent: NO_AGENT,
     });
     expect(held.intent.kind).toBe("continue");
@@ -2345,7 +2484,7 @@ describe("REPL journey: output nothing records still reaches the screen", () => 
       expect(shows(terminal, PRINTED)).toBe(true);
 
       gate.resolve();
-      yield* until_(terminal, "the question", (t) => shows(t, "Decide?"));
+      yield* until_(terminal, "the question", (t) => askedRow(t) !== undefined);
       expect((yield* records(root, files[0])).length).toBeGreaterThan(0);
 
       terminal.end();
@@ -2532,9 +2671,77 @@ function* awaiting(
   );
 }
 
-/** Wait until the open drawer is drawing this line of its form. */
-function awaitingDrawer(terminal: Terminal, line: string): Operation<void> {
-  return awaiting(terminal, `the drawer drawing ${line}`, (one) => shows(one, line));
+/**
+ * Reach the waiting question's drawer, and wait until it draws this line.
+ *
+ * Two acts, because a question announces itself and opens nothing: waiting for a
+ * drawer to appear on its own would wait until the deadline.
+ */
+function* awaitingDrawer(terminal: Terminal, line: string): Operation<void> {
+  yield* awaiting(
+    terminal,
+    "the waiting question announcing itself",
+    (one) => askedRow(one) !== undefined,
+  );
+  const at = askedRow(terminal);
+  if (at === undefined) {
+    throw new Error("the waiting question's control left the screen before it could be activated");
+  }
+  yield* clickAt(terminal, at);
+  yield* awaiting(terminal, `the drawer drawing ${line}`, (one) => shows(one, line));
+}
+
+/**
+ * Install a host over a repository that already exists.
+ *
+ * A reopen mints no identifier and creates no file, so both are refusals rather
+ * than values: a cold open that quietly made either would not be a cold open.
+ */
+function* reopening(root: string): Operation<void> {
+  yield* installReplHost({
+    dataRoot: () => root,
+    identify: () => {
+      throw new Error("a reopened execution mints no identifier");
+    },
+    createExclusive: () => Promise.reject(new Error("a reopened execution creates no file")),
+    appendRecord: (path, record) => appendFile(path, record),
+  });
+}
+
+/**
+ * Whether this row carries the selection marker.
+ *
+ * Read off the rendered row rather than from the route, because what is under
+ * test is that the frame says it. The marker sits in its own two columns before
+ * the label, beside the focus marker and independent of it.
+ */
+function marked(terminal: Terminal, label: string): boolean {
+  for (const line of screenOf(terminal)) {
+    const at = line.indexOf(label);
+    // The two columns immediately before the label, so a focus marker beside
+    // them changes nothing: the two channels are independent.
+    if (at >= 2 && line.slice(at - 2, at) === "* ") {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Every rendered row except the ones the location is drawn on.
+ *
+ * So a claim that switching changed the screen cannot be satisfied by the URL,
+ * which is the whole thing this Story says is not enough.
+ */
+function without(terminal: Terminal): string[] {
+  return screenOf(terminal)
+    .map((line) => line.trimEnd())
+    .filter((line) => !line.includes("xmd://repl/"));
+}
+
+/** The draft a location carries, as it spells it, or none. */
+function draftIn(location: string): string | undefined {
+  return /[?&]draft=([^&]*)/.exec(location)?.[1];
 }
 
 /** Wait until the draft has left the location, which is when it became an entry. */
@@ -2604,7 +2811,7 @@ describe("REPL journey: three entries, one command", () => {
       }
 
       // 3. Answer the question, and Entry 1 settles.
-      yield* activate(terminal, "? Ready?");
+      yield* activate(terminal, "[answer]");
       yield* awaitingDrawer(terminal, "decision: go");
       terminal.bytes(BYTES.encode("go"));
       yield* settled(30);
@@ -2634,6 +2841,13 @@ describe("REPL journey: three entries, one command", () => {
       // 5. Entry 3 follows the failure, and still reads Entry 1's value.
       yield* submitted(terminal, JOURNEY_THREE);
       yield* settledEntry(terminal, 3, "ok");
+      // Read under its own entry. Answering Entry 1's question selected the entry
+      // that was asking, and a selected entry is a transcript locus — so Entry 3's
+      // output appears where Entry 3 is, which is what selecting it shows.
+      yield* activate(terminal, "3. [ok] entry-3");
+      yield* awaiting(terminal, "entry 3's own transcript", (one) =>
+        shows(one, "Three: alpha-three"),
+      );
       expect(shows(terminal, "Three: alpha-three")).toBe(true);
 
       // Three entries, in admission order, with the outcomes they reached —
@@ -2667,6 +2881,73 @@ describe("REPL journey: three entries, one command", () => {
     expect(terminal.resets).toBe(1);
   });
 });
+
+/**
+ * One entry whose two children run together: one asks, the other fails.
+ *
+ * The failing child waits on a fetch the test holds, so the question is open and
+ * its drawer is mounted before anything fails — which is the only arrangement in
+ * which a *mounted* drawer can be observed going away.
+ */
+const SIBLING_FAILS = [
+  "```js eval",
+  "const schema = {",
+  '  type: "object",',
+  '  properties: { decision: { type: "string", enum: ["go"] } },',
+  '  required: ["decision"],',
+  "  additionalProperties: false,",
+  "};",
+  "```",
+  "",
+  "<All>",
+  "<Spawn>",
+  '<Elicit schema={schema} as="answer">Ready?</Elicit>',
+  "</Spawn>",
+  "<Spawn>",
+  "```js eval",
+  'yield* fetch("https://held.invalid/sibling");',
+  "```",
+  "</Spawn>",
+  "</All>",
+  "",
+].join("\n");
+
+/** One entry whose question is far wider than the narrowest supported frame. */
+/** One short question, so the whole drawer — its control included — is drawn. */
+const SHORT_QUESTION = [
+  "```js eval",
+  "const schema = {",
+  '  type: "object",',
+  '  properties: { decision: { type: "string", enum: ["go"] } },',
+  '  required: ["decision"],',
+  "  additionalProperties: false,",
+  "};",
+  "```",
+  "",
+  '<Elicit schema={schema} as="answer">Go?</Elicit>',
+  "",
+  "Decision: {answer.decision}",
+  "",
+].join("\n");
+
+const LONG_QUESTION = [
+  "```js eval",
+  "const schema = {",
+  '  type: "object",',
+  '  properties: { decision: { type: "string", enum: ["go"] } },',
+  '  required: ["decision"],',
+  "  additionalProperties: false,",
+  "};",
+  "```",
+  "",
+  '<Elicit schema={schema} as="answer">' +
+    "Would you like to approve the plan that was drafted for this execution, " +
+    "including every file it proposes to write and every command it proposes to run?" +
+    "</Elicit>",
+  "",
+  "Decision: {answer.decision}",
+  "",
+].join("\n");
 
 /** Two entries, the second reading what the first published, with no question. */
 const COLD_ONE = ["```js eval", 'const token = "alpha";', "```", "", "One: {token}", ""].join("\n");
@@ -2789,5 +3070,1390 @@ describe("REPL journey: a cold process over a multi-entry journal", () => {
     // And the file is the file. A cold process reads; it does not append.
     expect(yield* until(readFile(path, "utf8"))).toBe(before);
     expect(second.terminal.resets).toBe(1);
+  });
+});
+
+/**
+ * Story #870: the terminal teaches its own interaction, and can be left.
+ *
+ * Every row here drives the production command through real terminal bytes and
+ * reads the frame that was presented, because what is under test is what a
+ * person can see and reach. A reducer that would have answered correctly is not
+ * evidence that anything was on the screen.
+ */
+/**
+ * Each row is a test of its own rather than a step inside one.
+ *
+ * A `describe` stops at its first failing step, so a negative control that breaks
+ * an early row leaves every later one unreported — and an unreported row is not
+ * evidence about anything. Top level, each of these can be run, and reddened, on
+ * its own.
+ */
+describe("REPL first use: UI2", () => {
+  it("UI2: Enter on [exit] ends the command without touching the history", function* () {
+    const { terminal, install } = recordingTerminal();
+    let ended: ReplOutcome | undefined;
+    let root = "";
+    yield* scoped(function* (): Operation<void> {
+      yield* install();
+      yield* immediateClock();
+      root = yield* useTemporaryHost();
+
+      const running = yield* spawn(function* (): Operation<void> {
+        const ran = yield* runReplProgram({ profile: PROFILE });
+        if (!ran.ok) {
+          throw ran.error;
+        }
+        ended = ran.value;
+      });
+      yield* untilDrawn(terminal);
+
+      const files = yield* histories(root);
+      const before = yield* until(readFile(join(root, "xmd", "repl", files[0]), "utf8"));
+
+      // Reached by traversal, from what the screen shows: no hidden key, and the
+      // control says what it is.
+      yield* focusOn(terminal, "[exit]");
+      expect(focusedOn(terminal, "[exit]")).toBe(true);
+      terminal.feed("\r");
+
+      // The command is over. Joined rather than polled: the scope the program owns
+      // holds the session, the observer, the reader and the frame subscription,
+      // and this returns only once every one of them has been halted and joined.
+      yield* running;
+
+      // Nothing was appended for leaving. Leaving is the absence of further work,
+      // not an outcome, so the file is byte-identical.
+      expect(yield* until(readFile(join(root, "xmd", "repl", files[0]), "utf8"))).toBe(before);
+    });
+
+    // Ordinary success, with a location to come back to, and the terminal given
+    // back exactly once.
+    expect(ended?.refusal).toBeUndefined();
+    expect(ended?.location).toContain("xmd://repl/");
+    expect(terminal.resets).toBe(1);
+    expect(terminal.readers).toBe(0);
+  });
+});
+describe("REPL first use: UI2", () => {
+  it("UI2: a pointer on [exit] is the same act as Enter on it", function* () {
+    const { terminal, install } = recordingTerminal();
+    let ended: ReplOutcome | undefined;
+    yield* scoped(function* (): Operation<void> {
+      yield* install();
+      yield* immediateClock();
+      yield* useTemporaryHost();
+
+      const running = yield* spawn(function* (): Operation<void> {
+        const ran = yield* runReplProgram({ profile: PROFILE });
+        if (!ran.ok) {
+          throw ran.error;
+        }
+        ended = ran.value;
+      });
+      yield* untilDrawn(terminal);
+
+      // No traversal at all: a pointer resolves against the drawn frame, so this
+      // reaches the control exactly where the screen draws it.
+      yield* click(terminal, "[exit]");
+      yield* running;
+    });
+
+    expect(ended?.refusal).toBeUndefined();
+    expect(ended?.location).toContain("xmd://repl/");
+    expect(terminal.resets).toBe(1);
+  });
+});
+describe("REPL first use: UI1", () => {
+  it("UI1: the guidance teaches the ring that is mounted, at both sizes", function* () {
+    for (const size of [{ columns: 160, rows: 36 }, NARROW]) {
+      const { terminal, install } = recordingTerminal(size);
+      yield* scoped(function* (): Operation<void> {
+        yield* install();
+        yield* immediateClock();
+        yield* useTemporaryHost();
+
+        const running = yield* spawn(function* (): Operation<void> {
+          const ran = yield* runReplProgram({ profile: PROFILE });
+          if (!ran.ok) {
+            throw ran.error;
+          }
+        });
+        yield* untilDrawn(terminal);
+
+        // Focus starts on the draft, and what the screen says is what Enter there
+        // does. Not a legend: the words change with the control under the cursor.
+        expect(shows(terminal, "Type here")).toBe(true);
+        expect(shows(terminal, "Enter submits")).toBe(true);
+        expect(shows(terminal, "Tab/Shift+Tab move")).toBe(true);
+        // And the state it says that about, which is what makes "Enter submits"
+        // a fact rather than a legend (#870 UI10).
+        expect(shows(terminal, "Ready for Entry 1")).toBe(true);
+        // Escape closes a drawer, and there is no drawer. A legend naming it here
+        // would advertise an action nothing mounts.
+        expect(shows(terminal, "Esc closes")).toBe(false);
+
+        // Both ways out of the draft. Enter does not submit from a control, at
+        // either size, and the row says so by not saying otherwise.
+        yield* focusOn(terminal, "[exit]");
+        expect(shows(terminal, "Enter submits")).toBe(false);
+        // What Enter does on this node, rather than what it does on controls in
+        // general: `[exit]` leaves the command (#870 UI16).
+        expect(shows(terminal, "Enter exits")).toBe(true);
+        // The state survives moving focus, which is the whole point of putting it
+        // first: it is the one fact a person cannot work out from the keys.
+        expect(shows(terminal, "Ready for Entry 1")).toBe(true);
+        // Both say what Enter does and both say how to get back to the draft.
+        // The narrow row says each in fewer columns, because it is composed to
+        // fit 72 rather than written once and cut (#870 UI10/UI16): pointer
+        // equivalence and the longer way of saying "Tab to the draft" are what
+        // the extra columns of a wide frame buy.
+        if (size.columns > NARROW.columns) {
+          expect(shows(terminal, "Tab to the draft to type")).toBe(true);
+        } else {
+          expect(shows(terminal, "Tab to draft")).toBe(true);
+        }
+        // The generic spelling, on a control with nothing particular to say.
+        yield* focusOn(terminal, "Sessions");
+        expect(
+          shows(
+            terminal,
+            size.columns > NARROW.columns ? "Enter or click activates" : "Enter activates",
+          ),
+        ).toBe(true);
+
+        // With a drawer up, Escape is a thing that does something, and it says so.
+        yield* activate(terminal, "[history]");
+        yield* until_(terminal, "the History drawer", (one) => shows(one, "[close]"));
+        expect(shows(terminal, "Esc closes")).toBe(true);
+
+        terminal.end();
+        yield* running;
+      });
+    }
+  });
+});
+describe("REPL first use: UI1/UI5", () => {
+  it("UI1/UI5: the footer holds the actions, the band and the draft, in that order", function* () {
+    const { terminal, install } = recordingTerminal(NARROW);
+    yield* scoped(function* (): Operation<void> {
+      yield* install();
+      yield* immediateClock();
+      yield* useTempFileCompiler();
+      const root = yield* useTemporaryHost();
+
+      const running = yield* spawn(function* (): Operation<void> {
+        const ran = yield* runReplProgram({ profile: PROFILE });
+        if (!ran.ok) {
+          throw ran.error;
+        }
+      });
+      yield* untilDrawn(terminal);
+
+      // Something for the band to hold, so its rows are rows with text in them.
+      yield* submitted(terminal, COLD_ONE);
+      yield* settledEntry(terminal, 1, "ok");
+      const model = yield* projectionOf(root, (yield* histories(root))[0]);
+      expect(model.checkpoints.length).toBeGreaterThan(0);
+
+      const rows = screenOf(terminal);
+      const actions = NARROW.rows - 7;
+
+      // One action row, and every control is on it.
+      expect(rows[actions]).toContain("[history]");
+      expect(rows[actions]).toContain("[exit]");
+      // Five band rows under it, each one a position this execution reached.
+      const band = rows.slice(actions + 1, actions + 1 + HISTORY_ROWS);
+      expect(band).toHaveLength(HISTORY_ROWS);
+      expect(band.some((row) => row.includes(model.checkpoints[0].label))).toBe(true);
+      // The draft, on the last row, alone.
+      expect(rows[NARROW.rows - 1].trim().startsWith(">")).toBe(true);
+
+      // And nothing of the band at the top of the screen, which is where it used
+      // to be drawn: the first row belongs to whatever the body put there.
+      for (const checkpoint of model.checkpoints) {
+        expect([checkpoint.label, rows[0].includes(checkpoint.label)]).toEqual([
+          checkpoint.label,
+          false,
+        ]);
+      }
+
+      terminal.end();
+      yield* running;
+    });
+  });
+});
+describe("REPL first use: UI9", () => {
+  it("UI9: typing at a control never reaches the draft, and the screen says why", function* () {
+    const { terminal, install } = recordingTerminal();
+    yield* scoped(function* (): Operation<void> {
+      yield* install();
+      yield* immediateClock();
+      yield* useTemporaryHost();
+
+      const running = yield* spawn(function* (): Operation<void> {
+        const ran = yield* runReplProgram({ profile: PROFILE });
+        if (!ran.ok) {
+          throw ran.error;
+        }
+      });
+      yield* untilDrawn(terminal);
+
+      // Something in the draft first, so "unchanged" is a claim about bytes rather
+      // than about emptiness.
+      yield* focusDraft(terminal);
+      terminal.bytes(BYTES.encode("the draft"));
+      yield* settled(40);
+      const before = locationOn(terminal);
+      expect(before).toContain("draft=the%20draft");
+
+      yield* focusOn(terminal, "[exit]");
+      // The explanation is on the screen *before* the keystroke that needs it.
+      expect(shows(terminal, "Tab to the draft to type")).toBe(true);
+
+      terminal.bytes(BYTES.encode("xyz"));
+      yield* settled(40);
+      // Byte for byte: a control that let text fall through to the draft would be
+      // editing a field nobody is looking at.
+      expect(locationOn(terminal)).toBe(before);
+      expect(shows(terminal, "xyz")).toBe(false);
+
+      // And the draft takes them again as soon as focus comes back to it.
+      yield* focusDraft(terminal);
+      terminal.bytes(BYTES.encode("more"));
+      yield* settled(40);
+      expect(locationOn(terminal)).not.toBe(before);
+      expect(shows(terminal, "the draftmore")).toBe(true);
+
+      terminal.end();
+      yield* running;
+    });
+  });
+});
+describe("REPL first use: UI2 too small", () => {
+  it("UI2: below the minimum there is no exit to aim at, and Escape leaves", function* () {
+    const TINY = { columns: 60, rows: 18 };
+
+    // The semantic tree first: at a size this REPL cannot draw at, the control is
+    // not described — so there is nothing to reconcile, nothing to focus and
+    // nothing a pointer could be answered with. At a size it can draw at, it is.
+    const tiny = describeApplication(
+      refusedView(initialState("tiny"), "this history cannot be read.", TINY),
+    ).map((one) => readDescription(one).key);
+    expect(tiny).not.toContain("footer:exit");
+    const roomy = describeApplication(
+      refusedView(initialState("tiny"), "this history cannot be read.", {
+        columns: 160,
+        rows: 36,
+      }),
+    ).map((one) => readDescription(one).key);
+    expect(roomy).toContain("footer:exit");
+
+    // And then the real command, in a window that size.
+    const { terminal, install } = recordingTerminal(TINY);
+    let ended: ReplOutcome | undefined;
+    yield* scoped(function* (): Operation<void> {
+      yield* install();
+      yield* immediateClock();
+      yield* useTemporaryHost();
+
+      const running = yield* spawn(function* (): Operation<void> {
+        const ran = yield* runReplProgram({ profile: PROFILE });
+        if (!ran.ok) {
+          throw ran.error;
+        }
+        ended = ran.value;
+      });
+
+      // The one screen with no control on it says both of the things it can:
+      // that growing the window recovers, and that Escape leaves.
+      yield* until_(terminal, "the refusal", (one) => shows(one, "60x18"));
+      expect(shows(terminal, "larger")).toBe(true);
+      expect(shows(terminal, "Escape")).toBe(true);
+      // Nothing to aim at: no control is drawn, so none is in the target map.
+      expect(shows(terminal, "[exit]")).toBe(false);
+      expect(shows(terminal, "[history]")).toBe(false);
+
+      // Enter does nothing. The command is still running afterwards, which is the
+      // whole of what "no hidden exit target" means here.
+      terminal.feed("\r");
+      yield* settled(40);
+      expect(ended).toBeUndefined();
+      expect(terminal.resets).toBe(0);
+
+      // Escape is the way out, and it is the same structured teardown.
+      terminal.feed("\x1b");
+      yield* running;
+    });
+
+    expect(ended?.location).toContain("xmd://repl/");
+    expect(terminal.resets).toBe(1);
+    expect(terminal.readers).toBe(0);
+  });
+});
+
+describe("REPL first use: UI3", () => {
+  it("UI3: a question on Sessions moves nothing, and is reached by activating it", function* () {
+    const { terminal, install } = recordingTerminal();
+    yield* scoped(function* (): Operation<void> {
+      yield* install();
+      yield* immediateClock();
+      yield* useTempFileCompiler();
+      yield* useTemporaryHost();
+
+      const running = yield* spawn(function* (): Operation<void> {
+        const ran = yield* runReplProgram({ profile: PROFILE });
+        if (!ran.ok) {
+          throw ran.error;
+        }
+      });
+      yield* untilDrawn(terminal);
+
+      // On Sessions, with something typed, before anything is asked.
+      yield* activate(terminal, "Sessions");
+      yield* focusDraft(terminal);
+      terminal.bytes(BYTES.encode(JOURNEY_ONE));
+      yield* settled(60);
+      terminal.feed("\r");
+      yield* admittedDraft(terminal);
+      expect(locationOn(terminal)).toContain("/sessions");
+      yield* focusOn(terminal, "[exit]");
+      const standing = locationOn(terminal);
+
+      // The question arrives. It announces itself and does nothing else: the
+      // route, the surface and the focused control are where they were.
+      yield* until_(terminal, "the waiting question", (one) => askedRow(one) !== undefined);
+      expect(locationOn(terminal)).toBe(standing);
+      expect(locationOn(terminal)).toContain("/sessions");
+      expect(locationOn(terminal)).not.toContain("+elicit");
+      expect(focusedOn(terminal, "[exit]")).toBe(true);
+      expect(shows(terminal, "decision: go")).toBe(false);
+
+      // Activating it is what opens it, and that act crosses to the surface the
+      // question belongs to and selects the entry that is asking.
+      const at = askedRow(terminal);
+      if (at === undefined) {
+        throw new Error("the question announced itself");
+      }
+      yield* clickAt(terminal, at);
+      yield* until_(terminal, "the question's form", (one) => shows(one, "decision: go"));
+      expect(locationOn(terminal)).toContain("/repl/entry-1/+elicit");
+
+      // Escape dismisses without answering, and the question is still waiting — so
+      // it announces itself again and opens again.
+      terminal.feed("\x1b");
+      yield* until_(terminal, "the drawer closing", (one) => !shows(one, "decision: go"));
+      expect(locationOn(terminal)).not.toContain("+elicit");
+      yield* openQuestion(terminal);
+      expect(shows(terminal, "decision: go")).toBe(true);
+
+      terminal.end();
+      yield* running;
+    });
+  });
+});
+describe("REPL first use: UI1 selection", () => {
+  it("UI1: the active surface and the selected entry are marked in the frame", function* () {
+    for (const size of [{ columns: 160, rows: 36 }, NARROW]) {
+      const { terminal, install } = recordingTerminal(size);
+      yield* scoped(function* (): Operation<void> {
+        yield* install();
+        yield* immediateClock();
+        yield* useTempFileCompiler();
+        yield* useTemporaryHost();
+
+        const running = yield* spawn(function* (): Operation<void> {
+          const ran = yield* runReplProgram({ profile: PROFILE });
+          if (!ran.ok) {
+            throw ran.error;
+          }
+        });
+        yield* untilDrawn(terminal);
+
+        yield* submitted(terminal, COLD_ONE);
+        yield* settledEntry(terminal, 1, "ok");
+        yield* submitted(terminal, COLD_TWO);
+        yield* settledEntry(terminal, 2, "ok");
+
+        // Entries is where the route starts, and the frame says so.
+        expect(marked(terminal, "Entries")).toBe(true);
+        expect(marked(terminal, "Sessions")).toBe(false);
+
+        // Switching surfaces changes cells that are not the location: the URL
+        // alone cannot satisfy this, because the location rows are excluded.
+        const onEntries = without(terminal);
+        yield* activate(terminal, "Sessions");
+        const onSessions = without(terminal);
+        expect(onSessions).not.toEqual(onEntries);
+        expect(marked(terminal, "Sessions")).toBe(true);
+        expect(marked(terminal, "Entries")).toBe(false);
+
+        // By pointer too, and it means the same thing: the marker comes back to
+        // Entries and the screen is no longer the Sessions one. Not byte-identical
+        // to `onEntries`, because activating by pointer also moves focus there —
+        // which is the other marker, and the point of their being two.
+        yield* click(terminal, "Entries");
+        expect(marked(terminal, "Entries")).toBe(true);
+        expect(marked(terminal, "Sessions")).toBe(false);
+        expect(without(terminal)).not.toEqual(onSessions);
+
+        // Selecting one entry versus the other moves one marker and no other.
+        yield* activate(terminal, "1. [ok] entry-1");
+        expect(marked(terminal, "1. [ok] entry-1")).toBe(true);
+        expect(marked(terminal, "2. [ok] entry-2")).toBe(false);
+        const readingFirst = without(terminal);
+
+        yield* activate(terminal, "2. [ok] entry-2");
+        expect(marked(terminal, "2. [ok] entry-2")).toBe(true);
+        expect(marked(terminal, "1. [ok] entry-1")).toBe(false);
+        expect(without(terminal)).not.toEqual(readingFirst);
+
+        // And the marker is the route's, not focus's: it stays where it is when
+        // focus goes somewhere else entirely.
+        yield* focusOn(terminal, "[exit]");
+        expect(focusedOn(terminal, "[exit]")).toBe(true);
+        expect(marked(terminal, "2. [ok] entry-2")).toBe(true);
+        expect(marked(terminal, "Entries")).toBe(true);
+
+        // Selecting an entry does not filter the chronology this execution has.
+        yield* activate(terminal, "Sessions");
+        expect(shows(terminal, "(none retained)")).toBe(true);
+
+        terminal.end();
+        yield* running;
+      });
+    }
+  });
+});
+
+/**
+ * The narrow guidance row is composed, not cut (#870 UI10/UI16).
+ *
+ * Asserted by exact equality, because the claim is about the whole row. A row
+ * written long and left to the renderer loses its last fact with nothing to say
+ * that it has — and the facts at the end are the way out of a modal and the way
+ * back to the draft. Equality catches both the overflow and the silent cut.
+ */
+describe("REPL first use: UI10 narrow guidance", () => {
+  it("UI10: at 72x20 the row says the state, what Enter does, and the way back, whole", function* () {
+    const { terminal, install } = recordingTerminal(NARROW);
+    yield* scoped(function* (): Operation<void> {
+      yield* install();
+      yield* immediateClock();
+      yield* useTemporaryHost();
+
+      const running = yield* spawn(function* (): Operation<void> {
+        const ran = yield* runReplProgram({ profile: PROFILE });
+        if (!ran.ok) {
+          throw ran.error;
+        }
+      });
+      yield* untilDrawn(terminal);
+
+      // Focus starts in the draft. The state comes first, then what Enter does
+      // there, then that typing goes to the draft, then movement.
+      expect(guidanceRow(terminal)).toBe(
+        "Ready for Entry 1 · Enter submits · Type here · Tab/Shift+Tab move",
+      );
+      expect(guidanceRow(terminal).length).toBeLessThanOrEqual(NARROW.columns);
+
+      // On a control, Enter activates the control rather than submitting, so the
+      // row stops saying it submits and starts saying how to get back. `Sessions`
+      // because it is a control with nothing particular to say about itself —
+      // this is the generic spelling.
+      yield* focusOn(terminal, "Sessions");
+      expect(guidanceRow(terminal)).toBe(
+        "Ready for Entry 1 · Enter activates · Tab/Shift+Tab move · Tab to draft",
+      );
+      expect(guidanceRow(terminal).length).toBeLessThanOrEqual(NARROW.columns);
+
+      // And a control that does have something particular to say says it instead,
+      // because a row naming an action the focused node does not perform is worse
+      // than one naming none: the person presses the key it promised.
+      yield* focusOn(terminal, "[exit]");
+      expect(guidanceRow(terminal)).toBe(
+        "Ready for Entry 1 · Enter exits · Tab/Shift+Tab move · Tab to draft",
+      );
+      yield* focusOn(terminal, "[history]");
+      expect(guidanceRow(terminal)).toBe(
+        "Ready for Entry 1 · Enter opens · Tab/Shift+Tab move · Tab to draft",
+      );
+      expect(guidanceRow(terminal).length).toBeLessThanOrEqual(NARROW.columns);
+
+      terminal.end();
+      yield* running;
+    });
+  });
+});
+
+/**
+ * A drawer keeps the state and keeps the way out (#870 UI10/UI16).
+ *
+ * Inside a modal the order earns its keep: the drawer holds focus, so `Esc
+ * closes` is the one key a person must be told about, and it is required ahead of
+ * movement. The state stays because a question does not stop an entry from
+ * running and a reader still needs to know that it is.
+ */
+describe("REPL first use: UI10 narrow drawer guidance", () => {
+  it("UI10: at 72x20 a focused field and a focused drawer control each say state, action, Esc and movement", function* () {
+    const { terminal, install } = recordingTerminal(NARROW);
+    yield* scoped(function* (): Operation<void> {
+      yield* install();
+      yield* immediateClock();
+      yield* useTempFileCompiler();
+      yield* useTemporaryHost();
+
+      const running = yield* spawn(function* (): Operation<void> {
+        const ran = yield* runReplProgram({ profile: PROFILE });
+        if (!ran.ok) {
+          throw ran.error;
+        }
+      });
+      yield* untilDrawn(terminal);
+
+      yield* submitted(terminal, SHORT_QUESTION);
+      yield* until_(terminal, "the waiting question", (one) => askedRow(one) !== undefined);
+      yield* activate(terminal, "[answer]");
+      yield* until_(terminal, "the question's form", (one) => formShowing(one));
+
+      // A field holds focus: Enter answers, and the entry is still named.
+      const onField = guidanceRow(terminal);
+      expect(onField).toBe("Entry 1 question · Enter answers · Esc closes · Tab/Shift+Tab move");
+
+      // The question's submit: the same promise, because activating it is how the
+      // question gets answered.
+      yield* focusOn(terminal, "[submit]");
+      const onSubmit = guidanceRow(terminal);
+      expect(onSubmit).toBe("Entry 1 question · Enter answers · Esc closes · Tab/Shift+Tab move");
+
+      // And a control in the same drawer that does something else entirely. It
+      // moves the window over a message too long to draw at once, so the row says
+      // that instead of promising an answer to somebody who is still reading.
+      yield* focusOn(terminal, "[v later]");
+      const onScroll = guidanceRow(terminal);
+      expect(onScroll).toBe("Entry 1 question · Enter scrolls · Esc closes · Tab/Shift+Tab move");
+
+      // Whichever node holds focus: the state, the action that node performs, the
+      // way out, and movement — all four on one 72-column row, none of them cut.
+      for (const row of [onField, onSubmit, onScroll]) {
+        expect(row.startsWith("Entry 1 question · Enter ")).toBe(true);
+        expect(row).toContain("Esc closes");
+        expect(row).toContain("Tab/Shift+Tab move");
+        expect(row.length).toBeLessThanOrEqual(NARROW.columns);
+      }
+
+      terminal.end();
+      yield* running;
+    });
+  });
+});
+
+/** One entry that does not finish the instant it is admitted. */
+const SLOW_ENTRY = ["```ts eval", "yield* sleep(800)", "```", ""].join("\n");
+
+/**
+ * A refused submission keeps the draft, and stops being shown when it stops
+ * being true (#870 UI12).
+ *
+ * Driven through the running command, and — the part that matters — with no
+ * keystroke between the refusal and the readiness changing. Every action clears
+ * the refusal on its way through the reducer, so a row that pressed anything to
+ * make the entry finish would prove that pressing a key clears refusals and
+ * nothing about staleness. Here the entry finishes by itself and nobody touches
+ * the terminal, which is also how a person meets this: they press Enter, read why
+ * not, and watch the entry end.
+ */
+/**
+ * The drawer is found by where it is, not by what it says (#870 UI15, adj 3).
+ *
+ * `drawerMarkers()` used to locate the History drawer by the first line holding
+ * the word "History". The state sentence is that word at a frozen position, so
+ * the helper read the sentence instead of the list — from the wrong column, and
+ * answered with fragments of the transcript behind it. This row stands in exactly
+ * that frame: the guidance says "History" outside the drawer while the drawer
+ * lists positions inside it, and the helper has to answer with the positions.
+ */
+describe("REPL first use: UI15 drawer geometry", () => {
+  it("UI15: guidance saying History does not move what reading the drawer answers", function* () {
+    const { terminal, install } = recordingTerminal({ columns: 160, rows: 36 });
+    yield* scoped(function* (): Operation<void> {
+      yield* install();
+      yield* immediateClock();
+      yield* useTempFileCompiler();
+      yield* useTemporaryHost();
+
+      const running = yield* spawn(function* (): Operation<void> {
+        const ran = yield* runReplProgram({ profile: PROFILE });
+        if (!ran.ok) {
+          throw ran.error;
+        }
+      });
+      yield* untilDrawn(terminal);
+
+      yield* submitted(terminal, "one");
+      yield* until_(terminal, "the entry settling", (one) => shows(one, "Ready for Entry 2"));
+
+      // Into a position, so the state sentence becomes the word the old helper
+      // searched for.
+      yield* activate(terminal, "[history]");
+      yield* until_(terminal, "the History drawer", (one) => shows(one, "[close]"));
+      const listed = drawerMarkers(terminal);
+      expect(listed.length).toBeGreaterThan(0);
+      yield* activate(terminal, listed[0] ?? "");
+      yield* until_(terminal, "the frozen position", (one) => locationOn(one).includes("inspect"));
+
+      // Reopened over a frozen position: now both are true at once.
+      yield* activate(terminal, "[history]");
+      yield* until_(terminal, "the History drawer again", (one) => shows(one, "[close]"));
+      const saying = screenOf(terminal).findIndex((line) => line.includes("History ·"));
+      expect(saying).toBeGreaterThanOrEqual(0);
+      // Above the drawer's own rows — which is exactly what made the old anchor
+      // read the wrong one. It shares columns with the box at this size, so the
+      // row is the distinction and the column is not.
+      const box = drawerBox(terminal.size);
+      expect(saying).toBeLessThan(box.top);
+
+      // And the helper still answers with the drawer's own rows: every one of
+      // them is a position this history holds, and none is a piece of the
+      // sentence or of the transcript behind the box.
+      // The positions this frozen prefix holds — fewer than the live head's, which
+      // is what a prefix is — and every one of them a position rather than a
+      // piece of the sentence or of the transcript behind the box.
+      const markers = drawerMarkers(terminal);
+      expect(markers.length).toBeGreaterThan(0);
+      expect(markers).toContain("Entry 1 admitted");
+      expect(markers.length).toBeLessThanOrEqual(listed.length);
+      for (const marker of markers) {
+        expect([marker, marker.includes("·")]).toEqual([marker, false]);
+        expect([marker, marker.startsWith("History")]).toEqual([marker, false]);
+      }
+
+      terminal.end();
+      yield* running;
+    });
+  });
+});
+
+describe("REPL first use: UI12 refusal", () => {
+  it("UI12: a lifecycle refusal keeps the draft and goes when the entry it named ends, untouched", function* () {
+    const { terminal, install } = recordingTerminal({ columns: 160, rows: 36 });
+    yield* scoped(function* (): Operation<void> {
+      yield* install();
+      yield* immediateClock();
+      yield* useTempFileCompiler();
+      yield* useTemporaryHost();
+
+      const running = yield* spawn(function* (): Operation<void> {
+        const ran = yield* runReplProgram({ profile: PROFILE });
+        if (!ran.ok) {
+          throw ran.error;
+        }
+      });
+      yield* untilDrawn(terminal);
+
+      // One entry that is still running, so there is something for the next
+      // submission to be refused into.
+      yield* submitted(terminal, SLOW_ENTRY);
+
+      // A second document typed while the first is still going.
+      const DRAFT_TEXT = "second entry, typed while the first is running";
+      yield* focusDraft(terminal);
+      terminal.bytes(BYTES.encode(DRAFT_TEXT));
+      yield* settled(30);
+      terminal.feed("\r");
+      yield* until_(terminal, "the refusal", (one) => shows(one, "has not finished"));
+
+      // Refused, with its reason, and nothing taken from the person: the draft is
+      // exactly what they typed, and the history is exactly one entry.
+      expect(shows(terminal, DRAFT_TEXT)).toBe(true);
+      expect(shows(terminal, "2. ")).toBe(false);
+
+      // Nothing is pressed from here. The entry ends on its own.
+      yield* until_(terminal, "the next entry being ready", (one) =>
+        shows(one, "Ready for Entry 2"),
+      );
+
+      // The refusal is gone, because it stopped being true — and what replaced it
+      // says the opposite of what it said.
+      expect(shows(terminal, "has not finished")).toBe(false);
+      // And the draft is still theirs.
+      expect(shows(terminal, DRAFT_TEXT)).toBe(true);
+
+      terminal.end();
+      yield* running;
+    });
+  });
+});
+
+describe("REPL first use: UI1 narrow question", () => {
+  it("UI1: the longest question still has a placed, targetable control at 72x20", function* () {
+    const { terminal, install } = recordingTerminal(NARROW);
+    yield* scoped(function* (): Operation<void> {
+      yield* install();
+      yield* immediateClock();
+      yield* useTempFileCompiler();
+      yield* useTemporaryHost();
+
+      const running = yield* spawn(function* (): Operation<void> {
+        const ran = yield* runReplProgram({ profile: PROFILE });
+        if (!ran.ok) {
+          throw ran.error;
+        }
+      });
+      yield* untilDrawn(terminal);
+
+      // Asked from Sessions, so this row also proves the crossing, and asked with
+      // a message far wider than the terminal.
+      yield* activate(terminal, "Sessions");
+      yield* submitted(terminal, LONG_QUESTION);
+      yield* until_(terminal, "the waiting question", (one) => askedRow(one) !== undefined);
+
+      const at = askedRow(terminal);
+      if (at === undefined) {
+        throw new Error("the question announced itself");
+      }
+      const row = screenOf(terminal)[at.row];
+      // Everything that belongs on the action row is on it, and the announcement
+      // is placed rather than dropped: a control the row could not hold whole is
+      // left out of the frame, and a waiting question left out is unreachable.
+      expect(row).toContain("[history]");
+      expect(row).toContain("[exit]");
+      expect(row).toContain("[pause]");
+      expect(row).toContain("[answer]");
+      // Inside the terminal, so nothing of it is off the edge.
+      expect(at.column + "[answer]".length).toBeLessThanOrEqual(NARROW.columns);
+
+      // Activated by pointer: that is the target map answering for this column.
+      yield* clickAt(terminal, at);
+      yield* until_(terminal, "the question's form", (one) => formShowing(one));
+
+      // Dismissed, so the rows the location is drawn on are readable again — a
+      // drawer covers what it is in front of, and the crossing it performed
+      // survives it being closed.
+      terminal.feed("\x1b");
+      yield* until_(terminal, "the drawer closing", (one) => !formShowing(one));
+      expect(locationOn(terminal)).toContain("/repl/entry-1");
+      expect(marked(terminal, "Entries")).toBe(true);
+      expect(marked(terminal, "1. [unfinished] entry-1")).toBe(true);
+
+      // And reached again by Enter this time, because dismissing answered nothing.
+      yield* activate(terminal, "[answer]");
+      yield* until_(terminal, "the question's form again", (one) => formShowing(one));
+
+      terminal.end();
+      yield* running;
+    });
+  });
+});
+
+describe("REPL first use: UI2 refusal", () => {
+  it("UI2: a normal-sized refusal is left by its own visible control", function* () {
+    const { terminal, install } = recordingTerminal();
+    let outcome: Result<ReplOutcome> | undefined;
+    let root = "";
+    let before = "";
+    yield* scoped(function* (): Operation<void> {
+      yield* install();
+      yield* immediateClock();
+      root = yield* useTemporaryHost();
+
+      // One real execution to refuse a location against.
+      const first = recordingTerminal();
+      yield* scoped(function* (): Operation<void> {
+        yield* first.install();
+        const running = yield* spawn(function* (): Operation<void> {
+          const ran = yield* runReplProgram({ profile: PROFILE });
+          if (!ran.ok) {
+            throw ran.error;
+          }
+        });
+        yield* untilDrawn(first.terminal);
+        first.terminal.end();
+        yield* running;
+      });
+
+      const files = yield* histories(root);
+      const path = join(root, "xmd", "repl", files[0]);
+      before = yield* until(readFile(path, "utf8"));
+      const execution = files[0].replace(/\.jsonl$/, "");
+
+      const running = yield* spawn(function* (): Operation<void> {
+        // A location this history cannot answer: an entry it never admitted.
+        outcome = yield* runReplProgram({
+          location: `xmd://repl/${execution}/repl/entry-9`,
+          profile: PROFILE,
+        });
+      });
+      // Not `untilDrawn`: a refusal draws no canonical location, because there is
+      // no view for one to name.
+      yield* until_(terminal, "the refusal", (one) => shows(one, "[exit]"));
+      expect(shows(terminal, "admitted")).toBe(true);
+      expect(shows(terminal, "[exit]")).toBe(true);
+      // And nothing else: no draft, and no control this screen cannot honour.
+      expect(screenOf(terminal).some((line) => line.includes("[history]"))).toBe(false);
+      expect(screenOf(terminal).some((line) => line.trimEnd().endsWith(">"))).toBe(false);
+
+      // Reached by pointer, which is the target map answering for that column.
+      yield* click(terminal, "[exit]");
+      yield* running;
+    });
+
+    // A refusal is still a refusal: the command reports it rather than reporting
+    // success, and leaving it appended nothing.
+    expect(outcome?.ok).toBe(false);
+    expect(terminal.resets).toBe(1);
+    const files = yield* histories(root);
+    expect(yield* until(readFile(join(root, "xmd", "repl", files[0]), "utf8"))).toBe(before);
+  });
+
+  it("UI2: Enter on the refusal's control leaves it too", function* () {
+    const { terminal, install } = recordingTerminal();
+    let outcome: Result<ReplOutcome> | undefined;
+    yield* scoped(function* (): Operation<void> {
+      yield* install();
+      yield* immediateClock();
+      const root = yield* useTemporaryHost();
+
+      const first = recordingTerminal();
+      yield* scoped(function* (): Operation<void> {
+        yield* first.install();
+        const running = yield* spawn(function* (): Operation<void> {
+          const ran = yield* runReplProgram({ profile: PROFILE });
+          if (!ran.ok) {
+            throw ran.error;
+          }
+        });
+        yield* untilDrawn(first.terminal);
+        first.terminal.end();
+        yield* running;
+      });
+      const execution = (yield* histories(root))[0].replace(/\.jsonl$/, "");
+
+      const running = yield* spawn(function* (): Operation<void> {
+        outcome = yield* runReplProgram({
+          location: `xmd://repl/${execution}/repl/entry-9`,
+          profile: PROFILE,
+        });
+      });
+      yield* until_(terminal, "the refusal", (one) => shows(one, "[exit]"));
+      expect(shows(terminal, "admitted")).toBe(true);
+
+      yield* activate(terminal, "[exit]");
+      yield* running;
+    });
+
+    expect(outcome?.ok).toBe(false);
+    expect(terminal.resets).toBe(1);
+  });
+});
+
+describe("REPL first use: UI3", () => {
+  it("UI3: a question that disappears takes its drawer, and answers nothing", function* () {
+    const { terminal, install } = recordingTerminal();
+    const held = withResolvers<void>();
+    let root = "";
+    yield* scoped(function* (): Operation<void> {
+      yield* install();
+      yield* immediateClock();
+      yield* useTempFileCompiler();
+      root = yield* useTemporaryHost();
+      // The sibling's hold, and the failure that releases it. A deadline rather
+      // than a race: the drawer has to be *mounted* before the question goes, so
+      // the sibling waits for this row to say so.
+      yield* API.Fetch.around({
+        *fetch(): Operation<never> {
+          yield* held.operation;
+          throw new Error("the sibling could not finish");
+        },
+      });
+
+      const running = yield* spawn(function* (): Operation<void> {
+        const ran = yield* runReplProgram({ profile: PROFILE });
+        if (!ran.ok) {
+          throw ran.error;
+        }
+      });
+      yield* untilDrawn(terminal);
+
+      yield* submitted(terminal, SIBLING_FAILS);
+
+      // The question is asked and opened, the way a person opens it.
+      yield* openQuestion(terminal);
+      expect(locationOn(terminal)).toContain("+elicit");
+      expect(shows(terminal, "decision: go")).toBe(true);
+
+      // Now the sibling fails. The question goes with the expansion that was
+      // asking it, while this process stays alive and keeps the screen.
+      held.resolve();
+
+      // The drawer and the form go together, and neither becomes an answer.
+      yield* until_(terminal, "the drawer withdrawing", (one) => !shows(one, "decision: go"));
+      expect(locationOn(terminal)).not.toContain("+elicit");
+      // Focus is somewhere a person can use, not on a control that has gone.
+      expect(screenOf(terminal).some((line) => line.includes(">>"))).toBe(true);
+
+      // The entry keeps its own legitimate failure, and nothing recorded an
+      // elicitation: a withdrawal is not a decision.
+      yield* settledEntry(terminal, 1, "err");
+      const files = yield* histories(root);
+      expect((yield* records(root, files[0])).filter((line) => line.includes("elicit"))).toEqual(
+        [],
+      );
+
+      // The draft still works, and the execution still takes another entry.
+      yield* submitted(terminal, COLD_ONE);
+      yield* settledEntry(terminal, 2, "ok");
+
+      terminal.end();
+      yield* running;
+    });
+  });
+});
+describe("REPL first use: UI4", () => {
+  it("UI4: a live question's drawer is refused wherever it cannot belong", function* () {
+    const { terminal, install } = recordingTerminal();
+    let root = "";
+    yield* scoped(function* (): Operation<void> {
+      yield* install();
+      yield* immediateClock();
+      yield* useTempFileCompiler();
+      root = yield* useTemporaryHost();
+
+      const running = yield* spawn(function* (): Operation<void> {
+        const ran = yield* runReplProgram({ profile: PROFILE });
+        if (!ran.ok) {
+          throw ran.error;
+        }
+      });
+      yield* untilDrawn(terminal);
+
+      yield* submitted(terminal, JOURNEY_ONE);
+      yield* until_(terminal, "the waiting question", (one) => askedRow(one) !== undefined);
+      const standing = locationOn(terminal);
+      const before = yield* records(root, (yield* histories(root))[0]);
+
+      // A historical position cannot answer the question this process is asking,
+      // and asking it to says so instead of freezing a live drawer into a prefix.
+      yield* activate(terminal, "[history]");
+      yield* until_(terminal, "the History drawer", (one) => shows(one, "[close]"));
+      yield* click(terminal, "Entry 1 admitted");
+      yield* settled(40);
+      expect(locationOn(terminal)).toContain("at=");
+      // The announcement is gone with the live state it belonged to: a frozen view
+      // fills nothing from the head.
+      expect(askedRow(terminal)).toBeUndefined();
+      yield* click(terminal, "[close]");
+      yield* settled(30);
+      yield* activate(terminal, "[live]");
+      yield* until_(terminal, "the waiting question again", (one) => askedRow(one) !== undefined);
+
+      // Every refusal left the route standing and the file alone.
+      expect(locationOn(terminal)).toBe(standing);
+      expect(yield* records(root, (yield* histories(root))[0])).toEqual(before);
+
+      terminal.end();
+      yield* running;
+    });
+  });
+});
+describe("REPL first use: UI6", () => {
+  it("UI6: the draft stays visible and intact under a drawer, and is not editable through it", function* () {
+    for (const size of [{ columns: 160, rows: 36 }, NARROW]) {
+      const { terminal, install } = recordingTerminal(size);
+      yield* scoped(function* (): Operation<void> {
+        yield* install();
+        yield* immediateClock();
+        yield* useTempFileCompiler();
+        yield* useTemporaryHost();
+
+        const running = yield* spawn(function* (): Operation<void> {
+          const ran = yield* runReplProgram({ profile: PROFILE });
+          if (!ran.ok) {
+            throw ran.error;
+          }
+        });
+        yield* untilDrawn(terminal);
+
+        yield* submitted(terminal, JOURNEY_ONE);
+
+        // Typed before the drawer is up, because it is the *next* entry's text and
+        // an admitted entry is immutable.
+        yield* focusDraft(terminal);
+        terminal.bytes(BYTES.encode("next entry"));
+        yield* settled(40);
+        const kept = draftIn(locationOn(terminal));
+        expect(kept).toBe("next%20entry");
+
+        yield* openQuestion(terminal);
+
+        // Still drawn, on its own footer row, which the drawer sits above rather
+        // than across. The draft and the question are both readable at once. Read
+        // from the row rather than from the location, because a drawer covers the
+        // rows the location is drawn on — which is exactly why the draft needs a
+        // row of its own.
+        const row = size.rows - 1;
+        expect(screenOf(terminal)[row]).toContain("next entry");
+        expect(shows(terminal, "decision: go")).toBe(true);
+        const drawn = screenOf(terminal)[row];
+
+        // The modal owns the keystrokes: the draft is visible and not editable, so
+        // text reaches the field the drawer focused and the draft keeps its bytes.
+        terminal.bytes(BYTES.encode("go"));
+        yield* settled(40);
+        expect(screenOf(terminal)[row]).toBe(drawn);
+
+        // Dismissed, and the draft is reachable again with exactly what it had.
+        terminal.feed("\x1b");
+        yield* until_(terminal, "the drawer closing", (one) => !shows(one, "decision: go"));
+        yield* focusDraft(terminal);
+        expect(draftIn(locationOn(terminal))).toBe(kept);
+        expect(screenOf(terminal)[row]).toContain("next entry");
+
+        terminal.end();
+        yield* running;
+      });
+    }
+  });
+});
+describe("REPL first use: UI7", () => {
+  it("UI7: leaving strips the drawers only this process could mount", function* () {
+    const { terminal, install } = recordingTerminal();
+    let ended: ReplOutcome | undefined;
+    let root = "";
+    let performed: Performed | undefined;
+    let waiting = "";
+    yield* scoped(function* (): Operation<void> {
+      yield* install();
+      yield* immediateClock();
+      yield* useTempFileCompiler();
+      root = yield* useTemporaryHost();
+
+      const running = yield* spawn(function* (): Operation<void> {
+        const ran = yield* runReplProgram({ profile: PROFILE });
+        if (!ran.ok) {
+          throw ran.error;
+        }
+        ended = ran.value;
+      });
+      yield* untilDrawn(terminal);
+
+      yield* submitted(terminal, JOURNEY_ONE);
+      yield* openQuestion(terminal);
+
+      // What the file holds while the question is still waiting, so that what
+      // leaving appends is a comparison rather than an assumption.
+      const files = yield* histories(root);
+      waiting = yield* until(readFile(join(root, "xmd", "repl", files[0]), "utf8"));
+
+      // Left while the modal is up. The control is physically in the footer and
+      // belongs to the modal's own subtree, so a pointer on it reaches it without
+      // reaching past the trap.
+      yield* click(terminal, "[exit]");
+      yield* running;
+    });
+
+    // The location it printed is one a second process can be handed: the drawer
+    // that only this process could mount is not in it, and nothing was answered
+    // to take it out.
+    expect(ended?.location).toBeDefined();
+    expect(ended?.location).not.toContain("+elicit");
+    expect(ended?.location).not.toContain("+permission");
+    expect(ended?.location).toContain("/entry-1");
+
+    const path = join(root, "xmd", "repl", (yield* histories(root))[0]);
+    // Leaving appended nothing at all: no close, no cancellation, no audit.
+    expect(yield* until(readFile(path, "utf8"))).toBe(waiting);
+    // The entry was interrupted, so the file holds no close for it. An unfinished
+    // entry is what it is; nothing fabricated a cancellation to tidy it up.
+    const first = (yield* histories(root))[0];
+    expect((yield* projectionOf(root, first)).entries[0]?.terminal).toBeUndefined();
+    // And no answer was recorded for the question that was waiting.
+    expect((yield* records(root, first)).filter((line) => line.includes("elicit"))).toEqual([]);
+
+    // That location is one a second process accepts: it resolves, which is what
+    // being reopenable means. An unfinished entry is handed back to the engine to
+    // continue, so this reopen resumes rather than reconstructs — the provider it
+    // reaches belongs to resumed execution, not to restoration.
+    const resumed = recordingTerminal();
+    yield* scoped(function* (): Operation<void> {
+      yield* resumed.install();
+      yield* immediateClock();
+      yield* useTempFileCompiler();
+      yield* reopening(root);
+
+      const running = yield* spawn(function* (): Operation<void> {
+        const ran = yield* runReplProgram({ location: ended?.location, profile: PROFILE });
+        if (!ran.ok) {
+          throw ran.error;
+        }
+      });
+      yield* untilDrawn(resumed.terminal);
+      expect(locationOn(resumed.terminal)).toContain("/entry-1");
+      resumed.terminal.end();
+      yield* running;
+    });
+
+    // The settled half of the claim, on a history with nothing left to resume: the
+    // same exit, and a cold reopen that reaches no provider and appends nothing.
+    const { terminal: last, install: installLast } = recordingTerminal();
+    let settledLocation: string | undefined;
+    let settledRoot = "";
+    yield* scoped(function* (): Operation<void> {
+      yield* installLast();
+      yield* immediateClock();
+      yield* useTempFileCompiler();
+      settledRoot = yield* useTemporaryHost();
+
+      const running = yield* spawn(function* (): Operation<void> {
+        const ran = yield* runReplProgram({ profile: PROFILE });
+        if (!ran.ok) {
+          throw ran.error;
+        }
+        settledLocation = ran.value.location;
+      });
+      yield* untilDrawn(last);
+      yield* submitted(last, COLD_ONE);
+      yield* settledEntry(last, 1, "ok");
+      yield* click(last, "[exit]");
+      yield* running;
+    });
+
+    expect(settledLocation).toBeDefined();
+    const settledPath = join(settledRoot, "xmd", "repl", (yield* histories(settledRoot))[0]);
+    const settledBytes = yield* until(readFile(settledPath, "utf8"));
+
+    const cold = recordingTerminal();
+    yield* scoped(function* (): Operation<void> {
+      yield* cold.install();
+      yield* immediateClock();
+      yield* useTempFileCompiler();
+      yield* reopening(settledRoot);
+      performed = yield* countPerformed();
+
+      const running = yield* spawn(function* (): Operation<void> {
+        const ran = yield* runReplProgram({ location: settledLocation, profile: PROFILE });
+        if (!ran.ok) {
+          throw ran.error;
+        }
+      });
+      yield* untilDrawn(cold.terminal);
+      cold.terminal.end();
+      yield* running;
+    });
+
+    expect(performed?.asked).toBe(0);
+    expect(performed?.compiles).toBe(0);
+    expect(yield* until(readFile(settledPath, "utf8"))).toBe(settledBytes);
+    // The location the settled history ended at carries no live-only drawer either.
+    expect(settledLocation).not.toContain("+elicit");
+  });
+});
+describe("REPL first use: UI8", () => {
+  it("UI8: the whole first-use path, using only what the screen says", function* () {
+    // Wide, because step 4 reads what the answer made the document render and a
+    // narrow frame mounts only its routed outlet — the transcript is not a region
+    // it has. What a narrow frame does carry is proved by the rows above.
+    const { terminal, install } = recordingTerminal({ columns: 160, rows: 36 });
+    let ended: ReplOutcome | undefined;
+    yield* scoped(function* (): Operation<void> {
+      yield* install();
+      yield* immediateClock();
+      yield* useTempFileCompiler();
+      const root = yield* useTemporaryHost();
+
+      const running = yield* spawn(function* (): Operation<void> {
+        const ran = yield* runReplProgram({ profile: PROFILE });
+        if (!ran.ok) {
+          throw ran.error;
+        }
+        ended = ran.value;
+      });
+      yield* untilDrawn(terminal);
+
+      // 1. The screen says where typing goes and what Enter there does.
+      expect(shows(terminal, "Type here")).toBe(true);
+      expect(shows(terminal, "Enter submits")).toBe(true);
+      yield* submitted(terminal, JOURNEY_ONE);
+
+      // 2. Running, and then waiting — said on the entry's own row and in the
+      // footer, without anything opening itself.
+      yield* until_(terminal, "the entry running", (one) => shows(one, "1. [unfinished]"));
+      yield* until_(terminal, "the waiting question", (one) => askedRow(one) !== undefined);
+
+      // 3. Between the surfaces and back, with the selected entry preserved.
+      yield* activate(terminal, "Sessions");
+      expect(locationOn(terminal)).toContain("/sessions");
+      yield* activate(terminal, "Entries");
+      expect(locationOn(terminal)).toContain("/repl");
+
+      // 4. The question, answered in the drawer it opens.
+      yield* openQuestion(terminal);
+      yield* click(terminal, "decision: ");
+      terminal.bytes(BYTES.encode("go"));
+      yield* settled(30);
+      yield* click(terminal, "[submit]");
+      yield* until_(terminal, "the answer's output", (one) => shows(one, "One: alpha/go"));
+      yield* settledEntry(terminal, 1, "ok");
+
+      // 5. A history position, and back to the head.
+      yield* activate(terminal, "[history]");
+      yield* until_(terminal, "the History drawer", (one) => shows(one, "[close]"));
+      yield* click(terminal, "Entry 1 admitted");
+      yield* settled(40);
+      expect(locationOn(terminal)).toContain("at=");
+      yield* click(terminal, "[close]");
+      yield* settled(30);
+      // Frozen: what the draft's guidance says changes, because what Enter there
+      // does changed — there is no head to submit into from here.
+      yield* focusDraft(terminal);
+      expect(shows(terminal, "activate live to return to the head")).toBe(true);
+      expect(shows(terminal, "Enter submits")).toBe(false);
+      yield* activate(terminal, "[live]");
+      yield* until_(terminal, "the head", (one) => !(maybeLocation(one) ?? "at=").includes("at="));
+
+      // 6. The next entry, after the first has completely settled.
+      yield* submitted(terminal, COLD_TWO);
+      yield* settledEntry(terminal, 2, "ok");
+      expect(shows(terminal, "2. [ok] entry-2")).toBe(true);
+
+      // 7. Out, from the control that said so all along.
+      expect(yield* histories(root)).toHaveLength(1);
+      yield* activate(terminal, "[exit]");
+      yield* running;
+    });
+
+    expect(ended?.refusal).toBeUndefined();
+    expect(ended?.location).toContain("xmd://repl/");
+    expect(terminal.resets).toBe(1);
+  });
+});
+
+/**
+ * The whole first-use path at the narrowest supported frame (#870 C1).
+ *
+ * `UI8` walks this path at `160x36`, where there is a transcript column to read
+ * the answer's output in. A narrow frame has no transcript region at all — it
+ * mounts one routed outlet — so this row proves the other half of the claim: that
+ * everything a person has to *do* is reachable at `72x20`, found from the labels
+ * and the one guidance row, with no hidden key and no semantic lookup.
+ *
+ * Every control here is reached the way a person reaches it: Tab to it and press
+ * Enter, or click the exact cell the frame drew. Nothing addresses a node by key.
+ */
+describe("REPL first use: C1 narrow", () => {
+  it("C1: submit, answer, dismiss, reopen, settle, Sessions, History, live and exit at 72x20", function* () {
+    const { terminal, install } = recordingTerminal(NARROW);
+    let ended: ReplOutcome | undefined;
+    yield* scoped(function* (): Operation<void> {
+      yield* install();
+      yield* immediateClock();
+      yield* useTempFileCompiler();
+      yield* useTemporaryHost();
+
+      const running = yield* spawn(function* (): Operation<void> {
+        const ran = yield* runReplProgram({ profile: PROFILE });
+        if (!ran.ok) {
+          throw ran.error;
+        }
+        ended = ran.value;
+      });
+      yield* untilDrawn(terminal);
+
+      // 1. What the screen says it is for, before anything has been typed.
+      expect(guidanceRow(terminal)).toBe(
+        "Ready for Entry 1 · Enter submits · Type here · Tab/Shift+Tab move",
+      );
+
+      // 2. One entry, submitted the way the row said to submit it.
+      yield* submitted(terminal, SHORT_QUESTION);
+      yield* until_(terminal, "the waiting question", (one) => askedRow(one) !== undefined);
+
+      // 3. The screen now says what the execution is doing, and what to activate.
+      expect(guidanceRow(terminal)).toBe(
+        "Entry 1 question · activate answer · Type here · Tab/Shift+Tab move",
+      );
+
+      // 4. Reached by pointer, against the exact cell the frame drew for it.
+      const at = askedRow(terminal);
+      if (at === undefined) {
+        throw new Error("the question announced itself");
+      }
+      yield* clickAt(terminal, at);
+      yield* until_(terminal, "the question's form", (one) => formShowing(one));
+
+      // 5. Escape dismisses without answering, and leaves focus somewhere real.
+      terminal.feed("\x1b");
+      yield* until_(terminal, "the drawer closing", (one) => !formShowing(one));
+      expect(askedRow(terminal)).toBeDefined();
+      // Focus is derived from the tree, so it lands on the next frame rather than
+      // in the same one the drawer left. Waited for, with a deadline, because the
+      // claim is that it arrives somewhere real — on the control still asking.
+      yield* until_(terminal, "focus returning to the waiting question", (one) =>
+        focusedOn(one, "[answer]"),
+      );
+
+      // 6. Reopened with Enter this time, because dismissing answered nothing.
+      yield* activate(terminal, "[answer]");
+      yield* until_(terminal, "the question's form again", (one) => formShowing(one));
+
+      // 7. Answered by typing into the field that holds focus, then submitting.
+      terminal.bytes(BYTES.encode("go"));
+      yield* settled(30);
+      yield* activate(terminal, "[submit]");
+      yield* until_(terminal, "the entry settling", (one) => shows(one, "Ready for Entry 2"));
+      expect(shows(terminal, "1. [ok] entry-1")).toBe(true);
+
+      // 8. Sessions and back, with the entry still the one being read.
+      yield* activate(terminal, "Sessions");
+      yield* until_(terminal, "the Sessions surface", (one) => marked(one, "Sessions"));
+      yield* activate(terminal, "Entries");
+      yield* until_(terminal, "the Entries surface", (one) => marked(one, "Entries"));
+
+      // 9. A draft that has to survive a position, and a position to survive.
+      yield* focusDraft(terminal);
+      terminal.bytes(BYTES.encode("entry two"));
+      yield* settled(30);
+      yield* activate(terminal, "[history]");
+      yield* until_(terminal, "the History drawer", (one) => shows(one, "[close]"));
+      const positions = drawerMarkers(terminal);
+      expect(positions.length).toBeGreaterThan(0);
+      yield* activate(terminal, positions[0] ?? "");
+
+      // 10. Frozen: it says so, says Enter is not a submission, and offers back.
+      // Read from the guidance row rather than the location, because at 72
+      // columns the location is drawn over several rows and says how much of
+      // itself it is not showing — the sentence is what a person reads here.
+      // The position is taken while the drawer is still up, and the row already
+      // names the state it put the screen in rather than waiting to be dismissed.
+      yield* until_(terminal, "the frozen state inside the drawer", (one) =>
+        guidanceRow(one).startsWith("History · "),
+      );
+      expect(guidanceRow(terminal)).toContain("Esc closes");
+
+      // 10. Dismissed, and back in the draft — which a frozen position leaves
+      // editable — the row says what this position cannot do and how to leave it.
+      terminal.feed("\x1b");
+      yield* until_(terminal, "the drawer closing", (one) => !shows(one, "[close]"));
+      yield* focusDraft(terminal);
+      yield* until_(terminal, "the frozen guidance", (one) =>
+        guidanceRow(one).startsWith("History · Enter unavailable"),
+      );
+      expect(guidanceRow(terminal)).toContain("activate live");
+      expect(shows(terminal, "entry two")).toBe(true);
+
+      // 11. Back to the head, and the draft submits from there.
+      yield* activate(terminal, "[live]");
+      yield* until_(terminal, "the head being ready again", (one) =>
+        guidanceRow(one).startsWith("Ready for Entry 2"),
+      );
+      yield* focusDraft(terminal);
+      terminal.feed("\r");
+      yield* until_(terminal, "the second entry", (one) => shows(one, "2. "));
+
+      // 12. And out, from a control on the screen.
+      yield* activate(terminal, "[exit]");
+      yield* running;
+    });
+    expect(ended?.location).toContain("xmd://repl/");
   });
 });

@@ -455,6 +455,50 @@ describe("REPL route: resolving against one model", () => {
  * process says it has started, and has to refuse anything else rather than
  * showing an empty list.
  */
+describe("REPL route: a live question's drawer belongs to one place", () => {
+  beforeAll(() => useTempFileCompiler());
+
+  it("UI4: resolution refuses what the grammar refuses, before anything adopts it", function* () {
+    const events = yield* referenceEvents();
+    const model = projected(events);
+    const live = holding({ elicit: true });
+
+    // The structural rule, enforced where a caller is deciding whether to adopt a
+    // route rather than only where one is spelled. Resolution used to accept a
+    // drawer this surface cannot hold: the reducer adopted it, and the next frame
+    // raised out of `encodeLocation` and ended the command.
+    const asking: readonly ReplDrawerRef[] = [{ kind: "live-elicit" }];
+    const sessions = { ...decoded(`xmd://repl/${EXECUTION}/sessions`), drawers: asking };
+    const refusal = resolveLocation(model, sessions, live);
+    expect(refusal.ok).toBe(false);
+    if (refusal.ok) {
+      throw new Error("the Sessions surface holds no live question");
+    }
+    expect(refusal.error.message).toContain("Sessions surface");
+    // The same route cannot be spelled either, so the two cannot disagree.
+    expect(() => encodeLocation(sessions)).toThrow();
+
+    // A history position cannot answer the question this process is asking.
+    expect(
+      unresolved(
+        projected(events, "yield:root:0"),
+        `xmd://repl/${EXECUTION}/repl/entry-1/+elicit?at=yield:root:0&inspect`,
+        live,
+      ),
+    ).toContain("frozen at an earlier position");
+
+    // Cold, with no process holding a question: a Journal records answers, never a
+    // question that is still waiting, so nothing retained can establish this.
+    expect(unresolved(model, `xmd://repl/${EXECUTION}/repl/entry-1/+elicit`)).toContain(
+      "nothing is being asked",
+    );
+
+    // And on the surface it does belong to, while a question is held, it resolves.
+    const opened = resolved(model, `xmd://repl/${EXECUTION}/repl/entry-1/+elicit`, live);
+    expect(opened.drawers).toEqual([{ kind: "live-elicit" }]);
+  });
+});
+
 describe("REPL route: the conversation filter", () => {
   it("R1: encodes session last, after every member that was canonical before it", function* () {
     const locations = [

@@ -5751,6 +5751,108 @@ which finished first. A record naming a source this prefix never admitted, one i
 admitted twice, or two sources at once is refused rather than attached to a
 guessed owner.
 
+### What the screen teaches, and what leaving it costs
+
+Presentation guidance, visual emphasis and the contextual status a person reads
+are derived process-local state. They are computed from the mounted tree and the
+resolved view on the way to a frame, they are in no location and no record, and
+replay neither produces nor consumes them. A screen that explained itself
+differently would still be the same execution.
+
+Placement owns where things are, and the footer's seven rows are fixed in one
+order: the contextual status and action row, the five History rows, and the draft.
+Each is stated as geometry rather than inferred from a list's length, because the
+one thing on that screen that is not a mounted cell is the History band — its
+labels come from the model, so nothing else can say where it goes, and a renderer
+left to place it on its own put it at the terminal's origin over the sidebar. A
+control the row cannot hold whole is left out of the frame entirely, so what a
+pointer can reach and what a person can see are the same set.
+
+Leaving is lifecycle control, and the one semantic action that settles nothing.
+It answers no question, decides no permission request, and appends no close,
+cancellation or audit: an entry whose root never closed stays unfinished, because
+that is what the file says about it. The command-owned scope is returned from
+rather than torn down from inside, so the session, the observer, every entry task,
+the reader and the frame subscription are halted and joined by the unwind that
+return causes — no host exit call, and no halt left unjoined. The route it prints
+drops the drawers only a running process could have mounted, because a location
+naming a waiting question is one nothing can reopen.
+
+**What the screen says the execution is doing is read from two halves.** The
+projected history answers what the file holds; this process answers what it is
+still doing. Neither is sufficient alone, and the gap between them is a real
+state rather than a rounding error: a root close is appended when a document
+settles, while the task that produced it is still unwinding, so a reading that
+took `settled` for "ready" would offer the next entry into a teardown that has
+not finished. The session's existing liveness reaches the view for that reason
+and no other, and the two are resolved into one value — because the sentence a
+person reads and the decision about whether a standing refusal still applies are
+one judgement, and two places deciding it separately is how a screen comes to
+announce that the next entry may start directly above a refusal explaining that
+the last one has not finished.
+
+That value is derived presentation, like the guidance beside it: computed on the
+way to a frame, in no location member and no record, produced and consumed by
+nothing durable. It is also what decides when a refusal expires. A refusal the
+readiness gave is true of a moment, so it is dropped once a submission would be
+admitted; a refusal of a document that cannot be admitted, or of an answer a
+schema rejected, is true of the thing itself and stays. Telling them apart cannot
+be done by class — a separately loaded copy has its own, and `instanceof` answers
+no across the boundary — nor by `name`, which is writable and so can be worn by
+any failure at all. The session marks its own refusals with a namespaced,
+non-enumerable own property at the point of raising, carrying the sentence it
+normalized, and the screen reads both the classification and the text back from
+that mark: authenticating one while displaying the other would show text the
+session never said.
+
+A recorded failure's reason is presented the same way and bounded the same way.
+The parsed message is already in the model; what the transcript adds is a row for
+it beside the compact outcome, flattened to one line and cut to the region it is
+drawn in, introduction included. A reason is whatever failed, and what failed may
+be a compiler: bounding only the message hands an over-wide row to a narrower
+column, where the renderer cuts it again and takes the mark that said it was
+shortened with it.
+
+Permission announcement follows the same rule in the other direction: the fact
+that a request is waiting is presentation, and the authority that answers it is
+Sessions'. Saying where a request is answered moves no route, opens no drawer and
+takes no focus. And a frozen prefix reads none of it — not the running entry, not
+the waiting question, not the pause capability — because a prefix is a reading of
+the file and the live head is not part of that file's past.
+
+**Terminal input is an owned stream, and that ownership is what makes leaving
+possible.** A runtime supplies the REPL's input as an Effection `Stream` whose
+resource holds the native reader, and it registers that resource's release before
+it acquires anything — so a scope cancelled between the two leaves nothing
+attached. The release actively cancels the read that was outstanding and waits for
+the cancellation, which is why teardown needs no further keystroke; it is
+idempotent, it is never fired and forgotten, and once it has completed no reader,
+listener, task or unsettled promise remains. End of input closes the stream
+normally, a read that fails raises as a terminal failure, and an owner cancelling
+is neither of those — it is the absence of both. Terminal modes stay with the
+screen that owns them and are restored exactly once.
+
+The previous design handed over an `AsyncIterable` and released it with the
+iterator's own `return()`. That is queued behind the very `next()` it has to end,
+so a command that decided to leave while a read was outstanding finished only when
+the person pressed one more key — which they had already stopped doing. A capability
+that can only *ask* to be released is not ownership.
+
+Each runtime spells its own reader and nothing else: Deno and the compiled binary
+share one surface, and the two Node-shaped hosts share a helper that takes its
+standard input by value, so no portable module detects a runtime to decide how to
+read a terminal.
+
+Which surface owns which drawer is one rule with one implementation. Decoding,
+encoding and resolution all consult it, so a route is refused where a caller is
+deciding whether to adopt it rather than at the moment something asks for its
+canonical spelling: resolution that accepted what encoding refused is how an
+adopted route came to raise out of the render path and end the command. A live
+question's drawer belongs to the Entries surface, at the live head, for the entry
+still running, while this process actually holds the question — and activating the
+row that announces one is what crosses to that surface. Nothing crosses on its
+own: arrival announces and repaints, and that is all it does.
+
 This command installs no foreground launcher, no browser elicitation and no
 readline permission handling, reads no runtime global, and adds no durable record
 family of its own: what it retains is the ordinary events any other run writes.

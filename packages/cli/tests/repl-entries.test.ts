@@ -46,7 +46,13 @@ import type { ReplQuestion } from "../src/repl/elicitation.ts";
 import type { ReplExecution } from "../src/repl/journal.ts";
 import { entryInitialBindings, projectRepl } from "../src/repl/model.ts";
 import type { ReplModel } from "../src/repl/model.ts";
-import { openReplSession, submitReplEntry } from "../src/repl/session.ts";
+import {
+  lifecycleRefusal,
+  markLifecycleRefusal,
+  openReplSession,
+  ReplLifecycleError,
+  submitReplEntry,
+} from "../src/repl/session.ts";
 import type { ReplSession } from "../src/repl/session.ts";
 import {
   admitted,
@@ -59,7 +65,7 @@ import {
   withoutAbsentEntry,
 } from "../src/repl/application.ts";
 import type { ReplAction, ReplLive, ReplState, ReplView } from "../src/repl/application.ts";
-import { layout, NARROW } from "../src/repl/layout.ts";
+import { layout, NARROW, surfaceWidth } from "../src/repl/layout.ts";
 import type { ReplPlacedCell, ReplSemanticFrame } from "../src/repl/layout.ts";
 import type { ReplTerminalSize } from "../src/repl/terminal.ts";
 import { fields, readDescription } from "../src/repl/description.ts";
@@ -1440,6 +1446,7 @@ const NOTHING_LIVE: ReplLive = Object.freeze({
   question: undefined,
   expansion: "playing",
   pausable: false,
+  running: false,
   agent: NO_AGENT,
 });
 
@@ -1450,6 +1457,7 @@ function liveReading(session: ReplSession): ReplLive {
     question: session.overlay.question,
     expansion: session.expansion.state,
     pausable: session.controller !== undefined,
+    running: session.live,
     agent: session.agent,
   };
 }
@@ -2493,6 +2501,581 @@ describe("REPL entries: a third entry inherits the file, not the run before it",
       yield* session.join();
       expect(session.model.entries[2]?.terminal?.output).toContain("Three: draft/1");
       expect(session.model.entries[2]?.terminal?.output).not.toContain("build");
+    });
+  });
+});
+
+/**
+ * Which refusals the screen is allowed to forget (#870 UI11/UI12).
+ *
+ * Three refusals reach one decision and only one of them goes stale. Readiness
+ * refuses a *moment*: the entry it names finishes and it stops being true, and a
+ * screen still showing it would contradict the sentence above it. A document that
+ * cannot be admitted and a form that does not validate are refusals of the thing
+ * itself — they stay true however the execution moves on, and dropping one would
+ * take away the only explanation of why somebody's draft is still sitting there.
+ *
+ * So the classification has to be exact in both directions, and it cannot be the
+ * class or the name: `instanceof` silently answers no across loaded copies, and
+ * `name` is an ordinary writable property that anything can carry.
+ */
+describe("REPL entries: which refusal the screen may forget", () => {
+  it("UI12: the session's own lifecycle refusal is recognized, and carries its reason", function* () {
+    const refusal = new ReplLifecycleError("this execution's entry-1 has not finished.");
+    expect(lifecycleRefusal(refusal)).toBe("this execution's entry-1 has not finished.");
+  });
+
+  it("UI12: an ordinary error merely named ReplLifecycleError is not one", function* () {
+    // The name is writable, so this is what a forgery costs: nothing. If the
+    // screen classified by it, any failure at all could claim to be a refusal
+    // this session never gave and be dropped the moment readiness moved.
+    const forged = new Error("this execution's entry-1 has not finished.");
+    forged.name = "ReplLifecycleError";
+    expect(lifecycleRefusal(forged)).toBe(undefined);
+  });
+
+  it("UI12: a refusal marked by another loaded copy is recognized", function* () {
+    // What a separately loaded copy of this module produces: not our class, and
+    // not our symbol — the same namespaced own-property, which is the whole
+    // reason the mark is a string rather than either of those.
+    const elsewhere = new Error("this session is ending, so it starts no further entry.");
+    Object.defineProperty(elsewhere, "executablemd.cli.repl.lifecycleRefusal", {
+      value: "this session is ending, so it starts no further entry.",
+      enumerable: false,
+    });
+    expect(lifecycleRefusal(elsewhere)).toBe(
+      "this session is ending, so it starts no further entry.",
+    );
+  });
+
+  it("UI12: an inherited mark is not an own mark", function* () {
+    // Created *from* something marked. It answers the same for a property read,
+    // which is why the parser reads an own descriptor and never the property:
+    // inheriting the shape of a refusal is not having been refused.
+    const marked = markLifecycleRefusal(new Error("carried"), "carried");
+    const inheriting: unknown = Object.create(marked);
+    expect(lifecycleRefusal(inheriting)).toBe(undefined);
+  });
+
+  it("UI12: an empty or malformed mark is rejected", function* () {
+    const empty = new Error("empty");
+    Object.defineProperty(empty, "executablemd.cli.repl.lifecycleRefusal", {
+      value: "",
+      enumerable: false,
+    });
+    expect(lifecycleRefusal(empty)).toBe(undefined);
+
+    for (const payload of [undefined, null, 0, true, {}, ["a reason"], () => "a reason"]) {
+      const malformed = new Error("malformed");
+      Object.defineProperty(malformed, "executablemd.cli.repl.lifecycleRefusal", {
+        value: payload,
+        enumerable: false,
+      });
+      expect([payload, lifecycleRefusal(malformed)]).toEqual([payload, undefined]);
+    }
+  });
+
+  it("UI12: an unmarked error, and a value that is not one, are not refusals", function* () {
+    expect(lifecycleRefusal(new Error("ordinary"))).toBe(undefined);
+    for (const value of [undefined, null, "a string", 7, {}]) {
+      expect([value, lifecycleRefusal(value)]).toEqual([value, undefined]);
+    }
+  });
+
+  it("UI12: the reason is the marked one, and rewriting the message cannot change it", function* () {
+    const refusal = new ReplLifecycleError("this execution's entry-1 has not finished.");
+    // What the session normalized when it refused, which is what the screen is
+    // meant to show.
+    expect(lifecycleRefusal(refusal)).toBe("this execution's entry-1 has not finished.");
+
+    // `message` is an ordinary writable property. Anything holding this error can
+    // rewrite it, and a screen that displayed `message` while authenticating the
+    // mark would show text the session never said.
+    refusal.message = "Entry 1 is ready — press Enter to submit";
+    expect(refusal.message).toBe("Entry 1 is ready — press Enter to submit");
+    expect(lifecycleRefusal(refusal)).toBe("this execution's entry-1 has not finished.");
+    expect(lifecycleRefusal(refusal)).not.toBe(refusal.message);
+  });
+
+  it("UI12: the mark is non-enumerable, so copying and serializing drop it", function* () {
+    const refusal = new ReplLifecycleError("this execution's entry-1 has not finished.");
+    // A wrapper that means to pass the classification on marks its own; one that
+    // merely copies the fields must not inherit the right to be forgotten.
+    const copied: unknown = { ...refusal };
+    expect(lifecycleRefusal(copied)).toBe(undefined);
+    expect(Object.keys(refusal)).not.toContain("executablemd.cli.repl.lifecycleRefusal");
+  });
+});
+
+/**
+ * Every readiness is a different sentence, at both sizes (#870 UI10).
+ *
+ * One row per state the contract distinguishes, read off the guidance the
+ * application describes rather than off the reducer's shape. The history under
+ * each one is a real projected journal and the live half is this process's own
+ * fact, because readiness is the pair: a close is recorded while the task that
+ * produced it is still unwinding, and a screen reading only the file would offer
+ * the next entry into a teardown that has not finished.
+ */
+describe("REPL entries: what the screen says the execution is doing", () => {
+  beforeAll(() => useTempFileCompiler());
+
+  /** The contextual guidance this view describes, at one size. */
+  function stateRow(
+    state: ReplState,
+    model: ReplModel,
+    live: ReplLive,
+    size: ReplTerminalSize,
+  ): string {
+    const row = rowsOf(describeApplication(reading(state, model, live, size))).find(
+      (one) => one.key === "guidance",
+    );
+    if (row === undefined) {
+      throw new Error("this view described no guidance row");
+    }
+    return row.label;
+  }
+
+  it("UI10: ready, running, waiting, settling, unfinished and complete each read differently", function* () {
+    const nothing = projectRepl([]);
+    if (!nothing.ok) {
+      throw nothing.error;
+    }
+    const EMPTY_MODEL = nothing.value;
+    const holder = replExecution();
+    yield* scoped(function* () {
+      // Nothing admitted and nothing running.
+      const empty = initialState(EXECUTION);
+      for (const size of [WIDE, NARROW]) {
+        expect([size.columns, stateRow(empty, EMPTY_MODEL, NOTHING_LIVE, size)]).toEqual([
+          size.columns,
+          `Ready for Entry 1 · Enter submits · Type here · Tab/Shift+Tab move`,
+        ]);
+      }
+
+      // A real entry, admitted and waiting on a real question.
+      const session = opened(yield* submitReplEntry({ execution: holder, source: ASKS }));
+      const question = yield* asking(session);
+      const waiting = liveReading(session);
+      const unsettled = session.model;
+      expect(unsettled.settled).toBe(false);
+      expect(waiting.running).toBe(true);
+      const state = initialState(EXECUTION);
+
+      // Waiting for an answer: the long spelling where there is room, the short
+      // one where there is not, and the way to reach it either way.
+      expect(stateRow(state, unsettled, waiting, WIDE)).toContain(
+        "Entry 1 waiting for an answer · activate answer",
+      );
+      expect(stateRow(state, unsettled, waiting, NARROW)).toBe(
+        "Entry 1 question · activate answer · Type here · Tab/Shift+Tab move",
+      );
+
+      // The same history with no question outstanding: running, and Enter is not
+      // a submission until it finishes.
+      const busy: ReplLive = { ...waiting, question: undefined };
+      expect(stateRow(state, unsettled, busy, WIDE)).toContain(
+        "Entry 1 running · Enter unavailable until it finishes",
+      );
+      expect(stateRow(state, unsettled, busy, NARROW)).toBe(
+        "Entry 1 running · Enter unavailable · Type here · Tab/Shift+Tab move",
+      );
+
+      // Admitted, no outcome, and nothing running it. The file is what decides
+      // that an entry never finished, so no successor may start however idle it
+      // looks — this is the cold and interrupted case.
+      const abandoned: ReplLive = { ...busy, running: false };
+      expect(stateRow(state, unsettled, abandoned, WIDE)).toContain(
+        "Entry 1 unfinished · no successor can start",
+      );
+      expect(stateRow(state, unsettled, abandoned, NARROW)).toBe(
+        "Entry 1 unfinished · no successor · Type here · Tab/Shift+Tab move",
+      );
+
+      // Answered, and joined.
+      question.submit({ decision: "go" });
+      yield* session.join();
+      const settled = session.model;
+      expect(settled.settled).toBe(true);
+      expect(session.live).toBe(false);
+
+      // The close is recorded and the task is joined: the next entry may start.
+      expect(stateRow(state, settled, liveReading(session), WIDE)).toContain(
+        "Ready for Entry 2 · Enter submits",
+      );
+
+      // The same recorded close while the task that produced it is still
+      // unwinding. This is the one distinction the durable side cannot make, and
+      // the reason the view carries the live half at all.
+      const tearing: ReplLive = { ...liveReading(session), running: true };
+      expect(stateRow(state, settled, tearing, WIDE)).toContain(
+        "Entry 1 settling · Enter unavailable until teardown finishes",
+      );
+      expect(stateRow(state, settled, tearing, NARROW)).toBe(
+        "Entry 1 settling · Enter unavailable · Type here · Tab/Shift+Tab move",
+      );
+
+      // And every one of them is a different sentence.
+      const said = new Set([
+        stateRow(empty, EMPTY_MODEL, NOTHING_LIVE, NARROW),
+        stateRow(state, unsettled, waiting, NARROW),
+        stateRow(state, unsettled, busy, NARROW),
+        stateRow(state, unsettled, abandoned, NARROW),
+        stateRow(state, settled, liveReading(session), NARROW),
+        stateRow(state, settled, tearing, NARROW),
+      ]);
+      expect(said.size).toBe(6);
+      for (const row of said) {
+        expect([row, row.length <= NARROW.columns]).toEqual([row, true]);
+      }
+    });
+  });
+});
+
+/**
+ * A frozen position says what is unavailable, and keeps the draft (#870 UI15).
+ *
+ * The prefix is a reading of the file, not of this process. What the live head is
+ * doing is not a fact about the position being inspected, so the sentence is
+ * about the position and the live-only controls are absent — while the draft,
+ * which belongs to no position, is untouched.
+ */
+describe("REPL entries: what a frozen position says is unavailable", () => {
+  beforeAll(() => useTempFileCompiler());
+
+  it("UI15: History says submission is unavailable, hides live-only controls, and keeps the draft", function* () {
+    const holder = replExecution();
+    yield* scoped(function* () {
+      const session = opened(yield* submitReplEntry({ execution: holder, source: ASKS }));
+      const question = yield* asking(session);
+      question.submit({ decision: "go" });
+      yield* session.join();
+      const model = session.model;
+      const marker = model.entries[0]?.transcript[0]?.marker;
+      if (marker === undefined) {
+        throw new Error("the recorded entry has no position to inspect");
+      }
+
+      const DRAFT_TEXT = "kept across the position";
+      const typed = drafting(initialState(EXECUTION), DRAFT_TEXT);
+      const frozen = frozenAt(typed, marker);
+
+      // The live half says an entry is running and a question is waiting. None of
+      // it may reach this reading: a prefix that borrowed the head's facts would
+      // describe an execution this view is not of.
+      const head: ReplLive = {
+        output: "live output nobody at this position has seen",
+        question: session.overlay.question,
+        expansion: "playing",
+        pausable: true,
+        running: true,
+        agent: NO_AGENT,
+      };
+
+      // Projected *at* the position, because a prefix is a different reading of
+      // the same file rather than a filter over the head.
+      const prefix = projectRepl(yield* holder.stream.readAll(), marker);
+      if (!prefix.ok) {
+        throw prefix.error;
+      }
+      for (const size of [WIDE, NARROW]) {
+        const rows = rowsOf(describeApplication(reading(frozen, prefix.value, head, size)));
+        const guidance = rows.find((one) => one.key === "guidance")?.label ?? "";
+        // The state is the position, and it says Enter is not a submission here.
+        expect([size.columns, guidance.startsWith("History · Enter unavailable")]).toEqual([
+          size.columns,
+          true,
+        ]);
+        expect([size.columns, guidance.includes("activate live")]).toEqual([size.columns, true]);
+        expect([size.columns, guidance.includes("Enter submits")]).toEqual([size.columns, false]);
+        expect([size.columns, guidance.length <= size.columns]).toEqual([size.columns, true]);
+
+        // The way back is a control on the screen, and the live-only ones are not
+        // on it at all: there is nothing here to pause and no question to answer.
+        const keys = new Set(rows.map((one) => one.key));
+        expect([size.columns, keys.has("footer:live")]).toEqual([size.columns, true]);
+        for (const absent of ["footer:pause", "footer:continue", "footer:asked"]) {
+          expect([size.columns, absent, keys.has(absent)]).toEqual([size.columns, absent, false]);
+        }
+
+        // And the draft, which belongs to no position, is exactly what was typed.
+        expect([size.columns, rows.find((one) => one.key === "footer:input")?.label]).toEqual([
+          size.columns,
+          DRAFT_TEXT,
+        ]);
+      }
+
+      // Returning to the head restores the readiness of the head, with the same
+      // draft still in hand.
+      const live = rowsOf(describeApplication(reading(typed, model, liveReading(session), WIDE)));
+      expect(live.find((one) => one.key === "guidance")?.label).toContain("Ready for Entry 2");
+      expect(live.find((one) => one.key === "footer:input")?.label).toBe(DRAFT_TEXT);
+    });
+  });
+});
+
+/**
+ * A recorded close is not a joined task, and the screen says which (#870 UI11).
+ *
+ * The one state the durable side cannot describe. The root close is in the file —
+ * the catalog shows an outcome, `model.settled` is true — while the task that
+ * wrote it is still coming down, and a submission taken in that window has
+ * nowhere to go. A screen reading only the file would offer the next entry into a
+ * teardown that has not finished.
+ *
+ * Held by a latch rather than by waiting: the entry owns an installation whose
+ * `ensure` signals that it has been entered and then parks on a resolver this row
+ * opens. Nothing here is produced by elapsed time. The only timing is the bounded
+ * wait that keeps a genuine deadlock from reporting as a hang.
+ */
+describe("REPL entries: a retained close while the task is still coming down", () => {
+  beforeAll(() => useTempFileCompiler());
+
+  /** The contextual guidance this view describes. */
+  function guidanceOf(state: ReplState, model: ReplModel, live: ReplLive): string {
+    const row = rowsOf(describeApplication(reading(state, model, live, WIDE))).find(
+      (one) => one.key === "guidance",
+    );
+    if (row === undefined) {
+      throw new Error("this view described no guidance row");
+    }
+    return row.label;
+  }
+
+  it("UI11: settling refuses the next entry, and releasing teardown reads ready with no input", function* () {
+    const holder = replExecution();
+    const entered = gate();
+    const release = gate();
+    yield* scoped(function* () {
+      // Released from inside this scope as well as outside it: an assertion that
+      // throws while the finalizer is parked would otherwise deadlock the
+      // teardown it is holding, and a deadlock reports as a timeout rather than
+      // as the assertion that failed.
+      try {
+        const session = opened(
+          yield* submitReplEntry({
+            execution: holder,
+            source: FIRST,
+            installations: [holdingTeardown(entered, release)],
+          }),
+        );
+        // Both halves true at once, which is the whole point of the latch: the
+        // close is durably projected, and the task that wrote it has not finished.
+        yield* awaiting("the entry reaching its own teardown", entered.opened);
+        expect(session.model.settled).toBe(true);
+        expect(session.model.entries[0]?.terminal?.status).toBe("ok");
+        expect(session.live).toBe(true);
+
+        // A draft typed while it comes down, and a form message about something
+        // else entirely, so this row can tell the two refusals apart.
+        const DRAFT_TEXT = "the next entry, typed while the last one settles";
+        const typed = Object.freeze({
+          ...drafting(initialState(EXECUTION), DRAFT_TEXT),
+          form: Object.freeze({
+            ...initialState(EXECUTION).form,
+            messages: Object.freeze([{ field: "decision", message: "decision is required" }]),
+          }),
+        });
+
+        // The screen says settling, and says that Enter is not a submission yet.
+        const settling = guidanceOf(typed, session.model, liveReading(session));
+        expect(settling).toContain("Entry 1 settling");
+        expect(settling).toContain("Enter unavailable until teardown finishes");
+        expect(settling).not.toContain("Enter submits");
+
+        // And the session refuses, as a lifecycle refusal and recognisably so.
+        const refused = refusedSubmission(yield* session.submit(INHERITING));
+        expect(lifecycleRefusal(refused)).toBe(refused.message);
+        // Nothing started and nothing was written: one entry, one admission.
+        expect(started(yield* holder.stream.readAll())).toBe(1);
+        expect(session.model.entries.map((entry) => entry.key)).toEqual(["entry-1"]);
+        // The draft is exactly what was typed, and the form message is still the
+        // form's own.
+        expect(typed.draft).toBe(DRAFT_TEXT);
+        expect(typed.form.messages[0]?.message).toBe("decision is required");
+
+        // Released — and nothing is typed. The only thing that changes is that
+        // the teardown finishes.
+        release.open();
+        yield* session.join();
+        expect(session.live).toBe(false);
+
+        // The same state, the same draft, the same form message: the screen now
+        // reads ready, because the other half of the fact changed.
+        const ready = guidanceOf(typed, session.model, liveReading(session));
+        expect(ready).toContain("Ready for Entry 2");
+        expect(ready).toContain("Enter submits");
+        expect(ready).not.toContain("settling");
+        expect(typed.form.messages[0]?.message).toBe("decision is required");
+
+        // And the preserved draft is admissible now, which is what the refusal
+        // was only ever saying about a moment.
+        accepted(yield* session.submit(typed.draft));
+        yield* session.join();
+        expect(session.model.entries.map((entry) => entry.key)).toEqual(["entry-1", "entry-2"]);
+      } finally {
+        release.open();
+      }
+    });
+  });
+});
+
+/**
+ * A failed entry says what it failed with (#870 UI13).
+ *
+ * The Journal already carries the parsed message; the catalog's `[err]` says only
+ * that something went wrong. An outcome without its reason is a reader being
+ * shown that their entry failed and being sent to the file to find out what.
+ *
+ * What it must not become is the record. A real compiler failure runs to hundreds
+ * of characters and embeds the whole generated module as a `data:` URI, so the row
+ * is flattened to one line and cut — every newline would otherwise become another
+ * cell and push the footer and every control off the screen.
+ */
+describe("REPL entries: what a failed entry says it failed with", () => {
+  beforeAll(() => useTempFileCompiler());
+
+  /** The transcript rows this model describes, by label. */
+  function transcript(model: ReplModel): string[] {
+    return rowsOf(describeApplication(reading(initialState(EXECUTION), model, NOTHING_LIVE, WIDE)))
+      .filter((one) => one.key.startsWith("line:"))
+      .map((one) => one.label);
+  }
+
+  it("UI13: the recorded reason is on the screen, bounded, and a cold reopen says the same", function* () {
+    const holder = replExecution();
+    yield* scoped(function* () {
+      // A real failure from a real compile: `await` is not available inside an
+      // eval block, which the engine reports with the whole generated module
+      // inlined as a `data:` URI.
+      const FAILS = ["```ts eval", "await Promise.resolve(1)", "```", ""].join("\n");
+      const session = opened(yield* submitReplEntry({ execution: holder, source: FAILS }));
+      yield* session.join();
+
+      const terminal = session.model.entries[0]?.terminal;
+      expect(terminal?.status).toBe("err");
+      const recorded = terminal?.message ?? "";
+      expect(recorded.length).toBeGreaterThan(80);
+
+      const live = transcript(session.model);
+      const failed = live.find((one) => one.startsWith("failed: "));
+      expect(failed).toBeDefined();
+      // The compact outcome is still there, beside the reason rather than
+      // replaced by it.
+      expect(live).toContain("closed err");
+
+      // One line, and bounded by the region it will be drawn in rather than by a
+      // constant: the row that carries it is cut to where it lands, and the row
+      // below asserts that against the real placement at three sizes.
+      expect(failed?.includes("\n")).toBe(false);
+      expect((failed ?? "").length).toBeLessThanOrEqual(surfaceWidth(WIDE));
+      // What is drawn is the *recorded* reason, flattened and cut — compared
+      // against the message this run actually produced rather than against a
+      // phrase. The phrase is the engine's: Deno compiles an eval block with V8
+      // and says "Unexpected reserved word", while Node and Bun reach it through
+      // esbuild and say "Transform failed". Asserting either one makes this row a
+      // claim about whichever runtime happened to write it.
+      const shown = (failed ?? "").slice("failed: ".length).replace(/…$/, "");
+      expect(shown.length).toBeGreaterThan(0);
+      expect(recorded.replace(/\s+/g, " ").trim().startsWith(shown)).toBe(true);
+      // And it is the message, not the serialized record around it.
+      expect(failed).not.toContain("stack");
+      expect(failed).not.toContain('"name"');
+
+      // Cold: the same file, projected again, with nothing run. `projectRepl` is a
+      // pure reading of the events — no compile, no provider, no execution — and
+      // it answers with the same reason on the same row.
+      const cold = projectRepl(yield* holder.stream.readAll());
+      if (!cold.ok) {
+        throw cold.error;
+      }
+      expect(cold.value.entries[0]?.terminal?.message).toBe(recorded);
+      expect(transcript(cold.value).find((one) => one.startsWith("failed: "))).toBe(failed);
+    });
+  });
+
+  it("UI13: the reason is drawn inside its region at every supported size, footer untouched", function* () {
+    const holder = replExecution();
+    yield* scoped(function* () {
+      const FAILS = ["```ts eval", "await Promise.resolve(1)", "```", ""].join("\n");
+      const session = opened(yield* submitReplEntry({ execution: holder, source: FAILS }));
+      yield* session.join();
+      // With the failed entry selected, so its transcript is the reading on every
+      // profile: a narrow frame mounts one routed outlet, and the catalog is what
+      // it shows until an entry is chosen.
+      const entry = session.model.entries[0]?.key ?? "";
+      const state = Object.freeze({
+        ...initialState(EXECUTION),
+        route: Object.freeze({ ...initialState(EXECUTION).route, entry }),
+      });
+
+      // Through the real placement boundary, because the claim is about drawn
+      // cells. A described row that is wider than the region it lands in is
+      // reflowed into rows the layout never allocated — and the renderer's cut
+      // would take the ellipsis with it, so the row would end mid-word with
+      // nothing saying it had been shortened.
+      for (const size of [WIDE, { columns: 120, rows: 30 }, NARROW]) {
+        const tree = yield* useReplTree<ReplAction>();
+        const view = reading(state, session.model, NOTHING_LIVE, size);
+        yield* applied(tree, view);
+        const frame = layout(size, replSurface(tree, view));
+
+        const cells = frame.cells.filter((cell) => {
+          const key = tree.keyOf(cell.node);
+          return key !== undefined && key.startsWith("line:");
+        });
+        const failed = cells.find((cell) => cell.text.startsWith("failed: "));
+        const region = frame.regions.find((one) => one.region === "transcript")?.bounds;
+
+        if (region === undefined) {
+          // The narrow profile mounts one routed outlet, and the transcript is
+          // not one of them: `content` carries the navigation and whichever
+          // catalog the route chose. No transcript row is placed at this size at
+          // all, which is asserted rather than assumed — a reason that cannot be
+          // drawn cannot overflow, and a row claiming to measure one here would
+          // be measuring nothing.
+          expect([size.columns, cells.length]).toEqual([size.columns, 0]);
+          expect([size.columns, failed]).toEqual([size.columns, undefined]);
+        } else {
+          expect([size.columns, failed !== undefined]).toEqual([size.columns, true]);
+          const drawn = failed?.bounds;
+          // Inside its own region, by its own geometry: it starts where the
+          // region starts and ends before the region ends.
+          expect([size.columns, (drawn?.x ?? -1) >= region.x]).toEqual([size.columns, true]);
+          expect([
+            size.columns,
+            (drawn?.x ?? 0) + (failed?.text.length ?? 0) <= region.x + region.width,
+          ]).toEqual([size.columns, true]);
+          // One row, which is what keeps everything below it where it was.
+          expect([size.columns, drawn?.height]).toEqual([size.columns, 1]);
+          // And it says so wherever it had to be shortened, rather than ending
+          // mid-word with the mark cut off by the renderer.
+          if ((failed?.text.length ?? 0) === region.width) {
+            expect([size.columns, failed?.text.endsWith("…")]).toEqual([size.columns, true]);
+          }
+        }
+
+        // The footer is exactly where it always is: the reason did not push a
+        // single row of it anywhere.
+        const footer = frame.regions.find((one) => one.region === "footer")?.bounds;
+        expect([size.columns, footer?.height]).toEqual([size.columns, 7]);
+        expect([size.columns, footer?.y]).toEqual([size.columns, size.rows - 7]);
+        expect([size.columns, footer?.width]).toEqual([size.columns, size.columns]);
+      }
+    });
+  });
+
+  it("UI13: an entry that did not fail is given no failure text", function* () {
+    const holder = replExecution();
+    yield* scoped(function* () {
+      const session = opened(yield* submitReplEntry({ execution: holder, source: FIRST }));
+      yield* session.join();
+      expect(session.model.entries[0]?.terminal?.status).toBe("ok");
+      // Nothing invented: an `ok` outcome has no reason, and a row saying it
+      // failed would describe a failure that did not happen.
+      for (const row of transcript(session.model)) {
+        expect([row, row.startsWith("failed: ")]).toEqual([row, false]);
+      }
     });
   });
 });

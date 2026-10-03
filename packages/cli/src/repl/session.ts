@@ -139,7 +139,64 @@ export class ReplLifecycleError extends Error {
   constructor(message: string) {
     super(message);
     this.name = "ReplLifecycleError";
+    markLifecycleRefusal(this, message);
   }
+}
+
+/**
+ * The mark itself.
+ *
+ * Stable and namespaced, because it is read across loaded copies. Changing this
+ * string is changing a cross-copy contract.
+ */
+const LIFECYCLE_REFUSAL = "executablemd.cli.repl.lifecycleRefusal";
+
+/**
+ * State that this failure is the execution's readiness refusing a submission,
+ * and answer with it.
+ *
+ * ## Why a mark rather than a class or a name
+ *
+ * What reads this is the screen, deciding whether a refusal it is already showing
+ * has stopped being true. Three refusals reach that decision and only this one
+ * goes stale: readiness refuses a *moment*, while a document that cannot be
+ * admitted and a form that does not validate are refusals of the thing itself and
+ * stay true however the execution moves on. Dropping one of those would take away
+ * the only explanation of why somebody's draft is still sitting there.
+ *
+ * `instanceof` cannot make that distinction safely, because a separately loaded
+ * copy of this module has its own class and the check silently answers no. The
+ * `name` cannot either, in the other direction: it is an ordinary writable
+ * property, so any error at all can carry this one and be mistaken for a refusal
+ * the session never gave. A namespaced own-property survives the boundary and is
+ * only there because a throw site put it there.
+ *
+ * Non-enumerable, so an error that is copied, wrapped or serialized does not take
+ * the mark along by accident — a wrapper meaning to pass the classification on
+ * marks its own.
+ */
+export function markLifecycleRefusal<E extends Error>(error: E, reason: string): E {
+  if (Object.getOwnPropertyDescriptor(error, LIFECYCLE_REFUSAL) === undefined) {
+    Object.defineProperty(error, LIFECYCLE_REFUSAL, { value: reason, enumerable: false });
+  }
+  return error;
+}
+
+/**
+ * The reason this failure carries, when it is readiness refusing a submission.
+ *
+ * Answers `undefined` for everything else: an unmarked error, an ordinary one
+ * merely *named* `ReplLifecycleError`, a mark it only inherits from a prototype
+ * it was created with, and a mark whose payload is not a non-empty string. Reads
+ * an own property descriptor rather than the property, so an inherited value is
+ * never read at all.
+ */
+export function lifecycleRefusal(error: unknown): string | undefined {
+  if (typeof error !== "object" || error === null) {
+    return undefined;
+  }
+  const held = Object.getOwnPropertyDescriptor(error, LIFECYCLE_REFUSAL)?.value;
+  return typeof held === "string" && held.length > 0 ? held : undefined;
 }
 
 /** What this process knows that the Journal does not. */
