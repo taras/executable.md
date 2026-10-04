@@ -3255,6 +3255,339 @@ const COLD_TWO = [
   "",
 ].join("\n");
 
+describe("REPL journey: what an open drawer covers, through the terminal", () => {
+  /** Every cell of one rectangle that is not blank, as `column,row=character`. */
+  const insideOf = (
+    rows: readonly string[],
+    box: { top: number; bottom: number; left: number; right: number },
+  ): string[] => {
+    const found: string[] = [];
+    for (let row = box.top; row < box.bottom; row += 1) {
+      const line = rows[row] ?? "";
+      for (let column = box.left; column < box.right; column += 1) {
+        const cell = line[column] ?? " ";
+        if (cell !== " ") {
+          found.push(`${column},${row}=${cell}`);
+        }
+      }
+    }
+    return found;
+  };
+
+  /** The text of one rectangle's rows, joined, which is what a reader sees in it. */
+  const textOf = (
+    rows: readonly string[],
+    box: { top: number; bottom: number; left: number; right: number },
+  ): string =>
+    Array.from({ length: box.bottom - box.top }, (_unused, at) =>
+      (rows[box.top + at] ?? "").slice(box.left, box.right),
+    ).join("\n");
+
+  it("TL6: narrow from the start, and through a resize round trip, it obscures what it covers", function* () {
+    const { terminal, install } = recordingTerminal({ columns: 72, rows: 20 });
+
+    yield* scoped(function* (): Operation<void> {
+      yield* install();
+      yield* immediateClock();
+      yield* useTempFileCompiler();
+      yield* useTemporaryHost();
+
+      const running = yield* spawn(function* (): Operation<void> {
+        const ran = yield* runReplProgram({ profile: PROFILE });
+        if (!ran.ok) {
+          throw ran.error;
+        }
+      });
+      yield* untilDrawn(terminal);
+
+      // A settled entry, so the body behind the drawer has a reading in it. A
+      // narrow frame draws no transcript column, so what is behind the rectangle
+      // there is the location and the catalog rather than the output — which is
+      // why the rows covered are read off the screen rather than named here.
+      yield* submitted(terminal, COLD_ONE);
+      yield* settledEntry(terminal, 1, "ok");
+
+      /**
+       * What the drawer covers, and what it must leave alone, at this size.
+       *
+       * The rows are the accumulated screen rather than one frame's bytes,
+       * because this renderer writes diffs: one frame holds only what changed,
+       * and what is being asked about is what a person is looking at. Every size
+       * change redraws the whole terminal, so inside this rectangle the
+       * accumulated screen is current at whatever size it is read at.
+       */
+      function* covering(label: string): Operation<void> {
+        const box = drawerBox(terminal.size);
+        yield* settled(30);
+        const body = screenOf(terminal);
+        // Pre-assert: the rectangle the drawer is about to be placed in really
+        // has text in it. Without this the assertion below would pass on an
+        // empty screen.
+        const behind = insideOf(body, box);
+        expect(behind.length).toBeGreaterThan(0);
+        const covered = textOf(body, box);
+        expect(covered.trim().length).toBeGreaterThan(0);
+
+        yield* activate(terminal, "[history]");
+        // Waited for in the rectangle, because the drawer covers the row the
+        // location is drawn on: there is no readable location to ask while it is
+        // open, which is itself the coverage being tested.
+        yield* until_(terminal, `the drawer at ${label}`, (one) =>
+          textOf(screenOf(one), box).includes("History"),
+        );
+        yield* settled(30);
+        const open = screenOf(terminal);
+        const inside = textOf(open, box);
+        // Its own rows are in the rectangle instead — including its heading, so
+        // this is the drawer and not an empty hole.
+        expect(inside).toContain("History");
+        // And none of the lines it covered is anywhere inside it. Read as cells
+        // rather than as descriptions: the blank interior of a short modal line
+        // is exactly where a drawer without a background lets text through.
+        for (const line of covered.split("\n").map((one) => one.trim())) {
+          if (line.length < 4) {
+            continue;
+          }
+          expect([label, line, inside.includes(line)]).toEqual([label, line, false]);
+        }
+        // The footer is never covered: the draft owns the last row and shares it
+        // with nothing.
+        expect(box.bottom).toBeLessThanOrEqual(terminal.size.rows - 7);
+        expect(open[terminal.size.rows - 1]?.includes(">")).toBe(true);
+
+        terminal.feed("\x1b");
+        yield* until_(
+          terminal,
+          `the drawer closing at ${label}`,
+          (one) => !(maybeLocation(one) ?? "+history").includes("+history"),
+        );
+      }
+
+      // Narrow from the start, which is not the same screen as one that was
+      // resized down to it.
+      yield* covering("72x20");
+
+      // Then a round trip, because a diffing renderer leaves stale text exactly
+      // where a rectangle moved.
+      terminal.resized({ columns: 160, rows: 36 });
+      yield* until_(terminal, "the wide frame", (one) => one.size.columns === 160);
+      yield* covering("160x36");
+      terminal.resized({ columns: 72, rows: 20 });
+      yield* until_(terminal, "the narrow frame again", (one) => one.size.columns === 72);
+      yield* covering("72x20 again");
+
+      terminal.end();
+      yield* running;
+    });
+  });
+});
+
+describe("REPL journey: a selection, a position and a draft across a resize", () => {
+  it("TL10: wide to narrow and back keeps the whole reading, and a cold open restores it", function* () {
+    const first = recordingTerminal({ columns: 160, rows: 36 });
+    let root: string | undefined;
+    let files: string[] = [];
+    let ended: ReplOutcome | undefined;
+    let standing: string | undefined;
+
+    yield* scoped(function* (): Operation<void> {
+      yield* first.install();
+      yield* immediateClock();
+      yield* useTempFileCompiler();
+      root = yield* useTemporaryHost();
+      const terminal = first.terminal;
+
+      const running = yield* spawn(function* (): Operation<void> {
+        const ran = yield* runReplProgram({ profile: PROFILE });
+        if (!ran.ok) {
+          throw ran.error;
+        }
+        ended = ran.value;
+      });
+      yield* untilDrawn(terminal);
+      files = yield* histories(root);
+
+      // Two settled entries, so there is a catalog to select from and positions
+      // to read at.
+      yield* submitted(terminal, COLD_ONE);
+      yield* settledEntry(terminal, 1, "ok");
+      yield* submitted(terminal, COLD_TWO);
+      yield* settledEntry(terminal, 2, "ok");
+
+      // 1. An entry selected by pointing at the cell its row is drawn in, which
+      //    is the production input path for a selection.
+      yield* click(terminal, "2. [ok] entry-2");
+      yield* until_(terminal, "entry-2 being the locus", (one) =>
+        locationOn(one).includes("/entry-2"),
+      );
+      expect(marked(terminal, "2. [ok] entry-2")).toBe(true);
+
+      // 2. A History position, chosen through the drawer the footer control
+      //    opens. Entry 2's own admission, so the entry selected above still
+      //    exists at it.
+      yield* activate(terminal, "[history]");
+      expect(locationOn(terminal)).toContain("+history");
+      yield* focusOn(terminal, "Entry 2 admitted");
+      terminal.feed("\r");
+      yield* until_(terminal, "a frozen position", (one) => locationOn(one).includes("at="));
+      // Choosing a position does not close the drawer it was chosen in, so it is
+      // dismissed the way a person dismisses it — and the position stands.
+      terminal.feed("\x1b");
+      yield* until_(terminal, "the drawer closing", (one) => !locationOn(one).includes("+history"));
+      expect(locationOn(terminal)).toContain("at=");
+
+      // 3. A non-empty draft, typed into the field Tab reaches.
+      yield* focusDraft(terminal);
+      terminal.bytes(BYTES.encode(DRAFTED));
+      yield* until_(
+        terminal,
+        "the draft reaching the location",
+        (one) => draftIn(locationOn(one)) !== undefined,
+      );
+
+      // The whole semantic reading, in the one string that carries all of it.
+      standing = locationOn(terminal);
+      expect(standing).toContain("/entry-2");
+      expect(standing).toContain("at=");
+      expect(standing).toContain("inspect");
+      const drafted = decodeLocation(standing);
+      expect(drafted.ok).toBe(true);
+      if (drafted.ok) {
+        expect(drafted.value.draft).toBe(DRAFTED);
+      }
+      expect(shows(terminal, `>> ${DRAFTED}`)).toBe(true);
+      // At entry 2's own admission the catalog says what that position says: the
+      // entry is there and has settled nothing yet.
+      expect(marked(terminal, READING)).toBe(true);
+
+      // 4. Narrow. The routed surface is one column wide now, and what a reader
+      //    chose is still what the screen says: the draft is on its own row, the
+      //    entry still carries the selection marker, and the catalog is still the
+      //    catalog. The location itself is abbreviated at this size, which is why
+      //    it is read back at the width that draws all of it.
+      // Read off the frames presented from the resize onward, because this
+      // renderer writes diffs: a buffer that also held the wide frames would
+      // answer with rows the narrow terminal no longer has.
+      const from = terminal.presented.length;
+      terminal.resized({ columns: 72, rows: 20 });
+      yield* until_(
+        terminal,
+        "the narrow frame",
+        (one) =>
+          one.presented.length > from &&
+          replay(one.presented.slice(from)).some((line) => line.includes("* Entries")),
+      );
+      const narrow = replay(terminal.presented.slice(from));
+      expect(narrow.length).toBe(20);
+      expect(narrow.filter((line) => line.trimEnd().length > 72)).toEqual([]);
+      expect(narrow.some((line) => line.includes(`>> ${DRAFTED}`))).toBe(true);
+      expect(markedIn(narrow, READING)).toBe(true);
+      expect(narrow.some((line) => line.includes("1. [ok] entry-1"))).toBe(true);
+
+      // 5. Wide again, and the reading is the same string it was. Byte equality
+      //    over the canonical location is the whole of the claim: route, surface,
+      //    selected entry, frozen position, inspect and draft are all in it.
+      const back = terminal.presented.length;
+      terminal.resized({ columns: 160, rows: 36 });
+      yield* until_(
+        terminal,
+        "the wide frame again",
+        (one) => one.presented.length > back && replay(one.presented.slice(back)).length === 36,
+      );
+      expect(locationOn(terminal)).toBe(standing);
+
+      // 6. And the cells agree with the targets the frame published for them: a
+      //    pointer at the row entry 1 is drawn in selects entry 1, and one at
+      //    entry 2's row puts the reading back exactly as it was.
+      yield* click(terminal, "1. [ok] entry-1");
+      yield* until_(terminal, "entry-1 being the locus", (one) =>
+        locationOn(one).includes("/entry-1"),
+      );
+      expect(marked(terminal, "1. [ok] entry-1")).toBe(true);
+      yield* click(terminal, READING);
+      yield* until_(terminal, "entry-2 again", (one) => maybeLocation(one) === standing);
+      expect(locationOn(terminal)).toBe(standing);
+
+      terminal.end();
+      yield* running;
+    });
+
+    // What the command handed back is what it was showing.
+    expect(ended?.location).toBe(standing);
+
+    const retained = root;
+    if (retained === undefined || standing === undefined) {
+      throw new Error("the first process created a repository and showed a location");
+    }
+    const path = join(retained, "xmd", "repl", files[0]);
+    const before = yield* until(readFile(path, "utf8"));
+
+    // A cold process over that exact location: the same reading, with no work
+    // performed and nothing appended.
+    const second = recordingTerminal({ columns: 160, rows: 36 });
+    let performed: Performed | undefined;
+    yield* scoped(function* (): Operation<void> {
+      yield* second.install();
+      yield* immediateClock();
+      yield* reopening(retained);
+      performed = yield* countPerformed();
+
+      const running = yield* spawn(function* (): Operation<void> {
+        const ran = yield* runReplProgram({ location: standing, profile: PROFILE });
+        if (!ran.ok) {
+          throw ran.error;
+        }
+      });
+      yield* untilDrawn(second.terminal);
+
+      expect(shows(second.terminal, "1. [ok] entry-1")).toBe(true);
+      // The position this location names, not the head: entry 2 is there and has
+      // settled nothing at its own admission.
+      expect(shows(second.terminal, READING)).toBe(true);
+      expect(marked(second.terminal, READING)).toBe(true);
+      expect(shows(second.terminal, `>> ${DRAFTED}`)).toBe(true);
+      expect(locationOn(second.terminal)).toBe(standing);
+
+      second.terminal.end();
+      yield* running;
+    });
+
+    // No entry source compiled, no component source read, nobody asked.
+    expect(performed?.compiles).toBe(0);
+    expect(performed?.reads.filter((one) => one.endsWith(".md"))).toEqual([]);
+    expect(performed?.asked).toBe(0);
+    // And the Journal is byte-identical: a cold process reads, it does not write.
+    expect(yield* until(readFile(path, "utf8"))).toBe(before);
+    expect(second.terminal.resets).toBe(1);
+  });
+});
+
+/**
+ * Whether one of these rows carries the selection marker before this label.
+ *
+ * The same reading as `marked`, over rows a caller has already chosen — which is
+ * what a claim about one size needs, since the accumulated buffer still holds
+ * the rows the other size drew.
+ */
+function markedIn(rows: readonly string[], label: string): boolean {
+  return rows.some((line) => {
+    const at = line.indexOf(label);
+    return at >= 2 && line.slice(at - 2, at) === "* ";
+  });
+}
+
+/** The draft this reading carries across every size, with a space in it. */
+const DRAFTED = "keep this draft";
+
+/**
+ * Entry 2's catalog row, as the position being read says it.
+ *
+ * At entry 2's own admission nothing of entry 2 has settled, so its outcome row
+ * is the unfinished one — which is a fact about the position rather than about
+ * the entry, and is why this label is not the settled one.
+ */
+const READING = "2. [unfinished] entry-2";
+
 describe("REPL journey: a cold process over a multi-entry journal", () => {
   it("EC1: the same catalog and the same selected entry, with no work and no append", function* () {
     const first = recordingTerminal();
