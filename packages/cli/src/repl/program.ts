@@ -684,13 +684,13 @@ function* drive(
       // A focus claim this commit satisfied is spent here, at the commit that
       // satisfied it: what the tree answers is the only thing that says whether
       // the control a claim named actually took it.
-      state = focusSettled(view, settledFocus);
+      state = focusSettled(view, settledFocus, painted.admission);
       if (settledFocus !== focused) {
         focused = settledFocus;
         const again = yield* paint(frames, tree, renderer, screen, compose);
         rendered = again.rendered;
         settledFocus = keyOfFocus(tree);
-        state = focusSettled(again.view, settledFocus);
+        state = focusSettled(again.view, settledFocus, again.admission);
         focused = settledFocus;
       }
       if (ended) {
@@ -1101,7 +1101,11 @@ function* prepared(
         // And only then 7. acknowledge that this timestamp has been applied.
         yield* screen.present(committed.value.rendered.output);
         held.value.acknowledge();
-        return { rendered: committed.value.rendered, view };
+        return {
+          rendered: committed.value.rendered,
+          view,
+          admission: committed.value.admission,
+        };
       }
       if (!isStaleFrame(committed.error)) {
         throw committed.error;
@@ -1131,6 +1135,15 @@ interface ReplPainted {
    * they first composed.
    */
   readonly view: ReplView;
+  /**
+   * What this frame admitted.
+   *
+   * Handed back because settling a focus claim has to keep what the claim
+   * moved: a window the claim scrolled to show a row is the window a person is
+   * now looking at, and the offset this process holds has to become that one
+   * before the claim is spent.
+   */
+  readonly admission: ReplAdmission;
 }
 
 /**

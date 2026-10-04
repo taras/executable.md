@@ -1599,12 +1599,37 @@ export function focusClaim(view: ReplView): string | undefined {
  * traversal is not an action, so a claim nobody retired would pull somebody back
  * after every Tab and traversal would never move.
  */
-export function focusSettled(view: ReplView, focused: string | undefined): ReplState {
+export function focusSettled(
+  view: ReplView,
+  focused: string | undefined,
+  /**
+   * What the frame that satisfied the claim admitted.
+   *
+   * Needed because a claim can *move* a window to show the row it names, and
+   * the move was computed from the claim: spending the claim without keeping
+   * the move would scroll the catalog straight back and take the row focus has
+   * just landed on off the screen. A caller with no committed frame to hand —
+   * one asking only whether a claim is spent — leaves it out.
+   */
+  admission?: ReplAdmission,
+): ReplState {
   const claim = focusClaim(view);
   if (view.state.restore === undefined || claim === undefined || focused !== claim) {
     return view.state;
   }
-  return Object.freeze({ ...view.state, restore: undefined });
+  // The reveal this frame presented, retained before the claim that caused it is
+  // spent. Only a claim on a catalog row can have moved that window, and only
+  // the window's own admitted start is kept — the offset this process holds
+  // becomes the one a person is actually looking at, so the next frame asks the
+  // same question and gets the same answer without a claim to ask it for.
+  const revealed = claim.startsWith("entry:")
+    ? admission?.windows.get(ENTRIES_WINDOW)?.from
+    : undefined;
+  const viewports =
+    revealed === undefined || revealed === view.state.viewports.entries
+      ? view.state.viewports
+      : Object.freeze({ ...view.state.viewports, entries: revealed });
+  return Object.freeze({ ...view.state, restore: undefined, viewports });
 }
 
 /** Every answer this history already holds, wherever in its entries it holds it. */

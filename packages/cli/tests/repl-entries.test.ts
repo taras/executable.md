@@ -60,6 +60,7 @@ import {
   ENTRIES_WINDOW,
   entriesRowCount,
   focusClaim,
+  focusSettled,
   initialState,
   NO_AGENT,
   reduceRepl,
@@ -1601,6 +1602,12 @@ function* applied(
   yield* drawn(tree, view, view.size, engine);
 }
 
+/** The key of whatever holds focus now, as the root reads it. */
+function keyedBy(tree: ReplTree<ReplAction>): string | undefined {
+  const node = tree.focused();
+  return node === undefined ? undefined : tree.keyOf(node);
+}
+
 /** The mounted node this key names, or none, which is what absence looks like. */
 function nodeOf(tree: ReplTree<ReplAction>, key: string): string | undefined {
   return tree.mounted().find((id) => tree.keyOf(id) === key);
@@ -2425,6 +2432,10 @@ describe("REPL entries: restoring an answer at a narrow size (#875 R1)", () => {
       }
 
       const model = session.model;
+      // What the file holds before any of the presentation work below, so the
+      // claim at the end compares two different readings of it.
+      const journal = yield* holder.stream.readAll();
+      expect(journal.length).toBeGreaterThan(0);
       const entry = model.entries[0];
       const answered = entry?.scope.elicitations[0];
       expect(answered).toBeDefined();
@@ -2461,8 +2472,45 @@ describe("REPL entries: restoring an answer at a narrow size (#875 R1)", () => {
 
       yield* applied(tree, view);
       expect(nodeOf(tree, `entry:${entry.key}`)).toBeDefined();
-      const landed = tree.focused();
-      expect(landed === undefined ? undefined : tree.keyOf(landed)).toBe(`entry:${entry.key}`);
+      expect(keyedBy(tree)).toBe(`entry:${entry.key}`);
+
+      // The claim is spent by the commit that satisfied it — a restoration is one
+      // claim, not a standing one — and the reveal it caused is retained in the
+      // offset this process holds.
+      const committed = (yield* contextOf(view)).admission;
+      const settled = focusSettled(view, `entry:${entry.key}`, committed);
+      expect(settled.restore).toBeUndefined();
+
+      // A second committed frame, with no claim left to ask for anything — which
+      // is where a reveal that was not kept scrolls the catalog back. The window
+      // is where the reveal left it, so the row focus landed on is still there,
+      // still mounted and still focused.
+      const next = reading(settled, model, NOTHING_LIVE, NARROW, `entry:${entry.key}`);
+      expect(focusClaim(next)).toBeUndefined();
+      expect((yield* contextOf(next)).admission.windows.get(ENTRIES_WINDOW)?.from).toBe(0);
+      yield* applied(tree, next);
+      expect(nodeOf(tree, `entry:${entry.key}`)).toBeDefined();
+      expect(keyedBy(tree)).toBe(`entry:${entry.key}`);
+
+      // Kept in the offset this process holds, which is what made that frame the
+      // frame it was — and nothing else of the reading moved with it.
+      expect(settled.viewports.entries).toBe(0);
+      expect(settled.route).toEqual(scrolled.route);
+      expect(settled.draft).toBe(scrolled.draft);
+
+      // And traversal from there is the person's: Tab moves, and the frame after
+      // it leaves focus where they moved it rather than reclaiming the row.
+      yield* tree.dispatch({ kind: "key", key: "Tab" });
+      const moved = keyedBy(tree);
+      expect(moved).not.toBe(`entry:${entry.key}`);
+      expect(moved).toBeDefined();
+      const third = reading(settled, model, NOTHING_LIVE, NARROW, moved);
+      expect(focusClaim(third)).toBeUndefined();
+      yield* applied(tree, third);
+      expect(keyedBy(tree)).toBe(moved);
+
+      // The Journal is untouched by any of it: this is presentation.
+      expect(yield* holder.stream.readAll()).toEqual(journal);
     });
   });
 });
