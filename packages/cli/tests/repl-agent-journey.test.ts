@@ -46,7 +46,7 @@ import { installReplTerminal } from "../src/repl/terminal-host.ts";
 import type { ReplTerminalCapabilities } from "../src/repl/terminal-host.ts";
 import type { ReplTerminalSize } from "../src/repl/terminal.ts";
 import { ReplClock } from "../src/repl/frame.ts";
-import { surfaceWidth } from "../src/repl/layout.ts";
+import { inspectionWidth, sidebarWidth } from "../src/repl/layout.ts";
 import { runReplProgram } from "../src/repl/program.ts";
 import { assembleReplProfile } from "../src/repl-profile.ts";
 import type { ReplExecutionProfile } from "../src/repl-profile.ts";
@@ -288,9 +288,17 @@ describe("J1 — the Story, from one entry to one README", () => {
         expect([line, shows(terminal, line)]).toEqual([line, true]);
       }
       expect(yield* untilResolved(readdir(workspace))).toEqual([]);
-      // The report is on the screen only as the source it was admitted from —
-      // one row, the program's own text — and nothing has rendered it.
-      expect(occurrences(terminal, CREATED)).toBe(1);
+      // Nothing has rendered the report, and while this drawer is open nothing
+      // behind it is on the screen either.
+      //
+      // It used to be visible here: the row holding the program's own source sat
+      // in the transcript column and showed through the modal, because a drawer
+      // that painted only its own text left the cells around that text as they
+      // were. A drawer now obscures its whole rectangle (#875), so the one place
+      // this report can be read before it is written is nowhere — which is what
+      // a modal is for. That it has not been written is a durable fact, asserted
+      // above, rather than something read off the screen.
+      expect(occurrences(terminal, CREATED)).toBe(0);
 
       // Approved. The report follows the write: at the first frame that shows
       // it, the file is already there, with the bytes the preview showed.
@@ -699,8 +707,8 @@ describe("J3 — durable truth, and a cold process over it", () => {
       expect(shows(first.terminal, "All conversations")).toBe(true);
       turnRows = promptRows(first.terminal);
       expect(turnRows).toHaveLength(2);
-      expect(turnRows.some((row) => row.includes("ask-one"))).toBe(true);
-      expect(turnRows.some((row) => row.includes("ask-two"))).toBe(true);
+      expect(turnRows.some((row) => shownPrompt(row, "ask-one"))).toBe(true);
+      expect(turnRows.some((row) => shownPrompt(row, "ask-two"))).toBe(true);
 
       first.terminal.end();
       location = yield* running;
@@ -782,7 +790,7 @@ describe("J3 — durable truth, and a cold process over it", () => {
       expect(transcript).not.toContain("ONE-DONE");
       // The first entry's turn is still on the Sessions reading beside it,
       // which is what makes the absence above a locus and not a lost record.
-      expect(promptRows(second.terminal).some((row) => row.includes("ask-one"))).toBe(true);
+      expect(promptRows(second.terminal).some((row) => shownPrompt(row, "ask-one"))).toBe(true);
 
       // Nobody was asked anything to do it.
       expect(cold.prompts).toEqual([]);
@@ -990,7 +998,10 @@ describe("J2 — three conversations at once, through the terminal", () => {
       yield* showing(terminal, "· queued");
       held.start(REVIEW_IT);
       held.deltas(REVIEW_IT);
-      yield* showing(terminal, `${REVIEW_IT} · completed`);
+      yield* awaiting(`${REVIEW_IT} never showed as completed`, function* () {
+        yield* settled(10);
+        return screenOf(terminal).some((line) => saying(line, REVIEW_IT, "completed"));
+      });
       held.start(BUILD_IT);
 
       // One frame holding all three states, each named by what its own child
@@ -999,9 +1010,13 @@ describe("J2 — three conversations at once, through the terminal", () => {
       yield* awaiting("the three states never stood together", function* () {
         yield* settled(10);
         const rows = screenOf(terminal);
-        return [`${REVIEW_IT} · completed`, `${BUILD_IT} · streaming`, `${PLAN_IT} · queued`].every(
-          (state) => rows.some((line) => line.includes(state)),
-        );
+        return (
+          [
+            [REVIEW_IT, "completed"],
+            [BUILD_IT, "streaming"],
+            [PLAN_IT, "queued"],
+          ] as const
+        ).every(([asked, state]) => rows.some((line) => saying(line, asked, state)));
       });
       yield* showing(terminal, "All conversations");
 
@@ -1016,7 +1031,7 @@ describe("J2 — three conversations at once, through the terminal", () => {
         yield* settled(10);
         return conversationRows(terminal, digest).length > 0;
       });
-      expect(shows(terminal, `${PLAN_IT} · queued`)).toBe(true);
+      expect(screenOf(terminal).some((line) => saying(line, PLAN_IT, "queued"))).toBe(true);
 
       // Selecting one is the route's own business: it carries that
       // conversation's exact provider session key, and the entry column beside
@@ -1065,7 +1080,10 @@ describe("J2 — three conversations at once, through the terminal", () => {
       expect(locationRow(terminal)).not.toContain("session=");
       expect(childrenShown(terminal)).toEqual([PLAN_IT, REVIEW_IT, BUILD_IT]);
       for (const asked of [PLAN_IT, REVIEW_IT, BUILD_IT]) {
-        expect([asked, shows(terminal, `${asked} · completed`)]).toEqual([asked, true]);
+        expect([
+          asked,
+          screenOf(terminal).some((line) => saying(line, asked, "completed")),
+        ]).toEqual([asked, true]);
       }
       // And one more conversation to filter by than there was, because the
       // third one has now been seen.
@@ -1077,6 +1095,290 @@ describe("J2 — three conversations at once, through the terminal", () => {
           recorded(yield* journal(hostRoot)).filter((kind) => kind === "agent_prompt").length === 3
         );
       });
+      terminal.end();
+      yield* running;
+    });
+  });
+});
+
+describe("J2 — a filter and a draft across a resize (#875 R1)", () => {
+  beforeAll(() => useTempFileCompiler());
+
+  /** The draft this reading carries across every size, with a space in it. */
+  const DRAFT = "and then this one";
+
+  /** Type into the draft without submitting it, and wait for the route to say so. */
+  function* drafting(terminal: Terminal, text: string): Operation<void> {
+    yield* focusDraft(terminal);
+    terminal.bytes(BYTES.encode(text));
+    const deadline = Date.now() + DEADLOCK_MS;
+    let last = "";
+    let still = 0;
+    while (still < 3) {
+      const now = maybeLocation(terminal) ?? "";
+      if (now === last && now.includes(`draft=${encodeURIComponent(text)}`)) {
+        still += 1;
+      } else {
+        still = 0;
+        last = now;
+      }
+      if (Date.now() > deadline) {
+        throw new Error(`the draft never settled. location=${now}`);
+      }
+      yield* sleep(20);
+      yield* settled(10);
+    }
+  }
+
+  it("TL10: a conversation filter and a draft survive the round trip, and a cold open restores them", function* () {
+    const live = createFakeAcp();
+    for (let turn = 0; turn < 3; turn += 1) {
+      live.script({ reply: ANSWERED });
+    }
+    const held = holds([PLAN_IT, REVIEW_IT, BUILD_IT]);
+    // The same wide terminal the other conversation rows use, so the whole
+    // reading is in the window rather than below it: what this row is about is a
+    // resize, not what a short window admits.
+    const first = recordingTerminal({ columns: 200, rows: 140 });
+    let hostRoot = "";
+    let location: string | undefined;
+    let standing: string | undefined;
+    let filtered: string | undefined;
+
+    yield* scoped(function* (): Operation<void> {
+      const workspace = yield* useWorkspace();
+      yield* first.install();
+      yield* immediateClock();
+      hostRoot = yield* useTemporaryHost();
+      const terminal = first.terminal;
+      const running = yield* spawn(() => start(live, held, workspace));
+      yield* untilDrawn(terminal);
+      yield* typed(terminal, THREE);
+
+      // Every child to its record, so there is more than one conversation to
+      // filter by and a settled entry to reopen over.
+      yield* showing(terminal, "· queued");
+      for (const asked of [PLAN_IT, REVIEW_IT, BUILD_IT]) {
+        held.start(asked);
+        held.deltas(asked);
+      }
+      yield* awaiting("the three turns were never all retained", function* () {
+        return (
+          recorded(yield* journal(hostRoot)).filter((kind) => kind === "agent_prompt").length === 3
+        );
+      });
+
+      // 1. A conversation filter, chosen by pointing at the row it is drawn in.
+      const digest = (live.turns[0]?.handle.sessionKey ?? "").split(":")[2] ?? "";
+      expect(digest).not.toBe("");
+      yield* awaiting("no conversation was ever offered", function* () {
+        yield* settled(10);
+        return conversationRows(terminal, digest).length > 0;
+      });
+      yield* click(terminal, conversationRows(terminal, digest)[0] ?? "");
+      yield* awaiting("the filter never reached the route", function* () {
+        yield* settled(10);
+        return sessionOf(terminal) !== undefined;
+      });
+      filtered = sessionOf(terminal);
+      expect(filtered).toBeDefined();
+
+      // 2. A non-empty draft, typed into the field Tab reaches.
+      yield* drafting(terminal, DRAFT);
+      standing = maybeLocation(terminal);
+      expect(standing).toBeDefined();
+      expect(standing).toContain(`session=${filtered}`);
+      expect(shows(terminal, `>> ${DRAFT}`)).toBe(true);
+      expect(childrenShown(terminal)).toHaveLength(1);
+
+      // 3. Narrow. The location is abbreviated at this width, so what is read
+      //    here is the draft row and the reading itself.
+      const from = terminal.presented.length;
+      terminal.resized({ columns: 72, rows: 20 });
+      // Waited for by the frame's shape rather than by its content, so what the
+      // draft row says is an assertion below rather than a condition for getting
+      // there.
+      yield* awaiting("the narrow frame never arrived", function* () {
+        yield* settled(10);
+        return (
+          terminal.presented.length > from && replay(terminal.presented.slice(from)).length === 20
+        );
+      });
+      const narrow = replay(terminal.presented.slice(from));
+      expect(narrow.length).toBe(20);
+      expect(narrow.some((line) => line.includes(`>> ${DRAFT}`))).toBe(true);
+      expect(narrow.filter((line) => line.trimEnd().length > 72)).toEqual([]);
+      // A narrow frame draws one routed surface, and choosing a conversation
+      // chooses a filter rather than a surface — so the Sessions reading is not
+      // on this screen at all. What a narrow frame still has to keep is the
+      // draft, which is on it, and the route, which is read back below at the
+      // width that draws all of it.
+      expect(narrow.some((line) => line.includes("* Entries"))).toBe(true);
+
+      // 4. Wide again, and the reading is the same string it was: the filter,
+      //    the route and the draft are all in it.
+      const back = terminal.presented.length;
+      terminal.resized({ columns: 200, rows: 140 });
+      yield* awaiting("the wide frame never came back", function* () {
+        yield* settled(10);
+        return (
+          terminal.presented.length > back && replay(terminal.presented.slice(back)).length === 140
+        );
+      });
+      expect(maybeLocation(terminal)).toBe(standing);
+      expect(sessionOf(terminal)).toBe(filtered);
+      expect(shows(terminal, `>> ${DRAFT}`)).toBe(true);
+      expect(childrenShown(terminal)).toHaveLength(1);
+
+      terminal.end();
+      location = yield* running;
+    });
+
+    // What the command handed back is what it was showing.
+    expect(location).toBe(standing);
+    expect(live.prompts).toHaveLength(3);
+    const before = yield* history(hostRoot);
+
+    // A cold process over that exact location: the same filter and the same
+    // draft, with no provider reached at all.
+    const cold = createFakeAcp();
+    const second = recordingTerminal({ columns: 200, rows: 140 });
+    yield* scoped(function* (): Operation<void> {
+      const elsewhere = yield* useWorkspace();
+      yield* second.install();
+      yield* immediateClock();
+      yield* useTemporaryHost(hostRoot);
+      const running = yield* spawn(() => start(cold, holds([]), elsewhere, location));
+      yield* untilDrawn(second.terminal);
+
+      yield* awaiting("the cold process never restored the reading", function* () {
+        yield* settled(10);
+        return maybeLocation(second.terminal) === standing;
+      });
+      expect(sessionOf(second.terminal)).toBe(filtered);
+      expect(shows(second.terminal, `>> ${DRAFT}`)).toBe(true);
+      expect(childrenShown(second.terminal)).toHaveLength(1);
+
+      // Nobody was asked, nothing was started, created or ensured.
+      expect(cold.prompts).toEqual([]);
+      expect(cold.started).toBe(false);
+      expect(cold.created).toEqual([]);
+      expect(cold.ensured).toEqual([]);
+
+      second.terminal.end();
+      yield* running;
+    });
+
+    // And the Journal is byte-identical: a cold process reads, it does not write.
+    expect(yield* history(hostRoot)).toBe(before);
+  });
+});
+
+describe("J2 — what filtering Sessions leaves on the screen (#875 R1)", () => {
+  beforeAll(() => useTempFileCompiler());
+
+  /**
+   * The rows the Sessions reading itself is drawn in.
+   *
+   * The sidebar band, cut at the reading's own `[v later]` control: below that
+   * sit the Entries heading and the catalog, which a conversation filter does
+   * not touch, and beside it are columns holding a journal that grows.
+   */
+  const listBand = (terminal: Terminal): string[] => {
+    const rows = screenOf(terminal).map((line) => line.slice(0, SIDEBAR));
+    const bottom = rows.findIndex((line) => line.includes("[v later]"));
+    return rows.slice(0, bottom === -1 ? rows.length : bottom);
+  };
+
+  /** The last row of that band with anything written in it. */
+  const lastWritten = (band: readonly string[]): number =>
+    band.reduce((last, line, at) => (line.trim().length > 0 ? at : last), -1);
+
+  it("TL5: filtering to one conversation blanks the cells the vacated rows were drawn in", function* () {
+    const fake = createFakeAcp();
+    for (let turn = 0; turn < 3; turn += 1) {
+      fake.script({ reply: ANSWERED });
+    }
+    const held = holds([PLAN_IT, REVIEW_IT, BUILD_IT]);
+    const { terminal, install } = recordingTerminal({ columns: 200, rows: 140 });
+
+    yield* scoped(function* (): Operation<void> {
+      const workspace = yield* useWorkspace();
+      yield* install();
+      yield* immediateClock();
+      const hostRoot = yield* useTemporaryHost();
+      const running = yield* spawn(() => start(fake, held, workspace));
+      yield* untilDrawn(terminal);
+      yield* typed(terminal, THREE);
+
+      // Every child runs to its record, so the unfiltered reading holds all
+      // three conversations and every fact each turn carries.
+      yield* showing(terminal, "· queued");
+      for (const asked of [PLAN_IT, REVIEW_IT, BUILD_IT]) {
+        held.start(asked);
+        held.deltas(asked);
+      }
+      yield* awaiting("the three turns were never all retained", function* () {
+        return (
+          recorded(yield* journal(hostRoot)).filter((kind) => kind === "agent_prompt").length === 3
+        );
+      });
+      yield* awaiting("all three children never stood together", function* () {
+        yield* settled(10);
+        return childrenShown(terminal).length === 3;
+      });
+
+      const digest = (fake.turns[0]?.handle.sessionKey ?? "").split(":")[2] ?? "";
+      expect(digest).not.toBe("");
+      yield* awaiting("no conversation was ever offered", function* () {
+        yield* settled(10);
+        return conversationRows(terminal, digest).length > 0;
+      });
+
+      // What the long reading draws, before anything is filtered.
+      const before = listBand(terminal);
+      const lastBefore = lastWritten(before);
+      // Pre-assert: the reading really is windowed, so there is a reading to
+      // shrink and a `[v later]` to bound it by.
+      expect(before.length).toBeGreaterThan(0);
+      expect(lastBefore).toBeGreaterThan(0);
+
+      // Filtered to one real conversation, which is a shorter reading.
+      yield* click(terminal, conversationRows(terminal, digest)[0] ?? "");
+      yield* awaiting("the reading never shrank", function* () {
+        yield* settled(10);
+        return childrenShown(terminal).length === 1;
+      });
+      expect(sessionOf(terminal)).toBeDefined();
+
+      const after = listBand(terminal);
+      const lastAfter = lastWritten(after);
+      // The reading really is shorter, which is what makes the rows below it
+      // vacated rather than merely redrawn.
+      expect(lastAfter).toBeLessThan(lastBefore);
+
+      // Pre-assert: those rows had conversation text written in them. Without
+      // this the assertion below would pass on an area that was always empty.
+      const vacated: number[] = [];
+      for (let row = lastAfter + 1; row <= lastBefore; row += 1) {
+        if ((before[row] ?? "").trim().length > 0) {
+          vacated.push(row);
+        }
+      }
+      expect(vacated.length).toBeGreaterThan(0);
+      expect(vacated.map((row) => before[row].trim()).filter((text) => text === "")).toEqual([]);
+
+      // And every cell of them is blank now — a cell, not a description. A
+      // renderer whose committed diff was computed against a frame nobody saw
+      // leaves this text exactly where it was.
+      const left = vacated.flatMap((row) =>
+        [...(after[row] ?? "")]
+          .map((cell, column) => ({ cell, column, row }))
+          .filter((one) => one.cell !== " ")
+          .map((one) => `${one.column},${one.row}=${one.cell}`),
+      );
+      expect(left).toEqual([]);
+
       terminal.end();
       yield* running;
     });
@@ -1823,6 +2125,18 @@ function* useTemporaryHost(existing?: string): Operation<string> {
  * had is not written again at all.
  */
 function screenOf(terminal: Terminal): string[] {
+  return replay(terminal.presented);
+}
+
+/**
+ * The same replay over a chosen run of presentations.
+ *
+ * What a resize draws can only be read on its own: this renderer writes diffs,
+ * so a buffer that also holds the frames before the resize holds rows the
+ * smaller terminal no longer has. The engine redraws completely after a size
+ * change, so the presentations from the resize onward are a whole screen.
+ */
+function replay(presented: readonly Uint8Array[]): string[] {
   const rows: string[][] = [];
   let row = 0;
   let column = 0;
@@ -1839,7 +2153,7 @@ function screenOf(terminal: Terminal): string[] {
     column += 1;
   };
 
-  const written = terminal.presented.map((bytes) => TEXT.decode(bytes)).join("");
+  const written = presented.map((bytes) => TEXT.decode(bytes)).join("");
   for (let index = 0; index < written.length; index += 1) {
     const character = written[index];
     if (character !== "\u001B") {
@@ -1886,8 +2200,16 @@ function maybeLocation(terminal: Terminal): string | undefined {
   }
   const at = (rows[first] ?? "").indexOf("xmd://repl/");
   const parts: string[] = [];
+  // How much of each row belongs to the surface carrying the location, read from
+  // the one place those column widths are declared. This test sees only a
+  // terminal, so interpreting its rows means knowing where the next column
+  // starts — it is not a second opinion about where anything was placed.
+  const width =
+    terminal.size.columns -
+    (sidebarWidth(terminal.size) ?? 0) -
+    (inspectionWidth(terminal.size) ?? 0);
   for (let row = first; row < rows.length && row < first + 24; row += 1) {
-    const part = (rows[row] ?? "").slice(at, at + surfaceWidth(terminal.size));
+    const part = (rows[row] ?? "").slice(at, at + width);
     if (part.trim().length === 0) {
       break;
     }
@@ -1964,6 +2286,11 @@ function historyMarkers(terminal: Terminal): string[] {
   const found: string[] = [];
   for (let row = at + 1; row < rows.length; row += 1) {
     const label = (rows[row] ?? "").trim().replace(/^>\s*/, "");
+    if (label === "[^ earlier]") {
+      // How the window moves, not a position in it. This drawer scrolls (#875),
+      // and both window controls sit outside the content they scroll.
+      continue;
+    }
     if (label.length === 0 || label.startsWith("[")) {
       break;
     }
@@ -1974,7 +2301,10 @@ function historyMarkers(terminal: Terminal): string[] {
 
 /** Which of the three children's turns this screen is showing, in source order. */
 function childrenShown(terminal: Terminal): string[] {
-  return [PLAN_IT, REVIEW_IT, BUILD_IT].filter((asked) => shows(terminal, `${asked} ·`));
+  const rows = screenOf(terminal);
+  return [PLAN_IT, REVIEW_IT, BUILD_IT].filter((asked) =>
+    rows.some((line) => saying(line, asked, "")),
+  );
 }
 
 /**
@@ -2173,6 +2503,35 @@ function* typed(terminal: Terminal, text: string): Operation<void> {
  * prefix of it that fits. Compared rather than interpreted — two readings of
  * one journal have to draw the same rows.
  */
+/**
+ * Whether this line shows this prompt, whole or shortened to fit its row.
+ *
+ * A row is as wide as the region the frame measured for it, and a sidebar is
+ * thirty-two columns: a prompt nobody bounded keeps the columns the row's own
+ * vocabulary leaves it, marked where it was cut. So a question about which turn
+ * a row is asks whether the row shows that prompt, not whether it holds every
+ * letter of it.
+ */
+function shownPrompt(line: string, prompt: string): boolean {
+  for (let kept = prompt.length; kept >= 1; kept -= 1) {
+    if (line.includes(kept === prompt.length ? prompt : `${prompt.slice(0, kept)}\u2026`)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/** Whether this line shows this prompt and this state, in that order. */
+function saying(line: string, prompt: string, state: string): boolean {
+  for (let kept = prompt.length; kept >= 1; kept -= 1) {
+    const shown = kept === prompt.length ? prompt : `${prompt.slice(0, kept)}\u2026`;
+    if (line.includes(`${shown} \u00b7 ${state}`)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 function promptRows(terminal: Terminal): string[] {
   return screenOf(terminal)
     .map((line) => line.slice(0, SIDEBAR).trimEnd())

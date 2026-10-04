@@ -54,12 +54,11 @@ import type { ReplExecutionProfile } from "../src/repl-profile.ts";
 import type { ReplOutcome } from "../src/repl/program.ts";
 import { parseDurableEvent, serializeDurableEvent } from "@executablemd/durable-streams";
 import {
-  drawerHeight,
-  drawerWidth,
+  drawerRect,
   HISTORY_ROWS,
+  inspectionWidth,
   NARROW,
-  sessionsHeight,
-  surfaceWidth,
+  sidebarWidth,
 } from "../src/repl/layout.ts";
 import { projectRepl } from "../src/repl/model.ts";
 import type { ReplModel } from "../src/repl/model.ts";
@@ -69,6 +68,7 @@ import {
   referenceEvents,
   referenceSource,
 } from "./fixtures/repl/reference.ts";
+import { measuringContext } from "./fixtures/repl/presentation.ts";
 
 const BYTES = new TextEncoder();
 
@@ -193,6 +193,8 @@ interface Terminal {
    */
   holdPresent: { release(): void } | undefined;
   size: ReplTerminalSize;
+  /** How many times the program has asked this terminal how big it is. */
+  sized: number;
   readonly raw: boolean[];
   resets: number;
   listeners: number;
@@ -202,6 +204,27 @@ interface Terminal {
   /** Make the next presentation block, so a test can look at the frame stream. */
   holdNextPresent(): void;
   resized(size: ReplTerminalSize): void;
+  /**
+   * Resize *between* two of the program's size reads.
+   *
+   * A window dragged while a frame is being prepared is exactly this: the read
+   * the frame was resolved against reports one size, and every read after it
+   * reports another. `after` counts reads from now, and the read that triggers
+   * it still answers with the size that is going away.
+   */
+  resizeAfterRead(after: number, next: ReplTerminalSize): void;
+  /**
+   * Move the terminal on *every* one of the next `reads` size reads.
+   *
+   * A window still being dragged. Each read answers with the size that was
+   * there and leaves a different one behind it, so every preparation the
+   * program takes is invalidated before it can revalidate — which is what
+   * exhausting a frame's rebuild budget looks like from outside. The last of
+   * those reads settles on `settled` and the churn is over.
+   */
+  churnSize(reads: number, settled: ReplTerminalSize): void;
+  /** How many churned reads are still owed, so a test can wait for the end. */
+  churning(): number;
   end(): void;
 }
 
@@ -218,10 +241,13 @@ function recordingTerminal(
   let ended = false;
 
   let holding = false;
+  let dragging: { after: number; next: ReplTerminalSize } | undefined;
+  let churn: { left: number; settled: ReplTerminalSize } | undefined;
   const terminal: Terminal = {
     presented: [],
     holdPresent: undefined,
     size,
+    sized: 0,
     raw: [],
     resets: 0,
     listeners: 0,
@@ -247,6 +273,15 @@ function recordingTerminal(
         watcher();
       }
     },
+    resizeAfterRead(after: number, next: ReplTerminalSize): void {
+      dragging = { after: terminal.sized + after, next };
+    },
+    churnSize(reads: number, settled: ReplTerminalSize): void {
+      churn = { left: reads, settled };
+    },
+    churning(): number {
+      return churn?.left ?? 0;
+    },
     end(): void {
       ended = true;
       const resolve = waiting;
@@ -259,7 +294,29 @@ function recordingTerminal(
 
   const host: ReplTerminalCapabilities = {
     interactive: () => interactive,
-    size: () => terminal.size,
+    size: () => {
+      terminal.sized += 1;
+      const reported = terminal.size;
+      if (churn !== undefined) {
+        churn.left -= 1;
+        // Always a different size from the one just answered with, so no
+        // preparation can be revalidated against the size it was measured for.
+        const next = churn.left > 0 ? DRAGGED[churn.left % DRAGGED.length] : churn.settled;
+        if (churn.left <= 0) {
+          churn = undefined;
+        }
+        // Set rather than announced. The host's own resize watcher reads the
+        // size from inside its listener, so announcing here would re-enter this
+        // read and drain the whole drag in one call. Nothing needs the
+        // announcement: the frame being outrun is already reading again.
+        terminal.size = next;
+      } else if (dragging !== undefined && terminal.sized >= dragging.after) {
+        const { next } = dragging;
+        dragging = undefined;
+        terminal.resized(next);
+      }
+      return reported;
+    },
     *write(bytes: Uint8Array): Operation<void> {
       terminal.presented.push(new Uint8Array(bytes));
       if (!holding) {
@@ -329,6 +386,20 @@ function recordingTerminal(
   return { terminal, install: () => installReplTerminal(host) };
 }
 
+/**
+ * The sizes a churning drag passes through, all of them drawable.
+ *
+ * Four, cycled, so consecutive reads never answer with the same size twice —
+ * and none of them is below the minimum, because what this exercises is a frame
+ * being outrun rather than the refusal a too-small window shows.
+ */
+const DRAGGED: readonly ReplTerminalSize[] = [
+  { columns: 160, rows: 36 },
+  { columns: 120, rows: 30 },
+  { columns: 100, rows: 26 },
+  { columns: 84, rows: 22 },
+];
+
 /** A REPL host over a temporary directory nothing else uses. */
 function* useTemporaryHost(): Operation<string> {
   const root = yield* until(mkdtemp(join(tmpdir(), "xmd-repl-journey-")));
@@ -353,6 +424,18 @@ function* useTemporaryHost(): Operation<string> {
  * screen an assertion about the screen.
  */
 function screenOf(terminal: Terminal): string[] {
+  return replay(terminal.presented);
+}
+
+/**
+ * The same replay over a chosen run of presentations.
+ *
+ * What a resize draws can only be read on its own: this renderer writes diffs,
+ * so a buffer that also holds the frames before the resize holds rows the
+ * smaller terminal no longer has. The engine redraws completely after a size
+ * change, so the presentations from the resize onward are a whole screen.
+ */
+function replay(written: readonly Uint8Array[]): string[] {
   const rows: string[][] = [];
   let row = 0;
   let column = 0;
@@ -369,9 +452,9 @@ function screenOf(terminal: Terminal): string[] {
     column += 1;
   };
 
-  const written = terminal.presented.map((bytes) => TEXT.decode(bytes)).join("");
-  for (let index = 0; index < written.length; index += 1) {
-    const character = written[index];
+  const text = written.map((bytes) => TEXT.decode(bytes)).join("");
+  for (let index = 0; index < text.length; index += 1) {
+    const character = text[index];
     if (character !== "\u001B") {
       if (character === "\n") {
         row += 1;
@@ -384,7 +467,7 @@ function screenOf(terminal: Terminal): string[] {
       continue;
     }
     // CSI: the only sequences this renderer uses to position and to clear.
-    const csi = /^\u001B\[([0-9;]*)([@-~])/.exec(written.slice(index));
+    const csi = /^\u001B\[([0-9;]*)([@-~])/.exec(text.slice(index));
     if (csi !== null) {
       const parameters = csi[1].split(";").map((one) => (one === "" ? 0 : Number(one)));
       if (csi[2] === "H") {
@@ -399,7 +482,7 @@ function screenOf(terminal: Terminal): string[] {
       continue;
     }
     // OSC, and the two-byte escapes. Neither carries anything readable.
-    const osc = /^\u001B\][^\u0007\u001B]*(?:\u0007|\u001B\\)/.exec(written.slice(index));
+    const osc = /^\u001B\][^\u0007\u001B]*(?:\u0007|\u001B\\)/.exec(text.slice(index));
     if (osc !== null) {
       index += osc[0].length - 1;
       continue;
@@ -538,7 +621,7 @@ function maybeLocation(terminal: Terminal): string | undefined {
   const at = rows[first].indexOf("xmd://repl/");
   const parts: string[] = [];
   for (let row = first; row < rows.length && row < first + 24; row += 1) {
-    const part = (rows[row] ?? "").slice(at, at + surfaceWidth(terminal.size));
+    const part = (rows[row] ?? "").slice(at, at + surfaceWidthOf(terminal.size));
     if (part.trim().length === 0) {
       break;
     }
@@ -760,11 +843,23 @@ function* until_(
 }
 
 /**
- * The rectangle the layout places the drawer in, at one size.
+ * How much of a row belongs to the surface carrying the location, at one size.
  *
- * The same arithmetic the placement uses, read back from what layout exports:
- * the body is everything above the footer, and the drawer is inset an eighth of
- * it on every side.
+ * Read from the one place those column widths are declared. This suite sees only
+ * a terminal, so interpreting its rows means knowing where the next column
+ * starts; it is not a second opinion about where anything was placed.
+ */
+function surfaceWidthOf(size: ReplTerminalSize): number {
+  return size.columns - (sidebarWidth(size) ?? 0) - (inspectionWidth(size) ?? 0);
+}
+
+/**
+ * The rectangle the drawer is placed in, at one size.
+ *
+ * Read from the one place that rectangle is declared rather than worked out
+ * again here. This suite sees only a terminal, so it needs to know which cells
+ * belong to the modal — but a second opinion about where they are would agree
+ * with itself while the product drew the drawer somewhere else.
  */
 function drawerBox(size: ReplTerminalSize): {
   top: number;
@@ -772,9 +867,16 @@ function drawerBox(size: ReplTerminalSize): {
   left: number;
   right: number;
 } {
-  const top = Math.floor(sessionsHeight(size) / 8);
-  const left = Math.floor(size.columns / 8);
-  return { top, bottom: top + drawerHeight(size), left, right: left + drawerWidth(size) };
+  const rect = drawerRect(size);
+  if (rect === undefined) {
+    throw new Error(`${size.columns}x${size.rows} draws no drawer`);
+  }
+  return {
+    top: rect.y,
+    bottom: rect.y + rect.height,
+    left: rect.x,
+    right: rect.x + rect.width,
+  };
 }
 
 /**
@@ -812,12 +914,52 @@ function drawerMarkers(terminal: Terminal): string[] {
       title = true;
       continue;
     }
-    if (label === "[close]") {
+    if (label === "[close]" || label === "[v later]") {
       break;
+    }
+    if (label === "[^ earlier]") {
+      // How the window moves, not a position in it. Both window controls stay
+      // outside the content they scroll, so neither is one of these.
+      continue;
     }
     found.push(label);
   }
   return found;
+}
+
+/**
+ * Every content row the open drawer can show, gathered by scrolling it.
+ *
+ * Through `[v later]`, the way a person reaches the rest of a long record:
+ * pressing it moves the window by a row, and what the window holds is what is
+ * mounted. Stops when a press adds nothing new, which is the end of the reading.
+ */
+function* drawerContent(
+  terminal: Terminal,
+  limit = 120,
+): Operation<{ readonly first: string[]; readonly reached: string[] }> {
+  const seen: string[] = [];
+  const take = (): number => {
+    for (const row of drawerMarkers(terminal)) {
+      if (!seen.includes(row)) {
+        seen.push(row);
+      }
+    }
+    return seen.length;
+  };
+  // What one frame holds, before anything has been scrolled.
+  const first = drawerMarkers(terminal);
+  take();
+  yield* focusOn(terminal, "[v later]");
+  for (let press = 0; press < limit; press += 1) {
+    const before = seen.length;
+    terminal.feed("\r");
+    yield* settled(20);
+    if (take() === before) {
+      return { first, reached: seen };
+    }
+  }
+  return { first, reached: seen };
 }
 
 /** Focus one control and activate it, the way a person does. */
@@ -1695,13 +1837,35 @@ describe("REPL journey: the whole of it, from raw bytes", () => {
         expect(decoded.value.inspect).toBe(true);
         expect(decoded.value.drawers.map((one) => one.kind)).toEqual(["recorded-elicit"]);
       }
-      // The whole retained schema and the whole retained answer, in rows.
-      for (const line of JSON.stringify(SCHEMA, undefined, 2).split("\n")) {
-        expect(shows(terminal, line)).toBe(true);
+      // The whole retained schema and the whole retained answer, reached through
+      // the drawer's own window.
+      //
+      // This drawer scrolls (#875). It used to describe every row at once and
+      // let placement clip whatever did not fit, which put the tail of a long
+      // record in no cell, no target and no focus stop while still claiming to
+      // show it — and cost this drawer its own `[close]`. So the claim is no
+      // longer "every line is on screen together" but the stronger one: every
+      // line is **reachable**, and the rows that are not visible are not mounted.
+      const { first: firstFrame, reached } = yield* drawerContent(terminal);
+      const retainedRows = [
+        ...JSON.stringify(SCHEMA, undefined, 2).split("\n"),
+        ...JSON.stringify(ANSWER, undefined, 2).split("\n"),
+      ].map((line) => line.trim());
+      for (const line of retainedRows) {
+        expect(reached).toContain(line);
       }
-      for (const line of JSON.stringify(ANSWER, undefined, 2).split("\n")) {
-        expect(shows(terminal, line)).toBe(true);
-      }
+      // And it really was a window rather than one tall drawer. This record is
+      // longer than the drawer can hold — schema and answer together are more
+      // rows than its rectangle has — so the rows on screen at the end are not
+      // the rows that were on screen at the start. Without this, `toContain`
+      // above would also pass on a drawer that described every row at once and
+      // let placement clip whatever did not fit.
+      const content =
+        2 +
+        JSON.stringify(SCHEMA, undefined, 2).split("\n").length +
+        JSON.stringify(ANSWER, undefined, 2).split("\n").length;
+      expect(firstFrame.length).toBeLessThan(content);
+      expect(drawerMarkers(terminal)).not.toEqual(firstFrame);
 
       terminal.end();
       yield* running;
@@ -1745,12 +1909,15 @@ describe("REPL journey: the whole of it, from raw bytes", () => {
       expect(locationOn(second.terminal)).toBe(captured);
 
       // The same retained question: the whole schema and the whole answer, not a
-      // label that happens to contain the word.
-      for (const line of JSON.stringify(SCHEMA, undefined, 2).split("\n")) {
-        expect(shows(second.terminal, line)).toBe(true);
-      }
-      for (const line of JSON.stringify(ANSWER, undefined, 2).split("\n")) {
-        expect(shows(second.terminal, line)).toBe(true);
+      // label that happens to contain the word. Reached through the drawer's own
+      // window, which a reopened process opens at its first row — how far a
+      // window is scrolled is process-local and no location carries it.
+      const reopened = yield* drawerContent(second.terminal);
+      for (const line of [
+        ...JSON.stringify(SCHEMA, undefined, 2).split("\n"),
+        ...JSON.stringify(ANSWER, undefined, 2).split("\n"),
+      ]) {
+        expect(reopened.reached).toContain(line.trim());
       }
 
       // Then out from under the drawer, for the rest of what the file holds.
@@ -1848,6 +2015,133 @@ describe("REPL journey: when a frame counts as applied", () => {
   });
 });
 
+describe("REPL journey: resizing while a frame is being prepared", () => {
+  it("J2: a window dragged while a frame is being prepared keeps the command", function* () {
+    const { terminal, install } = recordingTerminal({ columns: 160, rows: 36 });
+    const clock = countingClock();
+
+    yield* scoped(function* (): Operation<void> {
+      yield* install();
+      yield* clock.install();
+      yield* useTemporaryHost();
+
+      const running = yield* spawn(function* (): Operation<void> {
+        const ran = yield* runReplProgram({ profile: PROFILE });
+        if (!ran.ok) {
+          throw ran.error;
+        }
+      });
+
+      /** Let as many frames through as the program asks for. */
+      function* drawing(turns = 24): Operation<void> {
+        for (let turn = 0; turn < turns; turn += 1) {
+          clock.release();
+          yield* settled(6);
+        }
+      }
+
+      // Settled wide, with something typed: a draft is state this product holds
+      // nowhere but in the run, so it is the sharpest thing a rebuilt frame can
+      // be shown to have kept.
+      yield* drawing();
+      terminal.feed("resize me");
+      yield* drawing();
+      const wide = screenOf(terminal);
+      expect(wide.length).toBe(36);
+      expect(shows(terminal, "resize me")).toBe(true);
+      expect(shows(terminal, "Sessions")).toBe(true);
+      /** The execution this run opened, read off the location it is showing. */
+      const execution = /xmd:\/\/repl\/([0-9a-f]+)\//.exec(wide.join("\n"))?.[1];
+      expect(execution).toBeDefined();
+
+      // Dragged between the read this frame's measurement was taken against and
+      // the read that revalidates it. Which read of the wake that is was measured
+      // against this program rather than promised by it — what the row asserts is
+      // that the measured frame and the terminal were out of step, and the two
+      // controls for it are what keep that honest.
+      const from = terminal.presented.length;
+      terminal.resizeAfterRead(4, { columns: 72, rows: 20 });
+      terminal.feed("!");
+      yield* drawing();
+
+      // Alive, and still drawing.
+      expect(terminal.presented.length).toBeGreaterThan(from);
+      expect(terminal.size).toEqual({ columns: 72, rows: 20 });
+      // The *first* frame after the drag is already the new size: the one
+      // measured for 160x36 was abandoned before it could be mounted, not drawn
+      // and then corrected.
+      expect(replay([terminal.presented[from]]).length).toBe(20);
+      const after = replay(terminal.presented.slice(from));
+
+      // Drawn for the terminal that is there now: twenty rows, none of them
+      // wider than seventy-two columns. A frame that kept the measurement it
+      // took at 160x36 would place rows this screen does not have.
+      expect(after.length).toBe(20);
+      expect(after.filter((line) => line.length > 72)).toEqual([]);
+
+      // And it is the product, not a refusal — carrying the same execution, the
+      // same route and the same draft it had before the window moved.
+      expect(after.some((line) => line.includes("at least 72x20"))).toBe(false);
+      expect(after.some((line) => line.includes("* Entries"))).toBe(true);
+      expect(after.some((line) => line.includes(">> resize me!"))).toBe(true);
+      expect(after.some((line) => line.includes(`xmd://repl/${execution}/repl`))).toBe(true);
+      expect(after.some((line) => line.includes("draft=resize%20me"))).toBe(true);
+
+      // And the same again, but dragged for longer than one frame is allowed to
+      // rebuild for. Every size read answers with the size that was there and
+      // leaves a different one behind it, so every preparation — well past the
+      // eight a single frame may spend — is invalidated before it can
+      // revalidate, and the drag settles back at 72x20 at the end of it.
+      const churned = terminal.presented.length;
+      terminal.churnSize(60, { columns: 72, rows: 20 });
+      terminal.feed("?");
+      for (let turn = 0; turn < 200 && terminal.churning() > 0; turn += 1) {
+        clock.release();
+        yield* settled(6);
+      }
+      // The drag really did run its course, which is what says more than eight
+      // consecutive preparations were taken and abandoned.
+      // Nothing presented while the terminal was moving wrote past the row the
+      // settled terminal ends at. A frame measured for any of the sizes the drag
+      // passed through would have — every one of them is taller than twenty rows
+      // — so this is the assertion that says no stale geometry reached the
+      // screen. Asserted before the drag is known to have drained, because a
+      // frame presented from a measurement the terminal invalidated is the
+      // defect whether or not the drag got to the end.
+      const during = terminal.presented.slice(churned).map((bytes) => replay([bytes]).length);
+      expect(during.filter((rows) => rows > 20)).toEqual([]);
+      // Sixty size reads, and at most one frame out of all of them — the one the
+      // drag settled on. Two reads go into every preparation, so this is far past
+      // the eight a single frame may spend: the rest were abandoned before they
+      // were mounted, and none of them was acknowledged.
+      expect(during.length).toBeLessThanOrEqual(1);
+      expect(terminal.churning()).toBe(0);
+
+      // Settled, the command draws the valid frame for the size that is there.
+      yield* drawing();
+      expect(terminal.presented.length).toBeGreaterThan(churned);
+      expect(terminal.size).toEqual({ columns: 72, rows: 20 });
+      // The *first* frame after the drag is the settled size, not any of the
+      // sizes the drag passed through.
+      expect(replay([terminal.presented[churned]]).length).toBe(20);
+      const settledScreen = replay(terminal.presented.slice(churned));
+      expect(settledScreen.length).toBe(20);
+      expect(settledScreen.filter((line) => line.length > 72)).toEqual([]);
+      // With the state it had before any of it: same execution, same route,
+      // same draft — now carrying the second keystroke.
+      expect(settledScreen.some((line) => line.includes("at least 72x20"))).toBe(false);
+      expect(settledScreen.some((line) => line.includes("* Entries"))).toBe(true);
+      expect(settledScreen.some((line) => line.includes(">> resize me!?"))).toBe(true);
+      expect(settledScreen.some((line) => line.includes(`xmd://repl/${execution}/repl`))).toBe(
+        true,
+      );
+
+      terminal.end();
+      yield* running;
+    });
+  });
+});
+
 describe("REPL journey: the same product at every size", () => {
   it("J1: a long draft location stays exact at medium, and no row crosses its region", function* () {
     const source = yield* referenceSource();
@@ -1881,7 +2175,7 @@ describe("REPL journey: the same product at every size", () => {
       // And no row of it reaches past the surface it was placed in: the columns
       // to its right belong to the inspection column, and the layout gave them
       // to something else.
-      const surface = surfaceWidth(terminal.size);
+      const surface = surfaceWidthOf(terminal.size);
       expect(surface).toBe(64);
       const rows = screenOf(terminal);
       const first = rows.findIndex((line) => line.includes("xmd://repl/"));
@@ -1994,7 +2288,7 @@ describe("REPL journey: the same product at every size", () => {
       // size this REPL draws at.
       expect(shows(terminal, "Entries")).toBe(true);
       expect(locationOn(terminal)).toMatch(/^xmd:\/\/repl\/[A-Za-z0-9_-]+\/repl$/);
-      expect(surfaceWidth(terminal.size)).toBe(NARROW.columns);
+      expect(surfaceWidthOf(terminal.size)).toBe(NARROW.columns);
 
       terminal.end();
       yield* running;
@@ -2961,6 +3255,339 @@ const COLD_TWO = [
   "",
 ].join("\n");
 
+describe("REPL journey: what an open drawer covers, through the terminal", () => {
+  /** Every cell of one rectangle that is not blank, as `column,row=character`. */
+  const insideOf = (
+    rows: readonly string[],
+    box: { top: number; bottom: number; left: number; right: number },
+  ): string[] => {
+    const found: string[] = [];
+    for (let row = box.top; row < box.bottom; row += 1) {
+      const line = rows[row] ?? "";
+      for (let column = box.left; column < box.right; column += 1) {
+        const cell = line[column] ?? " ";
+        if (cell !== " ") {
+          found.push(`${column},${row}=${cell}`);
+        }
+      }
+    }
+    return found;
+  };
+
+  /** The text of one rectangle's rows, joined, which is what a reader sees in it. */
+  const textOf = (
+    rows: readonly string[],
+    box: { top: number; bottom: number; left: number; right: number },
+  ): string =>
+    Array.from({ length: box.bottom - box.top }, (_unused, at) =>
+      (rows[box.top + at] ?? "").slice(box.left, box.right),
+    ).join("\n");
+
+  it("TL6: narrow from the start, and through a resize round trip, it obscures what it covers", function* () {
+    const { terminal, install } = recordingTerminal({ columns: 72, rows: 20 });
+
+    yield* scoped(function* (): Operation<void> {
+      yield* install();
+      yield* immediateClock();
+      yield* useTempFileCompiler();
+      yield* useTemporaryHost();
+
+      const running = yield* spawn(function* (): Operation<void> {
+        const ran = yield* runReplProgram({ profile: PROFILE });
+        if (!ran.ok) {
+          throw ran.error;
+        }
+      });
+      yield* untilDrawn(terminal);
+
+      // A settled entry, so the body behind the drawer has a reading in it. A
+      // narrow frame draws no transcript column, so what is behind the rectangle
+      // there is the location and the catalog rather than the output — which is
+      // why the rows covered are read off the screen rather than named here.
+      yield* submitted(terminal, COLD_ONE);
+      yield* settledEntry(terminal, 1, "ok");
+
+      /**
+       * What the drawer covers, and what it must leave alone, at this size.
+       *
+       * The rows are the accumulated screen rather than one frame's bytes,
+       * because this renderer writes diffs: one frame holds only what changed,
+       * and what is being asked about is what a person is looking at. Every size
+       * change redraws the whole terminal, so inside this rectangle the
+       * accumulated screen is current at whatever size it is read at.
+       */
+      function* covering(label: string): Operation<void> {
+        const box = drawerBox(terminal.size);
+        yield* settled(30);
+        const body = screenOf(terminal);
+        // Pre-assert: the rectangle the drawer is about to be placed in really
+        // has text in it. Without this the assertion below would pass on an
+        // empty screen.
+        const behind = insideOf(body, box);
+        expect(behind.length).toBeGreaterThan(0);
+        const covered = textOf(body, box);
+        expect(covered.trim().length).toBeGreaterThan(0);
+
+        yield* activate(terminal, "[history]");
+        // Waited for in the rectangle, because the drawer covers the row the
+        // location is drawn on: there is no readable location to ask while it is
+        // open, which is itself the coverage being tested.
+        yield* until_(terminal, `the drawer at ${label}`, (one) =>
+          textOf(screenOf(one), box).includes("History"),
+        );
+        yield* settled(30);
+        const open = screenOf(terminal);
+        const inside = textOf(open, box);
+        // Its own rows are in the rectangle instead — including its heading, so
+        // this is the drawer and not an empty hole.
+        expect(inside).toContain("History");
+        // And none of the lines it covered is anywhere inside it. Read as cells
+        // rather than as descriptions: the blank interior of a short modal line
+        // is exactly where a drawer without a background lets text through.
+        for (const line of covered.split("\n").map((one) => one.trim())) {
+          if (line.length < 4) {
+            continue;
+          }
+          expect([label, line, inside.includes(line)]).toEqual([label, line, false]);
+        }
+        // The footer is never covered: the draft owns the last row and shares it
+        // with nothing.
+        expect(box.bottom).toBeLessThanOrEqual(terminal.size.rows - 7);
+        expect(open[terminal.size.rows - 1]?.includes(">")).toBe(true);
+
+        terminal.feed("\x1b");
+        yield* until_(
+          terminal,
+          `the drawer closing at ${label}`,
+          (one) => !(maybeLocation(one) ?? "+history").includes("+history"),
+        );
+      }
+
+      // Narrow from the start, which is not the same screen as one that was
+      // resized down to it.
+      yield* covering("72x20");
+
+      // Then a round trip, because a diffing renderer leaves stale text exactly
+      // where a rectangle moved.
+      terminal.resized({ columns: 160, rows: 36 });
+      yield* until_(terminal, "the wide frame", (one) => one.size.columns === 160);
+      yield* covering("160x36");
+      terminal.resized({ columns: 72, rows: 20 });
+      yield* until_(terminal, "the narrow frame again", (one) => one.size.columns === 72);
+      yield* covering("72x20 again");
+
+      terminal.end();
+      yield* running;
+    });
+  });
+});
+
+describe("REPL journey: a selection, a position and a draft across a resize", () => {
+  it("TL10: wide to narrow and back keeps the whole reading, and a cold open restores it", function* () {
+    const first = recordingTerminal({ columns: 160, rows: 36 });
+    let root: string | undefined;
+    let files: string[] = [];
+    let ended: ReplOutcome | undefined;
+    let standing: string | undefined;
+
+    yield* scoped(function* (): Operation<void> {
+      yield* first.install();
+      yield* immediateClock();
+      yield* useTempFileCompiler();
+      root = yield* useTemporaryHost();
+      const terminal = first.terminal;
+
+      const running = yield* spawn(function* (): Operation<void> {
+        const ran = yield* runReplProgram({ profile: PROFILE });
+        if (!ran.ok) {
+          throw ran.error;
+        }
+        ended = ran.value;
+      });
+      yield* untilDrawn(terminal);
+      files = yield* histories(root);
+
+      // Two settled entries, so there is a catalog to select from and positions
+      // to read at.
+      yield* submitted(terminal, COLD_ONE);
+      yield* settledEntry(terminal, 1, "ok");
+      yield* submitted(terminal, COLD_TWO);
+      yield* settledEntry(terminal, 2, "ok");
+
+      // 1. An entry selected by pointing at the cell its row is drawn in, which
+      //    is the production input path for a selection.
+      yield* click(terminal, "2. [ok] entry-2");
+      yield* until_(terminal, "entry-2 being the locus", (one) =>
+        locationOn(one).includes("/entry-2"),
+      );
+      expect(marked(terminal, "2. [ok] entry-2")).toBe(true);
+
+      // 2. A History position, chosen through the drawer the footer control
+      //    opens. Entry 2's own admission, so the entry selected above still
+      //    exists at it.
+      yield* activate(terminal, "[history]");
+      expect(locationOn(terminal)).toContain("+history");
+      yield* focusOn(terminal, "Entry 2 admitted");
+      terminal.feed("\r");
+      yield* until_(terminal, "a frozen position", (one) => locationOn(one).includes("at="));
+      // Choosing a position does not close the drawer it was chosen in, so it is
+      // dismissed the way a person dismisses it — and the position stands.
+      terminal.feed("\x1b");
+      yield* until_(terminal, "the drawer closing", (one) => !locationOn(one).includes("+history"));
+      expect(locationOn(terminal)).toContain("at=");
+
+      // 3. A non-empty draft, typed into the field Tab reaches.
+      yield* focusDraft(terminal);
+      terminal.bytes(BYTES.encode(DRAFTED));
+      yield* until_(
+        terminal,
+        "the draft reaching the location",
+        (one) => draftIn(locationOn(one)) !== undefined,
+      );
+
+      // The whole semantic reading, in the one string that carries all of it.
+      standing = locationOn(terminal);
+      expect(standing).toContain("/entry-2");
+      expect(standing).toContain("at=");
+      expect(standing).toContain("inspect");
+      const drafted = decodeLocation(standing);
+      expect(drafted.ok).toBe(true);
+      if (drafted.ok) {
+        expect(drafted.value.draft).toBe(DRAFTED);
+      }
+      expect(shows(terminal, `>> ${DRAFTED}`)).toBe(true);
+      // At entry 2's own admission the catalog says what that position says: the
+      // entry is there and has settled nothing yet.
+      expect(marked(terminal, READING)).toBe(true);
+
+      // 4. Narrow. The routed surface is one column wide now, and what a reader
+      //    chose is still what the screen says: the draft is on its own row, the
+      //    entry still carries the selection marker, and the catalog is still the
+      //    catalog. The location itself is abbreviated at this size, which is why
+      //    it is read back at the width that draws all of it.
+      // Read off the frames presented from the resize onward, because this
+      // renderer writes diffs: a buffer that also held the wide frames would
+      // answer with rows the narrow terminal no longer has.
+      const from = terminal.presented.length;
+      terminal.resized({ columns: 72, rows: 20 });
+      yield* until_(
+        terminal,
+        "the narrow frame",
+        (one) =>
+          one.presented.length > from &&
+          replay(one.presented.slice(from)).some((line) => line.includes("* Entries")),
+      );
+      const narrow = replay(terminal.presented.slice(from));
+      expect(narrow.length).toBe(20);
+      expect(narrow.filter((line) => line.trimEnd().length > 72)).toEqual([]);
+      expect(narrow.some((line) => line.includes(`>> ${DRAFTED}`))).toBe(true);
+      expect(markedIn(narrow, READING)).toBe(true);
+      expect(narrow.some((line) => line.includes("1. [ok] entry-1"))).toBe(true);
+
+      // 5. Wide again, and the reading is the same string it was. Byte equality
+      //    over the canonical location is the whole of the claim: route, surface,
+      //    selected entry, frozen position, inspect and draft are all in it.
+      const back = terminal.presented.length;
+      terminal.resized({ columns: 160, rows: 36 });
+      yield* until_(
+        terminal,
+        "the wide frame again",
+        (one) => one.presented.length > back && replay(one.presented.slice(back)).length === 36,
+      );
+      expect(locationOn(terminal)).toBe(standing);
+
+      // 6. And the cells agree with the targets the frame published for them: a
+      //    pointer at the row entry 1 is drawn in selects entry 1, and one at
+      //    entry 2's row puts the reading back exactly as it was.
+      yield* click(terminal, "1. [ok] entry-1");
+      yield* until_(terminal, "entry-1 being the locus", (one) =>
+        locationOn(one).includes("/entry-1"),
+      );
+      expect(marked(terminal, "1. [ok] entry-1")).toBe(true);
+      yield* click(terminal, READING);
+      yield* until_(terminal, "entry-2 again", (one) => maybeLocation(one) === standing);
+      expect(locationOn(terminal)).toBe(standing);
+
+      terminal.end();
+      yield* running;
+    });
+
+    // What the command handed back is what it was showing.
+    expect(ended?.location).toBe(standing);
+
+    const retained = root;
+    if (retained === undefined || standing === undefined) {
+      throw new Error("the first process created a repository and showed a location");
+    }
+    const path = join(retained, "xmd", "repl", files[0]);
+    const before = yield* until(readFile(path, "utf8"));
+
+    // A cold process over that exact location: the same reading, with no work
+    // performed and nothing appended.
+    const second = recordingTerminal({ columns: 160, rows: 36 });
+    let performed: Performed | undefined;
+    yield* scoped(function* (): Operation<void> {
+      yield* second.install();
+      yield* immediateClock();
+      yield* reopening(retained);
+      performed = yield* countPerformed();
+
+      const running = yield* spawn(function* (): Operation<void> {
+        const ran = yield* runReplProgram({ location: standing, profile: PROFILE });
+        if (!ran.ok) {
+          throw ran.error;
+        }
+      });
+      yield* untilDrawn(second.terminal);
+
+      expect(shows(second.terminal, "1. [ok] entry-1")).toBe(true);
+      // The position this location names, not the head: entry 2 is there and has
+      // settled nothing at its own admission.
+      expect(shows(second.terminal, READING)).toBe(true);
+      expect(marked(second.terminal, READING)).toBe(true);
+      expect(shows(second.terminal, `>> ${DRAFTED}`)).toBe(true);
+      expect(locationOn(second.terminal)).toBe(standing);
+
+      second.terminal.end();
+      yield* running;
+    });
+
+    // No entry source compiled, no component source read, nobody asked.
+    expect(performed?.compiles).toBe(0);
+    expect(performed?.reads.filter((one) => one.endsWith(".md"))).toEqual([]);
+    expect(performed?.asked).toBe(0);
+    // And the Journal is byte-identical: a cold process reads, it does not write.
+    expect(yield* until(readFile(path, "utf8"))).toBe(before);
+    expect(second.terminal.resets).toBe(1);
+  });
+});
+
+/**
+ * Whether one of these rows carries the selection marker before this label.
+ *
+ * The same reading as `marked`, over rows a caller has already chosen — which is
+ * what a claim about one size needs, since the accumulated buffer still holds
+ * the rows the other size drew.
+ */
+function markedIn(rows: readonly string[], label: string): boolean {
+  return rows.some((line) => {
+    const at = line.indexOf(label);
+    return at >= 2 && line.slice(at - 2, at) === "* ";
+  });
+}
+
+/** The draft this reading carries across every size, with a space in it. */
+const DRAFTED = "keep this draft";
+
+/**
+ * Entry 2's catalog row, as the position being read says it.
+ *
+ * At entry 2's own admission nothing of entry 2 has settled, so its outcome row
+ * is the unfinished one — which is a fact about the position rather than about
+ * the entry, and is why this label is not the settled one.
+ */
+const READING = "2. [unfinished] entry-2";
+
 describe("REPL journey: a cold process over a multi-entry journal", () => {
   it("EC1: the same catalog and the same selected entry, with no work and no append", function* () {
     const first = recordingTerminal();
@@ -3339,6 +3966,7 @@ describe("REPL first use: UI2 too small", () => {
     // nothing a pointer could be answered with. At a size it can draw at, it is.
     const tiny = describeApplication(
       refusedView(initialState("tiny"), "this history cannot be read.", TINY),
+      measuringContext(TINY),
     ).map((one) => readDescription(one).key);
     expect(tiny).not.toContain("footer:exit");
     const roomy = describeApplication(
@@ -3346,6 +3974,7 @@ describe("REPL first use: UI2 too small", () => {
         columns: 160,
         rows: 36,
       }),
+      measuringContext({ columns: 160, rows: 36 }),
     ).map((one) => readDescription(one).key);
     expect(roomy).toContain("footer:exit");
 

@@ -11,7 +11,7 @@
 
 import { beforeAll, describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { race, sleep, spawn, withResolvers } from "effection";
+import { Err, race, scoped, sleep, spawn, withResolvers } from "effection";
 import type { Operation, Result } from "effection";
 import {
   Elicitation,
@@ -42,13 +42,22 @@ import type {
   ReplTransition,
   ReplView,
 } from "../src/repl/application.ts";
-import { layout, NARROW } from "../src/repl/layout.ts";
+import { NARROW } from "../src/repl/layout.ts";
+import { flatten } from "../src/repl/layout.ts";
 import { fields, readDescription } from "../src/repl/description.ts";
+import type { ReplTerminalSize } from "../src/repl/terminal.ts";
 import type { ReplDescription } from "../src/repl/description.ts";
 import { ENTRY_SCOPE, projectRepl } from "../src/repl/model.ts";
 import type { ReplElicitation, ReplModel, ReplScope } from "../src/repl/model.ts";
 import { useReplTree } from "../src/repl/reconcile.ts";
-import { replSurface } from "../src/repl/application.ts";
+import { presentationFor } from "../src/repl/application.ts";
+import type { ReplPresentationContext } from "../src/repl/application.ts";
+import { commitReplFrame, isStaleFrame } from "../src/repl/program.ts";
+import { DRAWER_WINDOW, readingKeyOf } from "../src/repl/application.ts";
+import { ReplRenderError, useReplRenderer } from "../src/repl/renderer.ts";
+import type { ReplMeasured, ReplRenderer } from "../src/repl/renderer.ts";
+import type { ReplAdmission } from "../src/repl/layout-admission.ts";
+import { committedContext } from "./fixtures/repl/presentation.ts";
 import type { ReplTree } from "../src/repl/reconcile.ts";
 import { submitReplEntry } from "../src/repl/session.ts";
 import type { ReplSession } from "../src/repl/session.ts";
@@ -479,15 +488,25 @@ function opened(live: ReplLive): ReplState {
   return transition.state;
 }
 
-function drive(
+function* drive(
   state: ReplState,
   live: ReplLive,
   actions: readonly ReplAction[],
-): { state: ReplState; transitions: ReplTransition[] } {
+  engine?: ReplRenderer,
+): Operation<{ state: ReplState; transitions: ReplTransition[] }> {
   let current = state;
   const transitions: ReplTransition[] = [];
   for (const action of actions) {
-    const transition = reduceRepl(current, action, EMPTY_MODEL, live, NARROW);
+    // Measured for the state this action is answered at, which is what the
+    // program does before it reduces: a window moves within the capacity the
+    // screen is showing, not one left over from an earlier size or reading.
+    const transition = reduceRepl(
+      current,
+      action,
+      EMPTY_MODEL,
+      live,
+      yield* admissionOf(current, live, EMPTY_MODEL, NARROW, engine),
+    );
     transitions.push(transition);
     current = transition.state;
   }
@@ -498,7 +517,7 @@ describe("F2 — invalid stays open; valid is exact", () => {
   it("F2: choosing Request changes with no feedback keeps the question and says why", function* () {
     const asked = yield* askingFor(PLAN_SCHEMA);
     const live = asking(asked.question);
-    const { state, transitions } = drive(opened(live), live, [
+    const { state, transitions } = yield* drive(opened(live), live, [
       { kind: "choose", field: "decision", option: "Request changes" },
     ]);
     // Activating an option offers the whole object, as Enter does.
@@ -520,7 +539,7 @@ describe("F2 — invalid stays open; valid is exact", () => {
   it("F2: entering feedback then submitting resolves with exactly that object", function* () {
     const asked = yield* askingFor(PLAN_SCHEMA);
     const live = asking(asked.question);
-    const { state } = drive(opened(live), live, [
+    const { state } = yield* drive(opened(live), live, [
       { kind: "choose", field: "decision", option: "Request changes" },
       { kind: "type", text: "needs work", field: "feedback" },
     ]);
@@ -535,7 +554,7 @@ describe("F2 — invalid stays open; valid is exact", () => {
     // Typed into the second field first, then the first: an application that
     // kept one global answer, or one that sent text to whichever field it had
     // last recorded, would put both strings in one place.
-    const { state } = drive(opened(live), live, [
+    const { state } = yield* drive(opened(live), live, [
       { kind: "type", text: "a REPL", field: "description" },
       { kind: "type", text: "xmd", field: "project" },
     ]);
@@ -548,7 +567,9 @@ describe("F2 — invalid stays open; valid is exact", () => {
   it("F2: both details are required, and one missing keeps the question open", function* () {
     const asked = yield* askingFor(DETAILS_SCHEMA);
     const live = asking(asked.question);
-    const { state } = drive(opened(live), live, [{ kind: "type", text: "xmd", field: "project" }]);
+    const { state } = yield* drive(opened(live), live, [
+      { kind: "type", text: "xmd", field: "project" },
+    ]);
     expect(asked.question.submit(state.form.values).kind).toBe("invalid");
     yield* sleep(0);
     expect(asked.answer()).toBe(undefined);
@@ -557,7 +578,7 @@ describe("F2 — invalid stays open; valid is exact", () => {
   it("F2: confirmation returns exactly its offered decision", function* () {
     const asked = yield* askingFor(CONFIRM_SCHEMA);
     const live = asking(asked.question);
-    const { state } = drive(opened(live), live, [
+    const { state } = yield* drive(opened(live), live, [
       { kind: "choose", field: "decision", option: "Decline" },
     ]);
     expect(asked.question.submit(state.form.values).kind).toBe("answered");
@@ -568,7 +589,7 @@ describe("F2 — invalid stays open; valid is exact", () => {
   it("F2: an option the field does not offer puts nothing into the form", function* () {
     const asked = yield* askingFor(CONFIRM_SCHEMA);
     const live = asking(asked.question);
-    const { state, transitions } = drive(opened(live), live, [
+    const { state, transitions } = yield* drive(opened(live), live, [
       { kind: "choose", field: "decision", option: "Maybe" },
     ]);
     expect(transitions[0]?.intent.kind).toBe("none");
@@ -581,7 +602,7 @@ describe("F2 — invalid stays open; valid is exact", () => {
     const live = asking(asked.question);
     // Typed and then erased: the person cleared it, which is not the same as
     // never having touched it, and an optional empty string is valid here.
-    const { state } = drive(opened(live), live, [
+    const { state } = yield* drive(opened(live), live, [
       { kind: "choose", field: "decision", option: "Approve" },
       { kind: "type", text: "x", field: "feedback" },
       { kind: "erase", field: "feedback" },
@@ -595,7 +616,7 @@ describe("F2 — invalid stays open; valid is exact", () => {
   it("F2: closing discards the draft, answers nothing, and reopens empty", function* () {
     const asked = yield* askingFor(PLAN_SCHEMA);
     const live = asking(asked.question);
-    const { state, transitions } = drive(opened(live), live, [
+    const { state, transitions } = yield* drive(opened(live), live, [
       { kind: "type", text: "half written", field: "feedback" },
       { kind: "close-drawer" },
     ]);
@@ -606,18 +627,22 @@ describe("F2 — invalid stays open; valid is exact", () => {
     yield* sleep(0);
     expect(asked.answer()).toBe(undefined);
     // Still pending, and reopening starts with nothing in it.
-    const reopened = drive(state, live, [{ kind: "open-drawer", drawer: { kind: "live-elicit" } }]);
+    const reopened = yield* drive(state, live, [
+      { kind: "open-drawer", drawer: { kind: "live-elicit" } },
+    ]);
     expect(reopened.state.form.values).toEqual({});
   });
 
   it("F2: an astral scalar survives typing, and one erase removes one scalar", function* () {
     const asked = yield* askingFor(DETAILS_SCHEMA);
     const live = asking(asked.question);
-    const typed = drive(opened(live), live, [{ kind: "type", text: "é漢🙂", field: "project" }]);
+    const typed = yield* drive(opened(live), live, [
+      { kind: "type", text: "é漢🙂", field: "project" },
+    ]);
     expect(typed.state.form.values["project"]).toBe("é漢🙂");
     // One Unicode scalar, not one UTF-16 code unit: erasing the emoji leaves
     // the two characters before it whole rather than half a surrogate pair.
-    const erased = drive(typed.state, live, [{ kind: "erase", field: "project" }]);
+    const erased = yield* drive(typed.state, live, [{ kind: "erase", field: "project" }]);
     expect(erased.state.form.values["project"]).toBe("é漢");
   });
 });
@@ -658,13 +683,72 @@ function reading(
   return resolved.value;
 }
 
-/** The descriptions this state produces, or the failure that stopped it. */
-function seen(state: ReplState, live: ReplLive, size = NARROW, focused?: string) {
-  return describeApplication(reading(state, live, EMPTY_MODEL, size, focused));
+/**
+ * Measure one view with a real engine pair, as the product does.
+ *
+ * A window's rows are the rows the measurement left room for, so a test asking
+ * what a state describes has to measure it. An engine may be handed in where a
+ * test walks a window press by press; otherwise one is built for the question
+ * and released with it.
+ */
+function* measuring<T>(
+  size: ReplTerminalSize,
+  engine: ReplRenderer | undefined,
+  body: (renderer: ReplRenderer) => Operation<T>,
+): Operation<T> {
+  if (engine !== undefined) {
+    return yield* body(engine);
+  }
+  return yield* scoped(function* (): Operation<T> {
+    return yield* body(yield* useReplRenderer(size));
+  });
 }
 
-function framed(state: ReplState, live: ReplLive, size = NARROW, focused?: string) {
-  return rowsOf(seen(state, live, size, focused));
+/** What one view's frame settled on: its measured widths and its admission. */
+function* contextOf(view: ReplView, engine?: ReplRenderer): Operation<ReplPresentationContext> {
+  return yield* measuring(view.size, engine, (renderer) => committedContext(renderer, view));
+}
+
+/** What this state admits at this size, which is what a scroll moves within. */
+function* admissionOf(
+  state: ReplState,
+  live: ReplLive,
+  model: ReplModel = EMPTY_MODEL,
+  size = NARROW,
+  engine?: ReplRenderer,
+): Operation<ReplAdmission> {
+  const view = reading(state, live, model, size, undefined);
+  return (yield* contextOf(view, engine)).admission;
+}
+
+/** The descriptions one view produces, measured. */
+function* seenView(
+  view: ReplView,
+  engine?: ReplRenderer,
+): Operation<readonly ReplDescription<ReplAction>[]> {
+  return presentationFor(view, yield* contextOf(view, engine)).descriptions;
+}
+
+/** The descriptions this state produces, measured. */
+function* seen(
+  state: ReplState,
+  live: ReplLive,
+  size = NARROW,
+  focused?: string,
+  engine?: ReplRenderer,
+): Operation<readonly ReplDescription<ReplAction>[]> {
+  const view = reading(state, live, EMPTY_MODEL, size, focused);
+  return presentationFor(view, yield* contextOf(view, engine)).descriptions;
+}
+
+function* framed(
+  state: ReplState,
+  live: ReplLive,
+  size = NARROW,
+  focused?: string,
+  engine?: ReplRenderer,
+) {
+  return rowsOf(yield* seen(state, live, size, focused, engine));
 }
 
 const DRAFT = Array.from({ length: 40 }, (_, line) => `draft line ${line}`).join("\n");
@@ -675,15 +759,38 @@ const DRAFT = Array.from({ length: 40 }, (_, line) => `draft line ${line}`).join
  * At module scope because two describes need the same answer: what a pointer can
  * reach is also the set a keystroke has to be able to reach.
  */
-function* placedKeys(tree: ReplTree<ReplAction>, view: ReplView): Operation<Map<string, boolean>> {
-  yield* applied(tree, view);
-  const frame = layout(NARROW, replSurface(tree, view));
-  const keys = new Map<string, boolean>();
-  for (const cell of frame.cells) {
-    const key = tree.keyOf(cell.node);
+function* placedKeys(
+  tree: ReplTree<ReplAction>,
+  view: ReplView,
+  engine?: ReplRenderer,
+): Operation<Map<string, boolean>> {
+  const committed = yield* measuring(view.size, engine, (renderer) =>
+    commitReplFrame(tree, renderer, view, 0, undefined),
+  );
+  if (!committed.ok) {
+    throw committed.error;
+  }
+  // Read off the frame that was actually drawn: a box the manifest placed, whose
+  // key mounted a live node. A described node the frame did not place is in no
+  // cell and no target, which is the whole distinction being tested.
+  const mounted = new Set(tree.mounted());
+  const nodeByKey = new Map<string, string>();
+  for (const node of mounted) {
+    const key = tree.keyOf(node);
     if (key !== undefined) {
-      keys.set(key, cell.targetable);
+      nodeByKey.set(key, node);
     }
+  }
+  const keys = new Map<string, boolean>();
+  for (const box of flatten(committed.value.manifest.root)) {
+    if (box.key === undefined) {
+      continue;
+    }
+    const node = nodeByKey.get(box.key);
+    if (node === undefined) {
+      continue;
+    }
+    keys.set(box.key, box.control);
   }
   return keys;
 }
@@ -739,7 +846,13 @@ describe("F3 — complete content and reachable navigation", () => {
           reached.set(key, targetable || (reached.get(key) ?? false));
         }
       }
-      const next = reduceRepl(state, { kind: "scroll", delta: 1 }, EMPTY_MODEL, live, NARROW).state;
+      const next = reduceRepl(
+        state,
+        { kind: "scroll", delta: 1 },
+        EMPTY_MODEL,
+        live,
+        yield* admissionOf(state, live),
+      ).state;
       if (next.form.offset === state.form.offset) {
         break;
       }
@@ -755,10 +868,10 @@ describe("F3 — complete content and reachable navigation", () => {
   it("F3: the viewport walks the whole message before the form controls", function* () {
     const asked = yield* askingFor(PLAN_SCHEMA, DRAFT);
     const live = asking(asked.question);
-    const shown = (rows: ReturnType<typeof framed>): string[] =>
+    const shown = (rows: readonly { readonly key: string; readonly label: string }[]): string[] =>
       rows.filter((one) => one.key.startsWith("drawer:message:")).map((one) => one.label.trim());
 
-    const first = framed(opened(live), live);
+    const first = yield* framed(opened(live), live);
     // Not every line at once, and the first window starts at the beginning.
     expect(shown(first).length).toBeGreaterThan(0);
     expect(shown(first).length).toBeLessThan(40);
@@ -771,7 +884,7 @@ describe("F3 — complete content and reachable navigation", () => {
     let sawSubmit = false;
     let submitBeforeLastLine = false;
     for (let press = 0; press < 120; press++) {
-      const rows = framed(state, live);
+      const rows = yield* framed(state, live);
       for (const label of shown(rows)) {
         if (!seenLines.includes(label)) {
           seenLines.push(label);
@@ -783,7 +896,13 @@ describe("F3 — complete content and reachable navigation", () => {
           submitBeforeLastLine = true;
         }
       }
-      const next = reduceRepl(state, { kind: "scroll", delta: 1 }, EMPTY_MODEL, live, NARROW).state;
+      const next = reduceRepl(
+        state,
+        { kind: "scroll", delta: 1 },
+        EMPTY_MODEL,
+        live,
+        yield* admissionOf(state, live),
+      ).state;
       if (next.form.offset === state.form.offset) {
         break;
       }
@@ -799,9 +918,21 @@ describe("F3 — complete content and reachable navigation", () => {
     // Clamped at the end rather than wrapping, and one press back moves
     // immediately because the stored offset was clamped.
     const held = state.form.offset;
-    state = reduceRepl(state, { kind: "scroll", delta: 1 }, EMPTY_MODEL, live, NARROW).state;
+    state = reduceRepl(
+      state,
+      { kind: "scroll", delta: 1 },
+      EMPTY_MODEL,
+      live,
+      yield* admissionOf(state, live),
+    ).state;
     expect(state.form.offset).toBe(held);
-    const back = reduceRepl(state, { kind: "scroll", delta: -1 }, EMPTY_MODEL, live, NARROW).state;
+    const back = reduceRepl(
+      state,
+      { kind: "scroll", delta: -1 },
+      EMPTY_MODEL,
+      live,
+      yield* admissionOf(state, live),
+    ).state;
     expect(back.form.offset).toBe(held - 1);
 
     // And scrolling changed no value and no route.
@@ -812,7 +943,7 @@ describe("F3 — complete content and reachable navigation", () => {
   it("F3: the one History control is inside the drawer while it is open", function* () {
     const asked = yield* askingFor(PLAN_SCHEMA);
     const live = asking(asked.question);
-    const descriptions = seen(opened(live), live);
+    const descriptions = yield* seen(opened(live), live);
     // Exactly one node carries the key, and it is a child of the drawer
     // rather than a sibling of it.
     const all = rowsOf(descriptions).filter((one) => one.key === "footer:history");
@@ -833,7 +964,7 @@ describe("F3 — complete content and reachable navigation", () => {
     // wide as the terminal, so a trigger sized by the message is one the
     // narrowest supported frame drops — and a dropped announcement is a waiting
     // question nobody can reach.
-    const closed = framed(initialState("forms"), live);
+    const closed = yield* framed(initialState("forms"), live);
     const trigger = closed.find((one) => one.key === "footer:asked");
     expect(trigger).toBeDefined();
     expect(trigger?.label).toBe("[answer]");
@@ -845,7 +976,7 @@ describe("F3 — complete content and reachable navigation", () => {
     // the drawer this one control opens. The row above walks all forty lines of
     // it; this one holds the two halves together, so a trigger that stopped
     // announcing cannot be mistaken for a question that stopped being readable.
-    const opening = framed(opened(live), live);
+    const opening = yield* framed(opened(live), live);
     const message = opening
       .filter((one) => one.key.startsWith("drawer:message:"))
       .map((one) => one.label.trim());
@@ -902,7 +1033,13 @@ describe("F3 — focus returns to the invocation, not to where the drawer came f
     if (!dispatched.ok || dispatched.value.outcome !== "action") {
       throw new Error("the mounted option control produced no action");
     }
-    const transition = reduceRepl(open, dispatched.value.action, session.model, held, NARROW);
+    const transition = reduceRepl(
+      open,
+      dispatched.value.action,
+      session.model,
+      held,
+      yield* admissionOf(open, held, session.model),
+    );
     expect(transition.intent.kind).toBe("answer");
     if (transition.intent.kind !== "answer") {
       throw new Error("activating an option offers the whole object");
@@ -949,13 +1086,32 @@ describe("F3 — focus returns to the invocation, not to where the drawer came f
     expect(caused.answer).toEqual({ decision: "Approve" });
     expect(newest.answer).toEqual({ decision: "Stop" });
 
-    view = reading(state, liveReading(session), session.model, NARROW, between);
+    // Wide, where there is an inspection region: focus lands on the record this
+    // answer caused, and on neither of the two it did not.
+    view = reading(state, liveReading(session), session.model, WIDE, between);
     expect(focusClaim(view)).toBe(`elicit:${caused.marker}`);
     yield* applied(tree, view);
+    expect(keyed(tree)).toBe(`elicit:${caused.marker}`);
+    expect(keyed(tree)).not.toBe(`elicit:${before.marker}`);
+    expect(keyed(tree)).not.toBe(`elicit:${newest.marker}`);
+
+    // Narrow, where there is not. The record's own row is not a row this screen
+    // offers, so the claim names the entry that owns the record — the visible
+    // control — and focus lands there rather than on a node drawing nothing.
+    const owner = `entry:${session.model.entries[0]?.key}`;
+    view = reading(state, liveReading(session), session.model, NARROW, between);
+    expect(focusClaim(view)).toBe(owner);
+    yield* applied(tree, view);
     const landed = keyed(tree);
-    expect(landed).toBe(`elicit:${caused.marker}`);
-    expect(landed).not.toBe(`elicit:${before.marker}`);
-    expect(landed).not.toBe(`elicit:${newest.marker}`);
+    expect(landed).toBe(owner);
+    // And no recorded-answer row is mounted at this size at all, so none of the
+    // three could have been what focus found.
+    expect(
+      tree
+        .mounted()
+        .map((node) => tree.keyOf(node))
+        .filter((key) => key !== undefined && key.startsWith("elicit:")),
+    ).toEqual([]);
 
     // Spent by the commit that satisfied it, so traversal from here is the
     // person's: Tab moves, and the next frame leaves it where they moved it.
@@ -980,7 +1136,13 @@ describe("F3 — focus returns to the invocation, not to where the drawer came f
     // Dismissed, not answered: the same question is still being asked, so the
     // control that is asking it is where focus belongs — and it is the one
     // control that opens this drawer again.
-    const closed = reduceRepl(open, { kind: "close-drawer" }, recorded.model, live, NARROW).state;
+    const closed = reduceRepl(
+      open,
+      { kind: "close-drawer" },
+      recorded.model,
+      live,
+      yield* admissionOf(open, live, recorded.model),
+    ).state;
     expect(closed.restore?.kind).toBe("asked");
     expect(closed.route.drawers).toEqual([]);
     yield* applied(tree, reading(closed, live, recorded.model, NARROW, inside));
@@ -1041,11 +1203,23 @@ function withScope(state: ReplState, scope: string): ReplState {
   });
 }
 
-/** Commit one view into the real tree, refusing to assert past a rejected set. */
-function* applied(tree: ReplTree<ReplAction>, view: ReplView): Operation<void> {
-  const result = yield* tree.apply(describeApplication(view));
-  if (!result.ok) {
-    throw result.error;
+/**
+ * Commit one view into the real tree, refusing to assert past a rejected set.
+ *
+ * Through the product's own pipeline: measured, admitted, reconciled and drawn.
+ * What is mounted is therefore what was admitted, which is the only tree a test
+ * about focus or dispatch should be asking questions of.
+ */
+function* applied(
+  tree: ReplTree<ReplAction>,
+  view: ReplView,
+  engine?: ReplRenderer,
+): Operation<void> {
+  const committed = yield* measuring(view.size, engine, (renderer) =>
+    commitReplFrame(tree, renderer, view, 0, undefined),
+  );
+  if (!committed.ok) {
+    throw committed.error;
   }
 }
 
@@ -1275,7 +1449,7 @@ describe("F1 — the form's conditional means exactly what Core validates", () =
  * is deliberately not in the ring: focus that walked out of an open drawer would
  * let a keystroke reach what the drawer is covering.
  */
-function modalKeys(view: ReplView): Set<string> {
+function* modalKeys(view: ReplView, engine?: ReplRenderer): Operation<Set<string>> {
   const found = new Set<string>();
   const collect = (description: ReplDescription<ReplAction>): void => {
     const read = readDescription(description);
@@ -1296,7 +1470,7 @@ function modalKeys(view: ReplView): Set<string> {
       walk(child);
     }
   };
-  for (const description of describeApplication(view)) {
+  for (const description of yield* seenView(view, engine)) {
     walk(description);
   }
   return found;
@@ -1321,7 +1495,7 @@ describe("F3 — every placed modal control is in the ring", () => {
     // Every control this frame actually placed and can be pointed at. What a
     // pointer can reach is the set a keystroke has to be able to reach too.
     const placed = yield* placedKeys(tree, view);
-    const inside = modalKeys(view);
+    const inside = yield* modalKeys(view);
     const targetable = [...placed.entries()]
       .filter(([key, can]) => can && inside.has(key))
       .map(([key]) => key);
@@ -1382,9 +1556,9 @@ describe("F3 — every placed modal control is in the ring", () => {
     for (const { key, action } of promised) {
       yield* focusTo(tree, key);
       expect(keyed(tree)).toBe(key);
-      const row = rowsOf(
-        describeApplication(reading(state, live, recorded.model, NARROW, key)),
-      ).find((one) => one.key === "guidance");
+      const row = rowsOf(yield* seenView(reading(state, live, recorded.model, NARROW, key))).find(
+        (one) => one.key === "guidance",
+      );
       // This reading's one recorded entry has settled, so the row names the
       // readiness rather than the question. The `Entry 1 question` spelling is
       // asserted where an entry is really waiting, in the rendered journey.
@@ -1424,9 +1598,7 @@ describe("F2 — an invalid answer is not a lifecycle refusal", () => {
         messages: Object.freeze([{ field: "decision", message: "decision is required" }]),
       }),
     });
-    const rows = rowsOf(
-      describeApplication(reading(invalid, live, recorded.model, NARROW, undefined)),
-    );
+    const rows = rowsOf(yield* seenView(reading(invalid, live, recorded.model, NARROW, undefined)));
 
     // Under the form, about the field, in its own row.
     const under = rows.find((one) => one.key.startsWith("drawer:invalid:"));
@@ -1444,5 +1616,627 @@ describe("F2 — an invalid answer is not a lifecycle refusal", () => {
     // The two live in different places, so neither can be mistaken for the other.
     expect(invalid.refusal).toBe(undefined);
     expect(invalid.form.messages.length).toBe(1);
+  });
+});
+
+describe("F3 — the drawers that show a retained reading (#875 R1)", () => {
+  /** A value long enough that no drawer can show all of it at once. */
+  const LONG_VALUE = Object.freeze(
+    Array.from({ length: 60 }, (_unused, at) => `line-${String(at).padStart(2, "0")}`),
+  );
+
+  function scopeWith(key: string, bindings: readonly { name: string; value: Json }[]): ReplScope {
+    return Object.freeze({
+      key,
+      kind: "entry",
+      name: key,
+      path: "entry.md",
+      source: "",
+      position: undefined,
+      marker: `yield:${key}:1`,
+      bindings: Object.freeze([...bindings]),
+      elicitations: Object.freeze([]),
+      generated: Object.freeze([]),
+      scopes: Object.freeze([]),
+    });
+  }
+
+  /**
+   * Two entries, each holding a binding called `plan`, with different values.
+   *
+   * The shape that proves offsets are kept per *reading* rather than per drawer:
+   * the same name in two scopes is two readings, and one is not the other.
+   */
+  function twoScopes(): ReplModel {
+    const entries = [1, 2].map((order) =>
+      Object.freeze({
+        key: `entry-${order}`,
+        order,
+        source: "hello",
+        path: "entry.md",
+        scope: scopeWith(`entry-${order}`, [
+          { name: "plan", value: LONG_VALUE.map((line) => `${line}-entry-${order}`) },
+        ]),
+        transcript: Object.freeze([]),
+        checkpoints: Object.freeze([]),
+        terminal: undefined,
+        settled: true,
+        bindings: Object.freeze([]),
+        turns: Object.freeze([]),
+      }),
+    );
+    return Object.freeze({
+      selection: undefined,
+      head: true,
+      entries: Object.freeze(entries),
+      settled: true,
+      terminal: undefined,
+      checkpoints: Object.freeze([]),
+      transcript: Object.freeze([]),
+      turns: Object.freeze([]),
+      sessions: Object.freeze([]),
+    });
+  }
+
+  /** One state reading the named binding inside the named entry's scope. */
+  function openBinding(scope: string, name: string, offsets: Record<string, number> = {}) {
+    const base = initialState("drawers");
+    return Object.freeze({
+      ...base,
+      route: Object.freeze({
+        ...base.route,
+        scopes: Object.freeze([scope]),
+        drawers: Object.freeze([{ kind: "binding" as const, name }]),
+      }),
+      viewports: Object.freeze({ ...base.viewports, readings: Object.freeze(offsets) }),
+    });
+  }
+
+  /** The drawer's content rows this view describes, by key. */
+  function* drawerRows(
+    state: ReplState,
+    model: ReplModel,
+    size = NARROW,
+    engine?: ReplRenderer,
+  ): Operation<string[]> {
+    const view = reading(state, asking(undefined), model, size);
+    return (yield* seenView(view, engine))
+      .flatMap((description) => flattenKeys(description))
+      .filter((key) => key.startsWith("drawer:value:"));
+  }
+
+  /** Every key one description tree holds, outermost first. */
+  function flattenKeys(description: ReplDescription<ReplAction>): string[] {
+    const read = readDescription(description);
+    return [read.key, ...read.children.flatMap((child) => flattenKeys(child))];
+  }
+
+  it("TL3: a binding's value is windowed, and a hidden row is in nothing", function* () {
+    const engine = yield* useReplRenderer(NARROW);
+    const model = twoScopes();
+    const state = openBinding("entry-1", "plan");
+
+    const first = yield* drawerRows(state, model, NARROW, engine);
+    expect(first.length).toBeGreaterThan(0);
+    // Windowed: this value has sixty lines and no supported drawer is that tall.
+    expect(first.length).toBeLessThan(LONG_VALUE.length);
+
+    // The last content row is absent — not clipped. It has no node, so it is
+    // in no cell, no target and no focus cycle.
+    const tree = yield* useReplTree<ReplAction>();
+    const view = reading(state, asking(undefined), model, NARROW);
+    yield* applied(tree, view, engine);
+    const mounted = tree.mounted().map((node) => tree.keyOf(node));
+    const hidden = `drawer:value:${LONG_VALUE.length - 1}`;
+    expect(first).not.toContain(hidden);
+    expect(mounted).not.toContain(hidden);
+
+    // Reached by scrolling, the way a person reaches it: one press at a time
+    // from the clamp the frame is showing.
+    let offsets: Record<string, number> = {};
+    let reached = false;
+    for (let press = 0; press < 200; press += 1) {
+      const at = openBinding("entry-1", "plan", offsets);
+      const rows = yield* drawerRows(at, model, NARROW, engine);
+      if (rows.includes(hidden)) {
+        reached = true;
+        break;
+      }
+      const window = (yield* admissionOf(at, asking(undefined), model, NARROW, engine)).windows.get(
+        DRAWER_WINDOW,
+      );
+      if (window === undefined || !window.more) {
+        break;
+      }
+      const key = readingKeyOf(at, { kind: "binding", name: "plan" });
+      if (key === undefined) {
+        break;
+      }
+      offsets = { ...offsets, [key]: window.from + 1 };
+    }
+    expect(reached).toBe(true);
+  });
+
+  it("TL3: two bindings with one name in two scopes keep separate offsets", function* () {
+    const engine = yield* useReplRenderer(NARROW);
+    const model = twoScopes();
+    const firstKey = readingKeyOf(openBinding("entry-1", "plan"), {
+      kind: "binding",
+      name: "plan",
+    });
+    const secondKey = readingKeyOf(openBinding("entry-2", "plan"), {
+      kind: "binding",
+      name: "plan",
+    });
+    expect(firstKey).toBeDefined();
+    expect(secondKey).toBeDefined();
+    // The same name, two scopes, two readings.
+    expect(firstKey).not.toBe(secondKey);
+
+    // One reading scrolled well down; the other has never been opened.
+    const offsets = { [firstKey ?? ""]: 20 };
+    const scrolled = yield* drawerRows(
+      openBinding("entry-1", "plan", offsets),
+      model,
+      NARROW,
+      engine,
+    );
+    const fresh = yield* drawerRows(openBinding("entry-2", "plan", offsets), model, NARROW, engine);
+
+    // The scrolled one is showing row twenty; the fresh one starts at its own
+    // first row, because the offset it was handed is not its.
+    expect(scrolled[0]).toBe("drawer:value:20");
+    expect(fresh[0]).toBe("drawer:value:0");
+
+    // And revisiting the first finds its own position again.
+    const revisited = yield* drawerRows(
+      openBinding("entry-1", "plan", offsets),
+      model,
+      NARROW,
+      engine,
+    );
+    expect(revisited[0]).toBe("drawer:value:20");
+  });
+
+  it("TL3: a stored offset past the end is clamped to what the frame shows", function* () {
+    const engine = yield* useReplRenderer(NARROW);
+    const model = twoScopes();
+    const key = readingKeyOf(openBinding("entry-1", "plan"), { kind: "binding", name: "plan" });
+    const far = openBinding("entry-1", "plan", { [key ?? ""]: 10_000 });
+
+    const window = (yield* admissionOf(far, asking(undefined), model, NARROW, engine)).windows.get(
+      DRAWER_WINDOW,
+    );
+    expect(window).toBeDefined();
+    if (window === undefined) {
+      return;
+    }
+    // Clamped, and the clamp is the last window this reading has.
+    expect(window.from).toBe(window.total - window.capacity);
+    expect(window.more).toBe(false);
+    const rows = yield* drawerRows(far, model, NARROW, engine);
+    expect(rows).toContain(`drawer:value:${LONG_VALUE.length - 1}`);
+  });
+
+  it("TL3: scrolling a retained reading changes that offset and nothing else", function* () {
+    const engine = yield* useReplRenderer(NARROW);
+    const model = twoScopes();
+    const before = openBinding("entry-1", "plan");
+    const admission = yield* admissionOf(before, asking(undefined), model, NARROW, engine);
+
+    const after = reduceRepl(
+      before,
+      { kind: "scroll", delta: 1 },
+      model,
+      asking(undefined),
+      admission,
+    ).state;
+
+    const key = readingKeyOf(before, { kind: "binding", name: "plan" }) ?? "";
+    expect(after.viewports.readings[key]).toBe(1);
+    // Nothing else of the reading moved: not the route a location encodes, not
+    // the selected History position, not the draft, not an answer.
+    expect(after.route).toEqual(before.route);
+    expect(after.draft).toBe(before.draft);
+    expect(after.form).toEqual(before.form);
+    expect(after.route.at).toBe(before.route.at);
+    expect(after.viewports.sessions).toBe(before.viewports.sessions);
+    expect(after.viewports.entries).toBe(before.viewports.entries);
+    expect(after.viewports.permission).toBe(before.viewports.permission);
+    // And the other reading's offset is untouched.
+    const other =
+      readingKeyOf(openBinding("entry-2", "plan"), {
+        kind: "binding",
+        name: "plan",
+      }) ?? "";
+    expect(after.viewports.readings[other]).toBeUndefined();
+  });
+});
+
+describe("F3 — the History drawer is a window over every position (#875 R1)", () => {
+  /** More positions than any supported drawer can show at once. */
+  const POSITIONS = Object.freeze(
+    Array.from({ length: 60 }, (_unused, at) => ({
+      marker: `yield:__root__:${at}`,
+      kind: "scope" as const,
+      label: `position ${String(at).padStart(2, "0")}`,
+    })),
+  );
+
+  function withPositions(): ReplModel {
+    return Object.freeze({ ...EMPTY_MODEL, checkpoints: POSITIONS });
+  }
+
+  function openHistory(offsets: Record<string, number> = {}) {
+    const base = initialState("history");
+    return Object.freeze({
+      ...base,
+      route: Object.freeze({
+        ...base.route,
+        drawers: Object.freeze([{ kind: "history" as const }]),
+      }),
+      viewports: Object.freeze({ ...base.viewports, readings: Object.freeze(offsets) }),
+    });
+  }
+
+  function* markerKeys(
+    state: ReplState,
+    model: ReplModel,
+    engine?: ReplRenderer,
+  ): Operation<string[]> {
+    const view = reading(state, asking(undefined), model, NARROW);
+    const walk = (description: ReplDescription<ReplAction>): string[] => {
+      const read = readDescription(description);
+      return [read.key, ...read.children.flatMap((child) => walk(child))];
+    };
+    return (yield* seenView(view, engine))
+      .flatMap((description) => walk(description))
+      .filter((key) => key.startsWith("drawer:marker:"));
+  }
+
+  it("TL3: the final position is absent until the window reaches it", function* () {
+    const engine = yield* useReplRenderer(NARROW);
+    const model = withPositions();
+    const last = `drawer:marker:${POSITIONS[POSITIONS.length - 1].marker}`;
+
+    const first = yield* markerKeys(openHistory(), model, engine);
+    expect(first.length).toBeGreaterThan(0);
+    expect(first.length).toBeLessThan(POSITIONS.length);
+    expect(first).not.toContain(last);
+
+    // Not mounted either, so it is in no cell, no target and no focus cycle.
+    const tree = yield* useReplTree<ReplAction>();
+    yield* applied(tree, reading(openHistory(), asking(undefined), model, NARROW), engine);
+    expect(tree.mounted().map((node) => tree.keyOf(node))).not.toContain(last);
+
+    // Reached through the drawer's own control, one press at a time.
+    const key = readingKeyOf(openHistory(), { kind: "history" }) ?? "";
+    let offsets: Record<string, number> = {};
+    let reached = false;
+    for (let press = 0; press < 200; press += 1) {
+      const at = openHistory(offsets);
+      if ((yield* markerKeys(at, model, engine)).includes(last)) {
+        reached = true;
+        break;
+      }
+      const window = (yield* admissionOf(at, asking(undefined), model, NARROW, engine)).windows.get(
+        DRAWER_WINDOW,
+      );
+      if (window === undefined || !window.more) {
+        break;
+      }
+      offsets = { ...offsets, [key]: window.from + 1 };
+    }
+    expect(reached).toBe(true);
+
+    // And once it is there, it is a real control: mounted, and reachable.
+    const atEnd = openHistory({ [key]: POSITIONS.length });
+    const settledTree = yield* useReplTree<ReplAction>();
+    yield* applied(settledTree, reading(atEnd, asking(undefined), model, NARROW), engine);
+    expect(settledTree.mounted().map((node) => settledTree.keyOf(node))).toContain(last);
+  });
+
+  it("TL3: scrolling History selects no position", function* () {
+    const engine = yield* useReplRenderer(NARROW);
+    const model = withPositions();
+    const before = openHistory();
+    const admission = yield* admissionOf(before, asking(undefined), model, NARROW, engine);
+
+    const after = reduceRepl(
+      before,
+      { kind: "scroll", delta: 1 },
+      model,
+      asking(undefined),
+      admission,
+    ).state;
+
+    // The window moved. The selected position did not, and neither did the
+    // route a location encodes — selecting a position is `select-marker`, and
+    // a scroll is not that.
+    const key = readingKeyOf(before, { kind: "history" }) ?? "";
+    expect(after.viewports.readings[key]).toBe(1);
+    expect(after.route.at).toBeUndefined();
+    expect(after.route.at).toBe(before.route.at);
+    expect(after.route.inspect).toBe(before.route.inspect);
+    expect(after.route).toEqual(before.route);
+    expect(after.draft).toBe(before.draft);
+
+    // Selecting one, by contrast, is exactly what moves it.
+    const chosen = reduceRepl(
+      after,
+      { kind: "select-marker", marker: POSITIONS[1].marker },
+      model,
+      asking(undefined),
+      admission,
+    ).state;
+    expect(chosen.route.at).toBe(POSITIONS[1].marker);
+    expect(chosen.route.inspect).toBe(true);
+  });
+});
+
+describe("F3 — a narrow frame offers no inspection control (#875 R1)", () => {
+  beforeAll(() => useTempFileCompiler());
+
+  /** Every inspection control among these keys, sorted, so a diff names them. */
+  const inspecting = (keys: Iterable<string | undefined>): string[] =>
+    [...keys]
+      .filter(
+        (key): key is string =>
+          key !== undefined && (key.startsWith("binding:") || key.startsWith("elicit:")),
+      )
+      .sort();
+
+  /** One whole focus cycle, in the direction this key walks it. */
+  function* ring(tree: ReplTree<ReplAction>, key: "Tab" | "Backtab"): Operation<string[]> {
+    const first = keyed(tree);
+    const walked: string[] = [first ?? ""];
+    for (let press = 0; press < 200; press += 1) {
+      yield* tree.dispatch({ kind: "key", key });
+      const at = keyed(tree);
+      if (at === first) {
+        return walked;
+      }
+      walked.push(at ?? "");
+    }
+    throw new Error(`focus never came back round with ${key}`);
+  }
+
+  it("TL11: a recorded binding and answer are in a wide frame and in no part of a narrow one", function* () {
+    const recorded = yield* retained();
+    const live = asking(undefined);
+    const state = withScope(initialState("frames"), recorded.scope);
+
+    // Wide, where there is an inspection region: both rows are placed, drawn and
+    // targetable. Without this the absence below would be absence of nothing.
+    const wideTree = yield* useReplTree<ReplAction>();
+    const wideView = reading(state, live, recorded.model, WIDE);
+    const widePlaced = yield* placedKeys(wideTree, wideView);
+    expect(inspecting(widePlaced.keys()).length).toBeGreaterThan(0);
+    expect(widePlaced.get(`elicit:${recorded.marker}`)).toBe(true);
+    expect(inspecting(widePlaced.keys()).some((key) => key.startsWith("binding:"))).toBe(true);
+
+    // Narrow, where there is not.
+    const tree = yield* useReplTree<ReplAction>();
+    const view = reading(state, live, recorded.model, NARROW);
+    const placed = yield* placedKeys(tree, view);
+    const described = rowsOf(presentationFor(view, yield* contextOf(view)).descriptions);
+    const forward = yield* ring(tree, "Tab");
+    const back = yield* ring(tree, "Backtab");
+    // Pre-assert: there is a ring for these controls to be absent from.
+    expect(forward.length).toBeGreaterThan(2);
+    expect(back.length).toBe(forward.length);
+    // One answer asked six ways, together so a regression names every way it came
+    // back: absent from the description, which is where it has to be absent first
+    // because a row offered and then left out of the frame is a node that mounts
+    // anyway; absent from the tree; absent from the frame, so in no drawn cell;
+    // in no pointer target; and absent from the whole focus ring both ways round.
+    expect({
+      described: inspecting(described.map((one) => one.key)),
+      mounted: inspecting(tree.mounted().map((node) => tree.keyOf(node))),
+      placed: inspecting(placed.keys()),
+      targets: inspecting([...placed.entries()].filter(([, can]) => can).map(([key]) => key)),
+      forward: inspecting(forward),
+      back: inspecting(back),
+    }).toEqual({
+      described: [],
+      mounted: [],
+      placed: [],
+      targets: [],
+      forward: [],
+      back: [],
+    });
+
+    // What a narrow frame keeps is what the reader chose: the scope is still
+    // selected and the route is the route they are on.
+    expect(view.state.route.scopes).toEqual([recorded.scope]);
+    expect(view.selection.scope?.key).toBe(recorded.scope);
+    // And the recorded answer is still in the model, whatever this size offers.
+    expect(answers(recorded.model).some((one) => one.marker === recorded.marker)).toBe(true);
+  });
+
+  it("TL11: dismissing a recorded answer at a narrow size lands focus on a drawn control", function* () {
+    const recorded = yield* retained();
+    const live = asking(undefined);
+    // The drawer a wider window opened, still open after the window narrowed.
+    const open = Object.freeze({
+      ...withScope(initialState("frames"), recorded.scope),
+      route: Object.freeze({
+        ...withScope(initialState("frames"), recorded.scope).route,
+        drawers: Object.freeze([
+          Object.freeze({ kind: "recorded-elicit" as const, marker: recorded.marker }),
+        ]),
+      }),
+    });
+    const tree = yield* useReplTree<ReplAction>();
+    const view = reading(open, live, recorded.model, NARROW);
+    yield* applied(tree, view);
+    expect(keyed(tree)?.startsWith("drawer:")).toBe(true);
+
+    // Dismissed. The row this drawer came from is not one a narrow frame offers,
+    // so focus settles on a control this frame drew rather than on a node behind
+    // nothing.
+    const closed = reduceRepl(
+      open,
+      { kind: "close-drawer" },
+      recorded.model,
+      live,
+      yield* admissionOf(open, live, recorded.model),
+    ).state;
+    expect(closed.route.drawers).toEqual([]);
+    const after = reading(closed, live, recorded.model, NARROW, keyed(tree));
+    const placed = yield* placedKeys(tree, after);
+    const landed = keyed(tree);
+    expect(landed).toBeDefined();
+    expect(inspecting([landed])).toEqual([]);
+    // Drawn, and reachable by a pointer: whatever focus found is a row this frame
+    // actually placed.
+    expect(placed.get(landed ?? "")).toBe(true);
+  });
+});
+
+describe("F3 — one committed frame, in the one order this product allows", () => {
+  /**
+   * A renderer whose measurement can be held open.
+   *
+   * The seam TL9 needs, and nothing production has: `measure` suspends, so a
+   * test can look at the tree *while* the frame is still being measured and
+   * nothing has been admitted yet.
+   */
+  function holding(renderer: ReplRenderer): {
+    readonly renderer: ReplRenderer;
+    release(): void;
+    asked(): number;
+  } {
+    let waiters: (() => void)[] = [];
+    let asked = 0;
+    let open = true;
+    return {
+      renderer: {
+        *measure(ops, size) {
+          asked += 1;
+          if (open) {
+            const waiter = withResolvers<void>();
+            waiters.push(() => waiter.resolve());
+            yield* waiter.operation;
+          }
+          return yield* renderer.measure(ops, size);
+        },
+        draw: (request) => renderer.draw(request),
+        resize: (size) => renderer.resize(size),
+        last: () => renderer.last(),
+        engines: () => renderer.engines(),
+      },
+      release() {
+        open = false;
+        const releasing = waiters;
+        waiters = [];
+        for (const one of releasing) {
+          one();
+        }
+      },
+      asked: () => asked,
+    };
+  }
+
+  it("TL9: a held measurement changes no tree, no focus and no committed frame", function* () {
+    const renderer = yield* useReplRenderer(NARROW);
+    const tree = yield* useReplTree<ReplAction>();
+    const held = holding(renderer);
+    const view = reading(initialState("frames"), asking(undefined), EMPTY_MODEL, NARROW);
+
+    const revision = tree.frame().id;
+    expect(tree.mounted()).toEqual([]);
+
+    const running = yield* spawn(() => commitReplFrame(tree, held.renderer, view, 0, undefined));
+    yield* sleep(0);
+    yield* sleep(0);
+    yield* sleep(0);
+
+    // The measurement is outstanding, and this is the whole of what has
+    // happened: nothing is mounted, the revision has not moved, nothing holds
+    // focus, and the renderer has committed no frame to acknowledge.
+    expect(held.asked()).toBeGreaterThan(0);
+    expect(tree.mounted()).toEqual([]);
+    expect(tree.frame().id).toBe(revision);
+    expect(tree.focused()).toBeUndefined();
+    expect(renderer.last()).toBeUndefined();
+
+    held.release();
+    const committed = yield* running;
+    if (!committed.ok) {
+      throw committed.error;
+    }
+    // And only now is any of it true.
+    expect(tree.mounted().length).toBeGreaterThan(0);
+    expect(tree.frame().id).not.toBe(revision);
+    expect(renderer.last()).toBeDefined();
+    expect(committed.value.rendered.map.targets.length).toBeGreaterThan(0);
+  });
+
+  it("TL9: a resize under a held measurement abandons the frame before reconciliation", function* () {
+    const renderer = yield* useReplRenderer(NARROW);
+    const tree = yield* useReplTree<ReplAction>();
+    const held = holding(renderer);
+    const view = reading(initialState("frames"), asking(undefined), EMPTY_MODEL, NARROW);
+
+    const revision = tree.frame().id;
+    /** What the terminal reports when the frame asks again, which it does last. */
+    let reported: ReplTerminalSize = NARROW;
+    const running = yield* spawn(() =>
+      commitReplFrame(tree, held.renderer, view, 0, undefined, function* () {
+        return reported;
+      }),
+    );
+    yield* sleep(0);
+    yield* sleep(0);
+    yield* sleep(0);
+    expect(held.asked()).toBeGreaterThan(0);
+
+    // The window is dragged while the measurement is outstanding. Every capacity
+    // this frame is about to read describes a terminal that is no longer there.
+    reported = WIDE;
+    held.release();
+    const committed = yield* running;
+
+    expect(committed.ok).toBe(false);
+    if (!committed.ok) {
+      expect(isStaleFrame(committed.error)).toBe(true);
+      expect(committed.error.message).toContain("72x20");
+      expect(committed.error.message).toContain("160x36");
+    }
+    // And stale preparation reached nothing: no node is mounted, the revision has
+    // not moved, nothing holds focus, and no frame was drawn — so no target names
+    // a row that this terminal no longer has.
+    expect(tree.mounted()).toEqual([]);
+    expect(tree.frame().id).toBe(revision);
+    expect(tree.focused()).toBeUndefined();
+    expect(renderer.last()).toBeUndefined();
+  });
+
+  it("TL9: a measurement that fails commits nothing at all", function* () {
+    const renderer = yield* useReplRenderer(NARROW);
+    const tree = yield* useReplTree<ReplAction>();
+    const view = reading(initialState("frames"), asking(undefined), EMPTY_MODEL, NARROW);
+
+    const refusing: ReplRenderer = {
+      // deno-lint-ignore require-yield
+      *measure(): Operation<Result<ReplMeasured>> {
+        return Err(new ReplRenderError("this measurement cannot be taken"));
+      },
+      draw: (request) => renderer.draw(request),
+      resize: (size) => renderer.resize(size),
+      last: () => renderer.last(),
+      engines: () => renderer.engines(),
+    };
+
+    const outcome = yield* commitReplFrame(tree, refusing, view, 0, undefined);
+    expect(outcome.ok).toBe(false);
+    if (!outcome.ok) {
+      expect(outcome.error.message).toContain("cannot be taken");
+    }
+    // Nothing mounted and no frame committed: a failure before admission
+    // leaves no half-interactive screen behind.
+    expect(tree.mounted()).toEqual([]);
+    expect(renderer.last()).toBeUndefined();
   });
 });

@@ -43,7 +43,34 @@ export function textOf(input: ReplViewData, name: string): string {
  * exactly why the marker is redrawn after every commit rather than remembered.
  */
 function marked(input: ReplViewData, label: string): string {
-  return fields(input)?.["focused"] === true ? `> ${label}` : `  ${label}`;
+  return focusPrefixed(label, fields(input)?.["focused"] === true);
+}
+
+/**
+ * One selectable row's text, focus marker included.
+ *
+ * Pure, and exported, because the pass that measures a region has to ask how
+ * wide this row is before any node renders it. A measurement taken without the
+ * marker is two columns narrower than the row drawn in its place, which is how a
+ * control comes to be admitted to a row that cannot hold it.
+ */
+export function focusPrefixed(label: string, focused: boolean): string {
+  return focused ? `> ${label}` : `  ${label}`;
+}
+
+/**
+ * One editable line's text, for the same reason.
+ *
+ * A value holding several lines shows its last one under a count of the rest: a
+ * cell is a row, so a line that paid itself out over four of them would push the
+ * controls below it off the screen.
+ */
+export function fieldText(prompt: string, text: string, focused: boolean): string {
+  const lines = text.split("\n");
+  const last = lines[lines.length - 1];
+  const earlier = lines.length - 1;
+  const body = earlier === 0 ? last : `[${earlier} line${earlier === 1 ? "" : "s"}] ${last}`;
+  return `${focused ? ">" : " "}${prompt}${body}`;
 }
 
 /** Read an optional string field. */
@@ -265,13 +292,11 @@ function submission(input: ReplViewData): ReplAction | undefined {
  * location, which is where a caller reopens it from.
  */
 function rendered(input: ReplViewData): string {
-  const text = textOf(input, "text");
-  const here = fields(input)?.["focused"] === true;
-  const lines = text.split("\n");
-  const last = lines[lines.length - 1];
-  const earlier = lines.length - 1;
-  const body = earlier === 0 ? last : `[${earlier} line${earlier === 1 ? "" : "s"}] ${last}`;
-  return `${here ? ">" : " "}${textOf(input, "prompt")}${body}`;
+  return fieldText(
+    textOf(input, "prompt"),
+    textOf(input, "text"),
+    fields(input)?.["focused"] === true,
+  );
 }
 
 /**

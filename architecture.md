@@ -5534,31 +5534,93 @@ a conversation or a field whose name happened to look like something else.
 
 ### From a frame to a terminal, and back
 
-Below the tree, one more direction:
+Below the tree, one more direction — and it begins before anything is mounted:
 
 ```text
-committed frame → placement → engine ops → bytes → the terminal
-                       ↓
-              element id + geometry → the live node it came from
-                       ↑
+one resolved reading → candidate rows + a layout manifest
+                     → measure (empty viewports)      ← the engine answers
+                     → admit (rows, whole controls)
+                     → reconcile exactly the admitted set
+                     → draw → bytes → the terminal
+                              ↓
+                     element id + geometry → the live node it came from
+                              ↑
    bytes → normalized key or position → target → the same ancestry walk
 ```
 
-Placement is presentation and nothing else: it reads the committed frame and
-tells the tree nothing, so resizing moves things and changes no selection, no
-model object and no action's meaning. Four sizes are decided — wide, medium,
-narrow, and a refusal below the narrow minimum that recovers when the window
-grows — and a control the refusal hides is drawn nowhere and therefore
-targetable nowhere.
+**The engine places; this boundary only states constraints.** Profiles, column
+widths, the drawer's integer rectangle and the footer's seven rows are product
+facts declared once; where a row lands and how many rows a region holds are
+answers the engine gives. Nothing computes a cell coordinate or a capacity
+twice, because a question asked in two places is a question answered two ways.
+
+**Measurement comes first, and it is not a frame.** The application builds inert
+ordered candidates and a paired manifest from one semantic reading, and the
+measuring pass draws that manifest with every scrolling viewport genuinely
+empty — surrounding headings, both window controls and complete action labels
+included, so the room it reports is the region's rather than whatever is
+currently overflowing it. That pass mounts nothing, publishes no target,
+advances no revision and acknowledges nothing. Capacity is the measured viewport
+height, floored and bounded at zero; a region the engine measured nothing for
+holds nothing, because "no window means show everything" is how a list comes to
+describe rows the frame cannot place. Width-dependent text — the canonical
+location, a transcript row, a failure reason — is absent from the pass that
+answers how wide its region is, since a growing column takes its minimum from
+its widest child and one unbounded row would make the column wider than its
+share. Each row then states that measured width, so a row can neither widen its
+column nor publish a hit box reaching into the next one — and its label is
+fitted to that width, because a rectangle bounds a box and not its characters:
+the engine draws the text it is given and clips none of it. Fitting is by part
+rather than a cut at the end, since the end is where a row says what it is
+*about*. A name nothing in this product bounds gives up its columns first; where
+the row's own vocabulary will not fit either, the fact the row exists to carry
+survives whole and the name keeps what is left in front of it, because a state
+cut in half says something untrue and two rows that are only their state are two
+rows a reader cannot tell apart.
+
+**Admission decides what exists.** One pure adapter clamps the
+application's own offsets against the measured capacity, selects the visible
+range, and admits action controls as a contiguous priority prefix — stopping at
+the first control the row cannot hold whole, even where a later narrower one
+would fit, because a row that reordered itself between two sizes would move the
+control somebody was reaching for. An explanatory sentence is not a control, so
+the row shortens it instead of dropping it. Only the admitted set is offered to
+the tree: a row outside a window and a control the row cannot hold are not
+described at all, so neither is a cell, a pointer target or a keyboard stop.
+The same admission reaches the reducer, so a scroll moves from the clamp the
+screen is showing rather than from a number a resize or a filter left behind.
+
+Placement is still presentation and tells the tree nothing about meaning:
+resizing changes which rows are admitted, never the identity of a row that
+remains, the selection, a model object or an action. Four sizes are decided —
+wide, medium, narrow, and a refusal below the narrow minimum that recovers when
+the window grows — and a control the refusal hides is drawn nowhere and
+therefore targetable nowhere.
 
 Only mounted nodes are drawn. Each rendered frame carries an immutable map from
 the element the layout engine measured to the live node that asked for it, and
 that map is valid for exactly the tree revision that produced it: a pointer
 resolved against it travels with that revision's number, so a pointer from a
 frame the tree has moved past, one naming a node that has since gone, and one
-landing behind an open modal all reach nothing. A pointer that does resolve
-becomes the same normalized event a key produces and walks the same ancestry, so
-clicking a control and pressing Enter on it are one action.
+landing behind an open modal all reach nothing. A target exists because an
+admitted box mounted a live control — bounds alone cannot establish it, since
+the engine reports a clipped child's whole rectangle and says nothing about what
+was painted. Resolution is half-open on both axes, because the engine's own hit
+test includes a box's trailing edge and every row of a stacked list would
+otherwise be claimed by two neighbours. A bound that is not whole cells is
+refused rather than rounded: the engine produces fractional geometry wherever
+something is centred or sized by a share, and a rounded hit box disagrees with
+the text underneath it. A pointer that does resolve becomes the same normalized
+event a key produces and walks the same ancestry, so clicking a control and
+pressing Enter on it are one action.
+
+An open drawer is one floating, opaque rectangle over the body and above the
+footer. The background is coverage rather than style: an element without one
+lets what it covers show through from wherever its own text stops, so the blank
+interior of a short modal line would still be the transcript underneath it. The
+engine's pointer capture narrows the engine's own hit test over that rectangle
+and is not containment — whether a dispatch may reach a node behind the modal
+is the reconciler's to refuse, and it refuses with capture off.
 
 Text is its own member of that normalized union, not a key with a payload: a
 named key — submit, dismiss, traverse, erase — is a command whoever claims it
@@ -5568,16 +5630,42 @@ already assembled, and a newline inside a paste arrives as one. A chord carries
 a letter in its physical key code, and reading that code would type the letter
 somebody held Control with, so a chord is dropped whole — payload included.
 
-Every render input is retained as a frozen snapshot before it crosses into the
-engine, and the bytes that come back are copied immediately, because the engine
-hands out a view into its own memory that the next render invalidates. A frame
-the engine's arenas cannot hold is redrawn on an engine rebuilt for that frame's
-dimensions; recovery changes nothing above it.
+**One renderer owns two engines, and they are not interchangeable.** The engine
+emits a complete redraw after any update that is not a no-op, so telling it a
+size it already has throws away the diff the next committed frame is computed
+against — and the size is restated before every frame rather than only on a
+resize event. The engine diffs every render against the previous one on that
+instance, whoever asked and whatever was done with the bytes — so a render
+taken only to read geometry back becomes the front buffer the next committed
+frame is compared against, and the committed frame then emits only the
+difference from a frame nobody ever saw.
+Measured: a Sessions reading filtered from twelve rows to two left the
+thirteenth still reading `conversation 11`. One instance therefore only
+measures, the other alone owns committed display state, both are told the same
+size, and they are acquired once and reused for every frame. Only a capacity
+refusal replaces an instance — the one that refused, at the size the frame was
+laid out for. The installed engine exposes no disposal, so ownership ends by
+releasing the references with the renderer's scope rather than by calling a
+cleanup API that does not exist.
 
-Placement at narrow shows the one surface the route selected. Every other
-surface stays mounted and stays off the frame, which is what makes it
-unreachable rather than merely hidden: it is in no cell, in no frame map, and no
-pointer resolves to it.
+Everything a caller may hold is copied out of the engine the moment it arrives —
+the bytes, every published bound, the whole target map — because the engine
+hands out a view into its own memory and an `info` that the next render
+invalidates. An older frame therefore keeps answering exactly what it answered.
+Recovery changes nothing above it.
+
+Placement at narrow shows the one surface the route selected. The other surface
+stays mounted and stays off the frame, which is what makes it unreachable rather
+than merely hidden: it is in no cell, in no frame map, and no pointer resolves to
+it. The inspection reading is different, and is not described there at all: a
+narrow frame has no inspection region to put a binding row or a recorded answer
+in, and a row described into a region that does not exist is mounted, focusable
+and placed nowhere — a Tab stop drawing no cell and a pointer target behind
+nothing. So an answer given at a narrow size restores focus to the entry that
+owns the record rather than to the record's own row, and the catalog's own
+process-local offset moves only as far as it takes to show that entry. What is
+selected and which route is showing are unchanged by any of it: this is what the
+frame offers, not what the reader chose.
 
 Presentation time has one owner. There is a single acknowledged frame stream:
 holding a subscription is what asks for frames, an advance waits until every
@@ -5588,7 +5676,19 @@ acknowledgement never arrives, because it did not finish the frame it held. An a
 nearest common mounted ancestor, whose lifetime is the animation's; nothing
 below it keeps a clock of its own. The stream carries presentation time only —
 Journal records, model selection, routes and execution pause state are outside
-it.
+it. Measurement sits inside the frame a subscriber is already holding, and the
+measurement an action needs before it can move a window subscribes to nothing
+and acknowledges nothing: it is a question about geometry, not a frame. If the
+terminal's size moves while a frame is being prepared, that preparation is
+abandoned and rebuilt for the size that is actually there, because a measurement
+taken at one size and a draw at another is how a window comes to show rows the
+frame cannot place. Every preparation is revalidated, with no last attempt that
+skips the check: the rebuilding is bounded per frame rather than overall, and a
+frame whose whole budget went to preparations the terminal outran releases its
+subscription without applying the timestamp and defers to the next frame.
+Presenting the measurement a terminal has already contradicted would put stale
+geometry on the screen and publish targets naming rows nobody can see, and
+ending on it would be a command that cannot be resized — so it does neither.
 
 A frame that cannot be drawn ends the screen. A refused subscription, a refused
 reconcile and a refused render all raise, because the scope that owns the
