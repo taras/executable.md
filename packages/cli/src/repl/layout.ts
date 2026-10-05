@@ -35,8 +35,10 @@
  * cannot hit — so every size and inset here is stated as whole cells.
  */
 
-import { close, fixed, fit, grow, open, rgba, text } from "@bomb.sh/tty";
+import { close, fixed, fit, grow, open, text } from "@bomb.sh/tty";
 import type { Op, OpenElement, SizingAxis } from "@bomb.sh/tty";
+import { REPL_PALETTE, surfaceOf, terminalColour, textStyleOf } from "./presentation-style.ts";
+import type { ReplRowStyle } from "./presentation-style.ts";
 import type { ReplTerminalSize } from "./terminal.ts";
 
 /** Which layout one size gets. */
@@ -84,6 +86,15 @@ export interface ReplBox {
   readonly text: string | undefined;
   /** Whether activating it means something. Decided by what it is. */
   readonly control: boolean;
+  /**
+   * What this row means, for the cells it is drawn in, or none for a container.
+   *
+   * Carried rather than derived: the facts that decide it are the application's
+   * and exist before any node does, which is also why the measurement pass can
+   * draw the same decoration the committed pass will. A box with none is
+   * structure, and structure takes the surface of whatever it is inside.
+   */
+  readonly style: ReplRowStyle | undefined;
   readonly children: readonly ReplBox[];
 }
 
@@ -187,7 +198,7 @@ const DRAWER_SHARE = 8;
  * stops, so the blank half of a short modal line would still be the transcript
  * underneath it.
  */
-const DRAWER_BACKGROUND = rgba(16, 16, 32);
+const DRAWER_BACKGROUND = terminalColour(REPL_PALETTE.drawerSurface);
 
 /** Which profile a size gets. */
 export function profileFor(size: ReplTerminalSize): ReplProfile {
@@ -540,12 +551,19 @@ export function drawerLayerProps(
   };
 }
 
-/** The ops for the measurement pass, under structural ids and nothing else. */
+/**
+ * The ops for the measurement pass, under structural ids and nothing else.
+ *
+ * Decorated by the same builder as the committed frame. Nothing holds focus
+ * here — there is no mounted node to hold it — and that costs the measurement
+ * nothing, because focus changes a foreground and never a width.
+ */
 export function skeletonOps(root: ReplBox): Op[] {
   return opsOf(
     [root],
     (box) => box.id,
     () => undefined,
+    undefined,
   );
 }
 
@@ -565,6 +583,17 @@ export function committedOps(
   nodeByKey: ReadonlyMap<string, string>,
   mounted: ReadonlySet<string>,
   cells: ReadonlyMap<string, string>,
+  /**
+   * The mounted node holding focus after this frame reconciled, for this frame
+   * alone.
+   *
+   * Passed in rather than looked up, and not kept: focus belongs to the tree, and
+   * a manifest or a box that remembered it would be a second place to ask where
+   * it is. It is matched by exact mounted identity, so a box whose node is not
+   * the focused one is drawn unfocused however its key is spelled, and it is
+   * discarded with the ops it decorated.
+   */
+  focused: string | undefined,
 ): Op[] {
   return opsOf(
     [root],
@@ -576,6 +605,7 @@ export function committedOps(
       return node !== undefined && mounted.has(node) ? node : undefined;
     },
     (id) => cells.get(id),
+    focused,
   );
 }
 
@@ -583,6 +613,7 @@ function opsOf(
   boxes: readonly ReplBox[],
   idOf: (box: ReplBox) => string | undefined,
   textOf: (id: string) => string | undefined,
+  focused: string | undefined,
 ): Op[] {
   const ops: Op[] = [];
   for (const box of boxes) {
@@ -590,15 +621,42 @@ function opsOf(
     if (id === undefined) {
       continue;
     }
-    ops.push(open(id, box.props));
+    ops.push(open(id, decorated(box)));
     const content = textOf(id) ?? box.text;
     if (content !== undefined && content !== "") {
-      ops.push(text(content));
+      ops.push(written(content, box, id === focused));
     }
-    ops.push(...opsOf(box.children, idOf, textOf));
+    ops.push(...opsOf(box.children, idOf, textOf, focused));
     ops.push(close());
   }
   return ops;
+}
+
+/**
+ * One box's props with its surface on them.
+ *
+ * On the element rather than on the text, because a surface is the row's whole
+ * measured width: the engine paints an element's background across every cell it
+ * was given, and text only covers the cells it filled — so a selected row whose
+ * label got shorter would otherwise be half selected.
+ */
+function decorated(box: ReplBox): ReplBoxProps {
+  if (box.style === undefined) {
+    return box.props;
+  }
+  const surface = surfaceOf(box.style);
+  if (surface === undefined) {
+    return box.props;
+  }
+  return { ...box.props, bg: terminalColour(surface) };
+}
+
+function written(content: string, box: ReplBox, focused: boolean): Op {
+  if (box.style === undefined) {
+    return text(content);
+  }
+  const { colour, attrs } = textStyleOf(box.style, focused);
+  return text(content, { color: terminalColour(colour), ...(attrs === 0 ? {} : { attrs }) });
 }
 
 /** Every box of one tree, outermost first, for a caller that wants the list. */
@@ -614,6 +672,7 @@ export function box(input: {
   readonly props: ReplBoxProps;
   readonly text?: string;
   readonly control?: boolean;
+  readonly style?: ReplRowStyle;
   readonly children?: readonly ReplBox[];
 }): ReplBox {
   return Object.freeze({
@@ -623,6 +682,7 @@ export function box(input: {
     props: input.props,
     text: input.text,
     control: input.control === true,
+    style: input.style,
     children: Object.freeze(input.children === undefined ? [] : [...input.children]),
   });
 }

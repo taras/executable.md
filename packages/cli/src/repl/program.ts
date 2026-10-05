@@ -1264,8 +1264,12 @@ export function* commitReplFrame(
     cells.set(cell.node, cell.cell);
   }
   const root = presentation.manifest.root;
+  // Read after the reconcile that settled it and handed on, never stored: the
+  // tree owns focus, and decoration is the one thing that needs to know where it
+  // ended up. A row's own `>` cue is the view's and is therefore a frame behind;
+  // this is the frame's own answer.
   const drawn = yield* renderer.draw({
-    ops: committedOps(root, nodeByKey, mounted, cells),
+    ops: committedOps(root, nodeByKey, mounted, cells, tree.focused()),
     boxes: drawnBoxesOf(root, nodeByKey, mounted),
     // Every region and every viewport, so where one landed is a fact the frame
     // carries rather than something a later caller works out again.
