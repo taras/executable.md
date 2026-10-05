@@ -2295,11 +2295,8 @@ function described(view: ReplView, context: ReplPresentationContext): DescribedS
     // One cell is one row, so a recorded row that holds several lines of output
     // becomes several cells. A cell given more than one line would show only the
     // first, which is the whole of what a reader would then believe was there.
-    const style = transcriptStyle(transcript);
-    for (const [offset, text] of describeRow(transcript, surface ?? 0)
-      .split("\n")
-      .entries()) {
-      items.push(line(`line:${index}:${offset}`, text, style));
+    for (const [offset, part] of transcriptLines(transcript, surface ?? 0).entries()) {
+      items.push(line(`line:${index}:${offset}`, part.text, part.style));
     }
   }
   // The live overlay, explicitly below the recorded rows and explicitly labelled.
@@ -3607,30 +3604,71 @@ function nested(scope: ReplScope, path: readonly string[]): readonly NestedScope
   return found;
 }
 
-/**
- * What one transcript row means, read from the record's own kind.
- *
- * The record says which it is, so nothing here looks at the string that came out
- * of it: a document whose output happens to contain the word `failed` is output,
- * and a root that actually closed `err` is a failure whatever its text says.
- */
-function transcriptStyle(entry: ReplRow): ReplRowStyle {
-  if (entry.kind === "output") {
-    return styleOf("output");
-  }
-  if (entry.kind !== "terminal") {
-    return styleOf("metadata");
-  }
-  if (entry.status === "ok") {
-    return styleOf("successful-outcome");
-  }
-  // A root that closed `err` and one that was cancelled are both not `ok`, and a
-  // cancellation is not a failure — it is a reading that stopped.
-  return styleOf(entry.status === "err" ? "failed-outcome" : "waiting");
+/** One line of a transcript record, and what that line is. */
+interface TranscriptLine {
+  readonly text: string;
+  readonly style: ReplRowStyle;
 }
 
-/** One transcript row, as a line. */
-function describeRow(entry: ReplRow, width: number): string {
+/**
+ * One transcript record, as the lines it is drawn in and what each of them is.
+ *
+ * Decided together, because a root close draws two different things. A root that
+ * recorded a result shows that result — the rendered document, which is what a
+ * reader came for — and a root that recorded none shows the outcome it closed
+ * with instead. One role chosen from the record's kind alone paints a whole
+ * rendered document in the accent that belongs to the word `ok`.
+ *
+ * Read from the typed fields as each line is built, never from the string that
+ * came out: a document whose own output contains the word `failed` is still
+ * output, and a root that closed `err` is a failure whatever it rendered.
+ */
+function transcriptLines(entry: ReplRow, width: number): readonly TranscriptLine[] {
+  if (entry.kind !== "terminal") {
+    return lined(
+      describeRow(entry),
+      entry.kind === "output" ? styleOf("output") : styleOf("metadata"),
+    );
+  }
+  // Three outcomes rather than one "done", and a cancellation is not a failure:
+  // it is a reading that stopped.
+  const outcome =
+    entry.status === "ok"
+      ? styleOf("successful-outcome")
+      : styleOf(entry.status === "err" ? "failed-outcome" : "waiting");
+  const shown =
+    entry.output.length > 0
+      ? lined(entry.output, styleOf("output"))
+      : lined(`closed ${entry.status}`, outcome);
+  // Only a failure that recorded a reason, and only for a failure: an `ok`, a
+  // cancellation and an entry that never settled have no reason to show, and
+  // inventing text for them would describe a failure that did not happen.
+  if (entry.status !== "err" || entry.message === undefined) {
+    return shown;
+  }
+  // Its own line, so the outcome and the reason are two rows a window can scroll
+  // rather than one row a region has to clip in the middle.
+  return [...shown, { text: failedLine(entry.message, width), style: styleOf("failed-outcome") }];
+}
+
+/**
+ * One string as the rows it is drawn in, each under one role.
+ *
+ * A cell is a row, so a record holding several lines of text becomes several
+ * cells. A cell given more than one line would show only the first, which is the
+ * whole of what a reader would then believe was there.
+ */
+function lined(text: string, style: ReplRowStyle): readonly TranscriptLine[] {
+  return text.split("\n").map((one) => ({ text: one, style }));
+}
+
+/**
+ * One ordinary transcript row, as a line.
+ *
+ * A root close is not one of these: what it draws depends on whether it recorded
+ * a result, so the two cannot share a single string.
+ */
+function describeRow(entry: Exclude<ReplRow, { readonly kind: "terminal" }>): string {
   switch (entry.kind) {
     case "entry":
       return `entry ${entry.path}`;
@@ -3648,18 +3686,6 @@ function describeRow(entry: ReplRow, width: number): string {
       return `agent ${entry.turn.agent} ${entry.turn.status}`;
     case "effect":
       return `${entry.type} ${entry.status}`;
-    case "terminal": {
-      const closed = entry.output.length > 0 ? entry.output : `closed ${entry.status}`;
-      // Only a failure that recorded a reason, and only for a failure: an `ok`,
-      // a cancellation and an entry that never settled have no reason to show,
-      // and inventing text for them would describe a failure that did not happen.
-      if (entry.status !== "err" || entry.message === undefined) {
-        return closed;
-      }
-      // Its own line, so the outcome and the reason are two rows a window can
-      // scroll rather than one row a region has to clip in the middle.
-      return `${closed}\n${failedLine(entry.message, width)}`;
-    }
   }
 }
 

@@ -66,17 +66,17 @@ const SETTLING = [
   "",
 ].join("\n");
 
-/** One entry whose second block fails, so its root closes `err` with a reason. */
+/**
+ * One entry whose root closes `err` having recorded nothing to show.
+ *
+ * The same refusal the captures drive: a schema outside this REPL's form
+ * language. Nothing renders before it, so the transcript has an outcome to draw
+ * rather than a result, which is the branch that keeps the outcome accent.
+ */
 const FAILING = [
-  "```js eval",
-  'const token = "beta";',
-  "```",
+  "# A refused question",
   "",
-  "```js eval",
-  "const lost = undeclaredHere;",
-  "```",
-  "",
-  "Two: {token}",
+  '<Elicit schema={{ type: "number" }} as="answer">This schema is outside the REPL\'s form language.</Elicit>',
   "",
 ].join("\n");
 
@@ -348,6 +348,65 @@ describe("REPL presentation: what one row's cells say it is", () => {
       inkOf(grid, failed).foreground,
     ];
     expect(new Set(colours).size).toBe(4);
+  });
+
+  it("G1: a settled document's recorded result is output, not an outcome", function* () {
+    const model = yield* settledAndFailed();
+    const presenter = yield* usePresenter(WIDE);
+
+    // The root really did record a result, so the rows under test are the
+    // rendered document rather than the word the root closed with.
+    const settled = model.entries[0];
+    const at = settled.transcript.findIndex((row) => row.kind === "terminal");
+    const record = settled.transcript[at];
+    if (record === undefined || record.kind !== "terminal") {
+      throw new Error("this entry recorded no root close");
+    }
+    expect(record.status).toBe("ok");
+    expect(record.output.length).toBeGreaterThan(0);
+
+    // Selected, and with nothing live: the only copy of this text on the screen
+    // is the durable one, so a bright live overlay cannot stand in for it.
+    const observed = yield* presenter.commit(
+      reading(selecting(stateWith({}), settled.key), model, NOTHING_LIVE, WIDE),
+    );
+    const { grid } = presenter;
+    const first = placed(observed, `line:${at}:0`);
+    expect(textOf(grid, first)).toContain(record.output.split("\n")[0]);
+    expect(inkOf(grid, first).foreground).toBe(REPL_PALETTE.output);
+    expect(inkOf(grid, first).foreground).not.toBe(REPL_PALETTE.success);
+
+    // The outcome keeps its accent where an outcome is what is shown.
+    expect(inkOf(grid, placed(observed, `entry:${settled.key}`)).foreground).toBe(
+      REPL_PALETTE.success,
+    );
+  });
+
+  it("G1: a root that recorded no result shows its outcome and its reason", function* () {
+    const model = yield* settledAndFailed();
+    const presenter = yield* usePresenter(WIDE);
+
+    const failed = model.entries[1];
+    const at = failed.transcript.findIndex((row) => row.kind === "terminal");
+    const record = failed.transcript[at];
+    if (record === undefined || record.kind !== "terminal") {
+      throw new Error("this entry recorded no root close");
+    }
+    expect(record.status).toBe("err");
+    expect(record.output).toBe("");
+
+    const observed = yield* presenter.commit(
+      reading(selecting(stateWith({}), failed.key), model, NOTHING_LIVE, WIDE),
+    );
+    const { grid } = presenter;
+    // With nothing recorded to show, the outcome itself is the row, and it keeps
+    // the outcome accent; the reason recorded beside it is its own row.
+    const closed = placed(observed, `line:${at}:0`);
+    expect(textOf(grid, closed)).toContain("closed err");
+    expect(inkOf(grid, closed).foreground).toBe(REPL_PALETTE.failure);
+    const reason = placed(observed, `line:${at}:1`);
+    expect(textOf(grid, reason)).toContain("failed:");
+    expect(inkOf(grid, reason).foreground).toBe(REPL_PALETTE.failure);
   });
 
   it("G1: an entry that never closed reads as waiting, and says so", function* () {
