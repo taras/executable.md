@@ -757,14 +757,17 @@ function* painted(
   return (yield* drawn(tree, view, renderer)).bytes;
 }
 
-/** The row this screen is showing the location's omission summary on. */
-function summaryOn(rows: readonly string[]): string {
-  const found = rows.find((row) => row.includes("more characters"));
+/** The row this screen is drawing the draft on. */
+function draftRowIn(rows: readonly string[]): string {
+  const found = rows.find((row) => row.includes(DRAFT_PROMPT));
   if (found === undefined) {
-    throw new Error("the screen is showing no omission summary");
+    throw new Error("the screen is drawing no draft row");
   }
   return found;
 }
+
+/** What the draft row is called, which is how this suite finds it. */
+const DRAFT_PROMPT = "Draft: ";
 
 /** The keys this view describes with one `select`, which is what a row asks for. */
 function* keysSelecting(view: ReplView, select: string): Operation<string[]> {
@@ -1867,17 +1870,12 @@ describe("U3 — what each accepted frame mounts, and nothing else", () => {
     for (const size of [WIDE, { columns: 120, rows: 30 }, NARROW]) {
       const view = reading(onSessions(session), session, size);
       const frame = yield* drawn(tree, view);
-      const located = frame.keys.filter((key) => key.startsWith("location:"));
-      // One canonical location, once — and not repeated inside the Sessions rows.
-      expect(located.map((key) => frame.cell(key) ?? "").join("")).toContain(view.location);
-      // All of it in one region: the surface above whichever outlet is shown.
-      expect(
-        new Set(
-          located.map((key) =>
-            frame.inRegion("transcript").includes(key) ? "transcript" : "content",
-          ),
-        ).size,
-      ).toBe(1);
+      // No dedicated location display, at any size: no candidate, no mounted
+      // node, and no cell carrying it. The route itself is untouched — hidden is
+      // not dropped, and it still encodes exactly as the grammar writes it.
+      expect(frame.keys.filter((key) => key.startsWith("location:"))).toEqual([]);
+      expect(frame.keys.map((key) => frame.cell(key) ?? "").join("")).not.toContain("xmd://");
+      expect(view.location).toBe(encodeLocation(view.state.route));
     }
     // Smaller than narrow draws its refusal and offers nothing to activate.
     const tiny = yield* drawn(
@@ -1929,9 +1927,9 @@ describe("U2 — the program performs a permission, end to end", () => {
       yield* settled(40);
 
       yield* showing(terminal, "asks: Write");
-      // Nothing opened by itself: the request is a fact on its turn, and the
-      // location says no drawer is up.
-      expect(maybeLocation(terminal)).not.toContain("+permission");
+      // Nothing opened by itself: the request is a fact on its turn, and no
+      // drawer is up to answer it with.
+      expect(shows(terminal, "[Allow once]")).toBe(false);
 
       // A permission is answered on the Sessions surface, so that is where a
       // person goes first — through the ordinary control, not a shortcut.
@@ -1944,7 +1942,6 @@ describe("U2 — the program performs a permission, end to end", () => {
       yield* pressUntil(terminal, "asks: Write");
       terminal.feed("\r");
       yield* settled(40);
-      expect(maybeLocation(terminal)).toContain("+permission");
       expect(shows(terminal, "[Allow once]")).toBe(true);
 
       yield* pressUntil(terminal, "[Allow once]");
@@ -1958,9 +1955,8 @@ describe("U2 — the program performs a permission, end to end", () => {
       expect(stub.answers.get("call-1")).toBe(1);
       yield* settled(40);
 
-      // The drawer is gone from the screen and from the location, and focus is on
-      // the turn that was waiting rather than on whatever opened the drawer.
-      expect(maybeLocation(terminal)).not.toContain("+permission");
+      // The drawer is gone from the screen, and focus is on the turn that was
+      // waiting rather than on whatever opened the drawer.
       expect(shows(terminal, "[Allow once]")).toBe(false);
       expect(focusedOn(terminal, "review ·")).toBe(true);
 
@@ -2012,7 +2008,6 @@ describe("U2 — the program performs a permission, end to end", () => {
       yield* pressUntil(terminal, "asks: Write");
       terminal.feed("\r");
       yield* settled(40);
-      expect(maybeLocation(terminal)).toContain("+permission");
       expect(shows(terminal, "Escape or close denies")).toBe(true);
       expect(stub.outcomes.size).toBe(0);
 
@@ -2026,16 +2021,16 @@ describe("U2 — the program performs a permission, end to end", () => {
       yield* settled(40);
 
       // The drawer closed because the request is gone, not because a key was
-      // pressed: it is out of the screen and out of the location, and focus is
-      // back on the turn that was waiting.
-      expect(maybeLocation(terminal)).not.toContain("+permission");
+      // pressed: it is off the screen, and focus is back on the turn that was
+      // waiting.
       expect(shows(terminal, "Escape or close denies")).toBe(false);
       expect(focusedOn(terminal, "review ·")).toBe(true);
 
       // And the session is still live: dismissing one request cancelled nothing,
       // so the other conversation is still there to be seen.
       expect(shows(terminal, "build")).toBe(true);
-      expect(maybeLocation(terminal)).not.toContain("at=");
+      // And the reading is still the live head rather than a frozen position.
+      expect(shows(terminal, "[live]")).toBe(false);
       terminal.end();
       yield* running;
     });
@@ -2103,9 +2098,8 @@ describe("U4 — the loop wakes for Agent work", () => {
       stub.start(BUILDER);
       yield* showing(terminal, "asks: Write");
       expect(terminal.presented.length).toBeGreaterThan(beforeAsking);
-      // Arriving opened nothing and moved nobody: the location is unchanged and
-      // no drawer is up.
-      expect(maybeLocation(terminal)).not.toContain("+permission");
+      // Arriving opened nothing and moved nobody: no drawer is up.
+      expect(shows(terminal, "Escape or close denies")).toBe(false);
 
       terminal.end();
       yield* running;
@@ -2375,13 +2369,9 @@ describe("U6 — the Sessions reading is windowed", () => {
 
     expect(frame.node("sessions:earlier")).toBeDefined();
     expect(frame.node("sessions:later")).toBeDefined();
-    // The location says what it is not showing rather than showing none of it.
-    expect(frame.keys.filter((key) => key.startsWith("location:")).length).toBeLessThanOrEqual(3);
-    const shown = (yield* describedBy(view))
-      .filter((one) => one.key.startsWith("location:"))
-      .map((one) => one.label);
-    expect(shown.at(0)).toContain("xmd://repl/");
-    expect(shown.at(-1)).toContain("more characters");
+    // The dedicated location shows none of itself and reserves nothing for it:
+    // every row of this narrow outlet belongs to the reading.
+    expect(frame.keys.filter((key) => key.startsWith("location:"))).toEqual([]);
     // Every row this frame describes is one it places: nothing is mounted with
     // nowhere to be.
     for (const key of (yield* keysOf(view)).filter((one) => one.startsWith("sessions:"))) {
@@ -2408,7 +2398,7 @@ describe("U6 — the Sessions reading is windowed", () => {
     }
   });
 
-  it("U6: a shrinking omission summary repaints cleanly, and is a complete row", function* () {
+  it("U6: a shrinking draft row repaints cleanly, and is a complete row", function* () {
     const { session } = yield* asking({
       review: { streaming: true },
       build: { streaming: true },
@@ -2417,14 +2407,14 @@ describe("U6 — the Sessions reading is windowed", () => {
     yield* until(session, "all three Prompts being observed", () => observed(session) === 3);
     yield* until(session, "one turn being recorded", () => recorded(session) === 1);
 
-    // Two drafts whose omission counts have different numbers of digits, so the
-    // row that says how much is hidden gets shorter as the draft does. That row
-    // is the only location row whose length changes, and these two facts about
-    // it are separate: what the terminal ends up showing, and what this
+    // Two drafts whose line counts have different numbers of digits, so the row
+    // that says how many lines are hidden gets shorter as the draft does. The
+    // draft is the row of this screen whose length changes, and these are two
+    // separate facts about it: what the terminal ends up showing, and what this
     // application described for it to show.
     const standing = onSessions(session);
-    const longer = withDraft(standing, "x".repeat(1200));
-    const shorter = withDraft(standing, "x".repeat(1050));
+    const longer = withDraft(standing, "x\n".repeat(1200));
+    const shorter = withDraft(standing, "x\n".repeat(999));
 
     const tree = yield* useReplTree<ReplAction>();
     const renderer = yield* useReplRenderer(NARROW);
@@ -2433,48 +2423,53 @@ describe("U6 — the Sessions reading is windowed", () => {
 
     const first = reading(longer, session, NARROW);
     written.push(yield* painted(renderer, tree, first));
-    const four = summaryOn(screenFrom(written));
-    expect(four).toMatch(/^… \d{4} more characters/);
+    expect(draftRowIn(screenFrom(written))).toContain("[1200 lines]");
 
     // The same terminal, drawn again, with nothing clearing it between the two.
-    // What comes back is the shorter summary and nothing of the longer one —
-    // measured, and true of this renderer either way: it fills a placed cell to
-    // its bounds, so it is not the padding below that makes this pass.
+    // What comes back is the shorter count and nothing of the longer one.
     const second = reading(shorter, session, NARROW);
     written.push(yield* painted(renderer, tree, second));
 
-    const three = summaryOn(screenFrom(written));
-    expect(three).toMatch(/^… \d{3} more characters/);
+    const after = draftRowIn(screenFrom(written));
+    expect(after).toContain("[999 lines]");
+    expect(after).not.toContain("1200");
+
+    // Cell for cell, what a renderer that had never drawn the longer reading
+    // produces for the shorter one — blanks and all. This is the assertion that
+    // discriminates: a row that kept the tail of the count it used to carry
+    // reads the same as this one until the two screens are compared.
+    const fresh = yield* scoped(function* (): Operation<readonly string[]> {
+      const other = yield* useReplRenderer(NARROW);
+      const otherTree = yield* useReplTree<ReplAction>();
+      return screenFrom([yield* painted(other, otherTree, reading(shorter, session, NARROW))]);
+    });
+    expect(screenFrom(written)).toEqual(fresh);
 
     // And the row this application described is itself a complete row, as wide
-    // as the ones around it. This is the assertion that discriminates: the
-    // rendered screen above is clean whether or not the summary arrives padded,
-    // so it says what this renderer does, while this says what the application
-    // owns — the same full-width contract `chunked` gives every other location
-    // row, rather than one inherited from whatever draws it.
-    const located = (yield* describedBy(second))
-      .filter((one) => one.key.startsWith("location:"))
-      .map((one) => one.label);
-    expect(located.length).toBe(3);
-    // As wide as the outlet the frame measured for them, which at this size is
-    // the whole terminal: narrow has one routed outlet and no columns.
-    for (const row of located) {
-      expect(row.length).toBe(NARROW.columns);
-    }
-    // Exactly the new summary, with nothing of the longer one left on the end
-    // of it: the row is the row, not the row plus whatever it stopped short of.
-    const hidden = /… (\d+) more characters/.exec(three)?.[1] ?? "";
-    expect(three.trimEnd()).toBe(`… ${hidden} more characters, in a wider window`);
-    expect(three.trimEnd().endsWith("window")).toBe(true);
+    // as the ones around it — the full-width contract the draft shares with
+    // every other row of its region, rather than one inherited from whatever
+    // draws it.
+    const drafted = (yield* describedBy(second)).find((one) => one.key === "footer:input");
+    expect(drafted).toBeDefined();
+    expect((drafted?.label ?? "").length).toBeGreaterThanOrEqual(NARROW.columns - 2);
+
+    // The dedicated location is drawn nowhere, and reserves nothing: a draft
+    // this long would otherwise be the longest thing on the screen.
+    expect((yield* describedBy(second)).filter((one) => one.key.startsWith("location:"))).toEqual(
+      [],
+    );
+    expect(screenFrom(written).some((row) => row.includes("xmd://"))).toBe(false);
+    // And the route itself is unchanged: hidden is not dropped.
+    expect(second.location).toBe(encodeLocation(second.state.route));
 
     // And the screen is still one a person can use: both ways off it, and a
     // control of the reading itself.
-    const after = yield* drawn(tree, second);
+    const usable = yield* drawn(tree, second);
     for (const key of ["sessions:heading", "entries:heading"]) {
-      expect(after.targetable(key)).toBe(true);
+      expect(usable.targetable(key)).toBe(true);
     }
-    const outlet = after.keys.filter(
-      (key) => key.startsWith("sessions:turn:") && after.targetable(key),
+    const outlet = usable.keys.filter(
+      (key) => key.startsWith("sessions:turn:") && usable.targetable(key),
     );
     expect(outlet.length).toBeGreaterThan(0);
   });
@@ -3156,51 +3151,20 @@ function screenFrom(chunks: readonly Uint8Array[]): string[] {
 }
 
 /**
- * The canonical location the screen is showing, if it has drawn one yet.
+ * Whether a frame a person could actually use has been drawn.
  *
- * Reassembled, because a location carrying a draft is longer than a row and the
- * screen shows it as consecutive rows. Which rows belong to it is decided by the
- * grammar rather than by counting: the longest run that decodes *is* the location,
- * and a shorter prefix of it decodes to a different route or to nothing.
+ * Not merely that bytes arrived: a reset and an empty presentation are both
+ * frames and neither is a screen. The contextual status row is described only
+ * once a width has been measured, so with the draft row and a way out beside it
+ * this says the command is up and showing a measured frame.
  */
-function maybeLocation(terminal: Terminal): string | undefined {
+function usableFrame(terminal: Terminal): boolean {
   const rows = screenOf(terminal);
-  const first = rows.findIndex((line) => line.includes("xmd://repl/"));
-  if (first === -1) {
-    return undefined;
-  }
-  const at = rows[first].indexOf("xmd://repl/");
-  const parts: string[] = [];
-  for (let row = first; row < rows.length && row < first + 24; row += 1) {
-    const part = (rows[row] ?? "").slice(
-      at,
-      at +
-        terminal.size.columns -
-        (sidebarWidth(terminal.size) ?? 0) -
-        (inspectionWidth(terminal.size) ?? 0),
-    );
-    if (part.trim().length === 0) {
-      break;
-    }
-    parts.push(part.trimEnd());
-  }
-
-  // The rows below a location belong to whatever is drawn under it, and a row that
-  // used to hold a longer location can still have that tail on the end. So the
-  // answer is the longest prefix that *round-trips*: the grammar accepts some
-  // trailing junk inside a drawer segment, but re-encoding what it decoded only
-  // reproduces the prefix that really was the location.
-  const joined = parts.join("");
-  let found: string | undefined;
-  for (let length = joined.length; length > "xmd://repl/".length; length -= 1) {
-    const candidate = joined.slice(0, length);
-    const decoded = decodeLocation(candidate);
-    if (decoded.ok && encodeLocation(decoded.value) === candidate) {
-      found = candidate;
-      break;
-    }
-  }
-  return found;
+  return (
+    rows.some((line) => line.includes(" \u00b7 ")) &&
+    rows.some((line) => line.includes(DRAFT_PROMPT)) &&
+    rows.some((line) => line.includes("[exit]") || line.includes("[history]"))
+  );
 }
 
 /**
@@ -3243,7 +3207,7 @@ function shows(terminal: Terminal, expected: string): boolean {
  */
 function* untilDrawn(terminal: Terminal): Operation<void> {
   for (let attempt = 0; attempt < 40; attempt += 1) {
-    if (maybeLocation(terminal) !== undefined) {
+    if (usableFrame(terminal)) {
       return;
     }
     yield* sleep(10);
@@ -3895,9 +3859,9 @@ function draftOn(terminal: Terminal): string {
   const rows = screenOf(terminal);
   for (let row = rows.length - 1; row >= 0; row -= 1) {
     const line = rows[row] ?? "";
-    const at = line.lastIndexOf("> ");
+    const at = line.lastIndexOf(DRAFT_PROMPT);
     if (at !== -1) {
-      return line.slice(at + 2).trimEnd();
+      return line.slice(at + DRAFT_PROMPT.length).trimEnd();
     }
   }
   return "";

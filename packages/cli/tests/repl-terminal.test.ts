@@ -1931,6 +1931,88 @@ describe("REPL terminal: what the host normalizes, and what it refuses to guess"
     });
   });
 
+  it("I1: a shifted Tab goes backward, whichever way the terminal spells it", function* () {
+    const terminal = recordingTerminal();
+    yield* terminal.install();
+    const clock = controllableClock();
+    yield* clock.install();
+
+    yield* scoped(function* (): Operation<void> {
+      const screen = yield* useReplScreen();
+      const events = yield* screen.events();
+
+      // This screen asks the terminal for progressive keyboard input, so a
+      // shifted Tab arrives as `Tab` carrying a shift rather than as the legacy
+      // `Backtab` sequence. Both spellings are the same keystroke, and a reader
+      // pressing it is asking to go back either way.
+      terminal.log.feed(BYTES.encode("\x1b[Z"));
+      terminal.log.feed(BYTES.encode("\x1b[9;2u"));
+      // Held down, it repeats — and a repeat of going back is going back.
+      terminal.log.feed(BYTES.encode("\x1b[9;2:2u"));
+      // Unshifted, both spellings still go forward.
+      terminal.log.feed(BYTES.encode("\t"));
+      terminal.log.feed(BYTES.encode("\x1b[9;1u"));
+      // With Control held it is a chord nothing here claims, shift or no shift.
+      terminal.log.feed(BYTES.encode("\x1b[9;5u"));
+      terminal.log.feed(BYTES.encode("\x1b[9;6u"));
+      // A release is not a press.
+      terminal.log.feed(BYTES.encode("\x1b[9;2:3u"));
+      // A sentinel, so this is the whole sequence rather than the absence of
+      // something at the end of it.
+      terminal.log.feed(BYTES.encode("z"));
+
+      expect(normalizedFrom(yield* drained(events))).toEqual([
+        { kind: "key", key: "Backtab" },
+        { kind: "key", key: "Backtab" },
+        { kind: "key", key: "Backtab" },
+        { kind: "key", key: "Tab" },
+        { kind: "key", key: "Tab" },
+        { kind: "text", text: "z" },
+      ]);
+    });
+  });
+
+  it("I1: what a shifted Tab normalizes to actually moves focus back", function* () {
+    // The name is only half of it: a key that normalized correctly and then
+    // moved focus forward would satisfy the assertion above and still be the
+    // defect. So the normalized event is dispatched into a real mounted tree.
+    const { tree } = yield* mounted(FILLED);
+
+    const draft = tree.mounted().find((id) => tree.keyOf(id) === "footer:input");
+    expect(tree.focused()).toBe(draft);
+
+    const forward = acted(yield* tree.dispatch({ kind: "key", key: "Tab" }));
+    expect(forward.outcome).toBe("focus");
+    const moved = tree.focused();
+    expect(moved).not.toBe(draft);
+
+    const back = acted(yield* tree.dispatch({ kind: "key", key: "Backtab" }));
+    expect(back.outcome).toBe("focus");
+    expect(tree.focused()).toBe(draft);
+  });
+
+  it("I1: going back inside a drawer stays inside it", function* () {
+    // Containment is the drawer's, not this key's. Backtab must traverse the
+    // chain the drawer owns rather than escape to the reading behind it.
+    const { tree } = yield* mounted({ ...FILLED, drawer: "Binding: plan" });
+
+    const inside = new Set(
+      tree.mounted().filter((id) => (tree.keyOf(id) ?? "").startsWith("drawer:")),
+    );
+    expect(inside.size).toBeGreaterThan(1);
+    const within = () => {
+      const here = tree.focused();
+      return here !== undefined && inside.has(here);
+    };
+    expect(within()).toBe(true);
+
+    for (let step = 0; step < inside.size + 1; step += 1) {
+      const outcome = acted(yield* tree.dispatch({ kind: "key", key: "Backtab" }));
+      expect(outcome.outcome).toBe("focus");
+      expect([step, within()]).toEqual([step, true]);
+    }
+  });
+
   it("I1: text and Backspace reach the draft through the same ancestry as a key", function* () {
     const { tree } = yield* mounted(FILLED);
 

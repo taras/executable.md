@@ -47,6 +47,28 @@ import type { ReplTerminalSize } from "../../../src/repl/terminal.ts";
 const TEXT = new TextDecoder();
 
 /**
+ * What one cell was drawn with, as the terminal was told.
+ *
+ * `foreground` and `background` are 24-bit, the way the palette states them and
+ * the way the renderer's own truecolor SGR reports them, so what came out of a
+ * cell is comparable with what was asked for without either side re-deriving the
+ * other. `attrs` holds the SGR attribute parameters that were in force — `1` for
+ * bold — in ascending order. `undefined` is the terminal's own default, which is
+ * what a cell nothing coloured keeps.
+ */
+export interface CellStyle {
+  readonly foreground: number | undefined;
+  readonly background: number | undefined;
+  readonly attrs: readonly number[];
+}
+
+const DEFAULT_STYLE: CellStyle = Object.freeze({
+  foreground: undefined,
+  background: undefined,
+  attrs: Object.freeze([]),
+});
+
+/**
  * A terminal's cells, as the bytes written to it leave them.
  *
  * A real buffer rather than the bytes with escapes stripped, because this
@@ -59,6 +81,14 @@ const TEXT = new TextDecoder();
  * It persists across frames on purpose. A cell a later frame leaves blank is the
  * evidence that the text which used to be there was actually erased, and that
  * evidence only exists if the frame before it is still in the buffer.
+ *
+ * Every cell keeps the colour, background and attributes it was written under as
+ * well as its character, because an assertion that a row is a failure is an
+ * assertion about those cells. The same escapes carry both: the renderer sets the
+ * attributes and then moves the cursor, so a cell's style is whatever was in
+ * force at the moment the character landed in it — which is why a grid that only
+ * skipped the escapes could find a colour somewhere in the stream and prove
+ * nothing about where it was used.
  */
 export interface TerminalGrid {
   /** Replay one presentation's bytes into the grid. */
@@ -73,26 +103,95 @@ export interface TerminalGrid {
   blank(bounds: ReplBounds): boolean;
   /** Every cell of one rectangle that is not blank, as `column,row=character`. */
   nonblank(bounds: ReplBounds): readonly string[];
+  /** What one cell was drawn with, or the terminal's default where nothing was. */
+  styleAt(column: number, row: number): CellStyle;
+  /**
+   * Every cell of one rectangle as `character|foreground|background|attrs`, row
+   * by row.
+   *
+   * Blank cells included: a background painted across a row the text no longer
+   * fills, and a cell a shortened row left behind, are both only visible here.
+   */
+  styledIn(bounds: ReplBounds): readonly string[];
 }
 
 export function createGrid(): TerminalGrid {
   const cells: string[][] = [];
+  const styles: CellStyle[][] = [];
   let row = 0;
   let column = 0;
+  let current: CellStyle = DEFAULT_STYLE;
 
   const put = (character: string): void => {
     while (cells.length <= row) {
       cells.push([]);
+      styles.push([]);
     }
     const line = cells[row];
+    const styled = styles[row];
     while (line.length < column) {
       line.push(" ");
+      styled.push(DEFAULT_STYLE);
     }
     line[column] = character;
+    styled[column] = current;
     column += 1;
   };
 
   const read = (x: number, y: number): string => cells[y]?.[x] ?? " ";
+  const readStyle = (x: number, y: number): CellStyle => styles[y]?.[x] ?? DEFAULT_STYLE;
+
+  /** The style one `m` sequence leaves in force, applied to what is already. */
+  const select = (parameters: readonly number[]): void => {
+    let foreground = current.foreground;
+    let background = current.background;
+    const attrs = new Set(current.attrs);
+    for (let at = 0; at < parameters.length; at += 1) {
+      const parameter = parameters[at];
+      if (parameter === 0) {
+        foreground = undefined;
+        background = undefined;
+        attrs.clear();
+        continue;
+      }
+      // Truecolor, which is the only form this renderer emits: `38;2;r;g;b` for
+      // the foreground and `48;2;r;g;b` for the background.
+      if ((parameter === 38 || parameter === 48) && parameters[at + 1] === 2) {
+        const packed =
+          ((parameters[at + 2] ?? 0) << 16) |
+          ((parameters[at + 3] ?? 0) << 8) |
+          (parameters[at + 4] ?? 0);
+        if (parameter === 38) {
+          foreground = packed;
+        } else {
+          background = packed;
+        }
+        at += 4;
+        continue;
+      }
+      if (parameter === 39) {
+        foreground = undefined;
+        continue;
+      }
+      if (parameter === 49) {
+        background = undefined;
+        continue;
+      }
+      if (parameter >= 1 && parameter <= 9) {
+        attrs.add(parameter);
+        continue;
+      }
+      // `2x` turns off the attribute `x` switched on, except 20 and 21.
+      if (parameter >= 22 && parameter <= 29) {
+        attrs.delete(parameter - 20);
+      }
+    }
+    current = Object.freeze({
+      foreground,
+      background,
+      attrs: Object.freeze([...attrs].sort((left, right) => left - right)),
+    });
+  };
 
   return {
     apply(bytes) {
@@ -110,7 +209,7 @@ export function createGrid(): TerminalGrid {
           }
           continue;
         }
-        // CSI: the only sequences this renderer uses to position and to clear.
+        // CSI: positioning, clearing and the attributes a cell is written under.
         const csi = /^\u001B\[([0-9;]*)([@-~])/.exec(written.slice(index));
         if (csi !== null) {
           const parameters = csi[1].split(";").map((one) => (one === "" ? 0 : Number(one)));
@@ -119,8 +218,11 @@ export function createGrid(): TerminalGrid {
             column = Math.max(0, (parameters[1] ?? 1) - 1);
           } else if (csi[2] === "J") {
             cells.length = 0;
+            styles.length = 0;
             row = 0;
             column = 0;
+          } else if (csi[2] === "m") {
+            select(parameters);
           }
           index += csi[0].length - 1;
           continue;
@@ -166,7 +268,27 @@ export function createGrid(): TerminalGrid {
       }
       return found;
     },
+    styleAt(x, y) {
+      return readStyle(x, y);
+    },
+    styledIn(bounds) {
+      const lines: string[] = [];
+      for (let y = bounds.y; y < bounds.y + bounds.height; y += 1) {
+        const line: string[] = [];
+        for (let x = bounds.x; x < bounds.x + bounds.width; x += 1) {
+          line.push(`${read(x, y)}|${described(readStyle(x, y))}`);
+        }
+        lines.push(line.join(" "));
+      }
+      return lines;
+    },
   };
+}
+
+function described(style: CellStyle): string {
+  const colour = (value: number | undefined): string =>
+    value === undefined ? "-" : value.toString(16).padStart(6, "0");
+  return `${colour(style.foreground)}|${colour(style.background)}|${style.attrs.join(",")}`;
 }
 
 /** One frame this driver committed, with everything a test may read back. */
@@ -254,7 +376,13 @@ export function usePresenter(size: ReplTerminalSize): Operation<Presenter> {
           },
           boundsOf(key) {
             const node = byKey.get(key);
-            return node === undefined ? undefined : map.boundsOf(node);
+            if (node === undefined) {
+              return undefined;
+            }
+            // A control's geometry is in the target map; every other drawn row's
+            // is published beside it, because where a line landed and whether it
+            // can be activated are two different questions.
+            return map.boundsOf(node) ?? map.regionOf(node);
           },
           regionOf(id) {
             return map.regionOf(id);
@@ -456,7 +584,7 @@ export function useCommitter<T>(options: {
           placed.push({ key: box.key, region: box.region });
         }
         const result = yield* renderer.draw({
-          ops: committedOps(root, nodeByKey, mounted, cells),
+          ops: committedOps(root, nodeByKey, mounted, cells, tree.focused()),
           boxes,
           // Every structural box the manifest placed, so where each region, each
           // viewport and each band row landed travels with the frame.

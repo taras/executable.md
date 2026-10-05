@@ -5859,6 +5859,37 @@ resolved view on the way to a frame, they are in no location and no record, and
 replay neither produces nor consumes them. A screen that explained itself
 differently would still be the same execution.
 
+**What a row means is decided once, where the facts are.** The application
+assigns each row one immutable presentation role, and separately whether it is
+selected and whether it is being read as history, from the typed reading that
+produced it — a record's kind, an entry's terminal status, the resolved route.
+Nothing infers a role from a finished string, a path suffix or how a key is
+spelled, so arbitrary document and provider text is drawn as ordinary prose
+whatever words it happens to contain. Candidates and boxes carry those facts
+beside the text and the control identity; they carry no mounted node, no Journal
+record and no focus authority, and the manifest holds no focused node.
+
+A private module maps a role and those two flags to a colour, a weight and a
+surface. It is pure: no operation, no contextual Api, no Journal access, no
+mutable state and no export beyond this feature, so a role owns nothing that can
+outlive the frame that computed it. The palette lives there and nowhere else.
+
+**Keyboard focus is not a fact about the reading**, so it arrives later. After
+reconciliation the commit boundary passes the actual focused mounted node's id to
+the ops builder for that frame alone, matched by exact mounted identity and
+discarded with the ops it decorated. Focus changes a foreground and its attributes
+and never geometry; selection keeps an independent surface. Neither repairs,
+stores or grants focus.
+
+**One builder decorates both passes.** The measurement pass and the committed
+pass run through the same op builder, so pane edges, surfaces and headings
+participate in measurement and a measured region cannot disagree with the region
+drawn into it. A pane's own edges are not part of the room inside it: a bordered
+pane carries a border-free content box, and rows are built to the width the engine
+reports for that box rather than to the pane's outer bound. The renderer stays
+model-blind — it receives ops and geometry, classifies no row text, and no
+production string carries an escape sequence.
+
 Placement owns where things are, and the footer's seven rows are fixed in one
 order: the contextual status and action row, the five History rows, and the draft.
 Each is stated as geometry rather than inferred from a list's length, because the

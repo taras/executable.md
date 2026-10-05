@@ -41,6 +41,7 @@ import { join } from "node:path";
 import { randomBytes } from "node:crypto";
 
 import { decodeLocation, encodeLocation } from "../src/repl/route.ts";
+import type { ReplRoute } from "../src/repl/route.ts";
 import { installReplHost } from "../src/repl-assembly.ts";
 import { installReplTerminal } from "../src/repl/terminal-host.ts";
 import type { ReplTerminalCapabilities } from "../src/repl/terminal-host.ts";
@@ -772,7 +773,7 @@ describe("J3 — durable truth, and a cold process over it", () => {
       // The catalog the file holds, in admission order with its outcomes.
       yield* showing(second.terminal, "1. [ok] entry-1");
       yield* showing(second.terminal, "2. [ok] entry-2");
-      expect(locationRow(second.terminal) ?? "").toContain(`/${selected.key}`);
+      expect(selectedEntryOn(second.terminal) ?? "").toContain(selected.key);
 
       // The global Sessions chronology, row for row and conversation for
       // conversation, is the one the live process showed — both entries' turns
@@ -873,6 +874,7 @@ describe("J3 — durable truth, and a cold process over it", () => {
     const live = createFakeAcp();
     live.script({ reply: REPLY });
     const { terminal, install } = recordingTerminal({ columns: 200, rows: 60 });
+    let ended: string | undefined;
 
     yield* scoped(function* (): Operation<void> {
       const workspace = yield* useWorkspace();
@@ -902,7 +904,7 @@ describe("J3 — durable truth, and a cold process over it", () => {
       // The drawer stays open on the position it moved to, and now offers only
       // that prefix's markers: at `yield:root:0` the turn had not happened, so
       // there is nothing about it to select.
-      expect(maybeLocation(terminal)).toContain("at=yield:root:0");
+      expect(historicalOn(terminal)).toBe(true);
       expect(shows(terminal, "Agent prompt completed")).toBe(false);
 
       // Back at the head: the drawer is modal, so it is closed first and then
@@ -920,13 +922,23 @@ describe("J3 — durable truth, and a cold process over it", () => {
       yield* settled(40);
       yield* showing(terminal, REPLY.trim());
       yield* showing(terminal, "completed, recorded");
-      expect(maybeLocation(terminal)).toContain("at=yield:root:3");
+      expect(historicalOn(terminal)).toBe(true);
 
       // Reading a marker asked nobody anything.
       expect(live.prompts).toHaveLength(1);
       terminal.end();
-      yield* running;
+      ended = yield* running;
     });
+
+    // Which prefix it came to rest on, taken where the route is still published.
+    // `[live]` above says a prefix is being read; this says which one — the exact
+    // checkpoint the last marker encoded, read only, on the surface and the locus
+    // it was chosen from.
+    const route = routeOf(ended);
+    expect(route.at).toBe("yield:root:3");
+    expect(route.inspect).toBe(true);
+    expect(route.surface).toBe("repl");
+    expect(route.scopes).toEqual([]);
   });
 
   it("J3: a location this host cannot read refuses before any replay", function* () {
@@ -1039,20 +1051,27 @@ describe("J2 — three conversations at once, through the terminal", () => {
       const keys = [PLAN_IT, REVIEW_IT, BUILD_IT].map(
         (asked) => fake.turns.find((turn) => turn.text.includes(asked))?.handle.sessionKey ?? "",
       );
-      const unfiltered = locationRow(terminal);
+      const unfiltered = sessionOf(terminal);
       const offered = conversationRows(terminal, digest).length;
       yield* click(terminal, conversationRows(terminal, digest)[0] ?? "");
       yield* settled(40);
-      expect(keys).toContain(sessionOf(terminal));
+      // The row names the conversation the provider really issued. A sidebar is
+      // 32 columns and a session key is not, so the row carries as much of it as
+      // the column holds and says so — and what is compared is that prefix
+      // against the keys this run's own fixture recorded.
+      const marked = sessionOf(terminal) ?? "";
+      expect(keys.some((key) => key.startsWith(marked.replace(/\u2026$/, "")))).toBe(true);
       // One conversation's turns, and only its own.
       expect(childrenShown(terminal)).toHaveLength(1);
-      // The route gained the session and nothing else: the surface, the entry
-      // and the history position it was standing on are the same terms.
-      expect(locationRow(terminal)).toBe(`${unfiltered}?session=${sessionOf(terminal)}`);
+      // The reading gained the filter and nothing else: nothing was filtered
+      // before, exactly one conversation is marked now, and the entry it was
+      // standing on is the entry it is standing on.
+      expect(unfiltered).toBeUndefined();
+      expect(sessionOf(terminal)).toBeDefined();
       // Its row, whatever it has settled to: what this asserts is that the
       // catalog holds the entry, not what became of it.
       expect(shows(terminal, "] entry-1")).toBe(true);
-      const standing = locationRow(terminal);
+      const standing = sessionOf(terminal);
       // Where the person is standing now: on the control they just chose.
       const focused = focusedRow(terminal);
 
@@ -1066,7 +1085,7 @@ describe("J2 — three conversations at once, through the terminal", () => {
           recorded(yield* journal(hostRoot)).filter((kind) => kind === "agent_prompt").length === 3
         );
       });
-      expect(locationRow(terminal)).toBe(standing);
+      expect(sessionOf(terminal)).toBe(standing);
       expect(focusedRow(terminal)).toBe(focused);
       // And the filter still holds: the others are retained and not shown,
       // because this screen is showing one.
@@ -1077,7 +1096,7 @@ describe("J2 — three conversations at once, through the terminal", () => {
       // conversation to filter by than before.
       yield* click(terminal, "All conversations");
       yield* settled(40);
-      expect(locationRow(terminal)).not.toContain("session=");
+      expect(sessionOf(terminal)).toBeUndefined();
       expect(childrenShown(terminal)).toEqual([PLAN_IT, REVIEW_IT, BUILD_IT]);
       for (const asked of [PLAN_IT, REVIEW_IT, BUILD_IT]) {
         expect([
@@ -1115,15 +1134,15 @@ describe("J2 — a filter and a draft across a resize (#875 R1)", () => {
     let last = "";
     let still = 0;
     while (still < 3) {
-      const now = maybeLocation(terminal) ?? "";
-      if (now === last && now.includes(`draft=${encodeURIComponent(text)}`)) {
+      const now = draftTextOn(terminal) ?? "";
+      if (now === last && now === text) {
         still += 1;
       } else {
         still = 0;
         last = now;
       }
       if (Date.now() > deadline) {
-        throw new Error(`the draft never settled. location=${now}`);
+        throw new Error(`the draft never settled. draft row=${now}`);
       }
       yield* sleep(20);
       yield* settled(10);
@@ -1144,6 +1163,8 @@ describe("J2 — a filter and a draft across a resize (#875 R1)", () => {
     let location: string | undefined;
     let standing: string | undefined;
     let filtered: string | undefined;
+    /** The full provider session key the conversation row named. */
+    let chosen: string | undefined;
 
     yield* scoped(function* (): Operation<void> {
       const workspace = yield* useWorkspace();
@@ -1175,8 +1196,19 @@ describe("J2 — a filter and a draft across a resize (#875 R1)", () => {
         yield* settled(10);
         return conversationRows(terminal, digest).length > 0;
       });
-      yield* click(terminal, conversationRows(terminal, digest)[0] ?? "");
-      yield* awaiting("the filter never reached the route", function* () {
+      // Which conversation this is about, as a full provider key, settled before
+      // anything is clicked and taken from this run's own fixture rather than
+      // from the route under test. A 32-column row shows as much of a key as it
+      // holds, so the row names the key and the fixture supplies the rest.
+      const chosenRow = conversationRows(terminal, digest)[0] ?? "";
+      const shownKey = chosenRow.replace(/^[>*\s]+/, "").replace(/\u2026$/, "");
+      chosen = [...new Set(live.turns.map((turn) => turn.handle.sessionKey))].find((key) =>
+        key.startsWith(shownKey),
+      );
+      expect(chosen).toBeDefined();
+
+      yield* click(terminal, chosenRow);
+      yield* awaiting("the filter never reached the reading", function* () {
         yield* settled(10);
         return sessionOf(terminal) !== undefined;
       });
@@ -1185,14 +1217,11 @@ describe("J2 — a filter and a draft across a resize (#875 R1)", () => {
 
       // 2. A non-empty draft, typed into the field Tab reaches.
       yield* drafting(terminal, DRAFT);
-      standing = maybeLocation(terminal);
-      expect(standing).toBeDefined();
-      expect(standing).toContain(`session=${filtered}`);
-      expect(shows(terminal, `>> ${DRAFT}`)).toBe(true);
+      expect(sessionOf(terminal)).toBe(filtered);
+      expect(shows(terminal, `>> Draft: ${DRAFT}`)).toBe(true);
       expect(childrenShown(terminal)).toHaveLength(1);
 
-      // 3. Narrow. The location is abbreviated at this width, so what is read
-      //    here is the draft row and the reading itself.
+      // 3. Narrow. What is read here is the draft row and the reading itself.
       const from = terminal.presented.length;
       terminal.resized({ columns: 72, rows: 20 });
       // Waited for by the frame's shape rather than by its content, so what the
@@ -1206,7 +1235,7 @@ describe("J2 — a filter and a draft across a resize (#875 R1)", () => {
       });
       const narrow = replay(terminal.presented.slice(from));
       expect(narrow.length).toBe(20);
-      expect(narrow.some((line) => line.includes(`>> ${DRAFT}`))).toBe(true);
+      expect(narrow.some((line) => line.includes(`>> Draft: ${DRAFT}`))).toBe(true);
       expect(narrow.filter((line) => line.trimEnd().length > 72)).toEqual([]);
       // A narrow frame draws one routed surface, and choosing a conversation
       // chooses a filter rather than a surface — so the Sessions reading is not
@@ -1225,17 +1254,27 @@ describe("J2 — a filter and a draft across a resize (#875 R1)", () => {
           terminal.presented.length > back && replay(terminal.presented.slice(back)).length === 140
         );
       });
-      expect(maybeLocation(terminal)).toBe(standing);
       expect(sessionOf(terminal)).toBe(filtered);
-      expect(shows(terminal, `>> ${DRAFT}`)).toBe(true);
+      expect(shows(terminal, `>> Draft: ${DRAFT}`)).toBe(true);
       expect(childrenShown(terminal)).toHaveLength(1);
 
       terminal.end();
       location = yield* running;
     });
 
-    // What the command handed back is what it was showing.
-    expect(location).toBe(standing);
+    // The whole reading, in the one string the command publishes on its way out,
+    // compared field by field against what this run's fixture says each should
+    // be: the conversation it was filtered to by its full key, the draft byte for
+    // byte, the surface and locus it was standing on, and the live head.
+    standing = location;
+    expect(standing).toBeDefined();
+    const standingRoute = routeOf(standing);
+    expect(standingRoute.session).toBe(chosen);
+    expect(standingRoute.draft).toBe(DRAFT);
+    expect(standingRoute.surface).toBe("repl");
+    expect(standingRoute.scopes).toEqual([]);
+    expect(standingRoute.at).toBeUndefined();
+    expect(standingRoute.inspect).toBe(false);
     expect(live.prompts).toHaveLength(3);
     const before = yield* history(hostRoot);
 
@@ -1253,10 +1292,9 @@ describe("J2 — a filter and a draft across a resize (#875 R1)", () => {
 
       yield* awaiting("the cold process never restored the reading", function* () {
         yield* settled(10);
-        return maybeLocation(second.terminal) === standing;
+        return sessionOf(second.terminal) === filtered;
       });
-      expect(sessionOf(second.terminal)).toBe(filtered);
-      expect(shows(second.terminal, `>> ${DRAFT}`)).toBe(true);
+      expect(shows(second.terminal, `>> Draft: ${DRAFT}`)).toBe(true);
       expect(childrenShown(second.terminal)).toHaveLength(1);
 
       // Nobody was asked, nothing was started, created or ensured.
@@ -1266,7 +1304,12 @@ describe("J2 — a filter and a draft across a resize (#875 R1)", () => {
       expect(cold.ensured).toEqual([]);
 
       second.terminal.end();
-      yield* running;
+      const reopened = yield* running;
+      // What went in came back out: the cold process returns the same canonical
+      // reading it was given, which is the whole of what reopening means.
+      expect(reopened).toBe(standing);
+      expect(routeOf(reopened).session).toBe(chosen);
+      expect(routeOf(reopened).draft).toBe(DRAFT);
     });
 
     // And the Journal is byte-identical: a cold process reads, it does not write.
@@ -2191,50 +2234,6 @@ function replay(presented: readonly Uint8Array[]): string[] {
   return rows.map((line) => line.join(""));
 }
 
-/** The canonical location the screen is showing, if it has drawn one yet. */
-function maybeLocation(terminal: Terminal): string | undefined {
-  const rows = screenOf(terminal);
-  const first = rows.findIndex((line) => line.includes("xmd://repl/"));
-  if (first === -1) {
-    return undefined;
-  }
-  const at = (rows[first] ?? "").indexOf("xmd://repl/");
-  const parts: string[] = [];
-  // How much of each row belongs to the surface carrying the location, read from
-  // the one place those column widths are declared. This test sees only a
-  // terminal, so interpreting its rows means knowing where the next column
-  // starts — it is not a second opinion about where anything was placed.
-  const width =
-    terminal.size.columns -
-    (sidebarWidth(terminal.size) ?? 0) -
-    (inspectionWidth(terminal.size) ?? 0);
-  for (let row = first; row < rows.length && row < first + 24; row += 1) {
-    const part = (rows[row] ?? "").slice(at, at + width);
-    if (part.trim().length === 0) {
-      break;
-    }
-    parts.push(part.trimEnd());
-    // Every row of a location is padded to the full surface width, so a row
-    // with space left on its end is the last of them. Without this the row
-    // drawn underneath joins on, and the round-trip below cannot always tell:
-    // a location ending in `/entry-2` followed by a transcript row beginning
-    // `entry ...` re-encodes as `/entry-2entry` exactly as written.
-    if (part.trimEnd().length < part.length) {
-      break;
-    }
-  }
-
-  const joined = parts.join("");
-  for (let length = joined.length; length > "xmd://repl/".length; length -= 1) {
-    const candidate = joined.slice(0, length);
-    const decoded = decodeLocation(candidate);
-    if (decoded.ok && encodeLocation(decoded.value) === candidate) {
-      return candidate;
-    }
-  }
-  return undefined;
-}
-
 /**
  * How many columns the Sessions sidebar owns.
  *
@@ -2245,20 +2244,16 @@ const SIDEBAR = 30;
 
 /** The conversation this screen is filtered by, as the route states it. */
 function sessionOf(terminal: Terminal): string | undefined {
-  return /session=([^&\s]+)/.exec(locationRow(terminal) ?? "")?.[1];
-}
-
-/**
- * The one row the location is drawn on.
- *
- * Read as a row rather than reassembled across rows, because the surface column
- * has other columns beside it: a location short enough to fit on one line is
- * exactly that line, and joining the line below it would append whatever the
- * next column happened to hold there.
- */
-function locationRow(terminal: Terminal): string | undefined {
-  const row = screenOf(terminal).find((line) => line.includes("xmd://repl/"));
-  return row === undefined ? undefined : row.slice(row.indexOf("xmd://repl/")).trimEnd();
+  // The conversation the reading is filtered to is the one its own row marks:
+  // two columns of focus cue, the list's indent, then the filter's own `>`.
+  for (const line of screenOf(terminal)) {
+    const column = line.split("\u2502")[0] ?? "";
+    const match = /^[>\s]\s {2}>\s(\S.*?)\s*$/.exec(column);
+    if (match !== null) {
+      return match[1];
+    }
+  }
+  return undefined;
 }
 
 /**
@@ -2352,10 +2347,97 @@ function shows(terminal: Terminal, expected: string): boolean {
 
 /** Wait until the first frame has been drawn. */
 function* untilDrawn(terminal: Terminal): Operation<void> {
-  yield* until(
-    () => maybeLocation(terminal) !== undefined,
-    "the screen never drew its first frame",
+  yield* until(() => usable(terminal), "the screen never drew its first frame");
+}
+
+/** What the draft row is called, which is how this suite finds it. */
+const DRAFT_PROMPT = "Draft: ";
+
+/**
+ * Whether a frame a person could actually use has been drawn.
+ *
+ * Not merely that bytes arrived: a reset and an empty presentation are both
+ * frames and neither is a screen. The contextual status row is described only
+ * once a width has been measured, so with the draft row and a way out beside it
+ * this says the command is up and showing a measured frame.
+ */
+function usable(terminal: Terminal): boolean {
+  const rows = screenOf(terminal);
+  return (
+    rows.some((line) => line.includes(" \u00b7 ")) &&
+    rows.some((line) => line.includes(DRAFT_PROMPT)) &&
+    rows.some((line) => line.includes("[exit]") || line.includes("[history]"))
   );
+}
+
+/** Exactly what the draft row is holding, after its marker and its prompt. */
+function draftTextOn(terminal: Terminal): string | undefined {
+  const row = screenOf(terminal).find((line) => line.includes(DRAFT_PROMPT));
+  return row === undefined
+    ? undefined
+    : row.slice(row.indexOf(DRAFT_PROMPT) + DRAFT_PROMPT.length).trimEnd();
+}
+
+/**
+ * Every entry the catalog is showing, by the identity it draws.
+ *
+ * The outcome is part of the row this product promises, so a row without one is
+ * the empty placeholder rather than an entry. Markers are stripped: whether a
+ * row is selected or focused is a different question from whether it exists.
+ */
+function entriesOn(terminal: Terminal): string[] {
+  const found: string[] = [];
+  for (const line of screenOf(terminal)) {
+    const column = line.split("\u2502")[0] ?? "";
+    const match = /^[\s>*]*(\d+)\.\s+\[([a-z]+)\]\s+(\S.*?)\s*$/.exec(column);
+    if (match !== null) {
+      found.push(`${match[1]}. ${match[3]}`);
+    }
+  }
+  return found;
+}
+
+/** The catalog row this reading has selected, if it is showing one. */
+function selectedEntryOn(terminal: Terminal): string | undefined {
+  for (const line of screenOf(terminal)) {
+    const column = line.split("\u2502")[0] ?? "";
+    const match = /^[\s>]*\*\s*(\d+)\.\s+\[([a-z]+)\]\s+(\S.*?)\s*$/.exec(column);
+    if (match !== null) {
+      return `${match[1]}. ${match[3]}`;
+    }
+  }
+  return undefined;
+}
+
+/**
+ * The canonical route one returned location carries, decoded.
+ *
+ * The screen no longer draws a location, so what a scenario protects about its
+ * route is asserted here — on the string the command publishes when it ends,
+ * field by field, against what the fixture says those fields should be.
+ */
+function routeOf(location: string | undefined): ReplRoute {
+  const decoded = decodeLocation(location ?? "");
+  if (!decoded.ok) {
+    throw decoded.error;
+  }
+  return decoded.value;
+}
+
+/** Whether this reading is a retained position rather than the live head. */
+function historicalOn(terminal: Terminal): boolean {
+  return shows(terminal, "[live]");
+}
+
+/** The conversation the Sessions reading is filtered to, as the row marks it. */
+function filteredConversationOn(terminal: Terminal): string | undefined {
+  for (const line of screenOf(terminal)) {
+    const match = /^\s*>?\s*(?:\*\s*)?>\s(\S.*?)\s*(?:\u2502.*)?$/.exec(line);
+    if (match !== null && !match[1].startsWith("[")) {
+      return match[1];
+    }
+  }
+  return undefined;
 }
 
 /**
@@ -2467,8 +2549,8 @@ function* typed(terminal: Terminal, text: string): Operation<void> {
   let last = "";
   let still = 0;
   while (still < 3) {
-    const now = maybeLocation(terminal) ?? "";
-    if (now === last && now.includes("draft=")) {
+    const now = draftTextOn(terminal) ?? "";
+    if (now === last && now.length > 0) {
       still += 1;
     } else {
       still = 0;
@@ -2480,18 +2562,22 @@ function* typed(terminal: Terminal, text: string): Operation<void> {
     yield* sleep(20);
     yield* settled(10);
   }
+  const before = entriesOn(terminal);
   terminal.feed("\r");
   yield* sleep(200);
   yield* settled(20);
-  // The draft leaving the location is what says the entry exists. It used to be
-  // the footer notice that replaced the draft once one did; a draft is now
-  // execution-wide and survives admission as the *next* entry's text (#827
-  // Slice C), so what clears is the one this helper just typed — and it clears
-  // only when it has become an entry.
-  yield* until(
-    () => !(maybeLocation(terminal) ?? "draft=").includes("draft="),
-    "the draft never became an entry",
-  );
+  // Two facts together: the catalog gained a row it did not have, and the draft
+  // this helper just typed has emptied. A draft is execution-wide and survives
+  // admission as the *next* entry's text (#827 Slice C), so what clears is this
+  // one — and it clears only when it has become an entry.
+  yield* until(() => {
+    const now = entriesOn(terminal);
+    return (
+      now.length > before.length &&
+      now.some((entry) => !before.includes(entry)) &&
+      draftTextOn(terminal) === ""
+    );
+  }, "the draft never became an entry");
 }
 
 /**

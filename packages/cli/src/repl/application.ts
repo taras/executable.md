@@ -44,6 +44,9 @@ import {
   historyBand,
   HISTORY_ROWS,
   inspectionWidth,
+  paneColumnProps,
+  paneContentProps,
+  paneProps,
   NARROW,
   profileFor,
   refusalProps,
@@ -70,6 +73,8 @@ import {
   scrolled,
 } from "./layout-admission.ts";
 import type { ReplAdmission, ReplWindow } from "./layout-admission.ts";
+import { ORDINARY, REPL_PALETTE, styleOf } from "./presentation-style.ts";
+import type { ReplRowStyle } from "./presentation-style.ts";
 import type { ReplTerminalSize } from "./terminal.ts";
 import {
   decodeLocation,
@@ -1515,16 +1520,27 @@ function chunked(text: string, width: number): readonly string[] {
   return parts.length === 0 ? ["".padEnd(width, " ")] : parts;
 }
 
-/** A cell the layout can place, with the key its description was given. */
+/**
+ * A cell the layout can place, with the key its description was given and what
+ * the row means.
+ *
+ * `style` travels with the row because this is where the facts that decide it
+ * are: the record's kind, the entry's terminal status, whether the route is
+ * pointing at this row. A later pass reading the finished string could only
+ * guess, and guessing from text is how arbitrary document output comes to be
+ * drawn as a failure because it happens to contain a word.
+ */
 interface Described {
   readonly key: string;
   readonly description: ReplDescription<ReplAction>;
+  readonly style: ReplRowStyle;
 }
 
 function row(
   key: string,
   label: string,
   select: { readonly [name: string]: Json },
+  style: ReplRowStyle,
   options: {
     readonly focus?: true;
     readonly here?: string | undefined;
@@ -1535,6 +1551,7 @@ function row(
   const claims = options.focus === true || options.claim === key;
   return {
     key,
+    style,
     description: describeNode<ReplAction>({
       key,
       component: SELECT_ROW,
@@ -1684,9 +1701,10 @@ function selected(on: boolean): string {
   return on ? "* " : "  ";
 }
 
-function line(key: string, label: string): Described {
+function line(key: string, label: string, style: ReplRowStyle): Described {
   return {
     key,
+    style,
     description: describeNode<ReplAction>({ key, component: LINE, input: { label } }),
   };
 }
@@ -1946,7 +1964,21 @@ function fitted(width: number, parts: readonly GuidancePart[]): string {
       kept.push(part.text);
     }
   }
-  return kept.join(GUIDANCE_SEPARATOR);
+  const said = kept.join(GUIDANCE_SEPARATOR);
+  // A floor, not a policy. Choosing the vocabulary by room is what keeps the
+  // required parts whole, and the supported sizes never come here. What this
+  // refuses is the one outcome that is worse than a shortened sentence: a row
+  // longer than its own width, which this engine does not clip but writes over
+  // the row beneath.
+  return said.length <= width ? said : fitLine([{ text: said, elide: true }], width);
+}
+
+/** What the row cannot be drawn without, at the length it would be drawn at. */
+function requiredLength(parts: readonly GuidancePart[]): number {
+  return parts
+    .filter((part) => part.required === true)
+    .map((part) => part.text)
+    .join(GUIDANCE_SEPARATOR).length;
 }
 
 /**
@@ -1960,47 +1992,78 @@ function fitted(width: number, parts: readonly GuidancePart[]): string {
  * What never moves is the order: the state, then what focus actually does, then
  * the way out, then movement.
  */
-function guidance(view: ReplView): string {
+function guidance(view: ReplView, room: number): string {
+  const width = Math.max(1, room);
+  const readiness = readinessOf(view);
+  // Which vocabulary this row speaks is decided by the room it was measured
+  // for, not by the size of the terminal it is somewhere inside. The medium
+  // profile is wide enough for the long phrases and its transcript column is
+  // not: this row's three required parts come to seventy-one columns in a
+  // sixty-three column pane, and the parts that do not fit are not dropped —
+  // they are required — so the sentence ran onto the row below.
+  //
+  // A narrow frame keeps saying what it says today: it is already compact, and
+  // a profile that has chosen the short phrases does not un-choose them because
+  // its one column happens to be wide.
+  const narrow = view.size.columns <= NARROW.columns;
+  const full = guidanceParts(view, readiness, narrow);
+  const parts = requiredLength(full) <= width ? full : guidanceParts(view, readiness, true);
+  return fitted(width, parts);
+}
+
+/**
+ * The parts of the guidance row, in the order they are read.
+ *
+ * `compact` chooses the shorter of the two vocabularies this row already has.
+ * It is a question about room rather than about the terminal: the same screen
+ * can want the long phrases in one region and the short ones in another.
+ *
+ * What never moves is the order: the state, then what focus actually does, then
+ * the way out, then movement.
+ */
+function guidanceParts(
+  view: ReplView,
+  readiness: ReplReadiness,
+  compact: boolean,
+): readonly GuidancePart[] {
   const focused = view.focused;
   const modal = view.selection.drawers.length > 0;
   const editing = focused === undefined || focused === "footer:input";
   const narrow = view.size.columns <= NARROW.columns;
-  const width = Math.max(1, view.size.columns);
   const move: GuidancePart = { text: "Tab/Shift+Tab move" };
-  const readiness = readinessOf(view);
   if (modal) {
     // A drawer holds focus, so `Esc closes` is required and movement is not: Tab
     // is discoverable by pressing it, and being shut inside a modal whose way out
     // was cut from the row is not. The state stays, because a question does not
     // stop an entry from running and a reader still needs to know that it is.
-    return fitted(width, [
+    return [
       { text: drawerState(view, readiness), required: true },
-      { text: primaryAction(view, narrow), required: true },
+      { text: primaryAction(view, compact), required: true },
       { text: "Esc closes", required: true },
       move,
-    ]);
+    ];
   }
-  const state: GuidancePart = { text: statePhrase(readiness, narrow), required: true };
+  const state: GuidancePart = { text: statePhrase(readiness, compact), required: true };
   if (!editing) {
     // No word here about submitting. Enter activates the control that has focus,
     // so a row explaining why Enter cannot submit would describe a key this node
     // does not use that way. The way back to the draft is required — it is the
     // one thing this screen used to say nothing about at all.
-    return fitted(width, [
+    return [
       state,
-      { text: primaryAction(view, narrow), required: true },
+      { text: primaryAction(view, compact), required: true },
       move,
-      { text: narrow ? "Tab to draft" : "Tab to the draft to type", required: true },
-    ]);
+      { text: compact ? "Tab to draft" : "Tab to the draft to type", required: true },
+    ];
   }
-  const advice = stateAdvice(readiness, narrow);
+  const advice = stateAdvice(readiness, compact);
   const said: GuidancePart[] =
     advice === undefined ? [state] : [state, { text: advice, required: true }];
   if (readiness.kind === "history") {
     // The draft survives a frozen position and stays editable, but the fact a
     // person needs here is the way back to the head rather than that typing
     // works. The draft row below is visibly holding their text either way.
-    return fitted(width, [...said, move]);
+    return [...said, move];
   }
   // Focus is in the draft. Only here is Enter a submission, and only when the
   // readiness would take one — a row promising it in any other state is the one
@@ -2008,7 +2071,7 @@ function guidance(view: ReplView): string {
   const enter: GuidancePart[] = admitsSubmission(readiness)
     ? [{ text: "Enter submits", required: true }]
     : [];
-  return fitted(width, [...said, ...enter, { text: "Type here" }, move]);
+  return [...said, ...enter, { text: "Type here" }, move];
 }
 
 /**
@@ -2018,8 +2081,8 @@ function guidance(view: ReplView): string {
  * whatever was underneath it visible from where its text ends — and a modal you
  * can read the transcript through is not a modal.
  */
-function drawerLine(key: string, label: string, width: number): Described {
-  return line(key, width < 1 ? label : label.padEnd(width, " "));
+function drawerLine(key: string, label: string, width: number, style: ReplRowStyle): Described {
+  return line(key, width < 1 ? label : label.padEnd(width, " "), style);
 }
 
 function field(
@@ -2027,6 +2090,7 @@ function field(
   prompt: string,
   text: string,
   purpose: "draft" | "answer",
+  style: ReplRowStyle,
   options: {
     readonly focus?: true;
     readonly here?: string | undefined;
@@ -2036,6 +2100,7 @@ function field(
 ): Described {
   return {
     key,
+    style,
     description: describeNode<ReplAction>({
       key,
       component: FIELD,
@@ -2069,7 +2134,19 @@ export function describeApplication(
   return presentationFor(view, context).descriptions;
 }
 
-function described(view: ReplView, context: ReplPresentationContext): readonly Described[] {
+/**
+ * One reading's rows, and what every one of them means.
+ *
+ * `rows` is every `Described` this screen built, nested drawer content included,
+ * so the style a row was given is available wherever that row's box is made.
+ * `items` is the top-level set, in order, which is what the tree reconciles.
+ */
+interface DescribedScreen {
+  readonly items: readonly Described[];
+  readonly rows: readonly Described[];
+}
+
+function described(view: ReplView, context: ReplPresentationContext): DescribedScreen {
   if (view.refusal !== undefined) {
     // A reason as long as its sentence, over rows that fit: a refusal is the only
     // thing on this screen, and one clipped to a single row is a refusal that has
@@ -2083,6 +2160,7 @@ function described(view: ReplView, context: ReplPresentationContext): readonly D
     const items: Described[] = [
       {
         key: "refusal",
+        style: styleOf("failed-outcome"),
         description: describeNode<ReplAction>({
           key: "refusal",
           component: REFUSAL,
@@ -2097,7 +2175,7 @@ function described(view: ReplView, context: ReplPresentationContext): readonly D
       },
     ];
     for (const [offset, part] of rest.entries()) {
-      items.push(line(`refusal:${offset}`, part));
+      items.push(line(`refusal:${offset}`, part, styleOf("failed-outcome")));
     }
     // And the way out, because this screen offers nothing else to do — at every
     // size this REPL draws at. A valid session that could only be left by a key
@@ -2113,13 +2191,14 @@ function described(view: ReplView, context: ReplPresentationContext): readonly D
           "footer:exit",
           "[exit]",
           { select: "exit" },
+          styleOf("action"),
           view.state.route.at === undefined
             ? { focus: true, here: view.focused }
             : { here: view.focused },
         ),
       );
     }
-    return items;
+    return { items, rows: items };
   }
 
   const items: Described[] = [];
@@ -2140,16 +2219,19 @@ function described(view: ReplView, context: ReplPresentationContext): readonly D
   // where they already are — and the way back would be mounted on the screen
   // they cannot reach. Both controls are described at every size; the route
   // decides which outlet's rows follow them, never whether they exist.
+  const inspected = state.route.at !== undefined;
   const toSessions = row(
     "sessions:heading",
     `${selected(routed === "sessions")}Sessions`,
     { select: "surface", surface: "sessions" },
+    styleOf("pane-heading", { selected: routed === "sessions" }),
     { here: view.focused },
   );
   const toEntries = row(
     "entries:heading",
     `${selected(routed === "repl")}Entries`,
     { select: "surface", surface: "repl" },
+    styleOf("pane-heading", { selected: routed === "repl" }),
     { here: view.focused },
   );
   items.push(toSessions);
@@ -2165,7 +2247,7 @@ function described(view: ReplView, context: ReplPresentationContext): readonly D
     // Present and empty. This REPL keeps one execution per invocation, and a
     // Sessions surface that vanished when it held nothing would read as a
     // feature that does not exist.
-    items.push(line("sessions:empty", "  (none retained)"));
+    items.push(line("sessions:empty", "  (none retained)", styleOf("metadata")));
   } else {
     // One window over the whole reading. Every conversation, turn, fact, audit
     // and request is built in order and then windowed: a list that described all
@@ -2183,6 +2265,7 @@ function described(view: ReplView, context: ReplPresentationContext): readonly D
         "sessions:earlier",
         "  [^ earlier]",
         { select: "scroll-sessions", delta: -1 },
+        styleOf("action"),
         {
           here: view.focused,
         },
@@ -2194,6 +2277,7 @@ function described(view: ReplView, context: ReplPresentationContext): readonly D
         "sessions:later",
         "  [v later]",
         { select: "scroll-sessions", delta: 1 },
+        styleOf("action"),
         {
           here: view.focused,
         },
@@ -2223,6 +2307,7 @@ function described(view: ReplView, context: ReplPresentationContext): readonly D
           "entries:earlier",
           "  [^ earlier]",
           { select: "scroll-entries", delta: -1 },
+          styleOf("action"),
           { here: view.focused },
         ),
       );
@@ -2234,10 +2319,24 @@ function described(view: ReplView, context: ReplPresentationContext): readonly D
           "entries:later",
           "  [v later]",
           { select: "scroll-entries", delta: 1 },
+          styleOf("action"),
           { here: view.focused },
         ),
       );
     }
+  }
+
+  // What each shared column is, said once at the top of it. A pane that named
+  // itself only when it held something would be a pane a reader has to recognize
+  // by what happens to be in it, and an empty one would read as a gap. They are
+  // read rather than activated: nothing here is a control, and the frame places
+  // them only where there is a pane to put them in.
+  // Not in a narrow frame: it routes one outlet and has neither column, so a
+  // title described there would be a mounted node with no box to draw it in.
+  // The two surface controls are that frame's own headings.
+  if (!narrow) {
+    items.push(line("transcript:heading", "Transcript", styleOf("pane-heading")));
+    items.push(line("inspection:heading", "Bindings", styleOf("pane-heading")));
   }
 
   // The transcript of whatever is selected. Selecting an entry *is* selecting a
@@ -2257,10 +2356,8 @@ function described(view: ReplView, context: ReplPresentationContext): readonly D
     // One cell is one row, so a recorded row that holds several lines of output
     // becomes several cells. A cell given more than one line would show only the
     // first, which is the whole of what a reader would then believe was there.
-    for (const [offset, text] of describeRow(transcript, surface ?? 0)
-      .split("\n")
-      .entries()) {
-      items.push(line(`line:${index}:${offset}`, text));
+    for (const [offset, part] of transcriptLines(transcript, surface ?? 0).entries()) {
+      items.push(line(`line:${index}:${offset}`, part.text, part.style));
     }
   }
   // The live overlay, explicitly below the recorded rows and explicitly labelled.
@@ -2273,7 +2370,7 @@ function described(view: ReplView, context: ReplPresentationContext): readonly D
   // is not the one they are looking at would be attributed to it.
   if (inspectable && live.output.length > 0 && livesHere(model, selection)) {
     for (const [offset, text] of live.output.split("\n").entries()) {
-      items.push(line(`line:live:${offset}`, `… ${text}`));
+      items.push(line(`line:live:${offset}`, `… ${text}`, styleOf("output")));
     }
   }
 
@@ -2297,6 +2394,10 @@ function described(view: ReplView, context: ReplPresentationContext): readonly D
             select: "binding",
             name: binding.name,
           },
+          // A binding row is a name and the value bound to it, so it reads as the
+          // value: the whole reason the column is there is to say what the run
+          // produced.
+          styleOf("field-value", { inspected }),
           { here: view.focused },
         ),
       );
@@ -2313,6 +2414,9 @@ function described(view: ReplView, context: ReplPresentationContext): readonly D
             select: "recorded-elicit",
             marker: elicitation.marker,
           },
+          // Where the answer was given, not the answer itself: the value is in the
+          // drawer this row opens.
+          styleOf("field-hint", { inspected }),
           { here: view.focused, claim },
         ),
       );
@@ -2331,6 +2435,7 @@ function described(view: ReplView, context: ReplPresentationContext): readonly D
     "footer:history",
     "[history]",
     { select: "history" },
+    styleOf("action", { inspected }),
     {
       here: view.focused,
     },
@@ -2339,7 +2444,9 @@ function described(view: ReplView, context: ReplPresentationContext): readonly D
   // node: while a drawer is mounted it is reparented into the modal branch, so it
   // stays reachable without reaching past the focus trap, and layout still draws
   // it in the footer where it always is.
-  const exit = row("footer:exit", "[exit]", { select: "exit" }, { here: view.focused });
+  const exit = row("footer:exit", "[exit]", { select: "exit" }, styleOf("action"), {
+    here: view.focused,
+  });
   // Whether the action row holds one control at all. A control the measured row
   // cannot hold whole is not described, so it mounts nothing: describing it and
   // leaving it out of the frame would be a focus stop that draws nothing and a
@@ -2362,7 +2469,9 @@ function described(view: ReplView, context: ReplPresentationContext): readonly D
     }
   }
   if (state.route.at !== undefined && offering("footer:live")) {
-    items.push(row("footer:live", "[live]", { select: "live" }, { here: view.focused }));
+    items.push(
+      row("footer:live", "[live]", { select: "live" }, styleOf("action"), { here: view.focused }),
+    );
   }
   if (live.pausable) {
     if (offering("footer:pause")) {
@@ -2374,6 +2483,7 @@ function described(view: ReplView, context: ReplPresentationContext): readonly D
           "footer:pause",
           live.expansion === "playing" ? "[pause]" : `[pause] ${live.expansion}`,
           { select: "pause" },
+          styleOf("action"),
           { here: view.focused },
         ),
       );
@@ -2384,7 +2494,9 @@ function described(view: ReplView, context: ReplPresentationContext): readonly D
     // the pause somebody just asked for rather than resume anything.
     if (live.expansion === "paused" && offering("footer:continue")) {
       items.push(
-        row("footer:continue", "[continue]", { select: "continue" }, { here: view.focused }),
+        row("footer:continue", "[continue]", { select: "continue" }, styleOf("action"), {
+          here: view.focused,
+        }),
       );
     }
   }
@@ -2400,6 +2512,9 @@ function described(view: ReplView, context: ReplPresentationContext): readonly D
         // opens, which is where there is room for it.
         "[answer]",
         { select: "live-elicit" },
+        // What it announces is a question nobody has answered yet, which is why
+        // it reads as waiting rather than as one more way out of the screen.
+        styleOf("waiting"),
         { here: view.focused, claim },
       ),
     );
@@ -2410,14 +2525,7 @@ function described(view: ReplView, context: ReplPresentationContext): readonly D
   // transcript column is narrower than the longest of them — a row wider than
   // its column is one the column beside it loses space to.
   if (surface !== undefined) {
-    items.push(line("guidance", guidance(view)));
-  }
-
-  // The canonical location: how a person comes back to exactly this view, here
-  // or in another process. It goes above whatever surface is being shown rather
-  // than in the footer, which is seven rows and has controls in them.
-  for (const [offset, part] of locationRows(view.location, view.size, context.widths).entries()) {
-    items.push(line(`location:${offset}`, part));
+    items.push(line("guidance", guidance(view, surface), styleOf("status", { inspected })));
   }
 
   // Why the last thing asked for changed nothing. Shown rather than swallowed: a
@@ -2440,6 +2548,7 @@ function described(view: ReplView, context: ReplPresentationContext): readonly D
         room === undefined || said.length <= room
           ? said
           : `${said.slice(0, Math.max(1, room - 1))}…`,
+        styleOf("failed-outcome"),
       ),
     );
   }
@@ -2460,18 +2569,27 @@ function described(view: ReplView, context: ReplPresentationContext): readonly D
   items.push(
     field(
       "footer:input",
-      "> ",
+      // Named, because the row below a reading has to say that it is where typing
+      // goes rather than one more line of that reading. The marker in front of it
+      // is still the focus cue `fieldText` writes, so this row reads `>> Draft: `
+      // while it holds focus and ` > Draft: ` while it does not.
+      "> Draft: ",
       state.draft,
       "draft",
+      styleOf("draft"),
       claiming ? { focus: true, here: view.focused } : { here: view.focused },
     ),
   );
 
   const drawer = drawerFor(view, context, history, exit, drawable);
-  if (drawer !== undefined) {
-    items.push(drawer);
+  if (drawer === undefined) {
+    return { items, rows: items };
   }
-  return items;
+  items.push(drawer.drawer);
+  // The drawer's own rows are inside its description rather than beside it, so
+  // they are collected here: a box built for one of them has to be able to ask
+  // what that row meant.
+  return { items, rows: [...items, ...drawer.rows] };
 }
 
 /**
@@ -2559,6 +2677,7 @@ function sessionRows(
         "sessions:all",
         filter === undefined ? "  All conversations" : "  All conversations (filtered)",
         { select: "all-sessions" },
+        styleOf("action", { selected: filter === undefined }),
         { here: focused },
       ),
     );
@@ -2571,6 +2690,7 @@ function sessionRows(
             width,
           ),
           { select: "session", session: key },
+          styleOf("pane-heading", { selected: filter === key }),
           { here: focused },
         ),
       );
@@ -2599,6 +2719,10 @@ function sessionRows(
         turn.marker === undefined
           ? { select: "surface", surface: "sessions" }
           : { select: "marker", marker: turn.marker },
+        // What was asked and how far it got, which is what this row exists to
+        // say. The provider's session key, the path and the stop reason are the
+        // subordinate rows below it.
+        turnStyle(turn),
         // A settled permission sends focus back to the turn that was waiting, so
         // this is the row that may be claimed.
         { here: focused, claim },
@@ -2610,6 +2734,7 @@ function sessionRows(
         line(
           `sessions:turn:${turn.key}:whose`,
           fitLine([{ text: "    " }, { text: said.join(" · "), elide: true }], width),
+          styleOf("metadata"),
         ),
       );
     }
@@ -2618,6 +2743,7 @@ function sessionRows(
         line(
           `sessions:turn:${turn.key}:text`,
           fitLine([{ text: "    " }, { text: headline(turn.text), elide: true }], width),
+          styleOf("output"),
         ),
       );
     }
@@ -2626,6 +2752,7 @@ function sessionRows(
         line(
           `sessions:turn:${turn.key}:stop`,
           fitLine([{ text: "    stopped: " }, { text: turn.stopReason, elide: true }], width),
+          styleOf("metadata"),
         ),
       );
     }
@@ -2634,6 +2761,7 @@ function sessionRows(
         line(
           `sessions:turn:${turn.key}:failed`,
           fitLine([{ text: "    " }, { text: headline(turn.failure), elide: true }], width),
+          styleOf("failed-outcome"),
         ),
       );
     }
@@ -2654,9 +2782,10 @@ function sessionRows(
               `sessions:request:${request.key}`,
               fitControl(asks, width),
               { select: "permission", request: request.key },
+              styleOf("waiting"),
               { here: focused },
             )
-          : line(`sessions:request:${request.key}`, fitLine(asks, width)),
+          : line(`sessions:request:${request.key}`, fitLine(asks, width), styleOf("waiting")),
       );
     }
     for (const [at, audit] of turn.audits.entries()) {
@@ -2676,65 +2805,12 @@ function sessionRows(
             ],
             width,
           ),
+          styleOf("metadata"),
         ),
       );
     }
   }
   return items;
-}
-
-/**
- * How many rows a narrow frame gives the canonical location.
- *
- * Three, and the region is thirteen. A narrow frame draws the location, both
- * surface controls, the two window controls and the routed outlet in one
- * region, so what the location takes is what the rest cannot have.
- */
-const NARROW_LOCATION_ROWS = 3;
-
-/**
- * The canonical location, as the rows one frame places it in.
- *
- * In full wherever there is room: it is the one thing a person copies out of
- * this screen, and a prefix of it takes them somewhere else. A narrow frame is
- * where there is not room — the location shares its region with every control
- * on the screen, and a draft long enough to fill that region would leave the
- * surface controls and the whole outlet mounted, focusable and drawn nowhere,
- * which is a screen with no way off it.
- *
- * So a narrow frame bounds it and says what it is not showing. A person who
- * cannot see the whole location can still read that fact and act on it; a
- * person whose controls are all off the bottom of the screen cannot do
- * anything at all.
- */
-function locationRows(
-  location: string,
-  size: ReplTerminalSize,
-  widths: ReplMeasuredWidths | undefined,
-): readonly string[] {
-  if (widths === undefined) {
-    // No width yet, and this is the longest unbounded thing on the screen: one
-    // row of it would make the column it lands in as wide as the whole location.
-    return Object.freeze([]);
-  }
-  const rows = chunked(location, widths.surface);
-  if (profileFor(size) !== "narrow" || rows.length <= NARROW_LOCATION_ROWS) {
-    return rows;
-  }
-  const shown = rows.slice(0, NARROW_LOCATION_ROWS - 1);
-  const hidden = location.length - shown.join("").length;
-  // To the same width as the rows above it. This is the one location row whose
-  // length changes — a count that loses a digit makes it shorter — and what
-  // this application describes is a complete row either way: `chunked` already
-  // pads every ordinary one, and covering what a shorter row no longer reaches
-  // is this boundary's job rather than something to leave to whichever renderer
-  // happens to draw it. The renderer in use fills a placed cell to its bounds,
-  // so it repaints this cleanly whether or not the row arrives padded; that is
-  // its behavior, and this is the contract.
-  return Object.freeze([
-    ...shown,
-    pad(`… ${hidden} more characters, in a wider window`, widths.surface),
-  ]);
 }
 
 /**
@@ -2784,7 +2860,7 @@ function entryContent(
   claim?: string | undefined,
 ): readonly Described[] {
   if (model.entries.length === 0) {
-    return [line("entry:none", "  1. (not submitted)")];
+    return [line("entry:none", "  1. (not submitted)", styleOf("metadata"))];
   }
   const items: Described[] = [];
   for (const entry of model.entries) {
@@ -2804,6 +2880,7 @@ function entryContent(
           width,
         ),
         { select: "scope", scopes: [entry.key] },
+        entryStyle(entry, reading === entry.key),
         { here: focused, claim },
       ),
     );
@@ -2813,6 +2890,7 @@ function entryContent(
           `scope:${scope.path.join("/")}`,
           fitControl([{ text: "    " }, { text: scope.label, elide: true }], width),
           { select: "scope", scopes: scope.path },
+          styleOf("metadata"),
           { here: focused },
         ),
       );
@@ -2834,6 +2912,24 @@ function outcomeOfEntry(entry: ReplEntry): string {
 }
 
 /**
+ * What one catalog row means, read from the outcome its root recorded.
+ *
+ * The same four readings the row spells out, so the colour and the word cannot
+ * disagree. An entry still being read keeps its outcome: being selected says
+ * which transcript is on screen, not that the entry came to something else.
+ */
+function entryStyle(entry: ReplEntry, selected: boolean): ReplRowStyle {
+  const terminal = entry.terminal;
+  if (terminal === undefined) {
+    return styleOf("waiting", { selected });
+  }
+  if (terminal.status === "ok") {
+    return styleOf("successful-outcome", { selected });
+  }
+  return styleOf(terminal.status === "err" ? "failed-outcome" : "waiting", { selected });
+}
+
+/**
  * How far one turn has got, in words a reader can act on.
  *
  * How it ended and whether the history holds it are separate facts, and a turn
@@ -2841,6 +2937,23 @@ function outcomeOfEntry(entry: ReplEntry): string {
  * looking at the second may go to its position, and a person looking at the
  * first is watching this process.
  */
+/**
+ * What one turn's row means, read from how far the turn itself has got.
+ *
+ * The same four readings the row spells out. A turn nobody has answered yet is
+ * waiting whatever it will become; one that failed is a failure however it was
+ * phrased; and a turn that finished is the result a reader came for.
+ */
+function turnStyle(turn: ReplSessionTurn): ReplRowStyle {
+  if (turn.state === "queued" || turn.state === "active") {
+    return styleOf("waiting");
+  }
+  if (turn.status === "failed" || turn.failure !== undefined) {
+    return styleOf("failed-outcome");
+  }
+  return styleOf("output");
+}
+
 function stateOf(turn: ReplSessionTurn): string {
   if (turn.state === "queued") {
     return "queued";
@@ -2882,32 +2995,34 @@ function drawerFor(
   history: Described,
   exit: Described,
   drawable: boolean,
-): Described | undefined {
+): { readonly drawer: Described; readonly rows: readonly Described[] } | undefined {
   const held = drawerContent(view, context.widths?.drawer ?? 0);
   if (held === undefined) {
     return undefined;
   }
   const { title, dismissing, entering, content } = held;
   const width = context.widths?.drawer ?? 0;
-  const children: ReplDescription<ReplAction>[] = [];
-  children.push(
+  const rows: Described[] = [];
+  rows.push(
     row(
       "drawer:scroll:up",
       padControl("[^ earlier]", width),
       { select: "scroll", delta: -1 },
+      styleOf("action"),
       { here: view.focused },
-    ).description,
+    ),
   );
   for (const placed of windowed(content, context, entering, view.focused)) {
-    children.push(placed);
+    rows.push(placed);
   }
-  children.push(
+  rows.push(
     row(
       "drawer:scroll:down",
       padControl("[v later]", width),
       { select: "scroll", delta: 1 },
+      styleOf("action"),
       { here: view.focused },
-    ).description,
+    ),
   );
 
   // The two nodes the footer would have drawn, inside the modal focus root. A
@@ -2919,31 +3034,34 @@ function drawerFor(
   // a control that row cannot hold whole is not described here either.
   const offered = (key: string): boolean => context.measuring || context.admission.actions.has(key);
   if (offered("footer:history")) {
-    children.push(history.description);
+    rows.push(history);
   }
   if (drawable && offered("footer:exit")) {
-    children.push(exit.description);
+    rows.push(exit);
   }
-  children.push(
+  rows.push(
     row(
       "drawer:close",
       padControl("[close]", width),
       dismissing === undefined
         ? { select: "close" }
         : { select: "permission-dismiss", request: dismissing },
+      styleOf("action"),
       { here: view.focused },
-    ).description,
+    ),
   );
-  return {
+  const drawer: Described = {
     key: "drawer:open",
+    style: styleOf("drawer-title"),
     description: describeNode<ReplAction>({
       key: "drawer:open",
       component: DRAWER,
       input: { label: width < 1 ? title : title.padEnd(width, " ") },
-      children,
+      children: rows.map((one) => one.description),
       modal: true,
     }),
   };
+  return { drawer, rows };
 }
 
 /** What one drawer reading holds, before any window decides what is shown. */
@@ -2983,22 +3101,32 @@ function drawerContent(view: ReplView, width: number): DrawerContent | undefined
   let entering = false;
 
   if (open.kind === "binding") {
-    title = open.name;
+    title = drawerTitle("Binding", open.name, width);
     for (const [offset, text] of detail(open.binding.value).entries()) {
-      content.push({ description: drawerLine(`drawer:value:${offset}`, text, width).description });
+      content.push({
+        described: drawerLine(`drawer:value:${offset}`, text, width, styleOf("field-value")),
+      });
     }
   } else if (open.kind === "recorded-elicit") {
-    title = open.elicitation.location;
+    title = drawerTitle("Recorded answer", open.elicitation.location, width);
     // The whole of what was asked and the whole of what was answered. A drawer is
     // where the retained value is, so a summary here would leave a reader with no
     // way to see what the record actually holds.
-    content.push({ description: drawerLine("drawer:schema", "schema", width).description });
+    content.push({
+      described: drawerLine("drawer:schema", "schema", width, styleOf("field-label")),
+    });
     for (const [offset, text] of detail(open.elicitation.schema).entries()) {
-      content.push({ description: drawerLine(`drawer:schema:${offset}`, text, width).description });
+      content.push({
+        described: drawerLine(`drawer:schema:${offset}`, text, width, styleOf("field-hint")),
+      });
     }
-    content.push({ description: drawerLine("drawer:answered", "answer", width).description });
+    content.push({
+      described: drawerLine("drawer:answered", "answer", width, styleOf("field-label")),
+    });
     for (const [offset, text] of detail(open.elicitation.answer).entries()) {
-      content.push({ description: drawerLine(`drawer:answer:${offset}`, text, width).description });
+      content.push({
+        described: drawerLine(`drawer:answer:${offset}`, text, width, styleOf("field-value")),
+      });
     }
   } else if (open.kind === "live-permission") {
     // The request this screen selected, read again here: a drawer draws what is
@@ -3011,13 +3139,13 @@ function drawerContent(view: ReplView, width: number): DrawerContent | undefined
     if (request === undefined) {
       return undefined;
     }
-    title = request.title ?? "Permission";
+    title = drawerTitle("Permission", request.title, width);
     // One window over the whole of it. `options` is the provider's, and nothing
     // bounds how many it offers: a drawer that described every choice would have
     // layout clip the last ones, which are exactly the ones a person scrolled
     // down to find.
     for (const placed of permissionContent(view.model, view.live, request, width, view.focused)) {
-      content.push({ description: placed });
+      content.push({ described: placed });
     }
     dismissing = request.key;
   } else if (open.kind === "history") {
@@ -3028,12 +3156,16 @@ function drawerContent(view: ReplView, width: number): DrawerContent | undefined
     // than something clipping hides.
     for (const checkpoint of view.model.checkpoints) {
       content.push({
-        description: row(
+        described: row(
           `drawer:marker:${checkpoint.marker}`,
           padControl(checkpoint.label, width),
           { select: "marker", marker: checkpoint.marker },
+          styleOf("history", {
+            selected: view.state.route.at === checkpoint.marker,
+            inspected: true,
+          }),
           { here: view.focused },
-        ).description,
+        ),
       });
     }
   } else {
@@ -3051,12 +3183,12 @@ function drawerContent(view: ReplView, width: number): DrawerContent | undefined
     // placed in.
     for (const [offset, text] of question.message.split("\n").entries()) {
       content.push({
-        description: drawerLine(`drawer:message:${offset}`, text, width).description,
+        described: drawerLine(`drawer:message:${offset}`, text, width, styleOf("source")),
       });
     }
     if (form.description !== undefined) {
       content.push({
-        description: drawerLine("drawer:form:about", form.description, width).description,
+        described: drawerLine("drawer:form:about", form.description, width, styleOf("field-hint")),
       });
     }
     // The same rule inside the modal: the first control claims focus when the
@@ -3067,17 +3199,22 @@ function drawerContent(view: ReplView, width: number): DrawerContent | undefined
       const marked = requiredNow(form, view.state.form.values, one) ? "*" : " ";
       const label = one.title ?? one.name;
       content.push({
-        description: row(
+        described: row(
           `drawer:field:${one.name}`,
           padControl(`${marked}${label}: ${value}`, width),
           { select: "form-field", field: one.name },
+          styleOf("field-label"),
           { here: view.focused },
-        ).description,
+        ),
       });
       if (one.description !== undefined) {
         content.push({
-          description: drawerLine(`drawer:field:${one.name}:about`, `  ${one.description}`, width)
-            .description,
+          described: drawerLine(
+            `drawer:field:${one.name}:about`,
+            `  ${one.description}`,
+            width,
+            styleOf("field-hint"),
+          ),
         });
       }
       if (one.choices !== undefined) {
@@ -3085,23 +3222,25 @@ function drawerContent(view: ReplView, width: number): DrawerContent | undefined
         // is chosen; this is the line that names the whole set, and it is what a
         // reader scanning the form reads first.
         content.push({
-          description: drawerLine(
+          described: drawerLine(
             `drawer:form:${one.name}`,
             `${one.name}: ${one.choices.join(" | ")}`,
             width,
-          ).description,
+            styleOf("field-hint"),
+          ),
         });
       }
       // Every offered value, each its own control. A form that drew only the
       // first would be offering a choice nobody could make.
       for (const option of one.choices ?? []) {
         content.push({
-          description: row(
+          described: row(
             `drawer:choice:${one.name}:${option}`,
             padControl(`  ${value === option ? "(x)" : "( )"} ${option}`, width),
             { select: "form-choice", field: one.name, option },
+            styleOf("action", { selected: value === option }),
             { here: view.focused },
-          ).description,
+          ),
         });
       }
       // The one editable line for this field, which is where text and Backspace
@@ -3109,29 +3248,38 @@ function drawerContent(view: ReplView, width: number): DrawerContent | undefined
       // drawer opens — including an enum's, because typing an offered value and
       // pressing Enter is still a way to answer.
       content.push({
-        description: field(`drawer:value:${one.name}`, "  = ", value, "answer", {
-          here: view.focused,
-        }).description,
+        described: field(
+          `drawer:value:${one.name}`,
+          "  = ",
+          value,
+          "answer",
+          styleOf("field-value"),
+          {
+            here: view.focused,
+          },
+        ),
         field: { name: one.name, value },
       });
     }
     // What the last submission was told, under the form it is about.
     for (const [offset, message] of view.state.form.messages.entries()) {
       content.push({
-        description: drawerLine(
+        described: drawerLine(
           `drawer:invalid:${offset}`,
           message.field === undefined ? message.message : `${message.field}: ${message.message}`,
           width,
-        ).description,
+          styleOf("failed-outcome"),
+        ),
       });
     }
     content.push({
-      description: row(
+      described: row(
         "drawer:form:submit",
         padControl("[submit]", width),
         { select: "form-submit" },
+        styleOf("action"),
         { here: view.focused },
-      ).description,
+      ),
     });
   }
 
@@ -3147,7 +3295,7 @@ function drawerContent(view: ReplView, width: number): DrawerContent | undefined
  * something the loop that builds them can see.
  */
 interface DrawerRow {
-  readonly description: ReplDescription<ReplAction>;
+  readonly described: Described;
   readonly field?: { readonly name: string; readonly value: string };
 }
 
@@ -3163,7 +3311,7 @@ function windowed(
   context: ReplPresentationContext,
   entering: boolean,
   focused: string | undefined,
-): readonly ReplDescription<ReplAction>[] {
+): readonly Described[] {
   if (context.measuring) {
     return [];
   }
@@ -3176,12 +3324,16 @@ function windowed(
   return rows.map((candidate, at) => {
     const named = candidate.field;
     if (at !== index || named === undefined) {
-      return candidate.description;
+      return candidate.described;
     }
-    return field(`drawer:value:${named.name}`, "  = ", named.value, "answer", {
-      focus: true,
-      here: focused,
-    }).description;
+    return field(
+      `drawer:value:${named.name}`,
+      "  = ",
+      named.value,
+      "answer",
+      styleOf("field-value"),
+      { focus: true, here: focused },
+    );
   });
 }
 
@@ -3199,15 +3351,22 @@ function permissionContent(
   request: ReplLivePermission,
   width: number,
   focused: string | undefined,
-): readonly ReplDescription<ReplAction>[] {
-  const content: ReplDescription<ReplAction>[] = [];
+): readonly Described[] {
+  const content: Described[] = [];
   // What is being asked, in the provider's own words. Never `rawInput` and
   // never the request object: a screen shows what a person decides about.
   if (request.kind !== undefined) {
-    content.push(drawerLine("drawer:permission:kind", `  ${request.kind}`, width).description);
+    content.push(
+      drawerLine("drawer:permission:kind", `  ${request.kind}`, width, styleOf("field-label")),
+    );
   }
   content.push(
-    drawerLine("drawer:permission:call", `  call ${request.toolCallId}`, width).description,
+    drawerLine(
+      "drawer:permission:call",
+      `  call ${request.toolCallId}`,
+      width,
+      styleOf("metadata"),
+    ),
   );
   // Whose turn is waiting, so a decision is not made about an anonymous one.
   const waiting = chronology(model, live).find((candidate) => candidate.key === request.turn);
@@ -3216,7 +3375,7 @@ function permissionContent(
       waiting.sessionKey === undefined
         ? headline(waiting.prompt)
         : `${headline(waiting.prompt)} · ${waiting.sessionKey}`;
-    content.push(drawerLine("drawer:permission:turn", `  ${whose}`, width).description);
+    content.push(drawerLine("drawer:permission:turn", `  ${whose}`, width, styleOf("metadata")));
   }
   // Every choice the provider offered, in its order, each one its own control.
   for (const choice of request.choices) {
@@ -3225,8 +3384,9 @@ function permissionContent(
         `drawer:permission:choice:${choice.optionId}`,
         padControl(`[${choice.name}]${lasting(choice.kind)}`, width),
         { select: "permission-choice", request: request.key, option: choice.optionId },
+        styleOf("action"),
         { here: focused },
-      ).description,
+      ),
     );
   }
   // Said rather than implied: dismissing is a denial of this request, and the
@@ -3236,7 +3396,8 @@ function permissionContent(
       "drawer:permission:dismissal",
       "  Escape or close denies this request; the session keeps running.",
       width,
-    ).description,
+      styleOf("field-hint"),
+    ),
   );
   return content;
 }
@@ -3291,6 +3452,25 @@ function drawerContentRows(question: ReplQuestion | undefined, form: ReplFormSta
 }
 
 /** The first line of a message, for a control that is one row tall. */
+/**
+ * One drawer's title: what kind of reading it is, and which one.
+ *
+ * The kind first, because it is the fixed part and the part a reader is looking
+ * for — a drawer called `plan` says nothing about whether it holds a binding or
+ * an answer. The name is whatever the record carries, so it is elided before the
+ * word it belongs to is: losing the end of a long name costs a reader less than
+ * losing what they are looking at.
+ */
+function drawerTitle(kind: string, name: string | undefined, width: number): string {
+  if (name === undefined || name.length === 0) {
+    return kind;
+  }
+  return fitLine(
+    [{ text: `${kind} · ` }, { text: name, elide: true }],
+    width < 1 ? undefined : width,
+  );
+}
+
 function headline(message: string): string {
   const [first = ""] = message.split("\n");
   return first.length > 60 ? `${first.slice(0, 59)}…` : first;
@@ -3464,37 +3644,119 @@ function nested(scope: ReplScope, path: readonly string[]): readonly NestedScope
   return found;
 }
 
-/** One transcript row, as a line. */
-function describeRow(entry: ReplRow, width: number): string {
+/** One line of a transcript record, and what that line is. */
+interface TranscriptLine {
+  readonly text: string;
+  readonly style: ReplRowStyle;
+}
+
+/**
+ * One transcript record, as the lines it is drawn in and what each of them is.
+ *
+ * Decided together, because a root close draws two different things. A root that
+ * recorded a result shows that result — the rendered document, which is what a
+ * reader came for — and a root that recorded none shows the outcome it closed
+ * with instead. One role chosen from the record's kind alone paints a whole
+ * rendered document in the accent that belongs to the word `ok`.
+ *
+ * Read from the typed fields as each line is built, never from the string that
+ * came out: a document whose own output contains the word `failed` is still
+ * output, and a root that closed `err` is a failure whatever it rendered.
+ */
+function transcriptLines(entry: ReplRow, width: number): readonly TranscriptLine[] {
+  if (entry.kind !== "terminal") {
+    return lined(
+      describeRow(entry, width),
+      entry.kind === "output" ? styleOf("output") : styleOf("metadata"),
+    );
+  }
+  // Three outcomes rather than one "done", and a cancellation is not a failure:
+  // it is a reading that stopped.
+  const outcome =
+    entry.status === "ok"
+      ? styleOf("successful-outcome")
+      : styleOf(entry.status === "err" ? "failed-outcome" : "waiting");
+  const shown =
+    entry.output.length > 0
+      ? lined(entry.output, styleOf("output"))
+      : lined(`closed ${entry.status}`, outcome);
+  // Only a failure that recorded a reason, and only for a failure: an `ok`, a
+  // cancellation and an entry that never settled have no reason to show, and
+  // inventing text for them would describe a failure that did not happen.
+  if (entry.status !== "err" || entry.message === undefined) {
+    return shown;
+  }
+  // Its own line, so the outcome and the reason are two rows a window can scroll
+  // rather than one row a region has to clip in the middle.
+  return [...shown, { text: failedLine(entry.message, width), style: styleOf("failed-outcome") }];
+}
+
+/**
+ * One string as the rows it is drawn in, each under one role.
+ *
+ * A cell is a row, so a record holding several lines of text becomes several
+ * cells. A cell given more than one line would show only the first, which is the
+ * whole of what a reader would then believe was there.
+ */
+function lined(text: string, style: ReplRowStyle): readonly TranscriptLine[] {
+  return text.split("\n").map((one) => ({ text: one, style }));
+}
+
+/**
+ * One ordinary transcript row, as a line that fits where it will be drawn.
+ *
+ * A root close is not one of these: what it draws depends on whether it recorded
+ * a result, so the two cannot share a single string.
+ *
+ * The rows naming *where something came from* are bounded here. A path, a
+ * component's name and a generated fragment's source are as long as somebody
+ * else made them, and this engine clips no text — so a row longer than its pane
+ * is drawn over the row beneath it, and the reader loses a line they were given
+ * to keep one nobody bounded. The fixed part of each row is kept and the
+ * unbounded part gives up its columns first, with the mark that says it was
+ * shortened; the whole of it stays in the Journal, which is where something
+ * unbounded belongs.
+ *
+ * What a document and a provider *said* is not bounded here. That text is the
+ * thing a reader came for, and shortening it would be this screen editing the
+ * content it exists to show.
+ */
+function describeRow(
+  entry: Exclude<ReplRow, { readonly kind: "terminal" }>,
+  width: number,
+): string {
+  const room = width < 1 ? undefined : width;
   switch (entry.kind) {
     case "entry":
-      return `entry ${entry.path}`;
+      return fitLine([{ text: "entry " }, { text: entry.path, elide: true }], room);
     case "scope":
-      return `${entry.scope} ${entry.name}`;
+      return fitLine([{ text: `${entry.scope} ` }, { text: entry.name, elide: true }], room);
     case "binding":
       return `${entry.scope} bound ${entry.names.join(", ")}`;
     case "output":
       return entry.text;
     case "generated":
+      // A fragment's source is read as the document it is: the Agent journey
+      // reads the branch a program did *not* take off this screen, which only
+      // whole source can show. Bounding it to one row is a decision about what
+      // this screen owes a reader, not a formatting choice.
       return `generated ${entry.decision}${entry.source === undefined ? "" : `: ${entry.source}`}`;
     case "elicit":
       return `answered ${entry.location} ${summarize(entry.answer)}`;
     case "agent":
-      return `agent ${entry.turn.agent} ${entry.turn.status}`;
+      // The status stays whatever the name costs: a row that said which agent
+      // and not how it ended would have kept the part nobody bounded and lost
+      // the part this row exists to carry.
+      return fitLine(
+        [
+          { text: "agent " },
+          { text: entry.turn.agent, elide: true },
+          { text: ` ${entry.turn.status}`, keep: true },
+        ],
+        room,
+      );
     case "effect":
       return `${entry.type} ${entry.status}`;
-    case "terminal": {
-      const closed = entry.output.length > 0 ? entry.output : `closed ${entry.status}`;
-      // Only a failure that recorded a reason, and only for a failure: an `ok`,
-      // a cancellation and an entry that never settled have no reason to show,
-      // and inventing text for them would describe a failure that did not happen.
-      if (entry.status !== "err" || entry.message === undefined) {
-        return closed;
-      }
-      // Its own line, so the outcome and the reason are two rows a window can
-      // scroll rather than one row a region has to clip in the middle.
-      return `${closed}\n${failedLine(entry.message, width)}`;
-    }
   }
 }
 
@@ -3671,6 +3933,7 @@ export function drawerOffsetOf(state: ReplState, open: ReplDrawerRef | undefined
 type ReplSlot =
   | "located"
   | "navigation"
+  | "pane-heading"
   | "sessions-fixed"
   | "sessions"
   | "entries-fixed"
@@ -3714,6 +3977,9 @@ function slotOf(key: string): ReplSlot | undefined {
   if (key === "sessions:heading" || key === "entries:heading") {
     return "navigation";
   }
+  if (key === "transcript:heading" || key === "inspection:heading") {
+    return "pane-heading";
+  }
   // The empty placeholder and both window controls stay put around the window
   // rather than inside it, so a measured viewport is the moving part alone.
   if (key === "sessions:empty" || key === "sessions:earlier" || key === "sessions:later") {
@@ -3734,7 +4000,7 @@ function slotOf(key: string): ReplSlot | undefined {
   if (key.startsWith("binding:") || key.startsWith("elicit:")) {
     return "inspection";
   }
-  if (key === "guidance" || key.startsWith("location:")) {
+  if (key === "guidance") {
     return "located";
   }
   // Above the surface, where there is a row's full width for a sentence. On the
@@ -3751,6 +4017,7 @@ interface ReplCandidate {
   readonly slot: ReplSlot;
   readonly text: string;
   readonly control: boolean;
+  readonly style: ReplRowStyle;
 }
 
 /**
@@ -3762,6 +4029,15 @@ interface ReplCandidate {
  */
 function candidatesOf(
   descriptions: readonly ReplDescription<ReplAction>[],
+  /**
+   * What each described row meant, by the key it was described under.
+   *
+   * The walk below reads the finished descriptions, which no longer carry the
+   * facts a role comes from — so the style is carried alongside rather than
+   * recovered. A key the screen did not describe has no entry and reads as
+   * ordinary prose.
+   */
+  styles: ReadonlyMap<string, ReplRowStyle>,
 ): readonly ReplCandidate[] {
   const found: ReplCandidate[] = [];
   const walk = (description: ReplDescription<ReplAction>): void => {
@@ -3773,6 +4049,7 @@ function candidatesOf(
         slot,
         text: measurementTextOf(read.component, read.input),
         control: isControl(read.component, read.input),
+        style: styles.get(read.key) ?? ORDINARY,
       });
     }
     for (const child of read.children) {
@@ -3846,6 +4123,7 @@ function rowBox(candidate: ReplCandidate, region: ReplRegion, width: number | un
     props: rowProps(width),
     text: candidate.text,
     control: candidate.control,
+    style: candidate.style,
   });
 }
 
@@ -3861,7 +4139,12 @@ export function presentationFor(
   view: ReplView,
   context: ReplPresentationContext,
 ): ReplPresentation {
-  const descriptions = described(view, context).map((item) => item.description);
+  const screen = described(view, context);
+  const descriptions = screen.items.map((item) => item.description);
+  const styles = new Map<string, ReplRowStyle>();
+  for (const one of screen.rows) {
+    styles.set(one.key, one.style);
+  }
   const size = view.size;
   const profile = profileFor(size);
   const band = historyBand(
@@ -3899,14 +4182,17 @@ export function presentationFor(
         viewports: Object.freeze([]),
         actions: undefined,
         regions: Object.freeze([Object.freeze({ region: "refusal", id: "box:refusal" })]),
+        contents: Object.freeze([]),
         history: band,
       }),
     };
   }
 
-  const candidates = candidatesOf(descriptions);
+  const candidates = candidatesOf(descriptions, styles);
   const viewports: ReplViewportSlot[] = [];
   const regions: { region: ReplRegion; id: string }[] = [];
+  /** The border-free inside of each pane that has edges. */
+  const contents: { region: ReplRegion; id: string }[] = [];
   /**
    * How wide one region is, as this frame measured it.
    *
@@ -3970,6 +4256,32 @@ export function presentationFor(
     const found = of("navigation").filter((candidate) => candidate.key === key);
     return found.map((candidate) => rowBox(candidate, region, widthOfRegion(region)));
   };
+  /** One pane's own title, where there is a pane to put it in. */
+  const paneTitle = (key: string, region: ReplRegion): readonly ReplBox[] => {
+    const found = of("pane-heading").filter((candidate) => candidate.key === key);
+    return found.map((candidate) => rowBox(candidate, region, widthOfRegion(region)));
+  };
+  /**
+   * One pane with edges, and the border-free box its rows are measured in.
+   *
+   * The column keeps the width the product gives it; the inside is whatever the
+   * engine leaves after the edges, and that inside is what `widthsOf` reads.
+   */
+  const edgedColumn = (
+    region: ReplRegion,
+    width: number | undefined,
+    surface: number,
+    children: readonly ReplBox[],
+  ): ReplBox => {
+    const id = `box:${region}:content`;
+    contents.push({ region, id });
+    return box({
+      id: `box:${region}`,
+      region,
+      props: paneColumnProps(width, surface),
+      children: [box({ id, region, props: paneContentProps(), children })],
+    });
+  };
 
   const columns: ReplBox[] = [];
   if (profile === "narrow") {
@@ -4007,7 +4319,7 @@ export function presentationFor(
       box({
         id: "box:sidebar",
         region: "sidebar",
-        props: columnProps(sidebarWidth(size)),
+        props: paneProps(sidebarWidth(size), REPL_PALETTE.sideSurface),
         children: [
           // Two groups, and only one of them grows: the Sessions reading takes
           // whatever the column has left, and the catalog states its own height.
@@ -4046,37 +4358,29 @@ export function presentationFor(
           }),
         ],
       }),
-      box({
-        id: "box:transcript",
-        region: "transcript",
-        props: columnProps(undefined),
-        children: [
-          ...located,
-          box({
-            id: "box:transcript:viewport",
-            region: "transcript",
-            props: viewportProps(),
-            children: of("transcript").map((candidate) =>
-              rowBox(candidate, "transcript", context.widths?.surface),
-            ),
-          }),
-        ],
-      }),
-      box({
-        id: "box:inspection",
-        region: "inspection",
-        props: columnProps(inspectionWidth(size)),
-        children: [
-          box({
-            id: "box:inspection:viewport",
-            region: "inspection",
-            props: viewportProps(),
-            children: of("inspection").map((candidate) =>
-              rowBox(candidate, "inspection", context.widths?.inspection),
-            ),
-          }),
-        ],
-      }),
+      edgedColumn("transcript", undefined, REPL_PALETTE.centreSurface, [
+        ...paneTitle("transcript:heading", "transcript"),
+        ...located,
+        box({
+          id: "box:transcript:viewport",
+          region: "transcript",
+          props: viewportProps(),
+          children: of("transcript").map((candidate) =>
+            rowBox(candidate, "transcript", context.widths?.surface),
+          ),
+        }),
+      ]),
+      edgedColumn("inspection", inspectionWidth(size), REPL_PALETTE.bindingsSurface, [
+        ...paneTitle("inspection:heading", "inspection"),
+        box({
+          id: "box:inspection:viewport",
+          region: "inspection",
+          props: viewportProps(),
+          children: of("inspection").map((candidate) =>
+            rowBox(candidate, "inspection", context.widths?.inspection),
+          ),
+        }),
+      ]),
     );
   }
 
@@ -4130,7 +4434,11 @@ export function presentationFor(
         id: "box:root",
         props: rootProps(size),
         children: [
-          box({ id: "box:body", props: bodyProps(), children: columns }),
+          box({
+            id: "box:body",
+            props: bodyProps(profile !== "narrow"),
+            children: columns,
+          }),
           box({
             id: "box:footer",
             region: "footer",
@@ -4148,6 +4456,7 @@ export function presentationFor(
                     props: CONTROL_PROPS,
                     text: candidate.text,
                     control: candidate.control,
+                    style: candidate.style,
                   }),
                 ),
               }),
@@ -4161,6 +4470,11 @@ export function presentationFor(
                     region: "footer",
                     props: rowProps(size.columns),
                     text,
+                    // The one part of this screen that is not a mounted row, so
+                    // its style comes from the band rather than from a candidate.
+                    style: styleOf("history", {
+                      inspected: view.state.route.at !== undefined,
+                    }),
                   }),
                 ),
               }),
@@ -4181,6 +4495,7 @@ export function presentationFor(
         ),
       }),
       regions: Object.freeze(regions.map((region) => Object.freeze(region))),
+      contents: Object.freeze(contents.map((content) => Object.freeze(content))),
       history: band,
     }),
   };
