@@ -41,6 +41,7 @@ import { join } from "node:path";
 import { randomBytes } from "node:crypto";
 
 import { decodeLocation, encodeLocation } from "../src/repl/route.ts";
+import type { ReplRoute } from "../src/repl/route.ts";
 import { installReplHost } from "../src/repl-assembly.ts";
 import { installReplTerminal } from "../src/repl/terminal-host.ts";
 import type { ReplTerminalCapabilities } from "../src/repl/terminal-host.ts";
@@ -873,6 +874,7 @@ describe("J3 — durable truth, and a cold process over it", () => {
     const live = createFakeAcp();
     live.script({ reply: REPLY });
     const { terminal, install } = recordingTerminal({ columns: 200, rows: 60 });
+    let ended: string | undefined;
 
     yield* scoped(function* (): Operation<void> {
       const workspace = yield* useWorkspace();
@@ -925,8 +927,18 @@ describe("J3 — durable truth, and a cold process over it", () => {
       // Reading a marker asked nobody anything.
       expect(live.prompts).toHaveLength(1);
       terminal.end();
-      yield* running;
+      ended = yield* running;
     });
+
+    // Which prefix it came to rest on, taken where the route is still published.
+    // `[live]` above says a prefix is being read; this says which one — the exact
+    // checkpoint the last marker encoded, read only, on the surface and the locus
+    // it was chosen from.
+    const route = routeOf(ended);
+    expect(route.at).toBe("yield:root:3");
+    expect(route.inspect).toBe(true);
+    expect(route.surface).toBe("repl");
+    expect(route.scopes).toEqual([]);
   });
 
   it("J3: a location this host cannot read refuses before any replay", function* () {
@@ -1151,6 +1163,8 @@ describe("J2 — a filter and a draft across a resize (#875 R1)", () => {
     let location: string | undefined;
     let standing: string | undefined;
     let filtered: string | undefined;
+    /** The full provider session key the conversation row named. */
+    let chosen: string | undefined;
 
     yield* scoped(function* (): Operation<void> {
       const workspace = yield* useWorkspace();
@@ -1182,8 +1196,19 @@ describe("J2 — a filter and a draft across a resize (#875 R1)", () => {
         yield* settled(10);
         return conversationRows(terminal, digest).length > 0;
       });
-      yield* click(terminal, conversationRows(terminal, digest)[0] ?? "");
-      yield* awaiting("the filter never reached the route", function* () {
+      // Which conversation this is about, as a full provider key, settled before
+      // anything is clicked and taken from this run's own fixture rather than
+      // from the route under test. A 32-column row shows as much of a key as it
+      // holds, so the row names the key and the fixture supplies the rest.
+      const chosenRow = conversationRows(terminal, digest)[0] ?? "";
+      const shownKey = chosenRow.replace(/^[>*\s]+/, "").replace(/\u2026$/, "");
+      chosen = [...new Set(live.turns.map((turn) => turn.handle.sessionKey))].find((key) =>
+        key.startsWith(shownKey),
+      );
+      expect(chosen).toBeDefined();
+
+      yield* click(terminal, chosenRow);
+      yield* awaiting("the filter never reached the reading", function* () {
         yield* settled(10);
         return sessionOf(terminal) !== undefined;
       });
@@ -1237,12 +1262,19 @@ describe("J2 — a filter and a draft across a resize (#875 R1)", () => {
       location = yield* running;
     });
 
-    // The whole reading, in the one string the command publishes on its way out:
-    // the conversation it was filtered to, and the draft, byte for byte.
+    // The whole reading, in the one string the command publishes on its way out,
+    // compared field by field against what this run's fixture says each should
+    // be: the conversation it was filtered to by its full key, the draft byte for
+    // byte, the surface and locus it was standing on, and the live head.
     standing = location;
     expect(standing).toBeDefined();
-    expect(standing).toContain("session=");
-    expect(standing).toContain(`draft=${encodeURIComponent(DRAFT)}`);
+    const standingRoute = routeOf(standing);
+    expect(standingRoute.session).toBe(chosen);
+    expect(standingRoute.draft).toBe(DRAFT);
+    expect(standingRoute.surface).toBe("repl");
+    expect(standingRoute.scopes).toEqual([]);
+    expect(standingRoute.at).toBeUndefined();
+    expect(standingRoute.inspect).toBe(false);
     expect(live.prompts).toHaveLength(3);
     const before = yield* history(hostRoot);
 
@@ -1272,7 +1304,12 @@ describe("J2 — a filter and a draft across a resize (#875 R1)", () => {
       expect(cold.ensured).toEqual([]);
 
       second.terminal.end();
-      yield* running;
+      const reopened = yield* running;
+      // What went in came back out: the cold process returns the same canonical
+      // reading it was given, which is the whole of what reopening means.
+      expect(reopened).toBe(standing);
+      expect(routeOf(reopened).session).toBe(chosen);
+      expect(routeOf(reopened).draft).toBe(DRAFT);
     });
 
     // And the Journal is byte-identical: a cold process reads, it does not write.
@@ -2370,6 +2407,21 @@ function selectedEntryOn(terminal: Terminal): string | undefined {
     }
   }
   return undefined;
+}
+
+/**
+ * The canonical route one returned location carries, decoded.
+ *
+ * The screen no longer draws a location, so what a scenario protects about its
+ * route is asserted here — on the string the command publishes when it ends,
+ * field by field, against what the fixture says those fields should be.
+ */
+function routeOf(location: string | undefined): ReplRoute {
+  const decoded = decodeLocation(location ?? "");
+  if (!decoded.ok) {
+    throw decoded.error;
+  }
+  return decoded.value;
 }
 
 /** Whether this reading is a retained position rather than the live head. */
