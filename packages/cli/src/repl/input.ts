@@ -87,6 +87,24 @@ const KEYS: ReadonlyMap<string, ReplKey> = new Map([
 const NEWLINE_CHORD = "j";
 
 /**
+ * Whether this press is a shifted Tab, which is the same keystroke as Backtab.
+ *
+ * A terminal has two ways to say it. Legacy mode sends `ESC [ Z`, which the
+ * decoder reports as its own `Backtab` code. Under the progressive keyboard
+ * input this screen asks for, the same key arrives as `Tab` carrying a shift,
+ * because that protocol reports a physical key and its modifiers rather than a
+ * sequence naming the pair. Both are a reader asking to go back, so both say
+ * so here, where the spelling stops mattering.
+ *
+ * Control is not consulted: a chord is dropped before this is asked, so
+ * Control-Shift-Tab stays a chord nothing claims rather than becoming a way to
+ * traverse.
+ */
+function backward(event: Extract<InputEvent, { type: "keydown" | "keyrepeat" }>): boolean {
+  return event.code === "Tab" && event.shift === true;
+}
+
+/**
  * Normalize one decoded event.
  *
  * A pointer event carries where it landed but no target: which node is there is
@@ -107,7 +125,7 @@ export function normalize(event: InputEvent): ReplNormalized {
       // A chord nothing here claims. Dropped whole, payload included.
       return { event: undefined, at: undefined };
     }
-    const key = KEYS.get(event.code);
+    const key = KEYS.get(backward(event) ? "Backtab" : event.code);
     if (key !== undefined) {
       return { event: Object.freeze({ kind: "key", key }), at: undefined };
     }
