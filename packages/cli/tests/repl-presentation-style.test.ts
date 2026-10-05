@@ -35,6 +35,7 @@ import { initialState, NO_AGENT, viewFor } from "../src/repl/application.ts";
 import { encodeLocation } from "../src/repl/route.ts";
 import type { ReplAction, ReplLive, ReplState, ReplView } from "../src/repl/application.ts";
 import type { ReplDispatched } from "../src/repl/reconcile.ts";
+import type { ReplDrawerRef } from "../src/repl/route.ts";
 import { FOOTER_ROWS, HISTORY_LABEL, HISTORY_ROWS, NARROW } from "../src/repl/layout.ts";
 import type { ReplBounds } from "../src/repl/layout.ts";
 import { BOLD, REPL_PALETTE } from "../src/repl/presentation-style.ts";
@@ -45,6 +46,7 @@ import {
   usePresenter,
   viewportBounds,
 } from "./fixtures/repl/presentation.ts";
+import { referenceEvents } from "./fixtures/repl/reference.ts";
 import type { CellStyle, Observed, Presenter, TerminalGrid } from "./fixtures/repl/presentation.ts";
 
 const WIDE: ReplTerminalSize = { columns: 160, rows: 36 };
@@ -128,10 +130,36 @@ function projected(events: readonly DurableEvent[]): ReplModel {
  * Both roots close, so the catalog holds a real `[ok]` beside a real `[err]`.
  */
 function* settledAndFailed(): Operation<ReplModel> {
+  return projected(yield* settledAndFailedJournal());
+}
+
+/**
+ * The journal those two entries write.
+ *
+ * Returned as events as well as a model, because a reading frozen at a recorded
+ * position needs the prefix that position names — and a prefix is a slice of
+ * these bytes.
+ */
+function* settledAndFailedJournal(): Operation<DurableEvent[]> {
   const physical = new InMemoryStream();
   yield* runEntry(physical, SETTLING);
   yield* runEntry(physical, FAILING, entryInitialBindings(projected(yield* physical.readAll())));
-  return projected(yield* physical.readAll());
+  return yield* physical.readAll();
+}
+
+/**
+ * The model as it stood at one recorded position.
+ *
+ * The projector takes the position and reads the prefix that names it, which is
+ * what a reading frozen there is a reading of — a route naming a position its
+ * model was never projected at is refused, and rightly.
+ */
+function prefixAt(events: readonly DurableEvent[], marker: string): ReplModel {
+  const grown = projectRepl(events, marker);
+  if (!grown.ok) {
+    throw grown.error;
+  }
+  return grown.value;
 }
 
 /**
@@ -176,6 +204,22 @@ function opening(state: ReplState): ReplState {
       ...state.route,
       drawers: Object.freeze([Object.freeze({ kind: "history" as const })]),
     }),
+  });
+}
+
+/** The same state with one named drawer over it, as the grammar refers to them. */
+function openingDrawer(state: ReplState, drawer: ReplDrawerRef): ReplState {
+  return Object.freeze({
+    ...state,
+    route: Object.freeze({ ...state.route, drawers: Object.freeze([drawer]) }),
+  });
+}
+
+/** The same state frozen at one recorded position, the way the action freezes it. */
+function frozenAt(state: ReplState, marker: string): ReplState {
+  return Object.freeze({
+    ...state,
+    route: Object.freeze({ ...state.route, at: marker, inspect: true }),
   });
 }
 
@@ -657,11 +701,16 @@ describe("REPL presentation: what an updated frame leaves behind", () => {
     for (let y = rect.y; y < rect.y + rect.height; y += 1) {
       for (let x = rect.x; x < rect.x + rect.width; x += 1) {
         const style = presenter.grid.styleAt(x, y);
-        const surfaced =
-          style.background === REPL_PALETTE.drawerSurface ||
-          style.background === REPL_PALETTE.selectedSurface ||
-          style.background === REPL_PALETTE.historySurface ||
-          style.background === REPL_PALETTE.fieldSurface;
+        // Any of this palette's own surfaces, and never the terminal default:
+        // what the rectangle must not show is whatever is behind it.
+        const surfaces: readonly number[] = [
+          REPL_PALETTE.drawerSurface,
+          REPL_PALETTE.selectedSurface,
+          REPL_PALETTE.historySurface,
+          REPL_PALETTE.fieldSurface,
+          REPL_PALETTE.draftSurface,
+        ];
+        const surfaced = style.background !== undefined && surfaces.includes(style.background);
         if (!surfaced) {
           throw new Error(
             `the cell at ${x},${y} is inside the drawer and carries ${String(style.background)}`,
@@ -867,5 +916,132 @@ describe("REPL presentation: the panes a reading is laid out in", () => {
       }
       expect(first.y).toBe(body.y);
     }
+  });
+});
+
+describe("REPL presentation: what a drawer says it is showing", () => {
+  beforeAll(() => useTempFileCompiler());
+
+  it("D1: a binding drawer names the kind of reading and the binding", function* () {
+    const model = yield* settledAndFailed();
+    const binding = model.entries[0]?.bindings[0];
+    if (binding === undefined) {
+      throw new Error("this entry published no binding to inspect");
+    }
+    const presenter = yield* usePresenter(WIDE);
+    const state = openingDrawer(selecting(stateWith({}), "entry-1"), {
+      kind: "binding",
+      name: binding.name,
+    });
+    const observed = yield* presenter.commit(reading(state, model, NOTHING_LIVE, WIDE));
+    const { grid } = presenter;
+
+    const title = placed(observed, "drawer:open");
+    expect(textOf(grid, title)).toContain(`Binding · ${binding.name}`);
+    // A title is a heading: bold, and read rather than activated.
+    expect(inkOf(grid, title).attrs).toContain(BOLD);
+    expect(observed.targets.some((one) => one.node === observed.nodeOf("drawer:open"))).toBe(false);
+    // The value it holds reads as a value, not as the words around it.
+    const value = placed(observed, "drawer:value:0");
+    expect(inkOf(grid, value).foreground).toBe(REPL_PALETTE.output);
+  });
+
+  it("D1: a recorded answer says so, and keeps the origin it came from", function* () {
+    // The reference entry, which asks a question and is answered — so this
+    // history really holds a retained answer to inspect.
+    const model = projected(yield* referenceEvents());
+    const recorded = model.entries.flatMap((entry) => entry.scope.elicitations)[0];
+    if (recorded === undefined) {
+      throw new Error("this history retained no answer to inspect");
+    }
+    const presenter = yield* usePresenter(WIDE);
+    const state = openingDrawer(selecting(stateWith({}), "entry-1"), {
+      kind: "recorded-elicit",
+      marker: recorded.marker,
+    });
+    const observed = yield* presenter.commit(reading(state, model, NOTHING_LIVE, WIDE));
+    const { grid } = presenter;
+
+    const title = placed(observed, "drawer:open");
+    expect(textOf(grid, title)).toContain("Recorded answer · ");
+    expect(textOf(grid, title)).toContain(recorded.location.slice(0, 12));
+    expect(inkOf(grid, title).attrs).toContain(BOLD);
+
+    // What was asked is a label, what was answered is a value, and the two are
+    // not the same reading.
+    const schema = placed(observed, "drawer:schema");
+    const answered = placed(observed, "drawer:answered");
+    expect(inkOf(grid, schema).attrs).toContain(BOLD);
+    expect(inkOf(grid, answered).attrs).toContain(BOLD);
+    expect(inkOf(grid, placed(observed, "drawer:answer:0")).foreground).toBe(REPL_PALETTE.output);
+    expect(inkOf(grid, placed(observed, "drawer:schema:0")).foreground).toBe(REPL_PALETTE.muted);
+  });
+
+  it("D1: History names itself, and its rows keep the band's own accent", function* () {
+    const model = yield* settledAndFailed();
+    const presenter = yield* usePresenter(WIDE);
+    const state = opening(selecting(stateWith({}), "entry-1"));
+    const observed = yield* presenter.commit(reading(state, model, NOTHING_LIVE, WIDE));
+    const { grid } = presenter;
+
+    expect(textOf(grid, placed(observed, "drawer:open")).trim()).toBe("History");
+    const marker = model.checkpoints[0];
+    if (marker === undefined) {
+      throw new Error("this history retained no position");
+    }
+    const row = placed(observed, `drawer:marker:${marker.marker}`);
+    expect(inkOf(grid, row).foreground).toBe(REPL_PALETTE.historical);
+  });
+
+  it("D2: a drawer's actions sit on their own surface, and only one is focused", function* () {
+    const model = yield* settledAndFailed();
+    const presenter = yield* usePresenter(WIDE);
+    const state = opening(selecting(stateWith({}), "entry-1"));
+    yield* presenter.commit(reading(state, model));
+    yield* focusOn(presenter, "drawer:close");
+    const observed = yield* presenter.commit(
+      reading(state, model, NOTHING_LIVE, WIDE, focusKeyOf(presenter)),
+    );
+    const { grid } = presenter;
+
+    // Every control of this drawer carries the surface a control carries, so a
+    // reader can tell what acts from what explains before reading either.
+    for (const key of ["drawer:scroll:up", "drawer:scroll:down", "drawer:close"]) {
+      const bounds = placed(observed, key);
+      expect(grid.styleAt(bounds.x, bounds.y).background).toBe(REPL_PALETTE.draftSurface);
+    }
+    // And exactly one of them is the one a keystroke reaches.
+    expect(focusedRows(observed, grid)).toEqual(["drawer:close"]);
+    expect(textOf(grid, placed(observed, "drawer:close"))).toContain("[close]");
+  });
+
+  it("D3: a recorded position reads as history, and returning live clears it", function* () {
+    const events = yield* settledAndFailedJournal();
+    const model = projected(events);
+    const marker = model.checkpoints[0];
+    if (marker === undefined) {
+      throw new Error("this history retained no position");
+    }
+
+    const inspected = yield* scoped(function* (): Operation<CellStyle> {
+      const presenter = yield* usePresenter(WIDE);
+      const prefix = prefixAt(events, marker.marker);
+      const state = frozenAt(stateWith({}), marker.marker);
+      const observed = yield* presenter.commit(reading(state, prefix, NOTHING_LIVE, WIDE));
+      return inkOf(presenter.grid, placed(observed, "guidance"));
+    });
+    // A reading of a recorded position says so in its own accent.
+    expect(inspected.foreground).toBe(REPL_PALETTE.historical);
+
+    const live = yield* scoped(function* (): Operation<CellStyle> {
+      const presenter = yield* usePresenter(WIDE);
+      const observed = yield* presenter.commit(
+        reading(selecting(stateWith({}), "entry-1"), model, NOTHING_LIVE, WIDE),
+      );
+      return inkOf(presenter.grid, placed(observed, "guidance"));
+    });
+    // And the head reads as the head: the accent leaves with the reading.
+    expect(live.foreground).toBe(REPL_PALETTE.source);
+    expect(live.foreground).not.toBe(inspected.foreground);
   });
 });

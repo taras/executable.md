@@ -194,6 +194,13 @@ export function surfaceOf(style: ReplRowStyle): number | undefined {
   if (style.role === "field-value") {
     return REPL_PALETTE.fieldSurface;
   }
+  // Something you activate, wherever it is. A drawer's choices sit among the
+  // lines explaining what they decide, and a reader has to be able to tell the
+  // two apart before reading either — so a control carries the same surface the
+  // draft does, which is this screen's other place a keystroke does something.
+  if (style.role === "action") {
+    return REPL_PALETTE.draftSurface;
+  }
   if (style.role === "history") {
     return REPL_PALETTE.historySurface;
   }

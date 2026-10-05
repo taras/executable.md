@@ -2682,7 +2682,7 @@ function sessionRows(
         // What was asked and how far it got, which is what this row exists to
         // say. The provider's session key, the path and the stop reason are the
         // subordinate rows below it.
-        styleOf("output"),
+        turnStyle(turn),
         // A settled permission sends focus back to the turn that was waiting, so
         // this is the row that may be claimed.
         { here: focused, claim },
@@ -2897,6 +2897,23 @@ function entryStyle(entry: ReplEntry, selected: boolean): ReplRowStyle {
  * looking at the second may go to its position, and a person looking at the
  * first is watching this process.
  */
+/**
+ * What one turn's row means, read from how far the turn itself has got.
+ *
+ * The same four readings the row spells out. A turn nobody has answered yet is
+ * waiting whatever it will become; one that failed is a failure however it was
+ * phrased; and a turn that finished is the result a reader came for.
+ */
+function turnStyle(turn: ReplSessionTurn): ReplRowStyle {
+  if (turn.state === "queued" || turn.state === "active") {
+    return styleOf("waiting");
+  }
+  if (turn.status === "failed" || turn.failure !== undefined) {
+    return styleOf("failed-outcome");
+  }
+  return styleOf("output");
+}
+
 function stateOf(turn: ReplSessionTurn): string {
   if (turn.state === "queued") {
     return "queued";
@@ -3044,14 +3061,14 @@ function drawerContent(view: ReplView, width: number): DrawerContent | undefined
   let entering = false;
 
   if (open.kind === "binding") {
-    title = open.name;
+    title = drawerTitle("Binding", open.name, width);
     for (const [offset, text] of detail(open.binding.value).entries()) {
       content.push({
         described: drawerLine(`drawer:value:${offset}`, text, width, styleOf("field-value")),
       });
     }
   } else if (open.kind === "recorded-elicit") {
-    title = open.elicitation.location;
+    title = drawerTitle("Recorded answer", open.elicitation.location, width);
     // The whole of what was asked and the whole of what was answered. A drawer is
     // where the retained value is, so a summary here would leave a reader with no
     // way to see what the record actually holds.
@@ -3082,7 +3099,7 @@ function drawerContent(view: ReplView, width: number): DrawerContent | undefined
     if (request === undefined) {
       return undefined;
     }
-    title = request.title ?? "Permission";
+    title = drawerTitle("Permission", request.title, width);
     // One window over the whole of it. `options` is the provider's, and nothing
     // bounds how many it offers: a drawer that described every choice would have
     // layout clip the last ones, which are exactly the ones a person scrolled
@@ -3395,6 +3412,25 @@ function drawerContentRows(question: ReplQuestion | undefined, form: ReplFormSta
 }
 
 /** The first line of a message, for a control that is one row tall. */
+/**
+ * One drawer's title: what kind of reading it is, and which one.
+ *
+ * The kind first, because it is the fixed part and the part a reader is looking
+ * for — a drawer called `plan` says nothing about whether it holds a binding or
+ * an answer. The name is whatever the record carries, so it is elided before the
+ * word it belongs to is: losing the end of a long name costs a reader less than
+ * losing what they are looking at.
+ */
+function drawerTitle(kind: string, name: string | undefined, width: number): string {
+  if (name === undefined || name.length === 0) {
+    return kind;
+  }
+  return fitLine(
+    [{ text: `${kind} · ` }, { text: name, elide: true }],
+    width < 1 ? undefined : width,
+  );
+}
+
 function headline(message: string): string {
   const [first = ""] = message.split("\n");
   return first.length > 60 ? `${first.slice(0, 59)}…` : first;
