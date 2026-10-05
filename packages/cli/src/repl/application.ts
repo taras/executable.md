@@ -3626,7 +3626,7 @@ interface TranscriptLine {
 function transcriptLines(entry: ReplRow, width: number): readonly TranscriptLine[] {
   if (entry.kind !== "terminal") {
     return lined(
-      describeRow(entry),
+      describeRow(entry, width),
       entry.kind === "output" ? styleOf("output") : styleOf("metadata"),
     );
   }
@@ -3663,27 +3663,58 @@ function lined(text: string, style: ReplRowStyle): readonly TranscriptLine[] {
 }
 
 /**
- * One ordinary transcript row, as a line.
+ * One ordinary transcript row, as a line that fits where it will be drawn.
  *
  * A root close is not one of these: what it draws depends on whether it recorded
  * a result, so the two cannot share a single string.
+ *
+ * The rows naming *where something came from* are bounded here. A path, a
+ * component's name and a generated fragment's source are as long as somebody
+ * else made them, and this engine clips no text — so a row longer than its pane
+ * is drawn over the row beneath it, and the reader loses a line they were given
+ * to keep one nobody bounded. The fixed part of each row is kept and the
+ * unbounded part gives up its columns first, with the mark that says it was
+ * shortened; the whole of it stays in the Journal, which is where something
+ * unbounded belongs.
+ *
+ * What a document and a provider *said* is not bounded here. That text is the
+ * thing a reader came for, and shortening it would be this screen editing the
+ * content it exists to show.
  */
-function describeRow(entry: Exclude<ReplRow, { readonly kind: "terminal" }>): string {
+function describeRow(
+  entry: Exclude<ReplRow, { readonly kind: "terminal" }>,
+  width: number,
+): string {
+  const room = width < 1 ? undefined : width;
   switch (entry.kind) {
     case "entry":
-      return `entry ${entry.path}`;
+      return fitLine([{ text: "entry " }, { text: entry.path, elide: true }], room);
     case "scope":
-      return `${entry.scope} ${entry.name}`;
+      return fitLine([{ text: `${entry.scope} ` }, { text: entry.name, elide: true }], room);
     case "binding":
       return `${entry.scope} bound ${entry.names.join(", ")}`;
     case "output":
       return entry.text;
     case "generated":
+      // A fragment's source is read as the document it is: the Agent journey
+      // reads the branch a program did *not* take off this screen, which only
+      // whole source can show. Bounding it to one row is a decision about what
+      // this screen owes a reader, not a formatting choice.
       return `generated ${entry.decision}${entry.source === undefined ? "" : `: ${entry.source}`}`;
     case "elicit":
       return `answered ${entry.location} ${summarize(entry.answer)}`;
     case "agent":
-      return `agent ${entry.turn.agent} ${entry.turn.status}`;
+      // The status stays whatever the name costs: a row that said which agent
+      // and not how it ended would have kept the part nobody bounded and lost
+      // the part this row exists to carry.
+      return fitLine(
+        [
+          { text: "agent " },
+          { text: entry.turn.agent, elide: true },
+          { text: ` ${entry.turn.status}`, keep: true },
+        ],
+        room,
+      );
     case "effect":
       return `${entry.type} ${entry.status}`;
   }

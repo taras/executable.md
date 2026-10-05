@@ -21,9 +21,10 @@
 
 import { beforeAll, describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { collect, inlineSource, useTempFileCompiler } from "@executablemd/core";
+import { collect, inlineSource, retainedSource, useTempFileCompiler } from "@executablemd/core";
 import { executeInstalled } from "@executablemd/core/host";
 import { InMemoryStream } from "@executablemd/durable-streams";
+import { fileURLToPath } from "node:url";
 import type { DurableEvent, DurableStream, Json } from "@executablemd/durable-streams";
 import { scoped } from "effection";
 import type { Operation } from "effection";
@@ -113,6 +114,37 @@ function* runEntry(
     // How far an entry got is the point: a failing root closes `err`, and that
     // close is the record the catalog reads its outcome from.
   }
+}
+
+/**
+ * The same entry submitted the way the command submits a host file: by its path.
+ *
+ * The path is what makes this fixture worth having. A document submitted from
+ * the filesystem is recorded by where it came from, and in this checkout that
+ * is longer than any pane the frame has room for — which is the metadata class
+ * the gallery caught wrapping over the row beneath it.
+ */
+function* runHostEntry(physical: DurableStream, path: string, source: string): Operation<void> {
+  const view = new EntrySegmentStream(physical);
+  try {
+    const execution = yield* executeInstalled(
+      { ...retainedSource(path, source), stream: view },
+      [],
+    );
+    yield* collect(execution);
+  } catch {
+    // As above: how far it got is the record the catalog reads.
+  }
+}
+
+/** This file's own reference entry, by its absolute path in this checkout. */
+const HOST_ENTRY_PATH = fileURLToPath(new URL("./fixtures/repl/entry.md", import.meta.url));
+
+/** One real entry whose own metadata row is wider than the pane holding it. */
+function* submittedByPath(): Operation<ReplModel> {
+  const physical = new InMemoryStream();
+  yield* runHostEntry(physical, HOST_ENTRY_PATH, SETTLING);
+  return projected(yield* physical.readAll());
 }
 
 /** The projected model, or the failure that stopped it. */
@@ -1048,5 +1080,80 @@ describe("REPL presentation: what a drawer says it is showing", () => {
     // And the head reads as the head: the accent leaves with the reading.
     expect(live.foreground).toBe(REPL_PALETTE.source);
     expect(live.foreground).not.toBe(inspected.foreground);
+  });
+});
+
+describe("REPL presentation: a row stays inside the pane it was measured for", () => {
+  beforeAll(() => useTempFileCompiler());
+
+  it("R3: long metadata is fitted, and the row beneath it is its own", function* () {
+    // An entry submitted by its host path, which in this checkout is longer
+    // than any pane the frame has room for. The engine clips nothing, so a row
+    // written unbounded wraps over the cells of the row beneath it: that is the
+    // artifact the complete gallery caught in the Transcript pane.
+    const model = yield* submittedByPath();
+    let exercised = false;
+
+    for (const size of [WIDE, MEDIUM]) {
+      const presenter = yield* usePresenter(size);
+      const observed = yield* presenter.commit(reading(stateWith({}), model, NOTHING_LIVE, size));
+      const { grid } = presenter;
+
+      const inside = observed.regionOf("box:transcript:content");
+      if (inside === undefined) {
+        throw new Error(`the ${size.columns}x${size.rows} frame published no transcript interior`);
+      }
+
+      const lines = observed.keys.filter((key) => key.startsWith("line:"));
+      const recordOf = (key: string) => model.transcript[Number(key.split(":")[1])];
+
+      // Every transcript row holds what its own node contributed and nothing
+      // else. This is the whole discrimination: an unbounded row leaves its
+      // tail on the cells of the row beneath it, so the row beneath stops
+      // reading as itself before anything else goes wrong.
+      for (const key of lines) {
+        const bounds = placed(observed, key);
+        const drawn = textOf(grid, bounds).trimEnd();
+        const contributed = (observed.cells.get(key) ?? "").trimEnd();
+        expect([size.columns, key, drawn]).toEqual([size.columns, key, contributed]);
+      }
+
+      // The rows that name where something came from: an entry's path, a
+      // scope's name, an agent's identity. What a document or a provider
+      // *said* stays unbounded on purpose — that text is the thing a reader
+      // came for.
+      //
+      // A generated fragment's source is the one member of this class left
+      // unbounded. An accepted journey reads the branch a program did not take
+      // off this screen, which only whole source can show, so bounding it is a
+      // decision about what the screen owes a reader rather than a formatting
+      // one; it is reported with this correction rather than taken.
+      const bounded = new Set(["entry", "scope", "agent"]);
+      const metadata = lines.filter((key) => {
+        const record = recordOf(key);
+        return record !== undefined && bounded.has(record.kind);
+      });
+      expect(metadata.length).toBeGreaterThan(0);
+
+      for (const key of metadata) {
+        const bounds = placed(observed, key);
+        // As wide as the inside of its pane, and no wider.
+        expect([key, bounds.width]).toEqual([key, inside.width]);
+        // And ending where the interior ends, so nothing of it reaches the
+        // pane beside it.
+        expect([size.columns, key, bounds.x + bounds.width]).toEqual([
+          size.columns,
+          key,
+          inside.x + inside.width,
+        ]);
+        if ((observed.cells.get(key) ?? "").length >= inside.width) {
+          exercised = true;
+        }
+      }
+    }
+
+    // One of those rows really did fill its pane, or this proves nothing: the
+    // case needs a row that would overflow if nothing bounded it.
+    expect(exercised).toBe(true);
   });
 });
