@@ -941,9 +941,14 @@ describe("REPL presentation: what a drawer says it is showing", () => {
     // A title is a heading: bold, and read rather than activated.
     expect(inkOf(grid, title).attrs).toContain(BOLD);
     expect(observed.targets.some((one) => one.node === observed.nodeOf("drawer:open"))).toBe(false);
-    // The value it holds reads as a value, not as the words around it.
+    // The value it holds reads as a value, not as the words around it — and it
+    // sits on the surface an editable value sits on, across the whole row the
+    // drawer measured for it, so what holds a value is visible before it is read.
     const value = placed(observed, "drawer:value:0");
     expect(inkOf(grid, value).foreground).toBe(REPL_PALETTE.output);
+    for (let x = value.x; x < value.x + value.width; x += 1) {
+      expect(grid.styleAt(x, value.y).background).toBe(REPL_PALETTE.fieldSurface);
+    }
   });
 
   it("D1: a recorded answer says so, and keeps the origin it came from", function* () {

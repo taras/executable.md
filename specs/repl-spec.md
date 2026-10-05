@@ -361,7 +361,7 @@ selected entry, the conversation filter and the draft.
 
 | terminal | what it shows |
 | --- | --- |
-| `160x36` and larger | Sessions/Entries sidebar, transcript, bindings and recorded questions, the drawer layer, and a fixed full-width footer holding the contextual action row, five History rows and the draft |
+| `160x36` and larger | a Sessions/Entries sidebar, a Transcript pane and a Bindings pane — each with its own surface and the edge that starts it — the drawer layer, and a fixed full-width footer holding the contextual action row, five History rows and the draft |
 | `120x30` and larger | the same, with a narrower sidebar and inspection column |
 | `72x20` and larger | one routed surface — the one the route selected — under the two surface controls, with the same drawer and footer |
 | smaller than `72x20` | a refusal saying the minimum, that growing the window recovers, and that Escape leaves; it shows nothing else, and offers no control to point at |
@@ -387,20 +387,23 @@ can see, and the catalog moves as far as it has to for that entry to be showing.
 Which entry and which scope you had selected does not change, and a wider window
 shows the record itself again.
 
-The location is drawn in full wherever there is room for it. A narrow frame
-draws it in at most three rows and says how much it is not showing: there, the
-location shares one region with every control on the screen, and a draft long
-enough to fill that region would leave you with a URL and no way to do anything
-else. The command still prints the whole location when it ends, and a wider
-window still shows all of it. The History band is five rows at every size; when the labels of
-several positions cannot all fit, they share a label and every position keeps its
-own identity.
+The location is not on the screen. It is the longest thing this command could
+draw and the one thing a reader never has to act on while they are reading, so no
+row carries it and none is kept for it at any size. The command prints the whole
+location when it ends, which is where it is useful: that is the string you pass
+back to reopen exactly what you were looking at. Source text, provider output and
+an event's own origin are content and are shown as written, URLs included.
+
+The History band is five rows at every size and says which band it is on the
+first of them; when the labels of several positions cannot all fit, they share a
+label and every position keeps its own identity.
 
 The footer is seven rows at every size, in one order: the contextual status and
 action row, then the five History rows, then the draft. The draft owns the last of
-them and shares it with nothing, so what a person is typing stays visible however
-many controls a state happens to offer — and the drawer layer sits above the
-footer rather than across it, so a question and the draft are readable at once.
+them, says `Draft:` so the row below a reading is not read as one more line of it,
+and shares it with nothing — so what a person is typing stays visible however many
+controls a state happens to offer. The drawer layer sits above the footer rather
+than across it, so a question and the draft are readable at once.
 
 The action row holds the controls that are available now, side by side, each as
 wide as its own label so a pointer on one reaches that one. Order is priority: a
@@ -446,12 +449,12 @@ is the one moment a person's keystrokes reach nothing.
 ## What the screen says the execution is doing
 
 One row says it, and it says the state first. That row is the contextual guidance
-above the surface, beside the canonical location — not a new row, and not one of
-the footer's. The footer is unchanged and still holds exactly what it held: its
+at the top of the surface being read — not a new row, and not one of the
+footer's. The footer is unchanged and still holds exactly what it held: its
 action row, the five History rows, and the draft.
 
-The state comes first because the row is as wide as the terminal and the terminal
-decides where it stops. A sentence cut after "Entry 1 running" still told somebody
+The state comes first because the row is as wide as the region it is drawn in and
+that region decides where it stops. A sentence cut after "Entry 1 running" still told somebody
 the thing they could not have worked out; one cut after the key guidance told them
 what the keys do and left them pressing Enter at an entry that cannot accept it.
 What follows the state is what the state means for the keys, then what the focused
@@ -506,6 +509,31 @@ on the way to a frame from the resolved view; they are in no location member and
 no record, and replay neither produces nor consumes them. A cold reopen shows the
 same state because the file and the location say the same things, not because
 anything stored what a previous process was displaying.
+
+## What the emphasis says
+
+Every row of this screen is drawn as the thing it is. What a run produced stands
+ahead of the facts about the events that produced it; an entry that closed `ok`,
+one that closed `err` and one still running are three different readings rather
+than three spellings of the same one; a question nobody has answered yet reads as
+waiting; and a retained position reads as history until you return to the head.
+A drawer says which kind of reading it is showing before it says which one — a
+binding, a recorded answer, a permission request — and separates what a field is
+called from what it means from the value you are editing. Whatever acts carries
+the same surface wherever it is, in a drawer or in the footer, so you can tell
+what you can press from what you can only read.
+
+Two of these are independent and stay that way. The row you have **selected**
+keeps its own surface for its whole measured width, and keyboard **focus** changes
+only the colour and weight of the row your next keystroke reaches — so moving
+focus never takes the selection off what you were reading, and both are visible at
+once.
+
+A reading of this screen with the colour thrown away loses nothing it needs. An
+outcome is spelled `[ok]` or `[err]`, a selected row keeps its `*`, a focused
+control keeps its `>`, the draft keeps its `>>`, and every state the emphasis
+distinguishes is also said in words. The emphasis is how the screen is read
+quickly; the text is how it is read at all.
 
 ## Sequential entries, and nothing else
 
