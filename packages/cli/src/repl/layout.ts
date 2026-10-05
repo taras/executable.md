@@ -149,6 +149,17 @@ export interface ReplLayoutManifest {
   readonly viewports: readonly ReplViewportSlot[];
   readonly actions: ReplActionSlot | undefined;
   readonly regions: readonly { readonly region: ReplRegion; readonly id: string }[];
+  /**
+   * The border-free inside of each bordered pane, for the rows that go in it.
+   *
+   * A pane's own edges are part of the pane and not part of the room inside it,
+   * so a row written to the outer bound would be two columns too wide — and a
+   * row too wide for its column widens that column and publishes a hit box
+   * reaching into the next one. Separate from `regions`, which keeps answering
+   * for the pane itself: where a pane landed and how much room it has inside are
+   * two different questions.
+   */
+  readonly contents: readonly { readonly region: ReplRegion; readonly id: string }[];
   /** The History band, which comes from the model rather than from a node. */
   readonly history: ReplHistoryBand;
 }
@@ -336,8 +347,21 @@ function groupedMarkers(
   return Object.freeze(placed);
 }
 
+/**
+ * What the band is called, on the first of its own rows.
+ *
+ * On the band rather than above it, because the footer is seven rows and all
+ * five of these are the band's: a label given a row of its own would be a row
+ * taken from the positions it names. It is read, not activated — nothing here
+ * becomes a control.
+ */
+export const HISTORY_LABEL = "History ·";
+
 function bandRows(markers: readonly ReplPlacedMarker[], columns: number): string[] {
   const rows = new Array<string>(HISTORY_ROWS).fill("");
+  // The label occupies the first row before any position does, so a position
+  // that will not fit beside it moves on like any other.
+  rows[0] = HISTORY_LABEL.length <= columns ? HISTORY_LABEL : "";
   const labels: string[] = [];
   for (const marker of markers) {
     if (!labels.includes(marker.label)) {
@@ -411,9 +435,59 @@ export function rootProps(size: ReplTerminalSize): ReplBoxProps {
   };
 }
 
-/** The body: whatever the footer does not take, in one left-to-right flow. */
-export function bodyProps(): ReplBoxProps {
-  return { layout: { width: grow(), height: grow(), direction: "ltr" } };
+/**
+ * The body: whatever the footer does not take, in one left-to-right flow.
+ *
+ * `edged` closes the reading along the bottom, which is what separates it from
+ * the footer below. The edge is a real row the engine takes out of the body, so
+ * what a region has left to hold rows is measured with it rather than guessed
+ * around it. A profile with no pane edges takes none here either, so the one
+ * screen that gives everything to a single outlet keeps every row it had.
+ */
+export function bodyProps(edged: boolean): ReplBoxProps {
+  const layout = { width: grow(), height: grow(), direction: "ltr" as const };
+  if (!edged) {
+    return { layout };
+  }
+  return { layout, border: { color: terminalColour(REPL_PALETTE.edge), bottom: 1 } };
+}
+
+/**
+ * A pane with its own surface and the edge that starts it.
+ *
+ * The column keeps the width the product gives it, so the outer constraints are
+ * unchanged and the edge comes out of the inside. What is left is the content
+ * box below, which is the only honest answer to how wide a row in this pane may
+ * be.
+ *
+ * One edge, on the side the pane begins at, so two panes side by side are parted
+ * by a single rule rather than by each one's own: a reader sees where a column
+ * starts, and the column beside it does not pay a second cell to say the same
+ * thing twice.
+ */
+export function paneColumnProps(width: number | undefined, surface: number): ReplBoxProps {
+  return {
+    ...columnProps(width),
+    bg: terminalColour(surface),
+    border: { color: terminalColour(REPL_PALETTE.edge), left: 1 },
+  };
+}
+
+/** A pane with a surface and no edge of its own, like the one at the margin. */
+export function paneProps(width: number | undefined, surface: number): ReplBoxProps {
+  return { ...columnProps(width), bg: terminalColour(surface) };
+}
+
+/**
+ * The inside of a bordered pane, which is what its rows are measured in.
+ *
+ * Border-free and stated as a box of its own, because a measured bound is the
+ * only thing that can say how much room an edge left — and subtracting a border
+ * count in the caller would be a second answer to a question the engine has
+ * already answered.
+ */
+export function paneContentProps(): ReplBoxProps {
+  return { layout: { width: grow(), height: grow(), direction: "ttb" } };
 }
 
 /**

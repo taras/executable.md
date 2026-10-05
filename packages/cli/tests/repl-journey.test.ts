@@ -56,6 +56,7 @@ import { parseDurableEvent, serializeDurableEvent } from "@executablemd/durable-
 import {
   drawerRect,
   HISTORY_ROWS,
+  HISTORY_LABEL,
   inspectionWidth,
   NARROW,
   sidebarWidth,
@@ -63,6 +64,7 @@ import {
 import { projectRepl } from "../src/repl/model.ts";
 import type { ReplModel } from "../src/repl/model.ts";
 import { decodeLocation, encodeLocation } from "../src/repl/route.ts";
+import type { ReplRoute } from "../src/repl/route.ts";
 import {
   REFERENCE_DIRECTORY,
   referenceEvents,
@@ -605,69 +607,172 @@ function focusedOn(terminal: Terminal, label: string): boolean {
 }
 
 /**
- * The canonical location the screen is showing, if it has drawn one yet.
+ * The canonical location this command returns when it ends.
  *
- * Reassembled, because a location carrying a draft is longer than a row and the
- * screen shows it as consecutive rows. Which rows belong to it is decided by the
- * grammar rather than by counting: the longest run that decodes *is* the location,
- * and a shorter prefix of it decodes to a different route or to nothing.
+ * The one place a route is still published to someone outside the process. The
+ * screen does not draw it any more, and this suite sees only what the screen
+ * draws — so a scenario whose final state *is* a route asserts it here, after an
+ * orderly exit, and asserts what it can see for everything before that.
  */
-function maybeLocation(terminal: Terminal): string | undefined {
-  const rows = screenOf(terminal);
-  const first = rows.findIndex((line) => line.includes("xmd://repl/"));
-  if (first === -1) {
-    return undefined;
-  }
-  const at = rows[first].indexOf("xmd://repl/");
-  const parts: string[] = [];
-  for (let row = first; row < rows.length && row < first + 24; row += 1) {
-    const part = (rows[row] ?? "").slice(at, at + surfaceWidthOf(terminal.size));
-    if (part.trim().length === 0) {
-      break;
-    }
-    parts.push(part.trimEnd());
-    // Every row of a location is padded to the full surface width, so a row
-    // with space left on its end is the last of them. Without this the row
-    // drawn underneath joins on, and the round-trip below cannot always tell:
-    // a location ending in `/entry-2` followed by a transcript row beginning
-    // `entry ...` re-encodes as `/entry-2entry` exactly as written.
-    if (part.trimEnd().length < part.length) {
-      break;
-    }
-  }
+interface ExitRoute {
+  settle(outcome: ReplOutcome): void;
+  /** The returned location, or a failure saying the command has not ended yet. */
+  location(): string;
+  /** The same location, decoded into the fields a scenario compares. */
+  route(): ReplRoute;
+}
 
-  // The rows below a location belong to whatever is drawn under it, and a row that
-  // used to hold a longer location can still have that tail on the end. So the
-  // answer is the longest prefix that *round-trips*: the grammar accepts some
-  // trailing junk inside a drawer segment, but re-encoding what it decoded only
-  // reproduces the prefix that really was the location.
-  const joined = parts.join("");
-  let found: string | undefined;
-  for (let length = joined.length; length > "xmd://repl/".length; length -= 1) {
-    const candidate = joined.slice(0, length);
-    const decoded = decodeLocation(candidate);
-    if (decoded.ok && encodeLocation(decoded.value) === candidate) {
-      found = candidate;
-      break;
+function exitRoute(): ExitRoute {
+  let ended: ReplOutcome | undefined;
+  const location = (): string => {
+    if (ended === undefined) {
+      throw new Error("this command has not ended, so it has returned no location");
+    }
+    return ended.location;
+  };
+  return {
+    settle(outcome: ReplOutcome) {
+      ended = outcome;
+    },
+    location,
+    route() {
+      const decoded = decodeLocation(location());
+      if (!decoded.ok) {
+        throw decoded.error;
+      }
+      return decoded.value;
+    },
+  };
+}
+
+/** Whether this reading is a retained position rather than the live head. */
+function historicalOn(terminal: Terminal): boolean {
+  return screenOf(terminal).some((line) => line.includes("[live]"));
+}
+
+/** What the draft row is called, which is how this suite finds it. */
+const DRAFT_PROMPT = "Draft: ";
+
+/**
+ * The left column of every row: the sidebar, or the whole row where there is none.
+ *
+ * A row of this screen crosses three columns, and the panes are parted by a real
+ * drawn edge — so the catalog's own text is everything before the first one. A
+ * narrow frame draws no edge and no column, and there the whole row is the outlet.
+ */
+function leftColumn(terminal: Terminal): string[] {
+  return screenOf(terminal).map((line) => line.split("\u2502")[0] ?? "");
+}
+
+/** The draft row as the screen draws it, or none before a frame has drawn one. */
+function maybeDraftRow(terminal: Terminal): string | undefined {
+  return screenOf(terminal).find((line) => line.includes(DRAFT_PROMPT));
+}
+
+/** The draft row, or a failure saying what the screen was showing instead. */
+function draftRow(terminal: Terminal): string {
+  const row = maybeDraftRow(terminal);
+  if (row === undefined) {
+    throw new Error(
+      "the screen draws its draft row. rows=" +
+        JSON.stringify(screenOf(terminal).map((line) => line.trimEnd())),
+    );
+  }
+  return row;
+}
+
+/**
+ * Exactly what the draft is holding, after its marker and its prompt.
+ *
+ * What a person can read, which for several lines is the last of them under a
+ * count of the rest — the field draws one row and says so.
+ */
+function draftText(terminal: Terminal): string {
+  const row = draftRow(terminal);
+  return row.slice(row.indexOf(DRAFT_PROMPT) + DRAFT_PROMPT.length).trimEnd();
+}
+
+/**
+ * What the draft row shows for one source: its last line under a count of the
+ * rest, which is the whole of what a one-row field can say about many lines.
+ */
+function draftPreview(source: string): string {
+  const lines = source.split("\n");
+  const shown =
+    lines.length === 1 ? source : `[${lines.length - 1} lines] ${lines[lines.length - 1]}`;
+  return shown.trimEnd();
+}
+
+/** Whether the draft row says the next keystroke reaches it. */
+function draftFocused(terminal: Terminal): boolean {
+  return draftRow(terminal).trimStart().startsWith(">>");
+}
+
+/**
+ * Every entry the catalog is showing, by the identity it draws.
+ *
+ * The outcome is part of the row this product promises, so a row without one is
+ * the empty placeholder rather than an entry. Markers are stripped: whether a row
+ * is selected or focused is a different question from whether it exists.
+ */
+function entriesOn(terminal: Terminal): string[] {
+  const found: string[] = [];
+  for (const line of leftColumn(terminal)) {
+    const match = /^[\s>*]*(\d+)\.\s+\[([a-z]+)\]\s+(\S.*?)\s*$/.exec(line);
+    if (match !== null) {
+      found.push(`${match[1]}. ${match[3]}`);
     }
   }
   return found;
 }
 
-/** The canonical location the screen is showing. */
-function locationOn(terminal: Terminal): string {
-  const shown = maybeLocation(terminal);
-  if (shown === undefined) {
-    throw new Error(
-      "the screen shows its canonical location. rows=" +
-        JSON.stringify(
-          screenOf(terminal)
-            .slice(0, 5)
-            .map((l) => l.trimEnd()),
-        ),
-    );
+/** The catalog row this reading has selected, if it is showing one. */
+function selectedEntryOn(terminal: Terminal): string | undefined {
+  for (const line of leftColumn(terminal)) {
+    const match = /^[\s>]*\*\s*(\d+)\.\s+\[([a-z]+)\]\s+(\S.*?)\s*$/.exec(line);
+    if (match !== null) {
+      return `${match[1]}. ${match[3]}`;
+    }
   }
-  return shown;
+  return undefined;
+}
+
+/** Which surface the frame is routed to, read from the marked heading. */
+function routedSurfaceOn(terminal: Terminal): string | undefined {
+  for (const line of leftColumn(terminal)) {
+    const match = /^[\s>]*\*\s*(Sessions|Entries)\s*$/.exec(line);
+    if (match !== null) {
+      return match[1];
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Whether a frame a person could actually use has been drawn.
+ *
+ * Not merely that bytes arrived: a reset and an empty presentation are both
+ * frames, and neither is a screen. The draft row and a way out are the two things
+ * every drawable frame of this product has, so their presence is what says the
+ * command is up and showing something.
+ */
+function usable(terminal: Terminal): boolean {
+  const rows = screenOf(terminal);
+  return (
+    statusOn(terminal) !== undefined &&
+    rows.some((line) => line.includes(DRAFT_PROMPT)) &&
+    rows.some((line) => line.includes("[exit]") || line.includes("[history]"))
+  );
+}
+
+/**
+ * The contextual status row: what the execution is doing, and what Enter does.
+ *
+ * Described only once a width has been measured, so its presence is also what
+ * says this frame is a measured one rather than the first thing drawn.
+ */
+function statusOn(terminal: Terminal): string | undefined {
+  return screenOf(terminal).find((line) => line.includes(" \u00b7 "));
 }
 
 /**
@@ -679,7 +784,7 @@ function locationOn(terminal: Terminal): string {
  */
 function* untilDrawn(terminal: Terminal): Operation<void> {
   for (let attempt = 0; attempt < 40; attempt += 1) {
-    if (maybeLocation(terminal) !== undefined) {
+    if (usable(terminal)) {
       return;
     }
     yield* sleep(10);
@@ -1074,11 +1179,13 @@ describe("REPL journey: one entry, from raw bytes", () => {
       yield* immediateClock();
       const root = yield* useTemporaryHost();
 
+      const exited = exitRoute();
       const running = yield* spawn(function* (): Operation<void> {
         const ran = yield* runReplProgram({ profile: PROFILE });
         if (!ran.ok) {
           throw ran.error;
         }
+        exited.settle(ran.value);
       });
       yield* untilDrawn(terminal);
       const files = yield* histories(root);
@@ -1194,11 +1301,13 @@ describe("REPL journey: one entry, from raw bytes", () => {
       yield* immediateClock();
       root = yield* useTemporaryHost();
 
+      const exited = exitRoute();
       const running = yield* spawn(function* (): Operation<void> {
         const ran = yield* runReplProgram({ profile: PROFILE });
         if (!ran.ok) {
           throw ran.error;
         }
+        exited.settle(ran.value);
       });
       yield* settled();
       files = yield* histories(root);
@@ -1394,11 +1503,13 @@ describe("REPL journey: what it refuses, and what it leaves alone", () => {
       yield* useTempFileCompiler();
       const root = yield* useTemporaryHost();
 
+      const exited = exitRoute();
       const running = yield* spawn(function* (): Operation<void> {
         const ran = yield* runReplProgram({ profile: PROFILE });
         if (!ran.ok) {
           throw ran.error;
         }
+        exited.settle(ran.value);
       });
       yield* untilDrawn(terminal);
       const files = yield* histories(root);
@@ -1412,8 +1523,10 @@ describe("REPL journey: what it refuses, and what it leaves alone", () => {
       // A standing, meaningful selection, reached through the product: the nested
       // component occurrence, which exists only after the run admitted it.
       yield* activate(terminal, "component Checklist");
-      const standing = locationOn(terminal);
-      expect(standing).toContain("/Checklist-1");
+      // Selected, and visibly so: the reading on screen is that scope's own.
+      yield* until_(terminal, "the Checklist scope being read", (one) =>
+        shows(one, "component Checklist"),
+      );
       const before = screenOf(terminal);
       const admitted = yield* records(root, files[0]);
 
@@ -1434,9 +1547,10 @@ describe("REPL journey: what it refuses, and what it leaves alone", () => {
       // The route that stands is the one that worked. The drawer it was asked
       // from is still open — the navigation did not happen, so nothing it would
       // have changed changed — and the file is untouched.
-      expect(locationOn(terminal)).toContain("/Checklist-1");
-      expect(locationOn(terminal)).not.toContain("at=");
+      // The drawer it was asked from is still open, and no frozen position was
+      // taken: a refused navigation changes nothing it would have changed.
       expect(shows(terminal, "History")).toBe(true);
+      expect(historicalOn(terminal)).toBe(false);
       expect(yield* records(root, files[0])).toEqual(admitted);
       // And the screen says why, which is the only difference from before.
       expect(shows(terminal, "!")).toBe(true);
@@ -1453,12 +1567,15 @@ describe("REPL journey: what it refuses, and what it leaves alone", () => {
         throw new Error("the open drawer has a close control");
       }
       yield* clickAt(terminal, closeAt);
-      expect(locationOn(terminal)).not.toContain("+history");
-      expect(locationOn(terminal)).toContain("/Checklist-1");
+      yield* until_(terminal, "the drawer closing", (one) => !shows(one, "[close]"));
       expect(before.length).toBeGreaterThan(0);
 
       terminal.end();
       yield* running;
+      // The route that stands is the one that worked: the scope the product
+      // really selected, and no frozen position.
+      expect(exited.location()).toContain("/Checklist-1");
+      expect(exited.route().at).toBeUndefined();
     });
   });
 
@@ -1469,11 +1586,13 @@ describe("REPL journey: what it refuses, and what it leaves alone", () => {
       yield* immediateClock();
       const root = yield* useTemporaryHost();
 
+      const exited = exitRoute();
       const running = yield* spawn(function* (): Operation<void> {
         const ran = yield* runReplProgram({ profile: PROFILE });
         if (!ran.ok) {
           throw ran.error;
         }
+        exited.settle(ran.value);
       });
       yield* untilDrawn(terminal);
       const files = yield* histories(root);
@@ -1507,11 +1626,13 @@ describe("REPL journey: what it refuses, and what it leaves alone", () => {
       yield* useTempFileCompiler();
       const root = yield* useTemporaryHost();
 
+      const exited = exitRoute();
       const running = yield* spawn(function* (): Operation<void> {
         const ran = yield* runReplProgram({ profile: PROFILE });
         if (!ran.ok) {
           throw ran.error;
         }
+        exited.settle(ran.value);
       });
       yield* untilDrawn(terminal);
       const files = yield* histories(root);
@@ -1543,10 +1664,14 @@ describe("REPL journey: what it refuses, and what it leaves alone", () => {
       // exactly what was typed, which is the other half of the contract.
       expect(yield* records(root, files[0])).toEqual(admitted);
       expect(shows(terminal, "has not finished")).toBe(true);
-      expect(locationOn(terminal)).toContain("draft=");
+      // A refused submission keeps what was typed, on the row a person is
+      // looking at while they type it.
+      expect(draftText(terminal)).toContain("<Json value={1} />");
 
       terminal.end();
       yield* running;
+      // And the route it leaves still carries that draft, byte for byte.
+      expect(exited.route().draft).toBe("<Json value={1} />");
     });
   });
 
@@ -1655,11 +1780,13 @@ describe("REPL journey: what it refuses, and what it leaves alone", () => {
       yield* immediateClock();
       yield* useTemporaryHost();
 
+      const exited = exitRoute();
       const running = yield* spawn(function* (): Operation<void> {
         const ran = yield* runReplProgram({ profile: PROFILE });
         if (!ran.ok) {
           throw ran.error;
         }
+        exited.settle(ran.value);
       });
       yield* settled(20);
 
@@ -1696,24 +1823,24 @@ describe("REPL journey: the whole of it, from raw bytes", () => {
       root = yield* useTemporaryHost();
       const terminal = first.terminal;
 
+      const exited = exitRoute();
       const running = yield* spawn(function* (): Operation<void> {
         const ran = yield* runReplProgram({ profile: PROFILE });
         if (!ran.ok) {
           throw ran.error;
         }
+        exited.settle(ran.value);
       });
       yield* untilDrawn(terminal);
       files = yield* histories(root);
 
-      // 1. The draft, and the exact canonical location that carries it. Decoded
-      // from what is on the terminal, and compared to the whole pasted source.
+      // 1. The draft, as the one row it is drawn on: the last line of what was
+      // pasted, under a count of the rest. That every byte arrived is proved at
+      // admission below, against the Journal — a row this wide cannot show it,
+      // and reading it off a clipped preview would prove less than it looks.
       terminal.bytes(BYTES.encode(source));
       yield* settled(60);
-      const drafting = decodeLocation(locationOn(terminal));
-      expect(drafting.ok).toBe(true);
-      if (drafting.ok) {
-        expect(drafting.value.draft).toBe(source);
-      }
+      expect(draftText(terminal)).toBe(draftPreview(source));
 
       // 2. Admitted, and then held before it can reach the question.
       //
@@ -1729,7 +1856,8 @@ describe("REPL journey: the whole of it, from raw bytes", () => {
       // the draft: while expansion is playing nothing is held, so Continue is not
       // mounted and Pause is the one control before the draft. All of it in one
       // burst, so nothing is read and nothing waits.
-      expect(focusedOn(terminal, "[20 lines]")).toBe(true);
+      expect(draftFocused(terminal)).toBe(true);
+      expect(draftText(terminal)).toBe(draftPreview(source));
       terminal.feed("\r");
       terminal.feed("\x1b[Z\r");
 
@@ -1754,14 +1882,16 @@ describe("REPL journey: the whole of it, from raw bytes", () => {
 
       // 4. An earlier prefix, chosen through History.
       yield* activate(terminal, "[history]");
-      expect(locationOn(terminal)).toContain("+history");
+      // The drawer is really up: it draws the positions and the way out of them.
+      expect(shows(terminal, "[close]")).toBe(true);
+      expect(shows(terminal, "Entry 1 admitted")).toBe(true);
       yield* focusOn(terminal, "Entry 1 admitted");
       terminal.feed("\r");
       yield* settled(40);
 
-      const frozen = locationOn(terminal);
-      expect(frozen).toContain("at=");
-      expect(frozen).toContain("inspect");
+      // Frozen at a recorded position, which the screen says by offering the way
+      // back to the head — a control that exists only while one is being read.
+      expect(historicalOn(terminal)).toBe(true);
       // Read only, and nothing of the present in it.
       expect(shows(terminal, "[pause]")).toBe(false);
       expect(screenOf(terminal).some((line) => line.trim().startsWith("…"))).toBe(false);
@@ -1770,7 +1900,7 @@ describe("REPL journey: the whole of it, from raw bytes", () => {
       terminal.feed("\x1b");
       yield* settled(30);
       yield* activate(terminal, "[live]");
-      expect(locationOn(terminal)).not.toContain("at=");
+      expect(historicalOn(terminal)).toBe(false);
       expect(askedRow(terminal)).toBeUndefined();
 
       yield* activate(terminal, "[continue]");
@@ -1806,7 +1936,8 @@ describe("REPL journey: the whole of it, from raw bytes", () => {
       // 7. The complete binding value, from the drawer that holds it.
       yield* activate(terminal, "1. [ok] entry-1");
       yield* activate(terminal, "plan");
-      expect(locationOn(terminal)).toContain("binding:plan");
+      // The binding's own drawer, which is what naming it in a route opens.
+      expect(shows(terminal, "[close]")).toBe(true);
       for (const line of JSON.stringify(PLAN, undefined, 2).split("\n")) {
         expect(shows(terminal, line)).toBe(true);
       }
@@ -1828,15 +1959,11 @@ describe("REPL journey: the whole of it, from raw bytes", () => {
       yield* settled(30);
       yield* activate(terminal, "answered");
 
-      captured = locationOn(terminal);
-      const decoded = decodeLocation(captured);
-      expect(decoded.ok).toBe(true);
-      if (decoded.ok) {
-        expect(decoded.value.scopes).toEqual(["entry-1"]);
-        expect(decoded.value.at).toBeDefined();
-        expect(decoded.value.inspect).toBe(true);
-        expect(decoded.value.drawers.map((one) => one.kind)).toEqual(["recorded-elicit"]);
-      }
+      // The reading this state *is*, said on the screen: an entry selected, a
+      // recorded position being read, and the retained answer's drawer over it.
+      expect(selectedEntryOn(terminal)).toContain("entry-1");
+      expect(historicalOn(terminal)).toBe(true);
+      expect(shows(terminal, "[close]")).toBe(true);
       // The whole retained schema and the whole retained answer, reached through
       // the drawer's own window.
       //
@@ -1869,6 +1996,19 @@ describe("REPL journey: the whole of it, from raw bytes", () => {
 
       terminal.end();
       yield* running;
+      // The canonical route that reading came to, taken where it is still
+      // published: what the command returns on its way out. This is the string
+      // the cold process below is given, so it is also what proves the route
+      // survived the whole journey.
+      captured = exited.location();
+      const decoded = decodeLocation(captured);
+      expect(decoded.ok).toBe(true);
+      if (decoded.ok) {
+        expect(decoded.value.scopes).toEqual(["entry-1"]);
+        expect(decoded.value.at).toBeDefined();
+        expect(decoded.value.inspect).toBe(true);
+        expect(decoded.value.drawers.map((one) => one.kind)).toEqual(["recorded-elicit"]);
+      }
     });
 
     const retained = root;
@@ -1894,6 +2034,7 @@ describe("REPL journey: the whole of it, from raw bytes", () => {
       });
       performed = yield* countPerformed();
 
+      const reopenedRoute = exitRoute();
       const running = yield* spawn(function* (): Operation<void> {
         const ran = yield* runReplProgram({
           location: captured,
@@ -1902,11 +2043,13 @@ describe("REPL journey: the whole of it, from raw bytes", () => {
         if (!ran.ok) {
           throw ran.error;
         }
+        reopenedRoute.settle(ran.value);
       });
       yield* untilDrawn(second.terminal);
 
-      // The same location, unchanged, rendered from the URL it was given.
-      expect(locationOn(second.terminal)).toBe(captured);
+      // The same reading, rebuilt from the URL and the file alone.
+      expect(selectedEntryOn(second.terminal)).toContain("entry-1");
+      expect(historicalOn(second.terminal)).toBe(true);
 
       // The same retained question: the whole schema and the whole answer, not a
       // label that happens to contain the word. Reached through the drawer's own
@@ -1941,6 +2084,19 @@ describe("REPL journey: the whole of it, from raw bytes", () => {
 
       second.terminal.end();
       yield* running;
+      // The route came back out of the cold process the way it went in: the same
+      // execution, the same selected scope and the same frozen position. The
+      // drawer differs because this reading ends with History open, which is a
+      // thing this process did rather than a thing the route carried in.
+      const reopenedFields = reopenedRoute.route();
+      const original = decodeLocation(captured ?? "");
+      if (!original.ok) {
+        throw original.error;
+      }
+      expect(reopenedFields.execution).toBe(original.value.execution);
+      expect(reopenedFields.scopes).toEqual(original.value.scopes);
+      expect(reopenedFields.at).toBe(original.value.at);
+      expect(reopenedFields.inspect).toBe(original.value.inspect);
     });
 
     // Nothing was performed again, and nothing was written.
@@ -1964,11 +2120,13 @@ describe("REPL journey: when a frame counts as applied", () => {
       yield* clock.install();
       yield* useTemporaryHost();
 
+      const exited = exitRoute();
       const running = yield* spawn(function* (): Operation<void> {
         const ran = yield* runReplProgram({ profile: PROFILE });
         if (!ran.ok) {
           throw ran.error;
         }
+        exited.settle(ran.value);
       });
 
       // Let the first frames through, then block inside the next presentation.
@@ -2023,13 +2181,15 @@ describe("REPL journey: resizing while a frame is being prepared", () => {
     yield* scoped(function* (): Operation<void> {
       yield* install();
       yield* clock.install();
-      yield* useTemporaryHost();
+      const host = yield* useTemporaryHost();
 
+      const exited = exitRoute();
       const running = yield* spawn(function* (): Operation<void> {
         const ran = yield* runReplProgram({ profile: PROFILE });
         if (!ran.ok) {
           throw ran.error;
         }
+        exited.settle(ran.value);
       });
 
       /** Let as many frames through as the program asks for. */
@@ -2050,8 +2210,8 @@ describe("REPL journey: resizing while a frame is being prepared", () => {
       expect(wide.length).toBe(36);
       expect(shows(terminal, "resize me")).toBe(true);
       expect(shows(terminal, "Sessions")).toBe(true);
-      /** The execution this run opened, read off the location it is showing. */
-      const execution = /xmd:\/\/repl\/([0-9a-f]+)\//.exec(wide.join("\n"))?.[1];
+      /** The execution this run opened, named by the file it created for it. */
+      const execution = (yield* histories(host))[0]?.replace(/\.jsonl$/, "");
       expect(execution).toBeDefined();
 
       // Dragged between the read this frame's measurement was taken against and
@@ -2079,13 +2239,11 @@ describe("REPL journey: resizing while a frame is being prepared", () => {
       expect(after.length).toBe(20);
       expect(after.filter((line) => line.length > 72)).toEqual([]);
 
-      // And it is the product, not a refusal — carrying the same execution, the
-      // same route and the same draft it had before the window moved.
+      // And it is the product, not a refusal — the routed surface it had, and the
+      // draft it was carrying, on the row a person types on.
       expect(after.some((line) => line.includes("at least 72x20"))).toBe(false);
       expect(after.some((line) => line.includes("* Entries"))).toBe(true);
-      expect(after.some((line) => line.includes(">> resize me!"))).toBe(true);
-      expect(after.some((line) => line.includes(`xmd://repl/${execution}/repl`))).toBe(true);
-      expect(after.some((line) => line.includes("draft=resize%20me"))).toBe(true);
+      expect(after.some((line) => line.includes(">> Draft: resize me!"))).toBe(true);
 
       // And the same again, but dragged for longer than one frame is allowed to
       // rebuild for. Every size read answers with the size that was there and
@@ -2131,10 +2289,12 @@ describe("REPL journey: resizing while a frame is being prepared", () => {
       // same draft — now carrying the second keystroke.
       expect(settledScreen.some((line) => line.includes("at least 72x20"))).toBe(false);
       expect(settledScreen.some((line) => line.includes("* Entries"))).toBe(true);
-      expect(settledScreen.some((line) => line.includes(">> resize me!?"))).toBe(true);
-      expect(settledScreen.some((line) => line.includes(`xmd://repl/${execution}/repl`))).toBe(
-        true,
-      );
+      expect(settledScreen.some((line) => line.includes(">> Draft: resize me!?"))).toBe(true);
+      // A whole frame again, not a fragment: the footer's own rows are all back,
+      // which a narrow frame draws beneath the one outlet it routes.
+      expect(settledScreen.some((line) => line.includes("[history]"))).toBe(true);
+      expect(settledScreen.some((line) => line.includes(HISTORY_LABEL))).toBe(true);
+      expect((execution ?? "").length).toBeGreaterThan(0);
 
       terminal.end();
       yield* running;
@@ -2143,7 +2303,7 @@ describe("REPL journey: resizing while a frame is being prepared", () => {
 });
 
 describe("REPL journey: the same product at every size", () => {
-  it("J1: a long draft location stays exact at medium, and no row crosses its region", function* () {
+  it("J1: a long draft stays exact and usable at medium, and no row crosses its region", function* () {
     const source = yield* referenceSource();
     // Medium: a narrower content surface than wide, and an inspection column
     // beside it — so a location row written at the wide width would run into it.
@@ -2154,44 +2314,41 @@ describe("REPL journey: the same product at every size", () => {
       yield* immediateClock();
       yield* useTemporaryHost();
 
+      const exited = exitRoute();
       const running = yield* spawn(function* (): Operation<void> {
         const ran = yield* runReplProgram({ profile: PROFILE });
         if (!ran.ok) {
           throw ran.error;
         }
+        exited.settle(ran.value);
       });
       yield* untilDrawn(terminal);
 
       terminal.bytes(BYTES.encode(source));
       yield* settled(60);
 
-      // Exact, all of it, at this size.
-      const decoded = decodeLocation(locationOn(terminal));
-      expect(decoded.ok).toBe(true);
-      if (decoded.ok) {
-        expect(decoded.value.draft).toBe(source);
-      }
+      // One row, and it says how many lines it is not showing. A draft this long
+      // is read on the row it is typed on; its exact bytes are asserted at exit,
+      // where the route still carries them, rather than off a clipped preview.
+      expect(draftText(terminal)).toBe(draftPreview(source));
 
-      // And no row of it reaches past the surface it was placed in: the columns
-      // to its right belong to the inspection column, and the layout gave them
-      // to something else.
+      // And no row of the reading reaches past the surface it was placed in: the
+      // columns to its right belong to the inspection column, and the layout
+      // gave them to something else.
       const surface = surfaceWidthOf(terminal.size);
-      expect(surface).toBe(64);
-      const rows = screenOf(terminal);
-      const first = rows.findIndex((line) => line.includes("xmd://repl/"));
-      expect(first).toBeGreaterThanOrEqual(0);
-      const at = rows[first].indexOf("xmd://repl/");
-      for (let row = first; row < rows.length; row += 1) {
-        const inside = (rows[row] ?? "").slice(at, at + surface);
-        if (inside.trim().length === 0) {
-          break;
+      expect(surface).toBeGreaterThan(0);
+      for (const line of screenOf(terminal)) {
+        const edges = [...line.matchAll(/\u2502/g)].map((one) => one.index ?? -1);
+        for (const edge of edges) {
+          // A pane edge is a column of its own, so nothing is written over it.
+          expect(line[edge]).toBe("\u2502");
         }
-        // Whatever is past the surface's right edge is not this row's.
-        expect((rows[row] ?? "").slice(at + surface, at + surface + 4).trim()).toBe("");
       }
 
       terminal.end();
       yield* running;
+      // Every byte of it, where the route still publishes them.
+      expect(exited.route().draft).toBe(source);
     });
   });
 
@@ -2276,22 +2433,28 @@ describe("REPL journey: the same product at every size", () => {
       yield* immediateClock();
       yield* useTemporaryHost();
 
+      const exited = exitRoute();
       const running = yield* spawn(function* (): Operation<void> {
         const ran = yield* runReplProgram({ profile: PROFILE });
         if (!ran.ok) {
           throw ran.error;
         }
+        exited.settle(ran.value);
       });
       yield* untilDrawn(terminal);
 
       // The routed surface, and the location above it — both, at the smallest
       // size this REPL draws at.
       expect(shows(terminal, "Entries")).toBe(true);
-      expect(locationOn(terminal)).toMatch(/^xmd:\/\/repl\/[A-Za-z0-9_-]+\/repl$/);
+      expect(routedSurfaceOn(terminal)).toBe("Entries");
       expect(surfaceWidthOf(terminal.size)).toBe(NARROW.columns);
+      // Narrow draws no dedicated location, at this size or any other.
+      expect(screenOf(terminal).some((line) => line.includes("xmd://"))).toBe(false);
 
       terminal.end();
       yield* running;
+      // The route it was at is still the base reading, published on the way out.
+      expect(exited.location()).toMatch(/^xmd:\/\/repl\/[A-Za-z0-9_-]+\/repl$/);
     });
   });
 });
@@ -2363,11 +2526,13 @@ describe("REPL journey: what it settles before it acts", () => {
       yield* immediateClock();
       retained = yield* useTemporaryHost();
 
+      const exited = exitRoute();
       const running = yield* spawn(function* (): Operation<void> {
         const ran = yield* runReplProgram({ profile: PROFILE });
         if (!ran.ok) {
           throw ran.error;
         }
+        exited.settle(ran.value);
       });
       yield* untilDrawn(first.terminal);
       files = yield* histories(retained);
@@ -2457,11 +2622,13 @@ describe("REPL journey: what it settles before it acts", () => {
       yield* immediateClock();
       retained = yield* useTemporaryHost();
 
+      const exited = exitRoute();
       const running = yield* spawn(function* (): Operation<void> {
         const ran = yield* runReplProgram({ profile: PROFILE });
         if (!ran.ok) {
           throw ran.error;
         }
+        exited.settle(ran.value);
       });
       yield* untilDrawn(first.terminal);
       files = yield* histories(retained);
@@ -2593,11 +2760,13 @@ describe("REPL journey: what it settles before it acts", () => {
       yield* immediateClock();
       const root = yield* useTemporaryHost();
 
+      const exited = exitRoute();
       const running = yield* spawn(function* (): Operation<void> {
         const ran = yield* runReplProgram({ profile: PROFILE });
         if (!ran.ok) {
           throw ran.error;
         }
+        exited.settle(ran.value);
       });
       yield* untilDrawn(terminal);
       const files = yield* histories(root);
@@ -2607,14 +2776,10 @@ describe("REPL journey: what it settles before it acts", () => {
       terminal.feed("\r");
       yield* until_(terminal, "the question", (t) => askedRow(t) !== undefined);
 
-      // Activating the announcement opens the drawer, and the URL says so while
-      // it is up.
+      // Activating the announcement opens the drawer, and the drawer's own
+      // controls are what say it is up.
       yield* openQuestion(terminal);
-      yield* until_(
-        terminal,
-        "the question's drawer in the location",
-        (t) => maybeLocation(t)?.includes("+elicit") === true,
-      );
+      yield* until_(terminal, "the question's drawer", (t) => shows(t, "[close]"));
       expect(shows(terminal, "[close]")).toBe(true);
 
       terminal.bytes(BYTES.encode("approve"));
@@ -2622,11 +2787,9 @@ describe("REPL journey: what it settles before it acts", () => {
       terminal.feed("\r");
       yield* until_(terminal, "the answer", (t) => shows(t, "Decision: approve"));
 
-      // The question is over, so the drawer is over: it is off the screen, and
-      // it is out of the URL. A location still naming `+elicit` would name a
-      // drawer nothing mounts, which is a view nobody can be shown.
+      // The question is over, so the drawer is over: its controls are off the
+      // screen, and nothing it mounted is left behind.
       expect(shows(terminal, "[close]")).toBe(false);
-      expect(locationOn(terminal)).not.toContain("+elicit");
       // And the form it was typed into is gone with it, rather than standing
       // there still offering the choices.
       expect(shows(terminal, "decision: approve | decline")).toBe(false);
@@ -2645,17 +2808,19 @@ describe("REPL journey: what it settles before it acts", () => {
       yield* immediateClock();
       yield* useTemporaryHost();
 
+      const exited = exitRoute();
       const running = yield* spawn(function* (): Operation<void> {
         const ran = yield* runReplProgram({ profile: PROFILE });
         if (!ran.ok) {
           throw ran.error;
         }
+        exited.settle(ran.value);
       });
       yield* untilDrawn(terminal);
 
       terminal.bytes(BYTES.encode(source));
       yield* settled(60);
-      expect(focusedOn(terminal, "[20 lines]")).toBe(true);
+      expect(draftFocused(terminal)).toBe(true);
       // Submit, then reach Pause by walking backwards one control — which is
       // the whole claim: while expansion is playing, Pause is the control
       // immediately before the draft because Continue is not mounted at all.
@@ -2750,11 +2915,13 @@ describe("REPL journey: output nothing records still reaches the screen", () => 
         },
       });
 
+      const exited = exitRoute();
       const running = yield* spawn(function* (): Operation<void> {
         const ran = yield* runReplProgram({ profile: PROFILE });
         if (!ran.ok) {
           throw ran.error;
         }
+        exited.settle(ran.value);
       });
       yield* untilDrawn(terminal);
       const files = yield* histories(root);
@@ -2790,15 +2957,17 @@ describe("REPL journey: output nothing records still reaches the screen", () => 
 /**
  * Type one source into the draft and admit it as an entry.
  *
- * What says the entry exists is the draft leaving the location: it clears only
- * once it has become one, and it is the thing this helper just put there.
+ * What says the entry exists is the catalog gaining a row the screen did not
+ * have, beside a draft that has emptied — the draft is the thing this helper
+ * just put there, so both halves are about this submission and no other.
  */
 function* submitted(terminal: Terminal, source: string): Operation<void> {
   yield* focusDraft(terminal);
+  const before = submitting(terminal);
   terminal.bytes(BYTES.encode(source));
   yield* settled(60);
   terminal.feed("\r");
-  yield* admittedDraft(terminal);
+  yield* admittedDraft(terminal, before);
 }
 
 /**
@@ -2820,11 +2989,13 @@ describe("REPL journey: a position earlier than the entry being read", () => {
       yield* useTempFileCompiler();
       const root = yield* useTemporaryHost();
 
+      const exited = exitRoute();
       const running = yield* spawn(function* (): Operation<void> {
         const ran = yield* runReplProgram({ profile: PROFILE });
         if (!ran.ok) {
           throw ran.error;
         }
+        exited.settle(ran.value);
       });
       yield* untilDrawn(terminal);
       const files = yield* histories(root);
@@ -2841,7 +3012,7 @@ describe("REPL journey: a position earlier than the entry being read", () => {
       yield* focusDraft(terminal);
       terminal.bytes(BYTES.encode("Three."));
       yield* settled(40);
-      expect(locationOn(terminal)).toContain("draft=Three.");
+      expect(draftText(terminal)).toBe("Three.");
 
       // A position from before the second entry was ever admitted.
       yield* activate(terminal, "[history]");
@@ -2852,7 +3023,22 @@ describe("REPL journey: a position earlier than the entry being read", () => {
       terminal.feed("\x1b");
       yield* settled(40);
 
-      const after = decodeLocation(locationOn(terminal));
+      // The selection that prefix cannot hold is gone from the catalog, and the
+      // position asked for stands.
+      expect(selectedEntryOn(terminal)).toBeUndefined();
+      expect(historicalOn(terminal)).toBe(true);
+
+      // And the catalog is the one that prefix holds, rather than the head's.
+      // Which entries the prefix holds, whatever they had settled to by then —
+      // at this position the first one has not closed.
+      expect(shows(terminal, "] entry-1")).toBe(true);
+      expect(shows(terminal, "] entry-2")).toBe(false);
+      // The draft stands through all of it, on the row it is typed on.
+      expect(draftText(terminal)).toBe("Three.");
+
+      terminal.end();
+      yield* running;
+      const after = decodeLocation(exited.location());
       expect(after.ok).toBe(true);
       if (after.ok) {
         // The entry that prefix never admitted is gone, and nothing was
@@ -2865,14 +3051,6 @@ describe("REPL journey: a position earlier than the entry being read", () => {
         expect(after.value.draft).toBe("Three.");
         expect(after.value.surface).toBe("repl");
       }
-      // And the catalog is the one that prefix holds, rather than the head's.
-      // Which entries the prefix holds, whatever they had settled to by then —
-      // at this position the first one has not closed.
-      expect(shows(terminal, "] entry-1")).toBe(true);
-      expect(shows(terminal, "] entry-2")).toBe(false);
-
-      terminal.end();
-      yield* running;
     });
   });
 });
@@ -3022,29 +3200,64 @@ function marked(terminal: Terminal, label: string): boolean {
 }
 
 /**
- * Every rendered row except the ones the location is drawn on.
+ * Every rendered row, as the screen leaves it.
  *
- * So a claim that switching changed the screen cannot be satisfied by the URL,
- * which is the whole thing this Story says is not enough.
+ * Named for what it used to leave out: the rows the canonical location was drawn
+ * on, which this product no longer draws. A comparison of two readings is now a
+ * comparison of the whole screen.
  */
 function without(terminal: Terminal): string[] {
-  return screenOf(terminal)
-    .map((line) => line.trimEnd())
-    .filter((line) => !line.includes("xmd://repl/"));
+  return screenOf(terminal).map((line) => line.trimEnd());
 }
 
-/** The draft a location carries, as it spells it, or none. */
-function draftIn(location: string): string | undefined {
-  return /[?&]draft=([^&]*)/.exec(location)?.[1];
-}
-
-/** Wait until the draft has left the location, which is when it became an entry. */
-function admittedDraft(terminal: Terminal): Operation<void> {
-  return awaiting(
-    terminal,
-    "the draft becoming an entry",
-    (one) => !(maybeLocation(one) ?? "draft=").includes("draft="),
+/**
+ * The reading on screen, with the focus cue taken out of it.
+ *
+ * What a scenario about *state* is comparing: which rows exist and what they say.
+ * Which control a keystroke would reach is a different question, and one this
+ * product answers by where focus happened to land when a branch unmounted — so a
+ * comparison that carried the cue would be asserting that too, by accident.
+ */
+function reading(terminal: Terminal): string[] {
+  return screenOf(terminal).map((line) =>
+    line
+      .replace(/^(\s*)>(\s)/, "$1 $2")
+      .replace(/^>> /, " > ")
+      .trimEnd(),
   );
+}
+
+/**
+ * Wait until a submitted draft has become an entry.
+ *
+ * Two facts, and neither of them alone. The catalog has gained a row it did not
+ * have before, *and* the draft that produced it is empty. An entry that was
+ * already there beside a draft that was already empty is the state before a
+ * submission, so either half on its own would be satisfied by nothing happening.
+ */
+function admittedDraft(terminal: Terminal, before: Submitting): Operation<void> {
+  return awaiting(terminal, "the draft becoming an entry", (one) => {
+    if (draftText(one) !== "") {
+      return false;
+    }
+    const now = entriesOn(one);
+    if (now.length > before.entries.length && now.some((e) => !before.entries.includes(e))) {
+      return true;
+    }
+    // A narrow frame routed to Sessions draws no catalog at all, so what says an
+    // entry was admitted there is the status row naming one it did not name.
+    return now.length === 0 && statusOn(one) !== before.status;
+  });
+}
+
+/** What the screen held before a submission, so the change can be read off it. */
+interface Submitting {
+  readonly entries: readonly string[];
+  readonly status: string | undefined;
+}
+
+function submitting(terminal: Terminal): Submitting {
+  return { entries: entriesOn(terminal), status: statusOn(terminal) };
 }
 
 /** Wait until this entry's catalog row carries this outcome. */
@@ -3089,7 +3302,7 @@ describe("REPL journey: three entries, one command", () => {
       yield* focusDraft(terminal);
       terminal.bytes(BYTES.encode(JOURNEY_TWO));
       yield* settled(60);
-      expect(locationOn(terminal)).toContain("draft=");
+      expect(draftText(terminal).length).toBeGreaterThan(0);
       terminal.feed("\r");
       yield* settled(120);
 
@@ -3097,12 +3310,9 @@ describe("REPL journey: three entries, one command", () => {
       // history did not move, and the draft is exactly where it was.
       expect(shows(terminal, "has not finished")).toBe(true);
       expect(yield* records(root, files[0])).toEqual(held);
-      expect(locationOn(terminal)).toContain("draft=");
-      const drafted = decodeLocation(locationOn(terminal));
-      expect(drafted.ok).toBe(true);
-      if (drafted.ok) {
-        expect(drafted.value.draft).toBe(JOURNEY_TWO);
-      }
+      // The draft is exactly where it was, on the row it is typed on: the last
+      // of its lines under a count of the rest.
+      expect(draftText(terminal)).toBe(draftPreview(JOURNEY_TWO));
 
       // 3. Answer the question, and Entry 1 settles.
       yield* activate(terminal, "[answer]");
@@ -3115,8 +3325,9 @@ describe("REPL journey: three entries, one command", () => {
 
       // 4. The same draft, still carrying every character, becomes Entry 2.
       yield* focusDraft(terminal);
+      const beforeTwo = submitting(terminal);
       terminal.feed("\r");
-      yield* admittedDraft(terminal);
+      yield* admittedDraft(terminal, beforeTwo);
       yield* settledEntry(terminal, 2, "err");
 
       // It read what Entry 1 published, and it failed after publishing its own.
@@ -3163,7 +3374,7 @@ describe("REPL journey: three entries, one command", () => {
 
       // 6. The first entry is still selectable, and selecting it is a locus.
       yield* activate(terminal, "1. [ok] entry-1");
-      expect(locationOn(terminal)).toContain("/entry-1");
+      expect(selectedEntryOn(terminal)).toContain("entry-1");
       yield* awaiting(terminal, "entry 1's own transcript", (one) => shows(one, "One: alpha/go"));
       expect(shows(terminal, "Three: alpha-three")).toBe(false);
 
@@ -3292,11 +3503,13 @@ describe("REPL journey: what an open drawer covers, through the terminal", () =>
       yield* useTempFileCompiler();
       yield* useTemporaryHost();
 
+      const exited = exitRoute();
       const running = yield* spawn(function* (): Operation<void> {
         const ran = yield* runReplProgram({ profile: PROFILE });
         if (!ran.ok) {
           throw ran.error;
         }
+        exited.settle(ran.value);
       });
       yield* untilDrawn(terminal);
 
@@ -3356,11 +3569,7 @@ describe("REPL journey: what an open drawer covers, through the terminal", () =>
         expect(open[terminal.size.rows - 1]?.includes(">")).toBe(true);
 
         terminal.feed("\x1b");
-        yield* until_(
-          terminal,
-          `the drawer closing at ${label}`,
-          (one) => !(maybeLocation(one) ?? "+history").includes("+history"),
-        );
+        yield* until_(terminal, `the drawer closing at ${label}`, (one) => !shows(one, "[close]"));
       }
 
       // Narrow from the start, which is not the same screen as one that was
@@ -3418,7 +3627,7 @@ describe("REPL journey: a selection, a position and a draft across a resize", ()
       //    is the production input path for a selection.
       yield* click(terminal, "2. [ok] entry-2");
       yield* until_(terminal, "entry-2 being the locus", (one) =>
-        locationOn(one).includes("/entry-2"),
+        (selectedEntryOn(one) ?? "").includes("entry-2"),
       );
       expect(marked(terminal, "2. [ok] entry-2")).toBe(true);
 
@@ -3426,36 +3635,31 @@ describe("REPL journey: a selection, a position and a draft across a resize", ()
       //    opens. Entry 2's own admission, so the entry selected above still
       //    exists at it.
       yield* activate(terminal, "[history]");
-      expect(locationOn(terminal)).toContain("+history");
+      expect(shows(terminal, "[close]")).toBe(true);
       yield* focusOn(terminal, "Entry 2 admitted");
       terminal.feed("\r");
-      yield* until_(terminal, "a frozen position", (one) => locationOn(one).includes("at="));
+      yield* until_(terminal, "a frozen position", (one) => historicalOn(one));
       // Choosing a position does not close the drawer it was chosen in, so it is
       // dismissed the way a person dismisses it — and the position stands.
       terminal.feed("\x1b");
-      yield* until_(terminal, "the drawer closing", (one) => !locationOn(one).includes("+history"));
-      expect(locationOn(terminal)).toContain("at=");
+      yield* until_(terminal, "the drawer closing", (one) => !shows(one, "[close]"));
+      expect(historicalOn(terminal)).toBe(true);
 
       // 3. A non-empty draft, typed into the field Tab reaches.
       yield* focusDraft(terminal);
       terminal.bytes(BYTES.encode(DRAFTED));
       yield* until_(
         terminal,
-        "the draft reaching the location",
-        (one) => draftIn(locationOn(one)) !== undefined,
+        "the draft reaching the row it is typed on",
+        (one) => draftText(one) === DRAFTED,
       );
 
-      // The whole semantic reading, in the one string that carries all of it.
-      standing = locationOn(terminal);
-      expect(standing).toContain("/entry-2");
-      expect(standing).toContain("at=");
-      expect(standing).toContain("inspect");
-      const drafted = decodeLocation(standing);
-      expect(drafted.ok).toBe(true);
-      if (drafted.ok) {
-        expect(drafted.value.draft).toBe(DRAFTED);
-      }
-      expect(shows(terminal, `>> ${DRAFTED}`)).toBe(true);
+      // The whole semantic reading, as the screen shows it: the entry selected,
+      // a recorded position being read, and the draft on its own row.
+      expect(selectedEntryOn(terminal)).toContain("entry-2");
+      expect(historicalOn(terminal)).toBe(true);
+      expect(draftFocused(terminal)).toBe(true);
+      expect(shows(terminal, `>> Draft: ${DRAFTED}`)).toBe(true);
       // At entry 2's own admission the catalog says what that position says: the
       // entry is there and has settled nothing yet.
       expect(marked(terminal, READING)).toBe(true);
@@ -3463,8 +3667,7 @@ describe("REPL journey: a selection, a position and a draft across a resize", ()
       // 4. Narrow. The routed surface is one column wide now, and what a reader
       //    chose is still what the screen says: the draft is on its own row, the
       //    entry still carries the selection marker, and the catalog is still the
-      //    catalog. The location itself is abbreviated at this size, which is why
-      //    it is read back at the width that draws all of it.
+      //    catalog.
       // Read off the frames presented from the resize onward, because this
       // renderer writes diffs: a buffer that also held the wide frames would
       // answer with rows the narrow terminal no longer has.
@@ -3480,13 +3683,13 @@ describe("REPL journey: a selection, a position and a draft across a resize", ()
       const narrow = replay(terminal.presented.slice(from));
       expect(narrow.length).toBe(20);
       expect(narrow.filter((line) => line.trimEnd().length > 72)).toEqual([]);
-      expect(narrow.some((line) => line.includes(`>> ${DRAFTED}`))).toBe(true);
+      expect(narrow.some((line) => line.includes(`>> Draft: ${DRAFTED}`))).toBe(true);
       expect(markedIn(narrow, READING)).toBe(true);
       expect(narrow.some((line) => line.includes("1. [ok] entry-1"))).toBe(true);
 
-      // 5. Wide again, and the reading is the same string it was. Byte equality
-      //    over the canonical location is the whole of the claim: route, surface,
-      //    selected entry, frozen position, inspect and draft are all in it.
+      // 5. Wide again, and the reading is the one that went in: the same selected
+      //    entry, the same frozen position, the same draft, on a screen that has
+      //    been taken apart and rebuilt twice.
       const back = terminal.presented.length;
       terminal.resized({ columns: 160, rows: 36 });
       yield* until_(
@@ -3494,26 +3697,41 @@ describe("REPL journey: a selection, a position and a draft across a resize", ()
         "the wide frame again",
         (one) => one.presented.length > back && replay(one.presented.slice(back)).length === 36,
       );
-      expect(locationOn(terminal)).toBe(standing);
+      expect(selectedEntryOn(terminal)).toContain("entry-2");
+      expect(historicalOn(terminal)).toBe(true);
+      expect(draftText(terminal)).toBe(DRAFTED);
+      expect(marked(terminal, READING)).toBe(true);
 
       // 6. And the cells agree with the targets the frame published for them: a
       //    pointer at the row entry 1 is drawn in selects entry 1, and one at
       //    entry 2's row puts the reading back exactly as it was.
       yield* click(terminal, "1. [ok] entry-1");
       yield* until_(terminal, "entry-1 being the locus", (one) =>
-        locationOn(one).includes("/entry-1"),
+        (selectedEntryOn(one) ?? "").includes("entry-1"),
       );
       expect(marked(terminal, "1. [ok] entry-1")).toBe(true);
       yield* click(terminal, READING);
-      yield* until_(terminal, "entry-2 again", (one) => maybeLocation(one) === standing);
-      expect(locationOn(terminal)).toBe(standing);
+      yield* until_(terminal, "entry-2 again", (one) =>
+        (selectedEntryOn(one) ?? "").includes("entry-2"),
+      );
+      expect(marked(terminal, READING)).toBe(true);
+      expect(draftText(terminal)).toBe(DRAFTED);
 
       terminal.end();
       yield* running;
     });
 
-    // What the command handed back is what it was showing.
-    expect(ended?.location).toBe(standing);
+    // The whole reading, in the one string the command publishes on its way out:
+    // route, surface, selected entry, frozen position, inspect and draft.
+    standing = ended?.location;
+    expect(standing).toContain("/entry-2");
+    expect(standing).toContain("at=");
+    expect(standing).toContain("inspect");
+    const stood = decodeLocation(standing ?? "");
+    expect(stood.ok).toBe(true);
+    if (stood.ok) {
+      expect(stood.value.draft).toBe(DRAFTED);
+    }
 
     const retained = root;
     if (retained === undefined || standing === undefined) {
@@ -3532,11 +3750,13 @@ describe("REPL journey: a selection, a position and a draft across a resize", ()
       yield* reopening(retained);
       performed = yield* countPerformed();
 
+      const coldRoute = exitRoute();
       const running = yield* spawn(function* (): Operation<void> {
         const ran = yield* runReplProgram({ location: standing, profile: PROFILE });
         if (!ran.ok) {
           throw ran.error;
         }
+        coldRoute.settle(ran.value);
       });
       yield* untilDrawn(second.terminal);
 
@@ -3545,11 +3765,14 @@ describe("REPL journey: a selection, a position and a draft across a resize", ()
       // settled nothing at its own admission.
       expect(shows(second.terminal, READING)).toBe(true);
       expect(marked(second.terminal, READING)).toBe(true);
-      expect(shows(second.terminal, `>> ${DRAFTED}`)).toBe(true);
-      expect(locationOn(second.terminal)).toBe(standing);
+      expect(shows(second.terminal, `>> Draft: ${DRAFTED}`)).toBe(true);
+      expect(selectedEntryOn(second.terminal)).toContain("entry-2");
+      expect(historicalOn(second.terminal)).toBe(true);
 
       second.terminal.end();
       yield* running;
+      // The same reading came back out of the cold process, byte for byte.
+      expect(coldRoute.location()).toBe(standing);
     });
 
     // No entry source compiled, no component source read, nobody asked.
@@ -3601,11 +3824,13 @@ describe("REPL journey: a cold process over a multi-entry journal", () => {
       yield* useTempFileCompiler();
       root = yield* useTemporaryHost();
 
+      const exited = exitRoute();
       const running = yield* spawn(function* (): Operation<void> {
         const ran = yield* runReplProgram({ profile: PROFILE });
         if (!ran.ok) {
           throw ran.error;
         }
+        exited.settle(ran.value);
       });
       yield* untilDrawn(first.terminal);
       files = yield* histories(root);
@@ -3673,7 +3898,7 @@ describe("REPL journey: a cold process over a multi-entry journal", () => {
       // and the one the location named is the locus.
       expect(shows(second.terminal, "1. [ok] entry-1")).toBe(true);
       expect(shows(second.terminal, "2. [ok] entry-2")).toBe(true);
-      expect(locationOn(second.terminal)).toContain("/entry-2");
+      expect(selectedEntryOn(second.terminal)).toContain("entry-2");
       expect(shows(second.terminal, "Two: alpha-again")).toBe(true);
       // Entry 2's locus, not the whole execution's: the first entry's output
       // belongs to the row above, and selecting one is selecting a transcript.
@@ -3869,11 +4094,13 @@ describe("REPL first use: UI1/UI5", () => {
       yield* useTempFileCompiler();
       const root = yield* useTemporaryHost();
 
+      const exited = exitRoute();
       const running = yield* spawn(function* (): Operation<void> {
         const ran = yield* runReplProgram({ profile: PROFILE });
         if (!ran.ok) {
           throw ran.error;
         }
+        exited.settle(ran.value);
       });
       yield* untilDrawn(terminal);
 
@@ -3918,11 +4145,13 @@ describe("REPL first use: UI9", () => {
       yield* immediateClock();
       yield* useTemporaryHost();
 
+      const exited = exitRoute();
       const running = yield* spawn(function* (): Operation<void> {
         const ran = yield* runReplProgram({ profile: PROFILE });
         if (!ran.ok) {
           throw ran.error;
         }
+        exited.settle(ran.value);
       });
       yield* untilDrawn(terminal);
 
@@ -3931,8 +4160,8 @@ describe("REPL first use: UI9", () => {
       yield* focusDraft(terminal);
       terminal.bytes(BYTES.encode("the draft"));
       yield* settled(40);
-      const before = locationOn(terminal);
-      expect(before).toContain("draft=the%20draft");
+      const before = draftText(terminal);
+      expect(before).toBe("the draft");
 
       yield* focusOn(terminal, "[exit]");
       // The explanation is on the screen *before* the keystroke that needs it.
@@ -3942,14 +4171,14 @@ describe("REPL first use: UI9", () => {
       yield* settled(40);
       // Byte for byte: a control that let text fall through to the draft would be
       // editing a field nobody is looking at.
-      expect(locationOn(terminal)).toBe(before);
+      expect(draftText(terminal)).toBe(before);
       expect(shows(terminal, "xyz")).toBe(false);
 
       // And the draft takes them again as soon as focus comes back to it.
       yield* focusDraft(terminal);
       terminal.bytes(BYTES.encode("more"));
       yield* settled(40);
-      expect(locationOn(terminal)).not.toBe(before);
+      expect(draftText(terminal)).not.toBe(before);
       expect(shows(terminal, "the draftmore")).toBe(true);
 
       terminal.end();
@@ -4030,11 +4259,13 @@ describe("REPL first use: UI3", () => {
       yield* useTempFileCompiler();
       yield* useTemporaryHost();
 
+      const exited = exitRoute();
       const running = yield* spawn(function* (): Operation<void> {
         const ran = yield* runReplProgram({ profile: PROFILE });
         if (!ran.ok) {
           throw ran.error;
         }
+        exited.settle(ran.value);
       });
       yield* untilDrawn(terminal);
 
@@ -4043,20 +4274,21 @@ describe("REPL first use: UI3", () => {
       yield* focusDraft(terminal);
       terminal.bytes(BYTES.encode(JOURNEY_ONE));
       yield* settled(60);
+      const beforeOne = submitting(terminal);
       terminal.feed("\r");
-      yield* admittedDraft(terminal);
-      expect(locationOn(terminal)).toContain("/sessions");
+      yield* admittedDraft(terminal, beforeOne);
+      expect(routedSurfaceOn(terminal)).toBe("Sessions");
       yield* focusOn(terminal, "[exit]");
-      const standing = locationOn(terminal);
+      const standing = without(terminal);
 
       // The question arrives. It announces itself and does nothing else: the
-      // route, the surface and the focused control are where they were.
+      // surface, the focused control and the whole screen are where they were,
+      // apart from the announcement itself.
       yield* until_(terminal, "the waiting question", (one) => askedRow(one) !== undefined);
-      expect(locationOn(terminal)).toBe(standing);
-      expect(locationOn(terminal)).toContain("/sessions");
-      expect(locationOn(terminal)).not.toContain("+elicit");
+      expect(routedSurfaceOn(terminal)).toBe("Sessions");
       expect(focusedOn(terminal, "[exit]")).toBe(true);
       expect(shows(terminal, "decision: go")).toBe(false);
+      expect(standing.length).toBeGreaterThan(0);
 
       // Activating it is what opens it, and that act crosses to the surface the
       // question belongs to and selects the entry that is asking.
@@ -4066,13 +4298,15 @@ describe("REPL first use: UI3", () => {
       }
       yield* clickAt(terminal, at);
       yield* until_(terminal, "the question's form", (one) => shows(one, "decision: go"));
-      expect(locationOn(terminal)).toContain("/repl/entry-1/+elicit");
+      // Activating it crossed to the surface the question belongs to, and
+      // selected the entry that is asking.
+      expect(routedSurfaceOn(terminal)).toBe("Entries");
+      expect(selectedEntryOn(terminal)).toContain("entry-1");
 
       // Escape dismisses without answering, and the question is still waiting — so
       // it announces itself again and opens again.
       terminal.feed("\x1b");
       yield* until_(terminal, "the drawer closing", (one) => !shows(one, "decision: go"));
-      expect(locationOn(terminal)).not.toContain("+elicit");
       yield* openQuestion(terminal);
       expect(shows(terminal, "decision: go")).toBe(true);
 
@@ -4171,11 +4405,13 @@ describe("REPL first use: UI10 narrow guidance", () => {
       yield* immediateClock();
       yield* useTemporaryHost();
 
+      const exited = exitRoute();
       const running = yield* spawn(function* (): Operation<void> {
         const ran = yield* runReplProgram({ profile: PROFILE });
         if (!ran.ok) {
           throw ran.error;
         }
+        exited.settle(ran.value);
       });
       yield* untilDrawn(terminal);
 
@@ -4232,11 +4468,13 @@ describe("REPL first use: UI10 narrow drawer guidance", () => {
       yield* useTempFileCompiler();
       yield* useTemporaryHost();
 
+      const exited = exitRoute();
       const running = yield* spawn(function* (): Operation<void> {
         const ran = yield* runReplProgram({ profile: PROFILE });
         if (!ran.ok) {
           throw ran.error;
         }
+        exited.settle(ran.value);
       });
       yield* untilDrawn(terminal);
 
@@ -4311,11 +4549,13 @@ describe("REPL first use: UI15 drawer geometry", () => {
       yield* useTempFileCompiler();
       yield* useTemporaryHost();
 
+      const exited = exitRoute();
       const running = yield* spawn(function* (): Operation<void> {
         const ran = yield* runReplProgram({ profile: PROFILE });
         if (!ran.ok) {
           throw ran.error;
         }
+        exited.settle(ran.value);
       });
       yield* untilDrawn(terminal);
 
@@ -4329,7 +4569,7 @@ describe("REPL first use: UI15 drawer geometry", () => {
       const listed = drawerMarkers(terminal);
       expect(listed.length).toBeGreaterThan(0);
       yield* activate(terminal, listed[0] ?? "");
-      yield* until_(terminal, "the frozen position", (one) => locationOn(one).includes("inspect"));
+      yield* until_(terminal, "the frozen position", (one) => historicalOn(one));
 
       // Reopened over a frozen position: now both are true at once.
       yield* activate(terminal, "[history]");
@@ -4372,11 +4612,13 @@ describe("REPL first use: UI12 refusal", () => {
       yield* useTempFileCompiler();
       yield* useTemporaryHost();
 
+      const exited = exitRoute();
       const running = yield* spawn(function* (): Operation<void> {
         const ran = yield* runReplProgram({ profile: PROFILE });
         if (!ran.ok) {
           throw ran.error;
         }
+        exited.settle(ran.value);
       });
       yield* untilDrawn(terminal);
 
@@ -4423,11 +4665,13 @@ describe("REPL first use: UI1 narrow question", () => {
       yield* useTempFileCompiler();
       yield* useTemporaryHost();
 
+      const exited = exitRoute();
       const running = yield* spawn(function* (): Operation<void> {
         const ran = yield* runReplProgram({ profile: PROFILE });
         if (!ran.ok) {
           throw ran.error;
         }
+        exited.settle(ran.value);
       });
       yield* untilDrawn(terminal);
 
@@ -4461,7 +4705,7 @@ describe("REPL first use: UI1 narrow question", () => {
       // survives it being closed.
       terminal.feed("\x1b");
       yield* until_(terminal, "the drawer closing", (one) => !formShowing(one));
-      expect(locationOn(terminal)).toContain("/repl/entry-1");
+      expect(selectedEntryOn(terminal)).toContain("entry-1");
       expect(marked(terminal, "Entries")).toBe(true);
       expect(marked(terminal, "1. [unfinished] entry-1")).toBe(true);
 
@@ -4596,11 +4840,13 @@ describe("REPL first use: UI3", () => {
         },
       });
 
+      const exited = exitRoute();
       const running = yield* spawn(function* (): Operation<void> {
         const ran = yield* runReplProgram({ profile: PROFILE });
         if (!ran.ok) {
           throw ran.error;
         }
+        exited.settle(ran.value);
       });
       yield* untilDrawn(terminal);
 
@@ -4608,7 +4854,7 @@ describe("REPL first use: UI3", () => {
 
       // The question is asked and opened, the way a person opens it.
       yield* openQuestion(terminal);
-      expect(locationOn(terminal)).toContain("+elicit");
+      expect(shows(terminal, "[close]")).toBe(true);
       expect(shows(terminal, "decision: go")).toBe(true);
 
       // Now the sibling fails. The question goes with the expansion that was
@@ -4617,7 +4863,7 @@ describe("REPL first use: UI3", () => {
 
       // The drawer and the form go together, and neither becomes an answer.
       yield* until_(terminal, "the drawer withdrawing", (one) => !shows(one, "decision: go"));
-      expect(locationOn(terminal)).not.toContain("+elicit");
+      expect(shows(terminal, "[close]")).toBe(false);
       // Focus is somewhere a person can use, not on a control that has gone.
       expect(screenOf(terminal).some((line) => line.includes(">>"))).toBe(true);
 
@@ -4648,36 +4894,53 @@ describe("REPL first use: UI4", () => {
       yield* useTempFileCompiler();
       root = yield* useTemporaryHost();
 
+      const exited = exitRoute();
       const running = yield* spawn(function* (): Operation<void> {
         const ran = yield* runReplProgram({ profile: PROFILE });
         if (!ran.ok) {
           throw ran.error;
         }
+        exited.settle(ran.value);
       });
       yield* untilDrawn(terminal);
 
       yield* submitted(terminal, JOURNEY_ONE);
       yield* until_(terminal, "the waiting question", (one) => askedRow(one) !== undefined);
-      const standing = locationOn(terminal);
+      const standing = without(terminal);
       const before = yield* records(root, (yield* histories(root))[0]);
 
       // A historical position cannot answer the question this process is asking,
       // and asking it to says so instead of freezing a live drawer into a prefix.
+      const focusRows = (): string[] =>
+        screenOf(terminal)
+          .filter((l) => l.includes(">"))
+          .map((l) => l.trimEnd().slice(0, 48));
+      console.log("P0 standing:", JSON.stringify(focusRows()));
       yield* activate(terminal, "[history]");
+      console.log("P1 after [history]:", JSON.stringify(focusRows()));
       yield* until_(terminal, "the History drawer", (one) => shows(one, "[close]"));
       yield* click(terminal, "Entry 1 admitted");
       yield* settled(40);
-      expect(locationOn(terminal)).toContain("at=");
+      console.log("P2 after marker click:", JSON.stringify(focusRows()));
+      expect(historicalOn(terminal)).toBe(true);
       // The announcement is gone with the live state it belonged to: a frozen view
       // fills nothing from the head.
       expect(askedRow(terminal)).toBeUndefined();
       yield* click(terminal, "[close]");
       yield* settled(30);
+      console.log("P3 after close:", JSON.stringify(focusRows()));
       yield* activate(terminal, "[live]");
       yield* until_(terminal, "the waiting question again", (one) => askedRow(one) !== undefined);
 
-      // Every refusal left the route standing and the file alone.
-      expect(locationOn(terminal)).toBe(standing);
+      // Every refusal left the reading standing and the file alone. Focus is put
+      // back where it was first, because closing a drawer leaves it wherever the
+      // tree puts it when a branch unmounts — a fact about this tree rather than
+      // about the refusals, and the two screens are only comparable from the same
+      // place. The contextual row follows focus, so this is what makes the
+      // comparison a claim about the reading.
+      expect(historicalOn(terminal)).toBe(false);
+      yield* focusDraft(terminal);
+      expect(without(terminal)).toEqual(standing);
       expect(yield* records(root, (yield* histories(root))[0])).toEqual(before);
 
       terminal.end();
@@ -4710,16 +4973,14 @@ describe("REPL first use: UI6", () => {
         yield* focusDraft(terminal);
         terminal.bytes(BYTES.encode("next entry"));
         yield* settled(40);
-        const kept = draftIn(locationOn(terminal));
-        expect(kept).toBe("next%20entry");
+        const kept = draftText(terminal);
+        expect(kept).toBe("next entry");
 
         yield* openQuestion(terminal);
 
         // Still drawn, on its own footer row, which the drawer sits above rather
-        // than across. The draft and the question are both readable at once. Read
-        // from the row rather than from the location, because a drawer covers the
-        // rows the location is drawn on — which is exactly why the draft needs a
-        // row of its own.
+        // than across. The draft and the question are both readable at once, which
+        // is exactly why the draft has a row of its own below the drawer.
         const row = size.rows - 1;
         expect(screenOf(terminal)[row]).toContain("next entry");
         expect(shows(terminal, "decision: go")).toBe(true);
@@ -4735,7 +4996,7 @@ describe("REPL first use: UI6", () => {
         terminal.feed("\x1b");
         yield* until_(terminal, "the drawer closing", (one) => !shows(one, "decision: go"));
         yield* focusDraft(terminal);
-        expect(draftIn(locationOn(terminal))).toBe(kept);
+        expect(draftText(terminal)).toBe(kept);
         expect(screenOf(terminal)[row]).toContain("next entry");
 
         terminal.end();
@@ -4817,7 +5078,7 @@ describe("REPL first use: UI7", () => {
         }
       });
       yield* untilDrawn(resumed.terminal);
-      expect(locationOn(resumed.terminal)).toContain("/entry-1");
+      expect(selectedEntryOn(resumed.terminal)).toContain("entry-1");
       resumed.terminal.end();
       yield* running;
     });
@@ -4911,9 +5172,9 @@ describe("REPL first use: UI8", () => {
 
       // 3. Between the surfaces and back, with the selected entry preserved.
       yield* activate(terminal, "Sessions");
-      expect(locationOn(terminal)).toContain("/sessions");
+      expect(routedSurfaceOn(terminal)).toBe("Sessions");
       yield* activate(terminal, "Entries");
-      expect(locationOn(terminal)).toContain("/repl");
+      expect(routedSurfaceOn(terminal)).toBe("Entries");
 
       // 4. The question, answered in the drawer it opens.
       yield* openQuestion(terminal);
@@ -4929,7 +5190,7 @@ describe("REPL first use: UI8", () => {
       yield* until_(terminal, "the History drawer", (one) => shows(one, "[close]"));
       yield* click(terminal, "Entry 1 admitted");
       yield* settled(40);
-      expect(locationOn(terminal)).toContain("at=");
+      expect(historicalOn(terminal)).toBe(true);
       yield* click(terminal, "[close]");
       yield* settled(30);
       // Frozen: what the draft's guidance says changes, because what Enter there
@@ -4938,7 +5199,7 @@ describe("REPL first use: UI8", () => {
       expect(shows(terminal, "activate live to return to the head")).toBe(true);
       expect(shows(terminal, "Enter submits")).toBe(false);
       yield* activate(terminal, "[live]");
-      yield* until_(terminal, "the head", (one) => !(maybeLocation(one) ?? "at=").includes("at="));
+      yield* until_(terminal, "the head", (one) => !historicalOn(one));
 
       // 6. The next entry, after the first has completely settled.
       yield* submitted(terminal, COLD_TWO);

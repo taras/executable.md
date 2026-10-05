@@ -429,6 +429,9 @@ export function fixturePairs(
             viewports: Object.freeze([]),
             actions: undefined,
             regions: Object.freeze([Object.freeze({ region: "refusal", id: "box:refusal" })]),
+            // This fixture screen draws no pane edges, so it reports no interior
+            // beside the panes themselves.
+            contents: Object.freeze([]),
             history: band,
           }),
         };
@@ -686,7 +689,7 @@ export function fixturePairs(
             id: "box:root",
             props: rootProps(size),
             children: [
-              box({ id: "box:body", props: bodyProps(), children: columns }),
+              box({ id: "box:body", props: bodyProps(false), children: columns }),
               box({
                 id: "box:footer",
                 region: "footer",
@@ -728,6 +731,7 @@ export function fixturePairs(
             ),
           }),
           regions: Object.freeze(regions.map((region) => Object.freeze(region))),
+          contents: Object.freeze([]),
           history: band,
         }),
       };

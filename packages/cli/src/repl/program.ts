@@ -1400,8 +1400,18 @@ export function* prepareFrame(
 
 /** Which region's width the text that must fit one is bounded by. */
 function widthsOf(manifest: ReplLayoutManifest, measured: ReplMeasured): ReplMeasuredWidths {
+  // The inside of a pane where the pane has edges, and the pane itself where it
+  // has none. A row written to the outer bound of a bordered pane is as wide as
+  // the pane *and* its edges, which is two columns more room than it has — and a
+  // row wider than its column widens that column and publishes a hit box
+  // reaching into the one beside it. The outer bounds stay in `regions`, which
+  // is what the pane geometry contract keeps asking.
   const of = (...names: readonly ReplRegion[]): number => {
     for (const name of names) {
+      const inside = manifest.contents.find((content) => content.region === name);
+      if (inside !== undefined) {
+        return widthOf(measured, inside.id);
+      }
       const found = manifest.regions.find((region) => region.region === name);
       if (found !== undefined) {
         return widthOf(measured, found.id);

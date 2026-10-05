@@ -32,9 +32,10 @@ import { entryInitialBindings, projectRepl } from "../src/repl/model.ts";
 import type { ReplModel } from "../src/repl/model.ts";
 import { EntrySegmentStream } from "../src/repl/entries.ts";
 import { initialState, NO_AGENT, viewFor } from "../src/repl/application.ts";
+import { encodeLocation } from "../src/repl/route.ts";
 import type { ReplAction, ReplLive, ReplState, ReplView } from "../src/repl/application.ts";
 import type { ReplDispatched } from "../src/repl/reconcile.ts";
-import { NARROW } from "../src/repl/layout.ts";
+import { FOOTER_ROWS, HISTORY_LABEL, HISTORY_ROWS, NARROW } from "../src/repl/layout.ts";
 import type { ReplBounds } from "../src/repl/layout.ts";
 import { BOLD, REPL_PALETTE } from "../src/repl/presentation-style.ts";
 import type { ReplTerminalSize } from "../src/repl/terminal.ts";
@@ -706,5 +707,165 @@ describe("REPL presentation: what an updated frame leaves behind", () => {
     expect(grid.styledIn({ x: 0, y: 0, width: 2, height: 1 })).toEqual([
       "a|7fd3e8|122026|1 b|7fd3e8|122026|1",
     ]);
+  });
+});
+
+describe("REPL presentation: the panes a reading is laid out in", () => {
+  beforeAll(() => useTempFileCompiler());
+
+  it("P1: each shared column is named, and says so while it is empty", function* () {
+    const model = yield* settledAndFailed();
+    for (const size of [WIDE, MEDIUM]) {
+      const presenter = yield* usePresenter(size);
+      // Nothing selected and nothing live: the Bindings column holds no row at
+      // all, which is exactly the state a pane that named itself only when full
+      // would read as a gap.
+      const observed = yield* presenter.commit(reading(stateWith({}), model, NOTHING_LIVE, size));
+      const { grid } = presenter;
+
+      const transcript = placed(observed, "transcript:heading");
+      const bindings = placed(observed, "inspection:heading");
+      expect(textOf(grid, transcript).trim()).toBe("Transcript");
+      expect(textOf(grid, bindings).trim()).toBe("Bindings");
+      expect(inkOf(grid, transcript).attrs).toContain(BOLD);
+      expect(inkOf(grid, bindings).attrs).toContain(BOLD);
+
+      // Named, and not a control: a pane title is something you read.
+      expect(
+        observed.targets.some((target) => target.node === observed.nodeOf("transcript:heading")),
+      ).toBe(false);
+      expect(
+        observed.targets.some((target) => target.node === observed.nodeOf("inspection:heading")),
+      ).toBe(false);
+    }
+  });
+
+  it("P1: a narrow frame has no pane to name, and names none", function* () {
+    const model = yield* settledAndFailed();
+    const presenter = yield* usePresenter(NARROW);
+    const observed = yield* presenter.commit(reading(stateWith({}), model, NOTHING_LIVE, NARROW));
+    // The two surface controls are the narrow frame's own headings; a pane title
+    // described here would be mounted and placed nowhere.
+    expect(observed.keys).toContain("sessions:heading");
+    expect(observed.keys).toContain("entries:heading");
+    expect(observed.keys).not.toContain("transcript:heading");
+    expect(observed.keys).not.toContain("inspection:heading");
+  });
+
+  it("P1: a row is built to the inside of its pane, not to the pane", function* () {
+    const model = yield* settledAndFailed();
+    for (const size of [WIDE, MEDIUM]) {
+      const presenter = yield* usePresenter(size);
+      const observed = yield* presenter.commit(
+        reading(selecting(stateWith({}), "entry-1"), model, NOTHING_LIVE, size),
+      );
+
+      for (const region of ["transcript", "inspection"] as const) {
+        const outer = regionBounds(observed, region);
+        const inside = observed.regionOf(`box:${region}:content`);
+        if (outer === undefined || inside === undefined) {
+          throw new Error(`the ${size.columns}x${size.rows} frame published no ${region} pane`);
+        }
+        // The edge is part of the pane and not part of the room in it.
+        expect(inside.width).toBeLessThan(outer.width);
+        expect(inside.x).toBeGreaterThan(outer.x - 1);
+        // And every row of that pane is exactly the inside wide — a row sized
+        // from the outer bound would reach into the column beside it.
+        for (const key of observed.keys) {
+          const bounds = observed.boundsOf(key);
+          if (bounds === undefined || !within(bounds, inside)) {
+            continue;
+          }
+          expect(bounds.width).toBe(inside.width);
+        }
+      }
+    }
+  });
+
+  it("P2: the footer keeps seven rows, and the draft says what it is", function* () {
+    const model = yield* settledAndFailed();
+    for (const size of [WIDE, MEDIUM, NARROW]) {
+      const presenter = yield* usePresenter(size);
+      const drafted = Object.freeze({
+        ...stateWith({}),
+        draft: "first line\nsecond line\nthird line",
+      });
+      // Twice: the draft claims focus on the first frame and the cue it renders
+      // is the view's, which is one frame behind the tree that settled it.
+      yield* presenter.commit(reading(drafted, model, NOTHING_LIVE, size));
+      const observed = yield* presenter.commit(
+        reading(drafted, model, NOTHING_LIVE, size, focusKeyOf(presenter)),
+      );
+      const { grid } = presenter;
+
+      const footer = regionBounds(observed, "footer");
+      if (footer === undefined) {
+        throw new Error("this frame published no footer");
+      }
+      expect(footer.height).toBe(FOOTER_ROWS);
+
+      // One row, the full width, and the count of what is not on it.
+      const draft = placed(observed, "footer:input");
+      expect(draft.height).toBe(1);
+      expect(draft.width).toBe(size.columns);
+      const text = textOf(grid, draft);
+      expect(text.startsWith(">> Draft: ")).toBe(true);
+      expect(text).toContain("[2 lines] third line");
+
+      // The band keeps its own five rows and now says which band it is.
+      const band = observed.regionOf("box:footer:band");
+      if (band === undefined) {
+        throw new Error("this frame published no History band");
+      }
+      expect(band.height).toBe(HISTORY_ROWS);
+      expect(textOf(grid, band).startsWith(HISTORY_LABEL)).toBe(true);
+    }
+  });
+
+  it("P2: the draft is marked unfocused when focus is elsewhere", function* () {
+    const model = yield* settledAndFailed();
+    const presenter = yield* usePresenter(WIDE);
+    const state = selecting(stateWith({ draft: "typed" }), "entry-1");
+    yield* presenter.commit(reading(state, model));
+    yield* focusOn(presenter, "entries:heading");
+    const observed = yield* presenter.commit(
+      reading(state, model, NOTHING_LIVE, WIDE, focusKeyOf(presenter)),
+    );
+    const text = textOf(presenter.grid, placed(observed, "footer:input"));
+    expect(text.startsWith(" > Draft: typed")).toBe(true);
+  });
+
+  it("P3: the dedicated location is drawn nowhere and reserves nothing", function* () {
+    const model = yield* settledAndFailed();
+    for (const size of [WIDE, MEDIUM, NARROW]) {
+      const presenter = yield* usePresenter(size);
+      // A long multiline draft makes the canonical location longer than any row,
+      // so a frame that still reserved room for it could not hide that.
+      const state = Object.freeze({
+        ...selecting(stateWith({}), "entry-1"),
+        draft: "a long draft line\n".repeat(12),
+      });
+      const view = reading(state, model, NOTHING_LIVE, size);
+      const observed = yield* presenter.commit(view);
+
+      // The route still exists and still encodes exactly as it did.
+      expect(view.location).toBe(encodeLocation(view.state.route));
+      expect(view.location.startsWith("xmd://repl/")).toBe(true);
+
+      // It is simply not on the screen: no candidate, no cell, no row.
+      expect(observed.keys.filter((key) => key.startsWith("location:"))).toEqual([]);
+      for (const row of presenter.grid.rows()) {
+        expect(row).not.toContain("xmd://");
+      }
+      // And nothing was left blank where it used to be: the first body row is
+      // the pane's own, which only holds if no row was reserved above it.
+      const first =
+        size === NARROW ? placed(observed, "guidance") : placed(observed, "transcript:heading");
+      const body = regionBounds(observed, size === NARROW ? "content" : "transcript");
+      if (body === undefined) {
+        throw new Error("this frame published no body region");
+      }
+      expect(first.y).toBe(body.y);
+    }
   });
 });

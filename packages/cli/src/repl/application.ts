@@ -44,6 +44,9 @@ import {
   historyBand,
   HISTORY_ROWS,
   inspectionWidth,
+  paneColumnProps,
+  paneContentProps,
+  paneProps,
   NARROW,
   profileFor,
   refusalProps,
@@ -70,7 +73,7 @@ import {
   scrolled,
 } from "./layout-admission.ts";
 import type { ReplAdmission, ReplWindow } from "./layout-admission.ts";
-import { ORDINARY, styleOf } from "./presentation-style.ts";
+import { ORDINARY, REPL_PALETTE, styleOf } from "./presentation-style.ts";
 import type { ReplRowStyle } from "./presentation-style.ts";
 import type { ReplTerminalSize } from "./terminal.ts";
 import {
@@ -1975,12 +1978,17 @@ function fitted(width: number, parts: readonly GuidancePart[]): string {
  * What never moves is the order: the state, then what focus actually does, then
  * the way out, then movement.
  */
-function guidance(view: ReplView): string {
+function guidance(view: ReplView, room: number): string {
   const focused = view.focused;
   const modal = view.selection.drawers.length > 0;
   const editing = focused === undefined || focused === "footer:input";
   const narrow = view.size.columns <= NARROW.columns;
-  const width = Math.max(1, view.size.columns);
+  // The room this row was measured to have, not the width of the terminal it is
+  // somewhere inside. They are the same only where one region is the whole
+  // screen; everywhere else this row lands in a column, and a sentence fitted to
+  // the terminal is a sentence that runs out of its own row — the engine clips no
+  // text, so what will not fit is drawn over the row underneath.
+  const width = Math.max(1, room);
   const move: GuidancePart = { text: "Tab/Shift+Tab move" };
   const readiness = readinessOf(view);
   if (modal) {
@@ -2278,6 +2286,19 @@ function described(view: ReplView, context: ReplPresentationContext): DescribedS
     }
   }
 
+  // What each shared column is, said once at the top of it. A pane that named
+  // itself only when it held something would be a pane a reader has to recognize
+  // by what happens to be in it, and an empty one would read as a gap. They are
+  // read rather than activated: nothing here is a control, and the frame places
+  // them only where there is a pane to put them in.
+  // Not in a narrow frame: it routes one outlet and has neither column, so a
+  // title described there would be a mounted node with no box to draw it in.
+  // The two surface controls are that frame's own headings.
+  if (!narrow) {
+    items.push(line("transcript:heading", "Transcript", styleOf("pane-heading")));
+    items.push(line("inspection:heading", "Bindings", styleOf("pane-heading")));
+  }
+
   // The transcript of whatever is selected. Selecting an entry *is* selecting a
   // transcript locus, so the rows are that entry's own — not every entry's
   // concatenated, which would make the catalog a list of things that all show
@@ -2464,14 +2485,7 @@ function described(view: ReplView, context: ReplPresentationContext): DescribedS
   // transcript column is narrower than the longest of them — a row wider than
   // its column is one the column beside it loses space to.
   if (surface !== undefined) {
-    items.push(line("guidance", guidance(view), styleOf("status", { inspected })));
-  }
-
-  // The canonical location: how a person comes back to exactly this view, here
-  // or in another process. It goes above whatever surface is being shown rather
-  // than in the footer, which is seven rows and has controls in them.
-  for (const [offset, part] of locationRows(view.location, view.size, context.widths).entries()) {
-    items.push(line(`location:${offset}`, part, styleOf("metadata")));
+    items.push(line("guidance", guidance(view, surface), styleOf("status", { inspected })));
   }
 
   // Why the last thing asked for changed nothing. Shown rather than swallowed: a
@@ -2515,7 +2529,11 @@ function described(view: ReplView, context: ReplPresentationContext): DescribedS
   items.push(
     field(
       "footer:input",
-      "> ",
+      // Named, because the row below a reading has to say that it is where typing
+      // goes rather than one more line of that reading. The marker in front of it
+      // is still the focus cue `fieldText` writes, so this row reads `>> Draft: `
+      // while it holds focus and ` > Draft: ` while it does not.
+      "> Draft: ",
       state.draft,
       "draft",
       styleOf("draft"),
@@ -2753,60 +2771,6 @@ function sessionRows(
     }
   }
   return items;
-}
-
-/**
- * How many rows a narrow frame gives the canonical location.
- *
- * Three, and the region is thirteen. A narrow frame draws the location, both
- * surface controls, the two window controls and the routed outlet in one
- * region, so what the location takes is what the rest cannot have.
- */
-const NARROW_LOCATION_ROWS = 3;
-
-/**
- * The canonical location, as the rows one frame places it in.
- *
- * In full wherever there is room: it is the one thing a person copies out of
- * this screen, and a prefix of it takes them somewhere else. A narrow frame is
- * where there is not room — the location shares its region with every control
- * on the screen, and a draft long enough to fill that region would leave the
- * surface controls and the whole outlet mounted, focusable and drawn nowhere,
- * which is a screen with no way off it.
- *
- * So a narrow frame bounds it and says what it is not showing. A person who
- * cannot see the whole location can still read that fact and act on it; a
- * person whose controls are all off the bottom of the screen cannot do
- * anything at all.
- */
-function locationRows(
-  location: string,
-  size: ReplTerminalSize,
-  widths: ReplMeasuredWidths | undefined,
-): readonly string[] {
-  if (widths === undefined) {
-    // No width yet, and this is the longest unbounded thing on the screen: one
-    // row of it would make the column it lands in as wide as the whole location.
-    return Object.freeze([]);
-  }
-  const rows = chunked(location, widths.surface);
-  if (profileFor(size) !== "narrow" || rows.length <= NARROW_LOCATION_ROWS) {
-    return rows;
-  }
-  const shown = rows.slice(0, NARROW_LOCATION_ROWS - 1);
-  const hidden = location.length - shown.join("").length;
-  // To the same width as the rows above it. This is the one location row whose
-  // length changes — a count that loses a digit makes it shorter — and what
-  // this application describes is a complete row either way: `chunked` already
-  // pads every ordinary one, and covering what a shorter row no longer reaches
-  // is this boundary's job rather than something to leave to whichever renderer
-  // happens to draw it. The renderer in use fills a placed cell to its bounds,
-  // so it repaints this cleanly whether or not the row arrives padded; that is
-  // its behavior, and this is the contract.
-  return Object.freeze([
-    ...shown,
-    pad(`… ${hidden} more characters, in a wider window`, widths.surface),
-  ]);
 }
 
 /**
@@ -3862,6 +3826,7 @@ export function drawerOffsetOf(state: ReplState, open: ReplDrawerRef | undefined
 type ReplSlot =
   | "located"
   | "navigation"
+  | "pane-heading"
   | "sessions-fixed"
   | "sessions"
   | "entries-fixed"
@@ -3905,6 +3870,9 @@ function slotOf(key: string): ReplSlot | undefined {
   if (key === "sessions:heading" || key === "entries:heading") {
     return "navigation";
   }
+  if (key === "transcript:heading" || key === "inspection:heading") {
+    return "pane-heading";
+  }
   // The empty placeholder and both window controls stay put around the window
   // rather than inside it, so a measured viewport is the moving part alone.
   if (key === "sessions:empty" || key === "sessions:earlier" || key === "sessions:later") {
@@ -3925,7 +3893,7 @@ function slotOf(key: string): ReplSlot | undefined {
   if (key.startsWith("binding:") || key.startsWith("elicit:")) {
     return "inspection";
   }
-  if (key === "guidance" || key.startsWith("location:")) {
+  if (key === "guidance") {
     return "located";
   }
   // Above the surface, where there is a row's full width for a sentence. On the
@@ -4107,6 +4075,7 @@ export function presentationFor(
         viewports: Object.freeze([]),
         actions: undefined,
         regions: Object.freeze([Object.freeze({ region: "refusal", id: "box:refusal" })]),
+        contents: Object.freeze([]),
         history: band,
       }),
     };
@@ -4115,6 +4084,8 @@ export function presentationFor(
   const candidates = candidatesOf(descriptions, styles);
   const viewports: ReplViewportSlot[] = [];
   const regions: { region: ReplRegion; id: string }[] = [];
+  /** The border-free inside of each pane that has edges. */
+  const contents: { region: ReplRegion; id: string }[] = [];
   /**
    * How wide one region is, as this frame measured it.
    *
@@ -4178,6 +4149,32 @@ export function presentationFor(
     const found = of("navigation").filter((candidate) => candidate.key === key);
     return found.map((candidate) => rowBox(candidate, region, widthOfRegion(region)));
   };
+  /** One pane's own title, where there is a pane to put it in. */
+  const paneTitle = (key: string, region: ReplRegion): readonly ReplBox[] => {
+    const found = of("pane-heading").filter((candidate) => candidate.key === key);
+    return found.map((candidate) => rowBox(candidate, region, widthOfRegion(region)));
+  };
+  /**
+   * One pane with edges, and the border-free box its rows are measured in.
+   *
+   * The column keeps the width the product gives it; the inside is whatever the
+   * engine leaves after the edges, and that inside is what `widthsOf` reads.
+   */
+  const edgedColumn = (
+    region: ReplRegion,
+    width: number | undefined,
+    surface: number,
+    children: readonly ReplBox[],
+  ): ReplBox => {
+    const id = `box:${region}:content`;
+    contents.push({ region, id });
+    return box({
+      id: `box:${region}`,
+      region,
+      props: paneColumnProps(width, surface),
+      children: [box({ id, region, props: paneContentProps(), children })],
+    });
+  };
 
   const columns: ReplBox[] = [];
   if (profile === "narrow") {
@@ -4215,7 +4212,7 @@ export function presentationFor(
       box({
         id: "box:sidebar",
         region: "sidebar",
-        props: columnProps(sidebarWidth(size)),
+        props: paneProps(sidebarWidth(size), REPL_PALETTE.sideSurface),
         children: [
           // Two groups, and only one of them grows: the Sessions reading takes
           // whatever the column has left, and the catalog states its own height.
@@ -4254,37 +4251,29 @@ export function presentationFor(
           }),
         ],
       }),
-      box({
-        id: "box:transcript",
-        region: "transcript",
-        props: columnProps(undefined),
-        children: [
-          ...located,
-          box({
-            id: "box:transcript:viewport",
-            region: "transcript",
-            props: viewportProps(),
-            children: of("transcript").map((candidate) =>
-              rowBox(candidate, "transcript", context.widths?.surface),
-            ),
-          }),
-        ],
-      }),
-      box({
-        id: "box:inspection",
-        region: "inspection",
-        props: columnProps(inspectionWidth(size)),
-        children: [
-          box({
-            id: "box:inspection:viewport",
-            region: "inspection",
-            props: viewportProps(),
-            children: of("inspection").map((candidate) =>
-              rowBox(candidate, "inspection", context.widths?.inspection),
-            ),
-          }),
-        ],
-      }),
+      edgedColumn("transcript", undefined, REPL_PALETTE.centreSurface, [
+        ...paneTitle("transcript:heading", "transcript"),
+        ...located,
+        box({
+          id: "box:transcript:viewport",
+          region: "transcript",
+          props: viewportProps(),
+          children: of("transcript").map((candidate) =>
+            rowBox(candidate, "transcript", context.widths?.surface),
+          ),
+        }),
+      ]),
+      edgedColumn("inspection", inspectionWidth(size), REPL_PALETTE.bindingsSurface, [
+        ...paneTitle("inspection:heading", "inspection"),
+        box({
+          id: "box:inspection:viewport",
+          region: "inspection",
+          props: viewportProps(),
+          children: of("inspection").map((candidate) =>
+            rowBox(candidate, "inspection", context.widths?.inspection),
+          ),
+        }),
+      ]),
     );
   }
 
@@ -4338,7 +4327,11 @@ export function presentationFor(
         id: "box:root",
         props: rootProps(size),
         children: [
-          box({ id: "box:body", props: bodyProps(), children: columns }),
+          box({
+            id: "box:body",
+            props: bodyProps(profile !== "narrow"),
+            children: columns,
+          }),
           box({
             id: "box:footer",
             region: "footer",
@@ -4395,6 +4388,7 @@ export function presentationFor(
         ),
       }),
       regions: Object.freeze(regions.map((region) => Object.freeze(region))),
+      contents: Object.freeze(contents.map((content) => Object.freeze(content))),
       history: band,
     }),
   };
