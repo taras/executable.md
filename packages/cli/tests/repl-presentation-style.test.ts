@@ -1157,3 +1157,59 @@ describe("REPL presentation: a row stays inside the pane it was measured for", (
     expect(exercised).toBe(true);
   });
 });
+
+describe("REPL presentation: the one guidance row", () => {
+  beforeAll(() => useTempFileCompiler());
+
+  it("R6: what the row must say fits the room it was measured for, whole", function* () {
+    // Focus on a mounted control that is not the draft. That is the branch
+    // with the most to say — the state, what Enter does here, and the way back
+    // to the draft are all required together — and it is the branch the
+    // gallery caught running out of a medium transcript column.
+    const model = yield* settledAndFailed();
+
+    for (const size of [WIDE, MEDIUM, NARROW]) {
+      const presenter = yield* usePresenter(size);
+      const observed = yield* presenter.commit(
+        reading(stateWith({}), model, NOTHING_LIVE, size, "entries:heading"),
+      );
+      const { grid } = presenter;
+      const bounds = placed(observed, "guidance");
+      const said = observed.cells.get("guidance") ?? "";
+
+      // It fits the row it was measured for. This engine clips no text, so a
+      // sentence longer than this is not a shortened sentence — it is a
+      // sentence written across the row underneath.
+      expect([size.columns, said.length, bounds.width]).toEqual([
+        size.columns,
+        said.length,
+        bounds.width >= said.length ? bounds.width : said.length,
+      ]);
+
+      // And it still says the three things it exists to say, each whole: the
+      // state it is in, what the focused control does, and the way back to the
+      // draft. No ellipsis, because nothing required was cut to get here.
+      expect([size.columns, said.startsWith("Ready for Entry ")]).toEqual([size.columns, true]);
+      expect([size.columns, said.includes("Enter")]).toEqual([size.columns, true]);
+      expect([size.columns, /Tab to (the )?draft/.test(said)]).toEqual([size.columns, true]);
+      expect([size.columns, said.includes("…")]).toEqual([size.columns, false]);
+
+      // What is drawn in the row is what the row contributed, and so is every
+      // transcript row beneath it: an overlong sentence lands on the cells of
+      // the row below, which is where it was seen.
+      for (const key of ["guidance", ...observed.keys.filter((one) => one.startsWith("line:"))]) {
+        // A narrow frame describes the transcript's rows and places none of
+        // them, so there is nothing of theirs on this screen to read.
+        const at = key === "guidance" ? bounds : observed.boundsOf(key);
+        if (at === undefined) {
+          continue;
+        }
+        expect([size.columns, key, textOf(grid, at).trimEnd()]).toEqual([
+          size.columns,
+          key,
+          (observed.cells.get(key) ?? "").trimEnd(),
+        ]);
+      }
+    }
+  });
+});

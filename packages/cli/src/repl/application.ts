@@ -1964,7 +1964,21 @@ function fitted(width: number, parts: readonly GuidancePart[]): string {
       kept.push(part.text);
     }
   }
-  return kept.join(GUIDANCE_SEPARATOR);
+  const said = kept.join(GUIDANCE_SEPARATOR);
+  // A floor, not a policy. Choosing the vocabulary by room is what keeps the
+  // required parts whole, and the supported sizes never come here. What this
+  // refuses is the one outcome that is worse than a shortened sentence: a row
+  // longer than its own width, which this engine does not clip but writes over
+  // the row beneath.
+  return said.length <= width ? said : fitLine([{ text: said, elide: true }], width);
+}
+
+/** What the row cannot be drawn without, at the length it would be drawn at. */
+function requiredLength(parts: readonly GuidancePart[]): number {
+  return parts
+    .filter((part) => part.required === true)
+    .map((part) => part.text)
+    .join(GUIDANCE_SEPARATOR).length;
 }
 
 /**
@@ -1979,51 +1993,77 @@ function fitted(width: number, parts: readonly GuidancePart[]): string {
  * the way out, then movement.
  */
 function guidance(view: ReplView, room: number): string {
+  const width = Math.max(1, room);
+  const readiness = readinessOf(view);
+  // Which vocabulary this row speaks is decided by the room it was measured
+  // for, not by the size of the terminal it is somewhere inside. The medium
+  // profile is wide enough for the long phrases and its transcript column is
+  // not: this row's three required parts come to seventy-one columns in a
+  // sixty-three column pane, and the parts that do not fit are not dropped —
+  // they are required — so the sentence ran onto the row below.
+  //
+  // A narrow frame keeps saying what it says today: it is already compact, and
+  // a profile that has chosen the short phrases does not un-choose them because
+  // its one column happens to be wide.
+  const narrow = view.size.columns <= NARROW.columns;
+  const full = guidanceParts(view, readiness, narrow);
+  const parts = requiredLength(full) <= width ? full : guidanceParts(view, readiness, true);
+  return fitted(width, parts);
+}
+
+/**
+ * The parts of the guidance row, in the order they are read.
+ *
+ * `compact` chooses the shorter of the two vocabularies this row already has.
+ * It is a question about room rather than about the terminal: the same screen
+ * can want the long phrases in one region and the short ones in another.
+ *
+ * What never moves is the order: the state, then what focus actually does, then
+ * the way out, then movement.
+ */
+function guidanceParts(
+  view: ReplView,
+  readiness: ReplReadiness,
+  compact: boolean,
+): readonly GuidancePart[] {
   const focused = view.focused;
   const modal = view.selection.drawers.length > 0;
   const editing = focused === undefined || focused === "footer:input";
   const narrow = view.size.columns <= NARROW.columns;
-  // The room this row was measured to have, not the width of the terminal it is
-  // somewhere inside. They are the same only where one region is the whole
-  // screen; everywhere else this row lands in a column, and a sentence fitted to
-  // the terminal is a sentence that runs out of its own row — the engine clips no
-  // text, so what will not fit is drawn over the row underneath.
-  const width = Math.max(1, room);
   const move: GuidancePart = { text: "Tab/Shift+Tab move" };
-  const readiness = readinessOf(view);
   if (modal) {
     // A drawer holds focus, so `Esc closes` is required and movement is not: Tab
     // is discoverable by pressing it, and being shut inside a modal whose way out
     // was cut from the row is not. The state stays, because a question does not
     // stop an entry from running and a reader still needs to know that it is.
-    return fitted(width, [
+    return [
       { text: drawerState(view, readiness), required: true },
-      { text: primaryAction(view, narrow), required: true },
+      { text: primaryAction(view, compact), required: true },
       { text: "Esc closes", required: true },
       move,
-    ]);
+    ];
   }
-  const state: GuidancePart = { text: statePhrase(readiness, narrow), required: true };
+  const state: GuidancePart = { text: statePhrase(readiness, compact), required: true };
   if (!editing) {
     // No word here about submitting. Enter activates the control that has focus,
     // so a row explaining why Enter cannot submit would describe a key this node
     // does not use that way. The way back to the draft is required — it is the
     // one thing this screen used to say nothing about at all.
-    return fitted(width, [
+    return [
       state,
-      { text: primaryAction(view, narrow), required: true },
+      { text: primaryAction(view, compact), required: true },
       move,
-      { text: narrow ? "Tab to draft" : "Tab to the draft to type", required: true },
-    ]);
+      { text: compact ? "Tab to draft" : "Tab to the draft to type", required: true },
+    ];
   }
-  const advice = stateAdvice(readiness, narrow);
+  const advice = stateAdvice(readiness, compact);
   const said: GuidancePart[] =
     advice === undefined ? [state] : [state, { text: advice, required: true }];
   if (readiness.kind === "history") {
     // The draft survives a frozen position and stays editable, but the fact a
     // person needs here is the way back to the head rather than that typing
     // works. The draft row below is visibly holding their text either way.
-    return fitted(width, [...said, move]);
+    return [...said, move];
   }
   // Focus is in the draft. Only here is Enter a submission, and only when the
   // readiness would take one — a row promising it in any other state is the one
@@ -2031,7 +2071,7 @@ function guidance(view: ReplView, room: number): string {
   const enter: GuidancePart[] = admitsSubmission(readiness)
     ? [{ text: "Enter submits", required: true }]
     : [];
-  return fitted(width, [...said, ...enter, { text: "Type here" }, move]);
+  return [...said, ...enter, { text: "Type here" }, move];
 }
 
 /**
