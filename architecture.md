@@ -31,6 +31,7 @@ and categorization rather than clarify them, so both stay exactly as written.
 | replay determinism | the journal doesn't lose the execution chain: replaying arrives at the same state, where execution can continue |
 | replay | using the durable journal to restore the recorded portion of a document execution without repeating durable effects; after the recorded entries are consumed, execution may continue live |
 | divergence | reserved for replay: a replay that departs from the recorded journal |
+| REPL history | the immutable ordered execution records the REPL reads from the durable journal and projects into `ReplModel`; the History surface presents this read model and is not itself a journal |
 | middleware | applied by the lexical structure, used by runtime execution |
 | workflow run | a workflow being carried out with its progress and outcome recorded durably; document executions perform its work, while ongoing effects remain scoped to the document execution in which they run |
 | document execution | one evaluation of a root document initiated through `execute()`, producing one output stream and one completion result while reading and appending a durable journal; its ongoing effects belong to the Effection scope in which the evaluation runs |
