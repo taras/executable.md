@@ -547,6 +547,16 @@ function* drive(
       /** Whether the person asked to leave, as opposed to input having ended. */
       let departing = false;
       for (const wake of taken) {
+        // Leaving was decided earlier in this batch, and everything after it is
+        // input that arrived before the decision. A wake reader hands over
+        // everything the terminal had, so a submission typed ahead of the
+        // interrupt is in the same batch as it — and acting on one would start an
+        // entry, answer a question or settle a permission on behalf of somebody
+        // who has already asked to stop. The decision is enforced here because
+        // this is the only place that sees the rest of the batch.
+        if (departing) {
+          break;
+        }
         if (wake.kind === "session") {
           model = current.model;
         } else if (wake.event.kind === "eof") {
