@@ -1165,7 +1165,7 @@ describe("REPL journey: one entry, from raw bytes", () => {
     expect(decoded.ok).toBe(true);
     if (decoded.ok) {
       expect(decoded.value.draft).toBe(source);
-      expect(decoded.value.surface).toBe("repl");
+      expect(decoded.value.surface).toBe("entries");
       expect(decoded.value.at).toBeUndefined();
     }
   });
@@ -1375,7 +1375,7 @@ describe("REPL journey: one entry, from raw bytes", () => {
     // opened it beside a nested scope would be describing two different places.
     const location = encodeLocation({
       execution,
-      surface: "repl",
+      surface: "entries",
       scopes: [entry.key],
       drawers: [{ kind: "binding", name: binding.name }],
       at: marker,
@@ -1479,7 +1479,7 @@ describe("REPL journey: one entry, from raw bytes", () => {
 
       terminal.end();
       yield* running;
-      expect(outcome?.location).toBe(`xmd://repl/${execution}/repl`);
+      expect(outcome?.location).toBe(`xmd://repl/${execution}/entries`);
       expect(outcome?.refusal).toBeUndefined();
     });
 
@@ -1517,7 +1517,7 @@ describe("REPL journey: leaving", () => {
       yield* running;
 
       // The same ending every other way of leaving produces, location included.
-      expect(outcome?.location).toBe(`xmd://repl/${execution}/repl`);
+      expect(outcome?.location).toBe(`xmd://repl/${execution}/entries`);
       expect(outcome?.refusal).toBeUndefined();
     });
 
@@ -1544,7 +1544,7 @@ describe("REPL journey: leaving", () => {
       let refused: boolean | undefined;
       const running = yield* spawn(function* (): Operation<void> {
         const ran = yield* runReplProgram({
-          location: "xmd://repl/broken/repl",
+          location: "xmd://repl/broken/entries",
           profile: PROFILE,
         });
         refused = !ran.ok;
@@ -1801,7 +1801,7 @@ describe("REPL journey: what it refuses, and what it leaves alone", () => {
       let refused: boolean | undefined;
       const running = yield* spawn(function* (): Operation<void> {
         const ran = yield* runReplProgram({
-          location: "xmd://repl/broken/repl",
+          location: "xmd://repl/broken/entries",
           profile: PROFILE,
         });
         refused = !ran.ok;
@@ -2563,7 +2563,7 @@ describe("REPL journey: the same product at every size", () => {
       terminal.end();
       yield* running;
       // The route it was at is still the base reading, published on the way out.
-      expect(exited.location()).toMatch(/^xmd:\/\/repl\/[A-Za-z0-9_-]+\/repl$/);
+      expect(exited.location()).toMatch(/^xmd:\/\/repl\/[A-Za-z0-9_-]+\/entries$/);
     });
   });
 });
@@ -2666,7 +2666,7 @@ describe("REPL journey: what it settles before it acts", () => {
     // real, and one segment of the path is a typo.
     const mistyped = encodeLocation({
       execution: files[0].replace(/\.jsonl$/, ""),
-      surface: "repl",
+      surface: "entries",
       scopes: [entryKey, "Nowhere-9"],
       drawers: [],
       at: undefined,
@@ -2764,7 +2764,7 @@ describe("REPL journey: what it settles before it acts", () => {
     // which no history records, so nothing this file holds could say otherwise.
     const stale = encodeLocation({
       execution: files[0].replace(/\.jsonl$/, ""),
-      surface: "repl",
+      surface: "entries",
       scopes: [model.entries[0]?.key ?? ""],
       drawers: [{ kind: "live-elicit" }],
       at: undefined,
@@ -2843,7 +2843,7 @@ describe("REPL journey: what it settles before it acts", () => {
 
       const running = yield* spawn(function* (): Operation<void> {
         outcome = yield* runReplProgram({
-          location: `xmd://repl/unclosed/repl/${model.entries[0]?.key ?? ""}/+elicit`,
+          location: `xmd://repl/unclosed/entries/${model.entries[0]?.key ?? ""}/+elicit`,
           profile: PROFILE,
         });
       });
@@ -3158,7 +3158,7 @@ describe("REPL journey: a position earlier than the entry being read", () => {
         expect(after.value.inspect).toBe(true);
         // So do the draft and the surface.
         expect(after.value.draft).toBe("Three.");
-        expect(after.value.surface).toBe("repl");
+        expect(after.value.surface).toBe("entries");
       }
     });
   });
@@ -3971,7 +3971,7 @@ describe("REPL journey: a cold process over a multi-entry journal", () => {
     // catalog and a selection rather than whatever happens to be first.
     const location = encodeLocation({
       execution,
-      surface: "repl",
+      surface: "entries",
       scopes: ["entry-2"],
       drawers: [],
       at: undefined,
@@ -4862,7 +4862,7 @@ describe("REPL first use: UI2 refusal", () => {
       const running = yield* spawn(function* (): Operation<void> {
         // A location this history cannot answer: an entry it never admitted.
         outcome = yield* runReplProgram({
-          location: `xmd://repl/${execution}/repl/entry-9`,
+          location: `xmd://repl/${execution}/entries/entry-9`,
           profile: PROFILE,
         });
       });
@@ -4913,7 +4913,7 @@ describe("REPL first use: UI2 refusal", () => {
 
       const running = yield* spawn(function* (): Operation<void> {
         outcome = yield* runReplProgram({
-          location: `xmd://repl/${execution}/repl/entry-9`,
+          location: `xmd://repl/${execution}/entries/entry-9`,
           profile: PROFILE,
         });
       });

@@ -7,7 +7,7 @@ another one.
 
 ```bash
 xmd repl                                  # a fresh execution with an empty draft
-xmd repl 'xmd://repl/<execution>/repl'    # reopen exactly that retained history
+xmd repl 'xmd://repl/<execution>/entries' # reopen exactly that retained history
 xmd repl --deny-all                       # the same, answering every agent request with no
 ```
 
@@ -46,7 +46,7 @@ one.
 
 Run `xmd repl`. The screen shows an empty draft, a Sessions list that says it is
 empty, an Entries list with nothing in it yet, and a location of the form
-`xmd://repl/<execution>/repl` — the execution already exists, as an empty history
+`xmd://repl/<execution>/entries` — the execution already exists, as an empty history
 file, before you have typed anything.
 
 Type or paste one XMD entry and press Enter. What was in the draft is now the

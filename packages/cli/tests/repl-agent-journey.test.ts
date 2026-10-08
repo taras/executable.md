@@ -937,7 +937,7 @@ describe("J3 — durable truth, and a cold process over it", () => {
     const route = routeOf(ended);
     expect(route.at).toBe("yield:root:3");
     expect(route.inspect).toBe(true);
-    expect(route.surface).toBe("repl");
+    expect(route.surface).toBe("entries");
     expect(route.scopes).toEqual([]);
   });
 
@@ -965,7 +965,7 @@ describe("J3 — durable truth, and a cold process over it", () => {
       // readable request about a history that is not here, so the surface says
       // so rather than replaying something.
       const running = yield* spawn(function* (): Operation<void> {
-        yield* runReplProgram({ profile, location: "xmd://repl/0123456789abcdef/repl" });
+        yield* runReplProgram({ profile, location: "xmd://repl/0123456789abcdef/entries" });
       });
       yield* showing(terminal, "this execution has no history here.");
 
@@ -1271,7 +1271,7 @@ describe("J2 — a filter and a draft across a resize (#875 R1)", () => {
     const standingRoute = routeOf(standing);
     expect(standingRoute.session).toBe(chosen);
     expect(standingRoute.draft).toBe(DRAFT);
-    expect(standingRoute.surface).toBe("repl");
+    expect(standingRoute.surface).toBe("entries");
     expect(standingRoute.scopes).toEqual([]);
     expect(standingRoute.at).toBeUndefined();
     expect(standingRoute.inspect).toBe(false);

@@ -117,16 +117,16 @@ const EXECUTION = "kf39sla2";
 describe("REPL route: the grammar", () => {
   it("R1: decodes equivalent spellings and query orders into one route", function* () {
     const canonical = decoded(
-      `xmd://repl/${EXECUTION}/repl/entry-1/+elicit:yield:root:6?at=yield:root:6&inspect`,
+      `xmd://repl/${EXECUTION}/entries/entry-1/+elicit:yield:root:6?at=yield:root:6&inspect`,
     );
 
     expect(canonical).toEqual(
       decoded(
-        `xmd://repl/${EXECUTION}/repl/entry%2D1/+elicit:yield%3Aroot%3A6?inspect&at=yield%3Aroot%3A6`,
+        `xmd://repl/${EXECUTION}/entries/entry%2D1/+elicit:yield%3Aroot%3A6?inspect&at=yield%3Aroot%3A6`,
       ),
     );
     expect(canonical.execution).toBe(EXECUTION);
-    expect(canonical.surface).toBe("repl");
+    expect(canonical.surface).toBe("entries");
     expect(canonical.scopes).toEqual(["entry-1"]);
     expect(canonical.drawers).toEqual([{ kind: "recorded-elicit", marker: "yield:root:6" }]);
     expect(canonical.at).toBe("yield:root:6");
@@ -137,17 +137,17 @@ describe("REPL route: the grammar", () => {
   it("R1: round-trips every valid surface through one canonical spelling", function* () {
     const locations = [
       `xmd://repl/${EXECUTION}/sessions`,
-      `xmd://repl/${EXECUTION}/repl`,
-      `xmd://repl/${EXECUTION}/repl/entry-1`,
-      `xmd://repl/${EXECUTION}/repl/entry-1/Checklist-1`,
-      `xmd://repl/${EXECUTION}/repl/entry-1/generated-1`,
-      `xmd://repl/${EXECUTION}/repl/entry-1/+history`,
-      `xmd://repl/${EXECUTION}/repl/entry-1/+binding:plan`,
-      `xmd://repl/${EXECUTION}/repl/entry-1/+elicit`,
-      `xmd://repl/${EXECUTION}/repl/entry-1/+history/+binding:plan`,
-      `xmd://repl/${EXECUTION}/repl/entry-1?at=yield:root:1`,
-      `xmd://repl/${EXECUTION}/repl/entry-1?at=yield:root:1&inspect`,
-      `xmd://repl/${EXECUTION}/repl?draft=one%20more%20line`,
+      `xmd://repl/${EXECUTION}/entries`,
+      `xmd://repl/${EXECUTION}/entries/entry-1`,
+      `xmd://repl/${EXECUTION}/entries/entry-1/Checklist-1`,
+      `xmd://repl/${EXECUTION}/entries/entry-1/generated-1`,
+      `xmd://repl/${EXECUTION}/entries/entry-1/+history`,
+      `xmd://repl/${EXECUTION}/entries/entry-1/+binding:plan`,
+      `xmd://repl/${EXECUTION}/entries/entry-1/+elicit`,
+      `xmd://repl/${EXECUTION}/entries/entry-1/+history/+binding:plan`,
+      `xmd://repl/${EXECUTION}/entries/entry-1?at=yield:root:1`,
+      `xmd://repl/${EXECUTION}/entries/entry-1?at=yield:root:1&inspect`,
+      `xmd://repl/${EXECUTION}/entries?draft=one%20more%20line`,
     ];
 
     for (const location of locations) {
@@ -161,22 +161,24 @@ describe("REPL route: the grammar", () => {
     expect(refused(`xmd://repl/${EXECUTION}`)).toContain("names an execution and a surface");
     expect(refused("xmd://repl/")).toContain("names an execution and a surface");
     expect(refused(`xmd://repl/${EXECUTION}/notes`)).toContain("surface");
-    expect(refused(`xmd://repl/${EXECUTION}/repl/%zz`)).toContain("escapes");
-    expect(refused(`xmd://repl/${EXECUTION}/repl//entry-1`)).toContain("empty path segment");
-    expect(refused(`xmd://repl/${EXECUTION}/repl/entry-1?inspect`)).toContain("needs the position");
-    expect(refused(`xmd://repl/${EXECUTION}/repl/entry-1/+history/Checklist-1`)).toContain(
+    expect(refused(`xmd://repl/${EXECUTION}/entries/%zz`)).toContain("escapes");
+    expect(refused(`xmd://repl/${EXECUTION}/entries//entry-1`)).toContain("empty path segment");
+    expect(refused(`xmd://repl/${EXECUTION}/entries/entry-1?inspect`)).toContain(
+      "needs the position",
+    );
+    expect(refused(`xmd://repl/${EXECUTION}/entries/entry-1/+history/Checklist-1`)).toContain(
       "scopes precede its drawers",
     );
-    expect(refused(`xmd://repl/${EXECUTION}/repl/entry-1/+notes`)).toContain("names a drawer");
+    expect(refused(`xmd://repl/${EXECUTION}/entries/entry-1/+notes`)).toContain("names a drawer");
     expect(refused(`xmd://repl/${EXECUTION}/sessions/+binding:plan`)).toContain("Sessions surface");
-    expect(refused(`xmd://repl/${EXECUTION}/repl?pause=1`)).toContain("query");
-    expect(refused(`xmd://repl/${EXECUTION}/repl#top`)).toContain("no fragment");
-    expect(refused("xmd://repl/../repl")).toContain("opaque identifier");
+    expect(refused(`xmd://repl/${EXECUTION}/entries?pause=1`)).toContain("query");
+    expect(refused(`xmd://repl/${EXECUTION}/entries#top`)).toContain("no fragment");
+    expect(refused("xmd://repl/../entries")).toContain("opaque identifier");
     expect(refused("xmd://repl/%2E%2E/repl")).toContain("opaque identifier");
   });
 
   it("R1: cannot spell a route the grammar would refuse", function* () {
-    const route = decoded(`xmd://repl/${EXECUTION}/repl/entry-1?at=yield:root:1&inspect`);
+    const route = decoded(`xmd://repl/${EXECUTION}/entries/entry-1?at=yield:root:1&inspect`);
 
     expect(() => encodeLocation({ ...route, at: undefined })).toThrow();
     expect(() => encodeLocation({ ...route, execution: "../escape" })).toThrow();
@@ -199,7 +201,7 @@ describe("REPL route: the grammar", () => {
     // rather than being a state an execution can only be in before its first
     // entry.
     const location =
-      `xmd://repl/${EXECUTION}/repl/entry-2/Checklist-1/+binding:plan` +
+      `xmd://repl/${EXECUTION}/entries/entry-2/Checklist-1/+binding:plan` +
       `?at=yield:root:6&inspect&draft=another%20entry&session=stub:planner`;
     const route = decoded(location);
 
@@ -209,7 +211,7 @@ describe("REPL route: the grammar", () => {
     expect(route.inspect).toBe(true);
     expect(route.draft).toBe("another entry");
     expect(route.session).toBe("stub:planner");
-    expect(route.surface).toBe("repl");
+    expect(route.surface).toBe("entries");
 
     // One canonical spelling, and reading it again is the same route.
     expect(encodeLocation(route)).toBe(location);
@@ -237,17 +239,17 @@ describe("REPL route: resolving against one model", () => {
     const nested = entry.scopes.find((scope) => scope.key === "Checklist-1");
     const plan = entry.bindings.find((candidate) => candidate.name === "plan");
 
-    const head = resolved(model, `xmd://repl/${EXECUTION}/repl/entry-1`);
+    const head = resolved(model, `xmd://repl/${EXECUTION}/entries/entry-1`);
     expect(head.entry).toBe(entry);
     expect(head.scope).toBe(entry);
     expect(head.ancestry).toEqual([entry]);
 
-    const inner = resolved(model, `xmd://repl/${EXECUTION}/repl/entry-1/Checklist-1`);
+    const inner = resolved(model, `xmd://repl/${EXECUTION}/entries/entry-1/Checklist-1`);
     expect(inner.scope).toBe(nested);
     expect(inner.ancestry.length).toBe(2);
     expect(inner.ancestry[0]).toBe(entry);
 
-    const drawer = resolved(model, `xmd://repl/${EXECUTION}/repl/entry-1/+binding:plan`);
+    const drawer = resolved(model, `xmd://repl/${EXECUTION}/entries/entry-1/+binding:plan`);
     expect(drawer.drawers).toHaveLength(1);
     const opened = drawer.drawers[0];
     if (opened.kind !== "binding") {
@@ -261,7 +263,7 @@ describe("REPL route: resolving against one model", () => {
 
   it("M3: the same view results from a journal read a second time", function* () {
     const events = yield* referenceEvents();
-    const location = `xmd://repl/${EXECUTION}/repl/entry-1/Checklist-1`;
+    const location = `xmd://repl/${EXECUTION}/entries/entry-1/Checklist-1`;
 
     const first = resolved(projected(events), location);
     const second = resolved(projected(copied(events)), location);
@@ -283,7 +285,7 @@ describe("REPL route: resolving against one model", () => {
 
     const inspecting = resolved(
       historical,
-      `xmd://repl/${EXECUTION}/repl/entry-1/+elicit:${answered.marker}` +
+      `xmd://repl/${EXECUTION}/entries/entry-1/+elicit:${answered.marker}` +
         `?at=${answered.marker}&inspect`,
     );
     const drawer = inspecting.drawers[0];
@@ -295,7 +297,7 @@ describe("REPL route: resolving against one model", () => {
     expect(
       unresolved(
         historical,
-        `xmd://repl/${EXECUTION}/repl/entry-1/+elicit?at=${answered.marker}&inspect`,
+        `xmd://repl/${EXECUTION}/entries/entry-1/+elicit?at=${answered.marker}&inspect`,
       ),
     ).toContain("live question");
     // No reading of any history can mount a live question's drawer. A waiting
@@ -304,7 +306,7 @@ describe("REPL route: resolving against one model", () => {
     // answer and merely has its root left to close, are both consistent with no
     // question ever arriving — and `settled` cannot tell them apart from one
     // that is really asking.
-    const live = `xmd://repl/${EXECUTION}/repl/entry-1/+elicit`;
+    const live = `xmd://repl/${EXECUTION}/entries/entry-1/+elicit`;
     expect(head.settled).toBe(true);
     expect(unresolved(head, live)).toContain("nothing is being asked");
 
@@ -324,21 +326,21 @@ describe("REPL route: resolving against one model", () => {
     const events = yield* referenceEvents();
     const model = projected(events);
 
-    expect(unresolved(model, `xmd://repl/${EXECUTION}/repl/entry-2`)).toContain("no entry-2");
-    expect(unresolved(model, `xmd://repl/${EXECUTION}/repl/Checklist-1`)).toContain(
+    expect(unresolved(model, `xmd://repl/${EXECUTION}/entries/entry-2`)).toContain("no entry-2");
+    expect(unresolved(model, `xmd://repl/${EXECUTION}/entries/Checklist-1`)).toContain(
       "no Checklist-1",
     );
-    expect(unresolved(model, `xmd://repl/${EXECUTION}/repl/entry-1/Checklist-2`)).toContain(
+    expect(unresolved(model, `xmd://repl/${EXECUTION}/entries/entry-1/Checklist-2`)).toContain(
       "holds no Checklist-2",
     );
-    expect(unresolved(model, `xmd://repl/${EXECUTION}/repl/entry-1/+binding:absent`)).toContain(
+    expect(unresolved(model, `xmd://repl/${EXECUTION}/entries/entry-1/+binding:absent`)).toContain(
       "publishes no absent",
     );
-    expect(unresolved(model, `xmd://repl/${EXECUTION}/repl/+binding:plan`)).toContain(
+    expect(unresolved(model, `xmd://repl/${EXECUTION}/entries/+binding:plan`)).toContain(
       "scope that published the name",
     );
     expect(
-      unresolved(model, `xmd://repl/${EXECUTION}/repl/entry-1/+elicit:yield:root:1`),
+      unresolved(model, `xmd://repl/${EXECUTION}/entries/entry-1/+elicit:yield:root:1`),
     ).toContain("recorded no question at");
   });
 
@@ -346,7 +348,7 @@ describe("REPL route: resolving against one model", () => {
     const events = yield* referenceEvents();
     const model = projected(events);
 
-    expect(unresolved(model, `xmd://repl/${EXECUTION}/repl/entry-1?at=yield:root:1`)).toContain(
+    expect(unresolved(model, `xmd://repl/${EXECUTION}/entries/entry-1?at=yield:root:1`)).toContain(
       "was not projected at",
     );
   });
@@ -354,10 +356,10 @@ describe("REPL route: resolving against one model", () => {
   it("R2: a refused navigation leaves the resolved view it was asked from untouched", function* () {
     const events = yield* referenceEvents();
     const model = projected(events);
-    const standing = resolved(model, `xmd://repl/${EXECUTION}/repl/entry-1/Checklist-1`);
+    const standing = resolved(model, `xmd://repl/${EXECUTION}/entries/entry-1/Checklist-1`);
     const before = { ...standing, ancestry: [...standing.ancestry] };
 
-    expect(unresolved(model, `xmd://repl/${EXECUTION}/repl/entry-1/Checklist-9`)).toContain(
+    expect(unresolved(model, `xmd://repl/${EXECUTION}/entries/entry-1/Checklist-9`)).toContain(
       "holds no Checklist-9",
     );
 
@@ -388,14 +390,14 @@ describe("REPL route: resolving against one model", () => {
       throw new Error("the reference journal admits an entry");
     }
 
-    const beside = resolved(model, `xmd://repl/${EXECUTION}/repl/entry-1?draft=another%20entry`);
+    const beside = resolved(model, `xmd://repl/${EXECUTION}/entries/entry-1?draft=another%20entry`);
     expect(beside.entry).toBe(entry);
     expect(beside.route.draft).toBe("another entry");
 
     // The same beside a nested scope, and beside a conversation filter.
     const nested = resolved(
       model,
-      `xmd://repl/${EXECUTION}/repl/entry-1/Checklist-1?draft=another%20entry`,
+      `xmd://repl/${EXECUTION}/entries/entry-1/Checklist-1?draft=another%20entry`,
     );
     expect(nested.scope?.key).toBe("Checklist-1");
     expect(nested.route.draft).toBe("another entry");
@@ -409,15 +411,15 @@ describe("REPL route: resolving against one model", () => {
     const frozen = projected(events, marker);
     const inspecting = resolved(
       frozen,
-      `xmd://repl/${EXECUTION}/repl?at=${encodeURIComponent(marker)}&inspect&draft=typed`,
+      `xmd://repl/${EXECUTION}/entries?at=${encodeURIComponent(marker)}&inspect&draft=typed`,
     );
     expect(inspecting.route.draft).toBe("typed");
     expect(inspecting.route.inspect).toBe(true);
 
     // An execution with no entry still resolves its own draft, as it always did.
-    expect(resolved(projected([]), `xmd://repl/${EXECUTION}/repl?draft=first%20entry`).entry).toBe(
-      undefined,
-    );
+    expect(
+      resolved(projected([]), `xmd://repl/${EXECUTION}/entries?draft=first%20entry`).entry,
+    ).toBe(undefined);
   });
 
   it("ER1: an entry absent from the selected prefix refuses, whole", function* () {
@@ -429,7 +431,7 @@ describe("REPL route: resolving against one model", () => {
     // entry guessed in the absent one's place.
     const attempt = resolveLocation(
       model,
-      decoded(`xmd://repl/${EXECUTION}/repl/entry-2/Checklist-1`),
+      decoded(`xmd://repl/${EXECUTION}/entries/entry-2/Checklist-1`),
       NO_LIVE,
     );
     if (attempt.ok) {
@@ -439,7 +441,7 @@ describe("REPL route: resolving against one model", () => {
     expect(Object.hasOwn(attempt, "value")).toBe(false);
 
     // The entry it does hold is still exactly the one it held before.
-    expect(resolved(model, `xmd://repl/${EXECUTION}/repl/entry-1`).entry).toBe(
+    expect(resolved(model, `xmd://repl/${EXECUTION}/entries/entry-1`).entry).toBe(
       model.entries[0]?.scope,
     );
   });
@@ -482,19 +484,19 @@ describe("REPL route: a live question's drawer belongs to one place", () => {
     expect(
       unresolved(
         projected(events, "yield:root:0"),
-        `xmd://repl/${EXECUTION}/repl/entry-1/+elicit?at=yield:root:0&inspect`,
+        `xmd://repl/${EXECUTION}/entries/entry-1/+elicit?at=yield:root:0&inspect`,
         live,
       ),
     ).toContain("frozen at an earlier position");
 
     // Cold, with no process holding a question: a Journal records answers, never a
     // question that is still waiting, so nothing retained can establish this.
-    expect(unresolved(model, `xmd://repl/${EXECUTION}/repl/entry-1/+elicit`)).toContain(
+    expect(unresolved(model, `xmd://repl/${EXECUTION}/entries/entry-1/+elicit`)).toContain(
       "nothing is being asked",
     );
 
     // And on the surface it does belong to, while a question is held, it resolves.
-    const opened = resolved(model, `xmd://repl/${EXECUTION}/repl/entry-1/+elicit`, live);
+    const opened = resolved(model, `xmd://repl/${EXECUTION}/entries/entry-1/+elicit`, live);
     expect(opened.drawers).toEqual([{ kind: "live-elicit" }]);
   });
 });
@@ -504,10 +506,10 @@ describe("REPL route: the conversation filter", () => {
     const locations = [
       `xmd://repl/${EXECUTION}/sessions?session=xmd:v1:a`,
       `xmd://repl/${EXECUTION}/sessions/+permission?session=xmd:v1:a`,
-      `xmd://repl/${EXECUTION}/repl/entry-1?session=xmd:v1:a`,
-      `xmd://repl/${EXECUTION}/repl/entry-1/+history?at=yield:root:1&inspect&session=one`,
-      `xmd://repl/${EXECUTION}/repl?draft=one%20more%20line&session=one`,
-      `xmd://repl/${EXECUTION}/repl/entry-1/+binding:plan?at=yield:root:1&session=one`,
+      `xmd://repl/${EXECUTION}/entries/entry-1?session=xmd:v1:a`,
+      `xmd://repl/${EXECUTION}/entries/entry-1/+history?at=yield:root:1&inspect&session=one`,
+      `xmd://repl/${EXECUTION}/entries?draft=one%20more%20line&session=one`,
+      `xmd://repl/${EXECUTION}/entries/entry-1/+binding:plan?at=yield:root:1&session=one`,
     ];
 
     for (const location of locations) {
@@ -519,11 +521,11 @@ describe("REPL route: the conversation filter", () => {
   it("R1: leaves every location that names no conversation byte-identical", function* () {
     const locations = [
       `xmd://repl/${EXECUTION}/sessions`,
-      `xmd://repl/${EXECUTION}/repl`,
-      `xmd://repl/${EXECUTION}/repl/entry-1`,
-      `xmd://repl/${EXECUTION}/repl/entry-1/+history/+binding:plan`,
-      `xmd://repl/${EXECUTION}/repl/entry-1?at=yield:root:1&inspect`,
-      `xmd://repl/${EXECUTION}/repl?draft=one%20more%20line`,
+      `xmd://repl/${EXECUTION}/entries`,
+      `xmd://repl/${EXECUTION}/entries/entry-1`,
+      `xmd://repl/${EXECUTION}/entries/entry-1/+history/+binding:plan`,
+      `xmd://repl/${EXECUTION}/entries/entry-1?at=yield:root:1&inspect`,
+      `xmd://repl/${EXECUTION}/entries?draft=one%20more%20line`,
     ];
 
     for (const location of locations) {
@@ -534,11 +536,13 @@ describe("REPL route: the conversation filter", () => {
 
   it("R1: reads query members by name, so order still does not matter", function* () {
     const canonical = decoded(
-      `xmd://repl/${EXECUTION}/repl/entry-1?at=yield:root:6&inspect&session=xmd:v1:a`,
+      `xmd://repl/${EXECUTION}/entries/entry-1?at=yield:root:6&inspect&session=xmd:v1:a`,
     );
 
     expect(canonical).toEqual(
-      decoded(`xmd://repl/${EXECUTION}/repl/entry-1?session=xmd:v1:a&inspect&at=yield%3Aroot%3A6`),
+      decoded(
+        `xmd://repl/${EXECUTION}/entries/entry-1?session=xmd:v1:a&inspect&at=yield%3Aroot%3A6`,
+      ),
     );
     expect(canonical.session).toBe("xmd:v1:a");
   });
@@ -569,7 +573,7 @@ describe("REPL route: the conversation filter", () => {
     expect(refused(`xmd://repl/${EXECUTION}/sessions/+permission:turn-3`)).toContain(
       "names a drawer",
     );
-    expect(refused(`xmd://repl/${EXECUTION}/repl/entry-1/+permission`)).toContain(
+    expect(refused(`xmd://repl/${EXECUTION}/entries/entry-1/+permission`)).toContain(
       "Sessions surface",
     );
     // And Sessions still holds nothing else.
@@ -578,7 +582,7 @@ describe("REPL route: the conversation filter", () => {
 
     const sessions = decoded(`xmd://repl/${EXECUTION}/sessions`);
     expect(() =>
-      encodeLocation({ ...sessions, surface: "repl", drawers: [{ kind: "live-permission" }] }),
+      encodeLocation({ ...sessions, surface: "entries", drawers: [{ kind: "live-permission" }] }),
     ).toThrow();
   });
 });
@@ -593,7 +597,7 @@ describe("REPL route: resolving a conversation", () => {
     const filtered = resolved(model, `xmd://repl/${EXECUTION}/sessions?session=stub%3Areview`);
     expect(filtered.session).toBe(model.sessions[0]);
     // The filter is orthogonal to everything else a location can say.
-    const beside = resolved(model, `xmd://repl/${EXECUTION}/repl/entry-1?session=stub%3Abuild`);
+    const beside = resolved(model, `xmd://repl/${EXECUTION}/entries/entry-1?session=stub%3Abuild`);
     expect(beside.session).toBe(model.sessions[1]);
     expect(beside.scope).toBe(model.entries[0]?.scope);
     // And absent means every conversation rather than none.
@@ -704,7 +708,7 @@ describe("REPL route: resolving a conversation", () => {
   it("R2: the two live facts stay independent of each other", function* () {
     const events = yield* referenceEvents();
     const model = projected(events);
-    const question = `xmd://repl/${EXECUTION}/repl/entry-1/+elicit`;
+    const question = `xmd://repl/${EXECUTION}/entries/entry-1/+elicit`;
 
     // Holding a permission request says nothing about a waiting question.
     expect(unresolved(model, question, holding({ permission: true }))).toContain(
