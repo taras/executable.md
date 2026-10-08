@@ -59,18 +59,47 @@ export function focusPrefixed(label: string, focused: boolean): string {
 }
 
 /**
- * One editable line's text, for the same reason.
+ * One editable line, as the four stretches it is drawn in.
+ *
+ * Separate because they are four different things — where the keystroke goes,
+ * what the line is called, how much of the value is not on this row, and the
+ * value itself — and the screen colours them separately. `fieldText` is their
+ * concatenation, so there is one answer to what the row says and the parts
+ * cannot drift from it.
  *
  * A value holding several lines shows its last one under a count of the rest: a
  * cell is a row, so a line that paid itself out over four of them would push the
  * controls below it off the screen.
  */
-export function fieldText(prompt: string, text: string, focused: boolean): string {
+export function fieldParts(
+  prompt: string,
+  text: string,
+  focused: boolean,
+): {
+  readonly marker: string;
+  readonly prompt: string;
+  readonly earlier: string;
+  readonly value: string;
+} {
   const lines = text.split("\n");
-  const last = lines[lines.length - 1];
   const earlier = lines.length - 1;
-  const body = earlier === 0 ? last : `[${earlier} line${earlier === 1 ? "" : "s"}] ${last}`;
-  return `${focused ? ">" : " "}${prompt}${body}`;
+  return Object.freeze({
+    marker: focused ? ">" : " ",
+    prompt,
+    earlier: earlier === 0 ? "" : `[${earlier} line${earlier === 1 ? "" : "s"}] `,
+    value: lines[lines.length - 1],
+  });
+}
+
+/**
+ * One editable line's text, for the pass that measures it.
+ *
+ * Pure, and exported, because the pass that measures a region has to ask how
+ * wide this row is before any node renders it.
+ */
+export function fieldText(prompt: string, text: string, focused: boolean): string {
+  const parts = fieldParts(prompt, text, focused);
+  return `${parts.marker}${parts.prompt}${parts.earlier}${parts.value}`;
 }
 
 /** Read an optional string field. */

@@ -37,7 +37,15 @@
 
 import { close, fixed, fit, grow, open, text } from "@bomb.sh/tty";
 import type { Op, OpenElement, SizingAxis } from "@bomb.sh/tty";
-import { REPL_PALETTE, surfaceOf, terminalColour, textStyleOf } from "./presentation-style.ts";
+import { runText } from "./description.ts";
+import type { ReplTokenRun } from "./description.ts";
+import {
+  REPL_PALETTE,
+  runStyleOf,
+  surfaceOf,
+  terminalColour,
+  textStyleOf,
+} from "./presentation-style.ts";
 import type { ReplRowStyle } from "./presentation-style.ts";
 import type { ReplTerminalSize } from "./terminal.ts";
 
@@ -95,6 +103,16 @@ export interface ReplBox {
    * structure, and structure takes the surface of whatever it is inside.
    */
   readonly style: ReplRowStyle | undefined;
+  /**
+   * The stretches this row's text is made of, where its characters mean
+   * different things, or none where the whole row reads as one thing.
+   *
+   * They apply only when they spell exactly the text being drawn. A row whose
+   * mounted node contributed something else is drawn as one stretch under the
+   * row's own role, because runs that said something about other characters
+   * would be colouring text they were never built for.
+   */
+  readonly runs: readonly ReplTokenRun[] | undefined;
   readonly children: readonly ReplBox[];
 }
 
@@ -210,6 +228,16 @@ const DRAWER_SHARE = 8;
  * underneath it.
  */
 const DRAWER_BACKGROUND = terminalColour(REPL_PALETTE.drawerSurface);
+
+/**
+ * How far in from each side of its rectangle a drawer's rows start.
+ *
+ * One cell. The reference this screen follows separates a drawer's content from
+ * its own edge with pixels, and a cell is the terminal's smallest version of
+ * that — enough to tell a title from the text it is in front of, and not enough
+ * to cost the content a column it needed.
+ */
+const DRAWER_INSET = 1;
 
 /** Which profile a size gets. */
 export function profileFor(size: ReplTerminalSize): ReplProfile {
@@ -428,10 +456,18 @@ export const CONTROL_PROPS: ReplBoxProps = Object.freeze({
   layout: Object.freeze({ width: fit(), height: fixed(1) }),
 });
 
-/** The whole terminal, stacked top to bottom. */
+/**
+ * The whole terminal, stacked top to bottom, on the application's own surface.
+ *
+ * Painted here rather than left to the terminal's default, because the parts of
+ * the screen no pane covers — the footer, the band, whatever a profile leaves
+ * over — are still this application's. A frame that painted only its panes would
+ * read as three lit columns on somebody's wallpaper.
+ */
 export function rootProps(size: ReplTerminalSize): ReplBoxProps {
   return {
     layout: { width: fixed(size.columns), height: fixed(size.rows), direction: "ttb" },
+    bg: terminalColour(REPL_PALETTE.applicationSurface),
   };
 }
 
@@ -590,10 +626,17 @@ export function bandProps(): ReplBoxProps {
  * `drawerRect()` states, and painted with its own background so the blank
  * interior of a short modal line obscures the text beneath it.
  *
- * Every row of the rectangle is the drawer's to use. There is no inset inside
- * it: the rectangle is already inset from the body, and a second margin within
- * it would cost the content two of the rows the product gives it — a drawer that
- * showed two fewer rows than before because it had gained a border.
+ * It is bounded by a rule along its top and inset one cell on each side. Both
+ * are part of the rectangle rather than additions to it, and both are measured:
+ * the rule is a row the engine takes out of the layer and the inset is two
+ * columns, so the content window below is measured at what is left and admits
+ * only what fits there. A drawer in front of a reading has to say where the
+ * reading stops, and a title flush against the text it covers reads as one more
+ * line of that text.
+ *
+ * The vertical rows beyond the rule are the drawer's to use. There is no second
+ * margin: the rectangle is already inset from the body, and another one inside
+ * it would cost the content more of the rows the product gives it.
  *
  * `capture` narrows the engine's own hit test over the rectangle, blank cells
  * included. It is not modal containment and nothing here treats it as such: a
@@ -609,8 +652,10 @@ export function drawerLayerProps(
       width: fixed(rect.width),
       height: fixed(rect.height),
       direction: "ttb",
+      padding: { left: DRAWER_INSET, right: DRAWER_INSET },
     },
     bg: DRAWER_BACKGROUND,
+    border: { color: terminalColour(REPL_PALETTE.waiting), top: 1 },
     // Vertically only: every row inside clips itself to the layer's width, so
     // nothing paints past the rectangle. Clipping horizontally here would make
     // each of those rows resolve its width against its own text instead.
@@ -698,7 +743,7 @@ function opsOf(
     ops.push(open(id, decorated(box)));
     const content = textOf(id) ?? box.text;
     if (content !== undefined && content !== "") {
-      ops.push(written(content, box, id === focused));
+      ops.push(...written(content, box, id === focused));
     }
     ops.push(...opsOf(box.children, idOf, textOf, focused));
     ops.push(close());
@@ -725,11 +770,32 @@ function decorated(box: ReplBox): ReplBoxProps {
   return { ...box.props, bg: terminalColour(surface) };
 }
 
-function written(content: string, box: ReplBox, focused: boolean): Op {
-  if (box.style === undefined) {
-    return text(content);
+/**
+ * One row's text, as the operations that draw it.
+ *
+ * Several operations inside the one element the row was measured as, never one
+ * element per stretch: the engine lays adjacent text out along the element's own
+ * flow, so what a reader sees is still one row of exactly the measured width —
+ * while a child per token would be a box, a bound and a pointer target for every
+ * delimiter on the screen.
+ */
+function written(content: string, box: ReplBox, focused: boolean): Op[] {
+  const style = box.style;
+  if (style === undefined) {
+    return [text(content)];
   }
-  const { colour, attrs } = textStyleOf(box.style, focused);
+  const { runs } = box;
+  if (runs === undefined || runs.length === 0 || runText(runs) !== content) {
+    const { colour, attrs } = textStyleOf(style, focused);
+    return [drawn(content, colour, attrs)];
+  }
+  return runs.map((run) => {
+    const { colour, attrs } = runStyleOf(run.token, style, focused);
+    return drawn(run.text, colour, attrs);
+  });
+}
+
+function drawn(content: string, colour: number, attrs: number): Op {
   return text(content, { color: terminalColour(colour), ...(attrs === 0 ? {} : { attrs }) });
 }
 
@@ -747,6 +813,7 @@ export function box(input: {
   readonly text?: string;
   readonly control?: boolean;
   readonly style?: ReplRowStyle;
+  readonly runs?: readonly ReplTokenRun[];
   readonly children?: readonly ReplBox[];
 }): ReplBox {
   return Object.freeze({
@@ -757,6 +824,7 @@ export function box(input: {
     text: input.text,
     control: input.control === true,
     style: input.style,
+    runs: input.runs,
     children: Object.freeze(input.children === undefined ? [] : [...input.children]),
   });
 }

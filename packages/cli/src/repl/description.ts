@@ -28,6 +28,8 @@
 import { Err, Ok } from "effection";
 import type { Operation, Result } from "effection";
 
+import type { ReplPresentationRole } from "./presentation-style.ts";
+
 /**
  * What a component may be given, and therefore what a tree may hold.
  *
@@ -48,6 +50,52 @@ export type ReplViewData =
 
 /** Placement a parent decides for one direct child. Opaque to everyone else. */
 export type ReplPlacement = { readonly [key: string]: string | number | boolean };
+
+/**
+ * One stretch of a row's text, and what those characters are.
+ *
+ * View data, like everything else that crosses into the tree: a string and the
+ * name of a role, with no function to call and nothing to interpret. A row's
+ * runs concatenate to exactly the text the row draws, which is what lets a
+ * reader see a delimiter, a tag and a quoted value as three different things
+ * without the row becoming three nodes — one node, several text operations
+ * inside the one element it was measured as.
+ */
+export interface ReplTokenRun {
+  readonly text: string;
+  readonly token: ReplPresentationRole;
+}
+
+/**
+ * Issue one row's runs, detached and frozen.
+ *
+ * Empty stretches are dropped rather than carried: a run with no characters
+ * draws nothing, and the concatenation a caller is held to is the same either
+ * way. Adjacent runs of one role are joined, so what reaches the engine is one
+ * operation per change of role rather than one per call that happened to split.
+ */
+export function tokenRuns(
+  parts: readonly { readonly text: string; readonly token: ReplPresentationRole }[],
+): readonly ReplTokenRun[] {
+  const runs: ReplTokenRun[] = [];
+  for (const part of parts) {
+    if (part.text.length === 0) {
+      continue;
+    }
+    const last = runs[runs.length - 1];
+    if (last !== undefined && last.token === part.token) {
+      runs[runs.length - 1] = Object.freeze({ text: last.text + part.text, token: last.token });
+      continue;
+    }
+    runs.push(Object.freeze({ text: part.text, token: part.token }));
+  }
+  return Object.freeze(runs);
+}
+
+/** What one row's runs say its text is. */
+export function runText(runs: readonly ReplTokenRun[]): string {
+  return runs.map((run) => run.text).join("");
+}
 
 /**
  * The named keys this composition layer understands.

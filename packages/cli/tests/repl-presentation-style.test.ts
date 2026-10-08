@@ -21,23 +21,44 @@
 
 import { beforeAll, describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { collect, inlineSource, retainedSource, useTempFileCompiler } from "@executablemd/core";
+import {
+  collect,
+  Elicitation,
+  inlineSource,
+  retainedSource,
+  useTempFileCompiler,
+} from "@executablemd/core";
 import { executeInstalled } from "@executablemd/core/host";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import { fileURLToPath } from "node:url";
 import type { DurableEvent, DurableStream, Json } from "@executablemd/durable-streams";
-import { scoped } from "effection";
+import { scoped, sleep, spawn } from "effection";
 import type { Operation } from "effection";
 
 import { entryInitialBindings, projectRepl } from "../src/repl/model.ts";
 import type { ReplModel } from "../src/repl/model.ts";
 import { EntrySegmentStream } from "../src/repl/entries.ts";
-import { initialState, NO_AGENT, viewFor } from "../src/repl/application.ts";
+import {
+  EMPTY_FORM,
+  initialState,
+  NO_AGENT,
+  reduceRepl,
+  viewFor,
+} from "../src/repl/application.ts";
+import { useReplElicitation } from "../src/repl/elicitation.ts";
+import type { ReplQuestion } from "../src/repl/elicitation.ts";
 import { encodeLocation } from "../src/repl/route.ts";
-import type { ReplAction, ReplLive, ReplState, ReplView } from "../src/repl/application.ts";
+import type {
+  ReplAction,
+  ReplFormMessage,
+  ReplLive,
+  ReplState,
+  ReplView,
+} from "../src/repl/application.ts";
 import type { ReplDispatched } from "../src/repl/reconcile.ts";
 import type { ReplDrawerRef } from "../src/repl/route.ts";
 import { FOOTER_ROWS, HISTORY_LABEL, HISTORY_ROWS, NARROW } from "../src/repl/layout.ts";
+import { ACTION_ROW, DRAWER_WINDOW } from "../src/repl/application.ts";
 import type { ReplBounds } from "../src/repl/layout.ts";
 import { BOLD, REPL_PALETTE } from "../src/repl/presentation-style.ts";
 import type { ReplTerminalSize } from "../src/repl/terminal.ts";
@@ -973,11 +994,14 @@ describe("REPL presentation: what a drawer says it is showing", () => {
     // A title is a heading: bold, and read rather than activated.
     expect(inkOf(grid, title).attrs).toContain(BOLD);
     expect(observed.targets.some((one) => one.node === observed.nodeOf("drawer:open"))).toBe(false);
-    // The value it holds reads as a value, not as the words around it — and it
-    // sits on the surface an editable value sits on, across the whole row the
-    // drawer measured for it, so what holds a value is visible before it is read.
+    // The value it holds reads as the JSON it is, not as the words around it —
+    // and it sits on the surface an editable value sits on, across the whole row
+    // the drawer measured for it, so what holds a value is visible before it is
+    // read.
     const value = placed(observed, "drawer:value:0");
-    expect(inkOf(grid, value).foreground).toBe(REPL_PALETTE.output);
+    expect(textOf(grid, value).trimEnd()).toBe(JSON.stringify(binding.value, undefined, 2));
+    expect(inkOf(grid, value).foreground).toBe(REPL_PALETTE.string);
+    expect(inkOf(grid, value).foreground).not.toBe(REPL_PALETTE.heading);
     for (let x = value.x; x < value.x + value.width; x += 1) {
       expect(grid.styleAt(x, value.y).background).toBe(REPL_PALETTE.fieldSurface);
     }
@@ -1010,8 +1034,37 @@ describe("REPL presentation: what a drawer says it is showing", () => {
     const answered = placed(observed, "drawer:answered");
     expect(inkOf(grid, schema).attrs).toContain(BOLD);
     expect(inkOf(grid, answered).attrs).toContain(BOLD);
-    expect(inkOf(grid, placed(observed, "drawer:answer:0")).foreground).toBe(REPL_PALETTE.output);
     expect(inkOf(grid, placed(observed, "drawer:schema:0")).foreground).toBe(REPL_PALETTE.muted);
+
+    // The answer itself is one window further on: the drawer's own top rule and
+    // side inset are part of its measured rectangle, and this schema is long.
+    // Reached through the window action a person presses, against the admission
+    // each frame measured, so what is asserted is what a reader would see.
+    let advanced = state;
+    for (let press = 0; press < 40; press += 1) {
+      if (presenter.last()?.boundsOf("drawer:answer:1") !== undefined) {
+        break;
+      }
+      const view = reading(advanced, model, NOTHING_LIVE, WIDE);
+      advanced = reduceRepl(
+        advanced,
+        { kind: "scroll", delta: 1 },
+        model,
+        NOTHING_LIVE,
+        yield* presenter.prepare(view),
+      ).state;
+      yield* presenter.commit(reading(advanced, model, NOTHING_LIVE, WIDE));
+    }
+    const scrolled = presenter.last();
+    if (scrolled === undefined) {
+      throw new Error("this presenter committed no frame");
+    }
+    // Read as the JSON it is: what the answer calls its field, and the value
+    // recorded under it, are two readings and neither is the muted schema.
+    const recordedAnswer = placed(scrolled, "drawer:answer:1");
+    expect(inkOfSpan(grid, recordedAnswer, '"decision"').foreground).toBe(REPL_PALETTE.attribute);
+    expect(inkOfSpan(grid, recordedAnswer, '"approve"').foreground).toBe(REPL_PALETTE.string);
+    expect(inkOfSpan(grid, recordedAnswer, '"approve"').foreground).not.toBe(REPL_PALETTE.muted);
   });
 
   it("D1: History names itself, and its rows keep the band's own accent", function* () {
@@ -1211,5 +1264,619 @@ describe("REPL presentation: the one guidance row", () => {
         ]);
       }
     }
+  });
+});
+
+/**
+ * The frozen source example, exactly as the accepted presentation states it.
+ *
+ * Three lines of existing grammar: a heading, a tag with an attribute, a quoted
+ * value and a reference, and a tag whose whole content is a reference. It is a
+ * presentation example rather than a program — nothing here is executed — which
+ * is why it is carried as a question's message and as a draft.
+ */
+const SOURCE_EXAMPLE: readonly string[] = Object.freeze([
+  "# Create a project README",
+  '<Elicit as="answers" schema={schema}>Enter the project details.</Elicit>',
+  '<Plan as="draft">{answers}</Plan>',
+]);
+
+/**
+ * One entry binding the frozen JSON example, and one value holding escapes.
+ *
+ * Bound by a real eval block in a real run, so what the inspector shows is a
+ * value this Journal actually recorded and `detail()` actually serialized.
+ */
+const BINDING_EXAMPLE = [
+  "```js eval",
+  "const tokens = {",
+  '  name: "Northstar",',
+  "  count: 3,",
+  "  approved: true,",
+  "  empty: null,",
+  '  quote: "say \\"hi\\" \\\\ once",',
+  "};",
+  "```",
+  "",
+].join("\n");
+
+/** Project details, with the exact labels and hints the presentation freezes. */
+const DETAILS_SCHEMA: { readonly [key: string]: Json } = {
+  type: "object",
+  title: "Project details",
+  properties: {
+    project: {
+      type: "string",
+      minLength: 1,
+      title: "Project name",
+      description: "Name your project.",
+    },
+    description: {
+      type: "string",
+      minLength: 1,
+      title: "One-sentence description",
+      description: "Describe its purpose.",
+    },
+  },
+  required: ["project", "description"],
+  additionalProperties: false,
+};
+
+/** One real entry whose eval block binds the frozen JSON example. */
+function* boundExample(): Operation<ReplModel> {
+  const physical = new InMemoryStream();
+  yield* runEntry(physical, BINDING_EXAMPLE);
+  return projected(yield* physical.readAll());
+}
+
+/**
+ * Install the real provider, ask one real question, and hand back the pending
+ * one.
+ *
+ * The provider's own question, so the form a drawer draws is the one Core
+ * compiled from the request rather than a shape this file assembled.
+ */
+function* askingWith(
+  schema: { readonly [key: string]: Json },
+  message: string,
+): Operation<ReplQuestion> {
+  const elicitation = yield* useReplElicitation();
+  yield* spawn(function* () {
+    yield* Elicitation.operations.elicit({ message, schema: { ...schema } });
+  });
+  // The provider publishes before it suspends, so one turn is enough.
+  yield* sleep(0);
+  const question = elicitation.pending;
+  if (question === undefined) {
+    throw new Error("the provider published no question");
+  }
+  return question;
+}
+
+/** A live reading with one question waiting. */
+function asking(question: ReplQuestion): ReplLive {
+  return Object.freeze({ ...NOTHING_LIVE, question });
+}
+
+/** The same state with the live question's drawer over it and a form filled in. */
+function answering(
+  state: ReplState,
+  values: Readonly<Record<string, string>>,
+  messages: readonly ReplFormMessage[] = [],
+): ReplState {
+  return Object.freeze({
+    ...openingDrawer(state, { kind: "live-elicit" }),
+    form: Object.freeze({
+      ...EMPTY_FORM,
+      values: Object.freeze({ ...values }),
+      messages: Object.freeze([...messages]),
+    }),
+  });
+}
+
+/**
+ * What one stretch of a row was drawn with, found by where that stretch is.
+ *
+ * The whole stretch, and it has to be one colour: a span drawn half in one
+ * foreground and half in another is not a classified token, and a helper that
+ * returned its first cell would call that a pass. The span is located in the
+ * characters the frame actually painted, so a row that drew something else has
+ * no such stretch and says so.
+ */
+function inkOfSpan(grid: TerminalGrid, bounds: ReplBounds, span: string, from = 0): CellStyle {
+  const row = textOf(grid, bounds);
+  const at = row.indexOf(span, from);
+  if (at < 0) {
+    throw new Error(`the row ${JSON.stringify(row)} holds no ${JSON.stringify(span)}`);
+  }
+  const first = grid.styleAt(bounds.x + at, bounds.y);
+  for (let step = 1; step < span.length; step += 1) {
+    const next = grid.styleAt(bounds.x + at + step, bounds.y);
+    if (next.foreground !== first.foreground) {
+      throw new Error(
+        `${JSON.stringify(span)} is drawn in two foregrounds: ` +
+          `${String(first.foreground)} then ${String(next.foreground)} at column ` +
+          `${bounds.x + at + step}`,
+      );
+    }
+  }
+  return first;
+}
+
+/**
+ * The source rows of an open question drawer, in order.
+ *
+ * Found by the keys the frame placed rather than by searching the screen for
+ * words: the message is arbitrary text, and a row of it may say anything.
+ */
+function messageRows(observed: Observed): readonly ReplBounds[] {
+  const found: ReplBounds[] = [];
+  for (let offset = 0; ; offset += 1) {
+    const bounds = observed.boundsOf(`drawer:message:${offset}`);
+    if (bounds === undefined) {
+      return found;
+    }
+    found.push(bounds);
+  }
+}
+
+describe("REPL presentation: what the characters of a reading are", () => {
+  beforeAll(() => useTempFileCompiler());
+
+  it("P1-T1: a source row's delimiters, names, values and references are each their own", function* () {
+    const model = yield* settledAndFailed();
+    const question = yield* askingWith(DETAILS_SCHEMA, SOURCE_EXAMPLE.join("\n"));
+    const presenter = yield* usePresenter(WIDE);
+    const state = answering(stateWith({}), {});
+    const observed = yield* presenter.commit(reading(state, model, asking(question), WIDE));
+    const { grid } = presenter;
+
+    // The whole example, preserved exactly: three rows, each holding the line
+    // it was given and nothing the screen added to it.
+    const rows = messageRows(observed);
+    expect(rows.length).toBe(SOURCE_EXAMPLE.length);
+    expect(rows.map((bounds) => textOf(grid, bounds).trimEnd())).toEqual([...SOURCE_EXAMPLE]);
+
+    // A heading is the whole line, and it is a heading: its own colour, bold.
+    const [heading, elicit, plan] = rows;
+    expect(inkOfSpan(grid, heading, "# Create a project README").foreground).toBe(
+      REPL_PALETTE.sourceHeading,
+    );
+    expect(inkOfSpan(grid, heading, "# Create a project README").attrs).toContain(BOLD);
+
+    // And every part of a tag is read as the thing it is, in the cells it was
+    // drawn in: one colour for the whole row would satisfy none of these.
+    expect(inkOfSpan(grid, elicit, "<").foreground).toBe(REPL_PALETTE.delimiter);
+    expect(inkOfSpan(grid, elicit, "Elicit").foreground).toBe(REPL_PALETTE.focus);
+    expect(inkOfSpan(grid, elicit, "as").foreground).toBe(REPL_PALETTE.attribute);
+    expect(inkOfSpan(grid, elicit, "=").foreground).toBe(REPL_PALETTE.punctuation);
+    expect(inkOfSpan(grid, elicit, '"answers"').foreground).toBe(REPL_PALETTE.quoted);
+    expect(inkOfSpan(grid, elicit, "schema", 20).foreground).toBe(REPL_PALETTE.attribute);
+    expect(inkOfSpan(grid, elicit, "{").foreground).toBe(REPL_PALETTE.brace);
+    expect(inkOfSpan(grid, elicit, "}").foreground).toBe(REPL_PALETTE.brace);
+    expect(inkOfSpan(grid, elicit, "Enter the project details.").foreground).toBe(
+      REPL_PALETTE.source,
+    );
+    expect(inkOfSpan(grid, elicit, "</").foreground).toBe(REPL_PALETTE.delimiter);
+    // The reference inside the braces is neither the braces nor the attribute
+    // whose value it is: three stretches, three colours, one row.
+    const referenced = inkOfSpan(grid, elicit, "schema", 28);
+    expect(referenced.foreground).toBe(REPL_PALETTE.reference);
+    expect(referenced.foreground).not.toBe(REPL_PALETTE.brace);
+    expect(referenced.foreground).not.toBe(REPL_PALETTE.attribute);
+    expect(inkOfSpan(grid, plan, "answers").foreground).toBe(REPL_PALETTE.reference);
+    expect(inkOfSpan(grid, plan, "Plan").foreground).toBe(REPL_PALETTE.focus);
+    expect(inkOfSpan(grid, plan, '"draft"').foreground).toBe(REPL_PALETTE.quoted);
+  });
+
+  it("P1-T1: a binding's JSON is read as JSON, escapes and all", function* () {
+    const model = yield* boundExample();
+    const binding = model.entries[0]?.bindings.find((one) => one.name === "tokens");
+    if (binding === undefined) {
+      throw new Error(
+        `this entry bound ${(model.entries[0]?.bindings ?? [])
+          .map((one) => one.name)
+          .join(", ")} rather than tokens`,
+      );
+    }
+    const presenter = yield* usePresenter(WIDE);
+    const state = openingDrawer(selecting(stateWith({}), "entry-1"), {
+      kind: "binding",
+      name: "tokens",
+    });
+    const observed = yield* presenter.commit(reading(state, model, NOTHING_LIVE, WIDE));
+    const { grid } = presenter;
+
+    // The complete parsed value, line for line, exactly as it serializes.
+    const serialized = (JSON.stringify(binding.value, undefined, 2) ?? "null").split("\n");
+    const rows = serialized.map((_, offset) => placed(observed, `drawer:value:${offset}`));
+    expect(rows.map((bounds) => textOf(grid, bounds).trimEnd())).toEqual(serialized);
+
+    const of = (needle: string): ReplBounds => {
+      const at = serialized.findIndex((line) => line.includes(needle));
+      if (at < 0) {
+        throw new Error(`this value serializes without ${needle}`);
+      }
+      return rows[at];
+    };
+    // A key is a key, a string is a string, and a brace is not either of them.
+    expect(inkOfSpan(grid, of('"name"'), '"name"').foreground).toBe(REPL_PALETTE.attribute);
+    expect(inkOfSpan(grid, of('"name"'), '"Northstar"').foreground).toBe(REPL_PALETTE.string);
+    expect(inkOfSpan(grid, of('"name"'), ":").foreground).toBe(REPL_PALETTE.punctuation);
+    expect(inkOfSpan(grid, of('"count"'), "3").foreground).toBe(REPL_PALETTE.number);
+    expect(inkOfSpan(grid, of('"approved"'), "true").foreground).toBe(REPL_PALETTE.brace);
+    expect(inkOfSpan(grid, of('"empty"'), "null").foreground).toBe(REPL_PALETTE.label);
+    expect(inkOfSpan(grid, rows[0], "{").foreground).toBe(REPL_PALETTE.punctuation);
+    // An escaped quote and an escaped backslash are characters of the string
+    // they are in, so the whole quoted run is one colour and nothing is lost.
+    const quoted = of('"quote"');
+    expect(inkOfSpan(grid, quoted, '"say \\"hi\\" \\\\ once"').foreground).toBe(
+      REPL_PALETTE.string,
+    );
+  });
+
+  it("P1-T1: an unfinished draft keeps every character it has", function* () {
+    const model = yield* settledAndFailed();
+    const presenter = yield* usePresenter(WIDE);
+    const unfinished = '<Elicit as="ans';
+    const observed = yield* presenter.commit(
+      reading(stateWith({ draft: unfinished }), model, NOTHING_LIVE, WIDE),
+    );
+    const { grid } = presenter;
+
+    const draft = placed(observed, "footer:input");
+    // Every character, in order, with the row's own name in front of it: a
+    // classifier that dropped the half-written attribute would be editing input.
+    expect(textOf(grid, draft).trimEnd()).toBe(` > Draft: ${unfinished}`);
+    expect(inkOfSpan(grid, draft, "<").foreground).toBe(REPL_PALETTE.delimiter);
+    expect(inkOfSpan(grid, draft, "Elicit").foreground).toBe(REPL_PALETTE.focus);
+    expect(inkOfSpan(grid, draft, "as").foreground).toBe(REPL_PALETTE.attribute);
+    expect(inkOfSpan(grid, draft, '"ans').foreground).toBe(REPL_PALETTE.quoted);
+    // And the row still says what it is, in its own colour rather than a token's.
+    expect(inkOfSpan(grid, draft, "Draft:").foreground).toBe(REPL_PALETTE.source);
+  });
+});
+
+describe("REPL presentation: focus marks the row without repainting it", () => {
+  beforeAll(() => useTempFileCompiler());
+
+  it("P1-T2: a focused draft keeps its token colours while the marker is the cyan", function* () {
+    const model = yield* settledAndFailed();
+    const presenter = yield* usePresenter(WIDE);
+    const typed = '<Plan as="draft">{answers}</Plan>';
+    const state = selecting(stateWith({ draft: typed }), "entry-1");
+
+    yield* presenter.commit(reading(state, model, NOTHING_LIVE, WIDE));
+    yield* focusOn(presenter, "footer:input");
+    const observed = yield* presenter.commit(
+      reading(state, model, NOTHING_LIVE, WIDE, focusKeyOf(presenter)),
+    );
+    const { grid } = presenter;
+
+    const draft = placed(observed, "footer:input");
+    // The marker is the one cyan thing on the row, and it is a column wide.
+    expect(textOf(grid, draft).trimEnd()).toBe(`>> Draft: ${typed}`);
+    expect(grid.styleAt(draft.x, draft.y).foreground).toBe(REPL_PALETTE.focus);
+    expect(grid.styleAt(draft.x, draft.y).attrs).toContain(BOLD);
+    // Everything after it keeps the colour it had, and gains the weight focus
+    // adds: a focus that repainted the row would make all of these cyan.
+    expect(grid.styleAt(draft.x + 1, draft.y).foreground).toBe(REPL_PALETTE.source);
+    expect(inkOfSpan(grid, draft, "Plan").foreground).toBe(REPL_PALETTE.focus);
+    expect(inkOfSpan(grid, draft, '"draft"').foreground).toBe(REPL_PALETTE.quoted);
+    expect(inkOfSpan(grid, draft, '"draft"').attrs).toContain(BOLD);
+    expect(inkOfSpan(grid, draft, "answers").foreground).toBe(REPL_PALETTE.reference);
+    expect(inkOfSpan(grid, draft, "</").foreground).toBe(REPL_PALETTE.delimiter);
+
+    // And the entry a reader chose is still the chosen one, whole width, with
+    // the cue that survives colour being thrown away.
+    const selected = placed(observed, "entry:entry-1");
+    for (let x = selected.x; x < selected.x + selected.width; x += 1) {
+      expect(grid.styleAt(x, selected.y).background).toBe(REPL_PALETTE.selectedSurface);
+    }
+    expect(textOf(grid, selected)).toContain("*");
+    expect(inkOf(grid, selected).foreground).toBe(REPL_PALETTE.success);
+    expect(focusedRows(observed, grid)).toEqual(["footer:input"]);
+  });
+});
+
+describe("REPL presentation: the surfaces a reading is drawn on", () => {
+  beforeAll(() => useTempFileCompiler());
+
+  it("P1-T3: an empty screen's panes, edges and uncovered area are each their own", function* () {
+    const model = yield* settledAndFailed();
+    const presenter = yield* usePresenter(WIDE);
+    const observed = yield* presenter.commit(reading(stateWith({}), model, NOTHING_LIVE, WIDE));
+    const { grid } = presenter;
+
+    // Each pane's own surface, across the pane the engine admitted — and the
+    // first column of a pane that begins with an edge is that edge.
+    const surfaces: readonly { readonly region: string; readonly surface: number }[] = [
+      { region: "sidebar", surface: REPL_PALETTE.sideSurface },
+      { region: "transcript", surface: REPL_PALETTE.centreSurface },
+      { region: "inspection", surface: REPL_PALETTE.bindingsSurface },
+    ];
+    for (const { region, surface } of surfaces) {
+      const bounds = regionBounds(observed, region);
+      if (bounds === undefined) {
+        throw new Error(`this frame published no ${region} region`);
+      }
+      expect([region, grid.styleAt(bounds.x + bounds.width - 1, bounds.y).background]).toEqual([
+        region,
+        surface,
+      ]);
+      expect([
+        region,
+        grid.styleAt(bounds.x + bounds.width - 1, bounds.y + bounds.height - 1).background,
+      ]).toEqual([region, surface]);
+    }
+
+    // The rule that parts two columns is the separator's own colour, drawn in
+    // the first column of the pane that begins at it.
+    const transcript = regionBounds(observed, "transcript");
+    const footer = regionBounds(observed, "footer");
+    if (transcript === undefined || footer === undefined) {
+      throw new Error("this frame published no transcript or footer region");
+    }
+    expect(grid.styleAt(transcript.x, transcript.y).foreground).toBe(REPL_PALETTE.edge);
+    // And the rule that parts the body from the footer, on the row above it.
+    expect(grid.styleAt(transcript.x, footer.y - 1).foreground).toBe(REPL_PALETTE.edge);
+
+    // What no row of its own covers is still this application's: the end of the
+    // action row, where no control was placed.
+    const actions = observed.regionOf(ACTION_ROW);
+    if (actions === undefined) {
+      throw new Error("this frame published no action row");
+    }
+    expect(grid.at(actions.x + actions.width - 1, actions.y)).toBe(" ");
+    expect(grid.styleAt(actions.x + actions.width - 1, actions.y).background).toBe(
+      REPL_PALETTE.applicationSurface,
+    );
+
+    // Both shared columns still say what they are while they hold nothing.
+    expect(textOf(grid, placed(observed, "sessions:heading"))).toContain("Sessions");
+    expect(inkOf(grid, placed(observed, "inspection:heading")).foreground).toBe(
+      REPL_PALETTE.heading,
+    );
+  });
+
+  it("P1-T3: a question drawer is bounded, named as waiting, and read in groups", function* () {
+    const model = yield* settledAndFailed();
+    const question = yield* askingWith(DETAILS_SCHEMA, SOURCE_EXAMPLE.join("\n"));
+    const presenter = yield* usePresenter(WIDE);
+    const filled = answering(
+      stateWith({}),
+      {
+        project: "Northstar",
+        description: "A lightweight workspace for coordinating coding agents.",
+      },
+      [{ field: "project", message: "project is required" }],
+    );
+    const observed = yield* presenter.commit(reading(filled, model, asking(question), WIDE));
+    const { grid } = presenter;
+
+    const rect = regionBounds(observed, "drawer");
+    if (rect === undefined) {
+      throw new Error("this frame published no drawer region");
+    }
+    // One cell of rule along the top of the rectangle, inside it, across it.
+    for (let x = rect.x; x < rect.x + rect.width; x += 1) {
+      const style = grid.styleAt(x, rect.y);
+      expect([x, style.foreground, style.background]).toEqual([
+        x,
+        REPL_PALETTE.waiting,
+        REPL_PALETTE.drawerSurface,
+      ]);
+    }
+
+    // The title is inside the rectangle, below the rule, inset from its side —
+    // so it cannot be read as one more line of what the drawer is covering.
+    const title = placed(observed, "drawer:open");
+    expect(title.y).toBe(rect.y + 1);
+    expect(title.x).toBe(rect.x + 1);
+    expect(title.x + title.width).toBe(rect.x + rect.width - 1);
+    expect(textOf(grid, title).trimEnd()).toBe("Project details");
+    // A question nobody has answered yet says so before a word of it is read.
+    expect(inkOfSpan(grid, title, "Project details").foreground).toBe(REPL_PALETTE.waiting);
+    expect(inkOfSpan(grid, title, "Project details").attrs).toContain(BOLD);
+
+    // A field's name, what it means and what is in it are three readings.
+    const named = placed(observed, "drawer:field:project");
+    expect(inkOfSpan(grid, named, "*Project name:").foreground).toBe(REPL_PALETTE.label);
+    expect(inkOfSpan(grid, named, "Northstar").foreground).toBe(REPL_PALETTE.output);
+    const hint = placed(observed, "drawer:field:project:about");
+    expect(inkOfSpan(grid, hint, "Name your project.").foreground).toBe(REPL_PALETTE.muted);
+    const edited = placed(observed, "drawer:value:project");
+    expect(inkOfSpan(grid, edited, "Northstar").foreground).toBe(REPL_PALETTE.output);
+    // The row text goes into sits on the surface that says so, whole width.
+    for (let x = edited.x; x < edited.x + edited.width; x += 1) {
+      expect(grid.styleAt(x, edited.y).background).toBe(REPL_PALETTE.fieldSurface);
+    }
+    // The second field's group reads the same way, with its own words.
+    const second = placed(observed, "drawer:field:description");
+    expect(inkOfSpan(grid, second, "*One-sentence description:").foreground).toBe(
+      REPL_PALETTE.label,
+    );
+    expect(
+      inkOfSpan(grid, second, "A lightweight workspace for coordinating coding agents.").foreground,
+    ).toBe(REPL_PALETTE.output);
+    expect(
+      inkOfSpan(grid, placed(observed, "drawer:field:description:about"), "Describe its purpose.")
+        .foreground,
+    ).toBe(REPL_PALETTE.muted);
+
+    // What the last submission was told, in the accent a refusal has.
+    const invalid = placed(observed, "drawer:invalid:0");
+    expect(textOf(grid, invalid)).toContain("project is required");
+    expect(inkOfSpan(grid, invalid, "project is required").foreground).toBe(REPL_PALETTE.failure);
+    // And the way to answer is still there, on a control's own surface.
+    const submit = placed(observed, "drawer:form:submit");
+    expect(textOf(grid, submit)).toContain("[submit]");
+    expect(grid.styleAt(submit.x, submit.y).background).toBe(REPL_PALETTE.draftSurface);
+
+    // Every cell of the rectangle is the drawer's, the unused ones included.
+    const own: readonly number[] = [
+      REPL_PALETTE.drawerSurface,
+      REPL_PALETTE.selectedSurface,
+      REPL_PALETTE.fieldSurface,
+      REPL_PALETTE.draftSurface,
+    ];
+    for (let y = rect.y; y < rect.y + rect.height; y += 1) {
+      for (let x = rect.x; x < rect.x + rect.width; x += 1) {
+        const background = grid.styleAt(x, y).background;
+        if (background === undefined || !own.includes(background)) {
+          throw new Error(
+            `the cell at ${x},${y} is inside the drawer and shows ${String(background)}`,
+          );
+        }
+      }
+    }
+  });
+
+  it("P1-T3: a shorter reading and a closed drawer leave nothing behind", function* () {
+    const model = yield* settledAndFailed();
+    const question = yield* askingWith(DETAILS_SCHEMA, SOURCE_EXAMPLE.join("\n"));
+    const live = asking(question);
+    const long = answering(stateWith({}), {
+      project: "Northstar",
+      description: "A lightweight workspace for coordinating coding agents.",
+    });
+    const short = answering(stateWith({}), { project: "N", description: "x" });
+
+    const incremental = yield* scoped(function* () {
+      const presenter = yield* usePresenter(WIDE);
+      yield* presenter.commit(reading(long, model, live, WIDE));
+      const after = yield* presenter.commit(reading(short, model, live, WIDE));
+      // The cells the longer value reached and the shorter one does not: still
+      // the row's own surface, with nothing of the longer value left in them.
+      const edited = placed(after, "drawer:value:description");
+      // Its unfocused marker, its name and the one character left in it.
+      expect(textOf(presenter.grid, edited).trimEnd()).toBe("   = x");
+      for (let x = edited.x; x < edited.x + edited.width; x += 1) {
+        expect(presenter.grid.styleAt(x, edited.y).background).toBe(REPL_PALETTE.fieldSurface);
+      }
+      const closed = yield* presenter.commit(reading(stateWith({}), model, live, WIDE));
+      return {
+        cells: presenter.grid.styledIn({ x: 0, y: 0, width: WIDE.columns, height: WIDE.rows }),
+        keys: closed.keys.slice().sort(),
+      };
+    });
+
+    const fresh = yield* scoped(function* () {
+      const presenter = yield* usePresenter(WIDE);
+      const first = yield* presenter.commit(reading(stateWith({}), model, live, WIDE));
+      return {
+        cells: presenter.grid.styledIn({ x: 0, y: 0, width: WIDE.columns, height: WIDE.rows }),
+        keys: first.keys.slice().sort(),
+      };
+    });
+
+    // Every cell, its characters, its foreground, its background and its blanks:
+    // a drawer that left its rule, its inset or a vacated value behind would
+    // differ from a screen that never drew one.
+    expect(incremental.cells).toEqual(fresh.cells);
+    expect(incremental.keys).toEqual(fresh.keys);
+    expect(incremental.keys.some((key) => key.startsWith("drawer:"))).toBe(false);
+  });
+});
+
+describe("REPL presentation: decoration the frame measured", () => {
+  beforeAll(() => useTempFileCompiler());
+
+  it("P1-T4: the drawer's rule and inset are measured, and every row lands inside them", function* () {
+    const model = yield* boundExample();
+    for (const size of [WIDE, MEDIUM, NARROW]) {
+      yield* scoped(function* () {
+        const presenter = yield* usePresenter(size);
+        const state = openingDrawer(selecting(stateWith({}), "entry-1"), {
+          kind: "binding",
+          name: "tokens",
+        });
+        const view = reading(state, model, NOTHING_LIVE, size);
+        const admission = yield* presenter.prepare(view);
+        const observed = yield* presenter.commit(view);
+        const { grid } = presenter;
+
+        const rect = regionBounds(observed, "drawer");
+        const viewport = viewportBounds(observed, DRAWER_WINDOW);
+        const footer = regionBounds(observed, "footer");
+        if (rect === undefined || viewport === undefined || footer === undefined) {
+          throw new Error(`${size.columns}x${size.rows} published no drawer or footer`);
+        }
+        // The rule is the rectangle's own first row, and the content begins
+        // below it and one column in from each side.
+        expect([size.columns, grid.styleAt(rect.x, rect.y).foreground]).toEqual([
+          size.columns,
+          REPL_PALETTE.waiting,
+        ]);
+        expect([size.columns, viewport.y > rect.y]).toEqual([size.columns, true]);
+        expect([size.columns, viewport.x]).toEqual([size.columns, rect.x + 1]);
+        expect([size.columns, viewport.x + viewport.width]).toEqual([
+          size.columns,
+          rect.x + rect.width - 1,
+        ]);
+
+        // Capacity is the viewport the engine measured with the decoration
+        // already in it, so what the window admits was never the undecorated
+        // rectangle: padding worked out afterwards would admit a row too many.
+        const admitted = admission.windows.get(DRAWER_WINDOW);
+        if (admitted === undefined) {
+          throw new Error(`${size.columns}x${size.rows} measured no drawer window`);
+        }
+        expect([size.columns, admitted.capacity]).toEqual([size.columns, viewport.height]);
+        expect([size.columns, admitted.count <= admitted.capacity]).toEqual([size.columns, true]);
+
+        // Every row the drawer placed is whole, inside the inset content area,
+        // and below the rule — the window controls and the way out included.
+        const inside: ReplBounds = {
+          x: rect.x + 1,
+          y: rect.y + 1,
+          width: rect.width - 2,
+          height: rect.height - 1,
+        };
+        const drawn = observed.keys.filter((key) => key.startsWith("drawer:"));
+        expect([size.columns, drawn.length > 0]).toEqual([size.columns, true]);
+        for (const key of drawn) {
+          const bounds = observed.boundsOf(key);
+          if (bounds === undefined) {
+            continue;
+          }
+          expect([key, size.columns, within(bounds, inside)]).toEqual([key, size.columns, true]);
+        }
+        // And the footer is still the seven rows it always is.
+        expect([size.columns, footer.height]).toEqual([size.columns, FOOTER_ROWS]);
+      });
+    }
+  });
+
+  it("P1-T4: a reading longer than the decorated window is in no cell and no target", function* () {
+    const model = yield* boundExample();
+    const presenter = yield* usePresenter(NARROW);
+    const state = openingDrawer(selecting(stateWith({}), "entry-1"), {
+      kind: "binding",
+      name: "tokens",
+    });
+    const view = reading(state, model, NOTHING_LIVE, NARROW);
+    const admission = yield* presenter.prepare(view);
+    const observed = yield* presenter.commit(view);
+
+    const admitted = admission.windows.get(DRAWER_WINDOW);
+    if (admitted === undefined) {
+      throw new Error("this frame measured no drawer window");
+    }
+    // The narrowest supported frame cannot hold this value whole, which is what
+    // makes the window the thing under test rather than a formality.
+    expect(admitted.total).toBeGreaterThan(admitted.capacity);
+    expect(admitted.more).toBe(true);
+
+    // Exactly the admitted rows mounted; the ones past the window are in no
+    // cell, so they are in no pointer target and no Tab stop either.
+    const shown = observed.keys.filter((key) => key.startsWith("drawer:value:"));
+    expect(shown.length).toBe(admitted.count);
+    expect(observed.boundsOf(`drawer:value:${admitted.total - 1}`)).toBe(undefined);
+    for (const key of shown) {
+      expect([key, observed.nodeOf(key) !== undefined]).toEqual([key, true]);
+    }
+    // And the way out of the drawer is still reachable at this size.
+    expect(observed.keys).toContain("drawer:close");
   });
 });
