@@ -101,9 +101,9 @@ reachable without reaching past the modal. Leaving is lifecycle and nothing else
 it answers no question, decides no permission request, and appends no close, no
 cancellation and no audit. An entry whose root never closed stays unfinished,
 because that is what it is. The command cancels and joins everything it owns,
-gives the terminal back once, prints the location it was at — minus the drawers
-only a running process could have mounted, so what it prints is a location a
-second process can be handed — and exits zero.
+gives the terminal back once, prints the command that reopens the location it was
+at — minus the drawers only a running process could have mounted, so what it
+prints is a location a second process can be handed — and exits zero.
 
 Press Enter on `[pause]` to stop expansion at its next boundary. `[continue]`
 exists only while a continuation is actually held — not while a pause is still
@@ -174,9 +174,9 @@ read back cold from the journal.
 
 ## One cold journey
 
-The command prints the location it ended at. Pass that location to a new
-`xmd repl` — on this machine, in a new process, with nothing carried over — and
-the same view comes back: the same catalog of entries in the same order with the
+The command prints the `xmd repl <location>` line that reopens where it ended.
+Run it — on this machine, in a new process, with nothing carried over — and the
+same view comes back: the same catalog of entries in the same order with the
 same outcomes, the same selected entry and scope, the same binding values, the
 same transcript, the same generated source, the same recorded question and
 answer, the same History positions and the same terminal output.
@@ -400,9 +400,13 @@ shows the record itself again.
 
 The location is not on the screen. It is the longest thing this command could
 draw and the one thing a reader never has to act on while they are reading, so no
-row carries it and none is kept for it at any size. The command prints the whole
-location when it ends, which is where it is useful: that is the string you pass
-back to reopen exactly what you were looking at. Source text, provider output and
+row carries it and none is kept for it at any size. When the command ends it
+prints the whole `xmd repl <location>` line, which is where that is useful: a
+person who has just had their terminal handed back wants something they can run,
+not a string to work out what to do with. The location is quoted, because it
+carries `?`, `&` and `=` structurally and a shell would read them — and
+single-quoted safely, because every character outside `[A-Za-z0-9-._~:@]` is
+percent-encoded, so a location can never contain the quote that would close it. Source text, provider output and
 an event's own origin are content and are shown as written, URLs included.
 
 The History band is five rows at every size and says which band it is on the

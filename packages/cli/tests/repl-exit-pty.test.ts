@@ -714,6 +714,11 @@ describe("REPL exit: a real terminal, and nothing further typed", () => {
       // caller to come back with.
       const printed = after.match(/xmd:\/\/repl\//g) ?? [];
       expect(printed).toHaveLength(1);
+
+      // And runnable exactly as printed: the location is one quoted argument of
+      // an `xmd repl` command, so somebody who has just been handed their
+      // terminal back can paste the line rather than assemble one.
+      expect(after).toMatch(/xmd repl 'xmd:\/\/repl\/[^']+'/);
     });
   });
 
@@ -759,6 +764,11 @@ describe("REPL exit: a real terminal, and nothing further typed", () => {
 
       const printed = after.match(/xmd:\/\/repl\//g) ?? [];
       expect(printed).toHaveLength(1);
+
+      // And runnable exactly as printed: the location is one quoted argument of
+      // an `xmd repl` command, so somebody who has just been handed their
+      // terminal back can paste the line rather than assemble one.
+      expect(after).toMatch(/xmd repl 'xmd:\/\/repl\/[^']+'/);
     });
   });
 });
