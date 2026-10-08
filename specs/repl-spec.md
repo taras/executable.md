@@ -350,8 +350,16 @@ Every other Control or Alt combination is still dropped whole.
 The command answers that key itself, where it answers end of input, rather than a
 mounted control answering it: ending is a lifecycle outcome its owner decides, and
 a key resolved by whichever row happened to have focus would stop meaning the same
-thing from one screen to the next. It therefore ends the refusal below the minimum
-size as well, which places no control at all and offers Escape besides.
+thing from one screen to the next. It therefore leaves both screens a running
+command can be sitting on, and they are not the same screen: the refusal below the
+minimum size, which places no control at all and offers Escape besides; and the
+one shown for a location this command cannot show, which does place a control.
+
+Leaving that second one is still a refusal. The reason is reported, the status is
+non-zero and no reopen command is printed, because a history that could not be
+read is not a view anybody can be handed back — which is exactly what its own
+Escape produces, and why this is one ending answered in two loops rather than two
+different endings.
 
 `[exit]` stays on the action row regardless, because leaving has to be a control a
 person can see rather than a key they have to know — and because a pointer reaches
