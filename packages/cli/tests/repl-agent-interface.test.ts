@@ -2145,9 +2145,9 @@ describe("U5 — navigation is outside the outlet it leaves", () => {
     expect(mountedKeys(tree).filter((key) => key.startsWith("scope:"))).toEqual([]);
     yield* focusTo(tree, "entries:heading");
     const back = yield* activate(tree);
-    expect(back).toEqual({ kind: "select-surface", surface: "repl" });
+    expect(back).toEqual({ kind: "select-surface", surface: "entries" });
     expect(yield* pointed(tree, sessionsFrame, "entries:heading")).toEqual(back);
-    expect((yield* acted(onSessionsNow, back, session)).route.surface).toBe("repl");
+    expect((yield* acted(onSessionsNow, back, session)).route.surface).toBe("entries");
   });
 
   it("U5: a request arriving on the other surface is still reachable from this one", function* () {
@@ -2343,7 +2343,7 @@ describe("U6 — the Sessions reading is windowed", () => {
     }
     expect(yield* pointed(tree, frame, "entries:heading")).toEqual({
       kind: "select-surface",
-      surface: "repl",
+      surface: "entries",
     });
 
     // And so is the outlet the route selected — not merely present in it: a
@@ -3443,7 +3443,7 @@ describe("EU1 — selecting an entry moves the transcript locus and nothing else
     const wrong = resolveLocation(
       model,
       {
-        ...decodeRoute(`xmd://repl/agent-interface/repl/entry-1`),
+        ...decodeRoute(`xmd://repl/agent-interface/entries/entry-1`),
         drawers: [{ kind: "live-elicit" }],
       },
       live,
@@ -3458,7 +3458,7 @@ describe("EU1 — selecting an entry moves the transcript locus and nothing else
     const right = resolveLocation(
       model,
       {
-        ...decodeRoute(`xmd://repl/agent-interface/repl/entry-2`),
+        ...decodeRoute(`xmd://repl/agent-interface/entries/entry-2`),
         drawers: [{ kind: "live-elicit" }],
       },
       live,
@@ -3512,7 +3512,7 @@ describe("EU1 — selecting an entry moves the transcript locus and nothing else
     expect(selected.draft).toBe("the next one");
     expect(selected.route.draft).toBe("the next one");
     expect(selected.route.at).toBe(undefined);
-    expect(selected.route.surface).toBe("repl");
+    expect(selected.route.surface).toBe("entries");
     expect(selected.route.session).toBe("stub:planner");
 
     // Sessions is one execution-wide chronology and selecting an entry never
@@ -3680,16 +3680,16 @@ describe("EU1 — selecting an entry moves the transcript locus and nothing else
     // 3. And back, through the other mounted surface control, to the same locus.
     expect(yield* asked(tree, sessionsView, NARROW, "entries:heading")).toEqual({
       kind: "select-surface",
-      surface: "repl",
+      surface: "entries",
     });
     const back = yield* reducedAt(
       onSessions,
-      { kind: "select-surface", surface: "repl" },
+      { kind: "select-surface", surface: "entries" },
       model,
       session,
       NARROW,
     );
-    expect(back.route.surface).toBe("repl");
+    expect(back.route.surface).toBe("entries");
     expect(back.route.scopes).toEqual(["entry-2"]);
     expect(back.draft).toBe("the next one");
     expect(back.route.session).toBe("stub:planner");

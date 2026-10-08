@@ -26,3 +26,4 @@ packages/web/generated/
 # it. The concurrent verifier runs site:build and site:check together, so a lint
 # that walked one would report on a file nobody wrote.
 site/*.timestamp-*.mjs
+.bench/

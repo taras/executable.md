@@ -1918,7 +1918,9 @@ describe("REPL terminal: what the host normalizes, and what it refuses to guess"
 
       // Every one of these decodes to a letter the person did not ask to type:
       // Control-C is `c`, Alt-a carries the text `a`, Control-H is `h`, and F5 is
-      // a key with no meaning here at all.
+      // a key with no meaning here at all. Control-C is named rather than
+      // dropped — it is an interrupt — but it is still not the letter it was
+      // pressed with, which is what this row is about.
       terminal.log.feed(new Uint8Array([0x03]));
       terminal.log.feed(BYTES.encode("\x1ba"));
       terminal.log.feed(new Uint8Array([0x08]));
@@ -1927,7 +1929,10 @@ describe("REPL terminal: what the host normalizes, and what it refuses to guess"
       // just the absence of something.
       terminal.log.feed(BYTES.encode("z"));
 
-      expect(normalizedFrom(yield* drained(events))).toEqual([{ kind: "text", text: "z" }]);
+      expect(normalizedFrom(yield* drained(events))).toEqual([
+        { kind: "key", key: "Interrupt" },
+        { kind: "text", text: "z" },
+      ]);
     });
   });
 

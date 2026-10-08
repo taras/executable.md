@@ -714,6 +714,67 @@ describe("REPL exit: a real terminal, and nothing further typed", () => {
       // caller to come back with.
       const printed = after.match(/xmd:\/\/repl\//g) ?? [];
       expect(printed).toHaveLength(1);
+
+      // And runnable exactly as printed: the location is one quoted argument of
+      // an `xmd repl` command, so somebody who has just been handed their
+      // terminal back can paste the line rather than assemble one. Under a line
+      // that says what it is for, because the screen that would have explained it
+      // has just gone.
+      expect(after).toContain("Reopen this view with:");
+      expect(after).toMatch(/xmd repl 'xmd:\/\/repl\/[^']+'/);
+    });
+  });
+
+  it("UI2: Control-C finishes the command the same way, with no control reached", function* () {
+    const line = cliShellCommand(["repl", "--deny-all"]);
+
+    yield* scoped(function* (): Operation<void> {
+      const home = yield* useTempDirectory("xmd-repl-pty-");
+      const pty = yield* allocate(line, home);
+
+      yield* showing(pty, "[exit]", REACH_MS);
+
+      // The interrupt, from wherever focus happens to be: no Tab walk and no
+      // control activated, because the point of this key is that it does not
+      // need one. Raw mode has cleared ISIG by now, so this byte is the only
+      // notice the command gets — nothing signals the process.
+      yield* pty.type("\u0003");
+
+      const deadline = Date.now() + LEAVE_MS;
+      let status: number | undefined;
+      while (status === undefined) {
+        status = yield* pty.status();
+        if (status !== undefined) {
+          break;
+        }
+        if (Date.now() > deadline) {
+          throw new Error(
+            `under ${cliRuntime()} Control-C did not end the command within ${LEAVE_MS}ms, ` +
+              "with no further byte sent. screen=" +
+              JSON.stringify((yield* pty.shows()).map((one) => one.trimEnd())),
+          );
+        }
+        yield* sleep(150);
+      }
+
+      // Ordinary success, not a signal: a SIGINT that reached this process would
+      // leave 130 here, and would not have run the teardown asserted below.
+      expect(status).toBe(0);
+
+      const after = (yield* pty.shows()).join("\n");
+      expect(after).not.toContain("[exit]");
+      expect(after).not.toContain("[history]");
+
+      const printed = after.match(/xmd:\/\/repl\//g) ?? [];
+      expect(printed).toHaveLength(1);
+
+      // And runnable exactly as printed: the location is one quoted argument of
+      // an `xmd repl` command, so somebody who has just been handed their
+      // terminal back can paste the line rather than assemble one. Under a line
+      // that says what it is for, because the screen that would have explained it
+      // has just gone.
+      expect(after).toContain("Reopen this view with:");
+      expect(after).toMatch(/xmd repl 'xmd:\/\/repl\/[^']+'/);
     });
   });
 });

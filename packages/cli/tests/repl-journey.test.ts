@@ -1165,7 +1165,7 @@ describe("REPL journey: one entry, from raw bytes", () => {
     expect(decoded.ok).toBe(true);
     if (decoded.ok) {
       expect(decoded.value.draft).toBe(source);
-      expect(decoded.value.surface).toBe("repl");
+      expect(decoded.value.surface).toBe("entries");
       expect(decoded.value.at).toBeUndefined();
     }
   });
@@ -1375,7 +1375,7 @@ describe("REPL journey: one entry, from raw bytes", () => {
     // opened it beside a nested scope would be describing two different places.
     const location = encodeLocation({
       execution,
-      surface: "repl",
+      surface: "entries",
       scopes: [entry.key],
       drawers: [{ kind: "binding", name: binding.name }],
       at: marker,
@@ -1479,7 +1479,7 @@ describe("REPL journey: one entry, from raw bytes", () => {
 
       terminal.end();
       yield* running;
-      expect(outcome?.location).toBe(`xmd://repl/${execution}/repl`);
+      expect(outcome?.location).toBe(`xmd://repl/${execution}/entries`);
       expect(outcome?.refusal).toBeUndefined();
     });
 
@@ -1488,6 +1488,275 @@ describe("REPL journey: one entry, from raw bytes", () => {
     expect(terminal.readers).toBe(0);
     expect(terminal.listeners).toBe(0);
     expect(terminal.raw[terminal.raw.length - 1]).toBe(false);
+  });
+});
+
+describe("REPL journey: leaving", () => {
+  const DRAFT = "# queued behind an interrupt";
+
+  it("J1: Control-C ends the command and prints the location", function* () {
+    const { terminal, install } = recordingTerminal();
+    yield* scoped(function* (): Operation<void> {
+      yield* install();
+      yield* immediateClock();
+      const root = yield* useTemporaryHost();
+
+      let outcome: ReplOutcome | undefined;
+      const running = yield* spawn(function* (): Operation<void> {
+        const ran = yield* runReplProgram({ profile: PROFILE });
+        if (!ran.ok) {
+          throw ran.error;
+        }
+        outcome = ran.value;
+      });
+      yield* settled();
+      const files = yield* histories(root);
+      const execution = files[0].replace(/\.jsonl$/, "");
+
+      // The interrupt and nothing else. The stream is deliberately left open:
+      // closing it would end the command by EOF and prove that instead.
+      terminal.bytes(new Uint8Array([0x03]));
+      yield* running;
+
+      // The same ending every other way of leaving produces, location included.
+      expect(outcome?.location).toBe(`xmd://repl/${execution}/entries`);
+      expect(outcome?.refusal).toBeUndefined();
+    });
+
+    // And it gave the terminal back, exactly once.
+    expect(terminal.resets).toBe(1);
+    expect(terminal.readers).toBe(0);
+    expect(terminal.listeners).toBe(0);
+    expect(terminal.raw[terminal.raw.length - 1]).toBe(false);
+  });
+
+  it("J1: Control-C leaves a refusal, and it is still a refusal", function* () {
+    const { terminal, install } = recordingTerminal();
+    yield* scoped(function* (): Operation<void> {
+      yield* install();
+      yield* immediateClock();
+      const root = yield* useTemporaryHost();
+
+      // A file that is not a projectable history, so the command mounts the
+      // refusal screen instead of a session.
+      const directory = join(root, "xmd", "repl");
+      yield* until(mkdir(directory, { recursive: true }));
+      yield* until(writeFile(join(directory, "broken.jsonl"), "{not a record}\n"));
+
+      let refused: boolean | undefined;
+      const running = yield* spawn(function* (): Operation<void> {
+        const ran = yield* runReplProgram({
+          location: "xmd://repl/broken/entries",
+          profile: PROFILE,
+        });
+        refused = !ran.ok;
+      });
+      yield* settled(20);
+      expect(shows(terminal, "cannot read")).toBe(true);
+
+      // The interrupt, with the stream left open: the refusal screen is its own
+      // loop, so a key that ends the main loop proves nothing about this one.
+      terminal.bytes(new Uint8Array([0x03]));
+      yield* running;
+
+      // Left, and still refused: how a person leaves a location this command
+      // cannot show does not turn it into one it could.
+      expect(refused).toBe(true);
+    });
+
+    expect(terminal.resets).toBe(1);
+    expect(terminal.readers).toBe(0);
+  });
+
+  it("J1: input queued behind Control-C starts nothing and appends nothing", function* () {
+    const { terminal, install } = recordingTerminal();
+    yield* scoped(function* (): Operation<void> {
+      yield* install();
+      yield* immediateClock();
+      const root = yield* useTemporaryHost();
+
+      let outcome: ReplOutcome | undefined;
+      const running = yield* spawn(function* (): Operation<void> {
+        const ran = yield* runReplProgram({ profile: PROFILE });
+        if (!ran.ok) {
+          throw ran.error;
+        }
+        outcome = ran.value;
+      });
+      yield* settled();
+
+      terminal.bytes(BYTES.encode(DRAFT));
+      yield* settled();
+
+      // One chunk carrying the interrupt and a submission behind it, which is
+      // what a terminal delivers when both were typed before either was read.
+      // The Enter is input that arrived before leaving was decided, so it must
+      // reach nothing: a batch is not a licence to act after the decision.
+      terminal.bytes(new Uint8Array([0x03, 0x0d]));
+      yield* running;
+
+      // Nothing was submitted, so the one history file this execution created
+      // holds no record at all.
+      const files = yield* histories(root);
+      expect(files).toHaveLength(1);
+      expect(yield* records(root, files[0])).toEqual([]);
+
+      // And what was being typed survived, because the location is read off the
+      // state as it stood when leaving was decided.
+      const decoded = decodeLocation(outcome?.location ?? "");
+      expect(decoded.ok).toBe(true);
+      if (decoded.ok) {
+        expect(decoded.value.draft).toBe(DRAFT);
+      }
+    });
+
+    // Teardown still happens exactly once, on the way out of one decision.
+    expect(terminal.resets).toBe(1);
+    expect(terminal.readers).toBe(0);
+    expect(terminal.listeners).toBe(0);
+    expect(terminal.raw[terminal.raw.length - 1]).toBe(false);
+  });
+
+  it("J1: a cold reopen restores the selection, the history position and the draft", function* () {
+    const first = recordingTerminal();
+    let root = "";
+    let execution = "";
+
+    // One process that admits an entry and ends, leaving only the file behind.
+    yield* scoped(function* (): Operation<void> {
+      yield* first.install();
+      yield* immediateClock();
+      root = yield* useTemporaryHost();
+      const exited = exitRoute();
+      const running = yield* spawn(function* (): Operation<void> {
+        const ran = yield* runReplProgram({ profile: PROFILE });
+        if (!ran.ok) {
+          throw ran.error;
+        }
+        exited.settle(ran.value);
+      });
+      yield* settled();
+      first.terminal.bytes(BYTES.encode("# cold reopen"));
+      yield* settled();
+      first.terminal.feed("\r");
+      yield* settled(30);
+      first.terminal.end();
+      yield* running;
+      execution = exited.route().execution;
+    });
+
+    const files = yield* histories(root);
+    expect(files).toHaveLength(1);
+    const path = join(root, "xmd", "repl", files[0]);
+    const before = yield* until(readFile(path, "utf8"));
+
+    // The three route members this row is about, read out of the file the first
+    // process left rather than invented: an entry to select, and a position in
+    // its history to be reading at.
+    const projected = projectRepl(
+      (yield* records(root, files[0])).map((line) => {
+        const parsed = parseDurableEvent(line);
+        if (!parsed.ok) {
+          throw parsed.error;
+        }
+        return parsed.value;
+      }),
+    );
+    if (!projected.ok) {
+      throw projected.error;
+    }
+    const entry = projected.value.entries[0]?.scope;
+    const marker = projected.value.checkpoints[projected.value.checkpoints.length - 1]?.marker;
+    if (entry === undefined || marker === undefined) {
+      throw new Error("the retained history holds an entry and at least one position");
+    }
+
+    const location = encodeLocation({
+      execution,
+      surface: "entries",
+      scopes: [entry.key],
+      drawers: [],
+      at: marker,
+      inspect: false,
+      draft: "# what comes next",
+      session: undefined,
+    });
+
+    // A fresh host carrying nothing but that location and the file it names.
+    const second = recordingTerminal();
+    yield* scoped(function* (): Operation<void> {
+      yield* second.install();
+      yield* immediateClock();
+      // Pointed at the file the first process left, and structurally unable to
+      // mint an identifier or create one: a reopen that did either would be
+      // starting an execution rather than reading one.
+      yield* installReplHost({
+        dataRoot: () => root,
+        identify: () => {
+          throw new Error("a reopened execution mints no identifier");
+        },
+        createExclusive: () => Promise.reject(new Error("a reopened execution creates no file")),
+        appendRecord: (path, record) => appendFile(path, record),
+      });
+      const exited = exitRoute();
+      const running = yield* spawn(function* (): Operation<void> {
+        const ran = yield* runReplProgram({ profile: PROFILE, location });
+        if (!ran.ok) {
+          throw ran.error;
+        }
+        exited.settle(ran.value);
+      });
+      yield* settled();
+
+      // On the screen, not merely in the route: the entry the location named is
+      // the marked one, and what was being typed is in the draft row.
+      expect(routedSurfaceOn(second.terminal)).toBe("Entries");
+      expect(selectedEntryOn(second.terminal)).toBeDefined();
+      expect(draftText(second.terminal)).toBe("# what comes next");
+
+      second.terminal.end();
+      yield* running;
+
+      // And it ends where it was opened. One equality covers all three members,
+      // because a location that lost the selection, the position or the draft
+      // could not spell itself back the same way.
+      expect(exited.location()).toBe(location);
+    });
+
+    // A cold process reads; it does not write.
+    expect(yield* until(readFile(path, "utf8"))).toBe(before);
+    expect(second.terminal.resets).toBe(1);
+  });
+
+  it("J1: no other chord ends it, so what leaves is the key and not the modifier", function* () {
+    const { terminal, install } = recordingTerminal();
+    yield* scoped(function* (): Operation<void> {
+      yield* install();
+      yield* immediateClock();
+      yield* useTemporaryHost();
+
+      let outcome: ReplOutcome | undefined;
+      const running = yield* spawn(function* (): Operation<void> {
+        const ran = yield* runReplProgram({ profile: PROFILE });
+        if (!ran.ok) {
+          throw ran.error;
+        }
+        outcome = ran.value;
+      });
+      yield* settled();
+
+      // Alt-a, Control-H and F5: still dropped whole. Without this the test
+      // above would pass just as well had every chord been made to leave.
+      terminal.bytes(BYTES.encode("\x1ba"));
+      terminal.bytes(new Uint8Array([0x08]));
+      terminal.bytes(BYTES.encode("\x1b[15~"));
+      yield* settled(30);
+      expect(outcome).toBeUndefined();
+
+      terminal.end();
+      yield* running;
+      expect(outcome?.location).toBeDefined();
+    });
   });
 });
 
@@ -1694,7 +1963,7 @@ describe("REPL journey: what it refuses, and what it leaves alone", () => {
       let refused: boolean | undefined;
       const running = yield* spawn(function* (): Operation<void> {
         const ran = yield* runReplProgram({
-          location: "xmd://repl/broken/repl",
+          location: "xmd://repl/broken/entries",
           profile: PROFILE,
         });
         refused = !ran.ok;
@@ -1754,9 +2023,11 @@ describe("REPL journey: what it refuses, and what it leaves alone", () => {
       });
       yield* settled();
 
-      // Control-C, Alt-a, Control-H and F5: each decodes to a letter or a key
-      // this product has no meaning for, and none of them is text.
-      terminal.bytes(new Uint8Array([0x03]));
+      // Alt-a, Control-H and F5: each decodes to a letter or a key this product
+      // has no meaning for, and none of them is text. Control-C is deliberately
+      // not among them — it ends the command, so leaving it here would depart on
+      // the first byte and the three after it would never be delivered. What it
+      // does instead is "REPL journey: leaving".
       terminal.bytes(BYTES.encode("\x1ba"));
       terminal.bytes(new Uint8Array([0x08]));
       terminal.bytes(BYTES.encode("\x1b[15~"));
@@ -2454,7 +2725,7 @@ describe("REPL journey: the same product at every size", () => {
       terminal.end();
       yield* running;
       // The route it was at is still the base reading, published on the way out.
-      expect(exited.location()).toMatch(/^xmd:\/\/repl\/[A-Za-z0-9_-]+\/repl$/);
+      expect(exited.location()).toMatch(/^xmd:\/\/repl\/[A-Za-z0-9_-]+\/entries$/);
     });
   });
 });
@@ -2557,7 +2828,7 @@ describe("REPL journey: what it settles before it acts", () => {
     // real, and one segment of the path is a typo.
     const mistyped = encodeLocation({
       execution: files[0].replace(/\.jsonl$/, ""),
-      surface: "repl",
+      surface: "entries",
       scopes: [entryKey, "Nowhere-9"],
       drawers: [],
       at: undefined,
@@ -2655,7 +2926,7 @@ describe("REPL journey: what it settles before it acts", () => {
     // which no history records, so nothing this file holds could say otherwise.
     const stale = encodeLocation({
       execution: files[0].replace(/\.jsonl$/, ""),
-      surface: "repl",
+      surface: "entries",
       scopes: [model.entries[0]?.key ?? ""],
       drawers: [{ kind: "live-elicit" }],
       at: undefined,
@@ -2734,7 +3005,7 @@ describe("REPL journey: what it settles before it acts", () => {
 
       const running = yield* spawn(function* (): Operation<void> {
         outcome = yield* runReplProgram({
-          location: `xmd://repl/unclosed/repl/${model.entries[0]?.key ?? ""}/+elicit`,
+          location: `xmd://repl/unclosed/entries/${model.entries[0]?.key ?? ""}/+elicit`,
           profile: PROFILE,
         });
       });
@@ -3049,7 +3320,7 @@ describe("REPL journey: a position earlier than the entry being read", () => {
         expect(after.value.inspect).toBe(true);
         // So do the draft and the surface.
         expect(after.value.draft).toBe("Three.");
-        expect(after.value.surface).toBe("repl");
+        expect(after.value.surface).toBe("entries");
       }
     });
   });
@@ -3862,7 +4133,7 @@ describe("REPL journey: a cold process over a multi-entry journal", () => {
     // catalog and a selection rather than whatever happens to be first.
     const location = encodeLocation({
       execution,
-      surface: "repl",
+      surface: "entries",
       scopes: ["entry-2"],
       drawers: [],
       at: undefined,
@@ -4753,7 +5024,7 @@ describe("REPL first use: UI2 refusal", () => {
       const running = yield* spawn(function* (): Operation<void> {
         // A location this history cannot answer: an entry it never admitted.
         outcome = yield* runReplProgram({
-          location: `xmd://repl/${execution}/repl/entry-9`,
+          location: `xmd://repl/${execution}/entries/entry-9`,
           profile: PROFILE,
         });
       });
@@ -4804,7 +5075,7 @@ describe("REPL first use: UI2 refusal", () => {
 
       const running = yield* spawn(function* (): Operation<void> {
         outcome = yield* runReplProgram({
-          location: `xmd://repl/${execution}/repl/entry-9`,
+          location: `xmd://repl/${execution}/entries/entry-9`,
           profile: PROFILE,
         });
       });

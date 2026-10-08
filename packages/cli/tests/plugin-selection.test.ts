@@ -104,9 +104,9 @@ describe("PS4 — the command a Plugin is told about", () => {
     // `--plugin` tokens taken out — so the command token is still in it, and
     // what changed is that `repl` is no longer *also* read as a document.
     expect(selected.rest).toEqual(["repl"]);
-    const located = selectPlugins(["--plugin=./a.mjs", "repl", "xmd://repl/one/repl"]);
+    const located = selectPlugins(["--plugin=./a.mjs", "repl", "xmd://repl/one/entries"]);
     expect(located.command).toBe("repl");
-    expect(located.rest).toEqual(["repl", "xmd://repl/one/repl"]);
+    expect(located.rest).toEqual(["repl", "xmd://repl/one/entries"]);
   });
 });
 

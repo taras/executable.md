@@ -7,7 +7,7 @@ another one.
 
 ```bash
 xmd repl                                  # a fresh execution with an empty draft
-xmd repl 'xmd://repl/<execution>/repl'    # reopen exactly that retained history
+xmd repl 'xmd://repl/<execution>/entries' # reopen exactly that retained history
 xmd repl --deny-all                       # the same, answering every agent request with no
 ```
 
@@ -46,7 +46,7 @@ one.
 
 Run `xmd repl`. The screen shows an empty draft, a Sessions list that says it is
 empty, an Entries list with nothing in it yet, and a location of the form
-`xmd://repl/<execution>/repl` — the execution already exists, as an empty history
+`xmd://repl/<execution>/entries` — the execution already exists, as an empty history
 file, before you have typed anything.
 
 Type or paste one XMD entry and press Enter. What was in the draft is now the
@@ -101,9 +101,9 @@ reachable without reaching past the modal. Leaving is lifecycle and nothing else
 it answers no question, decides no permission request, and appends no close, no
 cancellation and no audit. An entry whose root never closed stays unfinished,
 because that is what it is. The command cancels and joins everything it owns,
-gives the terminal back once, prints the location it was at — minus the drawers
-only a running process could have mounted, so what it prints is a location a
-second process can be handed — and exits zero.
+gives the terminal back once, prints what reopens the location it was at — minus
+the drawers only a running process could have mounted, so what it prints is a
+location a second process can be handed — and exits zero.
 
 Press Enter on `[pause]` to stop expansion at its next boundary. `[continue]`
 exists only while a continuation is actually held — not while a pause is still
@@ -174,9 +174,9 @@ read back cold from the journal.
 
 ## One cold journey
 
-The command prints the location it ended at. Pass that location to a new
-`xmd repl` — on this machine, in a new process, with nothing carried over — and
-the same view comes back: the same catalog of entries in the same order with the
+The command prints what reopens where it ended: a line saying so, and under it
+the whole `xmd repl <location>`. Run that — on this machine, in a new process,
+with nothing carried over — and the same view comes back: the same catalog of entries in the same order with the
 same outcomes, the same selected entry and scope, the same binding values, the
 same transcript, the same generated source, the same recorded question and
 answer, the same History positions and the same terminal output.
@@ -332,19 +332,38 @@ appended: the history file is byte-identical before and after a cold run.
 
 ## How this command ends
 
-Activating `[exit]`, Escape on the too-small refusal, EOF, a renderer that cannot
-present, a terminal that fails mid-read and a cancelled command scope all end the
-same way: the owner cancels and joins every Prompt, provider task, pending
+Activating `[exit]`, pressing Control-C, Escape on the too-small refusal, EOF, a
+renderer that cannot present, a terminal that fails mid-read and a cancelled
+command scope all end the same way: the owner cancels and joins every Prompt, provider task, pending
 permission operation, observer and frame subscription it started, appends nothing
 after that, and gives the terminal's modes back exactly once. Work that was
 interrupted leaves no record, because a record for it would be a record of
 something that did not happen. What was already appended stays readable, and is
 what a cold process shows.
 
-No chord ends it. A Control or Alt combination is dropped whole wherever it is
-pressed, so leaving is a control a person can see rather than a key they have to
-know — which is also why the one screen with no control on it, the refusal below
-the minimum size, says that Escape leaves.
+One chord ends it, and it is the only one: Control-C, wherever it is pressed.
+Raw mode clears `ISIG`, so no signal reaches this process and the byte is the
+whole of the notice — which is why dropping it with the other chords left the
+reflex every terminal program answers doing nothing, and saying nothing about why.
+Every other Control or Alt combination is still dropped whole.
+
+The command answers that key itself, where it answers end of input, rather than a
+mounted control answering it: ending is a lifecycle outcome its owner decides, and
+a key resolved by whichever row happened to have focus would stop meaning the same
+thing from one screen to the next. It therefore leaves both screens a running
+command can be sitting on, and they are not the same screen: the refusal below the
+minimum size, which places no control at all and offers Escape besides; and the
+one shown for a location this command cannot show, which does place a control.
+
+Leaving that second one is still a refusal. The reason is reported, the status is
+non-zero and no reopen command is printed, because a history that could not be
+read is not a view anybody can be handed back — which is exactly what its own
+Escape produces, and why this is one ending answered in two loops rather than two
+different endings.
+
+`[exit]` stays on the action row regardless, because leaving has to be a control a
+person can see rather than a key they have to know — and because a pointer reaches
+a control and reaches no keystroke.
 
 Leaving takes no further keystroke. The terminal's bytes arrive on a stream the
 command owns, and releasing it cancels the read it was holding rather than asking
@@ -389,9 +408,15 @@ shows the record itself again.
 
 The location is not on the screen. It is the longest thing this command could
 draw and the one thing a reader never has to act on while they are reading, so no
-row carries it and none is kept for it at any size. The command prints the whole
-location when it ends, which is where it is useful: that is the string you pass
-back to reopen exactly what you were looking at. Source text, provider output and
+row carries it and none is kept for it at any size. When the command ends it
+prints the whole `xmd repl <location>`, under one line saying that is what
+reopens this view: a person who has just had their terminal handed back wants
+something they can run, and the screen that would have explained it has gone. The
+command is indented rather than marked, so the line stays exactly what can be
+pasted. The location is quoted, because it carries `?`, `&` and `=` structurally
+and a shell would read them — and single-quoted safely, because every character
+outside `[A-Za-z0-9-._~:@]` is percent-encoded, so a location can never contain
+the quote that would close it. Source text, provider output and
 an event's own origin are content and are shown as written, URLs included.
 
 The History band is five rows at every size and says which band it is on the
@@ -590,7 +615,9 @@ position and never an action. Text is its own event and goes to whichever field
 has focus, and to nothing at all when a control has it rather than a field — so a
 keystroke never edits a field nobody is looking at, and the row above the surface
 says how to get back to the draft while that is the case. A Control or Alt chord
-is dropped whole rather than typed as the letter it was pressed with. A pointer is resolved against the exact frame that produced
+is dropped whole rather than typed as the letter it was pressed with, except for
+the two the host names: the newline inside a paste, and Control-C, which arrives
+as a key the command answers by ending. A pointer is resolved against the exact frame that produced
 its coordinates, so a stale frame, a node that has gone and a target behind a
 drawer all reach nothing — and activating a control with a pointer produces the
 same action as pressing Enter on it.
