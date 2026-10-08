@@ -1528,6 +1528,44 @@ describe("REPL journey: leaving", () => {
     expect(terminal.raw[terminal.raw.length - 1]).toBe(false);
   });
 
+  it("J1: Control-C leaves a refusal, and it is still a refusal", function* () {
+    const { terminal, install } = recordingTerminal();
+    yield* scoped(function* (): Operation<void> {
+      yield* install();
+      yield* immediateClock();
+      const root = yield* useTemporaryHost();
+
+      // A file that is not a projectable history, so the command mounts the
+      // refusal screen instead of a session.
+      const directory = join(root, "xmd", "repl");
+      yield* until(mkdir(directory, { recursive: true }));
+      yield* until(writeFile(join(directory, "broken.jsonl"), "{not a record}\n"));
+
+      let refused: boolean | undefined;
+      const running = yield* spawn(function* (): Operation<void> {
+        const ran = yield* runReplProgram({
+          location: "xmd://repl/broken/repl",
+          profile: PROFILE,
+        });
+        refused = !ran.ok;
+      });
+      yield* settled(20);
+      expect(shows(terminal, "cannot read")).toBe(true);
+
+      // The interrupt, with the stream left open: the refusal screen is its own
+      // loop, so a key that ends the main loop proves nothing about this one.
+      terminal.bytes(new Uint8Array([0x03]));
+      yield* running;
+
+      // Left, and still refused: how a person leaves a location this command
+      // cannot show does not turn it into one it could.
+      expect(refused).toBe(true);
+    });
+
+    expect(terminal.resets).toBe(1);
+    expect(terminal.readers).toBe(0);
+  });
+
   it("J1: no other chord ends it, so what leaves is the key and not the modifier", function* () {
     const { terminal, install } = recordingTerminal();
     yield* scoped(function* (): Operation<void> {

@@ -311,9 +311,10 @@ function* refuse(state: ReplState, reason: string): Operation<Result<ReplOutcome
       }
       // Escape as well, because the one screen with no control placed on it — a
       // window too small to draw in — offers this and nothing else. Control-C
-      // leaves from here too: a key that ends the command everywhere but on the
-      // one screen that already cannot show a control would be the least useful
-      // place to withhold it.
+      // leaves from here for the same reason it leaves anywhere: this is still a
+      // running command, and the key is answered by whoever owns the ending
+      // rather than by a control that may not have been placed. The outcome is
+      // unchanged, so leaving a refusal this way is still a refusal.
       if (
         next.value.event.kind === "key" &&
         (next.value.event.key === "Escape" || next.value.event.key === "Interrupt")
