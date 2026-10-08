@@ -778,6 +778,14 @@ function decorated(box: ReplBox): ReplBoxProps {
  * flow, so what a reader sees is still one row of exactly the measured width —
  * while a child per token would be a box, a bound and a pointer target for every
  * delimiter on the screen.
+ *
+ * Only for a row the element can hold. The engine wraps each text operation it
+ * is given **on its own**, and a row is one cell tall: several operations whose
+ * total is wider than the element each show their own first line and leave the
+ * cells their remainder went to blank — measured, a 400-column generated tag in
+ * a 118-column drawer came out with its quoted values missing. One operation
+ * wraps once, which is the reading this screen has always shown, so a row that
+ * does not fit is drawn as the one thing it is.
  */
 function written(content: string, box: ReplBox, focused: boolean): Op[] {
   const style = box.style;
@@ -785,7 +793,12 @@ function written(content: string, box: ReplBox, focused: boolean): Op[] {
     return [text(content)];
   }
   const { runs } = box;
-  if (runs === undefined || runs.length === 0 || runText(runs) !== content) {
+  if (
+    runs === undefined ||
+    runs.length === 0 ||
+    runText(runs) !== content ||
+    !holds(box.props, content)
+  ) {
     const { colour, attrs } = textStyleOf(style, focused);
     return [drawn(content, colour, attrs)];
   }
@@ -793,6 +806,24 @@ function written(content: string, box: ReplBox, focused: boolean): Op[] {
     const { colour, attrs } = runStyleOf(run.token, style, focused);
     return drawn(run.text, colour, attrs);
   });
+}
+
+/**
+ * Whether this element holds this text without the engine wrapping it.
+ *
+ * Read off the constraint the element was opened with rather than worked out
+ * again: a box stated at a measured width says how much room its text has, and
+ * a box that sizes itself to its content always has enough.
+ */
+function holds(props: ReplBoxProps, content: string): boolean {
+  const width = props.layout?.width;
+  if (width === undefined) {
+    return false;
+  }
+  if (width.type === "fit") {
+    return true;
+  }
+  return width.type === "fixed" && content.length <= width.value;
 }
 
 function drawn(content: string, colour: number, attrs: number): Op {

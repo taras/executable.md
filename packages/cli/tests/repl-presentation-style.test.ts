@@ -1880,3 +1880,44 @@ describe("REPL presentation: decoration the frame measured", () => {
     expect(observed.keys).toContain("drawer:close");
   });
 });
+
+describe("REPL presentation: a row the frame cannot hold whole", () => {
+  beforeAll(() => useTempFileCompiler());
+
+  it("P1-T1: a source row wider than its drawer keeps every character it shows", function* () {
+    const model = yield* settledAndFailed();
+    // One tag far wider than any drawer at any supported size, so the engine
+    // has to wrap it. Drawn as several stretches it would wrap each of them on
+    // its own and leave the cells their remainders went to blank.
+    const long =
+      '<Elicit as="answers" schema={schema}>' +
+      "Enter the project details, at length, so that this one line is wider ".repeat(4) +
+      "</Elicit>";
+    const question = yield* askingWith(DETAILS_SCHEMA, long);
+    const presenter = yield* usePresenter(WIDE);
+    const observed = yield* presenter.commit(
+      reading(answering(stateWith({}), {}), model, asking(question), WIDE),
+    );
+    const { grid } = presenter;
+
+    const row = placed(observed, "drawer:message:0");
+    const shown = textOf(grid, row);
+    // Whatever the row shows is a prefix of the line it was given, with no gap
+    // where a stretch wrapped away: every written cell is the next character of
+    // the source, in order.
+    const written = shown.replace(/\s+$/, "");
+    expect(written.length).toBeGreaterThan(40);
+    expect(long.startsWith(written)).toBe(true);
+    expect(written).not.toContain("  ");
+
+    // And a row the drawer does hold is still read as the thing it is, so the
+    // bound is on the row that overflows rather than on the reading.
+    const short = yield* askingWith(DETAILS_SCHEMA, SOURCE_EXAMPLE.join("\n"));
+    const fitted = yield* presenter.commit(
+      reading(answering(stateWith({}), {}), model, asking(short), WIDE),
+    );
+    expect(inkOfSpan(grid, placed(fitted, "drawer:message:1"), "Elicit").foreground).toBe(
+      REPL_PALETTE.focus,
+    );
+  });
+});
