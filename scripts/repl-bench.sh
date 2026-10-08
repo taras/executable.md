@@ -31,6 +31,7 @@ repl-bench <command>
 
   start [--size WxH] [--real-home] [-- <repl args>]
                      allocate a terminal and launch the REPL in it
+  attach             attach this terminal to the run, to drive it by hand
   look [label]       capture the screen now, with colour, into the frame tape
   tape               print the frame tape
   journal            copy this run's journal next to the frames
@@ -162,6 +163,15 @@ Attach with:  tmux -S $socket attach -t $session
 DONE
 }
 
+# The socket lives in TMPDIR and its path is long, so attaching is a subcommand
+# rather than a line to copy. Interactive by definition: this one replaces the
+# shell that called it.
+cmd_attach() {
+  need_tmux; load_run
+  alive || die "session $SESSION is gone; start a new run"
+  exec tmux -S "$SOCKET" attach -t "$SESSION"
+}
+
 cmd_look() {
   need_tmux; load_run
   local label="${1:-}"
@@ -281,6 +291,7 @@ cmd_stop() {
 mkdir -p "$BENCH"
 case "${1:-}" in
   start) shift; cmd_start "$@" ;;
+  attach) shift; cmd_attach "$@" ;;
   look) shift; cmd_look "$@" ;;
   tape) shift; cmd_tape "$@" ;;
   journal) shift; cmd_journal "$@" ;;
