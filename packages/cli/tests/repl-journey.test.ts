@@ -1491,6 +1491,75 @@ describe("REPL journey: one entry, from raw bytes", () => {
   });
 });
 
+describe("REPL journey: leaving", () => {
+  it("J1: Control-C ends the command and prints the location", function* () {
+    const { terminal, install } = recordingTerminal();
+    yield* scoped(function* (): Operation<void> {
+      yield* install();
+      yield* immediateClock();
+      const root = yield* useTemporaryHost();
+
+      let outcome: ReplOutcome | undefined;
+      const running = yield* spawn(function* (): Operation<void> {
+        const ran = yield* runReplProgram({ profile: PROFILE });
+        if (!ran.ok) {
+          throw ran.error;
+        }
+        outcome = ran.value;
+      });
+      yield* settled();
+      const files = yield* histories(root);
+      const execution = files[0].replace(/\.jsonl$/, "");
+
+      // The interrupt and nothing else. The stream is deliberately left open:
+      // closing it would end the command by EOF and prove that instead.
+      terminal.bytes(new Uint8Array([0x03]));
+      yield* running;
+
+      // The same ending every other way of leaving produces, location included.
+      expect(outcome?.location).toBe(`xmd://repl/${execution}/repl`);
+      expect(outcome?.refusal).toBeUndefined();
+    });
+
+    // And it gave the terminal back, exactly once.
+    expect(terminal.resets).toBe(1);
+    expect(terminal.readers).toBe(0);
+    expect(terminal.listeners).toBe(0);
+    expect(terminal.raw[terminal.raw.length - 1]).toBe(false);
+  });
+
+  it("J1: no other chord ends it, so what leaves is the key and not the modifier", function* () {
+    const { terminal, install } = recordingTerminal();
+    yield* scoped(function* (): Operation<void> {
+      yield* install();
+      yield* immediateClock();
+      yield* useTemporaryHost();
+
+      let outcome: ReplOutcome | undefined;
+      const running = yield* spawn(function* (): Operation<void> {
+        const ran = yield* runReplProgram({ profile: PROFILE });
+        if (!ran.ok) {
+          throw ran.error;
+        }
+        outcome = ran.value;
+      });
+      yield* settled();
+
+      // Alt-a, Control-H and F5: still dropped whole. Without this the test
+      // above would pass just as well had every chord been made to leave.
+      terminal.bytes(BYTES.encode("\x1ba"));
+      terminal.bytes(new Uint8Array([0x08]));
+      terminal.bytes(BYTES.encode("\x1b[15~"));
+      yield* settled(30);
+      expect(outcome).toBeUndefined();
+
+      terminal.end();
+      yield* running;
+      expect(outcome?.location).toBeDefined();
+    });
+  });
+});
+
 describe("REPL journey: what it refuses, and what it leaves alone", () => {
   it("J1: an invalid navigation leaves the standing route, tree, focus and targets", function* () {
     const { terminal, install } = recordingTerminal();
@@ -1754,9 +1823,11 @@ describe("REPL journey: what it refuses, and what it leaves alone", () => {
       });
       yield* settled();
 
-      // Control-C, Alt-a, Control-H and F5: each decodes to a letter or a key
-      // this product has no meaning for, and none of them is text.
-      terminal.bytes(new Uint8Array([0x03]));
+      // Alt-a, Control-H and F5: each decodes to a letter or a key this product
+      // has no meaning for, and none of them is text. Control-C is deliberately
+      // not among them — it ends the command, so leaving it here would depart on
+      // the first byte and the three after it would never be delivered. What it
+      // does instead is "REPL journey: leaving".
       terminal.bytes(BYTES.encode("\x1ba"));
       terminal.bytes(new Uint8Array([0x08]));
       terminal.bytes(BYTES.encode("\x1b[15~"));

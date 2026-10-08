@@ -332,19 +332,30 @@ appended: the history file is byte-identical before and after a cold run.
 
 ## How this command ends
 
-Activating `[exit]`, Escape on the too-small refusal, EOF, a renderer that cannot
-present, a terminal that fails mid-read and a cancelled command scope all end the
-same way: the owner cancels and joins every Prompt, provider task, pending
+Activating `[exit]`, pressing Control-C, Escape on the too-small refusal, EOF, a
+renderer that cannot present, a terminal that fails mid-read and a cancelled
+command scope all end the same way: the owner cancels and joins every Prompt, provider task, pending
 permission operation, observer and frame subscription it started, appends nothing
 after that, and gives the terminal's modes back exactly once. Work that was
 interrupted leaves no record, because a record for it would be a record of
 something that did not happen. What was already appended stays readable, and is
 what a cold process shows.
 
-No chord ends it. A Control or Alt combination is dropped whole wherever it is
-pressed, so leaving is a control a person can see rather than a key they have to
-know — which is also why the one screen with no control on it, the refusal below
-the minimum size, says that Escape leaves.
+One chord ends it, and it is the only one: Control-C, wherever it is pressed.
+Raw mode clears `ISIG`, so no signal reaches this process and the byte is the
+whole of the notice — which is why dropping it with the other chords left the
+reflex every terminal program answers doing nothing, and saying nothing about why.
+Every other Control or Alt combination is still dropped whole.
+
+The command answers that key itself, where it answers end of input, rather than a
+mounted control answering it: ending is a lifecycle outcome its owner decides, and
+a key resolved by whichever row happened to have focus would stop meaning the same
+thing from one screen to the next. It therefore ends the refusal below the minimum
+size as well, which places no control at all and offers Escape besides.
+
+`[exit]` stays on the action row regardless, because leaving has to be a control a
+person can see rather than a key they have to know — and because a pointer reaches
+a control and reaches no keystroke.
 
 Leaving takes no further keystroke. The terminal's bytes arrive on a stream the
 command owns, and releasing it cancels the read it was holding rather than asking
@@ -590,7 +601,9 @@ position and never an action. Text is its own event and goes to whichever field
 has focus, and to nothing at all when a control has it rather than a field — so a
 keystroke never edits a field nobody is looking at, and the row above the surface
 says how to get back to the draft while that is the case. A Control or Alt chord
-is dropped whole rather than typed as the letter it was pressed with. A pointer is resolved against the exact frame that produced
+is dropped whole rather than typed as the letter it was pressed with, except for
+the two the host names: the newline inside a paste, and Control-C, which arrives
+as a key the command answers by ending. A pointer is resolved against the exact frame that produced
 its coordinates, so a stale frame, a node that has gone and a target behind a
 drawer all reach nothing — and activating a control with a pointer produces the
 same action as pressing Enter on it.

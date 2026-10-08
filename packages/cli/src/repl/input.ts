@@ -87,6 +87,20 @@ const KEYS: ReadonlyMap<string, ReplKey> = new Map([
 const NEWLINE_CHORD = "j";
 
 /**
+ * The physical key an interrupt arrives as.
+ *
+ * Raw mode clears `ISIG`, so Control-C raises no signal and the byte is the only
+ * notice this command gets that somebody asked it to stop. Dropping it with the
+ * other chords left the reflex every terminal program answers doing nothing at
+ * all, with nothing on screen saying why.
+ *
+ * It is named as a key rather than decided here, because what a keystroke means
+ * is not this module's to say. `Interrupt` is what was pressed; ending is what
+ * the program does about it.
+ */
+const INTERRUPT_CHORD = "c";
+
+/**
  * Whether this press is a shifted Tab, which is the same keystroke as Backtab.
  *
  * A terminal has two ways to say it. Legacy mode sends `ESC [ Z`, which the
@@ -115,11 +129,18 @@ function backward(event: Extract<InputEvent, { type: "keydown" | "keyrepeat" }>)
  * code. A chord's code is a letter — Control-C is `c`, Alt-a is `a` — so reading
  * the code would type the letter somebody pressed Control with, which is how an
  * editor ends up inserting a `c` when a person asked it to stop.
+ *
+ * Two chords are named before the rest are dropped, and they are the only two:
+ * Control-J, which is the newline inside a paste, and Control-C, which is an
+ * interrupt. Every other Control or Alt combination is dropped whole.
  */
 export function normalize(event: InputEvent): ReplNormalized {
   if (event.type === "keydown" || event.type === "keyrepeat") {
     if (event.ctrl === true && event.alt !== true && event.code === NEWLINE_CHORD) {
       return { event: Object.freeze({ kind: "text", text: "\n" }), at: undefined };
+    }
+    if (event.ctrl === true && event.alt !== true && event.code === INTERRUPT_CHORD) {
+      return { event: Object.freeze({ kind: "key", key: "Interrupt" }), at: undefined };
     }
     if (event.ctrl === true || event.alt === true) {
       // A chord nothing here claims. Dropped whole, payload included.

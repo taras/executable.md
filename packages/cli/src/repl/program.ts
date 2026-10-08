@@ -310,8 +310,14 @@ function* refuse(state: ReplState, reason: string): Operation<Result<ReplOutcome
         return;
       }
       // Escape as well, because the one screen with no control placed on it — a
-      // window too small to draw in — offers this and nothing else.
-      if (next.value.event.kind === "key" && next.value.event.key === "Escape") {
+      // window too small to draw in — offers this and nothing else. Control-C
+      // leaves from here too: a key that ends the command everywhere but on the
+      // one screen that already cannot show a control would be the least useful
+      // place to withhold it.
+      if (
+        next.value.event.kind === "key" &&
+        (next.value.event.key === "Escape" || next.value.event.key === "Interrupt")
+      ) {
         return;
       }
       // Drawn again, because Tab moved focus and a marker nobody redrew is a
@@ -560,6 +566,14 @@ function* drive(
         } else if (wake.event.kind === "input") {
           const delivered = wake.event.event;
           if (delivered === undefined) {
+            continue;
+          }
+          // Control-C, from wherever it was pressed. Taken here rather than
+          // through the tree because no node claims it: ending is this owner's
+          // outcome, and a key answered by whichever row happened to have focus
+          // would stop meaning the same thing from one screen to the next.
+          if (delivered.kind === "key" && delivered.key === "Interrupt") {
+            departing = true;
             continue;
           }
           // A window too small to draw in shows a refusal and places no cell, so
