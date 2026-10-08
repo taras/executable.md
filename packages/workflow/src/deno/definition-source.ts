@@ -27,26 +27,18 @@
 
 import type { DatabaseSync } from "node:sqlite";
 import { Err, Ok, type Operation, type Result } from "effection";
-import type {
-  GitRetainedDefinitionSourcesV1,
-  RetainedDefinitionSources,
-  SourceBundleRetainedDefinitionSourcesV2,
-  SourceBundleRetainedSourceV2,
-} from "../lifecycle/source.ts";
-import { definitionComponents, type GitWorkflowDefinitionV1 } from "../storage/definition.ts";
+import type { RetainedDefinitionSources, RetainedSource } from "../lifecycle/source.ts";
 import {
-  LegacyWorkflowSourceMismatchError,
   WorkflowDefinitionCorruptError,
   WorkflowDefinitionSourceMissingError,
   WorkflowRecordMalformedError,
 } from "../storage/errors.ts";
 import {
-  type SourceBundleSnapshotEntryV2,
+  type SourceBundleSnapshotEntry,
   sourceBundleHash,
-  type SourceBundleWorkflowDefinitionV2,
+  type WorkflowDefinition,
   sourceContentHash,
 } from "../storage/source-bundle.ts";
-import { gitBlobIdentity } from "./artifact/source.ts";
 import { reading } from "./reading.ts";
 
 const INSERT_BLOB = `INSERT INTO workflow_definition_blob (source_hash, byte_length, content)
@@ -67,8 +59,8 @@ const SELECT_BLOBS = "SELECT source_hash, byte_length, content FROM workflow_def
  */
 export function writeDefinitionSources(
   database: DatabaseSync,
-  definition: SourceBundleWorkflowDefinitionV2,
-  snapshot: readonly SourceBundleSnapshotEntryV2[],
+  definition: WorkflowDefinition,
+  snapshot: readonly SourceBundleSnapshotEntry[],
 ): void {
   const blob = database.prepare(INSERT_BLOB);
   const source = database.prepare(INSERT_SOURCE);
@@ -134,9 +126,9 @@ export function readDefinitionSourceRows(database: DatabaseSync): RetainedSource
  * smaller closure, it is a different definition.
  */
 export function* verifyRetainedSources(
-  definition: SourceBundleWorkflowDefinitionV2,
+  definition: WorkflowDefinition,
   rows: RetainedSourceRows,
-): Operation<Result<SourceBundleRetainedDefinitionSourcesV2>> {
+): Operation<Result<RetainedDefinitionSources>> {
   const stored = new Map(rows.manifest.map((row) => [row.path, row.sourceHash]));
   if (stored.size !== rows.manifest.length) {
     return Err(new WorkflowDefinitionCorruptError("it retains one logical path more than once"));
@@ -151,7 +143,7 @@ export function* verifyRetainedSources(
   }
 
   const referenced = new Set<string>();
-  const sources: SourceBundleRetainedSourceV2[] = [];
+  const sources: RetainedSource[] = [];
   for (const entry of definition.sources) {
     const retainedHash = stored.get(entry.path);
     if (retainedHash === undefined) {
@@ -199,85 +191,10 @@ export function* verifyRetainedSources(
 
   return Ok(
     Object.freeze({
-      definitionVersion: 2,
       definition,
       sources: Object.freeze(sources),
     }),
   );
-}
-
-/**
- * Hold a legacy reader's answer to the version-1 definition it was asked about.
- *
- * The adapter fetched it; this decides whether what came back is this run's.
- * Every term the descriptor pins is compared — the object format, the pinned
- * commit, the repository-relative path, the exact target, and the declared
- * component set with its paths and blob identities — because a reader that
- * returned another commit's bytes has not obtained this source, and none of
- * what it returned may execute.
- */
-export function validateLegacySources(
-  definition: GitWorkflowDefinitionV1,
-  answered: RetainedDefinitionSources,
-): Result<GitRetainedDefinitionSourcesV1> {
-  if (answered.definitionVersion !== 1) {
-    return Err(
-      new LegacyWorkflowSourceMismatchError("it describes a source bundle, not a Git object"),
-    );
-  }
-  const { root, components } = answered.closure;
-  if (
-    root.objectFormat !== definition.objectFormat ||
-    root.pinnedCommit !== definition.objectId ||
-    root.rootDocumentPath !== definition.rootDocumentPath ||
-    root.targetPath !== definition.targetPath
-  ) {
-    return Err(new LegacyWorkflowSourceMismatchError("its root is not the object this run pins"));
-  }
-  // The declared identity is not taken on the reader's word: the blob id is
-  // recomputed from the bytes that came back, so a closure carrying one
-  // document's identity beside another's content is refused rather than
-  // executed.
-  if (gitBlobIdentity(root.content, root.objectFormat) !== root.blobId) {
-    return Err(
-      new LegacyWorkflowSourceMismatchError("its root content is not the object it declares"),
-    );
-  }
-
-  const declared = definitionComponents(definition);
-  if (components.length !== declared.length) {
-    return Err(
-      new LegacyWorkflowSourceMismatchError(
-        "it carries a different component set than this run declares",
-      ),
-    );
-  }
-  for (let index = 0; index < declared.length; index++) {
-    const expected = declared[index];
-    const supplied = components[index];
-    if (
-      expected === undefined ||
-      supplied === undefined ||
-      supplied.name !== expected.name ||
-      supplied.path !== expected.path ||
-      supplied.blobId !== expected.sourceHash
-    ) {
-      return Err(
-        new LegacyWorkflowSourceMismatchError(
-          "a component it carries is not one this run declares",
-        ),
-      );
-    }
-    if (gitBlobIdentity(supplied.content, definition.objectFormat) !== supplied.blobId) {
-      return Err(
-        new LegacyWorkflowSourceMismatchError(
-          "a component's content is not the object it declares",
-        ),
-      );
-    }
-  }
-
-  return Ok(Object.freeze({ definitionVersion: 1, definition, closure: answered.closure }));
 }
 
 function rowText(row: Record<string, unknown>, location: string, column = "path"): string {

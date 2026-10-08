@@ -41,16 +41,9 @@
  * effect transaction, and is retained by the `workspace_file` effect that
  * transaction publishes. Nothing about it reaches the value `<Evaluate>`
  * returns.
- *
- * ## The `source` spelling
- *
- * Workflow documents were written against `source` before `text` existed, so
- * this profile admits it and canonical `<Evaluate>` accepts it here without
- * complaint. The ordinary run profile does not: it never shipped that spelling,
- * and there is no document written against it to keep working.
  */
 
-import { API, timeoutFetch } from "@executablemd/runtime";
+import { API, cwd, timeoutFetch } from "@executablemd/runtime";
 import type { Operation } from "effection";
 import {
   detachHeaders,
@@ -71,7 +64,6 @@ import type {
 } from "@executablemd/core/host";
 import type { WorkflowRunDatabase } from "../../storage/api.ts";
 import { workflowFilesHandler } from "./files.ts";
-import { WORKSPACE_ROOT } from "./logical-path.ts";
 import { workspaceRootSelection } from "./effect.ts";
 
 /**
@@ -157,13 +149,25 @@ function workspaceFiles(database: WorkflowRunDatabase): FragmentFileAccess {
     writeTextFile: (input) => handler.writeTextFile(input),
     deleteFile: (input) => handler.deleteFile(input),
     ensureDirectory: (input) => handler.ensureDirectory(input),
-    // The Workspace root, and a logical path rather than a host one — the same
-    // root the run's documents resolve against. Nothing an admitted fragment
-    // writes reaches the directory the caller invoked `xmd` from.
-    // deno-lint-ignore require-yield
-    *workingDirectory(): Operation<string> {
-      return WORKSPACE_ROOT;
-    },
+    // The directory the run is in now, which is what every authored path in
+    // this run resolves against. Read when a fragment runs rather than frozen
+    // at assembly, so a fragment and the document that produced it resolve the
+    // same relative path to the same entry — an `<Evaluate>` written inside
+    // `<Dir path={worktree}>` proposes into that checkout, and the authored
+    // `<Git.Add paths="." />` beside it stages what the fragment wrote.
+    //
+    // Still a logical path rather than a host one: this run's `API.Env.cwd` is
+    // installed at `at: "min"` as the Workspace root and narrowed only by the
+    // run's own `<Dir>`, `<Repository>` and `<Worktree>`, so every answer names
+    // a directory inside the run's own filesystem and nothing an admitted
+    // fragment writes reaches the directory the caller invoked `xmd` from.
+    //
+    // It is not permission. The admitted tables, the path admission each
+    // operation performs and the run's effect transaction are the same at every
+    // directory, and the working directory is no member of the `generated_xmd`
+    // record a continuation compares — so narrowing from the root to the
+    // checkout the element was written in grants nothing it did not have.
+    workingDirectory: () => cwd(),
   };
 }
 
@@ -210,7 +214,6 @@ export function* evaluationProfile(
     files: workspaceFiles(database),
     ...(requests.length === 0 ? {} : { fetch: transport }),
     workspace: workspaceAccess(database),
-    deprecatedSourceAlias: true,
     ...(timeout === undefined ? {} : { fetchTimeout: timeout }),
   };
 }

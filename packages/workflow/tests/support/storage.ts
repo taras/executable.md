@@ -16,8 +16,8 @@ import { useTempDirectory } from "@executablemd/test-support/temp";
 import {
   type CreateWorkflowRunRequest,
   type ExecutorLock,
-  type GitWorkflowDefinitionV1,
   parseWorkflowDefinition,
+  type WorkflowDefinition,
   type DocumentExecutionRecord,
   WorkflowLifecycle,
   type WorkflowRunDatabase,
@@ -27,7 +27,6 @@ import {
   type WorkflowStopReason,
 } from "../../mod.ts";
 import type {
-  GitWorkflowRunCreationV1,
   WorkflowBeginRequest,
   WorkflowExecutionTransitions,
   WorkflowExecutionBegun,
@@ -38,10 +37,8 @@ import { useWorkflowRunConnections } from "../../src/deno/connections.ts";
 import { SavepointObservation } from "../../src/deno/savepoints.ts";
 import { installWorkflowRunStorage } from "../../src/deno/provider.ts";
 import type { PrivateWorkspaceOptions } from "../../src/deno/workspace/private.ts";
-import { isGitWorkflowDefinition } from "../../mod.ts";
-import { legacySourceReader } from "./legacy-source.ts";
 import { parseSourceBundleDefinition, sourceBundleHash, sourceContentHash } from "../../mod.ts";
-import type { SourceBundleWorkflowRunCreationV2 } from "../../deno.ts";
+import type { WorkflowRunCreation } from "../../deno.ts";
 import type { Json } from "@executablemd/durable-streams";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
@@ -56,24 +53,36 @@ export function useStorageRoot(): Operation<string> {
   return useTempDirectory("xmd-workflow-runs-");
 }
 
-export function definition(
-  overrides: Partial<GitWorkflowDefinitionV1> = {},
-): GitWorkflowDefinitionV1 {
+/**
+ * The one document this suite's representative run retains.
+ *
+ * The hashes are the ones these exact bytes produce, computed once rather than
+ * invented: the create transition recomputes them from the snapshot it is
+ * given, so a descriptor naming anything else retains nothing.
+ */
+const ENTRYPOINT = "workflows/release.md";
+const ENTRYPOINT_TEXT = "# Release\n";
+const ENTRYPOINT_BYTES = new TextEncoder().encode(ENTRYPOINT_TEXT);
+const SOURCE_HASH = "b78cd463c5885c1b595de07f665ce82b61df6636eb8c5f00cf11985cbfeb986d";
+const BUNDLE_HASH = "e22b9d94280c8b07aac19569452576323e1662e729d36609f72fd8be44a74d6c";
+
+/** The snapshot those sources are, as a caller offers it. */
+export function entrypointSnapshot(): { path: string; bytes: Uint8Array }[] {
+  return [{ path: ENTRYPOINT, bytes: ENTRYPOINT_BYTES.slice() }];
+}
+
+export function definition(overrides: Record<string, unknown> = {}): WorkflowDefinition {
   const result = parseWorkflowDefinition({
-    version: 1,
-    kind: "git",
-    objectFormat: "sha1",
-    objectId: SHA1,
-    rootDocumentPath: "workflows/release.md",
+    hashAlgorithm: "sha256",
+    bundleHash: BUNDLE_HASH,
+    entrypoint: ENTRYPOINT,
+    sources: [
+      { path: ENTRYPOINT, sourceHash: SOURCE_HASH, byteLength: ENTRYPOINT_BYTES.byteLength },
+    ],
     ...overrides,
   });
   if (!result.ok) {
     throw result.error;
-  }
-  // Narrowed rather than asserted: the parser answers with either version, and
-  // these fixtures describe the Git one.
-  if (!isGitWorkflowDefinition(result.value)) {
-    throw new Error("expected a Git workflow definition");
   }
   return result.value;
 }
@@ -84,7 +93,7 @@ export function request(
   return {
     runId: "release-1.4",
     definition: definition(),
-    base: "main",
+    sourceSnapshot: entrypointSnapshot(),
     props: { channel: "stable" },
     ...overrides,
   };
@@ -207,7 +216,6 @@ export function relaxRunConstraints(database: DatabaseSync): void {
       id INTEGER PRIMARY KEY,
       run_id TEXT,
       definition TEXT,
-      base TEXT,
       props TEXT,
       status TEXT,
       stop_reason_kind TEXT,
@@ -237,10 +245,7 @@ export function withRunHost<T>(
   return scoped(function* () {
     const connections = yield* useWorkflowRunConnections(yield* SavepointObservation.get());
     yield* installWorkflowRunStorage({ root }, internal, connections);
-    const transitions = yield* installWorkflowLifecycle(
-      { root, legacySource: legacySourceReader() },
-      connections,
-    );
+    const transitions = yield* installWorkflowLifecycle({ root }, connections);
     return yield* body(transitions);
   });
 }
@@ -276,11 +281,14 @@ export function withExecutorRun<T>(
   });
 }
 
-/** The Git creation a `start` supplies, for a fixture that does not care which. */
-export function creation(
-  overrides: Partial<GitWorkflowRunCreationV1> = {},
-): GitWorkflowRunCreationV1 {
-  return { definition: definition(), base: "main", props: { channel: "stable" }, ...overrides };
+/** The creation a `start` supplies, for a fixture that does not care which. */
+export function creation(overrides: Partial<WorkflowRunCreation> = {}): WorkflowRunCreation {
+  return {
+    definition: definition(),
+    sourceSnapshot: entrypointSnapshot(),
+    props: { channel: "stable" },
+    ...overrides,
+  };
 }
 
 /** A run begun under a real executor lock, with the settlement that ends it. */
@@ -347,7 +355,7 @@ export function* sourceBundleCreation(
     readonly targetPath?: string;
     readonly props?: { [key: string]: Json };
   } = {},
-): Operation<SourceBundleWorkflowRunCreationV2> {
+): Operation<WorkflowRunCreation> {
   const text = options.content ?? BUNDLE_SOURCE;
   const bytes = new TextEncoder().encode(text);
   const sources = [
@@ -359,8 +367,6 @@ export function* sourceBundleCreation(
   ];
   const bundleHash = yield* sourceBundleHash({ entrypoint: BUNDLE_ENTRYPOINT, sources });
   const parsed = parseSourceBundleDefinition({
-    version: 2,
-    kind: "source-bundle",
     hashAlgorithm: "sha256",
     bundleHash,
     entrypoint: BUNDLE_ENTRYPOINT,
@@ -374,6 +380,88 @@ export function* sourceBundleCreation(
     definition: parsed.value,
     sourceSnapshot: [{ path: BUNDLE_ENTRYPOINT, bytes }],
     props: options.props ?? { channel: "stable" },
+  };
+}
+
+/**
+ * The descriptor and snapshot one document's exact bytes produce.
+ *
+ * Derived rather than written beside them: the create and begin transitions
+ * recompute every hash from the snapshot they are given, so a fixture naming
+ * anything else retains nothing.
+ */
+export function* retainedSource(
+  entrypoint: string,
+  content: string,
+): Operation<{
+  definition: WorkflowDefinition;
+  sourceSnapshot: readonly { path: string; bytes: Uint8Array }[];
+}> {
+  const bytes = new TextEncoder().encode(content);
+  const sources = [
+    {
+      path: entrypoint,
+      sourceHash: yield* sourceContentHash(bytes),
+      byteLength: bytes.byteLength,
+    },
+  ];
+  const parsed = parseSourceBundleDefinition({
+    hashAlgorithm: "sha256",
+    bundleHash: yield* sourceBundleHash({ entrypoint, sources }),
+    entrypoint,
+    sources,
+  });
+  if (!parsed.ok) {
+    throw parsed.error;
+  }
+  return { definition: parsed.value, sourceSnapshot: [{ path: entrypoint, bytes }] };
+}
+
+/**
+ * A creation over several retained sources, with a declared component mapping.
+ *
+ * The manifest is derived from the bytes and sorted canonically, so a fixture
+ * says what it retains and the descriptor it gets is the one those bytes
+ * really produce.
+ */
+export function* bundleCreationOver(
+  entrypoint: string,
+  files: readonly { readonly path: string; readonly content: string }[],
+  components: readonly { readonly name: string; readonly path: string }[] = [],
+): Operation<WorkflowRunCreation> {
+  const encoder = new TextEncoder();
+  const snapshot = files.map((file) => ({ path: file.path, bytes: encoder.encode(file.content) }));
+  const sources: { path: string; sourceHash: string; byteLength: number }[] = [];
+  for (const entry of snapshot) {
+    sources.push({
+      path: entry.path,
+      sourceHash: yield* sourceContentHash(entry.bytes),
+      byteLength: entry.bytes.byteLength,
+    });
+  }
+  sources.sort((left, right) => (left.path < right.path ? -1 : left.path > right.path ? 1 : 0));
+  const mapping = [...components].sort((left, right) =>
+    left.name < right.name ? -1 : left.name > right.name ? 1 : 0,
+  );
+  const identity = {
+    entrypoint,
+    sources,
+    ...(mapping.length === 0 ? {} : { components: mapping }),
+  };
+  const parsed = parseSourceBundleDefinition({
+    hashAlgorithm: "sha256",
+    bundleHash: yield* sourceBundleHash(identity),
+    ...identity,
+  });
+  if (!parsed.ok) {
+    throw parsed.error;
+  }
+  return {
+    definition: parsed.value,
+    sourceSnapshot: snapshot.sort((left, right) =>
+      left.path < right.path ? -1 : left.path > right.path ? 1 : 0,
+    ),
+    props: { channel: "stable" },
   };
 }
 

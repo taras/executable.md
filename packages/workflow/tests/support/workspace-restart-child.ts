@@ -42,13 +42,25 @@ import {
   SEED_CLOCK,
 } from "./workspace-process.ts";
 
+const ENTRYPOINT = "workflows/release.md";
+const ENTRYPOINT_TEXT = "# Release\n";
 const DEFINITION = {
-  version: 1,
-  kind: "git",
-  objectFormat: "sha1",
-  objectId: "9fceb02d0ae598e95dc970b74767f19372d61af8",
-  rootDocumentPath: "workflows/release.md",
+  hashAlgorithm: "sha256",
+  bundleHash: "e22b9d94280c8b07aac19569452576323e1662e729d36609f72fd8be44a74d6c",
+  entrypoint: ENTRYPOINT,
+  sources: [
+    {
+      path: ENTRYPOINT,
+      sourceHash: "b78cd463c5885c1b595de07f665ce82b61df6636eb8c5f00cf11985cbfeb986d",
+      byteLength: 10,
+    },
+  ],
 } as const;
+
+/** The snapshot those sources are; the create transition recomputes them. */
+function snapshot(): { path: string; bytes: Uint8Array }[] {
+  return [{ path: ENTRYPOINT, bytes: new TextEncoder().encode(ENTRYPOINT_TEXT) }];
+}
 
 /**
  * Two effects, so there is a history to select from.
@@ -99,7 +111,7 @@ function* openRun(root: string, runId: string, create: boolean): Operation<Workf
     ? yield* WorkflowRunStorage.operations.create({
         runId,
         definition: DEFINITION,
-        base: "main",
+        sourceSnapshot: snapshot(),
         props: { channel: "stable" },
       })
     : yield* WorkflowRunStorage.operations.lookup(runId);

@@ -42,11 +42,7 @@ import { exists, rm } from "@effectionx/fs";
 import { linkSync, mkdtempSync, rmSync } from "node:fs";
 import { rename } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
-import {
-  isGitWorkflowRunRecord,
-  WorkflowInputDelivery,
-  WorkflowLifecycle,
-} from "@executablemd/workflow";
+import { WorkflowInputDelivery, WorkflowLifecycle } from "@executablemd/workflow";
 import type {
   DefinitionRetrieval,
   WorkflowArtifactIdentity,
@@ -234,7 +230,6 @@ function renderStatus(
     // Only a Git run has one. A source-bundle run started from exact bytes
     // rather than from a repository state, and printing a base for it would be
     // naming a revision it never had.
-    ...(isGitWorkflowRunRecord(record) ? [`base: ${record.base}`] : []),
     `props: ${JSON.stringify(record.props)}`,
     `created: ${record.createdAt}`,
     `updated: ${record.updatedAt}`,
@@ -393,10 +388,7 @@ function describeResult(event: DurableEvent): string {
 function describeDefinition(snapshot: WorkflowInspectionSnapshot): string {
   const { definition } = snapshot.record;
   const target = definition.targetPath === undefined ? "" : `#${definition.targetPath}`;
-  if (definition.kind === "source-bundle") {
-    return `${definition.bundleHash} ${definition.entrypoint}${target}`;
-  }
-  return `${definition.objectId} ${definition.rootDocumentPath}${target}`;
+  return `${definition.bundleHash} ${definition.entrypoint}${target}`;
 }
 
 function describeReason(record: WorkflowRunRecord): string {

@@ -33,26 +33,48 @@ import { executeInstalled } from "@executablemd/core/host";
 import type { ExecutionInstallation } from "@executablemd/core/host";
 import { GitQuery } from "@executablemd/git/api";
 import { createWorkflowRunInstallation, getWorkflowRun } from "../src/run.ts";
-import { workflowInstallation } from "../../git/src/installation.ts";
-import { describeGitWorkflowRun } from "../src/journal.ts";
+import { WORKFLOW_RUN } from "../src/journal.ts";
 import type { WorkflowRun } from "../src/run.ts";
-import { type GitWorkflowRunV1, isGitWorkflowRun } from "../mod.ts";
+import { retainedRunMismatch } from "../mod.ts";
 
-const COMMIT = "9fceb02d0ae598e95dc970b74767f19372d61af8";
-const OTHER_COMMIT = "1111111111111111111111111111111111111111";
+const BUNDLE = "9fceb02d0ae598e95dc970b74767f19372d61af89fceb02d0ae598e95dc970b74";
+const OTHER_BUNDLE = "1111111111111111111111111111111111111111111111111111111111111111";
 
-/** Resolve every revision to `commit`, and count the times Git was asked. */
-function useGit(commit: string, asked: string[]): Operation<void> {
-  return GitQuery.around(
-    {
-      // deno-lint-ignore require-yield
-      *resolve([revision]) {
-        asked.push(revision);
-        return commit;
-      },
+/**
+ * The vehicle these cases drive the run-installation seam with.
+ *
+ * A run is the bytes it retains, so there is nothing to resolve and no
+ * repository to reach: the bundle hash is known before the run exists, and the
+ * identifier is allocated lazily inside the durable operation — which is the
+ * ordering every case below is actually about.
+ *
+ * `allocate` is replaceable so a case can make the preparation itself fail,
+ * which is the generic shape of a preparation that records a failure and
+ * replays as one.
+ */
+function runInstallation(
+  bundleHash: string = BUNDLE,
+  options: {
+    readonly runId?: string;
+    readonly allocate?: () => Operation<WorkflowRun>;
+  } = {},
+): ExecutionInstallation {
+  return createWorkflowRunInstallation({
+    description: { type: WORKFLOW_RUN, name: WORKFLOW_RUN, bundleHash },
+    required: false,
+    *allocate(): Operation<WorkflowRun> {
+      if (options.allocate !== undefined) {
+        return yield* options.allocate();
+      }
+      return { runId: options.runId ?? crypto.randomUUID(), bundleHash };
     },
-    { at: "min" },
-  );
+    agree(recorded: WorkflowRun): WorkflowRun {
+      if (recorded.bundleHash !== bundleHash) {
+        throw retainedRunMismatch(["bundleHash"]);
+      }
+      return recorded;
+    },
+  });
 }
 
 /** A Git that fails the test if anything consults it. */
@@ -105,9 +127,8 @@ describe("Tier WR — workflow runs", () => {
     const after: string[] = [];
 
     yield* scoped(function* () {
-      yield* useGit(COMMIT, []);
       yield* useProbe(seen);
-      const workflow = workflowInstallation({ base: "main" });
+      const workflow = runInstallation();
 
       // Installing the middleware creates no workflow run.
       try {
@@ -132,7 +153,7 @@ describe("Tier WR — workflow runs", () => {
     });
 
     expect(seen).toHaveLength(1);
-    expect(seen[0]).toEqual({ runId: expect.any(String), base: "main", pinnedCommit: COMMIT });
+    expect(seen[0]).toEqual({ runId: expect.any(String), bundleHash: BUNDLE });
     expect(before[0]).toContain("run installation");
     expect(after[0]).toContain("run installation");
   });
@@ -141,9 +162,8 @@ describe("Tier WR — workflow runs", () => {
     const seen: WorkflowRun[] = [];
 
     yield* scoped(function* () {
-      yield* useGit(COMMIT, []);
       yield* useProbe(seen);
-      const workflow = workflowInstallation({ base: "main" });
+      const workflow = runInstallation();
       yield* collect(
         yield* executeInstalled(
           {
@@ -164,11 +184,10 @@ describe("Tier WR — workflow runs", () => {
     const first: WorkflowRun[] = [];
     const second: WorkflowRun[] = [];
 
-    function run(into: WorkflowRun[], base: string, commit: string): Operation<void> {
+    function run(into: WorkflowRun[], bundleHash: string, runId: string): Operation<void> {
       return scoped(function* () {
-        yield* useGit(commit, []);
         yield* useProbe(into);
-        const workflow = workflowInstallation({ base });
+        const workflow = runInstallation(bundleHash, { runId });
         yield* collect(
           yield* executeInstalled(
             { ...inlineSource("<Probe />\n"), stream: new InMemoryStream() },
@@ -179,24 +198,22 @@ describe("Tier WR — workflow runs", () => {
     }
 
     yield* scoped(function* () {
-      const a = yield* spawn(() => run(first, "main", COMMIT));
-      const b = yield* spawn(() => run(second, "release", OTHER_COMMIT));
+      const a = yield* spawn(() => run(first, BUNDLE, "first-run"));
+      const b = yield* spawn(() => run(second, OTHER_BUNDLE, "second-run"));
       yield* a;
       yield* b;
     });
 
-    expect(gitRun(first[0]).base).toBe("main");
-    expect(gitRun(first[0]).pinnedCommit).toBe(COMMIT);
-    expect(gitRun(second[0]).base).toBe("release");
-    expect(gitRun(second[0]).pinnedCommit).toBe(OTHER_COMMIT);
-    expect(gitRun(first[0]).runId).not.toBe(gitRun(second[0]).runId);
+    expect(first[0]?.bundleHash).toBe(BUNDLE);
+    expect(second[0]?.bundleHash).toBe(OTHER_BUNDLE);
+    expect(first[0]?.runId).not.toBe(second[0]?.runId);
   });
 
   it("WR20: one installation value reused by two executions gives each its own run", function* () {
     // A host may hold one installation value and run more than one document
     // with it. Each of those is a separate execution, and the run one of them
     // records is not the other's — including while both are live.
-    const shared = workflowInstallation({ base: "main" });
+    const shared = runInstallation();
     const prepared = withResolvers<void>();
     const release = withResolvers<void>();
     const streamA = new InMemoryStream();
@@ -206,7 +223,6 @@ describe("Tier WR — workflow runs", () => {
 
     const first = yield* spawn(() =>
       scoped(function* () {
-        yield* useGit(COMMIT, []);
         yield* registerComponents([
           {
             name: "Hold",
@@ -231,7 +247,6 @@ describe("Tier WR — workflow runs", () => {
     yield* prepared.operation;
 
     yield* scoped(function* () {
-      yield* useGit(COMMIT, []);
       yield* useProbe(seenB);
       yield* collect(
         yield* executeInstalled({ ...inlineSource("<Probe />\n"), stream: streamB }, [shared]),
@@ -294,24 +309,21 @@ describe("Tier WR — workflow runs", () => {
   it("WR4: a completed journal restores the run without consulting Git", function* () {
     const stream = new InMemoryStream();
     const live: WorkflowRun[] = [];
-    const asked: string[] = [];
 
     yield* scoped(function* () {
-      yield* useGit(COMMIT, asked);
       yield* useProbe(live);
-      const workflow = workflowInstallation({ base: "main" });
+      const workflow = runInstallation();
       yield* collect(
         yield* executeInstalled({ ...inlineSource("<Probe />\n"), stream }, [workflow]),
       );
     });
-    expect(asked).toEqual(["main^{commit}"]);
 
     // The root Close is in the journal, so the document never expands again and
     // the only reader left is a middleware watching the replayed output.
     const replayed: WorkflowRun[] = [];
     yield* scoped(function* () {
       yield* useForbiddenGit();
-      const workflow = workflowInstallation({ base: "main" });
+      const workflow = runInstallation();
       yield* DocumentOutput.around({
         *output([text], next) {
           replayed.push(yield* getWorkflowRun());
@@ -329,96 +341,6 @@ describe("Tier WR — workflow runs", () => {
     expect(replayed[0]).not.toBe(live[0]);
   });
 
-  it("WR5: a completed journal refuses a different base before returning its result", function* () {
-    const stream = new InMemoryStream();
-    yield* scoped(function* () {
-      yield* useGit(COMMIT, []);
-      yield* useProbe([]);
-      const workflow = workflowInstallation({ base: "main" });
-      yield* collect(
-        yield* executeInstalled({ ...inlineSource("<Probe />\n"), stream }, [workflow]),
-      );
-    });
-
-    const emitted: string[] = [];
-    const result = yield* scoped(function* () {
-      yield* useForbiddenGit();
-      const workflow = workflowInstallation({ base: "release" });
-      yield* DocumentOutput.around({
-        *output([text], next) {
-          emitted.push(text);
-          yield* next(text);
-        },
-      });
-      return yield* yield* executeInstalled({ ...inlineSource("<Probe />\n"), stream }, [workflow]);
-    });
-
-    expect(result.ok).toBe(false);
-    const message = result.ok ? "" : result.error.message;
-    expect(message).toContain("main");
-    expect(message).toContain("release");
-    // The recorded result never reaches the caller: the refusal lands first.
-    expect(emitted).toHaveLength(0);
-  });
-
-  it("WR6: a moving base cannot change a recorded pinned commit", function* () {
-    const stream = new InMemoryStream();
-    const live: WorkflowRun[] = [];
-    yield* scoped(function* () {
-      yield* useGit(COMMIT, []);
-      yield* useProbe(live);
-      const workflow = workflowInstallation({ base: "main" });
-      yield* collect(
-        yield* executeInstalled({ ...inlineSource("<Probe />\n"), stream }, [workflow]),
-      );
-    });
-
-    // The branch moved between runs. The recorded commit is what stands.
-    const restored: WorkflowRun[] = [];
-    const asked: string[] = [];
-    yield* scoped(function* () {
-      yield* useGit(OTHER_COMMIT, asked);
-      const workflow = workflowInstallation({ base: "main" });
-      yield* DocumentOutput.around({
-        *output([text], next) {
-          restored.push(yield* getWorkflowRun());
-          yield* next(text);
-        },
-      });
-      yield* collect(
-        yield* executeInstalled({ ...inlineSource("<Probe />\n"), stream }, [workflow]),
-      );
-    });
-
-    expect(asked).toHaveLength(0);
-    expect(gitRun(restored[0]).pinnedCommit).toBe(COMMIT);
-    expect(gitRun(restored[0]).runId).toBe(live[0]?.runId);
-  });
-
-  it("WR7: a failure to resolve the base records no run and expands no document", function* () {
-    const stream = new InMemoryStream();
-    const expanded: WorkflowRun[] = [];
-
-    const result = yield* scoped(function* () {
-      yield* GitQuery.around(
-        {
-          // deno-lint-ignore require-yield
-          *resolve() {
-            throw new Error("fatal: not a git repository");
-          },
-        },
-        { at: "min" },
-      );
-      yield* useProbe(expanded);
-      const workflow = workflowInstallation({ base: "main" });
-      return yield* yield* executeInstalled({ ...inlineSource("<Probe />\n"), stream }, [workflow]);
-    });
-
-    expect(result.ok).toBe(false);
-    expect(expanded).toHaveLength(0);
-    expect(recordedRun(stream)).toBeUndefined();
-  });
-
   // WR18: a base that would not resolve is journaled as a failed effect, and
   // that history is this run's own — so a programmatic installation contributes
   // no refusal about it. Requiring a *successful* record here would refuse a
@@ -430,20 +352,15 @@ describe("Tier WR — workflow runs", () => {
   // on its own terms (verified against `main` at b324b97). That contradiction
   // between core's rule and workflow-spec §6 is recorded in §6 and is not this
   // PR's to settle.
-  it("WR18: a recorded base-resolution failure is not refused as missing evidence", function* () {
+  it("WR18: a recorded preparation failure is not refused as missing evidence", function* () {
     const stream = new InMemoryStream();
 
     const first = yield* scoped(function* () {
-      yield* GitQuery.around(
-        {
-          // deno-lint-ignore require-yield
-          *resolve() {
-            throw new Error("fatal: not a git repository");
-          },
+      const workflow = runInstallation(BUNDLE, {
+        *allocate(): Operation<WorkflowRun> {
+          throw new Error("this preparation cannot allocate");
         },
-        { at: "min" },
-      );
-      const workflow = workflowInstallation({ base: "main" });
+      });
       return yield* yield* executeInstalled({ ...inlineSource("<Probe />\n"), stream }, [workflow]);
     });
     expect(first.ok).toBe(false);
@@ -454,7 +371,7 @@ describe("Tier WR — workflow runs", () => {
     const replayed = yield* scoped(function* () {
       yield* useForbiddenGit();
       yield* useProbe(expanded);
-      const workflow = workflowInstallation({ base: "main" });
+      const workflow = runInstallation();
       return yield* yield* executeInstalled({ ...inlineSource("<Probe />\n"), stream }, [workflow]);
     });
 
@@ -463,7 +380,7 @@ describe("Tier WR — workflow runs", () => {
     // Nothing about workflow-run evidence: this installation had no objection.
     expect(message).not.toContain("workflow run");
     expect(message).not.toContain("identifies");
-    // Git was never asked, the root never expanded, and nothing was appended.
+    // The root never expanded, and nothing was appended.
     expect(expanded).toEqual([]);
     expect(stream.snapshot().length).toEqual(before);
   });
@@ -473,18 +390,13 @@ describe("Tier WR — workflow runs", () => {
     const expanded: WorkflowRun[] = [];
 
     const live = yield* scoped(function* () {
-      yield* GitQuery.around(
-        {
-          // deno-lint-ignore require-yield
-          *resolve() {
-            throw new Error("fatal: not a git repository");
-          },
-        },
-        { at: "min" },
-      );
       yield* useProbe(expanded);
       return yield* yield* executeInstalled({ ...inlineSource("<Probe />\n"), stream }, [
-        workflowInstallation({ base: "main" }),
+        runInstallation(BUNDLE, {
+          *allocate(): Operation<WorkflowRun> {
+            throw new Error("this preparation cannot allocate");
+          },
+        }),
       ]);
     });
 
@@ -507,7 +419,6 @@ describe("Tier WR — workflow runs", () => {
     const replayedExpansions: WorkflowRun[] = [];
 
     const replayed = yield* scoped(function* () {
-      yield* useGit(COMMIT, asked);
       yield* useProbe(replayedExpansions);
       yield* Execution.around({
         *document([request], next) {
@@ -516,7 +427,7 @@ describe("Tier WR — workflow runs", () => {
         },
       });
       return yield* yield* executeInstalled({ ...inlineSource("<Probe />\n"), stream: replay }, [
-        workflowInstallation({ base: "main" }),
+        runInstallation(),
       ]);
     });
 
@@ -536,8 +447,7 @@ describe("Tier WR — workflow runs", () => {
     const stream = new InMemoryStream();
 
     const result = yield* scoped(function* () {
-      yield* useGit(COMMIT, []);
-      const workflow = workflowInstallation({ base: "main" });
+      const workflow = runInstallation();
       return yield* yield* executeInstalled(
         {
           // A value root that produces no <Return> fails after expansion begins.
@@ -551,8 +461,7 @@ describe("Tier WR — workflow runs", () => {
     expect(result.ok).toBe(false);
     expect(recordedRun(stream)).toEqual({
       runId: expect.any(String),
-      base: "main",
-      pinnedCommit: COMMIT,
+      bundleHash: BUNDLE,
     });
   });
 
@@ -614,13 +523,13 @@ describe("Tier WR — workflow runs", () => {
     yield* stream.append({
       type: "yield",
       coroutineId: "root",
-      description: { type: "workflow_run", name: "workflow_run", base: "main" },
-      result: { status: "ok", value: { runId: 7, base: "main" } },
+      description: { type: "workflow_run", name: "workflow_run", bundleHash: BUNDLE },
+      result: { status: "ok", value: { runId: 7, bundleHash: BUNDLE } },
     });
 
     const result = yield* scoped(function* () {
       yield* useForbiddenGit();
-      const workflow = workflowInstallation({ base: "main" });
+      const workflow = runInstallation();
       return yield* yield* executeInstalled({ ...inlineSource("# Hello\n"), stream }, [workflow]);
     });
 
@@ -638,8 +547,8 @@ describe("Tier WR — workflow runs", () => {
     yield* stream.append({
       type: "yield",
       coroutineId: "root",
-      description: { type: "workflow_run", name: "workflow_run", base: "main" },
-      result: { status: "ok", value: { runId: "seeded-run", base: "main", pinnedCommit: COMMIT } },
+      description: { type: "workflow_run", name: "workflow_run", bundleHash: BUNDLE },
+      result: { status: "ok", value: { runId: "seeded-run", bundleHash: BUNDLE } },
     });
     // The root import a real completed run always records. A retained terminal
     // result is reused on the strength of the selection its root import
@@ -663,7 +572,7 @@ describe("Tier WR — workflow runs", () => {
     const restored: WorkflowRun[] = [];
     yield* scoped(function* () {
       yield* useForbiddenGit();
-      const workflow = workflowInstallation({ base: "main" });
+      const workflow = runInstallation();
       yield* DocumentOutput.around({
         *output([text], next) {
           restored.push(yield* getWorkflowRun());
@@ -673,7 +582,7 @@ describe("Tier WR — workflow runs", () => {
       yield* collect(yield* executeInstalled({ ...inlineSource("# Hello\n"), stream }, [workflow]));
     });
 
-    expect(restored[0]).toEqual({ runId: "seeded-run", base: "main", pinnedCommit: COMMIT });
+    expect(restored[0]).toEqual({ runId: "seeded-run", bundleHash: BUNDLE });
   });
 
   it("WR14: a truncated journal seeded by hand restores, and the document runs on", function* () {
@@ -681,22 +590,22 @@ describe("Tier WR — workflow runs", () => {
     yield* stream.append({
       type: "yield",
       coroutineId: "root",
-      description: { type: "workflow_run", name: "workflow_run", base: "main" },
-      result: { status: "ok", value: { runId: "seeded-run", base: "main", pinnedCommit: COMMIT } },
+      description: { type: "workflow_run", name: "workflow_run", bundleHash: BUNDLE },
+      result: { status: "ok", value: { runId: "seeded-run", bundleHash: BUNDLE } },
     });
 
     const seen: WorkflowRun[] = [];
     yield* scoped(function* () {
       yield* useForbiddenGit();
       yield* useProbe(seen);
-      const workflow = workflowInstallation({ base: "main" });
+      const workflow = runInstallation();
       yield* collect(
         yield* executeInstalled({ ...inlineSource("<Probe />\n"), stream }, [workflow]),
       );
     });
 
     expect(seen).toHaveLength(1);
-    expect(seen[0]).toEqual({ runId: "seeded-run", base: "main", pinnedCommit: COMMIT });
+    expect(seen[0]).toEqual({ runId: "seeded-run", bundleHash: BUNDLE });
     // The record was replayed, not written a second time.
     expect(workflowEvents(stream)).toHaveLength(1);
   });
@@ -704,10 +613,9 @@ describe("Tier WR — workflow runs", () => {
   // The expansion identifier is derived from the document alone. A workflow run
   // pairs with it for workflow-wide identity; it never enters the derivation.
   it("WR15: expansion identifiers do not move with the workflow run", function* () {
-    function* ids(base?: string): Operation<string[]> {
+    function* ids(bundleHash?: string): Operation<string[]> {
       const seen: string[] = [];
       yield* scoped(function* () {
-        yield* useGit(base === "release" ? OTHER_COMMIT : COMMIT, []);
         yield* registerComponents([
           {
             name: "Probe",
@@ -719,7 +627,7 @@ describe("Tier WR — workflow runs", () => {
             },
           },
         ]);
-        const workflow = base === undefined ? undefined : workflowInstallation({ base });
+        const workflow = bundleHash === undefined ? undefined : runInstallation(bundleHash);
         yield* collect(
           yield* executeInstalled(
             { ...inlineSource("<Probe />\n"), stream: new InMemoryStream() },
@@ -731,8 +639,8 @@ describe("Tier WR — workflow runs", () => {
     }
 
     const withoutWorkflow = yield* ids();
-    const firstRun = yield* ids("main");
-    const secondRun = yield* ids("release");
+    const firstRun = yield* ids(BUNDLE);
+    const secondRun = yield* ids(OTHER_BUNDLE);
 
     expect(withoutWorkflow).toHaveLength(1);
     expect(firstRun).toEqual(withoutWorkflow);
@@ -747,7 +655,6 @@ describe("Tier WR — workflow runs", () => {
     const observed = withResolvers<void>();
 
     yield* scoped(function* () {
-      yield* useGit(COMMIT, []);
       yield* registerComponents([
         {
           name: "Probe",
@@ -762,7 +669,7 @@ describe("Tier WR — workflow runs", () => {
           },
         },
       ]);
-      const workflow = workflowInstallation({ base: "main" });
+      const workflow = runInstallation();
 
       const execution = yield* spawn(function* () {
         yield* collect(
@@ -775,8 +682,7 @@ describe("Tier WR — workflow runs", () => {
 
     expect(recordedRun(stream)).toEqual({
       runId: expect.any(String),
-      base: "main",
-      pinnedCommit: COMMIT,
+      bundleHash: BUNDLE,
     });
   });
 
@@ -793,7 +699,6 @@ describe("Tier WR — workflow runs", () => {
     const elsewhere = createContext<unknown>("executablemd.workflow.run", undefined);
 
     yield* scoped(function* () {
-      yield* useGit(COMMIT, []);
       yield* registerComponents([
         {
           name: "Probe",
@@ -806,7 +711,7 @@ describe("Tier WR — workflow runs", () => {
           },
         },
       ]);
-      const workflow = workflowInstallation({ base: "main" });
+      const workflow = runInstallation();
       yield* collect(
         yield* executeInstalled({ ...inlineSource("<Probe />\n"), stream: new InMemoryStream() }, [
           workflow,
@@ -853,7 +758,6 @@ describe("Tier WR — workflow runs", () => {
     const seen: WorkflowRun[] = [];
 
     const result = yield* scoped(function* () {
-      yield* useGit(COMMIT, []);
       yield* useProbe(seen);
       yield* loose().around({
         // deno-lint-ignore require-yield
@@ -862,7 +766,7 @@ describe("Tier WR — workflow runs", () => {
         },
       });
       return yield* yield* executeInstalled({ ...inlineSource("<Probe />\n"), stream: journal }, [
-        workflowInstallation({ base: "main" }),
+        runInstallation(),
       ]);
     });
 
@@ -883,7 +787,6 @@ describe("Tier WR — workflow runs", () => {
     const seen: WorkflowRun[] = [];
 
     const output = yield* scoped(function* () {
-      yield* useGit(COMMIT, []);
       yield* useProbe(seen);
       yield* loose().around({
         *document([request], next) {
@@ -893,7 +796,7 @@ describe("Tier WR — workflow runs", () => {
       });
       return yield* collect(
         yield* executeInstalled({ ...inlineSource("<Probe />\n"), stream: journal }, [
-          workflowInstallation({ base: "main" }),
+          runInstallation(),
         ]),
       );
     });
@@ -908,14 +811,13 @@ describe("Tier WR — workflow runs", () => {
     const journal = new InMemoryStream();
 
     yield* scoped(function* () {
-      yield* useGit(COMMIT, []);
       yield* registerComponents([
         {
           name: "Probe",
           origin: "tier-wr",
           props: { type: "object", properties: {}, additionalProperties: false },
           *fn() {
-            order.push(`expanded:${gitRun(yield* getWorkflowRun()).pinnedCommit === COMMIT}`);
+            order.push(`expanded:${(yield* getWorkflowRun()).bundleHash === BUNDLE}`);
             return "";
           },
         },
@@ -929,7 +831,7 @@ describe("Tier WR — workflow runs", () => {
       });
       yield* collect(
         yield* executeInstalled({ ...inlineSource("<Probe />\n"), stream: journal }, [
-          workflowInstallation({ base: "main" }),
+          runInstallation(),
         ]),
       );
     });
@@ -945,7 +847,7 @@ describe("Tier WR — workflow runs", () => {
     // core as an opaque record of closures — which is exactly how a separately
     // loaded copy reaches core: it hands over functions, and nobody agrees on
     // a name or a type.
-    const built = workflowInstallation({ base: "main" });
+    const built = runInstallation();
     const relayed: ExecutionInstallation = {
       admissions: built.admissions,
       prepare: built.prepare,
@@ -953,7 +855,6 @@ describe("Tier WR — workflow runs", () => {
     };
 
     yield* scoped(function* () {
-      yield* useGit(COMMIT, []);
       yield* useProbe(seen);
       yield* collect(
         yield* executeInstalled({ ...inlineSource("<Probe />\n"), stream: journal }, [relayed]),
@@ -970,7 +871,6 @@ describe("Tier WR — workflow runs", () => {
     const journal = new InMemoryStream();
 
     const output = yield* scoped(function* () {
-      yield* useGit(COMMIT, []);
       yield* useProbe(seen);
       yield* Execution.around({
         *document([request], next) {
@@ -981,7 +881,7 @@ describe("Tier WR — workflow runs", () => {
       });
       return yield* collect(
         yield* executeInstalled({ ...inlineSource("<Probe />\n"), stream: journal }, [
-          workflowInstallation({ base: "main" }),
+          runInstallation(),
         ]),
       );
     });
@@ -992,51 +892,10 @@ describe("Tier WR — workflow runs", () => {
     expect(recordedRun(journal)).toBeDefined();
   });
 
-  it("WR12: a slow Git does not stall a sibling execution", function* () {
-    const seen: WorkflowRun[] = [];
-
-    yield* scoped(function* () {
-      yield* useProbe(seen);
-      const slow = yield* spawn(() =>
-        scoped(function* () {
-          yield* GitQuery.around(
-            {
-              *resolve() {
-                yield* sleep(30);
-                return COMMIT;
-              },
-            },
-            { at: "min" },
-          );
-          const workflow = workflowInstallation({ base: "slow" });
-          yield* collect(
-            yield* executeInstalled(
-              { ...inlineSource("<Probe />\n"), stream: new InMemoryStream() },
-              [workflow],
-            ),
-          );
-        }),
-      );
-      yield* scoped(function* () {
-        yield* useGit(OTHER_COMMIT, []);
-        const workflow = workflowInstallation({ base: "fast" });
-        yield* collect(
-          yield* executeInstalled(
-            { ...inlineSource("<Probe />\n"), stream: new InMemoryStream() },
-            [workflow],
-          ),
-        );
-      });
-      yield* slow;
-    });
-
-    expect(seen.map((run) => gitRun(run).base).sort()).toEqual(["fast", "slow"]);
-  });
-
   /**
    * What a host outside this package supplies, and what it does not.
    *
-   * `workflowInstallation({ base })` and `retainedWorkflowInstallation(run)` are
+   * `runInstallation(bundleHash)` and `retainedWorkflowInstallation(run)` are
    * both this constructor with a different preparation, so a host that resolves
    * its own repository supplies the same four terms. What it never supplies is
    * when the admission runs, what parses the record, or where the run is
@@ -1056,12 +915,12 @@ describe("Tier WR — workflow runs", () => {
       yield* collect(
         yield* executeInstalled({ ...inlineSource("<Probe />\n"), stream }, [
           createWorkflowRunInstallation({
-            description: describeGitWorkflowRun("host-base"),
+            description: { type: WORKFLOW_RUN, name: WORKFLOW_RUN, bundleHash: BUNDLE },
             required: false,
             // deno-lint-ignore require-yield
             *allocate(): Operation<WorkflowRun> {
               allocations.push("allocated");
-              return { runId: "host-allocated", base: "host-base", pinnedCommit: COMMIT };
+              return { runId: "host-allocated", bundleHash: BUNDLE };
             },
             agree: (recorded) => recorded,
           }),
@@ -1073,15 +932,13 @@ describe("Tier WR — workflow runs", () => {
     expect(seen).toHaveLength(1);
     expect(seen[0]).toEqual({
       runId: "host-allocated",
-      base: "host-base",
-      pinnedCommit: COMMIT,
+      bundleHash: BUNDLE,
     });
     // Recorded under this package's canonical identity, from the host's own
     // description — which is what makes it the record a later run is held to.
     expect(recordedRun(stream)).toEqual({
       runId: "host-allocated",
-      base: "host-base",
-      pinnedCommit: COMMIT,
+      bundleHash: BUNDLE,
     });
   });
 
@@ -1093,7 +950,7 @@ describe("Tier WR — workflow runs", () => {
       description: { type: "workflow_run", name: "workflow_run", base: "host-base" },
       result: {
         status: "ok",
-        value: { runId: "somebody-elses", base: "host-base", pinnedCommit: COMMIT },
+        value: { runId: "somebody-elses", bundleHash: OTHER_BUNDLE },
       },
     });
 
@@ -1117,15 +974,15 @@ describe("Tier WR — workflow runs", () => {
       ]);
       return yield* yield* executeInstalled({ ...inlineSource("<Probe />\n"), stream }, [
         createWorkflowRunInstallation({
-          description: describeGitWorkflowRun("host-base"),
+          description: { type: WORKFLOW_RUN, name: WORKFLOW_RUN, bundleHash: BUNDLE },
           required: false,
           // deno-lint-ignore require-yield
           *allocate(): Operation<WorkflowRun> {
             allocated += 1;
-            return { runId: "host-allocated", base: "host-base", pinnedCommit: COMMIT };
+            return { runId: "host-allocated", bundleHash: BUNDLE };
           },
           agree(recorded): WorkflowRun {
-            refusals.push(gitRun(recorded).runId);
+            refusals.push(recorded.runId);
             throw new Error("this journal records a run this host did not create");
           },
         }),
@@ -1148,9 +1005,3 @@ describe("Tier WR — workflow runs", () => {
  * member: a value that came back as a source-bundle run is not the one the
  * assertion below is describing.
  */
-function gitRun(run: WorkflowRun | undefined): GitWorkflowRunV1 {
-  if (run === undefined || !isGitWorkflowRun(run)) {
-    throw new Error("expected a Git workflow run");
-  }
-  return run;
-}

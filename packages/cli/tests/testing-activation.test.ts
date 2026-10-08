@@ -26,8 +26,7 @@ import type { TestResult } from "@executablemd/testing";
 
 const RUN = Object.freeze({
   runId: "issue-523",
-  base: "main",
-  pinnedCommit: "9fceb02d0ae598e95dc970b74767f19372d61af8",
+  bundleHash: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
 });
 
 /** A Git that fails the run if the retained installation consults it. */

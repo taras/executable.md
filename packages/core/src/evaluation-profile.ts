@@ -254,14 +254,6 @@ export interface FragmentEvaluationInput {
    * on where the reading happened.
    */
   readonly fetchTimeout?: number;
-  /**
-   * Whether this host accepts the released `source` spelling beside `text`.
-   *
-   * The workflow profile does, silently, because documents were written against
-   * it before `text` existed. The ordinary profile does not: it never shipped
-   * that spelling.
-   */
-  readonly deprecatedSourceAlias?: boolean;
 }
 
 /**
@@ -571,7 +563,6 @@ export interface EvaluationProfile {
   readonly read: readonly CapturedEntry[];
   readonly write: readonly CapturedEntry[];
   readonly workspace?: FragmentWorkspaceAccess;
-  readonly deprecatedSourceAlias: boolean;
   /**
    * Begin one fragment, and answer with how to end it.
    *
@@ -722,7 +713,6 @@ export function* prepareEvaluationProfile(
   }
   const answered = answeredNames([...read, ...write]);
   const workspace = input.workspace === undefined ? undefined : bindWorkspace(input.workspace);
-  const deprecatedSourceAlias = input.deprecatedSourceAlias === true;
   return Object.freeze({
     answered: Object.freeze(
       [...answered.entries()].map(([name, identity]) => Object.freeze({ name, identity })),
@@ -748,7 +738,6 @@ export function* prepareEvaluationProfile(
         read: sealEntries(read, sealed),
         write: sealEntries(write, sealed),
         ...(workspace === undefined ? {} : { workspace }),
-        deprecatedSourceAlias,
         enterFragment: () => capabilities.enterFragment(),
         live: () => capabilities.live(),
         revoke: () => {

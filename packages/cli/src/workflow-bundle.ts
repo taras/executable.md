@@ -25,13 +25,6 @@
  * core resolves the names against. Because the hash is identity, changing what
  * a component says changes the definition rather than changing what a retained
  * definition executes.
- *
- * ## The legacy half
- *
- * `reconstructBundle()` rebuilds a version-1 run's bundle out of the commit it
- * pinned, through the contextual `Git` capability. It is reached only from the
- * legacy source reader this host supplies to the Workflow lifecycle; nothing
- * establishing a new bundle goes near it.
  */
 
 import { readFile } from "node:fs/promises";
@@ -47,7 +40,6 @@ import {
 import type { WorkflowBundleComponent } from "@executablemd/core/host";
 import { decodeSourceText, sourceContentHash } from "@executablemd/workflow";
 import { readGitObject, resolveGitRevision } from "@executablemd/git/api";
-import type { WorkflowComponentEntry } from "@executablemd/workflow";
 import type { GitObjectFormat } from "@executablemd/git/api";
 import type { EstablishedComponent } from "./workflow-definition.ts";
 
@@ -351,85 +343,4 @@ function* parseComponent(name: string, path: string, content: string): Operation
       ),
     );
   }
-}
-
-/**
- * Rebuild the execution view of a bundle a run already retained.
- *
- * The retained entries are definitive: each is read from the retained
- * commit, at the retained path, and the blob's object id must be the hash the
- * definition holds. A component whose object changed, went missing, or is no
- * longer a blob refuses the resume — it does not resolve to whatever is there
- * now, which would continue a procedure under code it never executed.
- */
-export function* reconstructBundle(
-  pinnedCommit: string,
-  retained: readonly WorkflowComponentEntry[],
-  objectFormat: GitObjectFormat,
-): Operation<Result<readonly WorkflowBundleComponent[]>> {
-  const loaded = yield* readGitBundle(
-    pinnedCommit,
-    retained.map((entry) => ({ name: entry.name, path: entry.path })),
-    objectFormat,
-  );
-  if (!loaded.ok) {
-    return loaded;
-  }
-  for (const [index, component] of loaded.value.entries()) {
-    if (component.sourceHash !== retained[index]?.sourceHash) {
-      return Err(
-        unavailable(
-          `the component "${component.name}" is no longer the object this run's definition ` +
-            "names. The run is left exactly as it is.",
-        ),
-      );
-    }
-  }
-  return loaded;
-}
-
-/**
- * Read every retained component out of one commit, for a version-1 resume.
- *
- * The legacy half, and the only place in this module that reaches Git. A
- * version-1 definition pins a commit and a path per component, so its bundle is
- * rebuilt from objects rather than from files — a working tree edited since the
- * run started continues the run it started.
- */
-function* readGitBundle(
-  pinnedCommit: string,
-  declared: readonly DeclaredComponent[],
-  objectFormat: GitObjectFormat,
-): Operation<Result<readonly WorkflowBundleComponent[]>> {
-  const components: WorkflowBundleComponent[] = [];
-  for (const { name, path } of declared) {
-    let content: string;
-    let sourceHash: string;
-    try {
-      // `cat-file blob` first: it refuses a tree, so a declaration that names a
-      // directory fails before its object id is taken as a component's identity.
-      content = yield* readGitObject(pinnedCommit, path);
-      sourceHash = (yield* resolveGitRevision(`${pinnedCommit}:${path}`)).toLowerCase();
-    } catch (error) {
-      return Err(
-        unavailable(
-          `the component "${name}" is not a file this workflow's commit holds at ${path}.`,
-          error,
-        ),
-      );
-    }
-    if (sourceHash.length !== OBJECT_ID_LENGTHS[objectFormat] || !/^[0-9a-f]+$/.test(sourceHash)) {
-      return Err(
-        unavailable(
-          `the component "${name}" did not resolve to an object this repository's format names.`,
-        ),
-      );
-    }
-    const parsed = yield* parseComponent(name, path, content);
-    if (!parsed.ok) {
-      return parsed;
-    }
-    components.push({ name, path, sourceHash, content });
-  }
-  return Ok(Object.freeze(components));
 }

@@ -82,7 +82,6 @@ const PROVIDER_NEUTRAL: readonly string[] = [
   "src/git-host/records.ts",
   "src/git.ts",
   "src/identities.ts",
-  "src/installation.ts",
   "src/issue/api.ts",
   "src/issue/context.ts",
   "src/issue/effect-type.ts",

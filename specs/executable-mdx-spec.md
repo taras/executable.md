@@ -1949,14 +1949,13 @@ run but are absent from the diagnostic trace.
 | `packages/cli/src/{deno,node,bun,compiled}.ts` | Entrypoints — each installs matching `API.Env` and `API.Service` adapters, then calls `runXmd` |
 | `packages/workflow/src/service-denial.ts` | `useWorkflowServiceDenial()`, the non-delegating provider `xmd workflow` installs in every start and resume scope |
 | `packages/cli/src/workflow.ts` | the runtime-neutral `xmd workflow` lifecycle: grammar, run opening, execution records, statuses and exit codes |
-| `packages/cli/src/workflow-definition.ts` | establishing an immutable Git definition from a working-tree path, and loading a retained one again |
+| `packages/cli/src/workflow-definition.ts` | establishing an immutable definition from a working-tree path, and loading a retained one again |
 | `packages/cli/src/deno-workflow.ts` | the Deno run store and Workspace attachment; Node and Bun install the refusing host instead |
 | `packages/workflow/src/deno/workspace/files.ts` | the transaction-bound `API.Files` provider — one durable Workspace effect per document read, write, directory ensure and search |
 | `packages/workflow/src/deno/workspace/host.ts` | `withWorkflowWorkspace()` — the run's effect coordinator, logical cwd `/`, and Files provider installed together inside one execution |
 | `packages/workflow/src/generated-observations.ts` | `evaluateGeneratedFragment()` — the workflow policy adapter over `evaluateGeneratedXmd()`, returning its rendered text directly as `Operation<string>`; `GeneratedObservation` remains the read-table entry type, not an output envelope |
 | `packages/workflow/src/journal.ts` | the `workflow_run` record, canonical-record recognition, and the refusals that name differing fields without their values |
-| `packages/workflow/src/run.ts` | `retainedWorkflowInstallation()` and `getWorkflowRun()` — associating one execution with a run already created, as the `ExecutionInstallation` a trusted host passes to `executeInstalled()`, contributing a mandatory run-identity admission and the `prepare` hook that reopens the run inside the durable root. The association resolves no revision and imports no Git feature, which is why it stays here; obtaining a version-1 run's Markdown afterwards is a separate step that reaches the host-supplied legacy reader |
-| `packages/git/src/installation.ts` | `workflowInstallation()` — the matching `ExecutionInstallation` that *creates* a version-1 run, resolving the supplied base to a pinned commit. Creating one is the single lifecycle step that needs a Git capability, so it is stated by the package that owns one rather than by Workflow |
+| `packages/workflow/src/run.ts` | `retainedWorkflowInstallation()` and `getWorkflowRun()` — associating one execution with a run already created, as the `ExecutionInstallation` a trusted host passes to `executeInstalled()`, contributing a mandatory run-identity admission and the `prepare` hook that reopens the run inside the durable root. The association resolves no revision and imports no Git feature, and a run retains the bytes it executes, so nothing afterwards reaches a repository for its Markdown |
 | `packages/workflow/src/bundle.ts` | `workflowBundleInstallation()` — the `ExecutionInstallation` that closes one execution over a workflow's component bundle, carrying the pinned execution view and the admission that holds every retained component import to it |
 | `packages/cli/src/file-stream.ts` | `FileStream` — JSONL-backed `DurableStream` implementation |
 
@@ -3941,10 +3940,9 @@ function* durableImportComponent(
 ```
 
 A component the workflow definition is closed over records its own shape. The
-path it records is the one that definition retains it under — a
-repository-relative path inside the pinned commit for a Git definition, a
-logical path inside the bundle for a source bundle — so an authored position
-inside a retained component names it by the same path the run does:
+path it records is the one that definition retains it under — a logical path
+inside the bundle — so an authored position inside a retained component names
+it by the same path the run does:
 
 ```json
 { "type": "import_component", "name": "Discovery" }
@@ -4154,9 +4152,8 @@ writes `<Evaluate>` is not asking for a ceiling.
 
 Self-closing takes the program as `text`. Paired makes the content the producer,
 and what it renders is the program. An element stating both is stating the
-program twice and is **refused** rather than resolved by precedence. The
-workflow host additionally accepts the released `source` spelling, silently; the
-ordinary profile refuses it, and no profile has ever accepted `program`.
+program twice and is **refused** rather than resolved by precedence. `text` is
+the only spelling: no profile accepts `source` or `program`.
 
 The producer renders through an **execution-owned, one-shot projection**
 delivered directly to the protected body. It bypasses the public
@@ -5243,7 +5240,7 @@ by being handled first.
 own invocation is supplied differently: the host declares it to the execution,
 which calls the host's factory once with the claimant it minted and registers
 what comes back (§5.3, §5.6). The workflow host supplies
-`<Evaluate source={…} />` that way, for a live or partial run — the operation an
+`<Evaluate text={…} />` that way, for a live or partial run — the operation an
 authored workflow document writes where an Agent's proposed fragment should be
 admitted and performed. Its schema is closed on one required string prop and one
 optional `allow` array selecting from the closed effect classes `read` and
@@ -10190,11 +10187,9 @@ An installation may also carry a `bundle`: the closed set of authored Markdown
 components one workflow execution is closed over, as plain immutable data —
 each entry's name, the canonical path its definition retains it under, that
 source's own identity hash, and the exact source behind it. What that path and
-hash mean belongs to the workflow definition's version and not to core: a
-version-1 definition retains a repository-relative path inside a pinned commit
-and the blob's object ID, and a version-2 source bundle retains a logical path
-and the source's own content hash. Either way core receives the same immutable
-entries. It is read once and copied entry by entry before any `install()` runs,
+hash mean belongs to the workflow definition and not to core: a definition
+retains a logical path and the source's own content hash. Core receives
+immutable entries either way. It is read once and copied entry by entry before any `install()` runs,
 on the same terms as
 the admissions and preparations beside it, so what a name resolves to and which
 answers a document may invoke are fixed before anything can observe or replace
@@ -13666,4 +13661,4 @@ must preserve the trace for diagnosis or remove it before starting a new run.
 | 100 | `<Let>` → `<Json>` → `<Parse>` is the explicit JSON direction | A document names a value, renders it as text, and validates text back into a value at three boundaries a reader can see. `{binding}` interpolation keeps its ordinary string coercion — there is no hidden JSON conversion — and `<Json>` takes no `indent`, `pretty`, replacer, sorting, canonicalization or newline option, so nothing about the format has to be agreed on per invocation. A file that must end in a newline authors that newline at the point it is written, rather than buying an option every other caller then has to reason about |
 | 101 | A capture is delivered from the authored expression | The scanner resolves a `{…}` prop whose text reads as JSON, but it runs before a name resolves and so cannot know the prop is a capture. Keeping the authored text beside the reading lets expansion decide with the selected definition in hand: a captured prop gets what its expression produced, every other prop gets the reading it always had, and an overriding repository file is an ordinary component either way. Without it `value={undefined}` reached a capturing component as `null`, which is the projection a capture exists to avoid |
 | 102 | A successful `undefined` omits an ordinary prop | Absence is the fact an author has to be able to state: an optional identity that a preceding result will supply is not there yet, and there is no value that means "not there" — `null` is a value, and a second element written for the other case duplicates the invocation. The omission is decided in the one resolver both component kinds pass through, before validation, so the schema answers it: optional stays unset, a `default` applies, a required prop fails as missing. It stops at the root and at that boundary — nested members keep native `JSON.stringify` normalization, failures stay failures, and captures and `<Let>` keep binding the exact value — and it puts `undefined` nowhere durable, because a prop that was never there is nothing to record |
-| 103 | A declared `<Evaluate>` and an authored loop, not hidden `<Prompt>` behavior | A workflow Agent's request/result exchange is written in the document: `<Loop max>` owns the bound, `<Parse>` and `<If>` own the branch, and `<Evaluate source={…} />` is where a generated fragment is admitted and performed. `<Prompt>` stays exactly one durable turn, with no hidden retry, schema repair or observation loop inside it, and the Agent Api gains no second operation. A component rather than a new execution primitive, because the operation needs a name a trusted document can write and a schema a reader can check. The host does not register it: it declares it to the execution, which calls the host's factory with the claimant it minted and registers what comes back — so the registration is canonical execution's, and what it provides is availability, never permission. Every ceiling comes from values the host captured before any document existed. Exhaustion is therefore the document's own failure, stated where the bound is, with the turns that produced it retained |
+| 103 | A declared `<Evaluate>` and an authored loop, not hidden `<Prompt>` behavior | A workflow Agent's request/result exchange is written in the document: `<Loop max>` owns the bound, `<Parse>` and `<If>` own the branch, and `<Evaluate text={…} />` is where a generated fragment is admitted and performed. `<Prompt>` stays exactly one durable turn, with no hidden retry, schema repair or observation loop inside it, and the Agent Api gains no second operation. A component rather than a new execution primitive, because the operation needs a name a trusted document can write and a schema a reader can check. The host does not register it: it declares it to the execution, which calls the host's factory with the claimant it minted and registers what comes back — so the registration is canonical execution's, and what it provides is availability, never permission. Every ceiling comes from values the host captured before any document existed. Exhaustion is therefore the document's own failure, stated where the bound is, with the turns that produced it retained |

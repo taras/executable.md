@@ -51,7 +51,6 @@ import {
   type WorkflowLifecycleSnapshot,
 } from "../lifecycle/api.ts";
 import {
-  isGitWorkflowRunCreation,
   type WorkflowBeginRequest,
   type WorkflowExecutionTransitions,
   type WorkflowExecutionBegun,
@@ -69,7 +68,6 @@ import {
   type WorkflowHistoryEntry,
 } from "../lifecycle/history.ts";
 import {
-  LegacyWorkflowSourceReaderUnavailableError,
   WorkflowDefinitionSourceMissingError,
   WorkflowInspectionRecoveryError,
   WorkflowRequestError,
@@ -98,8 +96,8 @@ import { workflowForkStaging, workflowRunPath } from "./path.ts";
 import { authorizedRoot, checkRunId } from "./provider.ts";
 import { reading, readTransaction } from "./reading.ts";
 import type { DetachedXmdArtifact } from "./artifact/types.ts";
-import type { LegacyWorkflowSourceReader, RetainedDefinitionSources } from "../lifecycle/source.ts";
-import type { GitWorkflowDefinitionV1, WorkflowDefinition } from "../storage/definition.ts";
+import type { RetainedDefinitionSources } from "../lifecycle/source.ts";
+import type { WorkflowDefinition } from "../storage/definition.ts";
 import type { Json } from "@executablemd/durable-streams";
 import { writeXmdArtifact } from "./artifact/mod.ts";
 import { historyArtifact, inspectArtifact } from "./artifact-inspection.ts";
@@ -107,7 +105,6 @@ import { readExportFrontier, readRetrievalMetadata } from "./artifact-frontier.t
 import {
   readDefinitionSourceRows,
   type RetainedSourceRows,
-  validateLegacySources,
   verifyRetainedSources,
 } from "./definition-source.ts";
 import type { WorkflowExportRequest, WorkflowExportResult } from "../lifecycle/export.ts";
@@ -168,19 +165,6 @@ function* unobserved(): Operation<void> {
 export interface WorkflowLifecycleOptions {
   /** The directory this host keeps runs in. Absolute, as storage requires. */
   readonly root: string;
-  /**
-   * How this host turns a retained version-1 definition back into Markdown.
-   *
-   * Captured in the provider's closure at installation and reachable through no
-   * Context, contextual Api, component, Plugin installation result or authored
-   * value. A host that installs none can inspect and control runs and cannot
-   * begin, fork or export a Git one — which is the honest answer, because it
-   * has no way to obtain what such a run executes.
-   *
-   * Version 2 never consults it: a source bundle's content is in the run's own
-   * store, and reaching a repository for it would be a second source of truth.
-   */
-  readonly legacySource?: LegacyWorkflowSourceReader;
 }
 
 /**
@@ -245,7 +229,7 @@ export function* installWorkflowLifecycle(
       },
 
       *export([request]) {
-        return yield* exportRun(root, executors, options.legacySource, request, observe);
+        return yield* exportRun(root, executors, request, observe);
       },
     },
     { at: "min" },
@@ -256,13 +240,13 @@ export function* installWorkflowLifecycle(
   // place for a capability that hands out transports.
   return {
     begin(executorLock, request) {
-      return beginRun(root, connections, executors, executorLock, request, options.legacySource);
+      return beginRun(root, connections, executors, executorLock, request);
     },
     fork(executorLock, request) {
-      return forkRun(root, connections, executors, executorLock, request, options.legacySource);
+      return forkRun(root, connections, executors, executorLock, request);
     },
     stageFork(request) {
-      return stageForkRun(root, connections, request, options.legacySource);
+      return stageForkRun(root, connections, request);
     },
     *settle(executorLock, completion) {
       // Authorized before a connection exists: the path comes from the hold the
@@ -289,7 +273,6 @@ function* beginRun(
   executors: ExecutorLockRegistry,
   executorLock: ExecutorLock,
   request: WorkflowBeginRequest,
-  legacySource: LegacyWorkflowSourceReader | undefined,
 ): Operation<Result<WorkflowExecutionBegun>> {
   const checked = checkRunId(request.runId);
   if (!checked.ok) {
@@ -309,7 +292,6 @@ function* beginRun(
     hold,
     () => executors.authorize(executorLock, checked.value),
     request,
-    legacySource,
   );
   if (!begun.ok) {
     return begun;
@@ -339,7 +321,6 @@ function* forkRun(
   executors: ExecutorLockRegistry,
   executorLock: ExecutorLock,
   request: WorkflowForkRequest,
-  legacySource: LegacyWorkflowSourceReader | undefined,
 ): Operation<Result<WorkflowExecutionBegun>> {
   const checked = checkRunId(request.runId);
   if (!checked.ok) {
@@ -370,7 +351,6 @@ function* forkRun(
     request,
     snapshot.value,
     forkHead(hold.runId, request),
-    legacySource,
   );
 
   if (forked.ok) {
@@ -417,7 +397,6 @@ function* stageForkRun(
   root: string,
   connections: WorkflowRunConnections,
   request: WorkflowForkRequest,
-  legacySource: LegacyWorkflowSourceReader | undefined,
 ): Operation<Result<WorkflowRunDatabase>> {
   const checked = checkRunId(request.runId);
   if (!checked.ok) {
@@ -437,7 +416,6 @@ function* stageForkRun(
     request,
     snapshot.value,
     forkHead(checked.value, request),
-    legacySource,
   );
 }
 
@@ -455,18 +433,10 @@ function forkHead(runId: string, request: WorkflowForkRequest): ForkHeadEvents {
   };
 }
 
-/** The fork's own run value, in the shape its candidate's version declares. */
+/** The fork's own run value. */
 function forkRunValue(runId: string, creation: WorkflowRunCreation): WorkflowRun {
-  if (isGitWorkflowRunCreation(creation)) {
-    return { runId, base: creation.base, pinnedCommit: creation.definition.objectId };
-  }
   const { bundleHash, targetPath } = creation.definition;
-  return {
-    runId,
-    definitionVersion: 2,
-    bundleHash,
-    ...(targetPath === undefined ? {} : { targetPath }),
-  };
+  return { runId, bundleHash, ...(targetPath === undefined ? {} : { targetPath }) };
 }
 
 /** The committed source prefix, read exactly the way inspection reads a run. */
@@ -635,7 +605,6 @@ function* acquire(
 function* exportRun(
   root: string,
   executors: ExecutorLockRegistry,
-  legacySource: LegacyWorkflowSourceReader | undefined,
   request: WorkflowExportRequest,
   observe: RecoveryObserver,
 ): Operation<Result<WorkflowExportResult>> {
@@ -644,12 +613,10 @@ function* exportRun(
     return checked;
   }
 
-  // The lock covers selection and detachment, and stops there. Reading a
-  // version-1 definition's source means opening a repository, and holding a run
-  // unrunnable for as long as that takes would buy nothing: the frontier is
-  // already values in memory, and no later execution can change what they say.
-  // A version-2 run's source is read here too, out of its own store, because
-  // that is where it is.
+  // The lock covers selection and detachment, and stops there. The source is
+  // read here, out of the run's own store, because that is where it is — and
+  // holding a run unrunnable for longer would buy nothing: the frontier is
+  // already values in memory, and no later execution can change what it says.
   const selected = yield* scoped(function* (): Operation<Result<SelectedFrontier>> {
     const hold = yield* executors.acquire(root, checked.value);
     if (hold === undefined) {
@@ -662,9 +629,7 @@ function* exportRun(
         detached: readExportFrontier(database, record, path),
         definition: record.definition,
         retrieval: readRetrievalMetadata(database),
-        ...(record.definition.kind === "source-bundle"
-          ? { rows: readDefinitionSourceRows(database) }
-          : {}),
+        rows: readDefinitionSourceRows(database),
       }),
       observe,
     );
@@ -674,17 +639,13 @@ function* exportRun(
   }
 
   const definition = selected.value.definition;
-  // Routed by the version the run retains. Version 2 reads only its own source
-  // store; version 1 crosses the host-supplied legacy seam, and Workflow — not
-  // the adapter — decides whether what came back describes this definition.
+  // The run's own source store is the only place a closure comes from. Nothing
+  // is fetched and no host capability is consulted: a run retains the bytes it
+  // executes, so a run whose store is empty is corrupt rather than remote.
   const closure: Result<RetainedDefinitionSources> =
-    definition.kind === "source-bundle"
-      ? selected.value.rows === undefined
-        ? Err(new WorkflowDefinitionSourceMissingError())
-        : yield* verifyRetainedSources(definition, selected.value.rows)
-      : legacySource === undefined
-        ? Err(new LegacyWorkflowSourceReaderUnavailableError())
-        : yield* fetchLegacyClosure(definition, selected.value.retrieval, legacySource);
+    selected.value.rows === undefined
+      ? Err(new WorkflowDefinitionSourceMissingError())
+      : yield* verifyRetainedSources(definition, selected.value.rows);
   if (!closure.ok) {
     return closure;
   }
@@ -704,24 +665,12 @@ function* exportRun(
   });
 }
 
-function* fetchLegacyClosure(
-  definition: GitWorkflowDefinitionV1,
-  retrieval: Json | undefined,
-  legacySource: LegacyWorkflowSourceReader,
-): Operation<Result<RetainedDefinitionSources>> {
-  const answered = yield* legacySource(definition, retrieval);
-  if (!answered.ok) {
-    return answered;
-  }
-  return validateLegacySources(definition, answered.value);
-}
-
 /** What one locked selection detached, before any source was fetched. */
 interface SelectedFrontier {
   readonly detached: Omit<DetachedXmdArtifact, "definition">;
   readonly definition: WorkflowDefinition;
   readonly retrieval: Json | undefined;
-  /** The retained source store, when the run is a source bundle. */
+  /** The retained source store this run executes out of. */
   readonly rows?: RetainedSourceRows;
 }
 
@@ -1221,7 +1170,7 @@ function readRunRow(database: DatabaseSync, path: string): WorkflowRunRecord {
   if (row === undefined) {
     throw new WorkflowRequestError(`The workflow-run database at ${path} holds no workflow run.`);
   }
-  return readRunRecord(row, liveSchemaVersion(database, path));
+  return readRunRecord(row);
 }
 
 function refusal<T>(error: unknown, path: string): Result<T> {

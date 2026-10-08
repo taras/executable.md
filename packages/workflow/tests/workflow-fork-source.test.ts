@@ -15,7 +15,6 @@ import { scoped } from "effection";
 import type { Operation } from "effection";
 import {
   forkRunRecordEvent,
-  LegacyWorkflowSourceReaderUnavailableError,
   WorkflowLifecycle,
   WorkflowRequestError,
 } from "@executablemd/workflow";
@@ -25,7 +24,6 @@ import { useWorkflowRunConnections } from "../src/deno/connections.ts";
 import { SavepointObservation } from "../src/deno/savepoints.ts";
 import { installWorkflowRunStorage } from "../src/deno/provider.ts";
 import { installWorkflowLifecycle } from "../src/deno/lifecycle.ts";
-import { legacySourceReader } from "./support/legacy-source.ts";
 import {
   BUNDLE_ENTRYPOINT,
   BUNDLE_SOURCE,
@@ -74,7 +72,6 @@ describe("Tier WFK — a source-bundle fork", () => {
         yield* begun.database.journal.append(
           forkRunRecordEvent({
             runId: "fork-source",
-            definitionVersion: 2,
             bundleHash: creation.definition.bundleHash,
           }),
         );
@@ -122,12 +119,7 @@ describe("Tier WFK — a source-bundle fork", () => {
 
       // The fork's own definition, and the closure it returns is the one its
       // store now holds rather than the buffers the caller supplied.
-      expect(forked.value.record.definition.kind).toBe("source-bundle");
       const sources = forked.value.sources;
-      expect(sources.definitionVersion).toBe(2);
-      if (sources.definitionVersion !== 2) {
-        throw new Error("expected a source bundle");
-      }
       expect(new TextDecoder().decode(sources.sources[0]?.bytes)).toBe(
         "# Forked\n\nits own bytes\n",
       );
@@ -139,7 +131,7 @@ describe("Tier WFK — a source-bundle fork", () => {
 
     // Its schema is version 2, with the source store beside it.
     tamper(runPath(root, "fork-destination"), (database) => {
-      expect(database.prepare("PRAGMA user_version").get()?.["user_version"]).toBe(2);
+      expect(database.prepare("PRAGMA user_version").get()?.["user_version"]).toBe(1);
       const stored = database.prepare("SELECT content FROM workflow_definition_blob").get();
       expect(new TextDecoder().decode(storedBytes(stored, "content"))).toBe(
         "# Forked\n\nits own bytes\n",
@@ -191,7 +183,6 @@ describe("Tier WFK — a source-bundle fork", () => {
       if (!staged.ok) {
         throw staged.error;
       }
-      expect(staged.value.record.definition.kind).toBe("source-bundle");
 
       // What it assembled, read out of the staging file while the resource that
       // owns it is still alive. The kind alone would be satisfied by a staging
@@ -201,7 +192,7 @@ describe("Tier WFK — a source-bundle fork", () => {
         readOnly: true,
       });
       try {
-        expect(database.prepare("PRAGMA user_version").get()?.["user_version"]).toBe(2);
+        expect(database.prepare("PRAGMA user_version").get()?.["user_version"]).toBe(1);
         const blob = database.prepare("SELECT content FROM workflow_definition_blob").get();
         expect(new TextDecoder().decode(storedBytes(blob, "content"))).toBe(staging);
 
@@ -218,83 +209,6 @@ describe("Tier WFK — a source-bundle fork", () => {
       // against, not a destination a host would find.
       const found = yield* WorkflowLifecycle.operations.inspect("fork-staged");
       expect(found.ok).toBe(false);
-    });
-  });
-
-  it("WFK43: every v1 admission is reader-gated, and leaves no destination", function* () {
-    const root = yield* useStorageRoot();
-
-    yield* scoped(function* () {
-      const connections = yield* useWorkflowRunConnections(yield* SavepointObservation.get());
-      yield* installWorkflowRunStorage({ root }, {}, connections);
-      // A host with the reader, so a version-1 source run can exist to fork.
-      const capable = yield* installWorkflowLifecycle(
-        { root, legacySource: legacySourceReader() },
-        connections,
-      );
-      const source = yield* withExecutorRun(
-        capable,
-        { runId: "git-source", action: "start", creation: creation() },
-        function* (begun, executorLock) {
-          const rootImport: DurableEvent = {
-            type: "yield",
-            coroutineId: "root",
-            description: { type: "import_component", name: "__root__" },
-            result: { status: "ok", value: { source: "# Release\n" } },
-          };
-          yield* begun.database.journal.append(
-            forkRunRecordEvent({ runId: "git-source", base: "main", pinnedCommit: SHA1 }),
-          );
-          yield* begun.database.journal.append(rootImport);
-          yield* begun.database.journal.append(retained("checkpoint"));
-          const entries = yield* begun.database.readJournalEntries();
-          if (!entries.ok) {
-            throw entries.error;
-          }
-          const last = entries.value.at(-1);
-          if (last === undefined) {
-            throw new Error("the source run retained no checkpoint");
-          }
-          const settled = yield* transitionsSettle(capable, executorLock, begun);
-          void settled;
-          return { checkpointEventId: last.eventId, rootImport };
-        },
-      );
-
-      // And a second host over the same storage with no reader at all.
-      const blind = yield* installWorkflowLifecycle({ root }, connections);
-      const request = {
-        selection: { sourceRunId: "git-source", checkpointEventId: source.checkpointEventId },
-        creation: creation(),
-        rootImport: source.rootImport,
-      };
-
-      const resumed = yield* withExecutor("git-source", function* (executorLock) {
-        return yield* blind.begin(executorLock, { runId: "git-source", action: "resume" });
-      });
-      expect(resumed.ok).toBe(false);
-      expect(!resumed.ok && resumed.error).toBeInstanceOf(
-        LegacyWorkflowSourceReaderUnavailableError,
-      );
-
-      const forked = yield* withExecutor("git-fork", function* (executorLock) {
-        return yield* blind.fork(executorLock, { ...request, runId: "git-fork" });
-      });
-      expect(forked.ok).toBe(false);
-      expect(!forked.ok && forked.error).toBeInstanceOf(LegacyWorkflowSourceReaderUnavailableError);
-
-      const staged = yield* blind.stageFork({ ...request, runId: "git-staged" });
-      expect(staged.ok).toBe(false);
-      expect(!staged.ok && staged.error).toBeInstanceOf(LegacyWorkflowSourceReaderUnavailableError);
-
-      // None of the three left a destination anything recognizes, and the
-      // source run is exactly as it was.
-      for (const runId of ["git-fork", "git-staged"]) {
-        const found = yield* WorkflowLifecycle.operations.inspect(runId);
-        expect({ runId, found: found.ok }).toEqual({ runId, found: false });
-      }
-      const intact = yield* WorkflowLifecycle.operations.inspect("git-source");
-      expect(intact.ok).toBe(true);
     });
   });
 });

@@ -42,7 +42,8 @@
 import { type Api, createApi } from "@effectionx/context-api";
 import type { Operation, Result } from "effection";
 import type { DurableEvent, DurableStream, Json } from "@executablemd/durable-streams";
-import type { GitWorkflowDefinitionV1 } from "./definition.ts";
+import type { WorkflowDefinition } from "./definition.ts";
+import type { SourceBundleSnapshotEntry } from "./source-bundle.ts";
 import { WorkflowStorageError } from "./errors.ts";
 import type { JsonObject } from "./members.ts";
 import type { DefinitionRetrieval, DocumentExecutionRecord, WorkflowRunRecord } from "./record.ts";
@@ -59,10 +60,17 @@ import type { DefinitionRetrieval, DocumentExecutionRecord, WorkflowRunRecord } 
 export interface CreateWorkflowRunRequest {
   /** The public run id. Retained inside the run, and the only way back to it. */
   readonly runId: string;
-  /** The immutable Git definition this run is a run of. */
-  readonly definition: GitWorkflowDefinitionV1;
-  /** The Git revision chosen as the run's starting repository state. */
-  readonly base: string;
+  /** The immutable definition this run is a run of. */
+  readonly definition: WorkflowDefinition;
+  /**
+   * The exact bytes behind every logical path the definition names.
+   *
+   * The descriptor and the bytes arrive together because they are one fact: a
+   * definition's authoritative content is what its store holds, so a request
+   * carrying only the descriptor would be asking storage to retain an identity
+   * for content nobody supplied.
+   */
+  readonly sourceSnapshot: readonly SourceBundleSnapshotEntry[];
   /**
    * Root props, already normalized by whoever validated them.
    *

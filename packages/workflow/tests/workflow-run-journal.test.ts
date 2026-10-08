@@ -1095,7 +1095,9 @@ describe("Tier WJ — two callers creating at once", () => {
     const root = yield* useStorageRoot();
 
     const results = yield* withStorage(root, function* () {
-      return yield* all([create(request({ base: "main" })), create(request({ base: "develop" }))]);
+      // The same run id offered on different immutable terms. `base` is not
+      // one of them any more, so the props are what the two disagree about.
+      return yield* all([create(request()), create(request({ props: { channel: "beta" } }))]);
     });
 
     const succeeded = results.filter((result) => result.ok);
@@ -1547,8 +1549,8 @@ describe("Tier WJ — surviving a process", () => {
     // Genuinely separate processes with genuinely separate connections, so the
     // convergence is SQLite's write lock rather than one thread's turn-taking.
     const [first, second] = yield* all([
-      runChild(root, "raced", marker, "main"),
-      runChild(root, "raced", marker, "develop"),
+      runChild(root, "raced", marker, "stable"),
+      runChild(root, "raced", marker, "beta"),
     ]);
 
     const outcomes = [JSON.parse(first.out), JSON.parse(second.out)];
@@ -1566,9 +1568,9 @@ describe("Tier WJ — surviving a process", () => {
     // names both rather than pinning the timing that chooses between them.
     expect(["already-running", "WorkflowRunConflictError"]).toContain(refused[0].refused);
 
-    // The winner's base is whichever one got there first, and it is the only
-    // base the run has.
-    expect(["main", "develop"]).toContain(created[0].base);
+    // The winner's terms are whichever process got there first, and they are
+    // the only terms the run has.
+    expect(["stable", "beta"]).toContain(created[0].channel);
   });
 
   it("WJ25: a second process restores the run and re-executes nothing", function* () {
@@ -1614,74 +1616,52 @@ describe("Tier WJ — surviving a process", () => {
 describe("Tier WJ — the source-bundle run record", () => {
   const BUNDLE_HASH = "a".repeat(64);
 
-  it("WJ40: version 2 serializes its own members, in its own order", function* () {
-    const whole = workflowRunValue({
-      runId: "bundle-1",
-      definitionVersion: 2,
-      bundleHash: BUNDLE_HASH,
-    });
-    expect(Object.keys(whole)).toEqual(["runId", "definitionVersion", "bundleHash"]);
+  it("WJ40: the run value serializes its own members, in its own order", function* () {
+    const whole = workflowRunValue({ runId: "bundle-1", bundleHash: BUNDLE_HASH });
+    expect(Object.keys(whole)).toEqual(["runId", "bundleHash"]);
 
     const section = workflowRunValue({
       runId: "bundle-1",
-      definitionVersion: 2,
       bundleHash: BUNDLE_HASH,
       targetPath: "Release/Publish",
     });
-    expect(Object.keys(section)).toEqual([
-      "runId",
-      "definitionVersion",
-      "bundleHash",
-      "targetPath",
-    ]);
-
-    // Version 1 is untouched, in members and in order.
-    expect(Object.keys(workflowRunValue({ runId: "r", base: "main", pinnedCommit: "c" }))).toEqual([
-      "runId",
-      "base",
-      "pinnedCommit",
-    ]);
+    expect(Object.keys(section)).toEqual(["runId", "bundleHash", "targetPath"]);
   });
 
-  it("WJ41: either exact member set reads, in any order, and nothing else", function* () {
+  it("WJ41: the exact member set reads, in any order, and nothing else", function* () {
     // Reordered keys are the same value.
+    expect(readWorkflowRun({ bundleHash: BUNDLE_HASH, runId: "bundle-1" })).toEqual({
+      runId: "bundle-1",
+      bundleHash: BUNDLE_HASH,
+    });
     expect(
-      readWorkflowRun({ bundleHash: BUNDLE_HASH, definitionVersion: 2, runId: "bundle-1" }),
-    ).toEqual({ runId: "bundle-1", definitionVersion: 2, bundleHash: BUNDLE_HASH });
+      readWorkflowRun({ targetPath: "Release", bundleHash: BUNDLE_HASH, runId: "bundle-1" }),
+    ).toEqual({ runId: "bundle-1", bundleHash: BUNDLE_HASH, targetPath: "Release" });
 
     for (const refused of [
-      // A member set that is neither version's.
-      { runId: "r", definitionVersion: 2 },
-      { runId: "r", definitionVersion: 2, bundleHash: BUNDLE_HASH, base: "main" },
-      // Half of each.
-      { runId: "r", base: "main", definitionVersion: 2 },
-      // A synthetic version, and a synthetic target.
-      { runId: "r", definitionVersion: 1, bundleHash: BUNDLE_HASH },
-      { runId: "r", definitionVersion: 2, bundleHash: BUNDLE_HASH, targetPath: 7 },
-      { runId: "r", definitionVersion: 2, bundleHash: "" },
+      // Members this shape does not declare, including the ones a record
+      // retained under an older format carried. A run read loosely would be a
+      // run this build cannot account for.
+      { runId: "r" },
+      { runId: "r", bundleHash: BUNDLE_HASH, base: "main" },
+      { runId: "r", bundleHash: BUNDLE_HASH, definitionVersion: 2 },
+      { runId: "r", base: "main", pinnedCommit: "0".repeat(40) },
+      // A target that is not a string, and a hash that names nothing.
+      { runId: "r", bundleHash: BUNDLE_HASH, targetPath: 7 },
+      { runId: "r", bundleHash: "" },
     ]) {
       expect({ refused, run: readWorkflowRun(refused) }).toEqual({ refused, run: undefined });
     }
   });
 
-  it("WJ42: the effect description says which version, and invents no base", function* () {
-    const described = describeWorkflowRun({
-      runId: "bundle-1",
-      definitionVersion: 2,
-      bundleHash: BUNDLE_HASH,
-    });
+  it("WJ42: the effect description carries the bundle, and invents no base", function* () {
+    const described = describeWorkflowRun({ runId: "bundle-1", bundleHash: BUNDLE_HASH });
     expect(described).toEqual({
       type: "workflow_run",
       name: "workflow_run",
-      definitionVersion: 2,
       bundleHash: BUNDLE_HASH,
     });
     expect("base" in described).toBe(false);
-
-    expect(describeWorkflowRun({ runId: "r", base: "main", pinnedCommit: "c" })).toEqual({
-      type: "workflow_run",
-      name: "workflow_run",
-      base: "main",
-    });
+    expect("definitionVersion" in described).toBe(false);
   });
 });

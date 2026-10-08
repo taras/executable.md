@@ -15,12 +15,8 @@ import type { Operation, Result } from "effection";
 import type { DurableEvent, Json } from "@executablemd/durable-streams";
 import type { ExecutorLock } from "./api.ts";
 import type { WorkflowRunDatabase } from "../storage/api.ts";
-import type { GitWorkflowDefinitionV1 } from "../storage/definition.ts";
 import type { JsonObject } from "../storage/members.ts";
-import type {
-  SourceBundleSnapshotEntryV2,
-  SourceBundleWorkflowDefinitionV2,
-} from "../storage/source-bundle.ts";
+import type { SourceBundleSnapshotEntry, WorkflowDefinition } from "../storage/source-bundle.ts";
 import type { RetainedDefinitionSources } from "./source.ts";
 import type {
   DocumentExecutionCompletion,
@@ -28,41 +24,23 @@ import type {
   WorkflowRunRecord,
 } from "../storage/record.ts";
 
-/** What a `start` creates a Git run from, and what compatible reuse compares. */
-export interface GitWorkflowRunCreationV1 {
-  readonly definition: GitWorkflowDefinitionV1;
-  readonly base: string;
-  readonly props: JsonObject;
-  readonly retrieval?: Json;
-}
-
 /**
- * What a `start` creates a source-bundle run from.
+ * What a `start` creates a run from, and what compatible reuse compares.
  *
  * The descriptor and the bytes arrive together, because they are one fact: a
- * version-2 run's authoritative content is what its store holds, so a creation
- * that carried only the descriptor would be asking storage to retain an
- * identity for content nobody supplied.
+ * run's authoritative content is what its store holds, so a creation that
+ * carried only the descriptor would be asking storage to retain an identity for
+ * content nobody supplied.
  *
  * `sourceSnapshot` names exactly the descriptor's paths, in exactly its order.
  * The transition copies every byte sequence before it validates anything, so
  * mutating a caller-owned array afterwards cannot change the run.
  */
-export interface SourceBundleWorkflowRunCreationV2 {
-  readonly definition: SourceBundleWorkflowDefinitionV2;
-  readonly sourceSnapshot: readonly SourceBundleSnapshotEntryV2[];
+export interface WorkflowRunCreation {
+  readonly definition: WorkflowDefinition;
+  readonly sourceSnapshot: readonly SourceBundleSnapshotEntry[];
   readonly props: JsonObject;
   readonly retrieval?: Json;
-}
-
-/** What a `start` creates a run from, by the definition version it creates. */
-export type WorkflowRunCreation = GitWorkflowRunCreationV1 | SourceBundleWorkflowRunCreationV2;
-
-/** Whether this creation is the Git one, narrowing to it when it is. */
-export function isGitWorkflowRunCreation(
-  creation: WorkflowRunCreation,
-): creation is GitWorkflowRunCreationV1 {
-  return creation.definition.kind === "git";
 }
 
 /** Which committed checkpoint of which run a fork continues. */
@@ -74,8 +52,8 @@ export interface WorkflowForkSelection {
 /**
  * One caller's request to admit a fork and begin its first execution.
  *
- * The creation is the fork's own: its definition, its base and the props it was
- * normalized to. What it inherits is decided by the selection, and the source
+ * The creation is the fork's own: its definition, its retained bytes and the
+ * props it was normalized to. What it inherits is decided by the selection, and the source
  * takes no part in this run's identity beyond being named as its lineage.
  */
 export interface WorkflowForkRequest {

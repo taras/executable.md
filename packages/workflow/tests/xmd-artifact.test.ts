@@ -63,7 +63,7 @@ import {
 import { serializeDurableEvent } from "@executablemd/durable-streams";
 import type { DurableEvent, Json } from "@executablemd/durable-streams";
 import { SUSPENSION_ANSWER } from "../src/suspension/answer.ts";
-import type { GitDefinitionSourceClosureV1, RetainedDefinitionSources } from "../deno.ts";
+import type { RetainedDefinitionSources } from "../deno.ts";
 import {
   FIXTURE_BUNDLE_PATH,
   FIXTURE_BUNDLE_SOURCE,
@@ -413,14 +413,9 @@ function* resealed(
     // format 1 would be turned away by the identity comparison rather than by
     // the gate a case is aiming at.
     const format = database.prepare("SELECT artifact_version FROM xmd_artifact_header").get();
-    const declared = format?.["artifact_version"] === 2 ? 2 : 1;
-    const built = buildXmdArtifactManifest(
-      entries,
-      (kind) => {
-        throw new Error(`two ${kind} records under one identity`);
-      },
-      declared,
-    );
+    const built = buildXmdArtifactManifest(entries, (kind) => {
+      throw new Error(`two ${kind} records under one identity`);
+    });
     database
       .prepare("UPDATE xmd_artifact_header SET manifest = ?, identity = ? WHERE id = 1")
       .run(built.bytes, built.identity);
@@ -616,7 +611,7 @@ describe("XMD artifact container version 1", () => {
     }
     expect(read.manifests.length).toBe(contents.manifests.length);
     // One component the run never expanded is still in the closure.
-    expect(gitClosure(read.definition).components.map((component) => component.name)).toEqual([
+    expect(read.definition.definition.components?.map((component) => component.name)).toEqual([
       "Checklist",
       "Unused",
     ]);
@@ -689,9 +684,6 @@ describe("XMD artifact container version 1", () => {
     // other format's records. Its closed inventory is the one the header names,
     // so a format-1 closure inside a format-2 header is content that format
     // does not declare rather than a superset either verifier could complete.
-    const wrongFormat = yield* damaged(path, join(directory, "wrong-format.xmd"), (target) => {
-      target.exec("UPDATE xmd_artifact_header SET artifact_version = 2");
-    });
     const extraView = yield* damaged(path, join(directory, "extra-view.xmd"), (target) => {
       target.exec("CREATE VIEW peek AS SELECT kind FROM xmd_artifact_content");
     });
@@ -707,9 +699,7 @@ describe("XMD artifact container version 1", () => {
     const changedTable = handBuiltContainer(join(directory, "changed-table.xmd"));
 
     const missingEntry = yield* damaged(path, join(directory, "missing-entry.xmd"), (target) => {
-      target.exec(
-        "DELETE FROM xmd_artifact_content WHERE kind = 'definition-source-component-content'",
-      );
+      target.exec("DELETE FROM xmd_artifact_content WHERE kind = 'definition-source-content'");
     });
     const extraEntry = yield* damaged(path, join(directory, "extra-entry.xmd"), (target) => {
       const content = encoder.encode("a record nothing declares");
@@ -794,7 +784,6 @@ describe("XMD artifact container version 1", () => {
       [notADatabase, "XmdArtifactForeignContainerError"],
       [futureContainer, "XmdArtifactContainerVersionError"],
       [futureFormat, "XmdArtifactFormatVersionError"],
-      [wrongFormat, "XmdArtifactInventoryError"],
       [extraView, "XmdArtifactSchemaError"],
       [extraIndex, "XmdArtifactSchemaError"],
       [extraTrigger, "XmdArtifactSchemaError"],
@@ -1222,17 +1211,25 @@ describe("XMD artifact container version 1", () => {
         canonicalJsonText({ ...session, sessionIdentity: "somebody else's session" }),
       );
     });
+    // The entrypoint's bytes, replaced: the content no longer hashes to the
+    // identity its own manifest row and the descriptor both declare.
     const closureHash = yield* damaged(path, join(directory, "closure.xmd"), (target) => {
-      rewrite(target, "definition-source-root-content", "null", "# A different document\n");
+      rewrite(
+        target,
+        "definition-source-content",
+        canonicalJsonText("workflows/release.md"),
+        "# A different document\n",
+      );
     });
+    // A retained source the descriptor still maps a component name onto,
+    // removed: the closure no longer carries what the definition names.
     const closureMembership = yield* damaged(path, join(directory, "membership.xmd"), (target) => {
-      const identity = canonicalJsonText("Unused");
-      target
-        .prepare("DELETE FROM xmd_artifact_content WHERE kind = ? AND identity = ?")
-        .run("definition-source-component", identity);
-      target
-        .prepare("DELETE FROM xmd_artifact_content WHERE kind = ? AND identity = ?")
-        .run("definition-source-component-content", identity);
+      const identity = canonicalJsonText("workflows/Unused.md");
+      for (const kind of ["definition-source-entry", "definition-source-content"]) {
+        target
+          .prepare("DELETE FROM xmd_artifact_content WHERE kind = ? AND identity = ?")
+          .run(kind, identity);
+      }
     });
 
     const corruptions = [
@@ -1489,61 +1486,6 @@ describe("XMD artifact version 1 Agent portability evidence", () => {
     expect(new Set([baseline, ...derived.map(([, identity]) => identity)]).size).toBe(
       variations.length + 1,
     );
-  });
-
-  it("F3 opens both frozen historical artifacts and synthesizes nothing", function* () {
-    // Bytes an earlier reader and writer actually emitted, generated once at
-    // the commits named beside them and never regenerated by this build.
-    const historical = [
-      {
-        name: "the merged PR #610 writer, from richArtifact()",
-        generatedAt: "b952af602437e0c1db2137a74453504ae7541da5",
-        path: fileURLToPath(new URL("./fixtures/legacy-v1-610.xmd", import.meta.url)),
-        fileSha256: "bc812c577bbeebcf4801d29ac0d1fdf5eaf1d7e4d0b2c64e51f3f6867f46bfa8",
-        identity: "02dc7d81e0cd6c4712a4f9aeb2b38535c641cd8658f16dd212caf4993bfc74ca",
-        runId: "release-1.4",
-        status: "suspended",
-        journal: 8,
-        finalEventId: "event-7",
-      },
-      {
-        name: "the PR #615 head, through `xmd workflow export`",
-        generatedAt: "0962ea2d69abab66c5ad39ea06ea931ae0a93f8a",
-        path: fileURLToPath(new URL("./fixtures/legacy-v1-615-export.xmd", import.meta.url)),
-        fileSha256: "520bb74ee4edd70d7fecd5077acdd7c2cd4b79b6551f7cd0aa122dc9920a42e3",
-        identity: "c1857b0dd95724adf0a28a22de3c47da6698943c33a50fa11e3e4875ecc686ef",
-        runId: "release-1",
-        status: "completed",
-        journal: 6,
-        finalEventId: "c64f8a11-5d7e-4151-867a-833ff7255cb4",
-      },
-    ];
-
-    for (const frozen of historical) {
-      expect(sha256Hex(yield* until(readFile(frozen.path)))).toBe(frozen.fileSha256);
-      const read = yield* opened(frozen.path);
-      expect(read.identity).toBe(frozen.identity);
-      expect(read.run.runId).toBe(frozen.runId);
-      expect(read.run.status).toBe(frozen.status);
-      expect(read.journal.length).toBe(frozen.journal);
-      expect(read.frontier.finalEventId).toBe(frozen.finalEventId);
-      expect(gitClosure(read.definition).root.content.length).toBeGreaterThan(0);
-      // No record, no token, no bundle and no marker is reconstructed for it.
-      expect(read.agentEvidence).toBeUndefined();
-      expect(rowsOfKind(frozen.path, "agent-session-portability")).toBe(0);
-      expect(rowsOfKind(frozen.path, "agent-session-bundle-bytes")).toBe(0);
-    }
-
-    // A legacy artifact that does hold retained Prompts: the sessions stay
-    // unclassified, because merged legacy V1 never promised a classification.
-    const directory = yield* useArtifactDirectory();
-    const { agentEvidence: _dropped, ...legacy } = finalizedArtifact();
-    const { path } = yield* sealed(directory, "legacy-prompts.xmd", legacy);
-    const read = yield* opened(path);
-    expect(read.agentEvidence).toBeUndefined();
-    expect(read.journal.length).toBe(finalizedArtifact().journal.length);
-    expect(read.agentSessions.length).toBe(4);
-    expect(read.journal.filter((row) => row.record.includes("agent_prompt")).length).toBe(5);
   });
 
   it("F4 classifies every session or refuses the file", function* () {
@@ -2074,20 +2016,6 @@ function walk(
 }
 
 /**
- * The Git closure an artifact carries, narrowed rather than asserted.
- *
- * The retained source is a closed union now, so a format-1 case says which
- * member it is describing: an artifact that came back carrying a source bundle
- * is not the one these cases are about.
- */
-function gitClosure(sources: RetainedDefinitionSources): GitDefinitionSourceClosureV1 {
-  if (sources.definitionVersion !== 1) {
-    throw new Error("expected a Git definition source closure");
-  }
-  return sources.closure;
-}
-
-/**
  * A format-2 artifact's own statement about its content, held to the descriptor.
  *
  * Each `definition-source-entry` declares a source hash and a byte length
@@ -2121,11 +2049,6 @@ describe("XMD artifact format 2 definition sources", () => {
   it("F40: opens when its entries agree with the descriptor", function* () {
     const { path } = yield* useSourceBundleArtifact();
     const artifact = yield* opened(path);
-
-    expect(artifact.definition.definitionVersion).toBe(2);
-    if (artifact.definition.definitionVersion !== 2) {
-      throw new Error("expected a source bundle");
-    }
     expect(new TextDecoder().decode(artifact.definition.sources[0]?.bytes)).toBe(
       FIXTURE_BUNDLE_SOURCE,
     );

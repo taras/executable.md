@@ -89,7 +89,6 @@ export { gitDirectoryEntry } from "./src/composition/definitions.ts";
  * one this package ships.
  */
 export { declaresFor as gitPluginDeclaresFor } from "./src/plugin.ts";
-export { workflowInstallation } from "./src/installation.ts";
 export { GitObjectError, GitRepositoryError, GitRevisionError } from "./src/git.ts";
 export type { GitObjectFormat } from "./src/git.ts";
 export {

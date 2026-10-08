@@ -64,6 +64,7 @@ import {
   translateArtifactSqliteError,
   XMD_ARTIFACT_EXTENSION,
   XMD_ARTIFACT_CONTAINER_VERSION,
+  XMD_ARTIFACT_FORMAT_VERSION,
 } from "./schema.ts";
 import type { DetachedXmdArtifact, XmdArtifactWriteResult } from "./types.ts";
 
@@ -124,10 +125,6 @@ function* seal(path: string, contents: DetachedXmdArtifact): Operation<XmdArtifa
     // Everything the file will hold, produced and then read straight back
     // through the reader's own parser. A snapshot this build could not decode
     // is refused here, where there is still nothing on disk to remove.
-    // The format is the run's, not a choice: a version-1 run seals its Git
-    // closure and a version-2 run seals its source bundle, and neither
-    // inventory is loosened to make one writer serve both.
-    const format = contents.definition.definitionVersion === 2 ? 2 : 1;
     const entries = encodeXmdArtifactInventory(contents);
     const { base, agent } = partitionXmdArtifactEntries(entries);
     const detached = decodeXmdArtifactInventory(base, path);
@@ -136,16 +133,12 @@ function* seal(path: string, contents: DetachedXmdArtifact): Operation<XmdArtifa
     if (evidence !== undefined) {
       verifyXmdArtifactAgentEvidence(detached, evidence, path);
     }
-    const built = buildXmdArtifactManifest(
-      entries,
-      (kind) => {
-        throw new XmdArtifactInventoryError(
-          path,
-          `the snapshot offers more than one ${kind} record under one identity`,
-        );
-      },
-      format,
-    );
+    const built = buildXmdArtifactManifest(entries, (kind) => {
+      throw new XmdArtifactInventoryError(
+        path,
+        `the snapshot offers more than one ${kind} record under one identity`,
+      );
+    });
 
     let published = false;
     yield* ensure(function* () {
@@ -155,7 +148,7 @@ function* seal(path: string, contents: DetachedXmdArtifact): Operation<XmdArtifa
     });
 
     const layout = (yield* XmdArtifactContainerLayout.get()) ?? {};
-    create(path, built.bytes, built.identity, built.ordered, layout, format);
+    create(path, built.bytes, built.identity, built.ordered, layout);
     yield* requireNoSidecar(path);
 
     const opened = yield* readXmdArtifact(path);
@@ -218,7 +211,6 @@ function create(
   identity: string,
   entries: readonly { kind: string; identity: unknown; encoding: string; content: Uint8Array }[],
   layout: XmdArtifactLayout,
-  format: 1 | 2,
 ): void {
   let database: DatabaseSync;
   try {
@@ -247,7 +239,7 @@ function create(
       }
       database
         .prepare(INSERT_HEADER)
-        .run(format, XMD_ARTIFACT_CONTAINER_VERSION, manifest, identity);
+        .run(XMD_ARTIFACT_FORMAT_VERSION, XMD_ARTIFACT_CONTAINER_VERSION, manifest, identity);
       database.exec("COMMIT");
     } catch (error) {
       database.exec("ROLLBACK");

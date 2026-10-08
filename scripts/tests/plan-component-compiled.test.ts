@@ -145,7 +145,7 @@ describe("compiled xmd", { sanitizeOps: false, sanitizeResources: false }, () =>
     // And the closed schema travels with it: a build that shipped a widened one
     // would let a fragment-bearing prop nobody validated reach the body.
     expect(evaluate[0].props.additionalProperties).toBe(false);
-    expect(Object.keys(evaluate[0].props.properties)).toEqual(["text", "source", "allow"]);
+    expect(Object.keys(evaluate[0].props.properties)).toEqual(["text", "allow"]);
 
     // The documentation asset travels with the binary, not with a checkout. A
     // build that forgot `--include` would still list the component and still

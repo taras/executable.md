@@ -99,9 +99,8 @@ import { preflightFork } from "./workflow-fork.ts";
 import type { EstablishedDefinition, RetainedSources } from "./workflow-definition.ts";
 import type { RetainedDefinitionSources } from "@executablemd/workflow/deno";
 import type { WorkflowBundleComponent } from "@executablemd/core/host";
-import { decodeSourceText, isGitWorkflowRunRecord } from "@executablemd/workflow";
+import { decodeSourceText } from "@executablemd/workflow";
 import type { WorkflowRun, WorkflowRunRecord } from "@executablemd/workflow";
-import type { SourceBundleWorkflowRunCreationV2 } from "@executablemd/workflow/deno";
 
 /**
  * What this module cannot do without knowing the host.
@@ -1224,7 +1223,7 @@ function* forkInheritance(
   request: WorkflowRequest,
   runId: string,
   start: WorkflowStart | undefined,
-  creation: SourceBundleWorkflowRunCreationV2 | undefined,
+  creation: WorkflowRunCreation | undefined,
   host: WorkflowHost,
   transitions: WorkflowExecutionTransitions,
   execute: (execution: WorkflowExecution) => Operation<Result<void>>,
@@ -1272,7 +1271,7 @@ function* startCreation(
   request: WorkflowRequest,
   start: WorkflowStart | undefined,
   inherited: Record<string, Json> | undefined,
-): Operation<Result<SourceBundleWorkflowRunCreationV2 | undefined>> {
+): Operation<Result<WorkflowRunCreation | undefined>> {
   if (request.action === "resume") {
     return Ok(undefined);
   }
@@ -1368,18 +1367,6 @@ function* inheritedProps(
  * run of, and the two could differ.
  */
 function executableSources(sources: RetainedDefinitionSources): Result<RetainedSources> {
-  if (sources.definitionVersion === 1) {
-    return Ok({
-      source: sources.closure.root.content,
-      components: sources.closure.components.map((component) => ({
-        name: component.name,
-        path: component.path,
-        sourceHash: component.blobId,
-        content: component.content,
-      })),
-    });
-  }
-
   const byPath = new Map(sources.sources.map((source) => [source.path, source.bytes]));
   const entry = byPath.get(sources.definition.entrypoint);
   if (entry === undefined) {
@@ -1414,22 +1401,13 @@ function executableSources(sources: RetainedDefinitionSources): Result<RetainedS
 /**
  * The run value this execution is installed under.
  *
- * Whichever version the record retains, spelled as that version spells it. A
- * source-bundle run records its bundle hash and exact target; it invents no
- * base or pinned commit for a repository it never had.
+ * The run records its bundle hash and exact target; it invents no base or
+ * pinned commit for a repository it never had.
  */
 function installedRun(record: WorkflowRunRecord): WorkflowRun {
-  if (isGitWorkflowRunRecord(record)) {
-    return {
-      runId: record.runId,
-      base: record.base,
-      pinnedCommit: record.definition.objectId,
-    };
-  }
   const { bundleHash, targetPath } = record.definition;
   return {
     runId: record.runId,
-    definitionVersion: 2,
     bundleHash,
     ...(targetPath === undefined ? {} : { targetPath }),
   };
@@ -1437,9 +1415,7 @@ function installedRun(record: WorkflowRunRecord): WorkflowRun {
 
 /** The logical path a run's own definition names its root document by. */
 function rootDocumentName(record: WorkflowRunRecord): string {
-  return isGitWorkflowRunRecord(record)
-    ? record.definition.rootDocumentPath
-    : record.definition.entrypoint;
+  return record.definition.entrypoint;
 }
 
 /**

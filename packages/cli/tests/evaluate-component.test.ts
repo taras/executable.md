@@ -110,8 +110,8 @@ describe("Tier FE — the ordinary run profile", () => {
   });
 });
 
-describe("Tier FE — the spellings this host accepts", () => {
-  it("FE19: the ordinary profile refuses the workflow's `source` alias", function* () {
+describe("Tier FE — the one spelling this host accepts", () => {
+  it("FE19: every profile refuses `source`, which is no longer a spelling", function* () {
     yield* useWorkspace(
       {
         "notes.md": NOTE,
@@ -119,8 +119,10 @@ describe("Tier FE — the spellings this host accepts", () => {
       },
       function* (dir) {
         const result = yield* runCli(["run", join(dir, "doc.md")], { cwd: dir }).join();
+        // The schema is closed on `text`, so the retired alias is refused by
+        // prop validation rather than reaching the body under a host flag.
         expect(result.code).not.toBe(0);
-        expect(`${result.stdout}${result.stderr}`).toContain("this host did not admit it");
+        expect(`${result.stdout}${result.stderr}`).toMatch(/source|additional/i);
       },
     );
   });

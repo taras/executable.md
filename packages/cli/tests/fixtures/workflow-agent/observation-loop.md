@@ -91,7 +91,7 @@ see rendered — a `<Fetch>` response, say — binds it and renders it with
 `<Json>`. It is bound rather than rendered here, because the reader of this run
 wants the agent's answer, not the file it happened to open.
 
-<Evaluate source={turn.source} as="observation" />
+<Evaluate text={turn.source} as="observation" />
 
 </Loop>
 

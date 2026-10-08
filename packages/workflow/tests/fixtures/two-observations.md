@@ -9,10 +9,10 @@ that text. The second binds its response inside the fragment and renders it
 through `<Json>`, because a `<Fetch>` returns a value rather than text and
 nothing collects one on the fragment's behalf.
 
-<Evaluate source={'<File path="alpha.md" />'} as="first" />
+<Evaluate text={'<File path="alpha.md" />'} as="first" />
 
 <Json value={first} />
 
-<Evaluate source={'<Fetch url="https://api.example.test/admitted" as="response" />\n\n<Json value={response} />'} as="second" />
+<Evaluate text={'<Fetch url="https://api.example.test/admitted" as="response" />\n\n<Json value={response} />'} as="second" />
 
 <Json value={second} />

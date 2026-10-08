@@ -1,11 +1,15 @@
 /**
- * A workflow definition that is the source itself.
+ * A workflow definition is the source itself.
  *
- * The Git descriptor beside this one names a document that lives somewhere
- * else: an object id, a path inside it, and a host able to read both. A source
- * bundle instead identifies the exact bytes, so a run of a file outside a
+ * A definition identifies the exact bytes, so a run of a file outside a
  * repository, of an untracked file, or of a file edited since its last commit
- * is one immutable definition the moment it is retained.
+ * is one immutable definition the moment it is retained. Nothing is fetched
+ * from anywhere to execute one: the closure a run needs is the closure it
+ * retained, which is why no host has to supply a reader to begin a run.
+ *
+ * There is one definition shape and it carries no version. Nothing released
+ * names an older one, so a later format is a clean break rather than a second
+ * arm admitted beside this one.
  *
  * Identity is content addressing over logical paths. A logical path is a
  * portable name inside the bundle, never a host filesystem path — the
@@ -43,42 +47,40 @@ import {
  * maps authored component names onto members of that closure, so adding,
  * removing or changing a retained dependency changes `bundleHash`.
  */
-export interface SourceBundleWorkflowDefinitionV2 {
-  readonly version: 2;
-  readonly kind: "source-bundle";
+export interface WorkflowDefinition {
   readonly hashAlgorithm: "sha256";
   readonly bundleHash: string;
   readonly entrypoint: string;
-  readonly sources: readonly SourceBundleEntryV2[];
+  readonly sources: readonly SourceBundleEntry[];
   /** One exact canonical document target, without a leading `#`. */
   readonly targetPath?: string;
-  readonly components?: readonly SourceBundleComponentV2[];
+  readonly components?: readonly SourceBundleComponent[];
 }
 
 /** One retained source: its logical path, and what its bytes hash and weigh. */
-export interface SourceBundleEntryV2 {
+export interface SourceBundleEntry {
   readonly path: string;
   readonly sourceHash: string;
   readonly byteLength: number;
 }
 
 /** One authored component name, resolved onto a retained source. */
-export interface SourceBundleComponentV2 {
+export interface SourceBundleComponent {
   readonly name: string;
   readonly path: string;
 }
 
 /** The exact bytes offered for one logical path when a run is created. */
-export interface SourceBundleSnapshotEntryV2 {
+export interface SourceBundleSnapshotEntry {
   readonly path: string;
   readonly bytes: Uint8Array;
 }
 
 /** What a bundle hash is computed over: the closure, and nothing else. */
-export interface SourceBundleIdentityV2 {
+export interface SourceBundleIdentity {
   readonly entrypoint: string;
-  readonly sources: readonly SourceBundleEntryV2[];
-  readonly components?: readonly SourceBundleComponentV2[];
+  readonly sources: readonly SourceBundleEntry[];
+  readonly components?: readonly SourceBundleComponent[];
 }
 
 const SOURCE_DOMAIN = "executablemd.workflow.source.v2";
@@ -89,8 +91,6 @@ const HASH_DIGITS = 64;
 const HASH_BYTES = 32;
 
 const MEMBER_NAMES = [
-  "version",
-  "kind",
   "hashAlgorithm",
   "bundleHash",
   "entrypoint",
@@ -127,9 +127,7 @@ function fail(reason: string, path: string): Error {
  * a parser that sorted them would turn two spellings of one malformed value
  * into one accepted identity.
  */
-export function parseSourceBundleDefinition(
-  value: unknown,
-): Result<SourceBundleWorkflowDefinitionV2> {
+export function parseSourceBundleDefinition(value: unknown): Result<WorkflowDefinition> {
   try {
     return Ok(parseDefinition(value));
   } catch (error) {
@@ -140,16 +138,10 @@ export function parseSourceBundleDefinition(
   }
 }
 
-function parseDefinition(value: unknown): SourceBundleWorkflowDefinitionV2 {
+function parseDefinition(value: unknown): WorkflowDefinition {
   const members = parseMembers(value, "$", fail);
   requireMemberNames(members, MEMBER_NAMES, "$", fail);
 
-  if (members.get("version") !== 2) {
-    throw fail("expected version 2", "$.version");
-  }
-  if (parseStringMember(members, "kind", "$", fail) !== "source-bundle") {
-    throw fail('expected the kind "source-bundle"', "$.kind");
-  }
   if (parseStringMember(members, "hashAlgorithm", "$", fail) !== "sha256") {
     throw fail('expected the hash algorithm "sha256"', "$.hashAlgorithm");
   }
@@ -161,8 +153,6 @@ function parseDefinition(value: unknown): SourceBundleWorkflowDefinitionV2 {
   const components = parseComponents(members, sources);
 
   return {
-    version: 2,
-    kind: "source-bundle",
     hashAlgorithm: "sha256",
     bundleHash,
     entrypoint,
@@ -180,7 +170,7 @@ function parseDefinition(value: unknown): SourceBundleWorkflowDefinitionV2 {
  * twice over — or listed them in some other order — would be a second identity
  * for bytes that already have one.
  */
-function parseSources(members: Members): readonly SourceBundleEntryV2[] {
+function parseSources(members: Members): readonly SourceBundleEntry[] {
   const path = "$.sources";
   const value = members.get("sources");
   if (!Array.isArray(value)) {
@@ -190,7 +180,7 @@ function parseSources(members: Members): readonly SourceBundleEntryV2[] {
     throw fail("expected at least one source", path);
   }
 
-  const sources: SourceBundleEntryV2[] = [];
+  const sources: SourceBundleEntry[] = [];
   let previous: Uint8Array | undefined;
   for (let index = 0; index < value.length; index++) {
     const entry = parseSourceEntry(value[index], `${path}[${index}]`);
@@ -210,7 +200,7 @@ function parseSources(members: Members): readonly SourceBundleEntryV2[] {
   return Object.freeze(sources);
 }
 
-function parseSourceEntry(value: unknown, path: string): SourceBundleEntryV2 {
+function parseSourceEntry(value: unknown, path: string): SourceBundleEntry {
   const members = parseMembers(value, path, fail);
   requireMemberNames(members, SOURCE_MEMBER_NAMES, path, fail);
   return {
@@ -233,8 +223,8 @@ function parseSourceEntry(value: unknown, path: string): SourceBundleEntryV2 {
  */
 function parseComponents(
   members: Members,
-  sources: readonly SourceBundleEntryV2[],
-): readonly SourceBundleComponentV2[] | undefined {
+  sources: readonly SourceBundleEntry[],
+): readonly SourceBundleComponent[] | undefined {
   if (!members.has("components")) {
     return undefined;
   }
@@ -248,7 +238,7 @@ function parseComponents(
   }
 
   const paths = new Set(sources.map((source) => source.path));
-  const components: SourceBundleComponentV2[] = [];
+  const components: SourceBundleComponent[] = [];
   let previous: Uint8Array | undefined;
   for (let index = 0; index < value.length; index++) {
     const entry = parseComponent(value[index], `${path}[${index}]`, paths);
@@ -272,7 +262,7 @@ function parseComponent(
   value: unknown,
   path: string,
   sourcePaths: ReadonlySet<string>,
-): SourceBundleComponentV2 {
+): SourceBundleComponent {
   const members = parseMembers(value, path, fail);
   requireMemberNames(members, COMPONENT_MEMBER_NAMES, path, fail);
   const name = parseStringMember(members, "name", path, fail);
@@ -289,7 +279,7 @@ function parseComponent(
 }
 
 /** The one source the run begins at, which is Markdown by the name it has. */
-function parseEntrypoint(value: string, sources: readonly SourceBundleEntryV2[]): string {
+function parseEntrypoint(value: string, sources: readonly SourceBundleEntry[]): string {
   const entrypoint = parseLogicalPath(value, "$.entrypoint");
   if (!entrypoint.endsWith(".md")) {
     throw fail('expected a ".md" path', "$.entrypoint");
@@ -411,10 +401,8 @@ function parseByteLength(value: unknown, path: string): number {
  * is written out member by member. Doing that here is also what keeps the
  * stored shape and the parsed shape one decision.
  */
-export function sourceBundleDefinitionToJson(definition: SourceBundleWorkflowDefinitionV2): Json {
+export function sourceBundleDefinitionToJson(definition: WorkflowDefinition): Json {
   return {
-    version: definition.version,
-    kind: definition.kind,
     hashAlgorithm: definition.hashAlgorithm,
     bundleHash: definition.bundleHash,
     entrypoint: definition.entrypoint,
@@ -440,8 +428,8 @@ export function sourceBundleDefinitionToJson(definition: SourceBundleWorkflowDef
 
 /** The component mapping this definition declares, empty when it declares none. */
 export function sourceBundleComponents(
-  definition: SourceBundleWorkflowDefinitionV2,
-): readonly SourceBundleComponentV2[] {
+  definition: WorkflowDefinition,
+): readonly SourceBundleComponent[] {
   return definition.components ?? [];
 }
 
@@ -464,7 +452,7 @@ export function* sourceContentHash(bytes: Uint8Array): Operation<string> {
  * the value and not to one spelling of it. The target is absent on purpose:
  * selecting a section does not change the bytes in the bundle.
  */
-export function* sourceBundleHash(identity: SourceBundleIdentityV2): Operation<string> {
+export function* sourceBundleHash(identity: SourceBundleIdentity): Operation<string> {
   const components = identity.components ?? [];
   const chunks: Uint8Array[] = [
     field(BUNDLE_DOMAIN),
@@ -490,8 +478,8 @@ export function* sourceBundleHash(identity: SourceBundleIdentityV2): Operation<s
  * identity nobody can reproduce.
  */
 export function* verifySourceBundleDefinition(
-  definition: SourceBundleWorkflowDefinitionV2,
-): Operation<Result<SourceBundleWorkflowDefinitionV2>> {
+  definition: WorkflowDefinition,
+): Operation<Result<WorkflowDefinition>> {
   const recomputed = yield* sourceBundleHash(definition);
   if (recomputed !== definition.bundleHash) {
     return Err(fail("expected the bundle hash this definition's sources produce", "$.bundleHash"));
@@ -509,9 +497,9 @@ export function* verifySourceBundleDefinition(
  * closure, not one to be repaired by sorting.
  */
 export function* verifySourceBundleSnapshot(
-  definition: SourceBundleWorkflowDefinitionV2,
+  definition: WorkflowDefinition,
   snapshot: unknown,
-): Operation<Result<readonly SourceBundleSnapshotEntryV2[]>> {
+): Operation<Result<readonly SourceBundleSnapshotEntry[]>> {
   const owned = copySnapshot(snapshot);
   if (!owned.ok) {
     return owned;
@@ -576,7 +564,7 @@ function refusal(subject: string): string {
   );
 }
 
-function copySnapshot(value: unknown): Result<readonly SourceBundleSnapshotEntryV2[]> {
+function copySnapshot(value: unknown): Result<readonly SourceBundleSnapshotEntry[]> {
   if (!Array.isArray(value)) {
     return Err(new WorkflowRequestError(refusal("the array of sources")));
   }
@@ -584,7 +572,7 @@ function copySnapshot(value: unknown): Result<readonly SourceBundleSnapshotEntry
     return Err(new WorkflowRequestError(refusal("the non-empty set of sources")));
   }
 
-  const entries: SourceBundleSnapshotEntryV2[] = [];
+  const entries: SourceBundleSnapshotEntry[] = [];
   for (const candidate of value) {
     if (candidate === null || typeof candidate !== "object" || Array.isArray(candidate)) {
       return Err(new WorkflowRequestError(refusal("the shape of the entries")));

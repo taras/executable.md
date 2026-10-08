@@ -29,18 +29,16 @@ import { ensure, Err, Ok, type Operation, resource, type Result, scoped } from "
 import { exists, rm } from "@effectionx/fs";
 import type { Json } from "@executablemd/durable-streams";
 import {
-  isGitWorkflowRunCreation,
   type WorkflowBeginRequest,
   type WorkflowExecutionBegun,
   type WorkflowForkRequest,
   type WorkflowRunCreation,
 } from "../lifecycle/execution.ts";
-import type { LegacyWorkflowSourceReader, RetainedDefinitionSources } from "../lifecycle/source.ts";
+import type { RetainedDefinitionSources } from "../lifecycle/source.ts";
 import type { WorkflowRunDatabase } from "../storage/api.ts";
 import { conflictingFields, type WorkflowRunComparison } from "../storage/compatibility.ts";
-import { definitionToJson, type GitWorkflowDefinitionV1 } from "../storage/definition.ts";
+import { definitionToJson } from "../storage/definition.ts";
 import {
-  LegacyWorkflowSourceReaderUnavailableError,
   WorkflowDefinitionSourceMissingError,
   WorkflowDocumentExecutionError,
   WorkflowRequestError,
@@ -50,7 +48,7 @@ import {
   WorkflowStorageError,
 } from "../storage/errors.ts";
 import {
-  type SourceBundleSnapshotEntryV2,
+  type SourceBundleSnapshotEntry,
   verifySourceBundleSnapshot,
 } from "../storage/source-bundle.ts";
 import {
@@ -70,7 +68,6 @@ import { readRetrievalMetadata } from "./artifact-frontier.ts";
 import {
   readDefinitionSourceRows,
   type RetainedSourceRows,
-  validateLegacySources,
   verifyRetainedSources,
   writeDefinitionSources,
 } from "./definition-source.ts";
@@ -81,7 +78,6 @@ import {
   initializeSchema,
   isSqliteForeignKeyConstraint,
   isUninitialized,
-  SOURCE_BUNDLE_SCHEMA_VERSION,
   translateSqliteError,
   verifyRecognizedSchema,
   verifySchema,
@@ -89,10 +85,6 @@ import {
 
 /** Shared with `create()`, so one statement writes an immutable run. */
 export const INSERT_RUN = `INSERT INTO workflow_run
-  (id, run_id, definition, base, props, status, created_at, updated_at)
-  VALUES (1, ?, ?, ?, ?, 'running', ?, ?)`;
-/** The same row in a version-2 database, which has no base column at all. */
-const INSERT_SOURCE_BUNDLE_RUN = `INSERT INTO workflow_run
   (id, run_id, definition, props, status, created_at, updated_at)
   VALUES (1, ?, ?, ?, 'running', ?, ?)`;
 const UPDATE_RUN_STATE = `UPDATE workflow_run
@@ -128,7 +120,6 @@ export function* beginExecution(
   hold: ExecutorLockHold,
   authorize: () => ExecutorLockHold,
   request: WorkflowBeginRequest,
-  readLegacySource?: LegacyWorkflowSourceReader,
 ): Operation<Result<BeginOutcome>> {
   // Asked before a connection exists, because opening one creates the file.
   // A resume that found nothing would otherwise leave an empty database behind
@@ -148,7 +139,7 @@ export function* beginExecution(
   // missing, damaged or unobtainable is refused with its lifecycle and its
   // journal exactly as they were, rather than after a recovery it then has to
   // leave behind.
-  const authenticated = yield* authenticateBeforeBegin(connection, path, request, readLegacySource);
+  const authenticated = yield* authenticateBeforeBegin(connection, path, request);
   if (!authenticated.ok) {
     return authenticated;
   }
@@ -178,13 +169,7 @@ export function* beginExecution(
   // A run this call created has no proved source yet: what it will execute is
   // read back out of the transaction that committed it, so the closure a caller
   // imports is the store's own bytes rather than the buffers it handed in.
-  const sources = yield* settleSources(
-    connection,
-    path,
-    record,
-    authenticated.value.proved,
-    readLegacySource,
-  );
+  const sources = yield* settleSources(connection, path, record, authenticated.value.proved);
   if (!sources.ok) {
     return sources;
   }
@@ -213,7 +198,7 @@ interface AuthenticatedSource {
    */
   readonly proved?: RetainedDefinitionSources;
   /** The creation's snapshot, copied and checked against its descriptor. */
-  readonly owned?: readonly SourceBundleSnapshotEntryV2[];
+  readonly owned?: readonly SourceBundleSnapshotEntry[];
 }
 
 /**
@@ -231,11 +216,10 @@ function* authenticateBeforeBegin(
   connection: RunConnection,
   path: string,
   request: WorkflowBeginRequest,
-  readLegacySource: LegacyWorkflowSourceReader | undefined,
 ): Operation<Result<AuthenticatedSource>> {
   const { creation } = request;
-  let owned: readonly SourceBundleSnapshotEntryV2[] | undefined;
-  if (creation !== undefined && !isGitWorkflowRunCreation(creation)) {
+  let owned: readonly SourceBundleSnapshotEntry[] | undefined;
+  if (creation !== undefined) {
     const verified = yield* verifySourceBundleSnapshot(
       creation.definition,
       creation.sourceSnapshot,
@@ -251,23 +235,15 @@ function* authenticateBeforeBegin(
     return stored;
   }
 
-  // A run that is already there is held to what it retains. A Git run that is
-  // being created is held to the descriptor it is about to retain: the reader
-  // is asked now, with the creation's own descriptor and retrieval metadata, so
-  // a host that cannot obtain the source never reaches the transaction that
-  // would make the run exist.
+  // A run that is already there is held to what it retains. A run that is being
+  // created has nothing retained yet — its bytes are the snapshot verified
+  // above, and the closure it executes is read back out of the store once the
+  // transaction has committed them.
   if (stored.value === undefined) {
-    if (creation === undefined || !isGitWorkflowRunCreation(creation)) {
-      return Ok(owned === undefined ? {} : { owned });
-    }
-    const proved = yield* readGitSource(creation.definition, creation.retrieval, readLegacySource);
-    if (!proved.ok) {
-      return proved;
-    }
-    return Ok({ proved: proved.value, ...(owned === undefined ? {} : { owned }) });
+    return Ok(owned === undefined ? {} : { owned });
   }
 
-  const proved = yield* authenticate(stored.value, readLegacySource);
+  const proved = yield* authenticate(stored.value);
   if (!proved.ok) {
     return proved;
   }
@@ -299,13 +275,10 @@ function* readStoredSource(
           if (isUninitialized(connection.database, path)) {
             return undefined;
           }
-          const version = verifyRecognizedSchema(connection.database, path, connection.dofs);
+          verifyRecognizedSchema(connection.database, path, connection.dofs);
           const record = readRunRow(connection.database, path);
           const retrieval = readRetrievalMetadata(connection.database);
-          if (version === 2) {
-            return { record, retrieval, rows: readDefinitionSourceRows(connection.database) };
-          }
-          return { record, retrieval };
+          return { record, retrieval, rows: readDefinitionSourceRows(connection.database) };
         }),
       );
     } catch (error) {
@@ -327,41 +300,12 @@ function* readStoredSource(
  * admitted without knowing what it executes: every version-1 lifecycle
  * admission is gated before it writes.
  */
-function* authenticate(
-  stored: StoredSource,
-  readLegacySource: LegacyWorkflowSourceReader | undefined,
-): Operation<Result<RetainedDefinitionSources>> {
+function* authenticate(stored: StoredSource): Operation<Result<RetainedDefinitionSources>> {
   const { definition } = stored.record;
-  if (definition.kind === "source-bundle") {
-    if (stored.rows === undefined) {
-      return Err(new WorkflowDefinitionSourceMissingError());
-    }
-    return yield* verifyRetainedSources(definition, stored.rows);
+  if (stored.rows === undefined) {
+    return Err(new WorkflowDefinitionSourceMissingError());
   }
-  return yield* readGitSource(definition, stored.retrieval, readLegacySource);
-}
-
-/**
- * A Git definition's Markdown, fetched through the host and held to it.
- *
- * The reader is a direct dependency the host captured, and a host that captured
- * none cannot obtain version-1 source at all — so that is a refusal here rather
- * than a run begun without knowing what it executes. Whatever comes back is
- * validated against this descriptor before it counts as this run's.
- */
-function* readGitSource(
-  definition: GitWorkflowDefinitionV1,
-  retrieval: Json | undefined,
-  readLegacySource: LegacyWorkflowSourceReader | undefined,
-): Operation<Result<RetainedDefinitionSources>> {
-  if (readLegacySource === undefined) {
-    return Err(new LegacyWorkflowSourceReaderUnavailableError());
-  }
-  const answered = yield* readLegacySource(definition, retrieval);
-  if (!answered.ok) {
-    return answered;
-  }
-  return validateLegacySources(definition, answered.value);
+  return yield* verifyRetainedSources(definition, stored.rows);
 }
 
 /**
@@ -377,15 +321,14 @@ function* settleSources(
   path: string,
   record: WorkflowRunRecord,
   proved: RetainedDefinitionSources | undefined,
-  readLegacySource: LegacyWorkflowSourceReader | undefined,
 ): Operation<Result<RetainedDefinitionSources>> {
   if (proved !== undefined) {
     return Ok(proved);
   }
-  // The one case left: a source-bundle run this call created. Its content
-  // existed nowhere until the transaction committed, so it is read back out of
-  // the store and verified again — which is what makes the closure a caller
-  // imports the retained bytes rather than the buffers it supplied.
+  // The one case left: a run this call created. Its content existed nowhere
+  // until the transaction committed, so it is read back out of the store and
+  // verified again — which is what makes the closure a caller imports the
+  // retained bytes rather than the buffers it supplied.
   const stored = yield* readStoredSource(connection, path);
   if (!stored.ok) {
     return stored;
@@ -393,7 +336,7 @@ function* settleSources(
   if (stored.value === undefined) {
     return Err(new WorkflowRunNotFoundError(record.runId));
   }
-  return yield* authenticate(stored.value, readLegacySource);
+  return yield* authenticate(stored.value);
 }
 
 /**
@@ -541,7 +484,7 @@ function beginOnce(
   path: string,
   hold: ExecutorLockHold,
   request: WorkflowBeginRequest,
-  owned: readonly SourceBundleSnapshotEntryV2[] | undefined,
+  owned: readonly SourceBundleSnapshotEntry[] | undefined,
 ): BegunRows | Refused {
   // An acquisition begins one execution. A second would find this workflow executor's own
   // live execution and, seeing it unfinished, reconcile it as a dead executor's
@@ -610,18 +553,16 @@ export function* forkExecution(
   request: WorkflowForkRequest,
   snapshot: ForkSourceSnapshot,
   head: ForkHeadEvents,
-  readLegacySource?: LegacyWorkflowSourceReader,
 ): Operation<Result<BeginOutcome>> {
   const connection = yield* connections.at(path);
 
   // The fork's own candidate, proved before its destination exists. A snapshot
   // that does not describe its descriptor leaves nothing behind at all.
-  const authenticated = yield* authenticateBeforeBegin(
-    connection,
-    path,
-    { runId: request.runId, action: "start", creation: request.creation },
-    readLegacySource,
-  );
+  const authenticated = yield* authenticateBeforeBegin(connection, path, {
+    runId: request.runId,
+    action: "start",
+    creation: request.creation,
+  });
   if (!authenticated.ok) {
     return authenticated;
   }
@@ -652,13 +593,7 @@ export function* forkExecution(
   }
 
   const { record, execution, replay, closed } = outcome.value;
-  const sources = yield* settleSources(
-    connection,
-    path,
-    record,
-    authenticated.value.proved,
-    readLegacySource,
-  );
+  const sources = yield* settleSources(connection, path, record, authenticated.value.proved);
   if (!sources.ok) {
     return sources;
   }
@@ -695,7 +630,6 @@ export function stageFork(
   request: WorkflowForkRequest,
   snapshot: ForkSourceSnapshot,
   head: ForkHeadEvents,
-  readLegacySource?: LegacyWorkflowSourceReader,
 ): Operation<Result<WorkflowRunDatabase>> {
   return resource(function* (provide) {
     yield* ensure(function* () {
@@ -709,21 +643,8 @@ export function stageFork(
     // The staged fork retains the same source its admitted twin will, so the
     // same snapshot is copied and checked here. A replay against buffers a
     // caller still holds would prove compatibility of something else.
-    let owned: readonly SourceBundleSnapshotEntryV2[] | undefined;
-    if (isGitWorkflowRunCreation(request.creation)) {
-      // A staged fork executes the same candidate its admitted twin will, so
-      // the same reader gate applies before anything is assembled: a host that
-      // cannot obtain this definition's Markdown cannot replay it either.
-      const proved = yield* readGitSource(
-        request.creation.definition,
-        request.creation.retrieval,
-        readLegacySource,
-      );
-      if (!proved.ok) {
-        yield* provide(proved);
-        return;
-      }
-    } else {
+    let owned: readonly SourceBundleSnapshotEntry[] | undefined;
+    {
       const verified = yield* verifySourceBundleSnapshot(
         request.creation.definition,
         request.creation.sourceSnapshot,
@@ -766,7 +687,7 @@ function forkOnce(
   snapshot: ForkSourceSnapshot,
   head: ForkHeadEvents,
   transaction: RunTransaction,
-  owned: readonly SourceBundleSnapshotEntryV2[] | undefined,
+  owned: readonly SourceBundleSnapshotEntry[] | undefined,
 ): BegunRows | Refused {
   if (hold.execution !== undefined) {
     throw new WorkflowRequestError(
@@ -913,7 +834,7 @@ function begin(
   hold: ExecutorLockHold,
   request: WorkflowBeginRequest,
   recovered: Recovery,
-  owned: readonly SourceBundleSnapshotEntryV2[] | undefined,
+  owned: readonly SourceBundleSnapshotEntry[] | undefined,
 ): BegunRows {
   const { database } = connection;
 
@@ -942,7 +863,7 @@ function create(
   path: string,
   hold: ExecutorLockHold,
   request: WorkflowBeginRequest,
-  owned: readonly SourceBundleSnapshotEntryV2[] | undefined,
+  owned: readonly SourceBundleSnapshotEntry[] | undefined,
 ): WorkflowRunRecord {
   const { creation } = request;
   if (creation === undefined) {
@@ -970,47 +891,29 @@ function createRun(
   path: string,
   runId: string,
   creation: WorkflowRunCreation,
-  owned: readonly SourceBundleSnapshotEntryV2[] | undefined,
+  owned: readonly SourceBundleSnapshotEntry[] | undefined,
 ): WorkflowRunRecord {
   const { database } = connection;
   const stamp = new Date().toISOString();
 
-  if (isGitWorkflowRunCreation(creation)) {
+  {
+    if (owned === undefined) {
+      throw new WorkflowRequestError(
+        "a run is created from its exact bytes, and none were verified for it.",
+      );
+    }
     initializeSchema(database, connection.dofs, () => {
       database
         .prepare(INSERT_RUN)
         .run(
           runId,
           canonicalJson(definitionToJson(creation.definition)),
-          creation.base,
           canonicalJson(creation.props),
           stamp,
           stamp,
         );
+      writeDefinitionSources(database, creation.definition, owned);
     });
-  } else {
-    if (owned === undefined) {
-      throw new WorkflowRequestError(
-        "a source-bundle run is created from its exact bytes, and none were verified for it.",
-      );
-    }
-    initializeSchema(
-      database,
-      connection.dofs,
-      () => {
-        database
-          .prepare(INSERT_SOURCE_BUNDLE_RUN)
-          .run(
-            runId,
-            canonicalJson(definitionToJson(creation.definition)),
-            canonicalJson(creation.props),
-            stamp,
-            stamp,
-          );
-        writeDefinitionSources(database, creation.definition, owned);
-      },
-      SOURCE_BUNDLE_SCHEMA_VERSION,
-    );
   }
 
   if (creation.retrieval !== undefined) {
@@ -1024,14 +927,6 @@ export function creationComparison(
   runId: string,
   creation: WorkflowRunCreation,
 ): WorkflowRunComparison {
-  if (isGitWorkflowRunCreation(creation)) {
-    return {
-      runId,
-      definition: creation.definition,
-      base: creation.base,
-      props: creation.props,
-    };
-  }
   return { runId, definition: creation.definition, props: creation.props };
 }
 

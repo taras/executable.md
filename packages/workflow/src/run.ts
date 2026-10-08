@@ -71,7 +71,6 @@ import type {
 import type { ExecutionInstallation, JournalAdmission } from "@executablemd/core/host";
 import {
   admitWorkflowRunHistory,
-  isGitWorkflowRun,
   retainedRunMismatch,
   describeWorkflowRun,
   malformedRecord,
@@ -198,25 +197,10 @@ function retaining(run: WorkflowRun): WorkflowRunPreparation {
 /**
  * Which terms of the retained run a recorded one disagrees with.
  *
- * Two versions are never the same run, and saying so as one field is what stops
- * the comparison from reporting members one of them does not have. Within a
- * version every term is compared, the exact target included: absent equals only
- * absent, which is what keeps a whole-document run distinct from a targeted one.
+ * Every term is compared, the exact target included: absent equals only absent,
+ * which is what keeps a whole-document run distinct from a targeted one.
  */
 function differingFields(recorded: WorkflowRun, expected: WorkflowRun): string[] {
-  if (isGitWorkflowRun(recorded)) {
-    if (!isGitWorkflowRun(expected)) {
-      return ["definition version"];
-    }
-    return [
-      ...(recorded.runId === expected.runId ? [] : ["runId"]),
-      ...(recorded.base === expected.base ? [] : ["base"]),
-      ...(recorded.pinnedCommit === expected.pinnedCommit ? [] : ["pinnedCommit"]),
-    ];
-  }
-  if (isGitWorkflowRun(expected)) {
-    return ["definition version"];
-  }
   return [
     ...(recorded.runId === expected.runId ? [] : ["runId"]),
     ...(recorded.bundleHash === expected.bundleHash ? [] : ["bundleHash"]),
@@ -393,24 +377,14 @@ function retainedRun(run: WorkflowRun): WorkflowRun {
   const parsed = readWorkflowRun(readingRetainedValue(() => workflowRunValue(run)));
   if (parsed === undefined || parsed.runId === "") {
     throw new Error(
-      "retainedWorkflowInstallation() needs a complete retained run: a Git run's id, base and " +
-        "pinned commit, or a source-bundle run's id and bundle hash. A run installed without " +
-        "them identifies no workflow run.",
+      "retainedWorkflowInstallation() needs a complete retained run: its id and its bundle hash. " +
+        "A run installed without them identifies no workflow run.",
     );
   }
-  if (!isGitWorkflowRun(parsed)) {
-    return parsed;
-  }
-  if (parsed.base === "") {
+  if (parsed.bundleHash === "") {
     throw new Error(
-      "retainedWorkflowInstallation() needs the retained run's id, base and pinned commit. A run " +
-        "installed without them identifies no workflow run.",
-    );
-  }
-  if (parsed.pinnedCommit === "") {
-    throw new Error(
-      "retainedWorkflowInstallation() needs the retained run's pinned commit: an empty one pins the " +
-        "run to no repository state at all.",
+      "retainedWorkflowInstallation() needs the retained run's bundle hash: an empty one pins the " +
+        "run to no retained source at all.",
     );
   }
   return parsed;

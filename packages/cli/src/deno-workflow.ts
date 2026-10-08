@@ -33,7 +33,6 @@ import { gitWorkspaceAttachment } from "@executablemd/git/deno";
 import type { WorkflowExecutionTransitions } from "@executablemd/workflow/deno";
 import type { WorkflowRunDatabase } from "@executablemd/workflow";
 import type { HelperAssembly } from "@executablemd/git/credential-helper";
-import { readLegacyDefinitionSource } from "./workflow-source.ts";
 import type { WorkflowHost } from "./workflow.ts";
 import { useWorkflowAgentProfile } from "./workflow-agent.ts";
 
@@ -49,17 +48,10 @@ export function* useDenoWorkflowHost(helper: HelperAssembly): Operation<Workflow
     configured === undefined || configured === "" ? DEFAULT_RUN_STORAGE_ROOT : configured;
   return {
     useRunHost(): Operation<WorkflowExecutionTransitions> {
-      // The same reader the lifecycle installation captures. A version-1 run
-      // needs its Markdown to begin, fork or stage, and the transitions this
-      // returns are what admit those — so a host that could export a legacy run
-      // and not resume one would be two hosts wearing one name.
-      return useWorkflowRunHost({ root, legacySource: readLegacyDefinitionSource });
+      return useWorkflowRunHost({ root });
     },
     useLifecycle(): Operation<void> {
-      // The reader goes into the provider's closure, not onto a request. An
-      // export seals the document a run was of, and a caller that could hand
-      // that in would be sealing its own bytes as somebody else's evidence.
-      return useWorkflowLifecycle({ root, legacySource: readLegacyDefinitionSource });
+      return useWorkflowLifecycle({ root });
     },
     useDelivery(): Operation<void> {
       return useWorkflowInputDelivery({ root });
