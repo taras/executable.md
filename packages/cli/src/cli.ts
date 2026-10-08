@@ -584,9 +584,9 @@ const REPL_HELP = [
   "",
   "  An execution admits exactly one entry. The screen always shows a location",
   "  of the form xmd://repl/<execution>/<surface>..., and when the command ends it",
-  "  prints the whole `xmd repl <location>` line that reopens the one it ended at.",
-  "  Running it reopens the same retained history and selects the same view — in",
-  "  this process or another one, from the history file alone.",
+  "  prints the whole xmd repl <location> that reopens the one it ended at. Running",
+  "  it reopens the same retained history and selects the same view — in this",
+  "  process or another one, from the history file alone.",
 ].join("\n");
 
 /**
@@ -2943,7 +2943,18 @@ function* dispatch(
       // particular because a location can never contain a `'`: every character
       // outside `[A-Za-z0-9-._~:@]` is percent-encoded on the way in, so there is
       // nothing in it that can close the quote.
-      const reopen = `xmd repl '${ran.value.location}'`;
+      // Said rather than left to be inferred: a bare command line is something a
+      // person has to recognize before it is useful, and this is the moment they
+      // have just stopped looking at the screen that would have explained it.
+      //
+      // "view" and "reopen" are the words `specs/repl-spec.md` already uses for
+      // this. Not "session" — in this product a Session is an Agent conversation,
+      // and the Sessions surface shows its turns, so resuming one would name
+      // something narrower than what the location restores.
+      //
+      // Indented rather than prefixed, so the second line is still exactly what
+      // somebody can paste.
+      const reopen = `Reopen this view with:\n  xmd repl '${ran.value.location}'`;
       const written = yield* deliverWhole(`${reopen}\n`, process.stdout);
       if (!written.ok) {
         console.error(

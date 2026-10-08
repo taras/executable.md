@@ -717,7 +717,10 @@ describe("REPL exit: a real terminal, and nothing further typed", () => {
 
       // And runnable exactly as printed: the location is one quoted argument of
       // an `xmd repl` command, so somebody who has just been handed their
-      // terminal back can paste the line rather than assemble one.
+      // terminal back can paste the line rather than assemble one. Under a line
+      // that says what it is for, because the screen that would have explained it
+      // has just gone.
+      expect(after).toContain("Reopen this view with:");
       expect(after).toMatch(/xmd repl 'xmd:\/\/repl\/[^']+'/);
     });
   });
@@ -767,7 +770,10 @@ describe("REPL exit: a real terminal, and nothing further typed", () => {
 
       // And runnable exactly as printed: the location is one quoted argument of
       // an `xmd repl` command, so somebody who has just been handed their
-      // terminal back can paste the line rather than assemble one.
+      // terminal back can paste the line rather than assemble one. Under a line
+      // that says what it is for, because the screen that would have explained it
+      // has just gone.
+      expect(after).toContain("Reopen this view with:");
       expect(after).toMatch(/xmd repl 'xmd:\/\/repl\/[^']+'/);
     });
   });
