@@ -283,7 +283,7 @@ Agent calls analyze evidence and propose changes; they do not perform them. Unde
 a workflow run an Agent reaches no checkout at all, and a proposal reaches the
 Workspace as generated XMD that a constrained evaluator preflights completely and
 expands as ordinary durable effects. The component a document writes to admit one
-is `<Evaluate source allow>`, and the whole path is built: the bounded
+is `<Evaluate text allow>`, and the whole path is built: the bounded
 request/result loop an Agent observes the repository through (#302, delivered by
 #549 and #550), and admission for a mutating fragment by effect class and
 authored form (#369, delivered by #572 and #574). What stays outside the admitted

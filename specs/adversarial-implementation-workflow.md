@@ -1072,12 +1072,12 @@ answered by what it does, and they are recorded because the answers are the
 boundaries the composition runs inside.
 
 1. The bounded request/result loop is authored Markdown
-   around `<Evaluate source>` (#302, #369, delivered by #549 and #550): one
+   around `<Evaluate text>` (#302, #369, delivered by #549 and #550): one
    `<Prompt>` per Agent turn, a closed observation/proposal envelope, and the
    detached read value rendered into the next prompt. The Agent still receives no
    checkout, materialization, working directory or registered directory.
 2. The component a document writes is `<Evaluate>`, with a closed schema of
-   required `source` and optional `allow`. A mutating fragment's admission is by
+   required `text` and optional `allow`. A mutating fragment's admission is by
    effect class and authored form (#369, delivered by #572 and #574): the
    standard profile's write table is core's paired `<File>`, this package's
    lexical `<Dir>` and core's self-closing `<File.Delete>`. The class is settled

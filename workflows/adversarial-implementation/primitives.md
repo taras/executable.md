@@ -432,7 +432,7 @@ alike.
 | --- | --- | --- |
 | provider-correct filesystem containment | #227 | open — `API.Files`, the host provider and the run's transaction-bound provider are built; the host validate-then-use race is what remains |
 | the workflow Agent ceiling: no checkout, no materialization, no cwd, no registered directory, no `additionalDirectories`, no MCP server, no native tool | #302, delivered by #549 | shipped — with a retained session the run comes back to |
-| the authored bounded observation loop, and `<Evaluate source>` | #302 and #369, delivered by #550 | shipped — declared to the execution by the workflow host |
+| the authored bounded observation loop, and `<Evaluate text>` | #302 and #369, delivered by #550 | shipped — declared to the execution by the workflow host |
 | generated Workspace mutation admission, by effect class and authored form | #369, delivered by #572 | shipped — paired `<File>`, lexical `<Dir>` |
 | generated single-file deletion | delivered by #574 | shipped — core's self-closing `<File.Delete>`, under the `write` class |
 | engine-owned authored-form dispatch on the invocation it issued | #569 | shipped |
@@ -447,7 +447,7 @@ everything outside that set — eval and exec blocks, expression props,
 interpolation that reads a binding, a result binding, an unadmitted component,
 and a malformed or out-of-ceiling request — naming the construct class and never
 echoing the source. Only then does it expand what it admitted. Resolution
-consults neither `componentDirs`, nor a registration, nor the workflow component
+consults neither `includes`, nor a registration, nor the workflow component
 bundle, so a same-named file beside the checkout answers nothing. The allowlist
 is authority, not prompting guidance: generated source cannot grant itself push,
 pull-request, or secret access by naming a component. One durable event records

@@ -30,7 +30,7 @@ import {
   withResolvers,
 } from "effection";
 import type { Operation, Result } from "effection";
-import { rm, writeTextFile } from "@effectionx/fs";
+import { exists, rm, writeTextFile } from "@effectionx/fs";
 import { exec } from "@effectionx/process";
 import { mkdtemp, realpath } from "node:fs/promises";
 import { join } from "node:path";
@@ -958,151 +958,49 @@ describe("Tier SCH — explicit scheduled resume", () => {
     expect(published.every((key) => typeof Reflect.get(surface, key) === "function")).toBe(true);
   });
 
-  it("SCH9: the stacked base is the reviewed composed consumer", function* () {
-    const toplevel = (yield* git(".", ["rev-parse", "--show-toplevel"])).trim();
+  /**
+   * The run executes what it retained, not what is on disk now.
+   *
+   * Historical provenance: this slice was reviewed on PR #181 head
+   * `525efaa736110f0ffcd5534985897d1db0692124` over `main` base
+   * `170a021db9d551f96f1e9bfdd9ea61f74e30e44e`. Those commits are recorded here
+   * as provenance and asserted nowhere — a file inventory pinned to them made
+   * every later edit of the reviewed consumer a failure, while saying nothing
+   * about what a scheduled resume actually does.
+   */
+  it("SCH9: a scheduled resume completes from retained source after the original moved", function* () {
+    yield* useReports();
+    const root = yield* useRunStore();
+    const fixture = yield* useDefinitionFixture();
+    const rendered: string[] = [];
+    yield* suspendedRun(root, fixture, rendered);
+    yield* deliver(root, suspensionId(root));
 
-    // The exact PR #181 head this slice branched from, and the exact main base
-    // beneath it. Recorded rather than derived: what the Planner reviewed is a
-    // commit, not whatever this checkout happens to be on.
-    expect(STACKED_BASE).toBe("525efaa736110f0ffcd5534985897d1db0692124");
-    expect(STACKED_MAIN_BASE).toBe("170a021db9d551f96f1e9bfdd9ea61f74e30e44e");
+    // The document the run started from is changed past recognition, and then
+    // removed outright. A run that read either would render something else or
+    // fail to resolve at all.
+    const document = join(fixture.repository, "workflow.md");
+    yield* writeTextFile(document, "# Not this document\n\nnothing the run retained.\n");
+    yield* rm(document, { force: true });
+    expect(yield* exists(document)).toBe(false);
 
-    // The consumer's file set, exactly. An addition or a deletion under the
-    // reviewed workflow changes this list even when every surviving file is
-    // untouched.
-    const tracked = (yield* git(toplevel, ["ls-files", "--", ...REVIEWED_CONSUMER_ROOTS]))
-      .split("\n")
-      .map((line) => line.trim())
-      .filter((line) => line.length > 0)
-      .sort();
-    expect(tracked).toEqual([...REVIEWED_CONSUMER].map(([path]) => path).sort());
+    // Ordinary resume, by run id and nothing else.
+    const resumed = yield* scheduleResume(ordinaryResume(OPTIONS, host(root), body(rendered)), {
+      runId: RUN_ID,
+    });
 
-    // And its content, exactly. `git hash-object` reads the working tree, so
-    // this holds whatever the checkout's history depth is — which matters,
-    // because CI clones one commit deep and has no reviewed base to diff
-    // against.
-    const paths = [...REVIEWED_CONSUMER].map(([path]) => path);
-    const hashed = (yield* git(toplevel, ["hash-object", "--", ...paths]))
-      .split("\n")
-      .map((line) => line.trim())
-      .filter((line) => line.length > 0);
-    expect(hashed).toHaveLength(paths.length);
-    expect(Object.fromEntries(paths.map((path, index) => [path, hashed[index]]))).toEqual(
-      Object.fromEntries(REVIEWED_CONSUMER),
-    );
+    expect(resumed.exitCode).toBe(0);
+    expect(runState(root)["status"]).toBe("completed");
+
+    // It completed from the bytes the run retains: the same authored output the
+    // document produces, rendered after its source stopped existing.
+    expect(rendered).toHaveLength(1);
+    expect(rendered[0]).toContain("decision: true");
+    expect(events(root, "workspace_file")).toHaveLength(2);
+
+    // And the answer was consumed exactly once.
+    expect(events(root, SUSPENSION_ANSWER)).toHaveLength(1);
+    expect(answerRows(root)).toHaveLength(1);
+    expect(answerRows(root)[0]?.["state"]).toBe("consumed");
   });
 });
-
-/** The exact PR #181 head this slice is stacked on. */
-const STACKED_BASE = "525efaa736110f0ffcd5534985897d1db0692124";
-
-/** The exact `main` base and merge base beneath it. */
-const STACKED_MAIN_BASE = "170a021db9d551f96f1e9bfdd9ea61f74e30e44e";
-
-/** Where the reviewed consumer lives. */
-const REVIEWED_CONSUMER_ROOTS = [
-  "workflows/adversarial-implementation",
-  "scripts/tests/adversarial-composition-workflow.test.ts",
-];
-
-/**
- * The reviewed consumer, as this slice depends on it.
- *
- * Blob object ids rather than a diff: this slice must not change the workflow
- * documents or the composition suite it depends on, and content identity says
- * so from any checkout — including CI's, which is one commit deep and cannot
- * name the base at all.
- *
- * The provenance below is unchanged: this slice was reviewed on PR #181 head
- * `525efaa7` over `170a021d`, and it still is. What has moved since are blobs,
- * and only through work reviewed in its own right — #299's R3 corrected the
- * observation instruction the Implementation stage renders and extended AC2 to
- * send it, and #292's final synchronization then made the workflow documents
- * describe the delivered revision and added `SYNC1` beside AC0–AC7, each under
- * independent Planner review. Pinning what those files hold now is what keeps
- * this case a statement about *this* slice changing them rather than a
- * statement about nobody changing them.
- */
-const REVIEWED_CONSUMER: readonly (readonly [string, string])[] = [
-  [
-    "scripts/tests/adversarial-composition-workflow.test.ts",
-    "adf7e58e609c116e2f93fb97e3592bc70756f24b",
-  ],
-  ["workflows/adversarial-implementation/Discovery.md", "eea1c650fe5a9d417595b9b457b73dc51485f05a"],
-  [
-    "workflows/adversarial-implementation/Implementation.md",
-    "65333321a163f125d6021f807ac14108e049deac",
-  ],
-  [
-    "workflows/adversarial-implementation/InstructionFiles.md",
-    "7ce93d7c1b7f79c560c9a861f27e7597697724d9",
-  ],
-  ["workflows/adversarial-implementation/Planning.md", "943cb9701e3f4a464f13606547ca319e770aecf3"],
-  [
-    "workflows/adversarial-implementation/UserCheckpoint.md",
-    "576e352ac232426c157a33be964402d600a545bc",
-  ],
-  ["workflows/adversarial-implementation/artifacts.md", "98899d95b70286851c08b5ccb10e26fd7b20e17e"],
-  [
-    "workflows/adversarial-implementation/primitives.md",
-    "9e66ca0df27608a3c2a6f2887db5b7cb4ed1e34a",
-  ],
-  ["workflows/adversarial-implementation/runtime.md", "128fb2c1337b5d78890ebc05dcfe79f7416d7f3c"],
-  ["workflows/adversarial-implementation/start.md", "b898f95188e5e1940e0e483a9ce74e69c49a53f2"],
-  [
-    "workflows/adversarial-implementation/tests/agents/checkpoint-material-choice.md",
-    "c126bdfe64c227c381317bf12338e235c52e78b5",
-  ],
-  [
-    "workflows/adversarial-implementation/tests/agents/checkpoint-no-choice.md",
-    "37233970d764ca28a82f2031361214a91f6279ee",
-  ],
-  [
-    "workflows/adversarial-implementation/tests/agents/checkpoint-twice-no-choice.md",
-    "71b960d1d9cc68e83da4a6c88a8d799a9142cde5",
-  ],
-  [
-    "workflows/adversarial-implementation/tests/agents/discovery.md",
-    "08e86c746045361ed2752ac456491d863b998348",
-  ],
-  [
-    "workflows/adversarial-implementation/tests/agents/malformed-checkpoint.md",
-    "d6c73891be4f4aa845d68e20e1ec9477ac6e1556",
-  ],
-  [
-    "workflows/adversarial-implementation/tests/agents/malformed-implementor.md",
-    "5e98acad2a2ad4747eda034f2221b7b4befaa2f8",
-  ],
-  [
-    "workflows/adversarial-implementation/tests/agents/malformed-planner.md",
-    "c62e30f33a2e05cf69d49f11f9a8de6f85eebb10",
-  ],
-  [
-    "workflows/adversarial-implementation/tests/agents/plan-converges-implementor.md",
-    "ee727a7854facfc7aee530f0c7c39ebee18fc865",
-  ],
-  [
-    "workflows/adversarial-implementation/tests/agents/plan-converges-planner.md",
-    "482312813324b7d36516e87624e172e501482f8e",
-  ],
-  [
-    "workflows/adversarial-implementation/tests/agents/revision-implementor.md",
-    "5e466bafef109db4444be51594b23e15da2820ec",
-  ],
-  [
-    "workflows/adversarial-implementation/tests/agents/revision-planner.md",
-    "fc5b99b299de2708f378ae265c55aea66d4016ab",
-  ],
-  [
-    "workflows/adversarial-implementation/tests/fixtures/AGENTS.md",
-    "5c1e220a6907494f4ec5e91aee1b321334784d3b",
-  ],
-  [
-    "workflows/adversarial-implementation/tests/fixtures/nested/AGENTS.md",
-    "ab3a7ac1b96e04e81bc463f572c7b77b19a4f711",
-  ],
-  [
-    "workflows/adversarial-implementation/tests/planning-logic.test.md",
-    "0f0bb56250e25be242ebaa8d93d76b44cad54e75",
-  ],
-];

@@ -255,7 +255,7 @@ That is the whole shape of the stage: **agents inspect; XMD mutates.**
         <If condition={turn.kind === "proposal"}>
           <Break />
           <Else>
-            <Evaluate source={turn.source} as="observation" />
+            <Evaluate text={turn.source} as="observation" />
           </Else>
         </If>
       </Loop>
@@ -302,7 +302,7 @@ That is the whole shape of the stage: **agents inspect; XMD mutates.**
         {proposalCandidate}
       </Parse>
 
-      <Evaluate source={proposal.changes} allow={["write"]} />
+      <Evaluate text={proposal.changes} allow={["write"]} />
       <Git.Add paths="." />
       <Git.Commit message={proposal.commitMessage} as="commit" />
       <Git.Push />
@@ -516,7 +516,7 @@ That is the whole shape of the stage: **agents inspect; XMD mutates.**
         <If condition={verdict.passed}>
           <Break />
           <Else>
-            <Prompt>
+            <Prompt throwOnError>
               Revise the implementation using this review:
 
               {verdict.review}
@@ -552,20 +552,33 @@ That is the whole shape of the stage: **agents inspect; XMD mutates.**
 
 ## Agents inspect; XMD mutates
 
-The implementor's proposal is XMD source, and `<Evaluate>` is what runs it. It
-is a workflow component the run's host **declares to the execution** rather than
-registering with the rest of the composition: canonical execution calls the
-host's factory with the claimant it minted and registers what comes back, so a
-run whose host declares none has no `<Evaluate>` at all. Being available is not
-being authorized — every ceiling comes from values the host captured before any
-document existed.
+The implementor's proposal is XMD source, and `<Evaluate>` is what runs it.
+`<Evaluate>` is **canonical protected core's own component**: core claims the
+name ahead of every host and author tier, so no registration, repository file,
+bundle member or declared Markdown component replaces it, and only canonical
+execution answers an import of it. Writing it therefore grants nothing. What a
+run may evaluate is the **ceiling**, which the host supplies as one
+`ExecutionInstallation.evaluation` profile captured by value before any
+installation runs — one per execution, and two are refused rather than ordered.
+A run whose host states no ceiling has no evaluation at all: `<Evaluate>`
+refuses before the producer runs rather than evaluating under a ceiling nobody
+stated.
 
-Its schema is closed: a required `source` string, an optional non-empty
-duplicate-free `allow` naming the classes `read`, `write`, or both, an ordinary
-`as`, and nothing else. It is self-closing and takes no content. **Omitting
-`allow` means exactly read-only**, which is the observation form above;
-`allow={["write"]}` is written once, on the approved proposal, and selects from
-the host's own write table rather than granting anything.
+Its schema is closed: the program as a required `text` string, an optional
+non-empty duplicate-free `allow` naming the classes `read`, `write`, or both, an
+ordinary `as`, and nothing else. `text` is the only spelling for the program.
+
+The two input forms are disjoint. Self-closing states the program as `text`; a
+**paired** element makes its own content the producer, and what that content
+renders is the program — rendered text captured through an execution-owned
+one-shot projection delivered straight to the protected body. An element stating
+both is stating the program twice and is refused rather than resolved by
+precedence, and a paired element carrying `text` is the same mistake seen from
+the other side.
+
+**Omitting `allow` means exactly read-only**, which is the observation form
+above; `allow={["write"]}` is written once, on the approved proposal, and selects
+from the host's own write table rather than granting anything.
 
 The evaluator underneath it parses the complete fragment and walks all of it
 inside the durable admission before the first effect, resolves an allowlist to
@@ -578,7 +591,7 @@ second element is an executable block performs nothing at all, however safe its
 first element was.
 
 The allowlist is authority, not prompting guidance, and a name is not an
-identity: resolution consults neither `componentDirs`, nor a registration, nor
+identity: resolution consults neither `includes`, nor a registration, nor
 the workflow component bundle, so a same-named file beside the checkout answers
 nothing. One durable event records the decision before the first admitted
 observation, carrying the exact admitted source and the normalized policy, and a
@@ -834,7 +847,7 @@ revision turn, or acceptance.
 
 | Written above | Supplied by | Status |
 | --- | --- | --- |
-| `<Evaluate source allow>` and the authored observation loop | #302 and #369, delivered by #549, #550 and #572 | shipped — declared to the execution by the workflow host |
+| `<Evaluate text allow>` and the authored observation loop | #302 and #369, delivered by #549, #550 and #572 | shipped — declared to the execution by the workflow host |
 | generated Workspace mutation admission, by class and authored form | #369, delivered by #572 | shipped — paired `<File>`, lexical `<Dir>` |
 | generated `<File.Delete>` admission | delivered by #574 | shipped — under the `write` class |
 | ordinary `<File.Delete>` | delivered by #570 | shipped — core registered component |

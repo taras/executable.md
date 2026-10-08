@@ -67,17 +67,17 @@ value — `assessment`, `recommendation`, `question`, `options`, `response`, and
 <Let as="decisionSchema" select="code[lang=json]">
 ```json
 {
-  "$schema": "http://json-schema.org/draft-07/schema#",
   "type": "object",
   "properties": {
-    "proceed": {
-      "type": "boolean",
-      "title": "Continue the workflow"
+    "choice": {
+      "type": "string",
+      "enum": ["Continue", "Stop"],
+      "title": "Continue this transition?"
     },
     "response": { "type": "string" },
     "rationale": { "type": "string" }
   },
-  "required": ["proceed", "response", "rationale"],
+  "required": ["choice", "response", "rationale"],
   "additionalProperties": false
 }
 ```
@@ -159,22 +159,28 @@ value — `assessment`, `recommendation`, `question`, `options`, `response`, and
   </Elicit>
   <Else>
     <Parse schema={decisionSchema} as="decision">
-    {"proceed": true, "response": "continue", "rationale": "The assessing agent found no material choice, so this transition needs no user decision."}
+    {"choice": "Continue", "response": "continue", "rationale": "The assessing agent found no material choice, so this transition needs no user decision."}
     </Parse>
   </Else>
 </If>
 
-<Return value={{requiresUser: assessment.requiresUser, proceed: decision.proceed, assessment: assessment.assessment, recommendation: assessment.recommendation, question: assessment.question, options: assessment.options, response: decision.response, rationale: decision.rationale}} />
+<Return value={{requiresUser: assessment.requiresUser, proceed: decision.choice === "Continue", assessment: assessment.assessment, recommendation: assessment.recommendation, question: assessment.question, options: assessment.options, response: decision.response, rationale: decision.rationale}} />
 
 ## Continuation is represented, never inferred
 
-Both branches bind `decision` against the same `decisionSchema`, so `proceed` is
-always a validated boolean that some path explicitly produced. When the agent
-reports no material choice, the `<Else>` branch parses an explicit
-`"proceed": true` with the reason recorded. Nothing reads a missing elicitation
-as consent, which is what keeps #290's "cannot become implicit approval"
-requirement intact: a transition advances because a decision said so, not
-because no decision was found.
+Both branches bind `decision` against the same `decisionSchema`, so `choice` is
+always one of exactly `"Continue"` or `"Stop"` — a value some path explicitly
+produced and the compiled schema admitted. The returned `proceed` is that choice
+read as a boolean, so callers keep gating on `checkpoint.proceed` and nothing
+else decides a transition.
+
+When the agent reports no material choice, the `<Else>` branch parses an explicit
+`"choice": "Continue"` with the reason recorded. Nothing reads a missing
+elicitation as consent, which is what keeps #290's "cannot become implicit
+approval" requirement intact: a transition advances because a decision said so,
+not because no decision was found. The enum is closed and `<Elicit>` validates
+before binding, so an invalid, absent or unanswered answer never becomes
+`proceed: true` — it is a refusal, and a refusal stops the transition.
 
 `UserInvolvementAssessment` distinguishes whether involvement is required from
 the choice itself. The caller passes the complete material to assess as the
@@ -198,7 +204,7 @@ the schema before its content expands, renders that content as the request
 message, and validates the provider's answer against the same compiled schema
 before binding it. There is no `mode`, `provider`, or `uiSchema` prop and no
 built-in approve, decline, or cancel — `decisionSchema` above defines every
-response available, and `proceed` is a field the author declared rather than a
+response available, and `choice` is a field the author declared rather than a
 built-in verb. Where the asking happens is the host's decision, made through the
 Elicitation Api: `xmd run` composes WebForm as its current provider, so this
 checkpoint opens a loopback browser form under the CLI. Only the validated

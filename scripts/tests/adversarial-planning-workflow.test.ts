@@ -291,7 +291,7 @@ function* runPlanning(): Operation<{ value: JsonObject; calls: Call[]; trace: Tr
       {
         path: root,
         stream: new InMemoryStream(),
-        componentDirs: COMPONENT_DIRS,
+        includes: COMPONENT_DIRS,
       },
       [{ components: agentIdentityComponents() }],
     );
@@ -435,7 +435,7 @@ function* runBoundary(inject?: (dir: string) => string): Operation<{ trace: Trac
       {
         path: root,
         stream: new InMemoryStream(),
-        componentDirs: COMPONENT_DIRS,
+        includes: COMPONENT_DIRS,
       },
       [{ components: agentIdentityComponents() }],
     );

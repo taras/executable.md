@@ -190,7 +190,7 @@ is render the evidence each agent needs into its prompt.
         <If condition={verdict.passed}>
           <Break />
           <Else>
-            <Prompt>
+            <Prompt throwOnError>
               Revise the implementation plan using this review:
 
               {verdict.review}

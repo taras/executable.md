@@ -184,8 +184,8 @@ asked.
 
 The `<Answers>` region here does not delegate, so a question this document did
 not anticipate fails rather than reaching a host provider. What a decline must
-never become is approval: `proceed` comes back `false`, and the caller's gate
-reads that directly.
+never become is approval: the answer is `"Stop"`, `proceed` comes back `false`,
+and the caller's gate reads that directly.
 
 <Test name="requiresUser true elicits, and an explicit decline stays false">
 
@@ -195,7 +195,7 @@ reads that directly.
   <Answers>
   <Answer
     template="{?a}QUESTION-SCOPE Should the health route be public?{?b}public{?c}internal only{?d}RECOMMEND internal only.{?e}"
-    value={{proceed: false, response: "internal only", rationale: "RATIONALE-DECLINE the public surface is out of scope"}}
+    value={{choice: "Stop", response: "internal only", rationale: "RATIONALE-DECLINE the public surface is out of scope"}}
   />
 
   <UserCheckpoint

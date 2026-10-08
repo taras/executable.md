@@ -35,12 +35,12 @@ import type {
 } from "@executablemd/core";
 import type { Stream } from "effection";
 import { executeInstalled } from "@executablemd/core/host";
-import type { WorkflowBundleComponent } from "@executablemd/core/host";
+import type { ExecutionInstallation, WorkflowBundleComponent } from "@executablemd/core/host";
 import type { DurableEvent, Json } from "@executablemd/durable-streams";
 import { useHostFiles } from "@executablemd/runtime";
 import {
   createSuspensionController,
-  evaluationComponents,
+  evaluationProfile,
   useWorkflowInputDelivery,
   useWorkflowRunHost,
 } from "@executablemd/workflow/deno";
@@ -50,14 +50,28 @@ import type { SuspensionNotice } from "@executablemd/workflow/deno";
 // owns, and deliberately offers no member for a substituted Git host or
 // Git-host transport — which is exactly what a leaf substitution is.
 import { withWorkflowWorkspace } from "../../packages/workflow/src/deno/workspace/host.ts";
-import type { WorkflowWorkspaceOptions } from "../../packages/workflow/src/deno/workspace/host.ts";
+// Git providers reach the run through the Workspace attachment this package
+// names, exactly as `xmd workflow` attaches them. The leaf substitutions this
+// suite makes are configuration for that attachment rather than members of the
+// Workspace's own options.
+import { gitDirectoryEntry } from "@executablemd/git";
+import { gitWorkspaceAttachment } from "@executablemd/git/deno";
+import type { GitWorkspaceOptions } from "@executablemd/git/deno";
 import {
   parseWorkflowDefinition,
+  sourceBundleHash,
+  sourceContentHash,
   SUSPENSION_REQUEST,
   WorkflowInputDelivery,
   WorkflowLifecycle,
 } from "@executablemd/workflow";
-import type { WorkflowRunDatabase } from "@executablemd/workflow";
+import type {
+  WorkflowDefinition,
+  WorkflowRun,
+  WorkflowRunCreation,
+  WorkflowRunDatabase,
+  WorkflowRunRecord,
+} from "@executablemd/workflow";
 import { retainedWorkflowInstallation } from "../../packages/workflow/src/run.ts";
 import {
   createRun,
@@ -65,24 +79,23 @@ import {
   withStorage,
 } from "../../packages/cli/tests/support/workflow-run.ts";
 import { useTempDirectory } from "@executablemd/test-support/temp";
-import { remoteRefs, useBareRemote } from "../../packages/workflow/tests/support/git-remotes.ts";
-import type { BareRemote } from "../../packages/workflow/tests/support/git-remotes.ts";
-import { countingHost } from "../../packages/workflow/tests/support/composition.ts";
-import { gitHubStore, respond } from "../../packages/workflow/tests/support/github.ts";
-import type { GitHubStore } from "../../packages/workflow/tests/support/github.ts";
-import { gitHubSource } from "../../packages/workflow/src/deno/composition/github.ts";
-import { GIT_HOST_EFFECT } from "../../packages/workflow/src/git-host/effect.ts";
-import { parseGitHostReconciliationRecord } from "../../packages/workflow/src/git-host/records.ts";
+import { remoteRefs, useBareRemote } from "../../packages/git/tests/support/git-remotes.ts";
+import type { BareRemote } from "../../packages/git/tests/support/git-remotes.ts";
+import { countingHost, gitPluginAdmissions } from "../../packages/git/tests/support/composition.ts";
+import { gitHubStore, respond } from "../../packages/git/tests/support/github.ts";
+import type { GitHubStore } from "../../packages/git/tests/support/github.ts";
+import { gitHubSource } from "../../packages/git/src/deno/composition/github.ts";
+import { GIT_HOST_EFFECT, parseGitHostReconciliationRecord } from "@executablemd/git";
 import type {
   GitHubAccess,
   GitHubHttpRequest,
   GitHubHttpResponse,
-} from "../../packages/workflow/src/deno/composition/github.ts";
+} from "../../packages/git/src/deno/composition/github.ts";
 import type {
   GitInvocation,
   GitOutcome,
   RepositoryHost,
-} from "../../packages/workflow/src/deno/composition/host.ts";
+} from "../../packages/git/src/deno/composition/host.ts";
 
 /** The checkout this suite reads its subject out of. */
 const REPOSITORY_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
@@ -103,14 +116,23 @@ const README_LINE = "Deployment note: the health route is not documented yet.";
 /** The five authored stages, read from the files that ship. */
 const STAGES = ["Discovery", "Implementation", "InstructionFiles", "Planning", "UserCheckpoint"];
 
+/**
+ * The five shipped stages, under the identity their own bytes have.
+ *
+ * Derived rather than numbered: `sourceContentHash()` is what Workflow
+ * recomputes on the way in, so a stage whose text changes changes its identity
+ * here too — which is the point. A counted placeholder would let a retained
+ * definition name bytes that are no longer the bytes that ship.
+ */
 function* bundle(): Operation<readonly WorkflowBundleComponent[]> {
+  const encoder = new TextEncoder();
   const components: WorkflowBundleComponent[] = [];
-  for (const [index, name] of STAGES.entries()) {
+  for (const name of STAGES) {
     const content = yield* readTextFile(join(WORKFLOW, `${name}.md`));
     components.push({
       name,
       path: `workflows/adversarial-implementation/${name}.md`,
-      sourceHash: `${index + 1}`.repeat(40),
+      sourceHash: yield* sourceContentHash(encoder.encode(content)),
       content,
     });
   }
@@ -452,6 +474,9 @@ function runComposition(script: Script): Operation<Attempt> {
           },
         });
         try {
+          // The Plugin, where a command installs it: its declarations register in
+          // this scope, which encloses the Workspace attachment below.
+          const git = yield* gitPluginAdmissions();
           output = yield* withWorkflowWorkspace(
             database,
             scoped(function* () {
@@ -460,31 +485,18 @@ function runComposition(script: Script): Operation<Attempt> {
                   {
                     ...retainedSource(ROOT_PATH, source),
                     stream: database.journal,
-                    componentDirs: [],
+                    includes: [],
                     props: {
                       request: "add a health endpoint",
                       repository: remote.locator,
                       tracker: "https://example.invalid/p/issues",
                     },
                   },
-                  [
-                    { bundle: { components } },
-                    retainedWorkflowInstallation({
-                      runId: database.record.runId,
-                      base: database.record.base,
-                      pinnedCommit: database.record.definition.objectId,
-                    }),
-                    {
-                      components: [
-                        ...evaluationComponents(database, {}),
-                        ...agentIdentityComponents(),
-                      ],
-                    },
-                  ],
+                  yield* installation(database, components, git),
                 ),
               );
             }),
-            {},
+            { attachments: [gitWorkspaceAttachment({})] },
           );
         } catch (error) {
           failure = error instanceof Error ? error.message : String(error);
@@ -557,7 +569,7 @@ interface Forge {
   readonly calls: string[];
   /** Every Git command the real host ran, in order. */
   readonly commands: string[][];
-  readonly options: WorkflowWorkspaceOptions;
+  readonly options: GitWorkspaceOptions;
 }
 
 /** The five evidence endpoints, and nothing else this suite cans. */
@@ -779,8 +791,11 @@ function forge(remote: BareRemote, evidence: readonly Evidence[]): Forge {
     commands,
     options: {
       composition: { host: forgeHost(remote, calls, commands) },
-      gitHubPullRequests: { allowed: [LOCATOR], access },
-      gitHubIssues: { ceiling: [TRACKER], access },
+      // The transport is injected; what is allowed and where the API lives are
+      // configuration, so the suite states them the way a deployment would have
+      // written them rather than writing them into this process.
+      gitHubPullRequests: { configuration: { allowed: [LOCATOR] }, access },
+      gitHubIssues: { configuration: { ceiling: [TRACKER] }, access },
     },
   };
 }
@@ -979,22 +994,48 @@ const SEED = {
 } as const;
 
 /**
- * What a host installs for this document: the bundle, the run, and the two
- * component sets a workflow execution declares.
+ * The retained run value a record installs under.
+ *
+ * Its bundle hash and exact target, and nothing invented beside them: a `base`
+ * or a `pinnedCommit` here would be a repository state the run never had, read
+ * back by anything comparing identity as though it had.
  */
-function installation(
+function retainedRunValue(record: WorkflowRunRecord): WorkflowRun {
+  return {
+    runId: record.runId,
+    bundleHash: record.definition.bundleHash,
+    ...(record.definition.targetPath === undefined
+      ? {}
+      : { targetPath: record.definition.targetPath }),
+  };
+}
+
+/**
+ * What a host installs for this document: the bundle, the run, and the
+ * evaluation ceiling and component set a workflow execution declares.
+ *
+ * An operation, because the ceiling is the host's to resolve once at assembly:
+ * `evaluationProfile()` reads this run's own transport and Fetch timeout, and
+ * one execution accepts exactly one such ceiling.
+ */
+function* installation(
   database: WorkflowRunDatabase,
   components: readonly WorkflowBundleComponent[],
-) {
+  git: ExecutionInstallation,
+): Operation<ExecutionInstallation[]> {
   return [
     { bundle: { components } },
-    retainedWorkflowInstallation({
-      runId: database.record.runId,
-      base: database.record.base,
-      pinnedCommit: database.record.definition.objectId,
-    }),
+    retainedWorkflowInstallation(retainedRunValue(database.record)),
+    // What the Git Plugin contributes to this execution's admissions. Its
+    // declarations were registered by the caller, in the scope that encloses
+    // the Workspace attachment, because that is where a command installs them.
+    git,
     {
-      components: [...evaluationComponents(database, {}), ...agentIdentityComponents()],
+      // The directory entry comes from the package that owns `<Dir>`, exactly
+      // as `xmd workflow` supplies it: a host that states none grants none, and
+      // this suite is standing in for the host that does.
+      evaluation: yield* evaluationProfile(database, { directory: gitDirectoryEntry() }),
+      components: [...agentIdentityComponents()],
     },
   ];
 }
@@ -1019,6 +1060,9 @@ function runForge(forged: Forge, script: Script): Operation<Attempt> {
           },
         });
         try {
+          // The Plugin, where a command installs it: its declarations register in
+          // this scope, which encloses the Workspace attachment below.
+          const git = yield* gitPluginAdmissions();
           output = yield* withWorkflowWorkspace(
             database,
             scoped(function* () {
@@ -1027,14 +1071,14 @@ function runForge(forged: Forge, script: Script): Operation<Attempt> {
                   {
                     ...retainedSource(ROOT_PATH, source),
                     stream: database.journal,
-                    componentDirs: [],
+                    includes: [],
                     props: PROPS,
                   },
-                  installation(database, components),
+                  yield* installation(database, components, git),
                 ),
               );
             }),
-            forged.options,
+            { attachments: [gitWorkspaceAttachment(forged.options)] },
           );
         } catch (error) {
           failure = error instanceof Error ? error.message : String(error);
@@ -1063,18 +1107,36 @@ function runForge(forged: Forge, script: Script): Operation<Attempt> {
 /** The default run a single-run scenario uses; AC6 names one run per gate. */
 const RUN_ID = "adversarial-composition";
 
-function definition() {
+/**
+ * The descriptor this suite's runs are runs of, and the bytes behind it.
+ *
+ * Derived from the shipped root rather than written beside it, so the bundle
+ * hash the run retains is the one those bytes really produce — which is what
+ * the begin transition verifies before it writes anything.
+ */
+function* creation(source: string): Operation<WorkflowRunCreation> {
+  const bytes = new TextEncoder().encode(source);
+  const sources = [
+    {
+      path: ROOT_PATH,
+      sourceHash: yield* sourceContentHash(bytes),
+      byteLength: bytes.byteLength,
+    },
+  ];
   const parsed = parseWorkflowDefinition({
-    version: 1,
-    kind: "git",
-    objectFormat: "sha1",
-    objectId: "1".repeat(40),
-    rootDocumentPath: ROOT_PATH,
+    hashAlgorithm: "sha256",
+    bundleHash: yield* sourceBundleHash({ entrypoint: ROOT_PATH, sources }),
+    entrypoint: ROOT_PATH,
+    sources,
   });
   if (!parsed.ok) {
     throw parsed.error;
   }
-  return parsed.value;
+  return {
+    definition: parsed.value,
+    sourceSnapshot: [{ path: ROOT_PATH, bytes }],
+    props: PROPS,
+  };
 }
 
 interface Suspending extends Attempt {
@@ -1114,7 +1176,7 @@ function attemptRun(
         ? {
             runId,
             action,
-            creation: { definition: definition(), base: "main", props: PROPS },
+            creation: yield* creation(yield* readTextFile(join(WORKFLOW, "start.md"))),
           }
         : { runId, action },
     );
@@ -1143,6 +1205,9 @@ function attemptRun(
                     options: { defaultAgent: "stub", permissionMode: "deny-all" },
                   },
                 });
+                // The Plugin, where a command installs it: its declarations register in
+                // this scope, which encloses the Workspace attachment below.
+                const git = yield* gitPluginAdmissions();
                 output = yield* withWorkflowWorkspace(
                   database,
                   scoped(function* () {
@@ -1151,14 +1216,14 @@ function attemptRun(
                         {
                           ...retainedSource(ROOT_PATH, source),
                           stream: database.journal,
-                          componentDirs: [],
+                          includes: [],
                           props: PROPS,
                         },
-                        installation(database, components),
+                        yield* installation(database, components, git),
                       ),
                     );
                   }),
-                  forged.options,
+                  { attachments: [gitWorkspaceAttachment(forged.options)] },
                 );
               });
             }),
@@ -1285,6 +1350,9 @@ describe("Tier AC — the adversarial workflow, composed", () => {
         yield* useHostFiles();
         yield* installAgentComponents({ defaultAgent: "stub", permissionMode: "deny-all" });
         try {
+          // The Plugin, where a command installs it: its declarations register in
+          // this scope, which encloses the Workspace attachment below.
+          const git = yield* gitPluginAdmissions();
           output = yield* withWorkflowWorkspace(
             database,
             scoped(function* () {
@@ -1293,31 +1361,18 @@ describe("Tier AC — the adversarial workflow, composed", () => {
                   {
                     ...retainedSource(ROOT_PATH, source),
                     stream: database.journal,
-                    componentDirs: [],
+                    includes: [],
                     props: {
                       request: "add a health endpoint",
                       repository: remote.locator,
                       tracker: "https://example.invalid/p/issues",
                     },
                   },
-                  [
-                    { bundle: { components } },
-                    retainedWorkflowInstallation({
-                      runId: database.record.runId,
-                      base: database.record.base,
-                      pinnedCommit: database.record.definition.objectId,
-                    }),
-                    {
-                      components: [
-                        ...evaluationComponents(database, {}),
-                        ...agentIdentityComponents(),
-                      ],
-                    },
-                  ],
+                  yield* installation(database, components, git),
                 ),
               );
             }),
-            {},
+            { attachments: [gitWorkspaceAttachment({})] },
           );
         } catch (error) {
           failure = error instanceof Error ? error.message : String(error);
@@ -1554,42 +1609,48 @@ describe("Tier AC — the adversarial workflow, composed", () => {
     expect(effectSequence(attempt.events)).toEqual([
       "0 workspace_repository",
       "1 workspace_worktree",
+      // Three reads of the Workspace before anything is prompted: `<Dir>`
+      // ensuring the checkout it installs as cwd, the instruction `<Glob>`, and
+      // the one `AGENTS.md` that glob found. The ensure is an effect because
+      // `<Dir>` creates its target, so arranging the directory is a mutation
+      // the run retains rather than a fact it assumes.
       "2 workspace_file",
       "3 workspace_file",
-      "4 agent_prompt",
+      "4 workspace_file",
       "5 agent_prompt",
       "6 agent_prompt",
       "7 agent_prompt",
       "8 agent_prompt",
       "9 agent_prompt",
       "10 agent_prompt",
-      "11 generated_xmd",
-      "12 workspace_file",
-      "13 workspace_git_add",
-      "14 workspace_git_commit",
-      "15 git_host_effect",
+      "11 agent_prompt",
+      "12 generated_xmd",
+      "13 workspace_file",
+      "14 workspace_git_add",
+      "15 workspace_git_commit",
       "16 git_host_effect",
-      "17 pull_request_read",
+      "17 git_host_effect",
       "18 pull_request_read",
       "19 pull_request_read",
-      "20 agent_prompt",
+      "20 pull_request_read",
       "21 agent_prompt",
       "22 agent_prompt",
       "23 agent_prompt",
-      "24 generated_xmd",
-      "25 workspace_file",
-      "26 workspace_git_add",
-      "27 workspace_git_commit",
-      "28 git_host_effect",
+      "24 agent_prompt",
+      "25 generated_xmd",
+      "26 workspace_file",
+      "27 workspace_git_add",
+      "28 workspace_git_commit",
       "29 git_host_effect",
-      "30 pull_request_read",
+      "30 git_host_effect",
       "31 pull_request_read",
       "32 pull_request_read",
+      "33 pull_request_read",
       // The second verdict, its review checkpoint, and the acceptance
       // checkpoint `start.md` reaches once the loop breaks.
-      "33 agent_prompt",
       "34 agent_prompt",
       "35 agent_prompt",
+      "36 agent_prompt",
     ]);
 
     // Two commits, and they are different: the second proposal was admitted
@@ -1753,7 +1814,7 @@ describe("Tier AC — the adversarial workflow, composed", () => {
 
     const before = forged.calls.length;
     yield* answer(root, suspensionId, {
-      proceed: true,
+      choice: "Continue",
       response: "RESPONSE-ACCEPTED",
       rationale: "RATIONALE-THE-CHECKS-ARE-UNDERSTOOD",
     });
@@ -1854,7 +1915,7 @@ describe("Tier AC — the adversarial workflow, composed", () => {
     yield* answer(
       root,
       suspensionId,
-      { proceed: false, response: `RESPONSE-DECLINED-${gate.name.toUpperCase()}`, rationale },
+      { choice: "Stop", response: `RESPONSE-DECLINED-${gate.name.toUpperCase()}`, rationale },
       runId,
     );
     const resumed = yield* attemptRun(root, "resume", forged, script, runId);
@@ -1881,7 +1942,7 @@ describe("Tier AC — the adversarial workflow, composed", () => {
    * "stopped" after having already pushed.
    *
    * Every gate here is a real `<Elicit>` under the workflow host — the only way
-   * to reach `proceed: false`, since the authored `<Else>` branch always parses
+   * to reach a `"Stop"` choice, since the authored `<Else>` branch always parses
    * an explicit `true`. So each case is a supervised run: start, suspend,
    * deliver a typed answer out of band, resume.
    *
@@ -2039,7 +2100,7 @@ describe("Tier AC — the adversarial workflow, composed", () => {
       yield* answer(
         root,
         suspensionId,
-        { proceed: false, response: "RESPONSE-DECLINED-ACCEPTANCE", rationale },
+        { choice: "Stop", response: "RESPONSE-DECLINED-ACCEPTANCE", rationale },
         runId,
       );
       const resumed = yield* attemptRun(root, "resume", forged, script, runId);
@@ -2342,7 +2403,7 @@ const OWNED_DOCUMENTS: readonly OwnedDocument[] = [
   {
     path: "architecture.md",
     requires: [
-      "which is also where the complete adversarial implementation loop is built",
+      "the complete adversarial implementation loop is built in this revision",
       "Status is measured against the revision containing this document",
       "Mutation-proposal admission is built",
       "workflow-bundled Markdown component admission",

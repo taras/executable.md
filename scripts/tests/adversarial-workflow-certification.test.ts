@@ -65,7 +65,10 @@ import process from "node:process";
 import { fileURLToPath } from "node:url";
 import { ordinaryResume, scheduleResume } from "../../packages/cli/src/scheduling.ts";
 import { useDenoWorkflowHost } from "../../packages/cli/src/deno-workflow.ts";
-import type { HelperAssembly } from "@executablemd/workflow/credential-helper";
+import { installPlugins } from "../../packages/cli/src/plugin-host.ts";
+import type { CommandPlugins } from "../../packages/cli/src/plugin-host.ts";
+import { gitPlugin } from "@executablemd/git";
+import type { HelperAssembly } from "@executablemd/git/credential-helper";
 import type { WorkflowExecution } from "../../packages/cli/src/workflow.ts";
 import { agentIdentityComponents, collect } from "@executablemd/core";
 import { executeInstalled } from "@executablemd/core/host";
@@ -73,10 +76,10 @@ import { Err, Ok } from "effection";
 import type { Result } from "effection";
 import { readRunDatabase } from "../../packages/cli/tests/support/run-database.ts";
 import { workflowRunPath } from "@executablemd/workflow/deno";
-import { gitHubStore, respond } from "../../packages/workflow/tests/support/github.ts";
-import type { GitHubStore } from "../../packages/workflow/tests/support/github.ts";
-import { remoteRefs, useBareRemote } from "../../packages/workflow/tests/support/git-remotes.ts";
-import type { BareRemote } from "../../packages/workflow/tests/support/git-remotes.ts";
+import { gitHubStore, respond } from "../../packages/git/tests/support/github.ts";
+import type { GitHubStore } from "../../packages/git/tests/support/github.ts";
+import { remoteRefs, useBareRemote } from "../../packages/git/tests/support/git-remotes.ts";
+import type { BareRemote } from "../../packages/git/tests/support/git-remotes.ts";
 
 const ROOT = fileURLToPath(new URL("../../", import.meta.url));
 
@@ -203,8 +206,9 @@ const TWO_REPOSITORIES = [
  *
  * It speaks the agent half of ACP over newline-delimited JSON-RPC on stdio —
  * `initialize`, `session/new`, `session/load`, `session/close`,
- * `session/prompt`, and a native permission request when it is told to ask for
- * one — and it decides nothing. Every turn is answered by the controller in the
+ * `session/prompt`, the acceptance notification that materializes a session,
+ * and a native permission request when it is told to ask for one — and it
+ * decides nothing. Every turn is answered by the controller in the
  * test process, which is what makes the conversation scripted and the trace
  * complete.
  *
@@ -320,6 +324,23 @@ while (true) {
     } else if (message.method === "session/close") {
       send({ jsonrpc: "2.0", id: message.id, result: {} });
     } else if (message.method === "session/prompt") {
+      // This agent takes the turn the moment it is asked, so acceptance is
+      // reported here — before the turn runs and before anything it produces.
+      // A client that withholds a session's durable identity until a
+      // conversation really exists waits for exactly this notification, and a
+      // turn that ends without it leaves the session unmaterialized however
+      // well the reply went.
+      send({
+        jsonrpc: "2.0",
+        method: "session/update",
+        params: {
+          sessionId: message.params.sessionId,
+          update: {
+            sessionUpdate: "session_info_update",
+            _meta: { "executablemd.session-materialization/v1": { state: "accepted" } },
+          },
+        },
+      });
       const answer = await ask("prompt", { content: text(message.params.prompt) });
       if (answer.requestsTool) {
         permissions += 1;
@@ -389,6 +410,39 @@ interface Controller {
 }
 
 /**
+ * One request body, with the listeners that collected it removed again.
+ *
+ * Declared at module scope and returning a plain promise: these listeners
+ * belong to the request rather than to any Effection scope, and each path out
+ * detaches all three — so nothing stays attached to a stream the server has
+ * finished with, and a request that errors is not collected forever.
+ */
+function readRequestBody(incoming: IncomingMessage): Promise<Buffer> {
+  return new Promise<Buffer>((resolve, reject) => {
+    const chunks: Buffer[] = [];
+    const onData = (chunk: Buffer): void => {
+      chunks.push(chunk);
+    };
+    const detach = (): void => {
+      incoming.off("data", onData);
+      incoming.off("end", onEnd);
+      incoming.off("error", onError);
+    };
+    function onEnd(): void {
+      detach();
+      resolve(Buffer.concat(chunks));
+    }
+    function onError(error: Error): void {
+      detach();
+      reject(error);
+    }
+    incoming.on("data", onData);
+    incoming.on("end", onEnd);
+    incoming.on("error", onError);
+  });
+}
+
+/**
  * The controller every generated agent answers through.
  *
  * One loopback server rather than a scripted file, because the answer a turn
@@ -400,10 +454,8 @@ function useController(answer: (turn: { role: string; content: string }) => Answ
   return resource<Controller>(function* (provide) {
     const contacts: Contact[] = [];
     const server = createServer((incoming: IncomingMessage, outgoing: ServerResponse) => {
-      const chunks: Buffer[] = [];
-      incoming.on("data", (chunk: Buffer) => chunks.push(chunk));
-      incoming.on("end", () => {
-        const body = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+      void readRequestBody(incoming).then((collected) => {
+        const body = JSON.parse(collected.toString("utf8"));
         const payload = (body.payload ?? {}) as Record<string, unknown>;
         const answered =
           body.kind === "prompt"
@@ -642,9 +694,7 @@ function useForge(store: GitHubStore): Operation<Forge> {
     const requests: string[] = [];
     let origin = "";
     const server = createServer((incoming: IncomingMessage, outgoing: ServerResponse) => {
-      const chunks: Buffer[] = [];
-      incoming.on("data", (chunk: Buffer) => chunks.push(chunk));
-      incoming.on("end", () => {
+      void readRequestBody(incoming).then((collected) => {
         const url = new URL(incoming.url ?? "/", "http://127.0.0.1");
         requests.push(`${incoming.method} ${url.pathname}`);
         const headers: Record<string, string> = {};
@@ -743,7 +793,7 @@ function useForge(store: GitHubStore): Operation<Forge> {
               incoming.method === "POST" ? "POST" : incoming.method === "PATCH" ? "PATCH" : "GET",
             url: `${origin}${incoming.url ?? "/"}`,
             headers,
-            body: Buffer.concat(chunks).toString("utf8"),
+            body: collected.toString("utf8"),
           });
         }
         outgoing.writeHead(answer.status, {
@@ -880,7 +930,7 @@ function useFixture(
 
     const remote = yield* useBareRemote(SEED);
     const store = gitHubStore({ owner: "owner", repository: "repository", token: TOKEN });
-    store.resolveHead = (branch) => remoteRefs(remote).get(`refs/heads/${branch}`);
+    store.resolveHead = (branch: string) => remoteRefs(remote).get(`refs/heads/${branch}`);
     const forge = yield* useForge(store);
     const controller = yield* useController(scripted(script));
 
@@ -1201,13 +1251,6 @@ function* journaled(
   });
 }
 
-function* answerRows(fixture: Fixture, runId: string): Operation<unknown[]> {
-  return yield* readRunDatabase(
-    workflowRunPath(fixture.runs, runId),
-    (database) => database.prepare("SELECT * FROM workflow_suspension_answers").all() as unknown[],
-  );
-}
-
 /** The commit each `<Git.Commit>` retained, in journal order. */
 function commitsRetained(events: readonly Record<string, unknown>[]): string[] {
   return events
@@ -1245,8 +1288,19 @@ function lastForkable(written: string): string {
   return id;
 }
 
-/** The document executor both entry points run. */
-function documentExecutor(): (execution: WorkflowExecution) => Operation<Result<void>> {
+/**
+ * The document executor an entry point runs, under the Plugins it installed.
+ *
+ * `plugins` is a parameter because `<Repository>`, `<Worktree>`, `<Dir>` and the
+ * Git operations beside them are the Git Plugin's declarations: the host
+ * attaches the providers that perform them, and nothing else declares the
+ * names. An executor handed none runs a document in which they resolve to
+ * nothing, which is not an error anywhere — the element simply expands to no
+ * content, and a replay reports that as the root returning early.
+ */
+function documentExecutor(
+  plugins: CommandPlugins,
+): (execution: WorkflowExecution) => Operation<Result<void>> {
   return function* (execution): Operation<Result<void>> {
     return yield* execution.around(
       call(function* (): Operation<Result<void>> {
@@ -1258,12 +1312,19 @@ function documentExecutor(): (execution: WorkflowExecution) => Operation<Result<
           yield* collect(
             yield* executeInstalled(
               { ...execution.root, stream: execution.stream, props: execution.props },
-              // What the entrypoint declares beside the run's own
-              // installations: `<Session>` names durable work after its own
-              // invocation, so the execution has to be told about it before
-              // anything else is installed — and a continuation that is not
-              // told cannot replay the turns that were taken under it.
-              [...execution.installations, { components: agentIdentityComponents() }],
+              [
+                // First, as the command installed them, so the run's own
+                // admissions are strictly nested inside the vocabulary they
+                // are written in.
+                ...plugins.installations,
+                ...execution.installations,
+                // What the entrypoint declares beside the run's own
+                // installations: `<Session>` names durable work after its own
+                // invocation, so the execution has to be told about it before
+                // anything else is installed — and a continuation that is not
+                // told cannot replay the turns that were taken under it.
+                { components: agentIdentityComponents() },
+              ],
             ),
           );
           return Ok(undefined);
@@ -1302,7 +1363,7 @@ describe("Tier CF — the supervised workflow, certified from outside", () => {
           "certification",
           suspension,
           JSON.stringify({
-            proceed: true,
+            choice: "Continue",
             response: "AUTHORIZED",
             rationale: "CERTIFICATION-AUTHORIZATION-RATIONALE",
           }),
@@ -1414,7 +1475,7 @@ describe("Tier CF — the supervised workflow, certified from outside", () => {
         expect(cwd.startsWith(fixture.definition)).toBe(false);
         const meta = Object(session["_meta"]);
         const instructions = String(Reflect.get(meta, "systemPrompt"));
-        expect(instructions).toContain("no native tool authority");
+        expect(instructions).toContain("no native tool permissions here");
         expect(instructions).toContain("A request for a native tool permission is denied");
         const claude = Object(Reflect.get(Object(Reflect.get(meta, "claudeCode")), "options"));
         expect(Reflect.get(claude, "allowedTools")).toEqual([]);
@@ -1531,7 +1592,7 @@ describe("Tier CF — the supervised workflow, certified from outside", () => {
         "scheduled",
         suspension,
         JSON.stringify({
-          proceed: true,
+          choice: "Continue",
           response: "ACCEPTED",
           rationale: "CERTIFICATION-ACCEPTANCE-RATIONALE",
         }),
@@ -1548,11 +1609,21 @@ describe("Tier CF — the supervised workflow, certified from outside", () => {
     // ordinary resume this host built and answers with its outcome.
     const outcome = yield* scoped(function* () {
       yield* useFixtureEnvironment(fixture);
+      // Installed once, in the scope that encloses the resume and therefore
+      // above the Workspace attachment the host makes inside it — which is
+      // where a command installs its Plugins. The argv carries the command
+      // token because the Plugin reads the action out of it: this vocabulary is
+      // declared for `workflow start`, `resume` and `fork`, and for no other
+      // workflow action.
+      const plugins = yield* installPlugins([gitPlugin], {
+        command: "workflow",
+        args: ["workflow", "resume", "scheduled"],
+      });
       const host = yield* useDenoWorkflowHost(HELPER);
       const resume = ordinaryResume(
         { verbose: false, raw: false, secretDetection: true },
         host,
-        documentExecutor(),
+        documentExecutor(plugins),
       );
       return yield* scheduleResume(resume, { runId: "scheduled" });
     });
@@ -1565,14 +1636,7 @@ describe("Tier CF — the supervised workflow, certified from outside", () => {
     // The answer is published on the coroutine that waited rather than on the
     // root, so it is counted where the run keeps it: one answer event, and
     // one delivery, claimed once.
-    console.log("=== answers table", JSON.stringify(yield* answerRows(fixture, "scheduled")));
-    const finalStatus = yield* status(fixture, DENO_SOURCE, "scheduled");
-    console.log(
-      "=== final status",
-      JSON.stringify(Reflect.get(Object(Reflect.get(finalStatus, "record")), "status")),
-    );
-    const replayed = yield* fixture.run(DENO_SOURCE, ["workflow", "resume", "scheduled"]);
-    console.log("=== replay stdout tail", replayed.stdout.slice(-400));
+    yield* fixture.run(DENO_SOURCE, ["workflow", "resume", "scheduled"]);
     expect(yield* journaled(fixture, "scheduled", "suspension_answer")).toHaveLength(1);
     const completed = yield* status(fixture, DENO_SOURCE, "scheduled");
     expect(Reflect.get(Object(Reflect.get(completed, "record")), "status")).toBe("completed");
@@ -1661,7 +1725,6 @@ describe("Tier CF — the supervised workflow, certified from outside", () => {
     // A run nobody had to be asked about, so it completes in one execution.
     const fixture = yield* useFixture({ observations: 1, findings: [DEFERRED] });
     const completed = yield* fixture.run(DENO_SOURCE, startArguments("accepted"));
-    console.log("=== forge log\n", fixture.forge.requests.join("\n"));
     expectExit(completed, 0);
     expect(completed.stdout).toContain("# Accepted");
 
@@ -1747,7 +1810,7 @@ describe("Tier CF — the supervised workflow, certified from outside", () => {
         "secret",
         suspension,
         JSON.stringify({
-          proceed: true,
+          choice: "Continue",
           response: `ghp_${"A".repeat(36)}`,
           rationale: "a token in an answer",
         }),
