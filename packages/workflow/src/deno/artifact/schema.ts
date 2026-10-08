@@ -48,14 +48,11 @@ export const XMD_ARTIFACT_APPLICATION_ID = 0x584d4441;
 /** The only container schema version this build reads or writes. */
 export const XMD_ARTIFACT_CONTAINER_VERSION = 1;
 
-/** The artifact format a Git-definition run is sealed as. */
+/** The only semantic artifact format this build reads or writes. */
 export const XMD_ARTIFACT_FORMAT_VERSION = 1;
 
-/** The artifact format a source-bundle run is sealed as. */
-export const XMD_ARTIFACT_SOURCE_BUNDLE_FORMAT_VERSION = 2;
-
-/** Every semantic artifact format this build reads or writes. */
-export type XmdArtifactFormatVersion = 1 | 2;
+/** The semantic artifact format, of which there is one. */
+export type XmdArtifactFormatVersion = 1;
 
 /** The extension the public format is named by. */
 export const XMD_ARTIFACT_EXTENSION = ".xmd";
@@ -207,16 +204,13 @@ export function verifyXmdArtifactFormatVersion(
   stored: number,
   path: string,
 ): XmdArtifactFormatVersion {
-  // The physical container stays at version 1 for both. Format 2 is a different
-  // set of records inside the same layout, so a build that reads one layout may
-  // still meet a semantic version it cannot verify.
+  // The semantic format is a set of records inside the container layout, so a
+  // build that reads one layout may still meet a semantic version it cannot
+  // verify. There is one, and a file declaring any other is refused.
   if (stored === XMD_ARTIFACT_FORMAT_VERSION) {
-    return 1;
+    return XMD_ARTIFACT_FORMAT_VERSION;
   }
-  if (stored === XMD_ARTIFACT_SOURCE_BUNDLE_FORMAT_VERSION) {
-    return 2;
-  }
-  throw new XmdArtifactFormatVersionError(path, stored, XMD_ARTIFACT_SOURCE_BUNDLE_FORMAT_VERSION);
+  throw new XmdArtifactFormatVersionError(path, stored, XMD_ARTIFACT_FORMAT_VERSION);
 }
 
 /**

@@ -30,9 +30,9 @@ import { GitQuery } from "@executablemd/git/api";
 import type { WorkflowRunDatabase } from "@executablemd/workflow";
 import { collect, inlineSource, registerComponents } from "@executablemd/core";
 import { executeInstalled } from "@executablemd/core/host";
-import { readLegacyDefinitionSource } from "../src/workflow-source.ts";
 import { runWorkflow } from "../src/workflow.ts";
 import type { WorkflowExecution, WorkflowHost, WorkflowRequest } from "../src/workflow.ts";
+import { retainedSource } from "../../workflow/tests/support/storage.ts";
 
 interface Fixture {
   readonly repository: string;
@@ -269,10 +269,10 @@ interface Attachment {
 function liveHost(root: string, attachment: Attachment): WorkflowHost {
   return {
     useRunHost(): Operation<WorkflowExecutionTransitions> {
-      return useWorkflowRunHost({ root, legacySource: readLegacyDefinitionSource });
+      return useWorkflowRunHost({ root });
     },
     useLifecycle(): Operation<void> {
-      return useWorkflowLifecycle({ root, legacySource: readLegacyDefinitionSource });
+      return useWorkflowLifecycle({ root });
     },
     useDelivery(): Operation<void> {
       return useWorkflowInputDelivery({ root });
@@ -348,10 +348,11 @@ function lifecycleRows(path: string): { status: string; executions: string[] } {
 }
 
 function* startedRun(root: string, repository: string, objectId: string): Operation<string> {
+  const retained = yield* retainedSource("workflow.md", "recorded\n");
+
   return yield* scoped(function* () {
     const transitions = yield* useWorkflowRunHost({
       root,
-      legacySource: readLegacyDefinitionSource,
     });
     const runId = randomUUID();
     const acquired = yield* WorkflowLifecycle.operations.acquireExecutor(runId);
@@ -362,14 +363,8 @@ function* startedRun(root: string, repository: string, objectId: string): Operat
       runId,
       action: "start",
       creation: {
-        base: "main",
-        definition: {
-          version: 1,
-          kind: "git",
-          objectFormat: "sha1",
-          objectId,
-          rootDocumentPath: "flow.md",
-        },
+        definition: retained.definition,
+        sourceSnapshot: retained.sourceSnapshot,
         props: {},
         retrieval: { kind: "local-checkout", checkout: repository },
       },
@@ -412,7 +407,7 @@ describe("Tier WFC3 — cancelling a run that is settling into a suspension", ()
           events: [],
           *onRelease(): Operation<void> {
             yield* scoped(function* () {
-              yield* useWorkflowLifecycle({ root, legacySource: readLegacyDefinitionSource });
+              yield* useWorkflowLifecycle({ root });
               refusal = yield* WorkflowLifecycle.operations.cancel(runId);
             });
             duringRows = lifecycleRows(path);

@@ -26,7 +26,7 @@ import { SUSPENSION_ANSWER } from "../../src/suspension/answer.ts";
 import { parseSuspensionRequest, suspensionRequestFingerprint } from "../../src/suspension/api.ts";
 import { SUSPENSION_REQUEST, suspensionId } from "../../src/suspension/suspend.ts";
 import { parseWorkflowDefinition } from "../../src/storage/definition.ts";
-import type { GitWorkflowDefinitionV1 } from "../../src/storage/definition.ts";
+import type { WorkflowDefinition } from "../../src/storage/definition.ts";
 import {
   compareUtf8,
   encodeWorkspaceManifest,
@@ -38,7 +38,6 @@ import type {
   XmdArtifactAgentPortability,
 } from "../../src/deno/artifact/mod.ts";
 import type { AgentSessionRecord } from "../../src/deno/workspace/agent-sessions.ts";
-import { isGitWorkflowDefinition } from "../../mod.ts";
 import type { Operation } from "effection";
 import { parseSourceBundleDefinition, sourceBundleHash, sourceContentHash } from "../../mod.ts";
 
@@ -212,31 +211,66 @@ function sourced(event: DurableEvent, line: number): DurableEvent {
   };
 }
 
-export function definitionOf(
-  overrides: Partial<GitWorkflowDefinitionV1> = {},
-): GitWorkflowDefinitionV1 {
+const ROOT_DOCUMENT = "# Release\n\n<Checklist />\n";
+const CHECKLIST = "- [ ] tag\n";
+const UNUSED = "This component was declared and never expanded.\n";
+
+/** Every path this fixture's bundle retains, in canonical order. */
+const RETAINED: readonly { readonly path: string; readonly content: string }[] = [
+  { path: "workflows/Checklist.md", content: CHECKLIST },
+  { path: "workflows/Unused.md", content: UNUSED },
+  { path: "workflows/release.md", content: ROOT_DOCUMENT },
+];
+
+/**
+ * The identity those exact bytes produce, computed once rather than invented.
+ *
+ * An artifact is verified against its descriptor when it is read, so a fixture
+ * whose hashes do not describe its own content seals nothing a reader accepts.
+ */
+const SOURCE_HASHES: Readonly<Record<string, string>> = {
+  "workflows/Checklist.md": "07015f69ff64556e40f1b662664edb371917dfd9ce736564de0c7cc31dbdaf03",
+  "workflows/Unused.md": "fd7e3b692ffc1862cc4dd847afa694d10e19805796a27aef21698e3654a63a3a",
+  "workflows/release.md": "e155d8bf3842de569979f953b92bbf3cc7d5db68d9468b77a8ef7bc2ad5e8f23",
+};
+const FIXTURE_BUNDLE_HASH = "fee1b10874315dcbd100bb36a32b4fcc1d5d727da63250e99286036a62d9f25f";
+
+export function definitionOf(overrides: Record<string, unknown> = {}): WorkflowDefinition {
   const parsed = parseWorkflowDefinition({
-    version: 1,
-    kind: "git",
-    objectFormat: "sha1",
-    objectId: PINNED_COMMIT,
-    rootDocumentPath: "workflows/release.md",
+    hashAlgorithm: "sha256",
+    bundleHash: FIXTURE_BUNDLE_HASH,
+    entrypoint: "workflows/release.md",
+    sources: RETAINED.map((entry) => ({
+      path: entry.path,
+      sourceHash: SOURCE_HASHES[entry.path],
+      byteLength: new TextEncoder().encode(entry.content).byteLength,
+    })),
     targetPath: "release-steps",
     components: [
-      { name: "Checklist", path: "workflows/Checklist.md", sourceHash: gitBlobId(CHECKLIST) },
-      { name: "Unused", path: "workflows/Unused.md", sourceHash: gitBlobId(UNUSED) },
+      { name: "Checklist", path: "workflows/Checklist.md" },
+      { name: "Unused", path: "workflows/Unused.md" },
     ],
     ...overrides,
   });
   if (!parsed.ok) {
     throw parsed.error;
   }
-  // Narrowed rather than asserted: the parser answers with either version, and
-  // these fixtures describe the Git one.
-  if (!isGitWorkflowDefinition(parsed.value)) {
-    throw new Error("expected a Git workflow definition");
-  }
   return parsed.value;
+}
+
+/** The retained closure those sources are, as the store hands it back. */
+export function retainedSourcesOf(): {
+  definition: WorkflowDefinition;
+  sources: readonly { path: string; bytes: Uint8Array }[];
+} {
+  const encoder = new TextEncoder();
+  return {
+    definition: definitionOf(),
+    sources: RETAINED.map((entry) => ({
+      path: entry.path,
+      bytes: encoder.encode(entry.content),
+    })),
+  };
 }
 
 /**
@@ -275,10 +309,6 @@ export const SUSPENSIONS = {
     { type: "string" },
   ),
 } as const;
-
-const ROOT_DOCUMENT = "# Release\n\n<Checklist />\n";
-const CHECKLIST = "- [ ] tag\n";
-const UNUSED = "This component was declared and never expanded.\n";
 
 /**
  * The whole snapshot, once.
@@ -398,7 +428,6 @@ export function richArtifact(): DetachedXmdArtifact {
     run: {
       runId: RUN_ID,
       definition,
-      base: "main",
       props: { channel: "stable", retries: 2 },
       status: "suspended",
       stopReason: { kind: "journal", eventId: "event-7" },
@@ -474,34 +503,7 @@ export function richArtifact(): DetachedXmdArtifact {
       },
     ],
     agentSessions: [agentSession()],
-    definition: {
-      definitionVersion: 1,
-      definition: definitionOf(),
-      closure: {
-        root: {
-          objectFormat: "sha1",
-          pinnedCommit: PINNED_COMMIT,
-          rootDocumentPath: "workflows/release.md",
-          targetPath: "release-steps",
-          blobId: gitBlobId(ROOT_DOCUMENT),
-          content: ROOT_DOCUMENT,
-        },
-        components: [
-          {
-            name: "Checklist",
-            path: "workflows/Checklist.md",
-            blobId: gitBlobId(CHECKLIST),
-            content: CHECKLIST,
-          },
-          {
-            name: "Unused",
-            path: "workflows/Unused.md",
-            blobId: gitBlobId(UNUSED),
-            content: UNUSED,
-          },
-        ],
-      },
-    },
+    definition: retainedSourcesOf(),
   };
 }
 
@@ -741,8 +743,6 @@ export function* sourceBundleArtifact(): Operation<DetachedXmdArtifact> {
   ];
   const bundleHash = yield* sourceBundleHash({ entrypoint: FIXTURE_BUNDLE_PATH, sources });
   const parsed = parseSourceBundleDefinition({
-    version: 2,
-    kind: "source-bundle",
     hashAlgorithm: "sha256",
     bundleHash,
     entrypoint: FIXTURE_BUNDLE_PATH,
@@ -769,7 +769,6 @@ export function* sourceBundleArtifact(): Operation<DetachedXmdArtifact> {
       updatedAt,
     },
     definition: {
-      definitionVersion: 2,
       definition: parsed.value,
       sources: [{ path: FIXTURE_BUNDLE_PATH, bytes }],
     },

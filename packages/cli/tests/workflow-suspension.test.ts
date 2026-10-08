@@ -64,7 +64,6 @@ import type {
 } from "@executablemd/core";
 import type { Stream } from "effection";
 import { createHash } from "node:crypto";
-import { readLegacyDefinitionSource } from "../src/workflow-source.ts";
 import { establishDefinition } from "../src/workflow-definition.ts";
 import { runWorkflow } from "../src/workflow.ts";
 import type {
@@ -75,6 +74,7 @@ import type {
   WorkflowStart,
 } from "../src/workflow.ts";
 import { runWorkflowManagement } from "../src/workflow-management.ts";
+import { retainedSource } from "../../workflow/tests/support/storage.ts";
 
 const SCHEMA = { type: "object", properties: { approved: { type: "boolean" } } };
 
@@ -115,10 +115,10 @@ function useRunStore(): Operation<string> {
 function host(root: string, events: string[] = []): WorkflowHost {
   return {
     useRunHost(): Operation<WorkflowExecutionTransitions> {
-      return useWorkflowRunHost({ root, legacySource: readLegacyDefinitionSource });
+      return useWorkflowRunHost({ root });
     },
     useLifecycle(): Operation<void> {
-      return useWorkflowLifecycle({ root, legacySource: readLegacyDefinitionSource });
+      return useWorkflowLifecycle({ root });
     },
     useDelivery(): Operation<void> {
       return useWorkflowInputDelivery({ root });
@@ -287,10 +287,11 @@ function retained(path: string): Retained {
  * below resume is an ordinary retained run rather than a fixture shape.
  */
 function* createRun(root: string, fixture: Fixture): Operation<string> {
+  const retained = yield* retainedSource("workflow.md", fixture.contents);
+
   return yield* scoped(function* () {
     const transitions = yield* useWorkflowRunHost({
       root,
-      legacySource: readLegacyDefinitionSource,
     });
     const runId = crypto.randomUUID();
     const acquired = yield* WorkflowLifecycle.operations.acquireExecutor(runId);
@@ -304,14 +305,8 @@ function* createRun(root: string, fixture: Fixture): Operation<string> {
       runId,
       action: "start",
       creation: {
-        base: "main",
-        definition: {
-          version: 1,
-          kind: "git",
-          objectFormat: "sha1",
-          objectId: fixture.objectId,
-          rootDocumentPath: "workflow.md",
-        },
+        definition: retained.definition,
+        sourceSnapshot: retained.sourceSnapshot,
         props: {},
         retrieval: { kind: "local-checkout", checkout: fixture.repository },
       },
@@ -511,7 +506,7 @@ describe("Tier WFS — a suspended run and its no-input resumes", () => {
     // The lock is free. Acquisition refuses outright while an executor holds
     // it, so acquiring at all is the proof it was released.
     yield* scoped(function* () {
-      yield* useWorkflowLifecycle({ root, legacySource: readLegacyDefinitionSource });
+      yield* useWorkflowLifecycle({ root });
       const acquired = yield* WorkflowLifecycle.operations.acquireExecutor(runId);
       expect(acquired.ok).toBe(true);
       expect(acquired.ok && acquired.value.kind).toBe("acquired");
@@ -730,7 +725,7 @@ describe("Tier WFS — a suspended run and its no-input resumes", () => {
     // And the real wait, answered while a live workflow executor holds the
     // lock. Delivery never asks for it, so holding it changes nothing.
     const delivered = yield* scoped(function* () {
-      yield* useWorkflowLifecycle({ root, legacySource: readLegacyDefinitionSource });
+      yield* useWorkflowLifecycle({ root });
       const acquired = yield* WorkflowLifecycle.operations.acquireExecutor(runId);
       expect(acquired.ok && acquired.value.kind).toBe("acquired");
       return yield* manage(
@@ -799,7 +794,7 @@ const CHECKPOINT = `<File path="notes.md">
 the change is ready
 </File>
 
-<Evaluate source={"<File path=\\"notes.md\\" />"} allow={["read"]} as="observed" />
+<Evaluate text={"<File path=\\"notes.md\\" />"} allow={["read"]} as="observed" />
 
 <Agent name="codex">
   <Prompt as="verdict" throwOnError>
@@ -890,10 +885,10 @@ function* useStubAgent(calls: AgentCalls): Operation<void> {
 function productionHost(root: string, calls: AgentCalls, events: string[] = []): WorkflowHost {
   return {
     useRunHost(): Operation<WorkflowExecutionTransitions> {
-      return useWorkflowRunHost({ root, legacySource: readLegacyDefinitionSource });
+      return useWorkflowRunHost({ root });
     },
     useLifecycle(): Operation<void> {
-      return useWorkflowLifecycle({ root, legacySource: readLegacyDefinitionSource });
+      return useWorkflowLifecycle({ root });
     },
     useDelivery(): Operation<void> {
       return useWorkflowInputDelivery({ root });
@@ -1202,7 +1197,7 @@ describe("Tier CKX — a checkpoint a document asked for", () => {
     // The lock is free: acquisition refuses outright while an executor holds
     // it, so acquiring at all is the proof it was released.
     yield* scoped(function* () {
-      yield* useWorkflowLifecycle({ root, legacySource: readLegacyDefinitionSource });
+      yield* useWorkflowLifecycle({ root });
       const acquired = yield* WorkflowLifecycle.operations.acquireExecutor(runId);
       expect(acquired.ok).toBe(true);
       expect(acquired.ok && acquired.value.kind).toBe("acquired");
@@ -1392,7 +1387,7 @@ decision: {decision.proceed}
     {
       what: "read",
       componentName: "Observe",
-      component: `<Evaluate source={"<File path=\\"notes.md\\" />"} allow={["read"]} as="observed" />\n`,
+      component: `<Evaluate text={"<File path=\\"notes.md\\" />"} allow={["read"]} as="observed" />\n`,
       setup: `
 <File path="notes.md">
 the retained note
@@ -1404,7 +1399,7 @@ the retained note
     {
       what: "write",
       componentName: "Propose",
-      component: `<Evaluate source={"<File path=\\"proposed.md\\">a generated proposal</File>"} allow={["write"]} as="observed" />\n`,
+      component: `<Evaluate text={"<File path=\\"proposed.md\\">a generated proposal</File>"} allow={["write"]} as="observed" />\n`,
       setup: "",
       nested: [{ operation: "write", target: "proposed.md" }],
       files: 2,
@@ -1526,7 +1521,7 @@ the retained note
     store: string,
   ): Operation<{ runId: string; path: string; rendered: string[]; calls: AgentCalls }> {
     const fixture = yield* useCheckpointFixture(bundledRoot("", "Propose"), {
-      Propose: `<Evaluate source={"<Dir path=\\"generated\\">\\n\\n<File path=\\"inside.md\\">from the fragment</File>\\n\\n</Dir>"} allow={["write"]} as="observed" />\n`,
+      Propose: `<Evaluate text={"<Dir path=\\"generated\\">\\n\\n<File path=\\"inside.md\\">from the fragment</File>\\n\\n</Dir>"} allow={["write"]} as="observed" />\n`,
     });
     yield* useRepositoryGit(fixture.repository);
 

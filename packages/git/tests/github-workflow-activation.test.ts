@@ -124,7 +124,6 @@ describe("the bundled profile, assembled", () => {
         function* (begun) {
           // Pinned so this cannot regress to a v1 run silently. A v1 record
           // would render the same and prove nothing about the bundle path.
-          expect(begun.database.record.definition.version).toBe(2);
 
           const rendered = yield* scoped(function* () {
             yield* refusing();

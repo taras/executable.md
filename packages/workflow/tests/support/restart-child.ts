@@ -8,7 +8,7 @@
  * observes them from outside.
  *
  * ```sh
- * deno run -A restart-child.ts <root> <run-id> <marker-file> [base]
+ * deno run -A restart-child.ts <root> <run-id> <marker-file> [channel]
  * ```
  *
  * The workflow performs one durable operation whose side effect is a line
@@ -16,9 +16,9 @@
  * is the restart question: a replay that re-executes a recorded operation
  * writes twice, and a replay that restores it writes once.
  *
- * `base` exists so two processes can race to create the same run id with
- * different immutable identity. One of them must win and the other must be
- * told it conflicts.
+ * `channel` exists so two processes can race to create the same run id on
+ * different immutable terms. One of them must win and the other must be told
+ * it conflicts.
  *
  * A storage refusal is reported on standard output rather than thrown, because
  * the caller is comparing two processes' outcomes and a refusal is one of them.
@@ -29,17 +29,28 @@ import process from "node:process";
 import { durableCall, durableRun } from "@executablemd/durable-streams";
 import type { Workflow } from "@executablemd/durable-streams";
 import { main, until } from "effection";
-import { isGitWorkflowRunRecord, WorkflowLifecycle, WorkflowStorageError } from "../../mod.ts";
+import { WorkflowLifecycle, WorkflowStorageError } from "../../mod.ts";
 import { useWorkflowRunHost } from "../../deno.ts";
-import { legacySourceReader } from "./legacy-source.ts";
 
+const ENTRYPOINT = "workflows/release.md";
+const ENTRYPOINT_TEXT = "# Release\n";
 const DEFINITION = {
-  version: 1,
-  kind: "git",
-  objectFormat: "sha1",
-  objectId: "9fceb02d0ae598e95dc970b74767f19372d61af8",
-  rootDocumentPath: "workflows/release.md",
+  hashAlgorithm: "sha256",
+  bundleHash: "e22b9d94280c8b07aac19569452576323e1662e729d36609f72fd8be44a74d6c",
+  entrypoint: ENTRYPOINT,
+  sources: [
+    {
+      path: ENTRYPOINT,
+      sourceHash: "b78cd463c5885c1b595de07f665ce82b61df6636eb8c5f00cf11985cbfeb986d",
+      byteLength: 10,
+    },
+  ],
 } as const;
+
+/** The snapshot those sources are; the create transition recomputes them. */
+function snapshot(): { path: string; bytes: Uint8Array }[] {
+  return [{ path: ENTRYPOINT, bytes: new TextEncoder().encode(ENTRYPOINT_TEXT) }];
+}
 
 /**
  * Three durable operations, so replay has an order to preserve.
@@ -68,11 +79,11 @@ function work(marker: string): () => Workflow<string> {
 main(function* () {
   // `process.argv` rather than `Deno.args`: this file is Deno-only to run, and
   // still has to typecheck under the Node project like every other source.
-  const [root, runId, marker, base = "main"] = process.argv.slice(2);
+  const [root, runId, marker, channel = "stable"] = process.argv.slice(2);
 
   // The whole host, because beginning a run is a lifecycle transition and the
   // executor lock is what authorizes it — here exactly as in production.
-  const transitions = yield* useWorkflowRunHost({ root, legacySource: legacySourceReader() });
+  const transitions = yield* useWorkflowRunHost({ root });
 
   const acquired = yield* WorkflowLifecycle.operations.acquireExecutor(runId);
   if (!acquired.ok) {
@@ -87,7 +98,7 @@ main(function* () {
   const opened = yield* transitions.begin(executorLock, {
     runId,
     action: "start",
-    creation: { definition: DEFINITION, base, props: { channel: "stable" } },
+    creation: { definition: DEFINITION, sourceSnapshot: snapshot(), props: { channel } },
   });
   if (!opened.ok) {
     if (opened.error instanceof WorkflowStorageError) {
@@ -113,20 +124,17 @@ main(function* () {
     throw entries.error;
   }
 
-  // This child restarts a version-1 run, so its record narrows to one before the
-  // base is reported. A version-2 record has none to report.
+  // What the winner's run was created on, so the caller can tell which of two
+  // racing processes got there first.
   const record = database.record;
-  if (!isGitWorkflowRunRecord(record)) {
-    throw new Error(`expected a Git run record, got ${record.definition.kind}`);
-  }
 
   console.log(
     JSON.stringify({
       value,
-      base: record.base,
       // The record settlement returned, not the handle's snapshot from when the
       // execution began — that one still says `running`.
       status: settled.value.status,
+      channel: record.props["channel"],
       events: entries.value.map((entry) => ({
         eventId: entry.eventId,
         type: entry.event.type,

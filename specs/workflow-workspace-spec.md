@@ -121,18 +121,15 @@ from the workflow host, not from another spelling of `<File>` or `<Git.Commit>`.
 
 ## 3. Workflow lifecycle
 
-The immutable workflow definition is established by the workflow-run contract
-and comes in two versions. A **source bundle** is the exact bytes the run
-retains, addressed by logical paths; a **Git** definition is the source
-repository, pinned commit and root document path. Neither is an implicit
-Repository inside the Workspace. Repository components may therefore open two or
+The immutable workflow definition is established by the workflow-run contract: a
+**source bundle**, the exact bytes the run retains, addressed by logical paths.
+It is not an implicit Repository inside the Workspace. Repository components may therefore open two or
 more unrelated repositories without changing definition or run identity.
 
 `xmd workflow start` establishes a source bundle. Its argument is a document
 reference — a path, optionally followed by `#` and one target selector — and the
 file's current bytes are what the run is of, whether or not that file is tracked,
-committed or inside a repository at all. Existing version-1 runs keep their
-definition, their identity and their behavior exactly.
+committed or inside a repository at all.
 
 When the definition names one **document target**, that exact canonical target
 is part of it and therefore part of definition identity. A run of one section
@@ -146,11 +143,9 @@ whatever the same glob would name against a later checkout.
 
 Every source check happens under the executor lock and **before** stale
 recovery, a new document-execution record, Workspace attachment, journal replay
-or root import. A source-bundle run's retained content is re-derived from its own
-store; a version-1 run's Markdown crosses the host-supplied legacy reader and its
-answer is validated against the descriptor. A host that installed no such reader
-cannot begin, fork or stage a version-1 run at all, and says so rather than
-admitting one without knowing what it executes.
+or root import. A run's retained content is re-derived from its own store, so no
+host supplies a source capability and nothing reaches a repository to begin,
+fork or stage a run.
 
 A failure there leaves the run exactly as it was: no execution record, no
 Workspace attached, no status published. Nothing falls back to the original
@@ -190,10 +185,6 @@ declares no `workflow` member is a run with no bundle and writes no `components`
 member at all; an explicitly empty mapping is refused rather than becoming a
 second spelling of the same thing. A declaration may not claim structural
 syntax, a component the engine supplies, or a name the host reserved.
-
-A version-1 run keeps its own form of the same rule: each path is normalized
-inside the pinned commit and read from it, and the blob's own object ID is the
-component's source hash.
 
 Because the hash is identity, changing what a component says changes the
 definition. A run of one bundle and a run of another are different runs, exactly
@@ -638,8 +629,7 @@ retained failure, and that does not make the run eligible for `resume`.
   specifier, an absolute path and a path that walks the tree are each refused
   rather than repaired.
 - A declared component that is not readable Markdown beside the root refuses
-  the `start` before storage is created and before any component code runs. A
-  version-1 run applies the same rule to the pinned commit.
+  the `start` before storage is created and before any component code runs.
 - The command exists on every runtime and the capability on one: the Deno
   entrypoint and the compiled binary own the local run store, and Node and Bun
   refuse before creating or executing anything.
@@ -667,10 +657,10 @@ retained events allow.
 
 The component bundle is built: a root declares one, `start` reads it from beside
 the root, the definition retains its bytes, and `resume` and completed replay
-execute the closure the lifecycle authenticated. A version-1 run's bundle is
-reconstructed from its pinned commit through the host's legacy source reader. The adversarial implementation loop those five
-stage names describe is not — its scheduling and unattended continuation belong
-to the durable-suspension stack. Generated-XMD admission is built for both
+execute the closure the lifecycle authenticated. The adversarial implementation
+loop those five stage names describe is not — its scheduling and unattended
+continuation belong to the durable-suspension stack. Generated-XMD admission is
+built for both
 effect classes (§8.4): a fragment observes under `read` and mutates the run's
 own Workspace under `write`.
 
@@ -839,55 +829,38 @@ Co-location does not make arbitrary filesystem content journal data.
 
 ### 5.1 What the run record holds
 
-The run's own record is the part of that database the lifecycle reads, and it is
-a closed alternative on the definition version it retains. Both members hold the
-immutable definition and the normalized props; the current status and its stop
-reason; one document-execution record per start and per resume; replaceable
-retrieval metadata; and the filtered journal. A **version-1** record also holds
-the definition base. A **version-2** record holds no base and no pinned commit:
-those are Git fields, and a synthetic one would name a repository state the run
-never had.
+The run's own record is the part of that database the lifecycle reads. It holds
+the immutable definition and the normalized props; the current status and its
+stop reason; one document-execution record per start and per resume; replaceable
+retrieval metadata; and the filtered journal. It holds no base and no pinned
+commit: a run starts from exact retained bytes rather than from a repository
+state, so a member naming one would be a claim about a repository the run never
+had.
 
-The immutable definition is a closed alternative on the same split.
-
-A **version-1** descriptor names an object format, an object ID and the
-repository-relative root document path. Its component bundle is an array sorted
-by component name, each entry holding that name, its canonical
-repository-relative path inside the pinned commit, and the blob's object ID
-under the descriptor's own object format. Where that object can be fetched from,
-and where it is checked out on one machine, are retrieval metadata:
-replaceable, free of credentials, reauthorized by the host before use, and
-excluded from the comparison that decides whether a reused run ID addresses the
-same run.
-
-A **version-2** descriptor is a source bundle: a hash algorithm, a bundle hash,
-a logical entrypoint, and a canonically ordered manifest holding each source's
+The immutable definition is a source bundle: a hash algorithm, a bundle hash, a
+logical entrypoint, and a canonically ordered manifest holding each source's
 logical path, its domain-separated content hash and its byte length. Its
 component bundle maps each declared name onto a logical path the same manifest
 retains. The bytes behind every path are retained with the run, so nothing has
 to be fetched at all; an optional credential-free provenance observation lives
-in the same replaceable metadata boundary and is never read back to find the
-source.
+in a replaceable metadata boundary, free of credentials, reauthorized by the
+host before use, excluded from the comparison that decides whether a reused run
+ID addresses the same run, and never read back to find the source.
 
-In both versions the bundle is a member of the descriptor rather than a version
-past it, so a definition retained before bundles existed parses unchanged and
-identifies a run closed over no components; an empty array is not a second
-spelling of that and is refused. A repository locator is part of neither.
+The bundle is a member of the descriptor rather than a version past it, so a
+definition closed over no components identifies exactly that; an empty array is
+not a second spelling of it and is refused. A repository locator is part of
+neither.
 
-Compatible reuse compares the run ID, the whole descriptor including its version
-and kind and its component bundle, and the normalized props, canonically. **The
-base takes part only when both sides are version-1 runs**; a source bundle has
-none, so nothing is compared about one. A version-2 comparison covers the bundle
-hash, the entrypoint, the complete canonical source manifest, the component
-mapping and the exact presence and value of the target — the manifest whole,
-even though the bundle hash commits to it, because a hash is not a reason to
-admit a retained structure that disagrees with itself.
+Compatible reuse compares the run ID, the whole descriptor including its
+component bundle, and the normalized props, canonically. The comparison covers
+the bundle hash, the entrypoint, the complete canonical source manifest, the
+component mapping and the exact presence and value of the target — the manifest
+whole, even though the bundle hash commits to it, because a hash is not a reason
+to admit a retained structure that disagrees with itself.
 
-Two descriptors of different versions are never one run. A cross-version reuse
-conflicts as `definition` and is not then asked about a base one of them does
-not have. A changed component name, path, source hash or component set conflicts
-as `definition` in either version, and the refusal names that field rather than
-any value behind it. Status, stop reason, retrieval metadata, provenance,
+A changed component name, path or component set conflicts as `definition`, and
+the refusal names that field rather than any value behind it. Status, stop reason, retrieval metadata, provenance,
 timestamps, document executions and journal records are excluded, so a completed
 run asked for again is found rather than refused.
 
@@ -1996,7 +1969,7 @@ reached, and the fragment performs nothing.
 
 #### The authored loop, and where it is written
 
-The host adds no control flow. `<Evaluate source={…} />` is the workflow host's
+The host adds no control flow. `<Evaluate text={…} />` is the workflow host's
 component an authored document writes where an observation should happen — the
 host declares it and canonical execution registers it (below) — and everything
 around it is ordinary Markdown:
@@ -2008,7 +1981,7 @@ around it is ordinary Markdown:
 <If condition={turn.kind === "proposal"}>
 <Break />
 </If>
-<Evaluate source={turn.source} as="observation" />
+<Evaluate text={turn.source} as="observation" />
 </Loop>
 ```
 
@@ -2031,7 +2004,7 @@ not a fragment anybody handed it. A write-enabled invocation is written the same
 way, with the class it draws on stated where a reader can see it:
 
 ```md
-<Evaluate source={proposal.changes} allow={["write"]} />
+<Evaluate text={proposal.changes} allow={["write"]} />
 ```
 
 It answers with a detached value, not text:
@@ -2323,8 +2296,8 @@ key: those are two namespaces that happen to share a prefix.
 journal sequence, and joining the two orders them. There is no second positional
 field to disagree with the journal.
 
-**The table is acquired, not inherited.** Every version-1 database written before
-checkpoints existed is still exactly the run it was, so its absence means zero
+**The table is acquired, not inherited.** A database written before checkpoints
+existed is still exactly the run it was, so its absence means zero
 associations. Read-only status, history and replay treat an absent table as zero
 associations and leave the file exactly as they found it. The table appears the
 first time a run has something to put in it, created inside the same transaction
@@ -2424,23 +2397,16 @@ Before any of that, a run closed over a component bundle obtains it, by the
 version it retains — under the executor lock, before a document-execution record
 is begun, before a Workspace is attached and before anything is appended.
 
-A **version-2** run authenticates it from its own retained source BLOBs. Every
-retained length and content hash is recomputed from the bytes the run holds, and
-so is the bundle hash over the resulting manifest and mapping. Nothing is read
-from a repository, from the file the run was started from, or from the files its
-components were read beside — all three may have been edited, moved or deleted,
-and none of them is what the run is a run of. Missing content and content that
-no longer describes itself are distinct refusals, and neither falls back to any
-other source.
+A run authenticates it from its own retained source BLOBs. Every retained length
+and content hash is recomputed from the bytes the run holds, and so is the bundle
+hash over the resulting manifest and mapping. Nothing is read from a repository,
+from the file the run was started from, or from the files its components were
+read beside — all three may have been edited, moved or deleted, and none of them
+is what the run is a run of. Missing content and content that no longer
+describes itself are distinct refusals, and neither falls back to any other
+source.
 
-A **version-1** run reconstructs it from the retained commit through the
-host-supplied legacy source reader, and Workflow recomputes every returned blob
-identity from the bytes that came back before comparing it with the retained
-source hash. The working tree and the current `HEAD` are not consulted. A host
-that installed no such reader cannot obtain a version-1 bundle at all and says
-so rather than proceeding without one.
-
-Either way the obtained bundle then holds the retained history to itself — a
+The obtained bundle then holds the retained history to itself — a
 recorded import naming a component the bundle does not declare, or holding a
 different path, hash or source, appends nothing and invokes nothing.
 
@@ -3076,10 +3042,8 @@ nor `--at`.
 ### 11.1 What a fork retains
 
 A fork is a new immutable WorkflowRun identity. It holds a new run ID, the
-supplied definition entire — its complete component bundle, and whatever else
-that version is made of: a source bundle's manifest and retained bytes, or a
-version-1 definition's base and pinned commit — the merged normalized props, its
-lineage, and a journal made of two records it writes for itself followed by
+supplied definition entire — its complete component bundle, its manifest and its
+retained bytes — the merged normalized props, its lineage, and a journal made of two records it writes for itself followed by
 everything it inherited.
 
 The two records are its own `workflow_run` and its own root import. The first is
@@ -3155,9 +3119,8 @@ or death after it leaves a valid fork under ordinary lifecycle and recovery
 rules. Live document execution begins only after that commit.
 
 Reusing a caller-selected fork ID is compatible only when the source run, the
-checkpoint, the definition including its version and its component bundle, and
-the normalized props all agree — and, for a version-1 definition, its base and
-pinned commit as well. A request differing in any one of them
+checkpoint, the definition including its component bundle, and the normalized
+props all agree. A request differing in any one of them
 is refused before anything is written, and the refusal names the term that
 differs rather than collapsing them into one cause.
 

@@ -1,10 +1,10 @@
 /**
  * Tier RR — installing a run that already exists.
  *
- * `workflowInstallation({ base })` lets the first live execution decide what the run is:
- * it allocates an identifier and resolves the base through Git. A workflow host
- * has already done both by the time a document runs — storage answered with the
- * run id, and the definition was established from a commit it pinned — so
+ * A live execution could be the thing that decides what the run is, allocating
+ * an identifier and establishing a definition as it goes. A workflow host has
+ * already done both by the time a document runs — storage answered with the run
+ * id, and the definition was established from the bytes it retained — so
  * nothing is left to decide, and a journal that records a different run is not
  * this run's journal.
  *
@@ -45,8 +45,7 @@ const OTHER_COMMIT = "1111111111111111111111111111111111111111";
 
 const RETAINED: WorkflowRun = Object.freeze({
   runId: "release-1.4",
-  base: "main",
-  pinnedCommit: COMMIT,
+  bundleHash: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
 });
 
 /** A Git that fails the test if anything consults it. */
@@ -252,7 +251,7 @@ function shiftingJournal(events: readonly DurableEvent[], reads: string[]): Dura
       get result(): Result {
         const runId = reads.length === 0 ? "release-1.4" : "release-1.5";
         reads.push(runId);
-        return { status: "ok", value: { runId, base: "main", pinnedCommit: COMMIT } };
+        return { status: "ok", value: { runId, bundleHash: RETAINED.bundleHash } };
       },
     };
   };
@@ -343,8 +342,7 @@ describe("Tier RR — retained workflow runs", () => {
     expect(attempt.seen).toEqual([RETAINED]);
     expect(recordedRun(stream)).toEqual({
       runId: "release-1.4",
-      base: "main",
-      pinnedCommit: COMMIT,
+      bundleHash: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
     });
     expect(workflowEvents(stream)).toHaveLength(1);
   });
@@ -387,17 +385,20 @@ describe("Tier RR — retained workflow runs", () => {
     expect(attempt.seen).toEqual([]);
   });
 
-  it("RR5: refuses a journal recording a different base or pinned commit", function* () {
+  it("RR5: refuses a journal recording a different bundle or target", function* () {
     const first = new InMemoryStream();
     yield* runRetained(RETAINED, first);
 
-    const base = yield* runRetained({ ...RETAINED, base: "release/1.4" }, partial(first));
-    expect(base.thrown).toBeInstanceOf(StaleInputError);
-    expect(base.thrown instanceof Error ? base.thrown.message : "").toContain("base");
+    const bundle = yield* runRetained(
+      { ...RETAINED, bundleHash: "ab".padEnd(64, "0") },
+      partial(first),
+    );
+    expect(bundle.thrown).toBeInstanceOf(StaleInputError);
+    expect(bundle.thrown instanceof Error ? bundle.thrown.message : "").toContain("bundleHash");
 
-    const pinned = yield* runRetained({ ...RETAINED, pinnedCommit: OTHER_COMMIT }, partial(first));
-    expect(pinned.thrown).toBeInstanceOf(StaleInputError);
-    expect(pinned.thrown instanceof Error ? pinned.thrown.message : "").toContain("pinnedCommit");
+    const targeted = yield* runRetained({ ...RETAINED, targetPath: "Release" }, partial(first));
+    expect(targeted.thrown).toBeInstanceOf(StaleInputError);
+    expect(targeted.thrown instanceof Error ? targeted.thrown.message : "").toContain("targetPath");
   });
 
   it("RR6: refuses a record that does not describe a workflow run at all", function* () {
@@ -728,7 +729,12 @@ describe("Tier RR — retained workflow runs", () => {
     // Admission agreed with that settlement, so nothing was refused...
     expect(attempt.thrown).toBeUndefined();
     // ...and the guard was handed the same settled value, not a second look.
-    expect(observed).toEqual([{ runId: "release-1.4", base: "main", pinnedCommit: COMMIT }]);
+    expect(observed).toEqual([
+      {
+        runId: "release-1.4",
+        bundleHash: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+      },
+    ]);
     expect(attempt.seen).toEqual([]);
   });
 
@@ -789,8 +795,7 @@ describe("Tier RR — retained workflow runs", () => {
       {
         says: "a getter refuses",
         value: () => ({
-          base: "main",
-          pinnedCommit: COMMIT,
+          bundleHash: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
           get runId(): never {
             throw new Error("PLANTED-GETTER");
           },
@@ -879,8 +884,7 @@ describe("Tier RR — retained workflow runs", () => {
   // is a sentence rather than the host's own exception.
   it("RR22: refuses a retained run whose members refuse to be read", function* () {
     const hostile = {
-      base: "main",
-      pinnedCommit: COMMIT,
+      bundleHash: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
       get runId(): never {
         throw new Error("PLANTED-INSTALL-GETTER");
       },
@@ -933,8 +937,7 @@ describe("Tier RR — retained workflow runs", () => {
       try {
         const workflow = retainedWorkflowInstallation({
           runId: "",
-          base: "main",
-          pinnedCommit: COMMIT,
+          bundleHash: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
         });
         return undefined;
       } catch (error) {
@@ -945,11 +948,7 @@ describe("Tier RR — retained workflow runs", () => {
 
     const unpinned = yield* scoped(function* () {
       try {
-        const workflow = retainedWorkflowInstallation({
-          runId: "r",
-          base: "main",
-          pinnedCommit: "",
-        });
+        const workflow = retainedWorkflowInstallation({ runId: "r", bundleHash: "" });
         return undefined;
       } catch (error) {
         return error;

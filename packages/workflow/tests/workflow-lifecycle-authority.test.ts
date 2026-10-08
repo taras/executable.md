@@ -32,7 +32,6 @@ import {
   useStorageRoot,
   withRunHost,
 } from "./support/storage.ts";
-import { legacySourceReader } from "./support/legacy-source.ts";
 import { Ok } from "effection";
 import {
   BUNDLE_ENTRYPOINT,
@@ -46,12 +45,7 @@ import { SavepointObservation } from "../src/deno/savepoints.ts";
 import { installWorkflowRunStorage } from "../src/deno/provider.ts";
 import { installWorkflowLifecycle } from "../src/deno/lifecycle.ts";
 import { gitBlobIdentity } from "../deno.ts";
-import {
-  LegacyWorkflowSourceMismatchError,
-  WorkflowRunStorage,
-  LegacyWorkflowSourceReaderUnavailableError,
-  WorkflowRequestError,
-} from "../mod.ts";
+import { WorkflowRequestError, WorkflowRunStorage } from "../mod.ts";
 import { withStorage } from "./support/storage.ts";
 
 const { acquireExecutor } = WorkflowLifecycle.operations;
@@ -60,7 +54,7 @@ const HOLDER = fileURLToPath(new URL("./support/executor-holder.ts", import.meta
 
 function withLifecycle<T>(root: string, body: () => Operation<T>): Operation<T> {
   return scoped(function* () {
-    yield* useWorkflowLifecycle({ root, legacySource: legacySourceReader() });
+    yield* useWorkflowLifecycle({ root });
     return yield* body();
   });
 }
@@ -462,10 +456,6 @@ describe("Tier WLA — a source-bundle creation", () => {
         // deno-lint-ignore require-yield
         function* (begun) {
           const sources = begun.sources;
-          expect(sources.definitionVersion).toBe(2);
-          if (sources.definitionVersion !== 2) {
-            throw new Error("expected a source-bundle closure");
-          }
           expect(sources.sources.map((source) => source.path)).toEqual([BUNDLE_ENTRYPOINT]);
           expect(new TextDecoder().decode(sources.sources[0]?.bytes)).toBe(BUNDLE_SOURCE);
           expect(sources.definition.bundleHash).toBe(creation.definition.bundleHash);
@@ -541,74 +531,6 @@ describe("Tier WLA — a source-bundle creation", () => {
     // Nothing was retained, so nothing recognizes the id: opening a connection
     // leaves an empty file behind, and an empty file is not a run.
     expect(yield* undiscoverable(root, "bundle-lie")).toBe(true);
-  });
-
-  it("WLA43: a host with no legacy reader cannot begin a Git run", function* () {
-    const root = yield* useStorageRoot();
-
-    const refused = yield* scoped(function* () {
-      const connections = yield* useWorkflowRunConnections(yield* SavepointObservation.get());
-      yield* installWorkflowRunStorage({ root }, {}, connections);
-      // Deliberately no `legacySource`: this host cannot obtain the Markdown a
-      // version-1 definition names, so it cannot say what such a run executes.
-      const transitions = yield* installWorkflowLifecycle({ root }, connections);
-      return yield* withExecutor("git-no-reader", function* (executorLock) {
-        return yield* transitions.begin(executorLock, {
-          runId: "git-no-reader",
-          action: "start",
-          creation: creation(),
-        });
-      });
-    });
-
-    expect(refused.ok).toBe(false);
-    expect(!refused.ok && refused.error).toBeInstanceOf(LegacyWorkflowSourceReaderUnavailableError);
-    // The check precedes the creation transaction, so nothing was written and
-    // the id is still one a later start can take.
-    expect(yield* undiscoverable(root, "git-no-reader")).toBe(true);
-  });
-
-  it("WLA44: a reader answering about another definition is a mismatch", function* () {
-    const root = yield* useStorageRoot();
-
-    const refused = yield* scoped(function* () {
-      const connections = yield* useWorkflowRunConnections(yield* SavepointObservation.get());
-      yield* installWorkflowRunStorage({ root }, {}, connections);
-      const transitions = yield* installWorkflowLifecycle(
-        {
-          root,
-          // deno-lint-ignore require-yield
-          *legacySource(definition) {
-            return Ok({
-              definitionVersion: 1,
-              definition,
-              closure: {
-                root: {
-                  objectFormat: definition.objectFormat,
-                  pinnedCommit: definition.objectId,
-                  rootDocumentPath: "workflows/somewhere-else.md",
-                  blobId: gitBlobIdentity("# Elsewhere\n", definition.objectFormat),
-                  content: "# Elsewhere\n",
-                },
-                components: [],
-              },
-            });
-          },
-        },
-        connections,
-      );
-      return yield* withExecutor("git-mismatch", function* (executorLock) {
-        return yield* transitions.begin(executorLock, {
-          runId: "git-mismatch",
-          action: "start",
-          creation: creation(),
-        });
-      });
-    });
-
-    expect(refused.ok).toBe(false);
-    expect(!refused.ok && refused.error).toBeInstanceOf(LegacyWorkflowSourceMismatchError);
-    expect(yield* undiscoverable(root, "git-mismatch")).toBe(true);
   });
 });
 

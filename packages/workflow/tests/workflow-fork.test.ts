@@ -76,8 +76,7 @@ function candidates(
 
 const RUN_RECORD = retained("workflow_run", "workflow_run", {
   runId: "source-1",
-  base: "main",
-  pinnedCommit: "abc",
+  bundleHash: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
 });
 const ROOT_IMPORT = retained("import_component", "__root__", {
   kind: "repository",
@@ -322,7 +321,10 @@ describe("Tier WFK — forkability and fork selection", () => {
 
     // The fork's journal is its own two records and then what it inherited.
     const journal = forkJournal(
-      { runId: "fork-1", base: "main", pinnedCommit: "def" },
+      {
+        runId: "fork-1",
+        bundleHash: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+      },
       ROOT_IMPORT,
       selected.value,
     );

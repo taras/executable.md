@@ -35,12 +35,12 @@ import {
   WorkflowRunStorage,
 } from "../storage/api.ts";
 import { conflictingFields } from "../storage/compatibility.ts";
+import { definitionToJson, parseWorkflowDefinition } from "../storage/definition.ts";
+import type { WorkflowDefinition } from "../storage/definition.ts";
 import {
-  definitionToJson,
-  type GitWorkflowDefinitionV1,
-  isGitWorkflowDefinition,
-  parseWorkflowDefinition,
-} from "../storage/definition.ts";
+  type SourceBundleSnapshotEntry,
+  verifySourceBundleSnapshot,
+} from "../storage/source-bundle.ts";
 import {
   WorkflowRequestError,
   WorkflowRunConflictError,
@@ -66,6 +66,7 @@ import {
 } from "./connections.ts";
 import { workflowRunPath } from "./path.ts";
 import { INSERT_RUN } from "./transitions.ts";
+import { writeDefinitionSources } from "./definition-source.ts";
 import { useHostConnections } from "./host-connections.ts";
 import { useJournalRouting } from "./journal-route.ts";
 import { readTransaction } from "./reading.ts";
@@ -166,8 +167,8 @@ export function authorizedRoot(root: string): string {
 /** A request whose every member has been checked rather than believed. */
 interface CheckedRequest {
   readonly runId: string;
-  readonly definition: GitWorkflowDefinitionV1;
-  readonly base: string;
+  readonly definition: WorkflowDefinition;
+  readonly sourceSnapshot: readonly SourceBundleSnapshotEntry[];
   readonly props: JsonObject;
 }
 
@@ -181,6 +182,13 @@ function* createWorkflowRun(
     return checked;
   }
   const wanted = checked.value;
+  // Copied and checked against the descriptor before anything is written, so a
+  // caller mutating its own array afterwards cannot change the run.
+  const verified = yield* verifySourceBundleSnapshot(wanted.definition, wanted.sourceSnapshot);
+  if (!verified.ok) {
+    return verified;
+  }
+  const owned = verified.value;
 
   const path = workflowRunPath(root, wanted.runId);
   if (!(yield* exists(path))) {
@@ -196,7 +204,7 @@ function* createWorkflowRun(
     // would stop the host while the first one is still committing.
     const stored = yield* scoped(function* () {
       yield* lock.hold();
-      return establish(connection, path, wanted, inspectRecognition);
+      return establish(connection, path, wanted, owned, inspectRecognition);
     });
     if (!stored.ok) {
       return stored;
@@ -275,6 +283,7 @@ function establish(
   connection: RunConnection,
   path: string,
   request: CheckedRequest,
+  owned: readonly SourceBundleSnapshotEntry[],
   inspectRecognition: WorkflowRunRecognitionProbe,
 ): Result<WorkflowRunRecord> {
   const { database } = connection;
@@ -303,11 +312,11 @@ function establish(
             .run(
               request.runId,
               canonicalJson(definitionToJson(request.definition)),
-              request.base,
               canonicalJson(request.props),
               stamp,
               stamp,
             );
+          writeDefinitionSources(database, request.definition, owned);
         });
       } else {
         verifySchema(database, path, connection.dofs);
@@ -357,7 +366,7 @@ function refusal<T>(error: unknown, path: string): Result<T> {
   throw translated;
 }
 
-const REQUEST_MEMBERS = ["runId", "definition", "base", "props"];
+const REQUEST_MEMBERS = ["runId", "definition", "sourceSnapshot", "props"];
 
 /**
  * The run id a caller named, whichever operation they called.
@@ -408,31 +417,20 @@ function checkRequest(offered: CreateWorkflowRunRequest): Result<CheckedRequest>
     return runId;
   }
 
-  const base = members.get("base");
-  if (typeof base !== "string" || base === "") {
-    return Err(
-      new WorkflowRequestError("a base is required: it is what the run's starting state is."),
-    );
-  }
-
   const definition = parseWorkflowDefinition(members.get("definition"));
   if (!definition.ok) {
     return definition;
   }
-  // Version 1 only, and refused rather than narrowed. This request carries a
-  // descriptor and no source, so admitting a source bundle would initialize a
-  // database whose authoritative content nobody ever supplied. Creating a
-  // version-2 run crosses the trusted lifecycle transition instead.
-  if (!isGitWorkflowDefinition(definition.value)) {
+  const offeredSnapshot = members.get("sourceSnapshot");
+  if (!Array.isArray(offeredSnapshot)) {
     return Err(
       new WorkflowRequestError(
-        "a source-bundle definition is not created through this request: its exact bytes are " +
-          "retained with it, and none were supplied here. Start the run through the workflow " +
-          "lifecycle instead.",
+        "a source snapshot is required: a definition's authoritative content is what its store " +
+          "holds, and a run created without it would retain an identity for content nobody " +
+          "supplied.",
       ),
     );
   }
-  const git = definition.value;
 
   let props: JsonObject;
   try {
@@ -444,7 +442,12 @@ function checkRequest(offered: CreateWorkflowRunRequest): Result<CheckedRequest>
     throw error;
   }
 
-  return Ok({ runId: runId.value, definition: git, base, props });
+  return Ok({
+    runId: runId.value,
+    definition: definition.value,
+    sourceSnapshot: offeredSnapshot,
+    props,
+  });
 }
 
 function requestFailure(reason: string, path: string): Error {

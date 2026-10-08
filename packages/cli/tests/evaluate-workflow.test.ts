@@ -133,7 +133,7 @@ describe("Tier FE — the workflow host's profile", () => {
       const alias = yield* runDocument(
         aliased,
         `<File path="notes.md">${NOTE}</File>\n\n` +
-          `<Evaluate source={'<File path="notes.md" />\\n'} as="answer" />\n\n` +
+          `<Evaluate text={'<File path="notes.md" />\\n'} as="answer" />\n\n` +
           `<Json value={answer} />\n`,
       );
 

@@ -18,13 +18,6 @@
  * started from when that is cheaply available, as replaceable metadata; failing
  * to learn it does not fail a start, and nothing ever reads it back to find the
  * source. The source is in the run.
- *
- * ## The legacy path
- *
- * Version-1 runs still exist, and their Markdown still lives in a repository.
- * `loadRetainedDefinition()` is what reaches it, and it is used from exactly one
- * place: the adapter this host hands the Workflow lifecycle as its legacy
- * source reader. Nothing establishes a version-1 definition any more.
  */
 
 import { readFile } from "node:fs/promises";
@@ -44,26 +37,24 @@ import type { DocumentInfo, FileRootDocument } from "@executablemd/core";
 import type { WorkflowBundleComponent } from "@executablemd/core/host";
 import {
   decodeSourceText,
-  definitionComponents,
   parseSourceBundleDefinition,
   sourceBundleHash,
   sourceContentHash,
 } from "@executablemd/workflow";
-import { gitObjectFormat, gitRoot, readGitObject, resolveGitRevision } from "@executablemd/git/api";
+import { gitObjectFormat, gitRoot, resolveGitRevision } from "@executablemd/git/api";
 import type {
-  GitWorkflowDefinitionV1,
-  SourceBundleEntryV2,
-  SourceBundleSnapshotEntryV2,
-  SourceBundleWorkflowDefinitionV2,
+  SourceBundleEntry,
+  SourceBundleSnapshotEntry,
+  WorkflowDefinition,
 } from "@executablemd/workflow";
-import { declaredBundle, readBundle, reconstructBundle } from "./workflow-bundle.ts";
+import { declaredBundle, readBundle } from "./workflow-bundle.ts";
 
 /** How this host recorded where a run was started from. Never read back. */
 export const RETRIEVAL_KIND = "local-checkout";
 
 /** Everything one `start` establishes before a run can exist. */
 export interface EstablishedDefinition {
-  readonly definition: SourceBundleWorkflowDefinitionV2;
+  readonly definition: WorkflowDefinition;
   /**
    * The exact bytes behind every logical path, in the descriptor's own order.
    *
@@ -71,7 +62,7 @@ export interface EstablishedDefinition {
    * transition, which copies them again before it validates — so nothing
    * between here and storage can change what the run is of.
    */
-  readonly sourceSnapshot: readonly SourceBundleSnapshotEntryV2[];
+  readonly sourceSnapshot: readonly SourceBundleSnapshotEntry[];
   /** Credential-free provenance, when it was cheaply available. */
   readonly retrieval?: Json;
   /** The entrypoint as text, for the caller that is about to import it. */
@@ -252,8 +243,8 @@ function withProvenance(retrieval: Json | undefined): { retrieval?: Json } {
 
 /** What one established candidate is, descriptor and bytes together. */
 interface BuiltBundle {
-  readonly definition: SourceBundleWorkflowDefinitionV2;
-  readonly sourceSnapshot: readonly SourceBundleSnapshotEntryV2[];
+  readonly definition: WorkflowDefinition;
+  readonly sourceSnapshot: readonly SourceBundleSnapshotEntry[];
 }
 
 /**
@@ -335,8 +326,8 @@ function* buildSourceBundle(
   }
 
   const ordered = [...byPath.keys()].sort(compareUtf8);
-  const sources: SourceBundleEntryV2[] = [];
-  const sourceSnapshot: SourceBundleSnapshotEntryV2[] = [];
+  const sources: SourceBundleEntry[] = [];
+  const sourceSnapshot: SourceBundleSnapshotEntry[] = [];
   for (const path of ordered) {
     const bytes = byPath.get(path);
     if (bytes === undefined) {
@@ -364,8 +355,6 @@ function* buildSourceBundle(
   // goes through the same closed parser storage reads one back through, so a
   // candidate that is not canonical is refused here rather than retained.
   const definition = parseSourceBundleDefinition({
-    version: 2,
-    kind: "source-bundle",
     hashAlgorithm: "sha256",
     bundleHash,
     entrypoint,
@@ -443,97 +432,4 @@ function* provenance(directory: string): Operation<Json | undefined> {
 
 function describeCause(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
-}
-
-/**
- * The checkout a retained version-1 locator names, reauthorized before use.
- *
- * A retained path is replaceable metadata rather than permission a host already
- * has, so it is checked against the repository it claims to be: a directory
- * that is no longer a working tree, or is now a different one, fails rather
- * than quietly resolving the definition somewhere else.
- */
-function parseRetrieval(metadata: Json | undefined): Result<string> {
-  if (typeof metadata !== "object" || metadata === null || Array.isArray(metadata)) {
-    return Err(
-      unavailable(
-        "this run retains no usable retrieval metadata, so its definition cannot be located. " +
-          "The run is left exactly as it is.",
-      ),
-    );
-  }
-  const record = Object.fromEntries(Object.entries(metadata));
-  if (record.kind !== RETRIEVAL_KIND || typeof record.checkout !== "string") {
-    return Err(
-      unavailable(
-        "this run's retrieval metadata does not describe a local checkout this host can " +
-          "reach. The run is left exactly as it is.",
-      ),
-    );
-  }
-  return Ok(record.checkout);
-}
-
-/**
- * Load the exact object a retained version-1 definition names.
- *
- * It never substitutes the current `HEAD` or a same-named file in the working
- * tree. A resume that could do either would silently continue a different
- * document under the same run id.
- *
- * Reached from one place only: the legacy source reader this host supplies to
- * the Workflow lifecycle. Nothing else in the CLI loads a definition — a
- * version-2 run's source comes out of the run.
- */
-export function* loadRetainedDefinition(
-  definition: GitWorkflowDefinitionV1,
-  metadata: Json | undefined,
-): Operation<Result<RetainedSources>> {
-  const checkout = parseRetrieval(metadata);
-  if (!checkout.ok) {
-    return checkout;
-  }
-
-  try {
-    return yield* inDirectory(checkout.value, function* (): Operation<Result<RetainedSources>> {
-      const root = yield* gitRoot();
-      if (resolve(root) !== resolve(checkout.value)) {
-        return Err(
-          unavailable(
-            "the checkout this run retains is no longer the root of the repository it names. " +
-              "The run is left exactly as it is.",
-          ),
-        );
-      }
-      const format = yield* gitObjectFormat();
-      if (format !== definition.objectFormat) {
-        return Err(
-          unavailable(
-            "the retained checkout names its objects with a different format than this run's " +
-              "definition. The run is left exactly as it is.",
-          ),
-        );
-      }
-      const source = yield* readGitObject(definition.objectId, definition.rootDocumentPath);
-      // Every retained component, from the retained commit, verified against
-      // the hash the definition holds. The working tree is never consulted, so
-      // a checkout edited since the run started continues the run it started.
-      const retained = definitionComponents(definition);
-      const components =
-        retained.length === 0
-          ? Ok([])
-          : yield* reconstructBundle(definition.objectId, retained, format);
-      if (!components.ok) {
-        return components;
-      }
-      return Ok({ source, components: components.value });
-    });
-  } catch (error) {
-    return Err(
-      unavailable(
-        "this run's retained definition could not be loaded: " + describeCause(error),
-        error,
-      ),
-    );
-  }
 }

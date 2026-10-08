@@ -18,7 +18,7 @@ import process from "node:process";
 import { main, type Operation, scoped, suspend } from "effection";
 import { collect, inlineSource } from "@executablemd/core";
 import { executeInstalled } from "@executablemd/core/host";
-import { isGitWorkflowRunRecord, WorkflowRunStorage } from "@executablemd/workflow";
+import { WorkflowRunStorage } from "@executablemd/workflow";
 import { useWorkflowRunStorage } from "@executablemd/workflow/deno";
 import { retainedWorkflowInstallation } from "../../../workflow/src/run.ts";
 import { gitWorkspaceAttachment } from "../../src/deno/attachment.ts";
@@ -67,9 +67,6 @@ function* open(root: string, runId: string, locator: string, endpoint: string): 
   // installation reads a base and a pinned commit. A version-2 record has
   // neither, and a synthetic one would name a repository state no run had.
   const record = database.record;
-  if (!isGitWorkflowRunRecord(record)) {
-    throw new Error(`expected a Git run record, got ${record.definition.kind}`);
-  }
 
   // The bundled Plugin, installed where a command installs it: above the
   // attachment, which owns this run's providers rather than its names.
@@ -86,8 +83,7 @@ function* open(root: string, runId: string, locator: string, endpoint: string): 
           [
             retainedWorkflowInstallation({
               runId: record.runId,
-              base: record.base,
-              pinnedCommit: record.definition.objectId,
+              bundleHash: record.definition.bundleHash,
             }),
           ],
         ),

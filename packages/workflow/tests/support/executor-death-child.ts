@@ -25,7 +25,6 @@ import { main, suspend } from "effection";
 import { WorkflowLifecycle } from "../../mod.ts";
 import { useWorkflowRunHost } from "../../deno.ts";
 import { creation } from "./storage.ts";
-import { legacySourceReader } from "./legacy-source.ts";
 
 /** Said on stdout, and nowhere else, once the execution is durably begun. */
 const READY = "READY";
@@ -41,7 +40,7 @@ await main(function* () {
   // `creation()` is a version-1 fixture, and every executable v1 admission is
   // reader-gated, so this host supplies the reader exactly as a Git-capable
   // one does.
-  const transitions = yield* useWorkflowRunHost({ root, legacySource: legacySourceReader() });
+  const transitions = yield* useWorkflowRunHost({ root });
   const acquired = yield* WorkflowLifecycle.operations.acquireExecutor(runId);
   if (!acquired.ok) {
     throw acquired.error;

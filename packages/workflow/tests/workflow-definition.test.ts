@@ -22,16 +22,12 @@ import {
   decodeSourceText,
   definitionComponents,
   definitionToJson,
-  type GitWorkflowDefinitionV1,
-  type GitWorkflowRunRecordV1,
-  isGitWorkflowDefinition,
   parseSourceBundleDefinition,
   parseStopReasonInput,
   parseWorkflowDefinition,
   sourceBundleComponents,
   sourceBundleDefinitionToJson,
   sourceBundleHash,
-  type SourceBundleWorkflowDefinitionV2,
   sourceContentHash,
   verifySourceBundleDefinition,
   verifySourceBundleSnapshot,
@@ -39,67 +35,79 @@ import {
   WorkflowDefinitionError,
   WorkflowRequestError,
   type WorkflowDefinition,
+  type WorkflowRunRecord,
   WorkflowRunStorage,
   WorkflowStorageProviderError,
 } from "../mod.ts";
 
-const SHA1 = "9fceb02d0ae598e95dc970b74767f19372d61af8";
 const SHA256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+
+/** The root this suite's representative descriptor is a run of. */
+const WD_ROOT = "workflows/release.md";
+
+/** A distinct source hash per retained path, so a swap is visible. */
+function digest(nth: number): string {
+  return `${nth}`.repeat(2).padEnd(64, "0");
+}
+
+/** The five names the representative authored workflow declares, in one bundle. */
+const BUNDLE = [
+  { name: "Discovery", path: "workflows/Discovery.md" },
+  { name: "Implementation", path: "workflows/Implementation.md" },
+  { name: "InstructionFiles", path: "workflows/InstructionFiles.md" },
+  { name: "Planning", path: "workflows/Planning.md" },
+  { name: "UserCheckpoint", path: "workflows/UserCheckpoint.md" },
+];
+
+/**
+ * Every retained source, canonical: one entry per path, in the UTF-8 byte order
+ * of those paths, with the root among them.
+ */
+const WD_SOURCES = [
+  ...BUNDLE.map((component, index) => ({
+    path: component.path,
+    sourceHash: digest(index + 1),
+    byteLength: 24,
+  })),
+  { path: WD_ROOT, sourceHash: digest(6), byteLength: 24 },
+].sort((left, right) => (left.path < right.path ? -1 : left.path > right.path ? 1 : 0));
+
+/** Another root, so a descriptor can be a run of a different document. */
+const WD_OTHER_ROOT = [{ path: "workflows/other.md", sourceHash: digest(7), byteLength: 24 }];
+
+/** Just the root, for the cases that need no bundle at all. */
+const WD_ROOT_ONLY = [{ path: WD_ROOT, sourceHash: digest(6), byteLength: 24 }];
 
 /** A descriptor, loosely typed: half of these tests build ones that are wrong. */
 function definition(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
-    version: 1,
-    kind: "git",
-    objectFormat: "sha1",
-    objectId: SHA1,
-    rootDocumentPath: "workflows/release.md",
+    hashAlgorithm: "sha256",
+    bundleHash: SHA256,
+    entrypoint: WD_ROOT,
+    sources: WD_ROOT_ONLY,
     ...overrides,
   };
 }
 
 /** The descriptor, parsed, for tests that need one they already trust. */
-function parsed(overrides: Partial<GitWorkflowDefinitionV1> = {}): GitWorkflowDefinitionV1 {
-  return git(parseWorkflowDefinition(definition(overrides)));
+function parsed(overrides: Record<string, unknown> = {}): WorkflowDefinition {
+  return accepted(parseWorkflowDefinition(definition(overrides)));
 }
 
-/**
- * The Git descriptor a result holds, narrowed rather than asserted.
- *
- * `parseWorkflowDefinition` now answers with either version, and these cases
- * are about the Git one: a fixture that parsed as a source bundle would be a
- * fixture this suite is not describing.
- */
-function git(result: Result<WorkflowDefinition>): GitWorkflowDefinitionV1 {
+/** The descriptor a result holds, or the refusal it answered with. */
+function accepted(result: Result<WorkflowDefinition>): WorkflowDefinition {
   if (!result.ok) {
     throw result.error;
-  }
-  if (!isGitWorkflowDefinition(result.value)) {
-    throw new Error("expected a Git workflow definition");
   }
   return result.value;
 }
 
-/** The five names the representative authored workflow declares, in one bundle. */
-const BUNDLE = [
-  { name: "Discovery", path: "workflows/Discovery.md", sourceHash: blob(1) },
-  { name: "Implementation", path: "workflows/Implementation.md", sourceHash: blob(2) },
-  { name: "InstructionFiles", path: "workflows/InstructionFiles.md", sourceHash: blob(3) },
-  { name: "Planning", path: "workflows/Planning.md", sourceHash: blob(4) },
-  { name: "UserCheckpoint", path: "workflows/UserCheckpoint.md", sourceHash: blob(5) },
-];
-
-/** A distinct SHA-1 blob id per component, so a swap is visible. */
-function blob(nth: number): string {
-  return `${nth}`.repeat(2).padEnd(40, "0");
-}
-
 function bundled(overrides: Record<string, unknown> = {}): Record<string, unknown> {
-  return { ...definition(), components: BUNDLE, ...overrides };
+  return { ...definition(), sources: WD_SOURCES, components: BUNDLE, ...overrides };
 }
 
-function parsedBundle(overrides: Record<string, unknown> = {}): GitWorkflowDefinitionV1 {
-  return git(parseWorkflowDefinition(bundled(overrides)));
+function parsedBundle(overrides: Record<string, unknown> = {}): WorkflowDefinition {
+  return accepted(parseWorkflowDefinition(bundled(overrides)));
 }
 
 function refusal(value: unknown): WorkflowDefinitionError {
@@ -113,11 +121,10 @@ function refusal(value: unknown): WorkflowDefinitionError {
   return result.error;
 }
 
-function record(overrides: Partial<GitWorkflowRunRecordV1> = {}): GitWorkflowRunRecordV1 {
+function record(overrides: Partial<WorkflowRunRecord> = {}): WorkflowRunRecord {
   return {
     runId: "release-1.4",
     definition: parsed(),
-    base: "main",
     props: { channel: "stable", tags: ["a", "b"] },
     status: "running",
     createdAt: "2026-08-07T00:00:00.000Z",
@@ -127,87 +134,12 @@ function record(overrides: Partial<GitWorkflowRunRecordV1> = {}): GitWorkflowRun
 }
 
 describe("Tier WD — workflow definition descriptors", () => {
-  it("WD1: reads a complete descriptor and round-trips it through JSON", function* () {
-    const first = parsed();
-
-    expect(first).toEqual({
-      version: 1,
-      kind: "git",
-      objectFormat: "sha1",
-      objectId: SHA1,
-      rootDocumentPath: "workflows/release.md",
-    });
-
-    const again = parseWorkflowDefinition(definitionToJson(first));
-    expect(again.ok).toBe(true);
-    expect(again.ok && again.value).toEqual(first);
-  });
-
-  it("WD2: refuses a member nobody declared", function* () {
-    const error = refusal({ ...definition(), repository: "https://example.invalid/a.git" });
-
-    expect(error.path).toBe("$");
-    expect(error.message).toContain("expected only the members");
-  });
-
-  it("WD3: refuses anything that is not an object", function* () {
-    expect(refusal(null).message).toContain("found null");
-    expect(refusal([]).message).toContain("found an array");
-    expect(refusal("git").message).toContain("found string");
-  });
-
-  it("WD4: admits only version 1 and only the git kind", function* () {
-    expect(refusal(definition({ version: 2 })).path).toBe("$.version");
-    expect(refusal(definition({ kind: "svn" })).path).toBe("$.kind");
-  });
-
-  it("WD5: holds an object id to the length its format requires", function* () {
-    expect(parsed({ objectFormat: "sha256", objectId: SHA256 }).objectId).toBe(SHA256);
-
-    expect(refusal(definition({ objectFormat: "sha256" })).path).toBe("$.objectId");
-    expect(refusal(definition({ objectId: SHA1.slice(1) })).path).toBe("$.objectId");
-    expect(refusal(definition({ objectFormat: "sha512" })).path).toBe("$.objectFormat");
-  });
-
-  it("WD6: admits lowercase hexadecimal only, so one commit has one spelling", function* () {
-    const error = refusal(definition({ objectId: SHA1.toUpperCase() }));
-
-    expect(error.path).toBe("$.objectId");
-    expect(error.message).toContain("lowercase");
-  });
-
-  it("WD7: refuses a root path that is not repository-relative POSIX", function* () {
-    const refused = [
-      "",
-      "/etc/passwd",
-      "workflows\\release.md",
-      "./release.md",
-      "../release.md",
-      "workflows/../release.md",
-      "workflows//release.md",
-      "workflows/release.md/",
-      "workflows/rele\u0000ase.md",
-    ];
-
-    for (const rootDocumentPath of refused) {
-      expect(refusal(definition({ rootDocumentPath })).path).toBe("$.rootDocumentPath");
-    }
-  });
-
-  it("WD8: admits an ordinary nested path", function* () {
-    expect(parsed({ rootDocumentPath: "a/b/c.md" }).rootDocumentPath).toBe("a/b/c.md");
-    expect(parsed({ rootDocumentPath: "release.md" }).rootDocumentPath).toBe("release.md");
-    expect(parsed({ rootDocumentPath: ".github/release.md" }).rootDocumentPath).toBe(
-      ".github/release.md",
-    );
-  });
-
   it("WD9: never repeats what it refused, as a value or as a name", function* () {
     const secret = "ghp_0123456789abcdefghijklmnopqrstuvwxyz";
 
     for (const error of [
-      refusal(definition({ objectId: secret })),
-      refusal(definition({ rootDocumentPath: `/${secret}` })),
+      refusal(definition({ bundleHash: secret })),
+      refusal(definition({ entrypoint: `/${secret}.md` })),
       // A member name is content too: a value carrying a credential as a key
       // is no safer to print than one carrying it as a value.
       refusal({ ...definition(), [secret]: "anything" }),
@@ -275,7 +207,7 @@ describe("Tier WD — the storage Api without a provider", () => {
         yield* WorkflowRunStorage.operations.create({
           runId: "release-1.4",
           definition: parsed(),
-          base: "main",
+          sourceSnapshot: [],
           props: {},
         });
       },
@@ -305,7 +237,6 @@ describe("Tier WD — compatible reuse", () => {
       conflictingFields(stored, {
         runId: stored.runId,
         definition: stored.definition,
-        base: stored.base,
         props: { tags: ["a", "b"], channel: "stable" },
       }),
     ).toEqual([]);
@@ -316,20 +247,20 @@ describe("Tier WD — compatible reuse", () => {
     const request = {
       runId: stored.runId,
       definition: stored.definition,
-      base: stored.base,
       props: stored.props,
     };
 
     expect(conflictingFields(stored, { ...request, runId: "other" })).toEqual(["run id"]);
-    expect(conflictingFields(stored, { ...request, base: "develop" })).toEqual(["base"]);
     expect(conflictingFields(stored, { ...request, props: { channel: "beta" } })).toEqual([
       "props",
     ]);
 
+    // A run is its retained bytes, so every way of being a run of something
+    // else is a different descriptor rather than a different repository state.
     for (const changed of [
-      parsed({ objectId: SHA1.replace("9", "a") }),
-      parsed({ rootDocumentPath: "workflows/other.md" }),
-      parsed({ objectFormat: "sha256", objectId: SHA256 }),
+      parsed({ bundleHash: SHA256.replace("e", "a") }),
+      parsed({ entrypoint: "workflows/other.md", sources: WD_OTHER_ROOT }),
+      parsed({ sources: WD_ROOT_ONLY.map((s) => ({ ...s, byteLength: 25 })) }),
     ]) {
       expect(conflictingFields(stored, { ...request, definition: changed })).toEqual([
         "definition",
@@ -341,7 +272,6 @@ describe("Tier WD — compatible reuse", () => {
     const request = {
       runId: "release-1.4",
       definition: parsed(),
-      base: "main",
       props: { channel: "stable", tags: ["a", "b"] },
     };
 
@@ -406,11 +336,10 @@ describe("Tier WD — a definition's exact document target", () => {
 
     expect("targetPath" in untargeted).toBe(false);
     expect(Object.keys(definitionToJson(untargeted) as Record<string, unknown>)).toEqual([
-      "version",
-      "kind",
-      "objectFormat",
-      "objectId",
-      "rootDocumentPath",
+      "hashAlgorithm",
+      "bundleHash",
+      "entrypoint",
+      "sources",
     ]);
   });
 
@@ -479,11 +408,10 @@ describe("Tier WD — a definition's exact document target", () => {
     const section = record({ definition: parsed({ targetPath: "Release/Publish" }) });
     const other = record({ definition: parsed({ targetPath: "Release/Announce" }) });
 
-    const asking = (stored: GitWorkflowRunRecordV1, definition: GitWorkflowDefinitionV1) =>
+    const asking = (stored: WorkflowRunRecord, definition: WorkflowDefinition) =>
       conflictingFields(stored, {
         runId: stored.runId,
         definition,
-        base: stored.base,
         props: stored.props,
       });
 
@@ -516,11 +444,10 @@ describe("Tier WD — the component bundle a definition is closed over", () => {
 
     expect("components" in first).toBe(false);
     expect(Object.keys(definitionToJson(first) as Record<string, unknown>)).toEqual([
-      "version",
-      "kind",
-      "objectFormat",
-      "objectId",
-      "rootDocumentPath",
+      "hashAlgorithm",
+      "bundleHash",
+      "entrypoint",
+      "sources",
     ]);
     expect(definitionComponents(first)).toEqual([]);
   });
@@ -528,7 +455,6 @@ describe("Tier WD — the component bundle a definition is closed over", () => {
   it("WD26: a bundled descriptor round-trips its whole bundle unchanged", function* () {
     const bundle = parsedBundle();
 
-    expect(bundle.version).toBe(1);
     expect(bundle.components).toEqual(BUNDLE);
     expect(definitionComponents(bundle)).toEqual(BUNDLE);
 
@@ -540,32 +466,11 @@ describe("Tier WD — the component bundle a definition is closed over", () => {
     expect(again.ok && again.value).toEqual(bundle);
   });
 
-  it("WD27: a bundle's hashes are held to the format the descriptor names", function* () {
-    const sha256 = parsedBundle({
-      objectFormat: "sha256",
-      objectId: SHA256,
-      components: [{ name: "Discovery", path: "workflows/Discovery.md", sourceHash: SHA256 }],
-    });
-    expect(definitionComponents(sha256)).toEqual([
-      { name: "Discovery", path: "workflows/Discovery.md", sourceHash: SHA256 },
-    ]);
-
-    // The same entry under sha1 is the wrong length, and the sha1 bundle is the
-    // wrong length under sha256: neither is a hash this descriptor could hold.
-    expect(refusal(bundled({ components: definitionComponents(sha256) })).path).toBe(
-      "$.components[0].sourceHash",
-    );
-    expect(refusal(bundled({ objectFormat: "sha256", objectId: SHA256 })).path).toBe(
-      "$.components[0].sourceHash",
-    );
-    expect(
-      refusal(bundled({ components: [{ ...BUNDLE[0], sourceHash: SHA1.toUpperCase() }] })).message,
-    ).toContain("lowercase");
-  });
-
-  it("WD28: the bundle is canonical — one entry per name, sorted by name", function* () {
+  it("WD28: the bundle is canonical — one entry per name, in UTF-8 byte order", function* () {
     const reversed = [...BUNDLE].reverse();
-    expect(refusal(bundled({ components: reversed })).message).toContain("sorted by name");
+    expect(refusal(bundled({ components: reversed })).message).toContain(
+      "sorted by the UTF-8 bytes of their names",
+    );
 
     const duplicated = [BUNDLE[0], BUNDLE[0]];
     expect(refusal(bundled({ components: duplicated })).message).toContain("once");
@@ -578,8 +483,10 @@ describe("Tier WD — the component bundle a definition is closed over", () => {
     expect(refusal(bundled({ components: [{ ...BUNDLE[0], origin: "elsewhere" }] })).path).toBe(
       "$.components[0]",
     );
+    // A mapping entry names a source this definition retains. `a.md` is not
+    // one, so the path is what the refusal names.
     expect(refusal(bundled({ components: [{ name: "Discovery", path: "a.md" }] })).path).toBe(
-      "$.components[0].sourceHash",
+      "$.components[0].path",
     );
     expect(refusal(bundled({ components: [{ ...BUNDLE[0], name: "discovery" }] })).path).toBe(
       "$.components[0].name",
@@ -604,29 +511,6 @@ describe("Tier WD — the component bundle a definition is closed over", () => {
     }
   });
 
-  it("WD30: a descriptor retained before bundles existed still reads", function* () {
-    // The exact JSON a run stored before the member existed. It parses, it
-    // means "closed over no components", and it serializes back byte for byte
-    // — which is what keeps the bundle a member rather than a second version.
-    const retained = {
-      version: 1,
-      kind: "git",
-      objectFormat: "sha1",
-      objectId: SHA1,
-      rootDocumentPath: "workflows/release.md",
-    };
-    const again = parseWorkflowDefinition(retained);
-
-    expect(again.ok).toBe(true);
-    expect(definitionComponents(git(again))).toEqual([]);
-    expect(definitionToJson(git(again))).toEqual(retained);
-
-    // Presence is the member being written at all: a descriptor that wrote it
-    // and named no bundle asked for one and failed to say which.
-    expect(refusal({ ...retained, components: undefined }).path).toBe("$.components");
-    expect(refusal({ ...retained, components: null }).path).toBe("$.components");
-  });
-
   it("WD31: a refusal never repeats the bundle it refused", function* () {
     // A distinctive string rather than a credential-shaped one: what is proved
     // is that no part of a refused entry is echoed, and a value that is not a
@@ -648,11 +532,10 @@ describe("Tier WD — the component bundle a definition is closed over", () => {
 
 describe("Tier WD — a bundle decides compatible reuse", () => {
   const stored = record({ definition: parsedBundle() });
-  const asking = (definition: GitWorkflowDefinitionV1) =>
+  const asking = (definition: WorkflowDefinition) =>
     conflictingFields(stored, {
       runId: stored.runId,
       definition,
-      base: stored.base,
       props: stored.props,
     });
 
@@ -660,15 +543,14 @@ describe("Tier WD — a bundle decides compatible reuse", () => {
     expect(asking(parsedBundle())).toEqual([]);
   });
 
-  it("WD33: a changed name, path, hash, or set is a different definition", function* () {
+  it("WD33: a changed name, path, or set is a different definition", function* () {
     const renamed = [...BUNDLE.slice(1), { ...BUNDLE[0], name: "Zeroth" }].sort((a, b) =>
       a.name < b.name ? -1 : 1,
     );
-    const moved = [{ ...BUNDLE[0], path: "workflows/other/Discovery.md" }, ...BUNDLE.slice(1)];
-    const rehashed = [{ ...BUNDLE[0], sourceHash: blob(9) }, ...BUNDLE.slice(1)];
+    const moved = [{ ...BUNDLE[0], path: WD_ROOT }, ...BUNDLE.slice(1)];
     const fewer = BUNDLE.slice(1);
 
-    for (const components of [renamed, moved, rehashed, fewer]) {
+    for (const components of [renamed, moved, fewer]) {
       expect(asking(parsedBundle({ components }))).toEqual(["definition"]);
     }
   });
@@ -681,7 +563,6 @@ describe("Tier WD — a bundle decides compatible reuse", () => {
       conflictingFields(unbundled, {
         runId: unbundled.runId,
         definition: parsedBundle(),
-        base: unbundled.base,
         props: unbundled.props,
       }),
     ).toEqual(["definition"]);
@@ -693,7 +574,6 @@ describe("Tier WD — a bundle decides compatible reuse", () => {
         conflictingFields(record({ definition: parsedBundle(), status }), {
           runId: stored.runId,
           definition: parsedBundle(),
-          base: stored.base,
           props: stored.props,
         }),
       ).toEqual([]);
@@ -761,8 +641,6 @@ const SNAPSHOT = [
 /** A v2 descriptor, loosely typed: half of these tests build ones that are wrong. */
 function bundleV2(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
-    version: 2,
-    kind: "source-bundle",
     hashAlgorithm: "sha256",
     bundleHash: BUNDLE_HASH,
     entrypoint: ROOT_PATH,
@@ -775,8 +653,6 @@ function bundleV2(overrides: Record<string, unknown> = {}): Record<string, unkno
 /** The same three sources with no `components` member written at all. */
 function unmappedV2(): Record<string, unknown> {
   return {
-    version: 2,
-    kind: "source-bundle",
     hashAlgorithm: "sha256",
     bundleHash: UNMAPPED_HASH,
     entrypoint: ROOT_PATH,
@@ -787,8 +663,6 @@ function unmappedV2(): Record<string, unknown> {
 /** The one-source descriptor a root declaring no components produces. */
 function soloV2(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
-    version: 2,
-    kind: "source-bundle",
     hashAlgorithm: "sha256",
     bundleHash: SOLO_HASH,
     entrypoint: ROOT_PATH,
@@ -797,7 +671,7 @@ function soloV2(overrides: Record<string, unknown> = {}): Record<string, unknown
   };
 }
 
-function parsedV2(value: Record<string, unknown>): SourceBundleWorkflowDefinitionV2 {
+function parsedV2(value: Record<string, unknown>): WorkflowDefinition {
   const result = parseSourceBundleDefinition(value);
   if (!result.ok) {
     throw result.error;
@@ -863,8 +737,6 @@ describe("Tier WD — a source-bundle descriptor", () => {
     const first = parsedV2(bundleV2({ targetPath: "Release/Publish" }));
 
     expect(first).toEqual({
-      version: 2,
-      kind: "source-bundle",
       hashAlgorithm: "sha256",
       bundleHash: BUNDLE_HASH,
       entrypoint: ROOT_PATH,
@@ -875,8 +747,6 @@ describe("Tier WD — a source-bundle descriptor", () => {
 
     const json = sourceBundleDefinitionToJson(first);
     expect(jsonMembers(json)).toEqual([
-      "version",
-      "kind",
       "hashAlgorithm",
       "bundleHash",
       "entrypoint",
@@ -890,7 +760,7 @@ describe("Tier WD — a source-bundle descriptor", () => {
     expect(again.ok && again.value).toEqual(first);
   });
 
-  it("WD37: admits exactly its own members, and only version 2 source bundles", function* () {
+  it("WD37: admits exactly its own members, and nothing a version would have chosen", function* () {
     // Neither the host path the bytes were read from nor the props a run was
     // started with is a member of this shape, so neither reaches the identity.
     expect(v2Refusal({ ...bundleV2(), sourcePath: "/home/ada/release.md" }).path).toBe("$");
@@ -899,8 +769,11 @@ describe("Tier WD — a source-bundle descriptor", () => {
 
     expect(v2Refusal(null).message).toContain("found null");
     expect(v2Refusal([]).message).toContain("found an array");
-    expect(v2Refusal(bundleV2({ version: 1 })).path).toBe("$.version");
-    expect(v2Refusal(bundleV2({ kind: "git" })).path).toBe("$.kind");
+    // Neither is a member of this shape any more: one definition format needs
+    // no version to choose between, so a descriptor carrying either is refused
+    // as carrying a member nobody declared.
+    expect(v2Refusal(bundleV2({ version: 1 })).path).toBe("$");
+    expect(v2Refusal(bundleV2({ kind: "git" })).path).toBe("$");
     expect(v2Refusal(bundleV2({ hashAlgorithm: "sha1" })).path).toBe("$.hashAlgorithm");
   });
 
@@ -953,8 +826,6 @@ describe("Tier WD — a source-bundle descriptor", () => {
     expect("components" in solo).toBe(false);
     expect(sourceBundleComponents(solo)).toEqual([]);
     expect(jsonMembers(sourceBundleDefinitionToJson(solo))).toEqual([
-      "version",
-      "kind",
       "hashAlgorithm",
       "bundleHash",
       "entrypoint",

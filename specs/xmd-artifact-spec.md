@@ -143,7 +143,7 @@ xmd workflow fork \
 ```
 
 **The artifact-backed fork is specified here and not built** (§8). What this
-revision delivers is the authenticated source input it needs: a format-2 closure
+revision delivers is the authenticated source input it needs: the sealed closure
 carries the descriptor and the exact bytes behind it, which is sufficient to
 copy into a destination run without making the artifact path retrieval state.
 
@@ -250,37 +250,21 @@ the state of the world around the run.
 
 ### 2.4 Definition source
 
-A run retains one of two definitions, and an artifact seals the one its run has.
-Neither is read as the other: a format-1 artifact admits only the Git closure
-and a format-2 artifact admits only the source bundle.
+An artifact seals the definition its run retains: the descriptor, and the exact
+bytes behind every logical path in it, including a component the run never
+expanded.
 
-**A Git (version-1) closure** contains:
-
-- the exact root Markdown bytes, repository-relative path, Git object format,
-  pinned commit and root blob identity;
-- the exact canonical document target, when one is selected; and
-- every declared workflow component's name, canonical repository-relative path,
-  blob identity and Markdown bytes, including a component the run never
-  expanded.
-
-Export authenticates every source against the immutable object identity in the
-workflow definition. It obtains that source through the host-supplied legacy
-reader, and validates the answer itself: the root's descriptor terms must be the
-definition's, and every blob identity is recomputed from the bytes that came
-back. A fetch is an export input operation, not inspection and not part of
-artifact identity. Missing retrieval permission, a missing reader, missing
-objects, an object-format mismatch or bytes that do not hash to the declared
-identity refuse export.
-
-**A source bundle (version-2)** contains the descriptor the run retains and the
-exact bytes behind every logical path in it. Export reads only the run's own
-source store; it reaches no repository and needs none, so a version-2 run
-exports after the file it was started from has been edited, moved or deleted.
+Export reads only the run's own source store. It reaches no repository and needs
+none, so a run exports after the file it was started from has been edited, moved
+or deleted. Every retained length and content hash is recomputed from the bytes
+the run holds, and so is the bundle hash over the resulting manifest and
+mapping; missing content and content that no longer describes itself are
+distinct refusals, and neither falls back to any other source.
 
 Retrieval metadata, provenance, clone paths, remote URLs, host paths and
-credentials do not enter either form. The artifact therefore remains sufficient
-to inspect and fork the original definition when its repository is unavailable
-— and, for a source bundle, when there never was one.
+credentials do not enter it. The artifact therefore remains sufficient to
+inspect and fork the original definition — including when there never was a
+repository at all.
 
 ### 2.5 Agent session portability evidence
 
@@ -407,12 +391,11 @@ space, indexes and host path are not.
 The XMD artifact identity is domain-separated by the semantic format:
 
 ```text
-sha256("xmd-artifact\0v1\0" || canonical-manifest-bytes)   # format 1
-sha256("xmd-artifact\0v2\0" || canonical-manifest-bytes)   # format 2
+sha256("xmd-artifact\0v1\0" || canonical-manifest-bytes)
 ```
 
-One format's manifest therefore never derives the other's identity, however
-similar the two inventories look.
+The domain is part of the derivation so that a later format, if there ever is
+one, never derives this one's identity however similar its inventory looks.
 
 The identity is written in the container as a derived value. A reader
 reconstructs the manifest, recomputes the identity, validates every referenced
@@ -496,29 +479,11 @@ groups, and admits nothing else:
   key for every portable one (§2.5). Both take part in the manifest and the
   artifact identity; neither is a profile marker, and no other Agent
   portability kind exists; and
-- the workflow definition source closure: the root descriptor and exact root
-  Markdown bytes, plus every declared component's name, canonical path, object
-  identity and exact Markdown bytes, including a component the run never
-  expanded.
+- the workflow definition source closure, one pair per retained source:
 
-An unknown content kind inside a version-1 container is an undeclared semantic
-record, and therefore corruption. It is not ignored for forward compatibility: a
-reader that skipped it would be returning a snapshot whose inventory nobody
-checked. A later version declares its own set.
-
-#### 4.1.3 The version 2 inventory is closed
-
-Format 2 seals a source-bundle run. It uses manifest version `2` and the
-`xmd-artifact\0v2\0` identity domain; the manifest entry order, the canonical
-JSON rules and the content-digest algorithm are otherwise the format-1 rules,
-and the physical container is unchanged (§5.1).
-
-Its inventory is every group above **except** the Git definition closure, plus
-one pair per retained source. It admits no format-1 definition kind at all:
-
-- `workflow-run` carries only the version-2 storage definition and the version-2
-  `WorkflowRun`. It admits no `base` and no pinned commit;
-- `definition-source-entry` is `canonical-json` under the canonical JSON string
+  - `workflow-run` carries the storage definition and the `WorkflowRun`. It
+    admits no `base` and no pinned commit;
+  - `definition-source-entry` is `canonical-json` under the canonical JSON string
   of the source's logical path, containing exactly the members `path`,
   `sourceHash` and `byteLength`. Canonical JSON writes those keys in its
   existing lexicographic order; a reader requires the exact member set and does
@@ -533,12 +498,11 @@ every source hash from the bytes carried, and recomputes the bundle hash —
 before any status or history is returned. An entry that names a path the
 descriptor does not retain is corruption.
 
-Format 1, its `xmd-artifact\0v1\0` identity domain and its Git definition
-closure remain byte for byte unchanged and readable. The writer selects format 1
-for a version-1 live run and format 2 for a version-2 one; the reader selects
-the exact closed inventory, manifest parser, identity domain and semantic
-verifier from the header version and never interprets one version's closure as
-the other's. Neither inventory is loosened into a shared superset.
+An unknown content kind is an undeclared semantic record, and therefore
+corruption. It is not ignored for forward compatibility: a reader that skipped
+it would be returning a snapshot whose inventory nobody checked. The inventory is
+never loosened into a superset, and a file declaring any other semantic format is
+refused rather than read under this one.
 
 ### 4.2 Integrity is not authenticity
 
@@ -561,10 +525,10 @@ artifact uses a distinct SQLite application ID from a live workflow-run
 database and carries both an artifact format version and a container schema
 version.
 
-The container schema version is `1`, stored as the SQLite `user_version`, for
-both semantic formats: the artifact format version and the container schema
-version are separate questions — how the records inside are to be read, and how
-the bytes are laid out — and format 2 changed only the first. The application
+The container schema version is `1`, stored as the SQLite `user_version`. The
+artifact format version and the container schema version are separate
+questions — how the records inside are to be read, and how the bytes are laid
+out — and each has exactly one admissible value. The application
 marker is the four bytes `XMDA`, the integer `0x584d4441`; the live workflow-run
 marker is `XMD1`, `0x584d4431`, and recognizing that one is the categorical
 live-run refusal rather than the foreign-container refusal.
@@ -612,11 +576,8 @@ Export refuses without producing the target when:
 - the source run is absent, foreign, damaged or incompatible;
 - another workflow executor holds its lock;
 - a consistent committed frontier cannot be read;
-- the workflow definition source cannot be obtained and authenticated: for a
-  version-1 run, no legacy reader is installed, the reader cannot reach the
-  retained object, or its answer does not describe the definition; for a
-  version-2 run, the retained manifest or content is missing, or disagrees with
-  the descriptor;
+- the workflow definition source cannot be obtained and authenticated: the
+  retained manifest or content is missing, or disagrees with the descriptor;
 - any retained state required by the artifact manifest is unreadable;
 - the target exists, lacks the `.xmd` extension or cannot be published
   atomically; or
@@ -675,8 +636,8 @@ Architecture review freezes these invariants before implementation:
 | Contract | Status at this design revision |
 | --- | --- |
 | XMD artifact terminology and structural boundary | specified in `architecture.md`; built |
-| `xmd workflow export` | specified; built, Deno provider only. A version-2 run exports from its own retained source; a version-1 run's source retrieval is host-installed rather than caller-supplied |
-| artifact format 2 for source-bundle runs | specified; the manifest version, identity domain, closed inventory, source entry/content pairs and semantic verifier are built, Deno provider only. Format 1 is unchanged and remains readable |
+| `xmd workflow export` | specified; built, Deno provider only. A run exports from its own retained source, so export reaches no repository |
+| the artifact format | specified; the manifest version, identity domain, closed inventory, source entry/content pairs and semantic verifier are built, Deno provider only |
 | artifact status/history and manifest verification | specified; built, Deno provider only. `inspectArtifact()` and `historyArtifact()` are sibling lifecycle operations, and history answers with an envelope |
 | version 1 Agent session portability evidence | specified; the two content kinds, the closed union and the complete post-identity profile verifier are built. Production export still emits merged-legacy V1, no provider bundle capture exists, and inspection carries none of it |
 | artifact-backed history fork and artifact lineage | specified; unbuilt |

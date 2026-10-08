@@ -29,7 +29,6 @@ import { initializeSchema as initializeCloudflareSchema } from "../../vendor/clo
 import {
   WorkflowDatabaseCorruptError,
   WorkflowDatabaseFormatError,
-  WorkflowIncompleteVersionOneError,
   WorkflowSchemaVersionError,
 } from "../storage/errors.ts";
 import { reading } from "./reading.ts";
@@ -47,17 +46,13 @@ export const APPLICATION_ID = 0x584d4431;
 /**
  * The version a Git-definition run is written at, and reads back as.
  *
- * Still the value it always was. A version-2 database is a different inventory
- * rather than a later amendment of this one, so redefining this constant to
- * mean "latest" would silently move every version-1 assertion that names it.
+ * The one inventory this build writes and reads. A file declaring any other
+ * version is refused rather than upgraded: nothing here ever migrates one.
  */
 export const SCHEMA_VERSION = 1;
 
-/** The version a source-bundle run is written at, and reads back as. */
-export const SOURCE_BUNDLE_SCHEMA_VERSION = 2;
-
-/** Every live schema version this build recognizes. */
-export type WorkflowSchemaVersion = 1 | 2;
+/** The live schema version, of which there is one. */
+export type WorkflowSchemaVersion = 1;
 
 const STATUSES = "'running', 'suspended', 'interrupted', 'completed', 'failed', 'cancelled'";
 
@@ -594,7 +589,8 @@ const SOURCE_BUNDLE_OBJECTS: ReadonlyMap<string, DeclaredObject> = new Map([
  * cannot drift apart in the objects they are supposed to share — and so a
  * version-1 amendment is not something that has to be applied twice.
  */
-const OBJECTS_V2: ReadonlyMap<string, DeclaredObject> = new Map([
+/** The declared inventory this build writes and reads. */
+const DECLARED: ReadonlyMap<string, DeclaredObject> = new Map([
   ...[...OBJECTS.entries()].map(([name, object]): [string, DeclaredObject] => [
     name,
     name === "workflow_run" ? SOURCE_BUNDLE_RUN : object,
@@ -602,20 +598,8 @@ const OBJECTS_V2: ReadonlyMap<string, DeclaredObject> = new Map([
   ...SOURCE_BUNDLE_OBJECTS.entries(),
 ]);
 
-/** The declared inventory of one live schema version. */
-function objectsFor(version: WorkflowSchemaVersion): ReadonlyMap<string, DeclaredObject> {
-  return version === 2 ? OBJECTS_V2 : OBJECTS;
-}
-
 export const EXPECTED_SCHEMA = Object.freeze(
-  [...OBJECTS.entries()].map(([name, object]) =>
-    Object.freeze({ name, type: object.type, sql: normalize(object.sql) }),
-  ),
-);
-
-/** The same declarations, for the source-bundle inventory. */
-export const SOURCE_BUNDLE_EXPECTED_SCHEMA = Object.freeze(
-  [...OBJECTS_V2.entries()].map(([name, object]) =>
+  [...DECLARED.entries()].map(([name, object]) =>
     Object.freeze({ name, type: object.type, sql: normalize(object.sql) }),
   ),
 );
@@ -671,19 +655,16 @@ export function declaredObjectSql(name: string): string {
   return declared.sql;
 }
 
-function schemaSql(version: WorkflowSchemaVersion): string {
-  return [...objectsFor(version).values()]
+function schemaSql(): string {
+  return [...DECLARED.values()]
     .filter((object) => object.type === "table" && !object.sql.startsWith("CREATE TABLE vfs_"))
     .filter((object) => !object.sql.startsWith("CREATE TABLE _vfs_"))
     .map((object) => `${object.sql};`)
     .join("\n\n");
 }
 
-/** Version 1 in full. */
-export const SCHEMA_SQL = schemaSql(SCHEMA_VERSION);
-
-/** Version 2 in full. */
-export const SOURCE_BUNDLE_SCHEMA_SQL = schemaSql(SOURCE_BUNDLE_SCHEMA_VERSION);
+/** The schema in full. */
+export const SCHEMA_SQL = schemaSql();
 
 /**
  * Write one live schema into a database that holds nothing.
@@ -692,22 +673,19 @@ export const SOURCE_BUNDLE_SCHEMA_SQL = schemaSql(SOURCE_BUNDLE_SCHEMA_VERSION);
  * and the tables appear together or not at all — a half-initialized file would
  * be indistinguishable from one this build must refuse.
  *
- * The version comes from the candidate definition that is about to be written,
- * never from what a file already claims: this initializes an empty database and
- * nothing here ever upgrades one.
+ * This initializes an empty database and nothing here ever upgrades one.
  */
 export function initializeSchema(
   database: DatabaseSync,
   dofs: CloudflareDatabase,
   initializeRun: () => void,
-  version: WorkflowSchemaVersion = SCHEMA_VERSION,
 ): void {
   database.exec(`PRAGMA application_id = ${APPLICATION_ID};`);
-  database.exec(version === 2 ? SOURCE_BUNDLE_SCHEMA_SQL : SCHEMA_SQL);
+  database.exec(SCHEMA_SQL);
   initializeCloudflareSchema(dofs, () => 0);
   initializeEmptyWorkspace(database);
   initializeRun();
-  database.exec(`PRAGMA user_version = ${version};`);
+  database.exec(`PRAGMA user_version = ${SCHEMA_VERSION};`);
 }
 
 /**
@@ -720,13 +698,10 @@ export function initializeSchema(
  */
 export function liveSchemaVersion(database: DatabaseSync, path: string): WorkflowSchemaVersion {
   const version = readPragmaNumber(database, "user_version", path);
-  if (version === SOURCE_BUNDLE_SCHEMA_VERSION) {
-    return 2;
-  }
   if (version === SCHEMA_VERSION) {
-    return 1;
+    return SCHEMA_VERSION;
   }
-  throw new WorkflowSchemaVersionError(path, version, SOURCE_BUNDLE_SCHEMA_VERSION);
+  throw new WorkflowSchemaVersionError(path, version, SCHEMA_VERSION);
 }
 
 /**
@@ -798,10 +773,10 @@ export function verifyRecognizedSchema(
       "it carries the XMD application identity without a complete schema version",
     );
   }
-  if (version !== SCHEMA_VERSION && version !== SOURCE_BUNDLE_SCHEMA_VERSION) {
-    throw new WorkflowSchemaVersionError(path, version, SOURCE_BUNDLE_SCHEMA_VERSION);
+  if (version !== SCHEMA_VERSION) {
+    throw new WorkflowSchemaVersionError(path, version, SCHEMA_VERSION);
   }
-  const recognized: WorkflowSchemaVersion = version === 2 ? 2 : 1;
+  const recognized: WorkflowSchemaVersion = SCHEMA_VERSION;
 
   verifyStructure(database, path, recognized);
   checkForeignKeys(database, path);
@@ -826,12 +801,7 @@ function verifyStructure(
 ): void {
   const objects = schemaObjects(database, path);
   // Only version 1 has pre-release shapes: nothing ever shipped claiming to be
-  // an incomplete version 2.
-  if (version === 1 && isIncompletePreReleaseShape(objects)) {
-    throw new WorkflowIncompleteVersionOneError(path);
-  }
-
-  const declared = objectsFor(version);
+  const declared = DECLARED;
   for (const object of objects) {
     const expected = declared.get(object.name);
     if (expected === undefined) {
@@ -860,73 +830,6 @@ function verifyStructure(
 
 function hasDeclaredVersionOneObjects(database: DatabaseSync, path: string): boolean {
   return schemaObjects(database, path).some((object) => OBJECTS.has(object.name));
-}
-
-/**
- * Every in-place amendment to version 1, newest first.
- *
- * Each entry names what that amendment added. Peeling them off in order is what
- * reconstructs the shapes that once claimed to be a complete version 1, so a
- * database an earlier build produced is refused as an incomplete pre-release
- * rather than as arbitrary damage.
- */
-const AMENDMENTS: readonly (readonly string[])[] = Object.freeze([
-  Object.freeze(["workflow_fork_lineage", "journal_event_provenance"]),
-  Object.freeze(["workflow_suspension_answers"]),
-  Object.freeze(["workspace_repositories", "workspace_worktrees"]),
-]);
-
-/** What the newest amendment added. Its presence marks a current-shape database. */
-const LATEST_AMENDMENT: readonly string[] = AMENDMENTS[0] ?? [];
-
-/** The very first pre-release shape, before Workspace root retention existed. */
-const EARLIEST_PRE_RELEASE_SHAPE: readonly string[] = [
-  "definition_retrieval",
-  "document_executions",
-  "journal_events",
-  "workflow_run",
-];
-
-/**
- * Every later shape that once claimed to be a complete version 1.
- *
- * Newest first: version 1 minus the newest amendment, then minus the one before
- * it, and so on.
- */
-const PRIOR_COMPLETE_SHAPES: readonly (readonly string[])[] = Object.freeze(
-  AMENDMENTS.map((_, index) => {
-    const removed = new Set(AMENDMENTS.slice(0, index + 1).flat());
-    return Object.freeze(REQUIRED_OBJECTS.filter((name) => !removed.has(name)));
-  }),
-);
-
-/**
- * Whether these declarations describe an earlier shape that once claimed to be
- * a complete version 1.
- *
- * The very first pre-release held only the run, journal and execution tables.
- * Every shape after it is version 1 minus whichever amendments had not been
- * made yet, and each is named here so the refusal reads as an incomplete
- * pre-release rather than as corruption.
- */
-function isIncompletePreReleaseShape(objects: readonly SchemaObject[]): boolean {
-  // Optional objects are not part of any shape's identity: one may be present
-  // at every amendment level or at none, so counting it would read a file's
-  // history off something that says nothing about it.
-  const present = new Set(
-    objects.map((object) => object.name).filter((name) => !OPTIONAL_OBJECTS.has(name)),
-  );
-  if (LATEST_AMENDMENT.some((name) => present.has(name))) {
-    return false;
-  }
-  const earliest = new Set(EARLIEST_PRE_RELEASE_SHAPE);
-  if (present.size === earliest.size && [...present].every((name) => earliest.has(name))) {
-    return objects.every((object) => object.type === "table");
-  }
-  return PRIOR_COMPLETE_SHAPES.some((shape) => {
-    const expected = new Set(shape);
-    return present.size === expected.size && [...present].every((name) => expected.has(name));
-  });
 }
 
 /**

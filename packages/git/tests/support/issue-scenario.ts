@@ -46,8 +46,7 @@ import type { IssueTrackerServer, ServedIssue } from "./issue-tracker-server.ts"
 
 const RUN: WorkflowRun = Object.freeze({
   runId: "run-296-issue",
-  base: "main",
-  pinnedCommit: "9fceb02d0ae598e95dc970b74767f19372d61af8",
+  bundleHash: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
 });
 
 const NO_PROPS: PropsSchema = { type: "object", properties: {}, additionalProperties: false };

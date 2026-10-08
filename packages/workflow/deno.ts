@@ -29,10 +29,7 @@ export type { WorkflowRunStorageOptions } from "./src/deno/provider.ts";
 export { useWorkflowLifecycle } from "./src/deno/lifecycle.ts";
 export { useWorkflowRunHost } from "./src/deno/run-host.ts";
 export type { WorkflowRunHostOptions } from "./src/deno/run-host.ts";
-export { isGitWorkflowRunCreation } from "./src/lifecycle/execution.ts";
 export type {
-  GitWorkflowRunCreationV1,
-  SourceBundleWorkflowRunCreationV2,
   WorkflowBeginRequest,
   WorkflowExecutionTransitions,
   WorkflowExecutionBegun,
@@ -42,32 +39,16 @@ export type {
 } from "./src/lifecycle/execution.ts";
 export type { WorkflowLifecycleOptions } from "./src/deno/lifecycle.ts";
 /**
- * How a host reads a retained definition's Markdown back, and the closure it
- * returns.
+ * The closure a retained definition returns.
  *
  * Published here rather than from the package root because these describe what
- * this adapter retains: a closure is checked against DOFS and SQLite rows, and
- * the reader is installed into this provider. The encoding stays private —
- * nothing that reads or writes a container is exported from any entrypoint.
+ * this adapter retains: a closure is checked against DOFS and SQLite rows. The
+ * encoding stays private — nothing that reads or writes a container is exported
+ * from any entrypoint.
  */
 export { gitBlobIdentity } from "./src/deno/artifact/source.ts";
-export type {
-  GitDefinitionSourceClosureV1,
-  GitDefinitionSourceComponentV1,
-  GitDefinitionSourceRootV1,
-  GitRetainedDefinitionSourcesV1,
-  LegacyWorkflowSourceReader,
-  RetainedDefinitionSources,
-  SourceBundleRetainedDefinitionSourcesV2,
-  SourceBundleRetainedSourceV2,
-} from "./src/lifecycle/source.ts";
-export type {
-  DetachedXmdArtifact,
-  VerifiedXmdArtifact,
-  XmdArtifactDefinitionClosure,
-  XmdArtifactDefinitionComponent,
-  XmdArtifactDefinitionRoot,
-} from "./src/deno/artifact/types.ts";
+export type { RetainedDefinitionSources, RetainedSource } from "./src/lifecycle/source.ts";
+export type { DetachedXmdArtifact, VerifiedXmdArtifact } from "./src/deno/artifact/types.ts";
 export {
   hashRunId,
   workflowForkStaging,

@@ -117,8 +117,7 @@ function* raised(operation: Operation<unknown>): Operation<unknown> {
 
 const GIT_HOST_RUN: WorkflowRun = Object.freeze({
   runId: "run-297-loaded-copy",
-  base: "main",
-  pinnedCommit: "9fceb02d0ae598e95dc970b74767f19372d61af8",
+  bundleHash: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
 });
 
 const GIT_HOST_SOURCE = "<Effect />\n";

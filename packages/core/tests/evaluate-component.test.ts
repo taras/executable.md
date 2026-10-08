@@ -402,26 +402,6 @@ describe("Tier FE — a program the document holds", () => {
       ),
     ).toContain("does not also carry `text`");
   });
-
-  it("FE1: the released `source` spelling is refused where the host did not admit it", function* () {
-    const files = recordedFiles({ "notes.md": NOTE });
-    expect(
-      yield* refusal(run(`<Evaluate source={'<File path="notes.md" />'} />\n`, [reading(files)])),
-    ).toContain("this host did not admit it");
-    // Refused before the program was read, so nothing was performed.
-    expect(files.performed).toEqual([]);
-  });
-
-  it("FE1: a host that admitted the alias accepts it, silently", function* () {
-    const files = recordedFiles({ "notes.md": NOTE });
-    const output = yield* run(
-      `<Evaluate source={'<File path="notes.md" />\\n'} as="answer" />\n\n<Json value={answer} />\n`,
-      [{ evaluation: { read: [fileReadEntry()], files, deprecatedSourceAlias: true } }],
-    );
-
-    expect(String(output)).toContain("the retained note");
-    expect(String(output)).not.toContain("earlier spelling");
-  });
 });
 
 describe("Tier FE — a fragment reaches the captured operations and nothing else", () => {

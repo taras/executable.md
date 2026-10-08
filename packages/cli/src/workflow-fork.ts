@@ -66,7 +66,7 @@ import type { ExecutionInstallation } from "@executablemd/core/host";
 import type { ForkSelection, WorkflowRun } from "@executablemd/workflow";
 import type { WorkflowRunDatabase } from "@executablemd/workflow";
 import type {
-  SourceBundleWorkflowRunCreationV2,
+  WorkflowRunCreation,
   WorkflowExecutionTransitions,
 } from "@executablemd/workflow/deno";
 import type { EstablishedDefinition } from "./workflow-definition.ts";
@@ -85,7 +85,7 @@ export interface ForkRequest {
   readonly sourceRunId: string;
   readonly checkpointEventId: string;
   readonly established: EstablishedDefinition;
-  readonly creation: SourceBundleWorkflowRunCreationV2;
+  readonly creation: WorkflowRunCreation;
 }
 
 /**
@@ -149,7 +149,6 @@ export function* preflightFork(
   // The fork's own run value, in the shape its candidate's version declares.
   const run: WorkflowRun = {
     runId: request.runId,
-    definitionVersion: 2,
     bundleHash: request.creation.definition.bundleHash,
     ...(request.creation.definition.targetPath === undefined
       ? {}

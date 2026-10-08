@@ -1,5 +1,5 @@
 /**
- * Tier WGAC — `<Evaluate source={…} />`, the registered generated-XMD boundary
+ * Tier WGAC — `<Evaluate text={…} />`, the registered generated-XMD boundary
  * (specs/workflow-workspace-spec.md §8.4).
  *
  * The claim under test is the split between availability and permission.
@@ -102,6 +102,11 @@ function runDocument(
   source: string,
   evaluation: GeneratedEvaluationOptions = {},
   hold?: () => Operation<void>,
+  // Where the document is written, when a case is about that. Installed inside
+  // the attachment and outside the execution, which is where the run's own
+  // `<Dir>` installs one — modelled by this host rather than imported, for the
+  // same reason the directory entry above is stated rather than imported.
+  within?: string,
 ): Operation<Attempt> {
   return scoped(function* () {
     yield* API.Env.around(
@@ -121,6 +126,14 @@ function runDocument(
       output = yield* withWorkflowWorkspace(
         database,
         scoped(function* () {
+          if (within !== undefined) {
+            yield* API.Env.around({
+              // deno-lint-ignore require-yield
+              *cwd(): Operation<string> {
+                return within;
+              },
+            });
+          }
           return yield* collect(
             yield* executeInstalled(
               { ...inlineSource(source), stream: database.journal },
@@ -383,7 +396,7 @@ describe("Tier WGAC — the registered Evaluate component", () => {
       // ran would be a matter of precedence rather than of what was written.
       const paired = yield* runDocument(
         database,
-        `<Evaluate source="text">\n<File path="notes.md" />\n</Evaluate>\n`,
+        `<Evaluate text="text">\n<File path="notes.md" />\n</Evaluate>\n`,
       );
       expect(reported(paired)).toContain("does not also carry `text`");
       expect(admissions(paired.events)).toHaveLength(0);
@@ -396,7 +409,7 @@ describe("Tier WGAC — the registered Evaluate component", () => {
       // cannot state a root, an identity or a request here.
       const widened = yield* runDocument(
         database,
-        `<Evaluate source="text" selectedRoot="workspace://elsewhere" />\n`,
+        `<Evaluate text="text" selectedRoot="workspace://elsewhere" />\n`,
       );
       expect(reported(widened)).toMatch(/selectedRoot|additional/i);
       expect(admissions(widened.events)).toHaveLength(0);
@@ -423,9 +436,9 @@ describe("Tier WGAC — the registered Evaluate component", () => {
       // of "the root this run is on" rather than "some root this run retains".
       const attempt = yield* runDocument(
         database,
-        `<Evaluate source={'<File path="notes.md" />'} as="first" />\n\n` +
+        `<Evaluate text={'<File path="notes.md" />'} as="first" />\n\n` +
           `<File path="between.md">written between observations</File>\n\n` +
-          `<Evaluate source={'<File path="notes.md" />'} as="second" />\n\n` +
+          `<Evaluate text={'<File path="notes.md" />'} as="second" />\n\n` +
           `<Json value={second} />\n`,
       );
 
@@ -479,7 +492,7 @@ describe("Tier WGAC — the registered Evaluate component", () => {
       // state its own ceilings.
       const attempt = yield* runDocument(
         database,
-        `<Evaluate source={'<Evaluate source="<File path=\\'notes.md\\' />" />'} />\n`,
+        `<Evaluate text={'<Evaluate text="<File path=\\'notes.md\\' />" />'} />\n`,
       );
 
       expect(reported(attempt)).toContain("did not admit");
@@ -523,8 +536,8 @@ describe("Tier WGAC — the registered Evaluate component", () => {
         ]);
         return yield* runDocument(
           database,
-          `<Forge>\n<Evaluate source={'<File path="notes.md" />'} />\n\n` +
-            `<Evaluate source={'<File path="notes.md" />'} />\n</Forge>\n`,
+          `<Forge>\n<Evaluate text={'<File path="notes.md" />'} />\n\n` +
+            `<Evaluate text={'<File path="notes.md" />'} />\n</Forge>\n`,
         );
       });
 
@@ -884,7 +897,7 @@ describe("Tier WGAC — the registered Evaluate component", () => {
       // with the workflow's own suspension replacement for the same name.
       const refused = yield* runDocument(
         database,
-        `<Evaluate allow={["write"]} source={'<Elicit schema={{}} as="x">ask?</Elicit>'} />\n`,
+        `<Evaluate allow={["write"]} text={'<Elicit schema={{}} as="x">ask?</Elicit>'} />\n`,
       );
       expect(reported(refused)).toContain("did not admit");
     });
@@ -896,7 +909,7 @@ describe("Tier WGAC — the registered Evaluate component", () => {
       // which is what "unless its own profile admits it" means.
       const admitted = yield* runDocument(
         database,
-        `<Evaluate allow={["write"]} source={'<Elicit schema={{}} as="x">ask?</Elicit>'} />\n`,
+        `<Evaluate allow={["write"]} text={'<Elicit schema={{}} as="x">ask?</Elicit>'} />\n`,
         { writes: [elicitWriteEntry()] },
       );
       expect(reported(admitted)).not.toContain("did not admit");
@@ -911,7 +924,7 @@ describe("Tier WGAC — the registered Evaluate component", () => {
       // No configured requests: `<Fetch>` is not on the allowlist at all.
       const refused = yield* runDocument(
         database,
-        `<Evaluate source={'<Fetch url="${URL_ADMITTED}" />'} />\n`,
+        `<Evaluate text={'<Fetch url="${URL_ADMITTED}" />'} />\n`,
       );
       expect(reported(refused)).toContain("did not admit");
       expect(refused.performed).toHaveLength(0);
@@ -922,7 +935,7 @@ describe("Tier WGAC — the registered Evaluate component", () => {
       const database = yield* createRun();
       const attempt = yield* runDocument(
         database,
-        `<Evaluate source={'<Fetch url="${URL_ADMITTED}" />'} />\n`,
+        `<Evaluate text={'<Fetch url="${URL_ADMITTED}" />'} />\n`,
         { requests: [{ url: URL_ADMITTED }] },
       );
       expect(attempt.failure).toBe(undefined);
@@ -935,7 +948,7 @@ describe("Tier WGAC — the registered Evaluate component", () => {
       // A different request under the same ceiling performs nothing.
       const outside = yield* runDocument(
         database,
-        `<Evaluate source={'<Fetch url="${URL_OTHER}" />'} />\n`,
+        `<Evaluate text={'<Fetch url="${URL_OTHER}" />'} />\n`,
         { requests: [{ url: URL_ADMITTED }] },
       );
       expect(reported(outside)).toContain("did not admit");
@@ -985,17 +998,17 @@ function* stored(database: WorkflowRunDatabase, path: string): Operation<string 
 /** One generated fragment, quoted into an expression prop the way a document writes one. */
 function evaluates(fragment: string, allow?: readonly string[]): string {
   const selection = allow === undefined ? "" : ` allow={${JSON.stringify([...allow])}}`;
-  return `<Evaluate source={${JSON.stringify(fragment)}}${selection} />\n`;
+  return `<Evaluate text={${JSON.stringify(fragment)}}${selection} />\n`;
 }
 
 const WRITES = `<Dir path="nested">\n\n<File path="out.md">the fragment wrote this</File>\n\n</Dir>\n`;
 
 describe("Tier WGAC — the classes an authored element may select", () => {
   const REFUSED: Array<[string, string]> = [
-    ["an empty selection", `<Evaluate source="text" allow={[]} />\n`],
-    ["one class twice", `<Evaluate source="text" allow={["read", "read"]} />\n`],
-    ["a class this host does not have", `<Evaluate source="text" allow={["execute"]} />\n`],
-    ["a selection that is not an array", `<Evaluate source="text" allow="write" />\n`],
+    ["an empty selection", `<Evaluate text="text" allow={[]} />\n`],
+    ["one class twice", `<Evaluate text="text" allow={["read", "read"]} />\n`],
+    ["a class this host does not have", `<Evaluate text="text" allow={["execute"]} />\n`],
+    ["a selection that is not an array", `<Evaluate text="text" allow="write" />\n`],
   ];
 
   for (const [what, source] of REFUSED) {
@@ -1101,6 +1114,34 @@ describe("Tier WGAC — the standard write table", () => {
           forms: ["self-closing"],
         },
       ]);
+    });
+  });
+
+  it("WGAC10: an admitted write lands in the directory the element was written in", function* () {
+    const root = yield* useStorageRoot();
+    yield* withStorage(root, function* () {
+      const database = yield* createRun();
+
+      // The site is inside a directory, the way an authored workflow writes
+      // `<Evaluate>` inside the checkout it is proposing into. The fragment
+      // names `nested` and nothing else: where that resolves is the question.
+      const attempt = yield* runDocument(
+        database,
+        evaluates(WRITES, ["write"]),
+        {},
+        undefined,
+        "/authored",
+      );
+
+      expect(attempt.failure).toBe(undefined);
+      // Resolved against the site, so the fragment's own `<Dir>` ensured its
+      // target beneath it and the write landed there — which is what makes an
+      // authored effect written beside the element, reading the same relative
+      // path, reach the same entry.
+      expect(yield* stored(database, "/authored/nested/out.md")).toBe("the fragment wrote this");
+      // And nowhere else. A profile answering with the Workspace root instead
+      // would put it here, where nothing written beside the element is looking.
+      expect(yield* stored(database, "/nested/out.md")).toBe(undefined);
     });
   });
 
@@ -1220,7 +1261,7 @@ describe("Tier WGAC — the standard write table", () => {
 
       const attempt = yield* runDocument(
         database,
-        `<Evaluate source={${JSON.stringify(`<File.Delete path="obsolete.md" />`)}} ` +
+        `<Evaluate text={${JSON.stringify(`<File.Delete path="obsolete.md" />`)}} ` +
           `allow={["write"]} as="applied" />\n\n<Json value={applied} />\n`,
       );
 
@@ -1312,7 +1353,7 @@ describe("Tier WGAC — what a selection binds", () => {
 
       const attempt = yield* runDocument(
         database,
-        `<Evaluate source={${JSON.stringify(WRITES)}} allow={["write"]} as="applied" />\n\n` +
+        `<Evaluate text={${JSON.stringify(WRITES)}} allow={["write"]} as="applied" />\n\n` +
           `<Json value={applied} />\n`,
       );
 
@@ -1334,7 +1375,7 @@ describe("Tier WGAC — what a selection binds", () => {
       const fragment = `<File path="notes.md" />\n\n<File path="proposed.md">the fragment wrote this</File>\n`;
       const attempt = yield* runDocument(
         database,
-        `<Evaluate source={${JSON.stringify(fragment)}} allow={["read", "write"]} as="applied" />\n\n` +
+        `<Evaluate text={${JSON.stringify(fragment)}} allow={["read", "write"]} as="applied" />\n\n` +
           `<Json value={applied} />\n`,
       );
 
