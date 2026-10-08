@@ -779,13 +779,13 @@ function decorated(box: ReplBox): ReplBoxProps {
  * while a child per token would be a box, a bound and a pointer target for every
  * delimiter on the screen.
  *
- * Only for a row the element can hold. The engine wraps each text operation it
- * is given **on its own**, and a row is one cell tall: several operations whose
- * total is wider than the element each show their own first line and leave the
+ * Bounded to the room the element has, because the engine wraps each operation
+ * it is given **on its own** and a row is one cell tall: several operations
+ * totalling more than the element each show their own first line and leave the
  * cells their remainder went to blank — measured, a 400-column generated tag in
- * a 118-column drawer came out with its quoted values missing. One operation
- * wraps once, which is the reading this screen has always shown, so a row that
- * does not fit is drawn as the one thing it is.
+ * a 118-column drawer came out with its quoted values missing. Cutting the
+ * stretches at the room keeps every character the row can show, in order, in
+ * the role it has; what is past the edge was never on the screen either way.
  */
 function written(content: string, box: ReplBox, focused: boolean): Op[] {
   const style = box.style;
@@ -793,37 +793,55 @@ function written(content: string, box: ReplBox, focused: boolean): Op[] {
     return [text(content)];
   }
   const { runs } = box;
-  if (
-    runs === undefined ||
-    runs.length === 0 ||
-    runText(runs) !== content ||
-    !holds(box.props, content)
-  ) {
+  const room = roomOf(box.props);
+  if (runs === undefined || runs.length === 0 || runText(runs) !== content || room === "unknown") {
     const { colour, attrs } = textStyleOf(style, focused);
     return [drawn(content, colour, attrs)];
   }
-  return runs.map((run) => {
+  return bounded(runs, room).map((run) => {
     const { colour, attrs } = runStyleOf(run.token, style, focused);
     return drawn(run.text, colour, attrs);
   });
 }
 
 /**
- * Whether this element holds this text without the engine wrapping it.
+ * How many columns this element gives its text.
  *
  * Read off the constraint the element was opened with rather than worked out
  * again: a box stated at a measured width says how much room its text has, and
- * a box that sizes itself to its content always has enough.
+ * a box that sizes itself to its own content never has too little. A box that
+ * grows takes its width from the flow around it, which is not an answer this
+ * builder has — and only the pass that is *asking* what the widths are draws
+ * one, so that row is drawn the way it always was and the measurement it
+ * contributes is unchanged.
  */
-function holds(props: ReplBoxProps, content: string): boolean {
+function roomOf(props: ReplBoxProps): number | "whole" | "unknown" {
   const width = props.layout?.width;
   if (width === undefined) {
-    return false;
+    return "unknown";
   }
   if (width.type === "fit") {
-    return true;
+    return "whole";
   }
-  return width.type === "fixed" && content.length <= width.value;
+  return width.type === "fixed" ? width.value : "unknown";
+}
+
+/** The stretches of a row that fall inside the room it has, in order. */
+function bounded(runs: readonly ReplTokenRun[], room: number | "whole"): readonly ReplTokenRun[] {
+  if (room === "whole" || runText(runs).length <= room) {
+    return runs;
+  }
+  const kept: ReplTokenRun[] = [];
+  let used = 0;
+  for (const run of runs) {
+    if (used >= room) {
+      break;
+    }
+    const take = Math.min(run.text.length, room - used);
+    kept.push(Object.freeze({ text: run.text.slice(0, take), token: run.token }));
+    used += take;
+  }
+  return kept;
 }
 
 function drawn(content: string, colour: number, attrs: number): Op {
