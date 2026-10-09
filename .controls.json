@@ -8,7 +8,7 @@
     ],
     "outcome": "BROKEN",
     "exit": 1,
-    "summary": "FAILED | 0 passed (34 steps) | 1 failed (2 steps) (62ms)",
+    "summary": "FAILED | 0 passed (34 steps) | 1 failed (2 steps) (60ms)",
     "firstFailure": "error: Error: expect(received).toBe(expected) // Object.is equality",
     "bytesBefore": "c1c4dc763817a6be8aabc049ccec1201f0130de7afee32a712139ac5263f184d",
     "bytesAfter": "c1c4dc763817a6be8aabc049ccec1201f0130de7afee32a712139ac5263f184d",
@@ -39,7 +39,7 @@
     ],
     "outcome": "BROKEN",
     "exit": 1,
-    "summary": "FAILED | 0 passed (34 steps) | 1 failed (2 steps) (60ms)",
+    "summary": "FAILED | 0 passed (34 steps) | 1 failed (2 steps) (61ms)",
     "firstFailure": "error: Error: expect(received).not.toContain(expected) // indexOf",
     "bytesBefore": "c1c4dc763817a6be8aabc049ccec1201f0130de7afee32a712139ac5263f184d",
     "bytesAfter": "c1c4dc763817a6be8aabc049ccec1201f0130de7afee32a712139ac5263f184d",
@@ -70,10 +70,10 @@
     ],
     "outcome": "BROKEN",
     "exit": 1,
-    "summary": "FAILED | 0 passed (19 steps) | 1 failed (3 steps) (205ms)",
+    "summary": "FAILED | 0 passed (21 steps) | 1 failed (3 steps) (218ms)",
     "firstFailure": "error: Error: expect(received).toContain(expected) // indexOf",
-    "bytesBefore": "f230870a067c5fd8cb1565e29f1341f3afe676a79d485125cd88f981016320d1",
-    "bytesAfter": "f230870a067c5fd8cb1565e29f1341f3afe676a79d485125cd88f981016320d1",
+    "bytesBefore": "d1d428c5ff52d4a8044b5c0d45736023d49a9fd9a22a3175e21fa0f5b8f70f0f",
+    "bytesAfter": "d1d428c5ff52d4a8044b5c0d45736023d49a9fd9a22a3175e21fa0f5b8f70f0f",
     "restored": true
   },
   {
@@ -100,7 +100,7 @@
     ],
     "outcome": "BROKEN",
     "exit": 1,
-    "summary": "FAILED | 0 passed (34 steps) | 1 failed (2 steps) (60ms)",
+    "summary": "FAILED | 0 passed (34 steps) | 1 failed (2 steps) (59ms)",
     "firstFailure": "error: Error: expect(received).toBe(expected) // Object.is equality",
     "bytesBefore": "c1c4dc763817a6be8aabc049ccec1201f0130de7afee32a712139ac5263f184d",
     "bytesAfter": "c1c4dc763817a6be8aabc049ccec1201f0130de7afee32a712139ac5263f184d",
@@ -130,7 +130,7 @@
     ],
     "outcome": "BROKEN",
     "exit": 1,
-    "summary": "FAILED | 0 passed (7 steps) | 1 failed (1 step) (255ms)",
+    "summary": "FAILED | 0 passed (7 steps) | 1 failed (1 step) (251ms)",
     "firstFailure": "error: Error: expect(received).toBe(expected) // Object.is equality",
     "bytesBefore": "59e98dc43ef620ef744da1b7fc04d7ebebe5d5ce9c993497bcb02080db23497d",
     "bytesAfter": "59e98dc43ef620ef744da1b7fc04d7ebebe5d5ce9c993497bcb02080db23497d",
@@ -149,6 +149,51 @@
     "firstFailure": "error: Error: expect(received).toEqual(expected) // deep equality",
     "bytesBefore": "a3a60a20cfec80d467ac009f36dd01aad9f259205551f6c291597b0444207d36",
     "bytesAfter": "a3a60a20cfec80d467ac009f36dd01aad9f259205551f6c291597b0444207d36",
+    "restored": true
+  },
+  {
+    "id": "K11-foreign",
+    "says": "let a terminal carry a request its invocation did not issue (R1)",
+    "file": "packages/core/src/component-api.ts",
+    "suites": [
+      "packages/core/tests/component-expansion.test.ts"
+    ],
+    "outcome": "BROKEN",
+    "exit": 1,
+    "summary": "FAILED | 0 passed (23 steps) | 1 failed (1 step) (213ms)",
+    "firstFailure": "error: Error: expect(received).toEqual(expected) // deep equality",
+    "bytesBefore": "8711622e0622d342b960d2bc4c60e4a7d984cea91ebec01cb285dde4e99f2e55",
+    "bytesAfter": "8711622e0622d342b960d2bc4c60e4a7d984cea91ebec01cb285dde4e99f2e55",
+    "restored": true
+  },
+  {
+    "id": "K12-mutable-phase",
+    "says": "publish a phase a reader can rewrite (R3)",
+    "file": "packages/core/src/component-expansion.ts",
+    "suites": [
+      "packages/core/tests/component-expansion.test.ts"
+    ],
+    "outcome": "BROKEN",
+    "exit": 1,
+    "summary": "FAILED | 0 passed (23 steps) | 1 failed (1 step) (214ms)",
+    "firstFailure": "error: Error: expect(received).toBe(expected) // Object.is equality",
+    "bytesBefore": "d1d428c5ff52d4a8044b5c0d45736023d49a9fd9a22a3175e21fa0f5b8f70f0f",
+    "bytesAfter": "d1d428c5ff52d4a8044b5c0d45736023d49a9fd9a22a3175e21fa0f5b8f70f0f",
+    "restored": true
+  },
+  {
+    "id": "K13-envelope",
+    "says": "let the lexical envelope disagree with the extractor (R2)",
+    "file": "packages/core/src/source-inspection.ts",
+    "suites": [
+      "packages/core/tests/source-inspection.test.ts"
+    ],
+    "outcome": "BROKEN",
+    "exit": 1,
+    "summary": "FAILED | 0 passed (12 steps) | 1 failed (1 step) (17ms)",
+    "firstFailure": "error: Error: expect(received).toEqual(expected) // deep equality",
+    "bytesBefore": "e6978c0d5ee73b2c1e94c9f2212bca067b32e7d64b1e55fb4bc50657b1d3064a",
+    "bytesAfter": "e6978c0d5ee73b2c1e94c9f2212bca067b32e7d64b1e55fb4bc50657b1d3064a",
     "restored": true
   }
 ]

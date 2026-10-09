@@ -262,6 +262,126 @@ describe("Tier CX — what surrounds one expansion", () => {
     expect(report).toContain("did not issue");
   });
 
+  it("CX1: an authentic request from another invocation runs neither body", function* () {
+    // R1. Not a fabricated object and not a copy — a *real* request belonging
+    // to another invocation that is live and has not been delegated yet,
+    // offered to this one's `next`. The brand is genuine and the claim is
+    // unspent, so nothing about the request itself says no; what says no is
+    // that this terminal is one element's continuation and that request was
+    // issued for another.
+    //
+    // It has to be refused before the body runs. Refusing afterwards is too
+    // late: the effect has happened, and the other element's one claim has
+    // been spent by the wrong invocation.
+    //
+    // Two spawned siblings, so both expansions really are in flight at once:
+    // in a sequential document the first element's request is already spent by
+    // the time the second is offered it, which tests the wrong thing.
+    const ran: string[] = [];
+    const lent = withResolvers<ComponentExpansionRequest>();
+    const tried = withResolvers<string>();
+    const observed = yield* watch(
+      "<All>\n<Spawn><Held /></Spawn>\n<Spawn><Other /></Spawn>\n</All>\n",
+      {
+        Held: component("Held", function* () {
+          ran.push("Held");
+          return "held";
+        }),
+        Other: component("Other", function* () {
+          ran.push("Other");
+          return "other";
+        }),
+      },
+      function* (request, next) {
+        if (request.expansion.name === "Held") {
+          // Lent out before it is delegated, so what the other invocation is
+          // offered is unconsumed.
+          lent.resolve(request);
+          yield* tried.operation;
+          yield* next(request);
+          return;
+        }
+        if (request.expansion.name !== "Other") {
+          yield* next(request);
+          return;
+        }
+        const theirs = yield* lent.operation;
+        let refused: unknown;
+        try {
+          yield* next(theirs);
+        } catch (error) {
+          refused = error;
+        }
+        tried.resolve("done");
+        expect(String(refused)).toContain("did not issue");
+        // Neither body ran on the invalid delegation.
+        expect(ran).toEqual([]);
+        yield* next(request);
+      },
+    );
+    // Both elements ran, each through its own terminal.
+    expect(ran.sort()).toEqual(["Held", "Other"]);
+    expect(observed.failure).toBe(undefined);
+    expect(observed.rendered).toContain("held");
+    expect(observed.rendered).toContain("other");
+    // And the lent request was still its own element's to spend.
+    const theirs = observed.watched.requests.find((one) => one.expansion.name === "Held");
+    const phases = observed.watched.seen.get(theirs?.expansion.id ?? "") ?? [];
+    expect(phases[phases.length - 1]?.phase).toBe("complete");
+  });
+
+  it("CX3: a published phase and its explanation cannot be edited by a reader", function* () {
+    // R3. One phase object reaches every subscriber and is kept as the latest
+    // for whoever registers next, so a reader that could write to it would be
+    // rewriting what this element did for everybody else.
+    const seen: ComponentExpansionPhase[] = [];
+    const observed = yield* watch(
+      "<Boom />\n",
+      {
+        Boom: component("Boom", function* () {
+          throw new AggregateError([new Error("one"), new Error("two")], "both failed");
+        }),
+      },
+      function* (request, next, read, owner) {
+        read((phase) => {
+          seen.push(phase);
+          // A reader trying to rewrite the observation it was handed.
+          try {
+            (phase as { phase: string }).phase = "active";
+          } catch {
+            // Frozen in strict mode, which is the point.
+          }
+        });
+        yield* next(request);
+        // A late reader, registered after the terminal phase was published.
+        owner.run(function* () {
+          for (const phase of yield* each(request.phases)) {
+            expect(phase.phase).not.toBe("active");
+            yield* each.next();
+          }
+        });
+      },
+    );
+    expect(observed.failure).not.toBe(undefined);
+    expect(seen.length).toBeGreaterThan(0);
+    for (const phase of seen) {
+      expect(Object.isFrozen(phase)).toBe(true);
+    }
+    // The terminal observation is still the one Core published.
+    const terminal = seen[seen.length - 1];
+    expect(terminal.phase).toBe("complete");
+    if (terminal.phase === "complete" && !terminal.result.ok) {
+      const report = terminal.result.error;
+      expect(Object.isFrozen(report)).toBe(true);
+      // An AggregateError's members are an array, and freezing the error does
+      // not freeze it: one reader could otherwise rewrite the explanation
+      // every other reader is holding.
+      if (report instanceof AggregateError) {
+        expect(Object.isFrozen(report.errors)).toBe(true);
+      }
+    }
+  });
+
   it("CX1: delegating the same request twice runs the body once", function* () {
     let ran = 0;
     const { report } = yield* watch(

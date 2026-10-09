@@ -55,9 +55,15 @@ function createPhasePublication(): PhasePublication {
   let closed = false;
 
   const deliver = (phase: ComponentExpansionPhase): void => {
-    latest = phase;
+    // Frozen before anybody can hold it. One object reaches every subscriber
+    // and is kept as `latest`, so a reader that changed a field would change
+    // what the other readers — and every reader registering afterwards — are
+    // told this element did. An observation is a reading, and a reading
+    // somebody can edit is not one.
+    const published = Object.freeze(phase);
+    latest = published;
     for (const queue of subscribers) {
-      queue.add(phase);
+      queue.add(published);
     }
   };
 
@@ -285,6 +291,13 @@ export function reported(raised: unknown, depth = 0): Error {
   detached.name = raised.name;
   if (explained?.cause !== undefined) {
     detached.cause = explained.cause;
+  }
+  // Freezing an AggregateError leaves its `errors` array writable, so one
+  // reader could rewrite the explanation every other reader is holding. The
+  // members are already detached reports; this is what stops them being
+  // edited in place.
+  if (detached instanceof AggregateError) {
+    Object.freeze(detached.errors);
   }
   return Object.freeze(detached);
 }

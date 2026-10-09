@@ -81,21 +81,31 @@ function shifted(element: SourceElement, by: number): SourceElement {
  * header, and the body is the whole text.
  */
 export function envelopeBody(text: string): number {
+  // A byte-order mark is never part of the body, whether or not a header
+  // follows it. A document with no header at all still starts after it.
   const mark = text.charCodeAt(0) === 0xfeff ? 1 : 0;
   if (!text.startsWith("---", mark) || text.charAt(mark + 3) === "-") {
-    return 0;
+    return mark;
   }
+  // An opener with nothing after it consumes the whole text: there is a header
+  // and no body, rather than a body that happens to look like a delimiter.
   const opened = text.indexOf("\n", mark + 3);
   if (opened === -1) {
-    return 0;
+    return text.length;
   }
   const closed = closingDelimiter(text, opened + 1);
   if (closed === -1) {
-    return 0;
+    return text.length;
   }
-  // Past the closing line's own newline, and the carriage return before it.
-  const line = text.indexOf("\n", closed);
-  return line === -1 ? text.length : line + 1;
+  // Immediately after the three characters that close it, and then one line
+  // ending if one is there. A closing line with anything after the delimiter
+  // keeps that text: it is the first thing in the body, not part of the
+  // header.
+  const after = closed + 3;
+  if (text.startsWith("\r\n", after)) {
+    return after + 2;
+  }
+  return text.startsWith("\n", after) ? after + 1 : after;
 }
 
 /** Where the line that is exactly the closing delimiter begins, or -1. */
@@ -105,7 +115,10 @@ function closingDelimiter(text: string, from: number): number {
     const end = text.indexOf("\n", at);
     const stop = end === -1 ? text.length : end;
     const line = text.slice(at, stop).replace(/\r$/, "");
-    if (line === "---") {
+    // Starts with the delimiter rather than being only it: the extractor ends
+    // the header at the first line that opens with `---`, and whatever follows
+    // on that line is the first thing in the body.
+    if (line.startsWith("---")) {
       return at;
     }
     if (end === -1) {

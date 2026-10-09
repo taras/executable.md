@@ -85,7 +85,7 @@ import type { ReplFrames } from "./frame.ts";
 import { committedOps, flatten, profileFor, skeletonOps } from "./layout.ts";
 import { prepareReading } from "./fitting.ts";
 import { readingLines } from "./source-reading.ts";
-import type { ReplBounds, ReplBox, ReplLayoutManifest, ReplRegion } from "./layout.ts";
+import type { ReplBox, ReplLayoutManifest, ReplRegion } from "./layout.ts";
 import { capacityOf, NOTHING_ADMITTED } from "./layout-admission.ts";
 import type { ReplAdmission } from "./layout-admission.ts";
 import { resolvePointer, useReplRenderer } from "./renderer.ts";
@@ -1420,19 +1420,6 @@ export function* prepareFrame(
   if (!third.ok) {
     return third;
   }
-  // Every answer this pass gave, copied out before anything else is measured.
-  // The engine's reported geometry is only valid until the next render, and the
-  // reading below renders probes — so a `boundsOf` read afterwards answers from
-  // a tree the frame never described. Measured: it reported capacities from the
-  // probe pass, which admitted a question drawer short of the one on screen and
-  // took a field's Tab stop away with it.
-  const geometry = new Map<string, ReplBounds>();
-  for (const one of flatten(measured.manifest.root)) {
-    const bounds = third.value.boundsOf(one.id);
-    if (bounds !== undefined) {
-      geometry.set(one.id, bounds);
-    }
-  }
   // The entry reading, fitted to the transcript's measured inner width. It
   // happens here — after the widths are known and before anything is admitted —
   // because the rows it produces are what the window has to admit and what the
@@ -1458,7 +1445,7 @@ export function* prepareFrame(
     manifest: measured.manifest,
     widths,
     reading: reading.value,
-    boundsOf: (id: string) => geometry.get(id),
+    boundsOf: (id: string) => third.value.boundsOf(id),
   });
   const context: ReplPresentationContext = {
     widths,

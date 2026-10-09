@@ -17,6 +17,7 @@ import { type Api, createApi, type Operations } from "@effectionx/context-api";
 import type { Operation, Result, Stream } from "effection";
 import type { EvalScope } from "@effectionx/scope-eval";
 import { settle } from "./errors.ts";
+import { ComponentExpansionProtocolError } from "./component-expansion.ts";
 import type { BoundExecRequest } from "./bound-exec.ts";
 import type { Expansion } from "./expansion.ts";
 import type {
@@ -471,6 +472,19 @@ export function expandThroughTerminal(
     ...COMPONENT_DEFAULTS,
     registry: new Map(),
     *expand(delegated: ComponentExpansionRequest): Operation<void> {
+      // This terminal is one element's continuation, so the only request it
+      // may carry is the one that element issued. An authentic request from
+      // *another* live invocation would otherwise reach the claim below and
+      // consume somebody else's work while running this body — refusing after
+      // the body has run is too late, because the effect has happened.
+      //
+      // Identity, not shape: a request that merely looks like this one was
+      // issued for different work.
+      if (delegated !== request) {
+        throw new ComponentExpansionProtocolError(
+          "delegated an expansion this invocation did not issue",
+        );
+      }
       yield* terminal(delegated);
     },
   });

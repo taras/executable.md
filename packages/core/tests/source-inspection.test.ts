@@ -10,7 +10,8 @@
 
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { inspectSource } from "../src/source-inspection.ts";
+import matter from "gray-matter";
+import { envelopeBody, inspectSource } from "../src/source-inspection.ts";
 import type { SourceElement } from "../src/source-inspection.ts";
 import { scanSegments } from "../src/scanner.ts";
 
@@ -162,11 +163,68 @@ describe("Tier SI — what a source text says it is made of", () => {
     expect(inspect(text, "document").map((one) => one.name)).toEqual(["Plan"]);
   });
 
-  it("SI2: an unterminated header is not a header", function* () {
+  it("SI2: an unterminated header is a header, and encloses no element", function* () {
     const text = "---\ntitle: x\n<Json value={1} />\n";
-    // gray-matter's value parser refuses this text; inspection never calls it,
-    // and reads the whole thing as body.
-    expect(inspect(text, "document").map((one) => one.name)).toEqual(["Json"]);
+    // Corrected for R2. This case previously asserted the opposite — that the
+    // whole text reads as body and the `<Json>` is an element in it — which
+    // was this helper disagreeing with the installed extractor rather than a
+    // reading of the document.
+    //
+    // The extractor ends an unterminated header at the end of the text: there
+    // is a header and no body. Its *value* parser then refuses this one
+    // outright, so execution accepts the document not at all — and inspection
+    // claiming an executable element inside a document nothing will run is
+    // the worse of the two answers.
+    //
+    // Inspection still never calls that parser, which is why it answers here
+    // at all instead of throwing.
+    expect(inspect(text, "document")).toEqual([]);
+    // Read as a fragment — no envelope — the same text is all body.
+    expect(inspect(text, "fragment").map((one) => one.name)).toEqual(["Json"]);
+  });
+
+  it("SI2: the envelope is the installed extractor's, shape for shape", function* () {
+    // R2. The one boundary, checked against the thing it has to agree with
+    // rather than against my reading of it. `parseSource` asserts this
+    // equality at execution time, so a disagreement is not a cosmetic drift —
+    // it refuses a document the engine would otherwise accept.
+    const shapes = [
+      "\uFEFF<Hello />\n",
+      "<Hello />\n",
+      "",
+      "\uFEFF",
+      "---\ntitle: hi\n",
+      "---\ntitle: hi\n---suffix\n<Hello />\n",
+      "---\ntitle: hi\n---\n<Hello />\n",
+      "\uFEFF---\ntitle: hi\n---\n<Hello />\n",
+      "---\r\ntitle: hi\r\n---\r\n<Hello />\r\n",
+      "----\ntitle: hi\n----\n<Hello />\n",
+      "---yaml\ntitle: hi\n---\n<Hello />\n",
+      "---\n---\n<Hello />\n",
+      "---\n",
+      "---",
+      "---\ntitle: hi\n---",
+      "text\n---\ntitle: hi\n---\nmore\n",
+      "---\ntitle: a---b\n---\nbody\n",
+      "\n---\ntitle: hi\n---\nbody\n",
+      "---\ntitle: hi\n----\nbody\n",
+      "---\ntitle: hi\n--- \nbody\n",
+      "---\n\n---\nbody\n",
+      "\uFEFF---\n",
+      "---\r\ntitle: hi\r\n---",
+      "--- \ntitle: hi\n---\nbody\n",
+    ];
+    for (const text of shapes) {
+      // What the extractor says, read the way `parseSource` reads it: the body
+      // is a verbatim suffix, so its start is a length difference.
+      const extracted = text.length - matter(text).content.length;
+      expect([text, envelopeBody(text)]).toEqual([text, extracted]);
+      // And the suffix itself, not just its offset.
+      expect([text, text.slice(envelopeBody(text))]).toEqual([text, matter(text).content]);
+    }
+    // A BOM is never body, with or without a header: the case R2 named.
+    expect(envelopeBody("\uFEFF<Hello />\n")).toBe(1);
+    expect(inspect("\uFEFF<Hello />\n", "document").map((one) => one.name)).toEqual(["Hello"]);
   });
 
   it("SI1: text with no elements is success, not a refusal", function* () {

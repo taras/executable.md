@@ -5597,7 +5597,21 @@ An observer decides nothing. What a handler returns is ignored; catching what
 canonical expansion raised does not rescue it; a handler may refuse the work by
 throwing or by returning without delegating. A copied, foreign or repeated
 request runs nothing, and `Component.expand` called outside canonical dispatch
-refuses an unissued request. A failure is reported as a detached, frozen
+refuses an unissued request.
+
+Each element's terminal carries only the request that element issued. A
+request belonging to *another* live invocation is authentic and unspent, so
+nothing about the request itself refuses it; what refuses it is the terminal
+it was handed to, before the body runs and before the claim is taken. Refusing
+afterwards would be too late twice over — the effect has happened, and the
+other element's one claim has been spent by the wrong invocation.
+
+Published phases are immutable observations. One phase object reaches every
+subscriber and is kept as the latest for whoever registers next, so it is
+frozen before publication; a reader cannot change what this element did for
+the other readers, or for a reader that has not registered yet. The same holds
+for the explanation a failure carries, whose aggregate members are frozen as
+well as the error around them. A failure is reported as a detached, frozen
 `Error` preserving the selected name, message and explanatory causes — no
 canonical error identity, binding or resource object crosses.
 
