@@ -19,10 +19,16 @@
  *   - **H5** every position is reachable in the drawer, group or not.
  */
 
-import { describe, it } from "@executablemd/test-support/bdd";
+import { beforeAll, describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { scoped } from "effection";
-import type { Operation } from "effection";
+import { ensure, scoped, sleep } from "effection";
+import type { Operation, Result } from "effection";
+import { useTempFileCompiler } from "@executablemd/core";
+import { InMemoryStream } from "@executablemd/durable-streams";
+
+import { openReplSession } from "../src/repl/session.ts";
+import type { ReplSession } from "../src/repl/session.ts";
+import type { ReplExecution } from "../src/repl/journal.ts";
 
 import {
   groupsOf,
@@ -41,6 +47,23 @@ import { runText } from "../src/repl/description.ts";
 import type { ReplTerminalSize } from "../src/repl/terminal.ts";
 
 const WIDE: ReplTerminalSize = { columns: 160, rows: 36 };
+
+function execution(): ReplExecution {
+  return { id: "history", stream: new InMemoryStream([]) };
+}
+
+function opened(result: Result<ReplSession>): ReplSession {
+  if (!result.ok) {
+    throw result.error;
+  }
+  return result.value;
+}
+
+function accepted(result: Result<void>): void {
+  if (!result.ok) {
+    throw result.error;
+  }
+}
 const NARROW: ReplTerminalSize = { columns: 72, rows: 20 };
 
 function withRenderer<T>(body: (renderer: ReplRenderer) => Operation<T>): Operation<T> {
@@ -316,6 +339,76 @@ describe("H3 — the head is derived from retained facts and owned work", () => 
         headOf({ entries: 1, outcome: true, working: false, paused: false, pausing: false }),
       ).toBe("settled");
     }
+  });
+});
+
+describe("H3 \u2014 the head a real session publishes", () => {
+  beforeAll(() => useTempFileCompiler());
+
+  it("is empty before an entry, live while one runs, settled once it has", function* () {
+    yield* scoped(function* () {
+      const session = opened(yield* openReplSession({ execution: execution() }));
+      // Nothing retained and nothing owned.
+      expect(session.navigation.head).toBe("empty");
+      expect(session.navigation.checkpoints).toEqual([]);
+
+      accepted(yield* session.submit('<Json value={1} as="a" />\n'));
+      // Owned work, from before its first record exists.
+      expect(session.navigation.head).toBe("live");
+
+      yield* session.join();
+      yield* sleep(0);
+      // The outcome is retained and nothing of the entry is still standing.
+      expect(session.navigation.head).toBe("settled");
+      expect(session.navigation.checkpoints.map((one) => one.kind)).toContain("entry");
+      expect(session.navigation.checkpoints.map((one) => one.kind)).toContain("terminal");
+    });
+  });
+
+  it("is SETTLING while the outcome is retained and the entry is still coming down", function* () {
+    // The window a reader watching a run end is actually in: the root closed,
+    // and this process still owns what the entry acquired. A head taken from
+    // the root Close alone would call this finished.
+    yield* scoped(function* () {
+      let duringRelease: string | undefined;
+      let held: ReplSession | undefined;
+      const session = opened(
+        yield* openReplSession({
+          execution: execution(),
+          installations: [
+            {
+              *install(): Operation<void> {
+                yield* ensure(() => {
+                  duringRelease = held?.navigation.head;
+                });
+              },
+            },
+          ],
+        }),
+      );
+      held = session;
+      accepted(yield* session.submit('<Json value={1} as="a" />\n'));
+      yield* session.join();
+      yield* sleep(0);
+      // Read at the moment this entry's own installation was released, which
+      // is after its outcome was recorded and before its work was finished.
+      expect(duringRelease).toBe("settling");
+      // And neutral once it is down, however it went.
+      expect(session.navigation.head).toBe("settled");
+    });
+  });
+
+  it("carries no payload from the entry it is describing", function* () {
+    yield* scoped(function* () {
+      const session = opened(yield* openReplSession({ execution: execution() }));
+      accepted(yield* session.submit('<Json value={{ secret: "shibboleth" }} as="a" />\n'));
+      yield* session.join();
+      yield* sleep(0);
+      expect(JSON.stringify(session.navigation)).not.toContain("shibboleth");
+      for (const point of session.navigation.checkpoints) {
+        expect(Object.keys(point).sort()).toEqual(["kind", "marker"]);
+      }
+    });
   });
 });
 
