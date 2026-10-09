@@ -51,6 +51,7 @@ import {
 import type {
   CapturedCapabilities,
   FragmentCapability,
+  FragmentMutationAdoption,
   FragmentFetchAccess,
   FragmentFileAccess,
 } from "./fragment-capabilities.ts";
@@ -651,6 +652,14 @@ export interface PreparedProfile {
    * lookup at all — a host that offers no provider answer pays for none.
    */
   readonly answered: readonly { readonly name: string; readonly identity: FragmentIdentity }[];
+  /**
+   * The generated mutation definitions a host that journals them may adopt.
+   *
+   * Unbound: each one names the exact dispatcher this preparation built, and
+   * its body is built later from the claimant the execution mints. Empty for a
+   * profile that admits no generated write or deletion.
+   */
+  readonly adoptions: readonly FragmentMutationAdoption[];
   /** Whether the operations this preparation bound are still usable. */
   readonly live: () => boolean;
   /** End them. Registered by canonical execution before any installation runs. */
@@ -686,7 +695,7 @@ export function* prepareEvaluationProfile(
   // two entries under one name, and the evaluator resolves an import by name —
   // so they arrive as one definition whose dispatch separates the two
   // spellings, exactly as the ordinary `<File>` does.
-  const built = buildDefinitions(input, capabilities);
+  const { built, adoptions } = buildDefinitions(input, capabilities);
   const read = yield* prepareEntries(input.read ?? [], input.fetchTimeout, built);
   const write = yield* prepareEntries(input.write ?? [], input.fetchTimeout, built);
   if (read.length === 0 && write.length === 0) {
@@ -717,6 +726,7 @@ export function* prepareEvaluationProfile(
     answered: Object.freeze(
       [...answered.entries()].map(([name, identity]) => Object.freeze({ name, identity })),
     ),
+    adoptions,
     live: () => capabilities.live(),
     revoke: () => {
       capabilities.revoke();
@@ -817,7 +827,10 @@ function bindWorkspace(access: FragmentWorkspaceAccess): FragmentWorkspaceAccess
 function buildDefinitions(
   input: FragmentEvaluationInput,
   capabilities: CapturedCapabilities,
-): Map<string, FunctionComponentDefinition> {
+): {
+  readonly built: Map<string, FunctionComponentDefinition>;
+  readonly adoptions: readonly FragmentMutationAdoption[];
+} {
   const admitted = new Map<
     string,
     { "self-closing"?: FragmentCapability; paired?: FragmentCapability }
@@ -840,13 +853,22 @@ function buildDefinitions(
     }
   }
   const built = new Map<string, FunctionComponentDefinition>();
+  const adoptions: FragmentMutationAdoption[] = [];
   for (const [name, forms] of admitted) {
-    built.set(
+    const capability = capabilityDefinition(
       name,
-      capabilityDefinition(name, forms, capabilities, normalizedCeiling(ceilings.get(name), input)),
+      forms,
+      capabilities,
+      normalizedCeiling(ceilings.get(name), input),
     );
+    built.set(name, capability.definition);
+    // Carried unbound. The claimant each of these needs belongs to the
+    // execution's identity installation, which runs after this preparation.
+    if (capability.adoption !== undefined) {
+      adoptions.push(capability.adoption);
+    }
   }
-  return built;
+  return { built, adoptions: Object.freeze(adoptions) };
 }
 
 /**

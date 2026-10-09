@@ -21,6 +21,7 @@ import { fileMutationBody as deleteBody } from "./FileDelete.ts";
 import { CORE_ORIGIN, coreComponentDefinition } from "./registry.ts";
 import type { AdoptedDeclaration } from "../invocation-identity.ts";
 import type { FileMutationHandlers } from "../file-mutations.ts";
+import type { FragmentMutationAdoption } from "../fragment-capabilities.ts";
 import type { FunctionComponent } from "../types.ts";
 
 /** The canonical names whose mutations a host may be handed. */
@@ -37,11 +38,25 @@ const FILE_DELETE = "File.Delete";
  */
 export function fileMutationComponents(
   handlers: FileMutationHandlers | undefined,
+  generated: readonly FragmentMutationAdoption[] = [],
 ): readonly AdoptedDeclaration[] {
   if (handlers === undefined) {
     return [];
   }
   const adopted: AdoptedDeclaration[] = [];
+  // The definitions this execution's profile built over its captured
+  // capabilities. They share their names with the authored components — a
+  // fragment writes `<File>` too — and they are different definitions with
+  // different owners, which is why an adoption belongs to an implementation
+  // rather than to a name.
+  for (const adoption of generated) {
+    adopted.push({
+      name: adoption.name,
+      origin: CORE_ORIGIN,
+      fn: adoption.fn,
+      build: (claim) => adoption.build(claim, handlers),
+    });
+  }
   const write = implementation(FILE);
   if (write !== undefined) {
     adopted.push({

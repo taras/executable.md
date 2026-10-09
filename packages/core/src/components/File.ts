@@ -144,10 +144,13 @@ const write = printErrors(function* (props: Record<string, Json>): Operation<str
  * write here any more than it can through ordinary dispatch.
  *
  * The order is the one the ordinary write keeps, with verification added where
- * it has to be: the path is admitted by pure arithmetic, then this invocation's
- * identity is claimed *before* its content is projected, because an invocation
- * names nothing while it is expanding its own children. Only then does the
- * rendered content reach the host.
+ * the contract puts it: the path is admitted by pure arithmetic, then this
+ * invocation's identity is claimed in its own frame, before anything
+ * subordinate runs, and only then is the content projected and handed over.
+ * Claiming first is not observably different from claiming afterwards — the
+ * projection has finished either way — so it is here because verification
+ * belongs before the subordinate scope, not because the claim would otherwise
+ * refuse.
  */
 export function fileMutationBody(
   claim: IdentityClaimant,

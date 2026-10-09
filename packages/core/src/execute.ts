@@ -2590,7 +2590,7 @@ function* executeDocument(
         // handlers for them. Their names are not claimed and their definitions
         // are the ones core already registers, so without a host this list is
         // empty and `<File>` is exactly what it was.
-        fileMutationComponents(fileMutations),
+        fileMutationComponents(fileMutations, prepared?.adoptions),
       );
       yield* registerComponents(identity.registrations);
       identity.activate();

@@ -1120,14 +1120,28 @@ export function installIdentities(
   // private name that shadowed a registered one would take its domain — and a
   // host that declared a protected name reaches this only after admission has
   // already refused it, so a duplicate here is core's own mistake.
-  assertDistinctIdentityNames([
-    ...components,
-    ...privateComponents,
-    ...protectedComponents,
-    ...adoptedComponents,
-  ]);
+  assertDistinctIdentityNames([...components, ...privateComponents, ...protectedComponents]);
+
+  function adoptedDomain(fn: unknown, name: string): Minted | undefined {
+    if (typeof fn !== "function") {
+      return undefined;
+    }
+    const domain = adopted.get(fn);
+    // The adoption's own name as well as its implementation: a profile may
+    // admit a captured capability under a name of its own, and that adoption
+    // answers for that name alone.
+    return domain !== undefined && domain.domain.component === name ? domain : undefined;
+  }
 
   const minted = new Map<string, Minted>();
+  // Indexed by the exact implementation rather than by the name, because two
+  // adoptions legitimately share one name: authored `<File>` and the `<File>`
+  // a fragment's captured capability answers for are different definitions with
+  // different owners, and merging them would let a generated lookup acquire the
+  // authored grant. The named tables beside this keep their own rules — a name
+  // is still one registration's, one declaration's and one protected
+  // component's.
+  const adopted = new Map<object, Minted>();
   const registrations: IdentityRegistration[] = [];
   const privates = new Map<string, FunctionComponentDefinition>();
   const guarded = new Map<string, FunctionComponentDefinition>();
@@ -1158,12 +1172,22 @@ export function installIdentities(
     });
   }
   for (const component of adoptedComponents) {
+    // One adoption per implementation. Two declarations for one function are
+    // two owners for one body, so the second is refused rather than quietly
+    // replacing the first — and the read and write entries that share a
+    // generated dispatcher are one adoption, not two.
+    if (adopted.has(component.fn)) {
+      throw new ComponentInvocationError(
+        `this execution was given two file-effect adoptions for the implementation it resolves ` +
+          `<${component.name} /> to, and one implementation has one owner.`,
+      );
+    }
     const domain = mintDomain(component.name);
-    minted.set(component.name, domain);
-    // The definition core already registers, not a new one: the name keeps the
-    // precedence it has, and this domain answers only where resolution selected
-    // that exact object.
+    // The definition core already registers or already built, not a new one:
+    // the name keeps the precedence it has, and this domain answers only where
+    // resolution selected that exact object.
     domain.implementation = component.fn;
+    adopted.set(component.fn, domain);
     componentRouting.adopt(
       component.fn,
       component.build,
@@ -1240,12 +1264,18 @@ export function installIdentities(
             // The name canonical resolution answered for has to be the one the
             // engine asked: a handler that delegates a different name selects a
             // registration the element never named.
-            const domain = asked === name ? minted.get(name) : undefined;
-            // And the implementation has to be the one this execution built. A
-            // repository file, a nested registration and another execution's
-            // component all resolve to a different function.
-            selected =
-              domain !== undefined && domain.implementation === definition.fn ? domain : undefined;
+            const named = asked === name ? minted.get(name) : undefined;
+            // And the implementation has to be the one this execution built or
+            // adopted. A repository file, a nested registration, a copied answer
+            // and another execution's component all resolve to a different
+            // function, so none of them reaches a domain through its name.
+            const owner =
+              named !== undefined && named.implementation === definition.fn
+                ? named
+                : asked === name
+                  ? adoptedDomain(definition.fn, name)
+                  : undefined;
+            selected = owner;
           },
           settle(): IdentityDomain | undefined {
             if (closed) {
@@ -1257,7 +1287,7 @@ export function installIdentities(
         };
       },
       revoke: () => {
-        for (const domain of minted.values()) {
+        for (const domain of [...minted.values(), ...adopted.values()]) {
           domain.revoke();
         }
         // There is no frame registry to clear. An execution torn down while a
@@ -1276,7 +1306,7 @@ export function installIdentities(
     protected: guarded,
     componentRouting,
     activate: () => {
-      for (const domain of minted.values()) {
+      for (const domain of [...minted.values(), ...adopted.values()]) {
         domain.activate();
       }
     },

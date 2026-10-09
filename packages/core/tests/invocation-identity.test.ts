@@ -1617,3 +1617,76 @@ describe("Tier PA10b — concurrent capability-backed identity", () => {
     expect(seen.taken).toEqual(seen.context);
   });
 });
+
+/**
+ * Tier FM — an adoption belongs to an implementation, not to a name.
+ *
+ * Authored `<File>` and the `<File>` a fragment's captured capability answers
+ * for are two definitions that legitimately share one name. A table keyed by
+ * the name could hold only one of them, so these state the rule the adopted
+ * category actually follows — and that the named categories beside it are
+ * unchanged.
+ */
+describe("Tier FM — adoption is keyed by implementation", () => {
+  // deno-lint-ignore require-yield
+  function* body(): Operation<string> {
+    return "";
+  }
+
+  function declaration(name: string, fn: FunctionComponent) {
+    return {
+      name,
+      origin: "test://adopted",
+      fn,
+      // deno-lint-ignore require-yield
+      build: () =>
+        function* (): Operation<string> {
+          return "adopted";
+        },
+    };
+  }
+
+  it("FM19: two definitions may be adopted under one name", function* () {
+    const authored = body;
+    // deno-lint-ignore require-yield
+    const generated = function* (): Operation<string> {
+      return "";
+    };
+    const installed = installIdentities(
+      [],
+      [],
+      [],
+      [declaration("File", authored), declaration("File", generated)],
+    );
+    installed.activate();
+
+    // Each definition has its own body: a name-keyed table could have kept
+    // only one of the two.
+    expect(installed.componentRouting.body(authored)).toBeDefined();
+    expect(installed.componentRouting.body(generated)).toBeDefined();
+    // A function neither declaration named reaches nothing, however it is
+    // spelled.
+    // deno-lint-ignore require-yield
+    expect(installed.componentRouting.body(function* () {})).toBeUndefined();
+  });
+
+  it("FM19: one implementation has one owner", function* () {
+    const shared = body;
+    let refusal: string | undefined;
+    try {
+      installIdentities([], [], [], [declaration("File", shared), declaration("File", shared)]);
+    } catch (error) {
+      refusal = error instanceof Error ? error.message : String(error);
+    }
+    expect(refusal).toContain("two file-effect adoptions");
+  });
+
+  it("FM19: an adoption is revoked with the execution that minted it", function* () {
+    const fn = body;
+    const installed = installIdentities([], [], [], [declaration("File", fn)]);
+    installed.activate();
+    expect(installed.componentRouting.body(fn)).toBeDefined();
+    installed.identities.revoke();
+    expect(installed.componentRouting.body(fn)).toBeUndefined();
+  });
+});
