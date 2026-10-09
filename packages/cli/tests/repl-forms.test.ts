@@ -867,6 +867,134 @@ describe("F3 — complete content and reachable navigation", () => {
     }
   });
 
+  it("F3: a long preview line is readable to its last character at 72x20", function* () {
+    // R4. A drawer row is one row, so a message split only at its newlines
+    // puts a long line's tail nowhere: the window can scroll to rows that
+    // were prepared and cannot recover the rest of one that was not. The
+    // reviewed build lost `ng coding agents."` off the end of the README
+    // summary at this size, with Approve still reachable — so reaching the
+    // controls is not what discriminates this.
+    //
+    // Walked through the real tree, the real admission and the real scroll,
+    // concatenating what the drawer actually placed.
+    const summary = "A lightweight workspace for coordinating coding agents.";
+    const long = [
+      "Proposed README.md:",
+      "",
+      "{",
+      `  "project": "Northstar",`,
+      `  "summary": "${summary}"`,
+      "}",
+      "",
+    ].join("\n");
+    const asked = yield* askingFor(PLAN_SCHEMA, long);
+    const live = asking(asked.question);
+    const tree = yield* useReplTree<ReplAction>();
+
+    let state = opened(live);
+    const rows: string[] = [];
+    const seenKeys = new Set<string>();
+    for (let press = 0; press < 160; press++) {
+      const view = reading(state, live, EMPTY_MODEL, NARROW, undefined);
+      for (const [key] of yield* placedKeys(tree, view)) {
+        if (key.startsWith("drawer:message:") && !seenKeys.has(key)) {
+          seenKeys.add(key);
+        }
+      }
+      for (const row of yield* framed(state, live)) {
+        if (
+          row.key.startsWith("drawer:message:") &&
+          !rows.includes(row.key + "\u0000" + row.label)
+        ) {
+          rows.push(row.key + "\u0000" + row.label);
+        }
+      }
+      const next = reduceRepl(
+        state,
+        { kind: "scroll", delta: 1 },
+        EMPTY_MODEL,
+        live,
+        yield* admissionOf(state, live),
+      ).state;
+      if (next.form.offset === state.form.offset) {
+        break;
+      }
+      state = next;
+    }
+
+    // Every row the drawer showed, in the order its keys number them.
+    //
+    // Compared with runs of whitespace collapsed, because the display adds
+    // two kinds of its own: `drawerLine` pads each row to the drawer's width,
+    // and a continuation is set in to the column its line was written at.
+    // Neither is content, and neither can be told from the content's own
+    // spaces in a drawn row — so the recovery rule is "every character, in
+    // order, up to the whitespace the display inserted". That is exactly the
+    // rule that catches the defect: a dropped tail is missing characters, not
+    // extra spaces.
+    const flat = (text: string): string => text.replace(/\s+/g, " ").trim();
+    const whole = flat(
+      rows
+        .map((one) => one.split("\u0000"))
+        .sort((a, b) => Number(a[0].split(":")[2]) - Number(b[0].split(":")[2]))
+        .map(([, label]) => label)
+        .join(" "),
+    );
+
+    // The property that makes the text *drawable*, and the one the reviewed
+    // build failed. A description's label always held the whole line — the
+    // loss happened at the row, where a label wider than the drawer has
+    // nowhere to put its tail and the window has no second row to scroll to.
+    // So every message row must fit the width the drawer was measured at.
+    const room =
+      (yield* contextOf(reading(opened(live), live, EMPTY_MODEL, NARROW, undefined))).widths
+        ?.drawer ?? 0;
+    expect(room).toBeGreaterThan(0);
+    const overflowing = rows
+      .map((one) => one.split("\u0000"))
+      .filter(([, label]) => label.replace(/\s+$/, "").length > room);
+    expect(overflowing.map(([key]) => key)).toEqual([]);
+    // And there really are more rows than logical lines, so this is wrapping
+    // rather than a message that happened to be short enough.
+    expect(rows.length).toBeGreaterThan(long.split("\n").length);
+
+    // The tail the reviewed build dropped.
+    expect(whole).toContain("ng coding agents.");
+    // And the value entire, with its closing quote.
+    expect(whole).toContain(flat(`"summary": "${summary}"`));
+    // Every logical line is in there whole, so nothing was shortened and
+    // nothing was invented.
+    for (const line of long.split("\n").filter((one) => one.trim().length > 0)) {
+      expect([line, whole.includes(flat(line))]).toEqual([line, true]);
+    }
+    // The decisions are still reachable afterwards, which is the half the
+    // reviewed build already satisfied.
+    const reached = new Set<string>();
+    let at = opened(live);
+    for (let press = 0; press < 160; press++) {
+      for (const [key, targetable] of yield* placedKeys(
+        tree,
+        reading(at, live, EMPTY_MODEL, NARROW, undefined),
+      )) {
+        if (targetable) {
+          reached.add(key);
+        }
+      }
+      const next = reduceRepl(
+        at,
+        { kind: "scroll", delta: 1 },
+        EMPTY_MODEL,
+        live,
+        yield* admissionOf(at, live),
+      ).state;
+      if (next.form.offset === at.form.offset) {
+        break;
+      }
+      at = next;
+    }
+    expect(reached.has("drawer:form:submit")).toBe(true);
+  });
+
   it("F3: the viewport walks the whole message before the form controls", function* () {
     const asked = yield* askingFor(PLAN_SCHEMA, DRAFT);
     const live = asking(asked.question);

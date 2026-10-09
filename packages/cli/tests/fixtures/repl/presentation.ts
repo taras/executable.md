@@ -705,9 +705,10 @@ export function measuringContext(size: ReplTerminalSize): ReplPresentationContex
     entriesWindowed: false,
     entriesRows: undefined,
     capture: "capture",
-    // The measuring pass has no fitted reading, which is what makes it the pass
-    // that asks how wide the pane holding one is.
+    // The measuring pass has no fitted reading or preview, which is what makes
+    // it the pass that asks how wide the panes holding them are.
     reading: undefined,
+    preview: undefined,
   };
 }
 

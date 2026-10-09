@@ -83,8 +83,9 @@ import type { ReplSession } from "./session.ts";
 import { useReplFrames } from "./frame.ts";
 import type { ReplFrames } from "./frame.ts";
 import { committedOps, flatten, profileFor, skeletonOps } from "./layout.ts";
-import { prepareReading } from "./fitting.ts";
+import { fitPlain, prepareReading } from "./fitting.ts";
 import { readingLines } from "./source-reading.ts";
+import { sourceRuns } from "./presentation-text.ts";
 import type { ReplBox, ReplLayoutManifest, ReplRegion } from "./layout.ts";
 import { capacityOf, NOTHING_ADMITTED } from "./layout-admission.ts";
 import type { ReplAdmission } from "./layout-admission.ts";
@@ -1367,9 +1368,10 @@ function measuringAt(
     entriesRows,
     capture: "capture",
     // The measuring pass describes no width-dependent text, so it has no
-    // fitted reading either: a reading prepared against a width this pass is
-    // still asking for would be a reading fitted to nothing.
+    // fitted reading or preview either: text prepared against a width this
+    // pass is still asking for would be text fitted to nothing.
     reading: undefined,
+    preview: undefined,
   };
 }
 
@@ -1440,11 +1442,33 @@ export function* prepareFrame(
   if (!reading.ok) {
     return reading;
   }
+  // The open question's message, fitted to the drawer's own width. Prepared
+  // here for the same reason the reading is: a drawer row is one row, so a
+  // long preview line is only reachable if it was cut into rows before the
+  // window counted them.
+  const asked = view.live.question;
+  const preview =
+    asked === undefined || widths.drawer < 1
+      ? Ok(undefined)
+      : yield* fitPlain(
+          renderer,
+          view.size,
+          asked.message.split("\n").map((text, offset) => ({
+            key: `message:${offset}`,
+            text,
+            runs: sourceRuns(text),
+          })),
+          widths.drawer,
+        );
+  if (!preview.ok) {
+    return preview;
+  }
   const admission = admissionFor({
     view,
     manifest: measured.manifest,
     widths,
     reading: reading.value,
+    preview: preview.value,
     boundsOf: (id: string) => third.value.boundsOf(id),
   });
   const context: ReplPresentationContext = {
@@ -1455,6 +1479,7 @@ export function* prepareFrame(
     entriesRows,
     capture: "capture",
     reading: reading.value,
+    preview: preview.value,
   };
   return Ok({ context, admission, presentation: presentationFor(view, context) });
 }

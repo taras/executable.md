@@ -85,7 +85,7 @@ import { jsonRuns, sourceRuns } from "./presentation-text.ts";
 import { entryReading, NO_READING } from "./source-reading.ts";
 import type { ReplReading } from "./source-reading.ts";
 import { readingRuns } from "./fitting.ts";
-import type { ReplPreparedReading, ReplPreparedRow } from "./fitting.ts";
+import type { ReplFittedLine, ReplPreparedReading, ReplPreparedRow } from "./fitting.ts";
 import type { ReplTerminalSize } from "./terminal.ts";
 import {
   decodeLocation,
@@ -3170,7 +3170,7 @@ function drawerFor(
   exit: Described,
   drawable: boolean,
 ): { readonly drawer: Described; readonly rows: readonly Described[] } | undefined {
-  const held = drawerContent(view, context.widths?.drawer ?? 0);
+  const held = drawerContent(view, context.widths?.drawer ?? 0, context.preview);
   if (held === undefined) {
     return undefined;
   }
@@ -3261,7 +3261,35 @@ interface DrawerContent {
  * many rows there are to window. A second counter is how a clamp comes to
  * disagree with the list it is clamping.
  */
-function drawerContent(view: ReplView, width: number): DrawerContent | undefined {
+/**
+ * The rows a question's message is read in.
+ *
+ * The frame's fitted rows where it prepared them, and the logical lines where
+ * it has not — the pass that measures the drawer's width cannot already have
+ * fitted text to it. An unfitted pass describes no window content anyway, so
+ * the fallback is what a measurement sees and never what a reader does.
+ */
+function messageRows(
+  question: ReplQuestion,
+  preview: readonly ReplFittedLine[] | undefined,
+): readonly { readonly text: string; readonly runs: readonly ReplTokenRun[] }[] {
+  if (preview !== undefined) {
+    return preview.map((one) => ({
+      text: " ".repeat(one.indent) + one.text,
+      runs:
+        one.indent === 0
+          ? one.runs
+          : tokenRuns([{ text: " ".repeat(one.indent), token: "punctuation" }, ...one.runs]),
+    }));
+  }
+  return question.message.split("\n").map((text) => ({ text, runs: sourceRuns(text) }));
+}
+
+function drawerContent(
+  view: ReplView,
+  width: number,
+  preview?: readonly ReplFittedLine[] | undefined,
+): DrawerContent | undefined {
   const open = view.selection.drawers[view.selection.drawers.length - 1];
   if (open === undefined) {
     return undefined;
@@ -3383,14 +3411,14 @@ function drawerContent(view: ReplView, width: number): DrawerContent | undefined
     // [submit] — is built in order and then windowed. A drawer too short to hold
     // all of it scrolls, rather than describing rows that have no frame to be
     // placed in.
-    for (const [offset, text] of question.message.split("\n").entries()) {
+    for (const [offset, part] of messageRows(question, preview).entries()) {
       content.push({
         described: drawerLine(
           `drawer:message:${offset}`,
-          text,
+          part.text,
           width,
           styleOf("source"),
-          sourceRuns(text),
+          part.runs,
         ),
       });
     }
@@ -3646,30 +3674,6 @@ function permissionContentRows(
  */
 function lasting(kind: ReplLiveChoice["kind"]): string {
   return kind === "allow_always" || kind === "reject_always" ? " for this Agent session" : "";
-}
-
-/**
- * How many rows the drawer's ordered content holds in total.
- *
- * The complete message, the form's description, every field with its
- * annotation, enum summary, offered values and editable line, every validation
- * message, and `[submit]`. Counted the same way the rows are built, because the
- * reducer clamps a scroll against this before any of them exist.
- */
-function drawerContentRows(question: ReplQuestion | undefined, form: ReplFormState): number {
-  if (question === undefined) {
-    return 0;
-  }
-  let rows = question.message.split("\n").length;
-  rows += question.form.description === undefined ? 0 : 1;
-  for (const one of question.form.fields) {
-    rows += 2;
-    rows += one.description === undefined ? 0 : 1;
-    rows += one.choices === undefined ? 0 : 1 + one.choices.length;
-  }
-  rows += form.messages.length;
-  // [submit] scrolls with the form it submits.
-  return rows + 1;
 }
 
 /** The first line of a message, for a control that is one row tall. */
@@ -4113,6 +4117,15 @@ export interface ReplPresentationContext {
    * which is why it describes none.
    */
   readonly reading: ReplPreparedReading | undefined;
+  /**
+   * The open question's message, fitted to the drawer's own width.
+   *
+   * Prepared beside the reading and for the same reason: a drawer row is one
+   * row, so a long line of somebody's preview can only be shown whole if it
+   * was cut into rows before the window counted them. Scrolling reveals
+   * prepared rows; it cannot recover the rest of an unprepared one.
+   */
+  readonly preview: readonly ReplFittedLine[] | undefined;
 }
 
 /** One reading's descriptions, paired with where the engine places them. */
@@ -4828,9 +4841,11 @@ export function admissionFor(input: {
   readonly widths: ReplMeasuredWidths;
   /** The reading this frame fitted, which is what its window admits rows of. */
   readonly reading?: ReplPreparedReading | undefined;
+  /** The open question's message, fitted, which its own window admits rows of. */
+  readonly preview?: readonly ReplFittedLine[] | undefined;
   readonly boundsOf: (id: string) => ReplBounds | undefined;
 }): ReplAdmission {
-  const { view, manifest, widths, reading, boundsOf } = input;
+  const { view, manifest, widths, reading, preview, boundsOf } = input;
   const windows = new Map<string, ReplWindow>();
   for (const slot of manifest.viewports) {
     const capacity = capacityOf(boundsOf(slot.id));
@@ -4838,7 +4853,7 @@ export function admissionFor(input: {
       slot.window,
       admitRows({
         offset: offsetFor(view, slot.window, capacity),
-        total: totalOf(view, widths, reading, slot.window),
+        total: totalOf(view, widths, reading, preview, slot.window),
         capacity,
       }),
     );
@@ -4919,6 +4934,7 @@ function totalOf(
   view: ReplView,
   widths: ReplMeasuredWidths,
   reading: ReplPreparedReading | undefined,
+  preview: readonly ReplFittedLine[] | undefined,
   window: string,
 ): number {
   if (window === SESSIONS_WINDOW) {
@@ -4933,7 +4949,7 @@ function totalOf(
   if (window === READING_WINDOW) {
     return reading?.rows.length ?? 0;
   }
-  return drawerContent(view, widths?.drawer ?? 0)?.content.length ?? 0;
+  return drawerContent(view, widths?.drawer ?? 0, preview)?.content.length ?? 0;
 }
 
 export { HISTORY_ROWS };

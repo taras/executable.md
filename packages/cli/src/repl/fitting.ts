@@ -262,6 +262,78 @@ export function* prepareReading(
   return Ok(Object.freeze({ reservation, rows: Object.freeze(rows) }));
 }
 
+/** One line of read-only text, fitted to a width. */
+export interface ReplFittedLine {
+  readonly key: string;
+  readonly text: string;
+  readonly runs: readonly ReplTokenRun[];
+  /** Whether a previous row already carried the start of this line. */
+  readonly continuation: boolean;
+  /** The column this line was written at, carried onto its continuations. */
+  readonly indent: number;
+}
+
+/**
+ * Fit read-only text to a width, with nothing reserved beside it.
+ *
+ * The reading's own `prepareReading` reserves a rail and a status column
+ * because every row of it carries both. A drawer's message carries neither: it
+ * is somebody's text in a box, and all of the box is for the text.
+ *
+ * The same measurement and the same cuts otherwise — engine widths, grapheme
+ * boundaries, word boundaries preferred, whitespace kept, blank lines kept —
+ * so concatenating one line's rows recovers exactly the line. A drawer that
+ * showed one row per logical line could only ever show the first screenful of
+ * a long one, and scrolling cannot reveal a row that was never prepared.
+ */
+export function* fitPlain(
+  renderer: ReplRenderer,
+  size: ReplTerminalSize,
+  lines: readonly {
+    readonly key: string;
+    readonly text: string;
+    readonly runs?: readonly ReplTokenRun[];
+  }[],
+  room: number,
+): Operation<Result<readonly ReplFittedLine[]>> {
+  if (room < 1) {
+    return Ok([]);
+  }
+  const fitted: ReplFittedLine[] = [];
+  for (const one of lines) {
+    const runs = one.runs ?? tokenRuns([{ text: one.text, token: "source" }]);
+    const rows = yield* fitLine(
+      renderer,
+      size,
+      Object.freeze({
+        key: one.key,
+        text: one.text,
+        runs,
+        rail: "rail-pending" as const,
+        depth: 0,
+        badge: undefined,
+        style: Object.freeze({ role: "source" as const, selected: false, inspected: false }),
+      }),
+      room,
+    );
+    if (!rows.ok) {
+      return rows;
+    }
+    for (const row of rows.value) {
+      fitted.push(
+        Object.freeze({
+          key: row.key,
+          text: row.text,
+          runs: row.runs,
+          continuation: row.continuation,
+          indent: row.indent,
+        }),
+      );
+    }
+  }
+  return Ok(Object.freeze(fitted));
+}
+
 /** One logical line as its rows. */
 function* fitLine(
   renderer: ReplRenderer,

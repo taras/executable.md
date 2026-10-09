@@ -694,6 +694,11 @@ counts, and the column is wide enough for every reading a badge can hold —
 including a cleanup wait, which says two things at once — so an element
 settling cannot reflow the document beside it.
 
+A question's own read-only preview is measured the same way, at the width its
+drawer was given. A drawer row is one row, so a line left unwrapped has nowhere
+to put its tail and the window has no second row to scroll to — reaching the
+decisions below it is not the same as having read what they decide.
+
 A region with no room for even one grapheme is the frame refusal that already
 recovers on resize. It is never a clip: shortening somebody's source would be
 this screen editing the content it exists to show.
