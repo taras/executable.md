@@ -100,6 +100,45 @@ export const SYNTAX = Object.freeze({
 });
 
 /**
+ * The archive's `L`: what one call of one element is doing.
+ *
+ * Glyph *and* word, as the archive's own comment insists — "never colour
+ * alone". A reader who cannot distinguish #5aa87c from #4f8468, or who is
+ * reading a capture through a filter, still has `ENTER` and `SETTLED` to read.
+ */
+export const LIFECYCLE = Object.freeze({
+  /** `enter` — a call has begun. */
+  enter: Object.freeze({ glyph: "\u25b6", word: "ENTER", colour: 0x5aa87c }),
+  /** `active` — it is expanding. */
+  active: Object.freeze({ glyph: "\u25cf", word: "ACTIVE", colour: 0x7fd3e8 }),
+  /** `hold` — it is waiting on somebody. */
+  hold: Object.freeze({ glyph: "\u25cf", word: "WAITING", colour: 0xc99a3f }),
+  /** `exit` — its body returned and its resources are being released. */
+  exit: Object.freeze({ glyph: "\u25c0", word: "EXIT", colour: 0xc2766e }),
+  /** `settled` — it finished. */
+  settled: Object.freeze({ glyph: "\u2713", word: "SETTLED", colour: 0x4f8468 }),
+  /** `fail` — it failed. */
+  fail: Object.freeze({ glyph: "\u00d7", word: "FAILED", colour: 0xd24b3f }),
+});
+
+/**
+ * The archive's `RAIL`: the column beside a reading, one value per phase.
+ *
+ * `held` is the archive's rail for a group whose body is collapsed, which this
+ * terminal has no equivalent of; it is transcribed for completeness and not
+ * sampled. `pend` is the one a reading uses for source nothing has been
+ * observed in.
+ */
+export const RAIL = Object.freeze({
+  held: 0x3c4a44,
+  active: 0x2f6272,
+  exit: 0x5d3c39,
+  settled: 0x2e3c35,
+  hold: 0x4a3a1c,
+  pend: 0x252b30,
+});
+
+/**
  * The two cues this terminal keeps that the archive states differently.
  *
  * The archive marks a selected row and a focused one with a badge, a variable

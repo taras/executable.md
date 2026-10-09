@@ -104,7 +104,20 @@ export type ReplPresentationRole =
   /** The line the next entry is typed on. */
   | "draft"
   /** A retained position, and the band that holds them. */
-  | "history";
+  | "history"
+  /** The rail beside a reading, saying which region an element occupies. */
+  | "rail-pending"
+  | "rail-active"
+  | "rail-waiting"
+  | "rail-exit"
+  | "rail-settled"
+  /** What one call of one element is doing, as its glyph and its word. */
+  | "lifecycle-enter"
+  | "lifecycle-active"
+  | "lifecycle-waiting"
+  | "lifecycle-exit"
+  | "lifecycle-settled"
+  | "lifecycle-failed";
 
 /**
  * One row's presentation facts, as the reading settles them.
@@ -193,6 +206,31 @@ export const REPL_PALETTE = Object.freeze({
   bindingsSurface: 0x0a0c0e,
   /** A pane's edge. */
   edge: 0x161c21,
+  /** An element one call of which has been entered. */
+  lifecycleEnter: 0x5aa87c,
+  /** One that is expanding. */
+  lifecycleActive: 0x7fd3e8,
+  /** One that is waiting on somebody. */
+  lifecycleWaiting: 0xc99a3f,
+  /** One whose body returned and whose resources are being released. */
+  lifecycleExit: 0xc2766e,
+  /** One that finished. */
+  lifecycleSettled: 0x4f8468,
+  /** One that failed. */
+  lifecycleFailed: 0xd24b3f,
+  /**
+   * The rails beside a reading, one per phase the occupied region is in.
+   *
+   * Dimmer than the badge of the same phase on purpose: a rail runs the whole
+   * height of an element and says only *where* it is, so it must not compete
+   * with the text it encloses or with the badge that says what the phase is.
+   */
+  railActive: 0x2f6272,
+  railWaiting: 0x4a3a1c,
+  railExit: 0x5d3c39,
+  railSettled: 0x2e3c35,
+  /** Source nothing has been observed in. Not a phase: an absence of one. */
+  railPending: 0x252b30,
 });
 
 /**
@@ -329,6 +367,28 @@ function colourOf(role: ReplPresentationRole, inspected: boolean): number {
       return REPL_PALETTE.waiting;
     case "history":
       return REPL_PALETTE.historical;
+    case "rail-pending":
+      return REPL_PALETTE.railPending;
+    case "rail-active":
+      return REPL_PALETTE.railActive;
+    case "rail-waiting":
+      return REPL_PALETTE.railWaiting;
+    case "rail-exit":
+      return REPL_PALETTE.railExit;
+    case "rail-settled":
+      return REPL_PALETTE.railSettled;
+    case "lifecycle-enter":
+      return REPL_PALETTE.lifecycleEnter;
+    case "lifecycle-active":
+      return REPL_PALETTE.lifecycleActive;
+    case "lifecycle-waiting":
+      return REPL_PALETTE.lifecycleWaiting;
+    case "lifecycle-exit":
+      return REPL_PALETTE.lifecycleExit;
+    case "lifecycle-settled":
+      return REPL_PALETTE.lifecycleSettled;
+    case "lifecycle-failed":
+      return REPL_PALETTE.lifecycleFailed;
     case "source":
     case "status":
     case "draft":
