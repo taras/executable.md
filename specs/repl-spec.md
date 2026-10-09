@@ -607,9 +607,10 @@ that is where it is — a component with a destructor has not finished until the
 destructor has.
 
 Waiting is counted, not guessed. An element waits when something it is actually
-waiting on says so: a question nobody has answered, a permission request
-attributed to the turn that asked for it, a hold the expansion controller is
-keeping. Each of those removes itself when it resolves, opening and closing a
+waiting on says so: a question nobody has answered, a permission request the
+turn that asked for it owns, a hold the expansion controller is keeping. A
+request nobody answers releases its wait when its scope goes, and decides
+nothing on the way out. Each of those removes itself when it resolves, opening and closing a
 drawer changes none of them, and ordinary suspension is not waiting at all. Two
 questions at once are two waiting elements rather than one screen that is busy.
 
@@ -650,7 +651,13 @@ element, not two phases.
 
 Nesting comes from where the delimiters are, and from nothing else. An element
 whose span lies inside another's is that one's child; one that merely follows it
-is its sibling. Source nothing has been observed in gets the rail that means
+is its sibling.
+
+A document that writes one element inside a `<Loop>`, or writes the same element
+twice, makes several *calls* of it at one position. Each is its own reading, in
+its own group, in the order they were observed: showing only the last would say
+the earlier ones never happened, and one badge for all of them would say several
+calls were one. An element nothing was observed of is read once, unobserved. Source nothing has been observed in gets the rail that means
 exactly that, and acquires no phase from retained syntax.
 
 An `<Evaluate>` that admitted a generated fragment shows that fragment where its
@@ -674,7 +681,9 @@ character.
 A line too long for its region is wrapped at the last word boundary that fits,
 and a word longer than the region is broken at the longest grapheme that fits.
 Whitespace is kept where it was typed, blank lines stay rows, and concatenating
-one line's rows recovers exactly the line. The rail, the gap after it and the
+one line's rows recovers exactly the line. A continuation is set in to the
+column its own line was written at, so a wrapped line is still read at its own
+depth; that indent is display, and no source byte or offset moves with it. The rail, the gap after it and the
 status column are reserved first, from measurements rather than character
 counts, and the column is wide enough for every reading a badge can hold —
 including a cleanup wait, which says two things at once — so an element

@@ -455,7 +455,7 @@ function* start(
     // middleware it owns belongs to this session's scope and dies with it. An
     // execution elsewhere would otherwise inherit an observer watching for a
     // session that is gone.
-    const agent = yield* useReplAgent(permissionMode ?? "deny-all");
+    const agent = yield* useReplAgent(permissionMode ?? "deny-all", lifecycle);
     // The scope every entry task is started in. One session, one owner: a task
     // started anywhere else would outlive the observer and the kernels it
     // reports through.

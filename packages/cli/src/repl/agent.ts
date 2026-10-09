@@ -72,6 +72,7 @@ import type {
   AgentPromptPublisher,
   ExecutionInstallation,
 } from "@executablemd/core/host";
+import type { ReplWaits } from "./lifecycle.ts";
 import { DurableContext } from "@executablemd/durable-streams";
 import type { DurableEvent } from "@executablemd/durable-streams";
 
@@ -426,7 +427,18 @@ function remove(attachment: Attachment, request: LiveRequest): void {
  * so no one is woken. No teardown path appends a record, writes an audit or
  * closes a coroutine.
  */
-export function useReplAgent(mode: PermissionMode): Operation<ReplAgentKernel> {
+export function useReplAgent(
+  mode: PermissionMode,
+  /**
+   * Where a pending request says the element asking for it is waiting, or none.
+   *
+   * Optional because the authority is complete without it: counting a wait is
+   * something a reading wants, not something deciding a permission needs. A
+   * kernel given none counts nothing, which is what an execution with no
+   * session reading behaves like.
+   */
+  waits?: ReplWaits,
+): Operation<ReplAgentKernel> {
   return resource(function* (provide) {
     const changes = createSignal<ReplAgentReading, never>();
     /**
@@ -642,6 +654,15 @@ export function useReplAgent(mode: PermissionMode): Operation<ReplAgentKernel> {
       // Decided before anything is published: an unowned request publishes no
       // reading and no key, and never becomes a denial.
       const held = owner(attachment, yield* currentCoroutine());
+      // The element this request is being asked on behalf of is waiting from
+      // here until somebody answers. Released in `ensure`, so abandoning the
+      // request at teardown releases the wait without inventing a decision —
+      // and so a request that is never answered leaves no element reading as
+      // waiting after its scope has gone.
+      const release = waits === undefined ? undefined : yield* waits.hold("permission");
+      if (release !== undefined) {
+        yield* ensure(release);
+      }
       return yield* action<PermissionOutcome>(function (resolve) {
         let settled = false;
         const live: LiveRequest = {

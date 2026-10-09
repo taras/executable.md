@@ -415,7 +415,40 @@ class Build {
     depth: number,
     prefix: string,
   ): void {
-    const observed = this.#observed(element, owner, generated);
+    // One reading per actual call, in the order they were observed, each in
+    // its own source group. An element nothing was observed of is read once
+    // and unobserved, which is the same shape with no call in it.
+    const calls = this.#occurrences(element, owner, generated);
+    if (calls.length === 0) {
+      this.#call(text, elements, element, owner, generated, depth, prefix, undefined);
+      return;
+    }
+    for (const [index, one] of calls.entries()) {
+      this.#call(
+        text,
+        elements,
+        element,
+        owner,
+        generated,
+        depth,
+        calls.length === 1 ? prefix : `${prefix}@${index}`,
+        one,
+      );
+    }
+  }
+
+  /** One call of one element, as its delimiters and what they enclose. */
+  #call(
+    text: string,
+    elements: readonly SourceElement[],
+    element: SourceElement,
+    owner: ReplScope | undefined,
+    generated: string | undefined,
+    depth: number,
+    prefix: string,
+    call: ReplOccurrence | undefined,
+  ): void {
+    const observed = this.#observed(call);
     // A self-closing element has one delimiter, so whatever would have been
     // said beside its closing tag is said beside the only tag it has. Dropping
     // it would leave an element that plainly settled reading as unobserved.
@@ -551,12 +584,7 @@ class Build {
    * observations at all, so every element in it reads as unobserved — which is
    * the truth: static syntax does not prove execution.
    */
-  #observed(
-    element: SourceElement,
-    owner: ReplScope | undefined,
-    generated: string | undefined,
-  ): Observation {
-    const one = this.#occurrence(element, owner, generated);
+  #observed(one: ReplOccurrence | undefined): Observation {
     if (one === undefined) {
       return UNOBSERVED;
     }
@@ -590,17 +618,26 @@ class Build {
     }
   }
 
-  #occurrence(
+  /**
+   * Every call of this element, in the order they were observed.
+   *
+   * A document that writes one element inside a `<Loop>`, or writes the same
+   * element twice, produces several *calls* of it at one source position. Each
+   * is its own reading: showing only the last would say the earlier ones never
+   * happened, and showing one badge for all of them would say several calls
+   * were one.
+   */
+  #occurrences(
     element: SourceElement,
     owner: ReplScope | undefined,
     generated: string | undefined,
-  ): ReplOccurrence | undefined {
+  ): readonly ReplOccurrence[] {
     const { lifecycle, entry } = this.#request;
     if (lifecycle.entry !== entry.key) {
-      return undefined;
+      return [];
     }
     const path = owner?.path;
-    let found: ReplOccurrence | undefined;
+    const found: ReplOccurrence[] = [];
     for (const one of lifecycle.occurrences) {
       const position = one.position;
       if (position === undefined || position.offset !== element.opening.start) {
@@ -612,10 +649,7 @@ class Build {
       if (generated === undefined && path !== undefined && position.path !== path) {
         continue;
       }
-      // Several calls of one authored element share its position. The reading
-      // shown beside the source a reader is looking at is the one that is
-      // happening now, which is the last observed.
-      found = one;
+      found.push(one);
     }
     return found;
   }

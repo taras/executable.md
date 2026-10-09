@@ -340,6 +340,145 @@ describe("Tier CX — what surrounds one expansion", () => {
     expect(observed.report).toBe(unobserved);
   });
 
+  it("CX3: an observed run writes the same Journal bytes as an unobserved one", function* () {
+    // The strongest statement of inertness this tier can make: not that the
+    // screen agreed, but that the record did. A run watched through the public
+    // chain must serialize byte for byte as the same run watched by nobody —
+    // otherwise observation is a participant in what the execution durably
+    // said, however carefully it declines to be one everywhere else.
+    const source = [
+      '<Evaluate as="kept">1 + 1</Evaluate>',
+      "",
+      "<Hello />",
+      "",
+      "<Boom />",
+      "",
+    ].join("\n");
+    const definitions = {
+      Hello: component("Hello", function* () {
+        return "hi";
+      }),
+      Boom: component("Boom", function* () {
+        throw new Error("the body said no");
+      }),
+    };
+    const journal = function* (observe: boolean): Operation<string> {
+      const written: string[] = [];
+      const run = yield* scoped(function* () {
+        const env: EvalEnv = { values: {} };
+        yield* Component.around({ env: () => env }, { at: "min" });
+        yield* Component.around(
+          {
+            // deno-lint-ignore require-yield
+            *importComponent([name]) {
+              const definition = definitions[name as keyof typeof definitions];
+              if (!definition) {
+                throw new Error(`no component ${name}`);
+              }
+              return definition;
+            },
+          },
+          { at: "min" },
+        );
+        // What this run durably said, in the order it said it: every element
+        // the public chain carried, with the identity and position the record
+        // would have been written under.
+        yield* Component.around({
+          *expand([request], next) {
+            written.push(
+              JSON.stringify({
+                id: request.expansion.id,
+                name: request.expansion.name,
+                position: request.expansion.position ?? null,
+              }),
+            );
+            if (!observe) {
+              yield* next(request);
+              return;
+            }
+            const owner: Scope = yield* useScope();
+            owner.run(function* () {
+              for (const _ of yield* each(request.phases)) {
+                yield* each.next();
+              }
+            });
+            yield* next(request);
+          },
+        });
+        try {
+          return renderSegments(yield* expandSegments(scanSegments(source), {}, {}, new Set()));
+        } catch (error) {
+          return String(error);
+        }
+      });
+      yield* sleep(0);
+      return JSON.stringify({ run, written });
+    };
+    expect(yield* journal(true)).toBe(yield* journal(false));
+  });
+
+  it("CX4: a reader that never finishes reading delays nothing", function* () {
+    // A subscriber that takes its first phase and then stops asking. The
+    // execution must not be waiting on it: the element completes, the document
+    // renders, and the reader is simply behind.
+    let taken = 0;
+    const observed = yield* watch(
+      "<Slow />\n",
+      {
+        Slow: component("Slow", function* () {
+          return "done";
+        }),
+      },
+      function* (request, next, read, owner) {
+        read(() => {});
+        owner.run(function* () {
+          // One phase, then never `each.next()` again.
+          for (const _ of yield* each(request.phases)) {
+            taken += 1;
+            yield* sleep(50_000);
+            yield* each.next();
+          }
+        });
+        yield* next(request);
+      },
+    );
+    expect(observed.rendered.trim()).toBe("done");
+    expect(observed.failure).toBe(undefined);
+    // It really did start reading, so this is a slow reader rather than none.
+    expect(taken).toBe(1);
+    // And the element finished regardless, which is what the whole sequence a
+    // *working* reader saw shows.
+    const phases = observed.watched.seen.get(observed.watched.requests[0].expansion.id) ?? [];
+    expect(phases[phases.length - 1]?.phase).toBe("complete");
+  });
+
+  it("CX4: a reader whose scope is cancelled cancels nothing", function* () {
+    // The reader is torn down while the element is still expanding. Nothing
+    // about the execution may notice: it renders, it completes, and the
+    // registration that went away leaves no gap behind it.
+    const observed = yield* watch(
+      "<Steady />\n",
+      {
+        Steady: component("Steady", function* () {
+          return "steady";
+        }),
+      },
+      function* (request, next, _read, owner) {
+        const reader = owner.run(function* () {
+          for (const _ of yield* each(request.phases)) {
+            yield* each.next();
+          }
+        });
+        yield* reader.halt();
+        yield* next(request);
+      },
+    );
+    expect(observed.rendered.trim()).toBe("steady");
+    expect(observed.failure).toBe(undefined);
+    const phases = observed.watched.seen.get(observed.watched.requests[0].expansion.id) ?? [];
+    expect(phases.map((one) => one.phase)).toContain("complete");
+  });
+
   it("CX1: structural work crosses the seam once, and only where it runs", function* () {
     const source = [
       '<Switch value={"b"}>',

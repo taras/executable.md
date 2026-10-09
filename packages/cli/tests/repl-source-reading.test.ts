@@ -401,6 +401,45 @@ describe("the reading one entry is shown as", () => {
         }));
     }
 
+    it("sets a continuation in to the column its own line was written at", () =>
+      withRenderer(function* (renderer) {
+        // An indented line, long enough to wrap. Its continuations have to
+        // start where it started: a continuation further left than the row it
+        // continues reads as a new, shallower line, which is a claim about
+        // structure the source does not make.
+        const indented =
+          "      " +
+          "an indented line of prose, written long enough that it cannot be held on one row";
+        const reading = entryReading({
+          entry: entryOf(indented + "\n"),
+          lifecycle: NO_LIFECYCLE,
+          live: "",
+          inspected: false,
+        });
+        const prepared = yield* prepareReading(renderer, WIDE, reading.source.lines, 56);
+        expect(prepared.ok).toBe(true);
+        if (!prepared.ok) {
+          return;
+        }
+        const rows = prepared.value.rows;
+        expect(rows.length).toBeGreaterThan(1);
+        // The first row carries the source's own whitespace in its text; each
+        // continuation carries the same amount as a display indent instead.
+        expect(rows[0].indent).toBe(0);
+        for (const row of rows.slice(1)) {
+          expect(row.indent).toBe(6);
+        }
+        // Each composed row therefore begins its text at the same column.
+        const columns = rows.map((one) => {
+          const whole = runText(readingRuns(prepared.value, one));
+          return whole.length - whole.trimStart().length;
+        });
+        expect(new Set(columns).size).toBe(1);
+        // And the line is still recoverable exactly: the indent is display,
+        // and no source byte moved.
+        expect(recovered(prepared.value).get(reading.source.lines[0].key)).toBe(indented);
+      }));
+
     it("never measures a row wider than the region it was cut for", () =>
       withRenderer(function* (renderer) {
         const reading = entryReading({
@@ -747,6 +786,43 @@ describe("the reading one entry is shown as", () => {
         expect(line.badge).toBeUndefined();
         expect(line.rail).toBe("rail-pending");
       }
+    });
+
+    it("gives each call of one element its own reading, in its own source group", function* () {
+      // Two calls of one authored element — what a `<Loop>` produces. Showing
+      // only the last would say the first never happened, and one badge for both
+      // would say two calls were one.
+      const source = '<Step as="each" />\n';
+      const reading = entryReading({
+        entry: entryOf(source),
+        lifecycle: observing([
+          { key: "entry-1#1", name: "Step", position: at(0), phase: "settled" },
+          { key: "entry-1#2", name: "Step", position: at(0), phase: "active" },
+        ]),
+        live: "",
+        inspected: false,
+      });
+      const rows = reading.source.lines.filter((one) => one.text.includes("<Step"));
+      expect(rows.length).toBe(2);
+      // Each reads as the call it is, in the order they were observed.
+      expect(rows.map((one) => runText(one.badge ?? []))).toEqual([
+        `${LIFECYCLE.settled.glyph} ${LIFECYCLE.settled.word}`,
+        `${LIFECYCLE.active.glyph} ${LIFECYCLE.active.word}`,
+      ]);
+      // And each is its own group: two rows, two keys, two rails.
+      expect(new Set(rows.map((one) => one.key)).size).toBe(2);
+      expect(rows.map((one) => one.rail)).toEqual(["rail-settled", "rail-active"]);
+    });
+
+    it("reads an element nothing was observed of exactly once", function* () {
+      const source = '<Step as="each" />\n';
+      const reading = entryReading({
+        entry: entryOf(source),
+        lifecycle: NO_LIFECYCLE,
+        live: "",
+        inspected: false,
+      });
+      expect(reading.source.lines.filter((one) => one.text.includes("<Step")).length).toBe(1);
     });
 
     it("aligns every badge at the same measured column", () =>

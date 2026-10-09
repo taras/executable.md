@@ -72,6 +72,20 @@ export interface ReplPreparedRow {
   readonly continuation: boolean;
   readonly rail: ReplReadingLine["rail"];
   readonly depth: number;
+  /**
+   * How far this row is set in from the start of the content region.
+   *
+   * The nesting depth's own indent, and on a continuation the leading
+   * whitespace of the logical line it continues as well — so a line that
+   * wrapped is still read at the column it was written at. Without it a
+   * continuation sits further left than the row above it and reads as a new,
+   * shallower line, which is a claim about structure that the source does not
+   * make.
+   *
+   * Display only. No source byte and no offset moves, and concatenating a
+   * line's rows still recovers exactly its text.
+   */
+  readonly indent: number;
   /** Present on a logical line's first row only. */
   readonly badge: readonly ReplTokenRun[] | undefined;
   readonly style: ReplReadingLine["style"];
@@ -235,7 +249,7 @@ export function* prepareReading(
   const rows: ReplPreparedRow[] = [];
   for (const [index, one] of cut.entries()) {
     const width = measured.value[index];
-    const indent = Math.min(one.depth * 2, Math.max(0, reservation.content - 1));
+    const indent = Math.min(one.depth * 2 + one.indent, Math.max(0, reservation.content - 1));
     if (width > reservation.content - indent) {
       return Err(
         new ReplFitRefusal(
@@ -258,24 +272,31 @@ function* fitLine(
   // A blank line is a row. Measuring it would ask the engine the width of
   // nothing, and dropping it would edit the shape of somebody's document.
   if (line.text.length === 0) {
-    return Ok([row(line, "", 0, false)]);
+    return Ok([row(line, "", 0, false, 0)]);
   }
   const whole = yield* widths(renderer, size, [line.text]);
   if (!whole.ok) {
     return whole;
   }
   if (whole.value[0] <= room) {
-    return Ok([row(line, line.text, 0, false)]);
+    return Ok([row(line, line.text, 0, false, 0)]);
   }
+  // Where this line begins, so its continuations begin there too. Bounded well
+  // inside the region: an indent that left no room for text would make a row
+  // that consumes nothing, and this loop would not terminate.
+  const hanging = Math.min(
+    line.text.length - line.text.trimStart().length,
+    Math.max(0, Math.floor(room / 2)),
+  );
   const rows: ReplPreparedRow[] = [];
   let at = 0;
   while (at < line.text.length) {
     const rest = line.text.slice(at);
-    const cut = yield* cutAt(renderer, size, rest, room);
+    const cut = yield* cutAt(renderer, size, rest, at > 0 ? room - hanging : room);
     if (!cut.ok) {
       return cut;
     }
-    rows.push(row(line, rest.slice(0, cut.value), at, at > 0));
+    rows.push(row(line, rest.slice(0, cut.value), at, at > 0, hanging));
     at += cut.value;
   }
   return Ok(Object.freeze(rows));
@@ -377,11 +398,13 @@ function row(
   shown: string,
   from: number,
   continuation: boolean,
+  hanging: number,
 ): ReplPreparedRow {
   return Object.freeze({
     // Replaced by the engine's answer for this exact row before the reading is
     // returned; nothing reads it in between.
     width: 0,
+    indent: continuation ? hanging : 0,
     key: continuation ? `${line.key}+${from}` : line.key,
     text: shown,
     runs: slicedRuns(line.runs, from, from + shown.length),
@@ -437,7 +460,7 @@ export function readingRuns(
   one: ReplPreparedRow,
 ): readonly ReplTokenRun[] {
   const { reservation } = prepared;
-  const indent = Math.min(one.depth * 2, Math.max(0, reservation.content - 1));
+  const indent = Math.min(one.depth * 2 + one.indent, Math.max(0, reservation.content - 1));
   const parts: { readonly text: string; readonly token: ReplTokenRun["token"] }[] = [
     { text: RAIL, token: one.rail },
     { text: SEPARATOR, token: "punctuation" },
