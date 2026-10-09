@@ -825,6 +825,39 @@ describe("the reading one entry is shown as", () => {
       expect(reading.source.lines.filter((one) => one.text.includes("<Step")).length).toBe(1);
     });
 
+    it("draws a rail on every row, in the colour of the region it is in", () =>
+      withRenderer(function* (renderer) {
+        // The gap K1 found. Every other case here reads `line.rail`, which is
+        // the model's answer; none of them asked whether a rail reaches the
+        // row. Removing it from the composed runs broke nothing, so a reading
+        // could have lost its rails entirely and every test would have passed.
+        const source = '<Elicit as="q">\n  Ask.\n</Elicit>\n';
+        const reading = entryReading({
+          entry: entryOf(source),
+          lifecycle: observing([{ position: at(0), phase: "active" }]),
+          live: "",
+          inspected: false,
+        });
+        const prepared = yield* prepareReading(renderer, WIDE, reading.source.lines, 72);
+        expect(prepared.ok).toBe(true);
+        if (!prepared.ok) {
+          return;
+        }
+        expect(prepared.value.rows.length).toBeGreaterThan(0);
+        for (const row of prepared.value.rows) {
+          const runs = readingRuns(prepared.value, row);
+          // It is the first thing in the row, it is the rail glyph, and it is
+          // drawn under the rail role that says which region the row is in.
+          expect([row.key, runs[0].text]).toEqual([row.key, "\u2502"]);
+          expect([row.key, runs[0].token]).toEqual([row.key, row.rail]);
+          expect([row.key, runText(runs).startsWith("\u2502")]).toEqual([row.key, true]);
+        }
+        // And the observed region's rail really is the observed one, so this is
+        // not satisfied by painting every row the same.
+        const observed = prepared.value.rows.filter((one) => one.rail === "rail-active");
+        expect(observed.length).toBeGreaterThan(0);
+      }));
+
     it("aligns every badge at the same measured column", () =>
       withRenderer(function* (renderer) {
         const source = '<Elicit as="a" />\n<Elicit as="b" />\n';
