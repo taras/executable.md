@@ -330,8 +330,17 @@ export function* observeExpansion<T>(
     }
   };
   issued.publish({ phase: "enter" });
+  // Said once however many body paths an element has: a second ACTIVE would
+  // be the same observation twice, and a reader counting changes would see a
+  // step that did not happen.
+  let active = false;
   const observed: ObservedExpansion = {
-    active: () => issued.publish({ phase: "active" }),
+    active: () => {
+      if (!active) {
+        active = true;
+        issued.publish({ phase: "active" });
+      }
+    },
     settled: (reason) => issued.publish({ phase: "exit", reason }),
   };
 

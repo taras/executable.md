@@ -2992,6 +2992,11 @@ function* expandComponent(
     } catch (error) {
       return [yield* raise(schemaValidationErrorSegment(error, name))];
     }
+    // Resolution and validation accepted this element, so whatever body it has
+    // is the work that was accepted. Published here rather than at each body,
+    // because every path past this point is work — and a refusal above it is
+    // an element that never became active at all.
+    observed.active();
 
     const missingCapture = returnCaptureViolation(
       name,
