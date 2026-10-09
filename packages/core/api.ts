@@ -112,3 +112,19 @@ export type {
   Structural,
 } from "./src/execution-declarations.ts";
 export type { JournalAdmission } from "./src/execute.ts";
+
+/**
+ * The contextual Api a consumer installs middleware on, and the types one
+ * `Component.expand` handler is written in.
+ *
+ * Exported here rather than from the root because this is the consumer-facing
+ * boundary: a host that wants to watch an element expand needs the descriptor
+ * and the shapes it will be handed, and nothing of the engine behind them.
+ */
+export { Component } from "./src/component-api.ts";
+export type {
+  ComponentApi,
+  ComponentExpansionPhase,
+  ComponentExpansionRequest,
+} from "./src/component-api.ts";
+export type { Expansion } from "./src/expansion.ts";
