@@ -35,6 +35,7 @@ import {
   parseRetainedRepositoryCompletion,
   parseRetainedRepositoryIntent,
   retainedRepositoryIntentIdentity,
+  retainedRepositoryRefusal,
   retainedRepositoryRequestFingerprint,
   sameRetainedFrontier,
   withSharedRefs,
@@ -325,13 +326,26 @@ export function* admitRetainedRepositoryHistory(
           "so nothing in this history prepared the transition it claims.",
       );
     }
-    // Which end it may stand at is decided by its own result. An operation that
-    // produced the result its intent froze performed the transition, so it has
-    // to be at the far end of it; the unchanged end belongs to a refusal, and a
-    // success reaches it only where the two ends coincide and there was nothing
-    // to change. Without this an ordinary write success sits at the state the
-    // file had before it, and the entry resumes believing the write is done.
+    // What the result is decides which end it may stand at, and there are only
+    // two things it may be. Either it is the result the intent froze, in which
+    // case the operation performed the transition and has to stand at the far
+    // end of it; or it is a refusal this operation is allowed to retain, in
+    // which case nothing changed and it has to stand at the unchanged end.
+    //
+    // Disagreeing with the frozen evidence is not itself a refusal. A write
+    // that reports a different ordinary success is a write that happened, and
+    // reading its disagreement as a refusal would retain it as one that did
+    // not — so a result that is neither is refused rather than interpreted.
     const performed = matchesRetainedEvidence(completion.result, entry.intent.evidence);
+    const refusal = retainedRepositoryRefusal(entry.intent.operation, completion.result);
+    if (!performed && !refusal) {
+      return refuse(
+        "unproven-outcome",
+        `a retained completion carries a result its intent did not predict and a "` +
+          `${entry.intent.operation}" does not refuse with, so this history cannot say whether ` +
+          "the operation changed anything.",
+      );
+    }
     if (performed && !advanced) {
       return refuse(
         "unproven-outcome",
@@ -342,8 +356,8 @@ export function* admitRetainedRepositoryHistory(
     if (!performed && !unchanged) {
       return refuse(
         "unproven-outcome",
-        "a retained completion stands at the state its intent predicted while carrying a result " +
-          "that intent did not predict, so nothing here proves the transition it claims.",
+        "a retained completion refused while standing at the state its intent predicted, so " +
+          "nothing here proves the transition it claims.",
       );
     }
     entry.completion = completion;

@@ -37,9 +37,15 @@
 
 import { until } from "effection";
 import type { Operation } from "effection";
+import { parseFileWriteFailure, parseFilesFailure } from "@executablemd/runtime";
 import type { Json } from "@executablemd/durable-streams";
 import { canonicalJson } from "@executablemd/workflow";
 import { members, text } from "../composition/parse.ts";
+import type {
+  GitFailureReason,
+  RepositoryFailureReason,
+  WorktreeFailureReason,
+} from "../composition/errors.ts";
 
 /** The durable type an intent is journaled under. */
 export const RETAINED_REPOSITORY_INTENT = "retained_repository_intent";
@@ -779,6 +785,120 @@ export function retainedRepositoryCompletionJson(completion: RetainedRepositoryC
     result: completion.result,
     frontier: retainedFrontierJson(completion.frontier),
   };
+}
+
+/**
+ * The words a Repository refusal retains, as a complete map of its vocabulary.
+ *
+ * A `Record` keyed by the union rather than a list, so the compiler refuses
+ * both a missing word and an invented one. A list would silently reject a
+ * refusal somebody added to the vocabulary later.
+ */
+const REPOSITORY_REFUSALS: Readonly<Record<RepositoryFailureReason, true>> = Object.freeze({
+  "invalid-locator": true,
+  "authentication-unavailable": true,
+  "unresolved-base": true,
+  "missing-remote-default": true,
+  "incompatible-reuse": true,
+  "unusable-repository": true,
+});
+
+/** The words a Worktree refusal retains. */
+const WORKTREE_REFUSALS: Readonly<Record<WorktreeFailureReason, true>> = Object.freeze({
+  "no-repository-context": true,
+  "unresolved-base": true,
+  "branch-checked-out-elsewhere": true,
+  "incompatible-reuse": true,
+  "unusable-repository": true,
+});
+
+/** The words a Git operation's refusal retains. */
+const GIT_REFUSALS: Readonly<Record<GitFailureReason, true>> = Object.freeze({
+  "invalid-invocation": true,
+  "invalid-branch": true,
+  "unresolved-base": true,
+  "branch-checked-out-elsewhere": true,
+  "overwrites-local-changes": true,
+  "unmatched-pathspec": true,
+  "ignored-pathspec": true,
+  "outside-checkout-pathspec": true,
+  "invalid-pathspec-magic": true,
+  "empty-index": true,
+  "unnamed-branch": true,
+});
+
+/**
+ * The retained result as the runtime's own Files parsers read one.
+ *
+ * Those parsers answer for an error carrying failure data, because that is how
+ * the data reaches every other consumer. Here it has come back out of a journal
+ * as plain JSON, so it is handed over the same way rather than re-implemented:
+ * the vocabulary of operations, phases, reasons and write targets stays the
+ * runtime's single definition of it.
+ */
+function filesOutcome(result: Json): Error {
+  return Object.assign(new Error("Files operation failed"), { data: result });
+}
+
+/**
+ * Whether this result is a refusal `operation` is allowed to retain unchanged
+ * state for.
+ *
+ * Positively parsed, never inferred from disagreeing with the frozen evidence:
+ * a different valid success is evidence disagreement, and reading it as a
+ * refusal would let a write that happened be retained as one that did not.
+ *
+ * A file write is held to more than a well-formed failure. Its data says what
+ * became of the target, and only `unchanged` and `rolled-back` are states
+ * nothing was left in — `commit-unknown` is the runtime's word for not knowing,
+ * which is exactly what cannot be retained as proof that nothing changed.
+ *
+ * An operation with no closed local refusal vocabulary retains none. Ambient
+ * selection and the three external operations fail the run or complete through
+ * their own existing records instead, and a managed-placement refusal arrives
+ * with the provider that owns those words.
+ */
+export function retainedRepositoryRefusal(
+  operation: RetainedRepositoryOperation,
+  result: Json,
+): boolean {
+  if (operation === "file-write") {
+    const failure = parseFileWriteFailure(filesOutcome(result));
+    if (failure === undefined) {
+      return false;
+    }
+    return failure.target === "unchanged" || failure.target === "rolled-back";
+  }
+  if (operation === "file-delete" || operation === "dir-ensure") {
+    return parseFilesFailure(filesOutcome(result)) !== undefined;
+  }
+  if (operation === "repository") {
+    return refusedWith(result, REPOSITORY_REFUSALS);
+  }
+  if (operation === "worktree") {
+    return refusedWith(result, WORKTREE_REFUSALS);
+  }
+  if (operation === "switch" || operation === "add" || operation === "commit") {
+    return refusedWith(result, GIT_REFUSALS);
+  }
+  return false;
+}
+
+/**
+ * Whether this result is one word from `vocabulary`, and nothing else.
+ *
+ * The word is the only part of one of these refusals that is safe to retain:
+ * the sentence beside it is written for the person reading the document, and
+ * the component that produced it deliberately keeps everything the platform
+ * said out of both.
+ */
+function refusedWith(result: Json, vocabulary: Readonly<Record<string, true>>): boolean {
+  const read = members(result, ["reason"]);
+  if (read === undefined) {
+    return false;
+  }
+  const reason = text(read["reason"]);
+  return reason !== undefined && Object.hasOwn(vocabulary, reason);
 }
 
 /**

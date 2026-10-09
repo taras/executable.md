@@ -20,6 +20,7 @@
  * to prove, through actual canonical execution.
  */
 
+import { FILES_WRITE_SUCCESS, fileWriteFailure, filesFailure } from "@executablemd/runtime";
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import type { DurableEvent, Json } from "@executablemd/durable-streams";
@@ -33,6 +34,7 @@ import {
   retainedRepositoryIntentIdentity,
   retainedRepositoryIntentJson,
   retainedRepositoryOwner,
+  detachedJson,
   retainedRepositoryRequestFingerprint,
 } from "../src/retained-repository/records.ts";
 import type {
@@ -157,6 +159,20 @@ function* completed(
       frontier: fixture.frontier ?? value.postState,
     }),
   );
+}
+
+/**
+ * The runtime's own failure data as the journal holds it.
+ *
+ * Parsed rather than cast: these records carry optional members, and what a
+ * journal holds is whatever survives being written as JSON.
+ */
+function failureJson(data: unknown): Json {
+  const value = detachedJson(data);
+  if (value === undefined) {
+    throw new Error("the runtime's failure data is not JSON");
+  }
+  return value;
 }
 
 /** The encoded record's members, so a test can add, drop or replace one. */
@@ -528,10 +544,10 @@ describe("retained repository records", () => {
           intended(selection),
           yield* completed(selection),
           intended(refused),
-          // Not the result its intent froze: the operation refused, and the
-          // state it stands at is the one it started from.
+          // One word from the vocabulary a Git operation refuses in, which is
+          // the only part of such a refusal that is retained at all.
           yield* completed(refused, {
-            result: { refusal: "dirty-worktree" },
+            result: { reason: "unmatched-pathspec" },
             frontier: refused.preState,
           }),
         ],
@@ -581,28 +597,165 @@ describe("retained repository records", () => {
         intended(selection),
         yield* completed(selection),
         intended(commit),
-        yield* completed(commit, { result: { refusal: "no-identity" } }),
+        yield* completed(commit, { result: { reason: "empty-index" } }),
       ],
       OWNER,
     );
     expect(reasonOf(result)).toBe("unproven-outcome");
   });
 
-  it("R1: an operation whose two ends coincide completes at either result", function* () {
+  it("R1: a result that is neither the frozen one nor a refusal is refused", function* () {
     const selection = yield* intent();
-    const noop = yield* intent({ operation: "dir-ensure", position: 1 });
+    const commit = yield* intent({
+      operation: "commit",
+      position: 1,
+      postState: frontier(PRIMARY, A, B),
+    });
+    const results: readonly Json[] = [
+      // Not a word this operation refuses in.
+      { reason: "dirty-worktree" },
+      // Not a refusal shape at all.
+      { refused: true },
+      "refused",
+    ];
+    for (const result of results) {
+      const admitted = yield* admitRetainedRepositoryHistory(
+        [
+          intended(selection),
+          yield* completed(selection),
+          intended(commit),
+          yield* completed(commit, { result, frontier: commit.preState }),
+        ],
+        OWNER,
+      );
+      expect(reasonOf(admitted)).toBe("unproven-outcome");
+    }
+  });
+
+  it("R1: a different ordinary write success is not a refusal", function* () {
+    const selection = yield* intent();
+    const write = yield* intent({
+      operation: "file-write",
+      position: 1,
+      request: { cwd: PRIMARY, path: "notes.md", content: "new text" },
+      postState: {
+        ...frontier(),
+        worktree: [{ kind: "file", path: "notes.md", mode: "100644", bytes: "bmV3IHRleHQ=" }],
+      },
+    });
+    const result = yield* admitRetainedRepositoryHistory(
+      [
+        intended(selection),
+        yield* completed(selection),
+        intended(write),
+        // An ordinary success the runtime recognizes, and not the one this
+        // intent froze: the write happened, under a different publication.
+        yield* completed(write, {
+          result: { type: FILES_WRITE_SUCCESS, publication: "transaction-staged" },
+          frontier: write.preState,
+        }),
+      ],
+      OWNER,
+    );
+    expect(reasonOf(result)).toBe("unproven-outcome");
+  });
+
+  it("R1: a write refusal is retained only where the target was left alone", function* () {
+    const selection = yield* intent();
+    const write = yield* intent({
+      operation: "file-write",
+      position: 1,
+      request: { cwd: PRIMARY, path: "notes.md", content: "new text" },
+      postState: {
+        ...frontier(),
+        worktree: [{ kind: "file", path: "notes.md", mode: "100644", bytes: "bmV3IHRleHQ=" }],
+      },
+    });
+
+    const unchanged = accepted(
+      yield* admitRetainedRepositoryHistory(
+        [
+          intended(selection),
+          yield* completed(selection),
+          intended(write),
+          yield* completed(write, {
+            result: failureJson(
+              fileWriteFailure({ phase: "target", reason: "permission-denied" }).data,
+            ),
+            frontier: write.preState,
+          }),
+        ],
+        OWNER,
+      ),
+    );
+    expect(unchanged.completed.length).toBe(2);
+
+    // The runtime's word for not knowing what became of the target. It is a
+    // well-formed failure and it is not proof that nothing changed.
+    const uncertain = yield* admitRetainedRepositoryHistory(
+      [
+        intended(selection),
+        yield* completed(selection),
+        intended(write),
+        yield* completed(write, {
+          result: failureJson(fileWriteFailure({ phase: "commit", reason: "no-space" }).data),
+          frontier: write.preState,
+        }),
+      ],
+      OWNER,
+    );
+    expect(reasonOf(uncertain)).toBe("unproven-outcome");
+  });
+
+  it("R1: a delete refusal is its own operation's failure data", function* () {
+    const selection = yield* intent();
+    const remove = yield* intent({
+      operation: "file-delete",
+      position: 1,
+      request: { cwd: PRIMARY, path: "notes.md" },
+      postState: { ...frontier(), worktree: [] },
+    });
     const history = accepted(
       yield* admitRetainedRepositoryHistory(
         [
           intended(selection),
           yield* completed(selection),
-          intended(noop),
-          yield* completed(noop, { result: { existing: true } }),
+          intended(remove),
+          yield* completed(remove, {
+            result: failureJson(
+              filesFailure({ operation: "delete", phase: "target", reason: "missing" }).data,
+            ),
+            frontier: remove.preState,
+          }),
         ],
         OWNER,
       ),
     );
     expect(history.completed.length).toBe(2);
+  });
+
+  it("R1: coincident ends still need a result this operation can produce", function* () {
+    const selection = yield* intent();
+    const noop = yield* intent({ operation: "dir-ensure", position: 1 });
+
+    const admitted = accepted(
+      yield* admitRetainedRepositoryHistory(
+        [intended(selection), yield* completed(selection), intended(noop), yield* completed(noop)],
+        OWNER,
+      ),
+    );
+    expect(admitted.completed.length).toBe(2);
+
+    const invalid = yield* admitRetainedRepositoryHistory(
+      [
+        intended(selection),
+        yield* completed(selection),
+        intended(noop),
+        yield* completed(noop, { result: { existing: true } }),
+      ],
+      OWNER,
+    );
+    expect(reasonOf(invalid)).toBe("unproven-outcome");
   });
 
   it("R1: an intent whose frozen state is in another lane is refused", function* () {
