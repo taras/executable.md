@@ -853,6 +853,10 @@ function filesOutcome(result: Json): Error {
  * nothing was left in — `commit-unknown` is the runtime's word for not knowing,
  * which is exactly what cannot be retained as proof that nothing changed.
  *
+ * A delete and a directory ensure are held to the operation their failure names.
+ * One parser answers for every non-write Files operation, so a well-formed
+ * failure is not on its own a failure of the operation standing here.
+ *
  * An operation with no closed local refusal vocabulary retains none. Ambient
  * selection and the three external operations fail the run or complete through
  * their own existing records instead, and a managed-placement refusal arrives
@@ -870,7 +874,14 @@ export function retainedRepositoryRefusal(
     return failure.target === "unchanged" || failure.target === "rolled-back";
   }
   if (operation === "file-delete" || operation === "dir-ensure") {
-    return parseFilesFailure(filesOutcome(result)) !== undefined;
+    const failure = parseFilesFailure(filesOutcome(result));
+    if (failure === undefined) {
+      return false;
+    }
+    // The parser recognizes every non-write Files operation, so the word it
+    // read has to be this operation's own. A read that was refused says
+    // nothing about whether the delete beside it refused.
+    return failure.operation === (operation === "file-delete" ? "delete" : "ensure-directory");
   }
   if (operation === "repository") {
     return refusedWith(result, REPOSITORY_REFUSALS);

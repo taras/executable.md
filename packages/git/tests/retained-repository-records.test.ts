@@ -707,6 +707,108 @@ describe("retained repository records", () => {
     expect(reasonOf(uncertain)).toBe("unproven-outcome");
   });
 
+  it("R1: a delete's refusal has to be a delete's failure", function* () {
+    // A delete that really changes something: the file is there before and
+    // gone after, so the unchanged end is only reachable by a refusal.
+    const present: RetainedFrontier = {
+      ...frontier(),
+      worktree: [{ kind: "file", path: "notes.md", mode: "100644", bytes: "b2xk" }],
+    };
+    const selection = yield* intent({ preState: present });
+    const remove = yield* intent({
+      operation: "file-delete",
+      position: 1,
+      request: { cwd: PRIMARY, path: "notes.md" },
+      preState: present,
+      postState: frontier(),
+    });
+    const history = [intended(selection), yield* completed(selection), intended(remove)];
+
+    const refused = accepted(
+      yield* admitRetainedRepositoryHistory(
+        [
+          ...history,
+          yield* completed(remove, {
+            result: failureJson(
+              filesFailure({ operation: "delete", phase: "access", reason: "permission-denied" })
+                .data,
+            ),
+            frontier: remove.preState,
+          }),
+        ],
+        OWNER,
+      ),
+    );
+    expect(refused.completed.length).toBe(2);
+
+    // One parser answers for every non-write Files operation, so a well-formed
+    // failure of another one is not this operation's refusal.
+    for (const operation of ["read", "ensure-directory", "glob"] as const) {
+      const substituted = yield* admitRetainedRepositoryHistory(
+        [
+          ...history,
+          yield* completed(remove, {
+            result: failureJson(
+              filesFailure({ operation, phase: "access", reason: "permission-denied" }).data,
+            ),
+            frontier: remove.preState,
+          }),
+        ],
+        OWNER,
+      );
+      expect(reasonOf(substituted)).toBe("unproven-outcome");
+    }
+  });
+
+  it("R1: a directory ensure's refusal has to be an ensure's failure", function* () {
+    const ensured: RetainedFrontier = {
+      ...frontier(),
+      worktree: [{ kind: "directory", path: "notes", mode: "040755" }],
+    };
+    const selection = yield* intent();
+    const ensure = yield* intent({
+      operation: "dir-ensure",
+      position: 1,
+      request: { cwd: PRIMARY, path: "notes" },
+      postState: ensured,
+    });
+    const history = [intended(selection), yield* completed(selection), intended(ensure)];
+
+    const refused = accepted(
+      yield* admitRetainedRepositoryHistory(
+        [
+          ...history,
+          yield* completed(ensure, {
+            result: failureJson(
+              filesFailure({
+                operation: "ensure-directory",
+                phase: "target",
+                reason: "not-directory",
+              }).data,
+            ),
+            frontier: ensure.preState,
+          }),
+        ],
+        OWNER,
+      ),
+    );
+    expect(refused.completed.length).toBe(2);
+
+    const substituted = yield* admitRetainedRepositoryHistory(
+      [
+        ...history,
+        yield* completed(ensure, {
+          result: failureJson(
+            filesFailure({ operation: "delete", phase: "target", reason: "missing" }).data,
+          ),
+          frontier: ensure.preState,
+        }),
+      ],
+      OWNER,
+    );
+    expect(reasonOf(substituted)).toBe("unproven-outcome");
+  });
+
   it("R1: a delete refusal is its own operation's failure data", function* () {
     const selection = yield* intent();
     const remove = yield* intent({
