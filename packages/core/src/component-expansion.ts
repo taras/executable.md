@@ -155,6 +155,20 @@ class CanonicalExpansionRequest implements ComponentExpansionRequest {
   }
 }
 
+/**
+ * What one element's observers are told, handed to the paths that run its body.
+ *
+ * Publication and nothing else: a path that takes it can say the work started
+ * and that it ended, and cannot read an outcome, decide one or reach the
+ * request it belongs to.
+ */
+export interface ObservedExpansion {
+  /** Accepted work is starting. */
+  active(): void;
+  /** The body's own work ended, and why, before its owned cleanup. */
+  settled(reason: "returned" | "failed" | "cancelled"): void;
+}
+
 /** What canonical expansion produced for one element. */
 export type ExpansionSettlement =
   /** The delegated work ran and settled on its own terms. */

@@ -129,6 +129,7 @@ import {
   issueComponentExpansion,
   reported,
 } from "./component-expansion.ts";
+import type { ObservedExpansion } from "./component-expansion.ts";
 import { expandThroughTerminal } from "./component-api.ts";
 import type { ComponentExpansionPhase } from "./component-api.ts";
 import type { Invocation } from "./invocation.ts";
@@ -2708,6 +2709,16 @@ function* expandComponent(
     }
   };
   issued.publish({ phase: "enter" });
+  const observed: ObservedExpansion = {
+    active: () => issued.publish({ phase: "active" }),
+    settled: (reason) => issued.publish({ phase: "exit", reason }),
+  };
+  /**
+   * The body's own work ended, and why — told before this invocation's ordered
+   * teardown runs, which is exactly the stretch a reader watching a destructor
+   * sees the element waiting in.
+   */
+  const settledExit = observed.settled;
   let chainFailure: unknown;
   let chainFailed = false;
   try {
@@ -2904,6 +2915,7 @@ function* expandComponent(
     // Function component: call the generator function directly
     if (imported.kind === "function") {
       return yield* expandFunctionComponent(
+        observed,
         name,
         props,
         expressions,
@@ -3048,6 +3060,9 @@ function* expandComponent(
     let claimProjection: ClaimFn = passthroughClaim;
 
     function* installInvocation(invocation: Invocation): Operation<void> {
+      // Resolution and validation accepted this element, and its body is about
+      // to run: that is what makes it active, and both bodies install here.
+      observed.active();
       const enclosing = yield* ActiveProjection.get();
       const handle = createProjectionHandle({
         invocation,
@@ -3150,7 +3165,7 @@ function* expandComponent(
             imports,
             returnBody,
           );
-        });
+        }, settledExit);
       } catch (error) {
         // Body fail-fast propagates unchanged; a return-value failure is the
         // component's own printed error and follows the caller's error mode.
@@ -3199,7 +3214,7 @@ function* expandComponent(
         imports,
         returnBody,
       );
-    });
+    }, settledExit);
 
     // Exact source is a provenance, and both halves of it are read here from
     // things no answer can write: that canonical execution authorized this import
@@ -3341,6 +3356,11 @@ function* raiseFrom(segment: ErrorSegment, from: unknown): Operation<ErrorSegmen
  * `expandChildren` helper that renders children.
  */
 function* expandFunctionComponent(
+  /**
+   * What this element's observers are told, from the expansion that issued
+   * them. Publication only: nothing here reads an outcome or decides one.
+   */
+  observed: ObservedExpansion,
   name: string,
   props: Record<string, Json>,
   expressions: Record<string, string>,
@@ -3521,6 +3541,7 @@ function* expandFunctionComponent(
     // in scope so it can render its invocation content through `yield* content()`.
     try {
       const output: unknown = yield* withInvocation(function* (invocation) {
+        observed.active();
         const enclosing = yield* ActiveProjection.get();
         // Minted before the handle, because the handle is what raises it: an
         // invocation names nothing while it is expanding its own content, and
@@ -3768,7 +3789,7 @@ function* expandFunctionComponent(
           }
           throw new ThrownValue(error);
         }
-      });
+      }, observed.settled);
       if (asBinding) {
         const parentEnv = yield* env;
         if (!parentEnv) {
