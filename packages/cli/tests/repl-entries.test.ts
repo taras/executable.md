@@ -3348,18 +3348,20 @@ describe("REPL entries: what a failed entry says it failed with", () => {
         // The rail opens every reading row, so the reason is found by what the
         // row says rather than by what the row begins with.
         const failed = cells.find((cell) => cell.text.includes("failed: "));
-        const region = frame.region("transcript");
+        // The pane the reading is placed in at this size. A narrow frame routes
+        // one outlet and the Entries surface is it, so the reading is in
+        // `content` there and in `transcript` at the two wider profiles — the
+        // same claim about the same rows, in whichever region the profile has
+        // for them.
+        const region = frame.region("transcript") ?? frame.region("content");
 
         if (region === undefined) {
-          // The narrow profile mounts one routed outlet, and the transcript is
-          // not one of them: `content` carries the navigation and whichever
-          // catalog the route chose. No transcript row is placed at this size at
-          // all, which is asserted rather than assumed — a reason that cannot be
-          // drawn cannot overflow, and a row claiming to measure one here would
-          // be measuring nothing.
-          expect([size.columns, cells.length]).toEqual([size.columns, 0]);
-          expect([size.columns, failed]).toEqual([size.columns, undefined]);
+          throw new Error(`the ${size.columns}-column frame placed the reading nowhere`);
         } else {
+          // Every profile places it, the narrow one included: routing a reader
+          // to the surface their entry is on and then showing them nothing of
+          // it is the defect this leg of the case exists for.
+          expect([size.columns, cells.length > 0]).toEqual([size.columns, true]);
           expect([size.columns, failed !== undefined]).toEqual([size.columns, true]);
           const drawn = failed?.bounds;
           // Inside its own region, by its own geometry: it starts where the

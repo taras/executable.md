@@ -623,7 +623,12 @@ written and something was recorded — never that anything is running now.
 ## One entry, read as output and then source
 
 The transcript pane holds one entry's reading: what it produced, and then the
-source that produced it. The two share one vertical window, so going from an
+source that produced it. A narrow frame has no transcript pane; its one routed
+Entries outlet holds the catalog and the reading of the entry the catalog has
+selected — the same two things the sidebar and the transcript are at a wider
+size, stacked because there is one column for them. The catalog takes its own
+height while it fits and its share when it does not, and the reading takes what
+is left. The two share one vertical window, so going from an
 answer to the reason for it is one movement rather than two panes to reconcile.
 A reading belongs to an entry; with nothing selected it is the last entry the
 prefix admitted, which is what a one-entry execution has always shown.

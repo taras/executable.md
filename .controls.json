@@ -39,7 +39,7 @@
     ],
     "outcome": "BROKEN",
     "exit": 1,
-    "summary": "FAILED | 0 passed (34 steps) | 1 failed (2 steps) (67ms)",
+    "summary": "FAILED | 0 passed (34 steps) | 1 failed (2 steps) (60ms)",
     "firstFailure": "error: Error: expect(received).not.toContain(expected) // indexOf",
     "bytesBefore": "c1c4dc763817a6be8aabc049ccec1201f0130de7afee32a712139ac5263f184d",
     "bytesAfter": "c1c4dc763817a6be8aabc049ccec1201f0130de7afee32a712139ac5263f184d",
@@ -70,7 +70,7 @@
     ],
     "outcome": "BROKEN",
     "exit": 1,
-    "summary": "FAILED | 0 passed (19 steps) | 1 failed (3 steps) (208ms)",
+    "summary": "FAILED | 0 passed (19 steps) | 1 failed (3 steps) (205ms)",
     "firstFailure": "error: Error: expect(received).toContain(expected) // indexOf",
     "bytesBefore": "f230870a067c5fd8cb1565e29f1341f3afe676a79d485125cd88f981016320d1",
     "bytesAfter": "f230870a067c5fd8cb1565e29f1341f3afe676a79d485125cd88f981016320d1",
@@ -100,7 +100,7 @@
     ],
     "outcome": "BROKEN",
     "exit": 1,
-    "summary": "FAILED | 0 passed (34 steps) | 1 failed (2 steps) (68ms)",
+    "summary": "FAILED | 0 passed (34 steps) | 1 failed (2 steps) (60ms)",
     "firstFailure": "error: Error: expect(received).toBe(expected) // Object.is equality",
     "bytesBefore": "c1c4dc763817a6be8aabc049ccec1201f0130de7afee32a712139ac5263f184d",
     "bytesAfter": "c1c4dc763817a6be8aabc049ccec1201f0130de7afee32a712139ac5263f184d",
@@ -115,7 +115,7 @@
     ],
     "outcome": "BROKEN",
     "exit": 1,
-    "summary": "FAILED | 0 passed (34 steps) | 1 failed (2 steps) (73ms)",
+    "summary": "FAILED | 0 passed (34 steps) | 1 failed (2 steps) (61ms)",
     "firstFailure": "error: Error: expect(received).toBe(expected) // Object.is equality",
     "bytesBefore": "1c2e64ac3b2ee281faca23ed8820019a517fde064c17a6e82c0fe57ef7cd8be3",
     "bytesAfter": "1c2e64ac3b2ee281faca23ed8820019a517fde064c17a6e82c0fe57ef7cd8be3",
@@ -130,10 +130,25 @@
     ],
     "outcome": "BROKEN",
     "exit": 1,
-    "summary": "FAILED | 0 passed (7 steps) | 1 failed (1 step) (270ms)",
+    "summary": "FAILED | 0 passed (7 steps) | 1 failed (1 step) (255ms)",
     "firstFailure": "error: Error: expect(received).toBe(expected) // Object.is equality",
     "bytesBefore": "59e98dc43ef620ef744da1b7fc04d7ebebe5d5ce9c993497bcb02080db23497d",
     "bytesAfter": "59e98dc43ef620ef744da1b7fc04d7ebebe5d5ce9c993497bcb02080db23497d",
+    "restored": true
+  },
+  {
+    "id": "K10-narrow-empty",
+    "says": "route a narrow frame to Entries and show it no reading",
+    "file": "packages/cli/src/repl/application.ts",
+    "suites": [
+      "packages/cli/tests/repl-entries.test.ts"
+    ],
+    "outcome": "BROKEN",
+    "exit": 1,
+    "summary": "FAILED | 18 passed (64 steps) | 1 failed (1 step) (1s)",
+    "firstFailure": "error: Error: expect(received).toEqual(expected) // deep equality",
+    "bytesBefore": "a3a60a20cfec80d467ac009f36dd01aad9f259205551f6c291597b0444207d36",
+    "bytesAfter": "a3a60a20cfec80d467ac009f36dd01aad9f259205551f6c291597b0444207d36",
     "restored": true
   }
 ]

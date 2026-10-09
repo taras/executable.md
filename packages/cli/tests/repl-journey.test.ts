@@ -3899,8 +3899,15 @@ describe("REPL journey: what an open drawer covers, through the terminal", () =>
         // And none of the lines it covered is anywhere inside it. Read as cells
         // rather than as descriptions: the blank interior of a short modal line
         // is exactly where a drawer without a background lets text through.
+        // A window control the drawer offers *itself* cannot discriminate: both
+        // panes spell `[^ earlier]` and `[v later]` the same way, so finding one
+        // inside the rectangle says the drawer has its own, not that something
+        // behind it showed through. Narrow routes one outlet holding the catalog
+        // and the entry's reading, each with its own pair, so a fragment of one
+        // of those labels is now among the covered lines.
+        const shared = ["[\u2191 earlier]", "[\u2193 later]", "[close]"];
         for (const line of covered.split("\n").map((one) => one.trim())) {
-          if (line.length < 4) {
+          if (line.length < 4 || shared.some((control) => control.includes(line))) {
             continue;
           }
           expect([label, line, inside.includes(line)]).toEqual([label, line, false]);

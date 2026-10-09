@@ -2494,13 +2494,7 @@ function described(view: ReplView, context: ReplPresentationContext): DescribedS
       ),
     );
     if (prepared !== undefined) {
-      // A narrow frame routes one outlet and has no transcript pane, so it has
-      // no window over this reading either. Its rows are described and placed
-      // nowhere, which is what the transcript's rows have always done at this
-      // size: the frame offers the reading, and the profile decides there is
-      // nowhere to put it.
-      const rows = readingRows(prepared);
-      items.push(...(narrow ? rows : shown(rows, context, READING_WINDOW)));
+      items.push(...shown(readingRows(prepared), context, READING_WINDOW));
     }
     items.push(
       row(
@@ -4586,10 +4580,38 @@ export function presentationFor(
     // every region would be a wide screen with the columns removed: the reader
     // would scroll past three lists to reach the one they asked for, and every
     // row of the other two would still be a target.
+    //
+    // The Entries surface is the catalog *and* the reading of whichever entry
+    // it has selected — the same two things the sidebar and the transcript are
+    // at a wider size, stacked because there is one column to put them in. A
+    // narrow frame that showed the catalog alone would route a reader to the
+    // surface their entry is on and then show them nothing of it.
+    //
+    // The catalog takes its own height while it fits and its share when it does
+    // not, exactly as it does in the sidebar; the reading takes what is left.
     const routed =
       view.state.route.surface === "sessions"
         ? listColumn("content", "sessions-fixed", "sessions", SESSIONS_WINDOW)
-        : listColumn("content", "entries-fixed", "entries", ENTRIES_WINDOW);
+        : [
+            box({
+              id: "box:content:entries",
+              region: "content",
+              props: stackProps(context.entriesRows === undefined ? sharedColumnRows(size) : "fit"),
+              children: listColumn(
+                "content",
+                "entries-fixed",
+                "entries",
+                ENTRIES_WINDOW,
+                context.entriesRows,
+              ),
+            }),
+            box({
+              id: "box:content:reading",
+              region: "content",
+              props: stackProps("grow"),
+              children: listColumn("content", "reading-fixed", "reading", READING_WINDOW),
+            }),
+          ];
     regions.push({ region: "content", id: "box:content" });
     columns.push(
       box({
