@@ -45,6 +45,7 @@ import {
   reduceRepl,
   viewFor,
 } from "../src/repl/application.ts";
+import { NO_LIFECYCLE } from "../src/repl/lifecycle.ts";
 import { useReplElicitation } from "../src/repl/elicitation.ts";
 import type { ReplQuestion } from "../src/repl/elicitation.ts";
 import { encodeLocation } from "../src/repl/route.ts";
@@ -120,6 +121,7 @@ const NOTHING_LIVE: ReplLive = Object.freeze({
   pausable: false,
   running: false,
   agent: NO_AGENT,
+  lifecycle: NO_LIFECYCLE,
 });
 
 /** This process part-way through an entry: output on the overlay, nothing closed. */

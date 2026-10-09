@@ -5564,6 +5564,94 @@ inside another execution without moving what an invocation may name.
 `Expansion` and `getExpansion()` belong to `@executablemd/core`, so ordinary
 document execution receives expansion identity with no extension installed.
 
+### 5.7 Expansion observation
+
+`Component.expand` surrounds one executable element's complete expansion. Core
+issues a request before the element is resolved or its props validated, and the
+public middleware chain composes around it; a handler delegates that exact
+request once with `next(request)`.
+
+```ts
+interface ComponentExpansionRequest {
+  readonly expansion: Expansion;
+  readonly phases: Stream<ComponentExpansionPhase, void>;
+}
+
+type ComponentExpansionPhase =
+  | { readonly phase: "enter" }
+  | { readonly phase: "active" }
+  | { readonly phase: "exit"; readonly reason: "returned" | "failed" | "cancelled" }
+  | { readonly phase: "complete"; readonly result: Result<void> }
+  | { readonly phase: "cancelled" };
+```
+
+An element is **entered** before anything about it is decided, becomes
+**active** once resolution and validation have accepted it, **exits** when its
+own body ends — before its owned cleanup runs, which is why a component with a
+destructor stays in `exit` while the destructor runs — and reaches exactly one
+terminal observation: `complete`, once the whole dispatch has unwound and
+canonical acceptance is reconciled, or `cancelled` where it unwound without
+completing.
+
+An observer decides nothing. What a handler returns is ignored; catching what
+canonical expansion raised does not rescue it; a handler may refuse the work by
+throwing or by returning without delegating. A copied, foreign or repeated
+request runs nothing, and `Component.expand` called outside canonical dispatch
+refuses an unissued request. A failure is reported as a detached, frozen
+`Error` preserving the selected name, message and explanatory causes — no
+canonical error identity, binding or resource object crosses.
+
+Each subscription is registered with the element's latest phase and then told
+each change in order, ending after the terminal observation. Reading or
+cancelling a subscription neither starts nor cancels the element, and a reader
+that is slow or absent delays nothing: execution never waits for an observer.
+A consumer that must see the terminal phase belongs to an owner that outlives
+the dispatch.
+
+Every path that expands authored work crosses this once: Markdown, function
+and value or captured component bodies, and the structural constructs `<If>`,
+`<Each>`, `<Loop>`, `<All>` and `<Switch>`, together with the selected
+`<Case>`, the `<Else>` that actually runs and each `<Spawn>` an `<All>`
+starts. An unselected branch, passive syntax and restored work expand nothing
+and receive no phases. Code blocks are observed within the element that
+contains them.
+
+### 5.8 Source inspection
+
+`inspectSource(text, kind)` answers where the executable elements of a text are
+written, without executing, resolving, compiling or evaluating any of it.
+
+```ts
+function inspectSource(text: string, kind: "document" | "fragment"):
+  Result<readonly SourceElement[]>;
+
+interface SourceElement {
+  readonly name: string;
+  readonly opening: SourceRange;
+  readonly closing?: SourceRange;
+}
+```
+
+Elements come back in opening order, nested ones included, each frozen.
+`closing` is absent for exactly self-closing syntax; an element written with
+paired delimiters and no content between them has one. `name` preserves the
+authored spelling, dots included, and says nothing about whether the name
+resolves or what it is permitted to do. Ranges are half-open UTF-16 slices into
+the exact text passed in, a document's header prefix included.
+
+The reading is the scanner's own, so a fence, an inline code span, a quoted
+`>` and a tag-like expression are decided exactly as execution decides them,
+and an incomplete passive tag is text — leaving no guessed children behind.
+Passive text and an empty result are success; a scanner refusal is an `Error`
+result.
+
+`"document"` reads the markdown body beneath a frontmatter header. That body
+boundary is found lexically — a byte-order mark, `---` on its own line, `----`
+which is not one, an optional header language, and the first closing line —
+without calling the frontmatter value parser, so inspecting a document
+interprets neither its header nor its body. Definition parsing asserts that its
+own boundary agrees.
+
 ## 6. Expansion
 
 ### 6.1 The expansion algorithm

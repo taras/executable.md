@@ -449,7 +449,7 @@ function* start(
     // its consumers outlive every element's dispatch, which is the only place
     // a terminal observation can reach them.
     const lifecycle = yield* useReplLifecycle();
-    const expansion = yield* useExpansionController();
+    const expansion = yield* useExpansionController(lifecycle);
     const elicitation = yield* useReplElicitation(lifecycle);
     // Created here and installed into each entry's execution below, so the
     // middleware it owns belongs to this session's scope and dies with it. An

@@ -35,6 +35,7 @@ import {
   reduceRepl,
   viewFor,
 } from "../src/repl/application.ts";
+import { NO_LIFECYCLE } from "../src/repl/lifecycle.ts";
 import type {
   ReplAction,
   ReplLive,
@@ -142,6 +143,7 @@ function asking(question: ReplQuestion | undefined): ReplLive {
     pausable: false,
     running: false,
     agent: NO_AGENT,
+    lifecycle: NO_LIFECYCLE,
   };
 }
 
@@ -1271,6 +1273,7 @@ function liveReading(session: ReplSession): ReplLive {
     pausable: session.controller !== undefined,
     running: session.live,
     agent: session.agent,
+    lifecycle: NO_LIFECYCLE,
   };
 }
 

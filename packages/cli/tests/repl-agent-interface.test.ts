@@ -65,6 +65,7 @@ import {
   presentationFor,
   viewFor,
 } from "../src/repl/application.ts";
+import { NO_LIFECYCLE } from "../src/repl/lifecycle.ts";
 import type {
   ReplAction,
   ReplIntent,
@@ -462,6 +463,7 @@ function liveReading(session: ReplSession): ReplLive {
     pausable: session.controller !== undefined,
     running: session.live,
     agent: session.agent,
+    lifecycle: NO_LIFECYCLE,
   };
 }
 

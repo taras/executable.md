@@ -772,7 +772,13 @@ function keyOfFocus(tree: ReplTree<ReplAction>): string | undefined {
   return node === undefined ? undefined : tree.keyOf(node);
 }
 
-/** This process's overlay, as the application reads it. */
+/**
+ * This process's overlay, as the application reads it.
+ *
+ * Everything this process knows and no record holds. What a reading frozen at
+ * a recorded position leaves out of it is stated once, in `viewFor`, rather
+ * than decided again here.
+ */
 function liveOf(session: ReplSession): ReplLive {
   return {
     output: session.overlay.output,
@@ -781,6 +787,7 @@ function liveOf(session: ReplSession): ReplLive {
     pausable: session.controller !== undefined,
     running: session.live,
     agent: session.agent,
+    lifecycle: session.lifecycle,
   };
 }
 

@@ -127,6 +127,8 @@ import {
   SELECT_ROW,
 } from "./components/rows.ts";
 import type { ReplAction } from "./components/actions.ts";
+import { NO_LIFECYCLE } from "./lifecycle.ts";
+import type { ReplLifecycleReading } from "./lifecycle.ts";
 
 export type { ReplAction };
 
@@ -156,6 +158,15 @@ export interface ReplLive {
    * live reading describes work this process is doing, and none of those is.
    */
   readonly agent: ReplAgentReading;
+  /**
+   * What this process is doing element by element, for the entry that is open.
+   *
+   * Empty wherever a live reading has nothing to say: a replay, a document
+   * with no element in flight, and every frozen prefix. What is here is what
+   * this process watched happen, which is why retained syntax and a recorded
+   * admission add nothing to it.
+   */
+  readonly lifecycle: ReplLifecycleReading;
 }
 
 /**
@@ -766,6 +777,10 @@ export function viewFor(
           // a fact about the position being inspected.
           running: false,
           agent: NO_AGENT,
+          // And the elements this process is expanding are the head's, not
+          // this position's: a reading frozen before them describes a file
+          // that had not reached them yet.
+          lifecycle: NO_LIFECYCLE,
         };
   return Ok(
     Object.freeze({
@@ -809,6 +824,7 @@ export function refusedView(
       pausable: false,
       running: false,
       agent: NO_AGENT,
+      lifecycle: NO_LIFECYCLE,
     }),
     location: encodeLocation(state.route),
     refusal: reason,
@@ -2339,7 +2355,7 @@ function described(view: ReplView, context: ReplPresentationContext): DescribedS
     items.push(
       row(
         "sessions:earlier",
-        "  [^ earlier]",
+        `  ${EARLIER}`,
         { select: "scroll-sessions", delta: -1 },
         styleOf("action"),
         {
@@ -2351,7 +2367,7 @@ function described(view: ReplView, context: ReplPresentationContext): DescribedS
     items.push(
       row(
         "sessions:later",
-        "  [v later]",
+        `  ${LATER}`,
         { select: "scroll-sessions", delta: 1 },
         styleOf("action"),
         {
@@ -2381,7 +2397,7 @@ function described(view: ReplView, context: ReplPresentationContext): DescribedS
       items.push(
         row(
           "entries:earlier",
-          "  [^ earlier]",
+          `  ${EARLIER}`,
           { select: "scroll-entries", delta: -1 },
           styleOf("action"),
           { here: view.focused },
@@ -2393,7 +2409,7 @@ function described(view: ReplView, context: ReplPresentationContext): DescribedS
       items.push(
         row(
           "entries:later",
-          "  [v later]",
+          `  ${LATER}`,
           { select: "scroll-entries", delta: 1 },
           styleOf("action"),
           { here: view.focused },
@@ -3084,7 +3100,7 @@ function drawerFor(
   rows.push(
     row(
       "drawer:scroll:up",
-      padControl("[^ earlier]", width),
+      padControl(EARLIER, width),
       { select: "scroll", delta: -1 },
       styleOf("action"),
       { here: view.focused },
@@ -3096,7 +3112,7 @@ function drawerFor(
   rows.push(
     row(
       "drawer:scroll:down",
-      padControl("[v later]", width),
+      padControl(LATER, width),
       { select: "scroll", delta: 1 },
       styleOf("action"),
       { here: view.focused },
@@ -3916,6 +3932,19 @@ function failedLine(message: string, width: number): string {
   // One column for the mark that says there is more.
   return `${line.slice(0, Math.max(FAILED_PREFIX.length, width - 1))}…`;
 }
+
+/**
+ * What the two window controls are called, wherever a reading has a window.
+ *
+ * One spelling, so Sessions, the catalog, a drawer and the entry reading
+ * cannot drift apart — and arrows rather than the ASCII they replaced, which
+ * is what the accepted presentation states. The semantic actions behind them
+ * are unchanged, and no keyboard shortcut is introduced: these are controls a
+ * person activates the way they always did.
+ */
+export const EARLIER = "[\u2191 earlier]";
+/** The other one. */
+export const LATER = "[\u2193 later]";
 
 /** The Sessions reading's window. */
 export const SESSIONS_WINDOW = "sessions";

@@ -48,6 +48,7 @@ import {
   reduceRepl,
   refusedView,
 } from "../src/repl/application.ts";
+import { NO_LIFECYCLE } from "../src/repl/lifecycle.ts";
 import { readDescription } from "../src/repl/description.ts";
 import { runReplProgram } from "../src/repl/program.ts";
 import type { ReplExecutionProfile } from "../src/repl-profile.ts";
@@ -1028,10 +1029,10 @@ function drawerMarkers(terminal: Terminal): string[] {
       title = true;
       continue;
     }
-    if (label === "[close]" || label === "[v later]") {
+    if (label === "[close]" || label === "[↓ later]") {
       break;
     }
-    if (label === "[^ earlier]") {
+    if (label === "[↑ earlier]") {
       // How the window moves, not a position in it. Both window controls stay
       // outside the content they scroll, so neither is one of these.
       continue;
@@ -1044,7 +1045,7 @@ function drawerMarkers(terminal: Terminal): string[] {
 /**
  * Every content row the open drawer can show, gathered by scrolling it.
  *
- * Through `[v later]`, the way a person reaches the rest of a long record:
+ * Through `[↓ later]`, the way a person reaches the rest of a long record:
  * pressing it moves the window by a row, and what the window holds is what is
  * mounted. Stops when a press adds nothing new, which is the end of the reading.
  */
@@ -1064,7 +1065,7 @@ function* drawerContent(
   // What one frame holds, before anything has been scrolled.
   const first = drawerMarkers(terminal);
   take();
-  yield* focusOn(terminal, "[v later]");
+  yield* focusOn(terminal, "[↓ later]");
   // Stopped when the window itself stops moving, not when a press reveals no
   // label this walk had not already collected. A serialized value repeats rows —
   // `}` closes every object — so a press that only brought a duplicate into view
@@ -3135,6 +3136,7 @@ describe("REPL journey: what it settles before it acts", () => {
       pausable: true,
       running: true,
       agent: NO_AGENT,
+      lifecycle: NO_LIFECYCLE,
     });
     expect(pausing.intent.kind).toBe("none");
     expect(pausing.state.refusal).toContain("not paused");
@@ -3146,6 +3148,7 @@ describe("REPL journey: what it settles before it acts", () => {
       pausable: true,
       running: true,
       agent: NO_AGENT,
+      lifecycle: NO_LIFECYCLE,
     });
     expect(held.intent.kind).toBe("continue");
     expect(held.state.refusal).toBe(undefined);
@@ -4784,7 +4787,7 @@ describe("REPL first use: UI10 narrow drawer guidance", () => {
       // And a control in the same drawer that does something else entirely. It
       // moves the window over a message too long to draw at once, so the row says
       // that instead of promising an answer to somebody who is still reading.
-      yield* focusOn(terminal, "[v later]");
+      yield* focusOn(terminal, "[↓ later]");
       const onScroll = guidanceRow(terminal);
       expect(onScroll).toBe("Entry 1 question · Enter scrolls · Esc closes · Tab/Shift+Tab move");
 

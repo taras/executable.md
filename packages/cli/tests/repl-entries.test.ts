@@ -68,6 +68,7 @@ import {
   viewFor,
   withoutAbsentEntry,
 } from "../src/repl/application.ts";
+import { NO_LIFECYCLE } from "../src/repl/lifecycle.ts";
 import type { ReplAction, ReplLive, ReplState, ReplView } from "../src/repl/application.ts";
 import { flatten, inspectionWidth, NARROW, sidebarWidth } from "../src/repl/layout.ts";
 import type { ReplBounds, ReplRegion } from "../src/repl/layout.ts";
@@ -1458,6 +1459,7 @@ const NOTHING_LIVE: ReplLive = Object.freeze({
   pausable: false,
   running: false,
   agent: NO_AGENT,
+  lifecycle: NO_LIFECYCLE,
 });
 
 /** This process's overlay, exactly as the program reads it into a view. */
@@ -1469,6 +1471,7 @@ function liveReading(session: ReplSession): ReplLive {
     pausable: session.controller !== undefined,
     running: session.live,
     agent: session.agent,
+    lifecycle: NO_LIFECYCLE,
   };
 }
 
@@ -3042,6 +3045,7 @@ describe("REPL entries: what a frozen position says is unavailable", () => {
         pausable: true,
         running: true,
         agent: NO_AGENT,
+        lifecycle: NO_LIFECYCLE,
       };
 
       // Projected *at* the position, because a prefix is a different reading of

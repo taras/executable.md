@@ -278,9 +278,9 @@ describe("REPL terminal: responsive semantic frames", () => {
     // sit outside the content they move.
     expect(textsIn(frame, "drawer")).toEqual([
       "Binding: plan",
-      "[^ earlier]",
+      "[↑ earlier]",
       "Close",
-      "[v later]",
+      "[↓ later]",
       "[close]",
     ]);
     // One surface, the routed one, and nothing from the others.

@@ -140,8 +140,11 @@ that is still running appears under that entry, never under the settled one you
 are reading.
 
 The list is windowed rather than clipped: it moves through as many rows as the
-frame can place, with its earlier and later controls staying put while the rows
-move beneath them. What the window is not showing is not drawn, not focusable
+frame can place, with `[\u2191 earlier]` and `[\u2193 later]` staying put while the
+rows move beneath them. Those two controls are spelled the same way wherever a
+reading has a window — this list, the catalog, Sessions and every drawer — and
+they are controls you activate, not keys you press: no arrow shortcut and no
+horizontal scrolling exist. What the window is not showing is not drawn, not focusable
 and reaches no pointer, and every row can be scrolled to, activated by Enter and
 activated by a pointer.
 
@@ -594,6 +597,27 @@ execution is unsupported.
 
 The Sessions surface presents the Agent work every entry did, as one chronology,
 and an execution with no Agent work has one that says so.
+
+## What this process is doing, element by element
+
+While an entry runs, the screen can say where each element of it has reached:
+entered, active, waiting, exited, and then settled, failed or cancelled. An
+element that has returned stays in exit while its own cleanup runs, because
+that is where it is — a component with a destructor has not finished until the
+destructor has.
+
+Waiting is counted, not guessed. An element waits when something it is actually
+waiting on says so: a question nobody has answered, a permission request
+attributed to the turn that asked for it, a hold the expansion controller is
+keeping. Each of those removes itself when it resolves, opening and closing a
+drawer changes none of them, and ordinary suspension is not waiting at all. Two
+questions at once are two waiting elements rather than one screen that is busy.
+
+All of it is this process's, and none of it is written down. A cold process
+reconstructs none of it, a reading frozen at an earlier position shows none of
+it, and an entry that finishes takes its own with it. Source that is still on
+the screen and a record the history retained prove only that something was
+written and something was recorded — never that anything is running now.
 
 ## What is retained, and what is not
 

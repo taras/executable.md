@@ -1323,13 +1323,13 @@ describe("J2 — what filtering Sessions leaves on the screen (#875 R1)", () => 
   /**
    * The rows the Sessions reading itself is drawn in.
    *
-   * The sidebar band, cut at the reading's own `[v later]` control: below that
+   * The sidebar band, cut at the reading's own `[↓ later]` control: below that
    * sit the Entries heading and the catalog, which a conversation filter does
    * not touch, and beside it are columns holding a journal that grows.
    */
   const listBand = (terminal: Terminal): string[] => {
     const rows = screenOf(terminal).map((line) => line.slice(0, SIDEBAR));
-    const bottom = rows.findIndex((line) => line.includes("[v later]"));
+    const bottom = rows.findIndex((line) => line.includes("[↓ later]"));
     return rows.slice(0, bottom === -1 ? rows.length : bottom);
   };
 
@@ -1382,7 +1382,7 @@ describe("J2 — what filtering Sessions leaves on the screen (#875 R1)", () => 
       const before = listBand(terminal);
       const lastBefore = lastWritten(before);
       // Pre-assert: the reading really is windowed, so there is a reading to
-      // shrink and a `[v later]` to bound it by.
+      // shrink and a `[↓ later]` to bound it by.
       expect(before.length).toBeGreaterThan(0);
       expect(lastBefore).toBeGreaterThan(0);
 
@@ -2281,7 +2281,7 @@ function historyMarkers(terminal: Terminal): string[] {
   const found: string[] = [];
   for (let row = at + 1; row < rows.length; row += 1) {
     const label = (rows[row] ?? "").trim().replace(/^>\s*/, "");
-    if (label === "[^ earlier]") {
+    if (label === "[↑ earlier]") {
       // How the window moves, not a position in it. This drawer scrolls (#875),
       // and both window controls sit outside the content they scroll.
       continue;
