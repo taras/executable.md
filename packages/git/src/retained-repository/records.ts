@@ -787,6 +787,30 @@ export function sameRetainedFrontier(left: RetainedFrontier, right: RetainedFron
 }
 
 /**
+ * The same frontier with the shared Git directory's refs replaced.
+ *
+ * Refs belong to the common directory rather than to one checkout, so work in a
+ * linked worktree moves them for every checkout that shares it. HEAD, the index
+ * and the worktree inventory stay this checkout's own: only the worktree that
+ * has a branch checked out can move it, so a sibling's commit changes what the
+ * ref list says without changing where this checkout stands.
+ */
+export function withSharedRefs(
+  frontier: RetainedFrontier,
+  refs: readonly RetainedRef[],
+): RetainedFrontier {
+  return Object.freeze({
+    checkout: frontier.checkout,
+    administration: frontier.administration,
+    objectFormat: frontier.objectFormat,
+    head: frontier.head,
+    refs: Object.freeze([...refs]),
+    index: frontier.index,
+    worktree: frontier.worktree,
+  });
+}
+
+/**
  * What one authored request asks, as a stable name.
  *
  * The owner and the site are in it, so the same text written at two occurrences

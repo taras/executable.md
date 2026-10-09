@@ -34,10 +34,13 @@ import {
   parseRetainedRepositoryCompletion,
   parseRetainedRepositoryIntent,
   retainedRepositoryIntentIdentity,
+  retainedRepositoryRequestFingerprint,
   sameRetainedFrontier,
+  withSharedRefs,
 } from "./records.ts";
 import type {
   RetainedFrontier,
+  RetainedRef,
   RetainedRepositoryCompletion,
   RetainedRepositoryIntent,
 } from "./records.ts";
@@ -50,6 +53,12 @@ export type RetainedRepositoryRefusal =
   | "unknown-version"
   /** A record belonging to another entry, another execution or a workflow. */
   | "foreign-owner"
+  /** An intent whose fingerprint is not the name of the request beside it. */
+  | "request-fingerprint"
+  /** An intent whose frozen states are not one checkout in the lane it claims. */
+  | "lane-mismatch"
+  /** A completion whose resulting state is neither the one its intent saved nor the one it predicted. */
+  | "frontier-substitution"
   /** A completion whose site is not the site of the intent it names. */
   | "site-substitution"
   /** A completion whose authored request is not the one its intent froze. */
@@ -134,12 +143,13 @@ type ReadRecord =
   | { readonly kind: "intent"; readonly value: RetainedRepositoryIntent }
   | { readonly kind: "completion"; readonly value: RetainedRepositoryCompletion };
 
-/** The same record with an intent's own name on it. */
+/** The same record with an intent's own name, and the name of its request, on it. */
 type RetainedRecord =
   | {
       readonly kind: "intent";
       readonly value: RetainedRepositoryIntent;
       readonly identity: string;
+      readonly requestName: string;
     }
   | { readonly kind: "completion"; readonly value: RetainedRepositoryCompletion };
 
@@ -183,7 +193,32 @@ export function* admitRetainedRepositoryHistory(
       if (intent.owner !== owner) {
         return foreign("an intent");
       }
+      if (intent.fingerprint !== record.requestName) {
+        return refuse(
+          "request-fingerprint",
+          "a retained intent carries a fingerprint that is not the name of the request beside " +
+            "it, so the request was changed after the work was saved and this history cannot " +
+            "say which of the two the saved work belongs to.",
+        );
+      }
       const lane = intent.lane.common;
+      if (
+        intent.preState.administration.common !== lane ||
+        intent.postState.administration.common !== lane
+      ) {
+        return refuse(
+          "lane-mismatch",
+          "a retained intent froze state in a different shared Git directory than the lane it " +
+            "claims to advance.",
+        );
+      }
+      if (intent.preState.checkout !== intent.postState.checkout) {
+        return refuse(
+          "lane-mismatch",
+          "a retained intent's frozen transition names two different checkouts, so it does not " +
+            "describe one operation's state.",
+        );
+      }
       const previous = lanePosition.get(lane);
       if (previous !== undefined && intent.lane.position <= previous) {
         return refuse(
@@ -273,10 +308,23 @@ export function* admitRetainedRepositoryHistory(
         "a retained completion carries a different authored request than the intent it names.",
       );
     }
+    // The resulting state is one of exactly two the intent froze: the state it
+    // predicted, or — for an operation that proved it changed nothing — the
+    // state it started from. Any other state is somebody's account of a
+    // transition this history never prepared, and folding it would advance the
+    // frontier a later mutation is held to.
+    if (
+      !sameRetainedFrontier(completion.frontier, entry.intent.postState) &&
+      !sameRetainedFrontier(completion.frontier, entry.intent.preState)
+    ) {
+      return refuse(
+        "frontier-substitution",
+        "a retained completion carries a state its intent neither predicted nor started from, " +
+          "so nothing in this history prepared the transition it claims.",
+      );
+    }
     entry.completion = completion;
-    // The verified resulting state, not the prediction: the prediction is what
-    // the operation was held to while it ran, and this is what it left.
-    established.set(completion.frontier.checkout, completion.frontier);
+    fold(established, completion.frontier);
     laneUnresolved.delete(entry.intent.lane.common);
   }
 
@@ -284,10 +332,36 @@ export function* admitRetainedRepositoryHistory(
 }
 
 /**
- * The same records with every intent named.
+ * Establish one checkout's state, and carry its shared Git changes across.
  *
- * One digest per intent, taken once: the walk needs an intent's name both when
- * it is admitted and when a later completion asks for it.
+ * Refs live in the common directory, so a linked worktree's commit moves them
+ * for every checkout sharing it. Each sibling keeps its own HEAD, index and
+ * worktree inventory and takes the new ref list, which is what makes a later
+ * mutation of the primary checkout — correctly presenting the ref a sibling
+ * moved — the continuation of this history rather than a break in it.
+ */
+function fold(established: Map<string, RetainedFrontier>, frontier: RetainedFrontier): void {
+  established.set(frontier.checkout, frontier);
+  const shared: readonly RetainedRef[] = frontier.refs;
+  for (const [checkout, held] of established) {
+    if (checkout === frontier.checkout) {
+      continue;
+    }
+    if (held.administration.common !== frontier.administration.common) {
+      continue;
+    }
+    established.set(checkout, withSharedRefs(held, shared));
+  }
+}
+
+/**
+ * The same records with every intent named, and every request named again.
+ *
+ * Two digests per intent, taken once. The identity is what a later completion
+ * asks for. The request name is computed from the record's own owner, site,
+ * operation, selection and authored request, and is the only thing that holds
+ * the saved fingerprint to the request beside it — a fingerprint read as given
+ * would let a changed request consume the work saved for the original.
  */
 function* identified(records: readonly ReadRecord[]): Operation<readonly RetainedRecord[]> {
   const named: RetainedRecord[] = [];
@@ -296,10 +370,18 @@ function* identified(records: readonly ReadRecord[]): Operation<readonly Retaine
       named.push(record);
       continue;
     }
+    const intent = record.value;
     named.push({
       kind: "intent",
-      value: record.value,
-      identity: yield* retainedRepositoryIntentIdentity(record.value),
+      value: intent,
+      identity: yield* retainedRepositoryIntentIdentity(intent),
+      requestName: yield* retainedRepositoryRequestFingerprint({
+        owner: intent.owner,
+        site: intent.site,
+        operation: intent.operation,
+        selection: intent.selection,
+        request: intent.request,
+      }),
     });
   }
   return named;
