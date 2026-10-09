@@ -70,6 +70,7 @@ import {
   SURFACE,
   SYNTAX,
   LIFECYCLE,
+  RAIL,
 } from "./fixtures/repl/reference-style.ts";
 import type { ReplTerminalSize } from "../src/repl/terminal.ts";
 import {
@@ -1699,7 +1700,10 @@ describe("REPL presentation: the surfaces a reading is drawn on", () => {
     // An entry whose source holds an element the scanner reports — a fence is
     // not one, so observing at its offset would match nothing and prove
     // nothing.
-    const source = '<Json value={1} as="n" />\n';
+    // Long enough that its opening delimiter wraps: "only the first visual row
+    // carries each badge" says nothing about an element that fits on one row,
+    // and a check written against one cannot see a badge repeated.
+    const source = '<Json value={{ note: "' + "detail ".repeat(26).trim() + '" }} as="n" />\n';
     const model = yield* scoped(function* () {
       const physical = new InMemoryStream();
       yield* runEntry(physical, source);
@@ -1752,6 +1756,47 @@ describe("REPL presentation: the surfaces a reading is drawn on", () => {
     // The source beside it keeps its own colours, so the badge is not
     // repainting the row it sits on.
     expect(inkOfSpan(grid, carrying.bounds, "<").foreground).not.toBe(LIFECYCLE.active.colour);
+
+    // Exactly one row says it. "Only the first visual row carries each badge"
+    // is frozen, and a second one would say the phase changed between two
+    // halves of one element — counted in cells, because that is where a
+    // reader would see it twice.
+    const saying = observed.keys
+      .filter((key) => key.startsWith("reading:"))
+      .map((key) => observed.boundsOf(key))
+      .filter((bounds) => bounds !== undefined && textOf(grid, bounds).includes(badge));
+    expect(saying.length).toBe(1);
+
+    // And every row of the reading opens with its rail, in cells. The rail is
+    // what says which region a row is in, so a reading drawn without one is a
+    // reading with its structure removed — and until now nothing asked the
+    // screen whether it was there.
+    const railed = observed.keys
+      .filter((key) => key.startsWith("reading:src:") || key.startsWith("reading:output:"))
+      .map((key) => ({ key, bounds: observed.boundsOf(key) }))
+      .filter((one) => one.bounds !== undefined);
+    expect(railed.length).toBeGreaterThan(0);
+    for (const one of railed) {
+      const bounds = one.bounds;
+      if (bounds === undefined) {
+        continue;
+      }
+      expect([one.key, grid.at(bounds.x, bounds.y)]).toEqual([one.key, "\u2502"]);
+      // In the rail's own ink, which for an observed region is not the
+      // unobserved one: a rail painted the same everywhere says nothing.
+      expect([one.key, grid.styleAt(bounds.x, bounds.y).foreground]).not.toEqual([
+        one.key,
+        REPL_PALETTE.source,
+      ]);
+    }
+    // The observed region really is drawn in the archive's active rail, so
+    // this is not satisfied by painting every row alike.
+    const activeRail = railed.filter(
+      (one) =>
+        one.bounds !== undefined &&
+        grid.styleAt(one.bounds.x, one.bounds.y).foreground === RAIL.active,
+    );
+    expect(activeRail.length).toBeGreaterThan(0);
   });
 
   it("P1-T3: an empty screen's panes, edges and uncovered area are each their own", function* () {
