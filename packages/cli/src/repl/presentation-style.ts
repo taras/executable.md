@@ -117,7 +117,18 @@ export type ReplPresentationRole =
   | "lifecycle-waiting"
   | "lifecycle-exit"
   | "lifecycle-settled"
-  | "lifecycle-failed";
+  | "lifecycle-failed"
+  /** The History band: its rule, its title, and what each mark on it is. */
+  | "history-rail"
+  | "history-title"
+  | "history-entry-earlier"
+  | "history-tick-earlier"
+  | "history-minor-earlier"
+  | "history-entry-later"
+  | "history-minor-later"
+  | "history-selected"
+  | "history-head-live"
+  | "history-head";
 
 /**
  * One row's presentation facts, as the reading settles them.
@@ -231,6 +242,30 @@ export const REPL_PALETTE = Object.freeze({
   railSettled: 0x2e3c35,
   /** Source nothing has been observed in. Not a phase: an absence of one. */
   railPending: 0x252b30,
+
+  /** The horizontal rule the History rail's marks stand on. */
+  historyRail: 0x141a1f,
+  /** What the band calls itself. */
+  historyTitle: 0x8b959c,
+  /**
+   * A position at or before what is being read, and one after it.
+   *
+   * Two categories, each with its own pair: an entry is the coarse mark a
+   * reader navigates by and a minor position is everything else. "Later"
+   * means later in the recorded order than the selection — dimmer because it
+   * is where a reader could go, not where they are.
+   */
+  historyEntryEarlier: 0xb8c4cc,
+  historyTickEarlier: 0xe6ecf1,
+  historyMinorEarlier: 0x7fd3e8,
+  historyEntryLater: 0x5d666e,
+  historyMinorLater: 0x4e565d,
+  /** The retained position being read: its diamond, junction and caption. */
+  historySelected: 0xc9a86a,
+  /** The head, when this process is running something. */
+  historyHeadLive: 0x7fd3e8,
+  /** Every other head state, `SELECTED · HEAD`, and the empty message. */
+  historyHead: 0x7b858d,
 });
 
 /**
@@ -389,6 +424,26 @@ function colourOf(role: ReplPresentationRole, inspected: boolean): number {
       return REPL_PALETTE.lifecycleSettled;
     case "lifecycle-failed":
       return REPL_PALETTE.lifecycleFailed;
+    case "history-rail":
+      return REPL_PALETTE.historyRail;
+    case "history-title":
+      return REPL_PALETTE.historyTitle;
+    case "history-entry-earlier":
+      return REPL_PALETTE.historyEntryEarlier;
+    case "history-tick-earlier":
+      return REPL_PALETTE.historyTickEarlier;
+    case "history-minor-earlier":
+      return REPL_PALETTE.historyMinorEarlier;
+    case "history-entry-later":
+      return REPL_PALETTE.historyEntryLater;
+    case "history-minor-later":
+      return REPL_PALETTE.historyMinorLater;
+    case "history-selected":
+      return REPL_PALETTE.historySelected;
+    case "history-head-live":
+      return REPL_PALETTE.historyHeadLive;
+    case "history-head":
+      return REPL_PALETTE.historyHead;
     case "source":
     case "status":
     case "draft":
