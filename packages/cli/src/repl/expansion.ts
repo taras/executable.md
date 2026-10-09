@@ -79,10 +79,18 @@ export interface BoundaryPartition {
  * `hasBinding` answer a question about an invocation the walk has already
  * reached; holding one would stop the same walk the gate before it already
  * stops, one question later.
+ *
+ * `expand` surrounds an element's whole expansion, which makes it a step in
+ * the walk that reached it and not a walk of its own. Treating it as one would
+ * count every element as a separate expansion to pause and release, and a
+ * structural element crossing this seam would release the hold its enclosing
+ * walk is still standing in. It inherits the walk it was reached through, and
+ * holding it stops that walk before the element resolves.
  */
 export const COMPONENT_BOUNDARIES: BoundaryPartition = {
   walks: ["content", "tryContent"],
   gates: [
+    "expand",
     "importComponent",
     "applyModifiers",
     "applyBoundModifiers",
