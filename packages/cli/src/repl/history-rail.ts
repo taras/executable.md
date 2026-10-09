@@ -58,6 +58,32 @@ export const SELECTED_HEAD = "SELECTED · HEAD";
 /** Exactly five, at every size. */
 export const HISTORY_ROWS = 5;
 
+/**
+ * A band with nothing on it.
+ *
+ * What a frame carries before it has measured one, and what a refusal
+ * carries: there is no validated reading to draw a rail from, and a stale one
+ * beside a refusal would be the worst of both.
+ */
+export const EMPTY_BAND: ReplPreparedRail = Object.freeze({
+  reservation: Object.freeze({ right: 0, separator: 0, rail: 0 }),
+  rows: Object.freeze(Array.from({ length: HISTORY_ROWS }, () => Object.freeze([]))),
+  groups: Object.freeze([]),
+});
+
+/**
+ * Five rows of the band's own surface, at a width.
+ *
+ * What a frame draws where it has not prepared a rail. Full width rather than
+ * empty, for the reason every other row of this screen is: the renderer
+ * writes what changed, so a band row that got shorter would keep the tail of
+ * whatever used to be there.
+ */
+export function blankBand(columns: number): readonly (readonly ReplTokenRun[])[] {
+  const blank = tokenRuns([{ text: " ".repeat(Math.max(0, columns)), token: "history" }]);
+  return Object.freeze(Array.from({ length: HISTORY_ROWS }, () => blank));
+}
+
 /** A tall mark: an entry, which is what a reader navigates by. */
 const ENTRY_UPRISER = "┃";
 /** Its junction on the rule, and the heavier one a crowded group takes. */

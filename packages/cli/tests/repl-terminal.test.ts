@@ -32,6 +32,7 @@ import {
 } from "effection";
 
 import { HISTORY_ROWS, NARROW, profileFor } from "../src/repl/layout.ts";
+import { runText } from "../src/repl/description.ts";
 import type { ReplBounds, ReplRegion } from "../src/repl/layout.ts";
 import { ReplRenderError, resolvePointer, useReplRenderer } from "../src/repl/renderer.ts";
 import type { ReplMeasured, ReplRendered, ReplRenderer } from "../src/repl/renderer.ts";
@@ -363,37 +364,22 @@ describe("REPL terminal: responsive semantic frames", () => {
     expect(frame.manifest.profile).toBe("wide");
   });
 
-  it("F1: compact geometry groups marker labels and keeps every marker's identity", function* () {
-    const history = Array.from({ length: 40 }, (_unused, index) => ({
-      marker: `yield:entry-1:${index}`,
-      label: `entry-1 yield ${index}`,
-    }));
-    const wide = (yield* mounted({ ...FILLED, history }, { columns: 160, rows: 36 })).frame;
-    const narrow = yield* scoped(function* () {
-      return (yield* mounted({ ...FILLED, history }, NARROW)).frame;
-    });
-
-    // Every marker survives at both sizes, once each, under its own name.
-    for (const frame of [wide, narrow]) {
-      expect(frame.manifest.history.markers.map((marker) => marker.marker)).toEqual(
-        history.map((one) => one.marker),
-      );
-      expect(frame.manifest.history.rows).toHaveLength(HISTORY_ROWS);
-    }
-    // Wide has room for its own labels; narrow shares them.
-    expect(wide.manifest.history.markers.every((marker) => marker.grouped.length === 0)).toBe(true);
-    expect(narrow.manifest.history.markers.some((marker) => marker.grouped.length > 0)).toBe(true);
-    const shared = narrow.manifest.history.markers.filter(
-      (marker) => marker.label === narrow.manifest.history.markers[0].label,
-    );
-    expect(shared.length).toBeGreaterThan(1);
-    // A grouped marker names the others it shares a label with, so the identity
-    // of a compact position is still recoverable.
-    expect(narrow.manifest.history.markers[0].grouped).toEqual(
-      shared.slice(1).map((marker) => marker.marker),
-    );
-    expect(narrow.manifest.history.markers[0].label).toContain("+");
-  });
+  // Retired for #881 PR 3: "F1: compact geometry groups marker labels and
+  // keeps every marker's identity".
+  //
+  // It asserted that a compact band shares *labels* and that each marker
+  // names the others it shares one with. The band no longer has labels: it
+  // places marks at engine-measured columns, and a group is the positions
+  // that landed on the same one. Its surviving claim — a compact band never
+  // costs a reader the ability to reach an exact position — is now
+  // `repl-history.test.ts`'s "groups collisions deterministically, and keeps
+  // every member", which makes it against the real engine at two widths and
+  // checks the ordinals as well as the markers.
+  //
+  // It is not re-anchored here because this suite drives the fixture surface
+  // rather than the application, and that surface carries an empty band: a
+  // version of this case against it would assert grouping that nothing had
+  // grouped.
 
   it("F1: resizing through every profile keeps selection, nodes and action identity", function* () {
     const driver = yield* driving({ columns: 160, rows: 36 });
@@ -487,16 +473,29 @@ describe("REPL terminal: responsive semantic frames", () => {
         // Each row is the full width, so a band that gets shorter cannot leave
         // the tail of the position that used to be there.
         for (const row of frame.manifest.history.rows) {
-          expect(row).toHaveLength(size.columns);
+          // Measured through the runs the band is now made of, which is what
+          // the boxes draw.
+          expect(runText(row)).toHaveLength(size.columns);
         }
-        // And what the terminal actually holds on those rows is the band.
+        // And what the terminal actually holds on those rows is the band's own
+        // surface, for the full width of the footer.
+        //
+        // Re-anchored for #881 PR 3: this read the first row for a checkpoint
+        // *label*, and the band no longer has any — it places marks at
+        // measured columns from a summary this fixture surface cannot
+        // prepare. What the band says is `repl-history.test.ts`'s; what this
+        // suite owns is where it is placed and how much of the footer it
+        // covers, which is what remains here.
         const band = grid.textIn({
           x: footer.x,
           y: footer.y + 1,
           width: footer.width,
           height: HISTORY_ROWS,
         });
-        expect(band[0]).toContain("root 1");
+        expect(band).toHaveLength(HISTORY_ROWS);
+        for (const row of band) {
+          expect(row).toHaveLength(size.columns);
+        }
       });
     }
   });

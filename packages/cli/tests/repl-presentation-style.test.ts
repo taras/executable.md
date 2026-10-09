@@ -58,8 +58,10 @@ import type {
 } from "../src/repl/application.ts";
 import type { ReplDispatched } from "../src/repl/reconcile.ts";
 import type { ReplDrawerRef } from "../src/repl/route.ts";
-import { FOOTER_ROWS, HISTORY_LABEL, HISTORY_ROWS, NARROW } from "../src/repl/layout.ts";
+import { FOOTER_ROWS, HISTORY_ROWS, NARROW } from "../src/repl/layout.ts";
+import { HISTORY_TITLE } from "../src/repl/history-rail.ts";
 import { ACTION_ROW, DRAWER_WINDOW, READING_WINDOW } from "../src/repl/application.ts";
+import { navigationOf } from "../src/repl/navigation.ts";
 import type { ReplBounds } from "../src/repl/layout.ts";
 import { BOLD, REPL_PALETTE } from "../src/repl/presentation-style.ts";
 import {
@@ -368,7 +370,18 @@ function reading(
   size: ReplTerminalSize = WIDE,
   focused?: string,
 ): ReplView {
-  const resolved = viewFor(state, model, live, size, focused);
+  // The navigation a session would publish for this reading: every position
+  // the file retained, with the head it is standing at. Derived from the
+  // model here because these cases build the model directly rather than
+  // running a session.
+  const resolved = viewFor(
+    state,
+    model,
+    live,
+    size,
+    focused,
+    navigationOf(model.checkpoints, model.settled ? "settled" : "unfinished"),
+  );
   if (!resolved.ok) {
     throw resolved.error;
   }
@@ -687,10 +700,28 @@ describe("REPL presentation: what one row's cells say it is", () => {
         expect(band.height).toBe(5);
         const row = placed(observed, "footer:input").y - band.height;
         expect(band.y).toBe(row);
+        // Re-anchored for #881 PR 3: the band was one accent and is now a
+        // rail whose cells say what each of them is — the title, the rule,
+        // an entry mark, a minor mark, the selection, the head. The claim is
+        // the same and is why either exists: every cell in this band is the
+        // band's own, and nothing foreign is painted here.
+        const own = new Set<number>([
+          REPL_PALETTE.historyTitle,
+          REPL_PALETTE.historyRail,
+          REPL_PALETTE.historyEntryEarlier,
+          REPL_PALETTE.historyTickEarlier,
+          REPL_PALETTE.historyMinorEarlier,
+          REPL_PALETTE.historyEntryLater,
+          REPL_PALETTE.historyMinorLater,
+          REPL_PALETTE.historySelected,
+          REPL_PALETTE.historyHeadLive,
+          REPL_PALETTE.historyHead,
+        ]);
         for (const written of presenter.grid.nonblank(band)) {
           const [at] = written.split("=");
           const [x, y] = at.split(",").map(Number);
-          expect(presenter.grid.styleAt(x, y).foreground).toBe(REPL_PALETTE.historical);
+          const ink = presenter.grid.styleAt(x, y).foreground;
+          expect([at, ink !== undefined && own.has(ink)]).toEqual([at, true]);
         }
         for (let x = band.x; x < band.x + band.width; x += 1) {
           expect(presenter.grid.styleAt(x, band.y).background).toBe(REPL_PALETTE.historySurface);
@@ -1038,7 +1069,7 @@ describe("REPL presentation: the panes a reading is laid out in", () => {
         throw new Error("this frame published no History band");
       }
       expect(band.height).toBe(HISTORY_ROWS);
-      expect(textOf(grid, band).startsWith(HISTORY_LABEL)).toBe(true);
+      expect(textOf(grid, band).startsWith(HISTORY_TITLE)).toBe(true);
     }
   });
 

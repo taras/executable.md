@@ -38,6 +38,7 @@
 import { close, fixed, fit, grow, open, text } from "@bomb.sh/tty";
 import type { Op, OpenElement, SizingAxis } from "@bomb.sh/tty";
 import { runText } from "./description.ts";
+import type { ReplPreparedRail } from "./history-rail.ts";
 import type { ReplTokenRun } from "./description.ts";
 import {
   REPL_PALETTE,
@@ -197,7 +198,10 @@ const WIDE: ReplTerminalSize = { columns: 160, rows: 36 };
  */
 export const FOOTER_ROWS = 7;
 /** The History band's own five rows. */
-export const HISTORY_ROWS = 5;
+export { HISTORY_ROWS } from "./history-rail.ts";
+
+/** Five, at every size — imported for this module's own placement. */
+import { HISTORY_ROWS } from "./history-rail.ts";
 
 /** How wide a column is at each profile that has one. */
 interface ColumnWidths {
@@ -297,115 +301,16 @@ export function drawerRect(size: ReplTerminalSize): ReplBounds | undefined {
   });
 }
 
-/** One selectable history position, as the band would label it. */
-export interface ReplSurfaceMarker {
-  readonly marker: string;
-  readonly label: string;
-}
-
-/** One marker as the band shows it, grouped or not. */
-export interface ReplPlacedMarker {
-  readonly marker: string;
-  /** The label shown. Several markers may share one when space is short. */
-  readonly label: string;
-  /** The other markers sharing that label, this one excluded. */
-  readonly grouped: readonly string[];
-}
-
-/** The History band: its five rows, and what each marker is labelled. */
-export interface ReplHistoryBand {
-  /** Exactly five rows, whatever the size. */
-  readonly rows: readonly string[];
-  readonly markers: readonly ReplPlacedMarker[];
-}
-
 /**
- * The History band, labelled and laid into its five rows.
+ * The History band as the frame holds it: five rows of inert runs, and the
+ * columns its positions landed on.
  *
- * The band is the one thing on this screen that is not a mounted row: its labels
- * come from the model rather than from a node, so nothing else can tell the
- * engine what to put there. Grouping is visual — every marker stays under its
- * own name and the ones sharing a label say which others they share it with, so
- * a compact band never costs a reader the ability to select an exact position.
+ * Prepared in `history-rail.ts` from engine measurements and handed here as
+ * text and roles. Layout places it; it receives no Journal, no session, no
+ * capability, no mounted focus and no authoritative outcome, and it decides
+ * nothing about what the band says.
  */
-export function historyBand(
-  markers: readonly ReplSurfaceMarker[],
-  columns: number,
-): ReplHistoryBand {
-  const placed = groupedMarkers(markers, columns);
-  return Object.freeze({ rows: Object.freeze(bandRows(placed, columns)), markers: placed });
-}
-
-function groupedMarkers(
-  markers: readonly ReplSurfaceMarker[],
-  columns: number,
-): readonly ReplPlacedMarker[] {
-  // Five rows wide as the band is wide. Grouping is about the band's whole
-  // budget, not one row's: a label that will not fit row three may fit row four.
-  const budget = HISTORY_ROWS * Math.max(1, columns - 2);
-  const separate = markers.reduce((width, marker) => width + marker.label.length + 1, 0);
-  if (markers.length === 0 || separate <= budget) {
-    return Object.freeze(
-      markers.map((marker) => Object.freeze({ ...marker, grouped: Object.freeze([]) })),
-    );
-  }
-
-  // A grouped label is its first member's plus a count, so budget for that.
-  const widest = markers.reduce((width, marker) => Math.max(width, marker.label.length), 1) + 4;
-  const affordable = Math.max(1, Math.floor(budget / (widest + 1)));
-  // At least two: reaching here means one-per-group would group nothing and the
-  // band would overflow exactly as before.
-  const perGroup = Math.max(2, Math.ceil(markers.length / affordable));
-  const placed: ReplPlacedMarker[] = [];
-  for (let start = 0; start < markers.length; start += perGroup) {
-    const group = markers.slice(start, start + perGroup);
-    const label = group.length === 1 ? group[0].label : `${group[0].label} +${group.length - 1}`;
-    for (const marker of group) {
-      placed.push(
-        Object.freeze({
-          marker: marker.marker,
-          label,
-          grouped: Object.freeze(
-            group.filter((other) => other !== marker).map((other) => other.marker),
-          ),
-        }),
-      );
-    }
-  }
-  return Object.freeze(placed);
-}
-
-/**
- * What the band is called, on the first of its own rows.
- *
- * On the band rather than above it, because the footer is seven rows and all
- * five of these are the band's: a label given a row of its own would be a row
- * taken from the positions it names. It is read, not activated — nothing here
- * becomes a control.
- */
-export const HISTORY_LABEL = "History ·";
-
-function bandRows(markers: readonly ReplPlacedMarker[], columns: number): string[] {
-  const rows = new Array<string>(HISTORY_ROWS).fill("");
-  // The label occupies the first row before any position does, so a position
-  // that will not fit beside it moves on like any other.
-  rows[0] = HISTORY_LABEL.length <= columns ? HISTORY_LABEL : "";
-  const labels: string[] = [];
-  for (const marker of markers) {
-    if (!labels.includes(marker.label)) {
-      labels.push(marker.label);
-    }
-  }
-  labels.forEach((label, index) => {
-    const row = index % HISTORY_ROWS;
-    const next = rows[row] === "" ? label : `${rows[row]} ${label}`;
-    rows[row] = next.length <= columns ? next : rows[row];
-  });
-  // Padded to the full width, for the same reason the location rows are: a
-  // renderer writes what changed, so a band row that got shorter would keep the
-  // tail of the position that used to be there.
-  return rows.map((row) => (columns < 1 ? row : row.padEnd(columns, " ")));
-}
+export type ReplHistoryBand = ReplPreparedRail;
 
 /** The one region a refusal has: the whole terminal, holding one sentence. */
 export function refusalProps(): ReplBoxProps {

@@ -84,6 +84,7 @@ import { useReplFrames } from "./frame.ts";
 import type { ReplFrames } from "./frame.ts";
 import { committedOps, flatten, profileFor, skeletonOps } from "./layout.ts";
 import { fitPlain, prepareReading } from "./fitting.ts";
+import { prepareRail } from "./history-rail.ts";
 import { readingLines } from "./source-reading.ts";
 import { sourceRuns } from "./presentation-text.ts";
 import type { ReplBox, ReplLayoutManifest, ReplRegion } from "./layout.ts";
@@ -657,7 +658,14 @@ function* drive(
       const attempted = yield* reproject(state, model, execution);
       const drawnAt = yield* screen.size();
       let adopting = attempted.state;
-      let built = viewFor(adopting, attempted.model, liveOf(current), drawnAt, focused);
+      let built = viewFor(
+        adopting,
+        attempted.model,
+        liveOf(current),
+        drawnAt,
+        focused,
+        current.navigation,
+      );
       if (!built.ok) {
         // A position earlier than the selected entry's admission has no such
         // entry in it. The position is what was asked for, so the invalid entry
@@ -665,7 +673,14 @@ function* drive(
         // the surface, the conversation filter and the marker all stand.
         const cleared = withoutAbsentEntry(adopting, attempted.model);
         if (cleared !== undefined) {
-          const without = viewFor(cleared, attempted.model, liveOf(current), drawnAt, focused);
+          const without = viewFor(
+            cleared,
+            attempted.model,
+            liveOf(current),
+            drawnAt,
+            focused,
+            current.navigation,
+          );
           if (without.ok) {
             adopting = cleared;
             built = without;
@@ -803,7 +818,7 @@ function* build(
   size: ReplTerminalSize,
   focused: string | undefined,
 ): Operation<ReplView> {
-  const view = viewFor(state, model, liveOf(session), size, focused);
+  const view = viewFor(state, model, liveOf(session), size, focused, session.navigation);
   return view.ok ? view.value : refusedView(state, view.error.message, size);
 }
 
@@ -1372,6 +1387,7 @@ function measuringAt(
     // pass is still asking for would be text fitted to nothing.
     reading: undefined,
     preview: undefined,
+    rail: undefined,
   };
 }
 
@@ -1463,6 +1479,27 @@ export function* prepareFrame(
   if (!preview.ok) {
     return preview;
   }
+  // The History band, measured against the terminal's own width. Prepared
+  // beside the reading: where a mark lands is a proportion of the rail's
+  // measured columns, so the pass that asks how wide the band is cannot
+  // already have placed anything on it.
+  // Below the minimum there is no band to measure: that frame is one
+  // sentence and publishes no footer at all, so preparing a rail for it
+  // would turn a refusal the product already handles into a measurement
+  // failure.
+  const rail =
+    profileFor(view.size) === "too-small"
+      ? Ok(undefined)
+      : yield* prepareRail(
+          renderer,
+          view.size,
+          view.navigation,
+          view.state.route.at,
+          view.size.columns,
+        );
+  if (!rail.ok) {
+    return rail;
+  }
   const admission = admissionFor({
     view,
     manifest: measured.manifest,
@@ -1480,6 +1517,7 @@ export function* prepareFrame(
     capture: "capture",
     reading: reading.value,
     preview: preview.value,
+    rail: rail.value,
   };
   return Ok({ context, admission, presentation: presentationFor(view, context) });
 }

@@ -57,11 +57,11 @@ import { parseDurableEvent, serializeDurableEvent } from "@executablemd/durable-
 import {
   drawerRect,
   HISTORY_ROWS,
-  HISTORY_LABEL,
   inspectionWidth,
   NARROW,
   sidebarWidth,
 } from "../src/repl/layout.ts";
+import { HISTORY_TITLE } from "../src/repl/history-rail.ts";
 import { projectRepl } from "../src/repl/model.ts";
 import type { ReplModel } from "../src/repl/model.ts";
 import { decodeLocation, encodeLocation } from "../src/repl/route.ts";
@@ -599,7 +599,11 @@ function focusedOn(terminal: Terminal, label: string): boolean {
       // focused and the one being read, and the two markers are independent.
       const after = line.slice(at + 1).trimStart();
       const beyond = after.startsWith("* ") ? after.slice(2) : after;
-      if (after.startsWith(label) || beyond.startsWith(label)) {
+      // And past a History row's own ordinal. #881 PR 3 gives every retained
+      // position its number in the full list — `12 · Entry 3 admitted` — which
+      // is another prefix the product puts there, like the two above.
+      const named = beyond.replace(/^\d+ \u00b7 /, "");
+      if (after.startsWith(label) || beyond.startsWith(label) || named.startsWith(label)) {
         return true;
       }
     }
@@ -2621,7 +2625,7 @@ describe("REPL journey: resizing while a frame is being prepared", () => {
       // A whole frame again, not a fragment: the footer's own rows are all back,
       // which a narrow frame draws beneath the one outlet it routes.
       expect(settledScreen.some((line) => line.includes("[history]"))).toBe(true);
-      expect(settledScreen.some((line) => line.includes(HISTORY_LABEL))).toBe(true);
+      expect(settledScreen.some((line) => line.includes(HISTORY_TITLE))).toBe(true);
       expect((execution ?? "").length).toBeGreaterThan(0);
 
       terminal.end();
@@ -4468,7 +4472,12 @@ describe("REPL first use: UI1/UI5", () => {
       // Five band rows under it, each one a position this execution reached.
       const band = rows.slice(actions + 1, actions + 1 + HISTORY_ROWS);
       expect(band).toHaveLength(HISTORY_ROWS);
-      expect(band.some((row) => row.includes(model.checkpoints[0].label))).toBe(true);
+      // Re-anchored for #881 PR 3: the band listed checkpoint *labels* and now
+      // draws a measured rail — its title, its rule and a mark per position.
+      // What this case is about is the footer's order, and the band being
+      // there is what it needs; what the band says is `repl-history`'s.
+      expect(band.some((row) => row.includes(HISTORY_TITLE))).toBe(true);
+      expect(band.some((row) => row.includes("\u2500"))).toBe(true);
       // The draft, on the last row, alone.
       expect(rows[NARROW.rows - 1].trim().startsWith(">")).toBe(true);
 
@@ -4934,15 +4943,21 @@ describe("REPL first use: UI15 drawer geometry", () => {
       // And the helper still answers with the drawer's own rows: every one of
       // them is a position this history holds, and none is a piece of the
       // sentence or of the transcript behind the box.
-      // The positions this frozen prefix holds — fewer than the live head's, which
-      // is what a prefix is — and every one of them a position rather than a
-      // piece of the sentence or of the transcript behind the box.
+      //
+      // Re-anchored for #881 PR 3, in two ways. A row used to be a bare label
+      // and now carries its place in the recorded order, so "holds no `\u00b7`" —
+      // which is how this told a row from the guidance sentence — would reject
+      // every row; the shape `N \u00b7 <category>` says the same thing and says
+      // more. And the drawer at a frozen position now lists the *whole* order
+      // rather than the prefix's share of it: the positions after the one being
+      // read are where a reader can go next, which is the navigation exception
+      // this slice exists for.
       const markers = drawerMarkers(terminal);
       expect(markers.length).toBeGreaterThan(0);
-      expect(markers).toContain("Entry 1 admitted");
-      expect(markers.length).toBeLessThanOrEqual(listed.length);
+      expect(markers).toContain("1 \u00b7 Entry 1 admitted");
+      expect(markers.length).toBe(listed.length);
       for (const marker of markers) {
-        expect([marker, marker.includes("·")]).toEqual([marker, false]);
+        expect([marker, /^\d+ \u00b7 \S/.test(marker)]).toEqual([marker, true]);
         expect([marker, marker.startsWith("History")]).toEqual([marker, false]);
       }
 

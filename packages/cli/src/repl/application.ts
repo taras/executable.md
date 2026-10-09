@@ -47,8 +47,6 @@ import {
   drawerLayerProps,
   drawerRect,
   footerProps,
-  historyBand,
-  HISTORY_ROWS,
   inspectionWidth,
   paneColumnProps,
   paneContentProps,
@@ -82,6 +80,10 @@ import type { ReplAdmission, ReplWindow } from "./layout-admission.ts";
 import { ORDINARY, REPL_PALETTE, styleOf } from "./presentation-style.ts";
 import type { ReplPresentationRole, ReplRowStyle } from "./presentation-style.ts";
 import { jsonRuns, sourceRuns } from "./presentation-text.ts";
+import { NO_NAVIGATION, numbered, pointLabel } from "./navigation.ts";
+import type { ReplHistoryNavigation } from "./navigation.ts";
+import { blankBand, EMPTY_BAND, HISTORY_ROWS } from "./history-rail.ts";
+import type { ReplPreparedRail } from "./history-rail.ts";
 import { entryReading, NO_READING } from "./source-reading.ts";
 import type { ReplReading } from "./source-reading.ts";
 import { readingRuns } from "./fitting.ts";
@@ -532,6 +534,16 @@ export interface ReplTransition {
 export interface ReplView {
   readonly state: ReplState;
   readonly model: ReplModel;
+  /**
+   * Every position the history retained, and what the head is doing.
+   *
+   * The explicit exception to this view being a reading of one prefix: the
+   * band is a map of the whole recorded order, because the positions after
+   * the selected one are where a reader can go next. It is a marker and a
+   * kind each — nothing a later position holds crosses — and it reaches the
+   * band and the History drawer only. Every other pane gets the prefix.
+   */
+  readonly navigation: ReplHistoryNavigation;
   readonly selection: ReplSelection;
   readonly live: ReplLive;
   /** The canonical location this view is at. */
@@ -758,6 +770,7 @@ export function viewFor(
   live: ReplLive,
   size: ReplTerminalSize,
   focused?: string,
+  navigation: ReplHistoryNavigation = NO_NAVIGATION,
 ): Result<ReplView> {
   // This process is the only thing that can say a question is waiting, so it
   // says so here rather than leaving resolution to infer it from a history that
@@ -790,6 +803,7 @@ export function viewFor(
     Object.freeze({
       state,
       model,
+      navigation,
       selection: resolved.value,
       live: shown,
       location: encodeLocation(state.route),
@@ -812,6 +826,9 @@ export function refusedView(
   return Object.freeze({
     state,
     model: EMPTY_MODEL,
+    // A refusal navigates nowhere: there is no validated reading to draw a
+    // rail from, and a stale one beside a refusal would be the worst of both.
+    navigation: NO_NAVIGATION,
     selection: Object.freeze({
       route: state.route,
       surface: state.route.surface,
@@ -2791,6 +2808,20 @@ export function readingOf(view: ReplView): ReplReading {
 }
 
 /**
+ * The band's five rows, or five empty ones where none was prepared.
+ *
+ * The measuring pass has no rail — it is the pass that answers how wide the
+ * band is — and an unmeasured frame describes no band content, exactly as it
+ * describes no windowed content.
+ */
+function bandRowsOf(
+  rail: ReplPreparedRail | undefined,
+  columns: number,
+): readonly (readonly ReplTokenRun[])[] {
+  return rail === undefined ? blankBand(columns) : rail.rows;
+}
+
+/**
  * The transcript rows the selected locus holds.
  *
  * An entry's own rows when one is selected, and the whole execution's when none
@@ -3383,14 +3414,20 @@ function drawerContent(
     // not described, so it is not a cell, not a target and not a Tab stop —
     // which is what makes reaching the last one a thing the controls do rather
     // than something clipping hides.
-    for (const checkpoint of view.model.checkpoints) {
+    // The whole recorded order, not the selected prefix: the positions after
+    // the one being read are where a reader can go next, and a drawer that
+    // stopped at the selection would be a list of where they had already
+    // been. Every position gets its own row — a group is how the rail *draws*
+    // two of them, never how it counts them — and each says what kind it is
+    // without reading anything the position holds.
+    for (const one of numbered(view.navigation)) {
       content.push({
         described: row(
-          `drawer:marker:${checkpoint.marker}`,
-          padControl(checkpoint.label, width),
-          { select: "marker", marker: checkpoint.marker },
+          `drawer:marker:${one.point.marker}`,
+          padControl(pointLabel(one.point, one.ordinal, one.entry), width),
+          { select: "marker", marker: one.point.marker },
           styleOf("history", {
-            selected: view.state.route.at === checkpoint.marker,
+            selected: view.state.route.at === one.point.marker,
             inspected: true,
           }),
           { here: view.focused },
@@ -4126,6 +4163,14 @@ export interface ReplPresentationContext {
    * prepared rows; it cannot recover the rest of an unprepared one.
    */
   readonly preview: readonly ReplFittedLine[] | undefined;
+  /**
+   * The History band this frame measured, or none before it has measured one.
+   *
+   * Prepared beside the reading: where a mark lands is a proportion of the
+   * rail's measured columns, so the pass that asks how wide the band is
+   * cannot already have placed anything on it.
+   */
+  readonly rail: ReplPreparedRail | undefined;
 }
 
 /** One reading's descriptions, paired with where the engine places them. */
@@ -4451,13 +4496,10 @@ export function presentationFor(
   }
   const size = view.size;
   const profile = profileFor(size);
-  const band = historyBand(
-    view.model.checkpoints.map((checkpoint) => ({
-      marker: checkpoint.marker,
-      label: checkpoint.label,
-    })),
-    size.columns,
-  );
+  // The band the frame measured. The pass that asks how wide it is has none,
+  // and describes none: a rail placed against a width still being asked for
+  // would be a rail placed on nothing.
+  const rail = context.rail;
   if (profile === "too-small") {
     // No cell beyond the sentence, so nothing this frame hides can be pointed
     // at: a control that is not in the frame is not in its target map either.
@@ -4487,7 +4529,7 @@ export function presentationFor(
         actions: undefined,
         regions: Object.freeze([Object.freeze({ region: "refusal", id: "box:refusal" })]),
         contents: Object.freeze([]),
-        history: band,
+        history: rail ?? EMPTY_BAND,
       }),
     };
   }
@@ -4790,14 +4832,16 @@ export function presentationFor(
                 id: "box:footer:band",
                 region: "footer",
                 props: bandProps(),
-                children: band.rows.map((text, at) =>
+                children: bandRowsOf(rail, size.columns).map((row, at) =>
                   box({
                     id: `box:band:${at}`,
                     region: "footer",
                     props: rowProps(size.columns),
-                    text,
+                    text: runText(row),
+                    runs: row,
                     // The one part of this screen that is not a mounted row, so
                     // its style comes from the band rather than from a candidate.
+                    // Each cell carries its own role; this is the row's base.
                     style: styleOf("history", {
                       inspected: view.state.route.at !== undefined,
                     }),
@@ -4822,7 +4866,7 @@ export function presentationFor(
       }),
       regions: Object.freeze(regions.map((region) => Object.freeze(region))),
       contents: Object.freeze(contents.map((content) => Object.freeze(content))),
-      history: band,
+      history: rail ?? EMPTY_BAND,
     }),
   };
 }

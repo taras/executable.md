@@ -899,7 +899,11 @@ describe("J3 — durable truth, and a cold process over it", () => {
       // admission, the turn's publication, and the root settling.
       yield* click(terminal, "[history]");
       yield* settled(40);
-      for (const marker of ["Entry 1 admitted", "Agent prompt completed", "Settled"]) {
+      // The categories a retained position reads as. Re-anchored for #881
+      // PR 3: a drawer row was the checkpoint's own label and is now its place
+      // in the recorded order and what kind of position it is — identical
+      // wording live and historical, so neither route invents a richer one.
+      for (const marker of ["Entry 1 admitted", "Agent turn recorded", "Entry outcome recorded"]) {
         expect([marker, shows(terminal, marker)]).toEqual([marker, true]);
       }
 
@@ -910,11 +914,20 @@ describe("J3 — durable truth, and a cold process over it", () => {
       expect(shows(terminal, REPLY.trim())).toBe(false);
       expect(shows(terminal, "ok? ·")).toBe(false);
 
-      // The drawer stays open on the position it moved to, and now offers only
-      // that prefix's markers: at `yield:root:0` the turn had not happened, so
-      // there is nothing about it to select.
+      // The drawer stays open on the position it moved to, and offers the
+      // whole recorded order from there.
+      //
+      // Re-anchored for #881 PR 3. This asserted the opposite — that an
+      // earlier prefix offers only its own share of the positions — and that
+      // is the premise this slice reverses: the positions *after* the one
+      // being read are where a reader can go next, so navigation is taken at
+      // the whole file while content stays at the prefix. The separation is
+      // still the claim, and it is now the pair below: the later position is
+      // offered, and nothing it holds is on the screen.
       expect(historicalOn(terminal)).toBe(true);
-      expect(shows(terminal, "Agent prompt completed")).toBe(false);
+      expect(shows(terminal, "Agent turn recorded")).toBe(true);
+      expect(shows(terminal, REPLY.trim())).toBe(false);
+      expect(shows(terminal, "completed, recorded")).toBe(false);
 
       // Back at the head: the drawer is modal, so it is closed first and then
       // the live control is reachable.
@@ -927,7 +940,7 @@ describe("J3 — durable truth, and a cold process over it", () => {
       // record carries and nothing live.
       yield* click(terminal, "[history]");
       yield* settled(40);
-      yield* click(terminal, "Agent prompt completed");
+      yield* click(terminal, "Agent turn recorded");
       yield* settled(40);
       yield* showing(terminal, REPLY.trim());
       yield* showing(terminal, "completed, recorded");
