@@ -144,7 +144,7 @@ describe("H4 — the five rows are allocated by measurement", () => {
       const members = first.value.groups.flatMap((one) => one.ordinals);
       expect(members.length).toBe(40);
       expect(new Set(members).size).toBe(40);
-      expect([...members].sort((a, b) => a - b)).toEqual(
+      expect(members.toSorted((a, b) => a - b)).toEqual(
         Array.from({ length: 40 }, (_, at) => at + 1),
       );
     }));
@@ -305,17 +305,12 @@ describe("H4 — the five rows are allocated by measurement", () => {
     }));
 });
 
+/** `headOf` over one neutral baseline, so each case names only its own fact. */
+const facts = (over: Partial<Parameters<typeof headOf>[0]>) =>
+  headOf({ entries: 1, outcome: false, working: false, paused: false, pausing: false, ...over });
+
 describe("H3 — the head is derived from retained facts and owned work", () => {
   it("takes the frozen precedence, and never infers a pause", function* () {
-    const facts = (over: Partial<Parameters<typeof headOf>[0]>) =>
-      headOf({
-        entries: 1,
-        outcome: false,
-        working: false,
-        paused: false,
-        pausing: false,
-        ...over,
-      });
     // 1 settling beats everything: an outcome is retained and the work this
     // process owns has not come down yet.
     expect(facts({ outcome: true, working: true, paused: true, pausing: true })).toBe("settling");
@@ -342,73 +337,128 @@ describe("H3 — the head is derived from retained facts and owned work", () => 
   });
 });
 
-describe("H3 \u2014 the head a real session publishes", () => {
+describe("H3 — the head a real session publishes", () => {
   beforeAll(() => useTempFileCompiler());
 
   it("is empty before an entry, live while one runs, settled once it has", function* () {
-    yield* scoped(function* () {
-      const session = opened(yield* openReplSession({ execution: execution() }));
-      // Nothing retained and nothing owned.
-      expect(session.navigation.head).toBe("empty");
-      expect(session.navigation.checkpoints).toEqual([]);
+    const session = opened(yield* openReplSession({ execution: execution() }));
+    // Nothing retained and nothing owned.
+    expect(session.navigation.head).toBe("empty");
+    expect(session.navigation.checkpoints).toEqual([]);
 
-      accepted(yield* session.submit('<Json value={1} as="a" />\n'));
-      // Owned work, from before its first record exists.
-      expect(session.navigation.head).toBe("live");
+    accepted(yield* session.submit('<Json value={1} as="a" />\n'));
+    // Owned work, from before its first record exists.
+    expect(session.navigation.head).toBe("live");
 
-      yield* session.join();
-      yield* sleep(0);
-      // The outcome is retained and nothing of the entry is still standing.
-      expect(session.navigation.head).toBe("settled");
-      expect(session.navigation.checkpoints.map((one) => one.kind)).toContain("entry");
-      expect(session.navigation.checkpoints.map((one) => one.kind)).toContain("terminal");
-    });
+    yield* session.join();
+    yield* sleep(0);
+    // The outcome is retained and nothing of the entry is still standing.
+    expect(session.navigation.head).toBe("settled");
+    expect(session.navigation.checkpoints.map((one) => one.kind)).toContain("entry");
+    expect(session.navigation.checkpoints.map((one) => one.kind)).toContain("terminal");
   });
 
   it("is SETTLING while the outcome is retained and the entry is still coming down", function* () {
     // The window a reader watching a run end is actually in: the root closed,
     // and this process still owns what the entry acquired. A head taken from
     // the root Close alone would call this finished.
-    yield* scoped(function* () {
-      let duringRelease: string | undefined;
-      let held: ReplSession | undefined;
-      const session = opened(
-        yield* openReplSession({
-          execution: execution(),
-          installations: [
-            {
-              *install(): Operation<void> {
-                yield* ensure(() => {
-                  duringRelease = held?.navigation.head;
-                });
-              },
+    let duringRelease: string | undefined;
+    let held: ReplSession | undefined;
+    const session = opened(
+      yield* openReplSession({
+        execution: execution(),
+        installations: [
+          {
+            *install(): Operation<void> {
+              yield* ensure(() => {
+                duringRelease = held?.navigation.head;
+              });
             },
-          ],
-        }),
-      );
-      held = session;
-      accepted(yield* session.submit('<Json value={1} as="a" />\n'));
-      yield* session.join();
-      yield* sleep(0);
-      // Read at the moment this entry's own installation was released, which
-      // is after its outcome was recorded and before its work was finished.
-      expect(duringRelease).toBe("settling");
-      // And neutral once it is down, however it went.
-      expect(session.navigation.head).toBe("settled");
-    });
+          },
+        ],
+      }),
+    );
+    held = session;
+    accepted(yield* session.submit('<Json value={1} as="a" />\n'));
+    yield* session.join();
+    yield* sleep(0);
+    // Read at the moment this entry's own installation was released, which
+    // is after its outcome was recorded and before its work was finished.
+    expect(duringRelease).toBe("settling");
+    // And neutral once it is down, however it went.
+    expect(session.navigation.head).toBe("settled");
   });
 
   it("carries no payload from the entry it is describing", function* () {
-    yield* scoped(function* () {
-      const session = opened(yield* openReplSession({ execution: execution() }));
-      accepted(yield* session.submit('<Json value={{ secret: "shibboleth" }} as="a" />\n'));
-      yield* session.join();
-      yield* sleep(0);
-      expect(JSON.stringify(session.navigation)).not.toContain("shibboleth");
-      for (const point of session.navigation.checkpoints) {
-        expect(Object.keys(point).sort()).toEqual(["kind", "marker"]);
-      }
-    });
+    const session = opened(yield* openReplSession({ execution: execution() }));
+    accepted(yield* session.submit('<Json value={{ secret: "shibboleth" }} as="a" />\n'));
+    yield* session.join();
+    yield* sleep(0);
+    expect(JSON.stringify(session.navigation)).not.toContain("shibboleth");
+    for (const point of session.navigation.checkpoints) {
+      expect(Object.keys(point).toSorted()).toEqual(["kind", "marker"]);
+    }
+  });
+});
+
+describe("H1/H2 — the whole order, and nothing of what it holds", () => {
+  beforeAll(() => useTempFileCompiler());
+
+  it("offers later positions from an earlier one, with the prefix's content", function* () {
+    const holder = execution();
+    const first = opened(yield* openReplSession({ execution: holder }));
+    accepted(yield* first.submit('<Json value={{ early: 1 }} as="a" />\n'));
+    yield* first.join();
+    const early = first.navigation.checkpoints[0].marker;
+    accepted(yield* first.submit('<Json value={{ late: 2 }} as="b" />\n'));
+    yield* first.join();
+    yield* sleep(0);
+    const whole = first.navigation.checkpoints.length;
+    expect(whole).toBeGreaterThan(2);
+
+    // Reopened at the earliest position. Its content is that prefix's — the
+    // second entry had not happened — and its navigation is the whole
+    // file's, because the positions after it are where a reader can go.
+    const inspecting = opened(yield* openReplSession({ execution: holder, selection: early }));
+    expect(inspecting.model.entries.length).toBe(1);
+    expect(inspecting.navigation.checkpoints.length).toBe(whole);
+    // The content channel is live and is the prefix's: it carries the first
+    // entry's payload and not the second's. Against that, navigation holds
+    // neither — it is an order, not a reading.
+    const content = JSON.stringify(inspecting.model);
+    expect(content).toContain("early");
+    expect(content).not.toContain("late");
+    const order = JSON.stringify(inspecting.navigation);
+    expect(order).not.toContain("early");
+    expect(order).not.toContain("late");
+  });
+
+  it("refuses the whole reading when a later segment is malformed", function* () {
+    const holder = execution();
+    const first = opened(yield* openReplSession({ execution: holder }));
+    accepted(yield* first.submit('<Json value={1} as="a" />\n'));
+    yield* first.join();
+    yield* sleep(0);
+    const early = first.navigation.checkpoints[0].marker;
+
+    // A record nothing can read, appended after the position being asked
+    // for. Reopening at that earlier marker must refuse: a plausible prefix
+    // beside navigation that cannot be built is the worst of both.
+    const events = yield* holder.stream.readAll();
+    // The control: the same reconstruction, minus the bad record, opens at
+    // this very marker. So the refusal below is the record's, not the
+    // reconstruction's.
+    const rebuilt = { id: "history", stream: new InMemoryStream([...events]) };
+    expect((yield* openReplSession({ execution: rebuilt, selection: early })).ok).toBe(true);
+    const corrupted = {
+      id: "history",
+      stream: new InMemoryStream([
+        ...events,
+        { type: "nonsense-this-reader-cannot-validate" } as never,
+      ]),
+    };
+    const reopened = yield* openReplSession({ execution: corrupted, selection: early });
+    expect(reopened.ok).toBe(false);
   });
 });
 
