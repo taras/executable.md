@@ -18,13 +18,17 @@ import { ensure, Ok, race, resource, scoped, sleep, suspend, until } from "effec
 import type { Operation } from "effection";
 import { exists, readTextFile, rm, writeTextFile } from "@effectionx/fs";
 import { API, fileWriteSuccess, hostFilesHandler, useHostFiles } from "@executablemd/runtime";
-import type { FileWriteInput } from "@executablemd/runtime";
+import type { FilePathInput, FileWriteInput, FileWriteSuccess } from "@executablemd/runtime";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import type { Json } from "@executablemd/durable-streams";
 import { execute, executeInstalled } from "../src/execute.ts";
 import { fileDeleteEntry, fileWriteEntry } from "../host.ts";
 import { recordedFiles } from "./support/fragment-files.ts";
-import type { FileMutationHandlers, FileMutationRequest } from "../src/file-mutations.ts";
+import type {
+  FileMutationHandlers,
+  FileMutationNext,
+  FileMutationRequest,
+} from "../src/file-mutations.ts";
 import { collect } from "../src/collect.ts";
 import { useTempFileCompiler } from "../src/temp-file-compiler.ts";
 import { FileAccessError } from "../src/components/File.ts";
@@ -2010,6 +2014,141 @@ describe("Tier FM — a host that is handed `<File>`'s mutations", () => {
     expect(output).toContain("shadowed notes.md");
     expect(mutations.delivered).toEqual([]);
     expect(yield* exists(join(fixture.workspace, "notes.md"))).toBe(false);
+  });
+
+  it("FM20: overlapping continuations cannot enter two handlers for one occurrence", function* () {
+    const fixture = yield* useFixture();
+    const entered: string[] = [];
+    const handlers: FileMutationHandlers = {
+      *writeTextFile([routing], next) {
+        const occurrence = yield* next({ intent: "inspect", routing });
+        entered.push(occurrence);
+        // Suspended while a second continuation call is in flight: the entry is
+        // what has to already be consumed, not the settled result.
+        yield* sleep(20);
+        yield* next({
+          intent: "answer",
+          routing,
+          answer: Ok(fileWriteSuccess("host-committed")),
+        });
+      },
+      *deleteFile([routing], next) {
+        yield* next({ intent: "inspect", routing });
+        yield* next({ intent: "answer", routing, answer: Ok(undefined) });
+      },
+    };
+    try {
+      yield* retained(fixture, '<File path="notes.md">the note</File>\n', handlers, function* () {
+        yield* API.Files.around(
+          {
+            *writeTextFile([input], next) {
+              return yield* race([next(input), next(input)]);
+            },
+          },
+          { at: "max" },
+        );
+      });
+    } catch {
+      // Refusing the reuse may end the execution. What matters is that it
+      // happened before a second handler entered.
+    }
+    expect(entered.length).toBe(1);
+  });
+
+  it("FM21: a continuation kept past a failed mutation opens no fresh terminal", function* () {
+    const fixture = yield* useFixture();
+    const mutations = recording();
+    let replay: (() => Operation<unknown>) | undefined;
+    try {
+      yield* retained(
+        fixture,
+        '<File path="notes.md">the note</File>\n',
+        mutations.handlers,
+        function* () {
+          yield* API.Files.around(
+            {
+              // deno-lint-ignore require-yield
+              *writeTextFile([input], next) {
+                replay = () => next(input);
+                return Ok(fileWriteSuccess("host-committed"));
+              },
+            },
+            { at: "max" },
+          );
+        },
+      );
+    } catch {
+      // Answering without delegating fails the mutation, which is the point:
+      // the invocation is over before its saved continuation is called.
+    }
+    if (replay === undefined) {
+      throw new Error("the middleware never captured its continuation");
+    }
+    try {
+      yield* replay();
+    } catch {
+      // An expired continuation refuses.
+    }
+    expect(mutations.delivered).toEqual([]);
+  });
+
+  it("FM22: a captured handler method keeps its supplied receiver", function* () {
+    const fixture = yield* useFixture();
+    const handlers = {
+      received: 0,
+      *writeTextFile(
+        [routing]: [FileMutationRequest<FileWriteInput>],
+        next: FileMutationNext<FileWriteInput, FileWriteSuccess>,
+      ): Operation<void> {
+        this.received += 1;
+        yield* next({ intent: "inspect", routing });
+        yield* next({
+          intent: "answer",
+          routing,
+          answer: Ok(fileWriteSuccess("host-committed")),
+        });
+      },
+      *deleteFile(
+        [routing]: [FileMutationRequest<FilePathInput>],
+        next: FileMutationNext<FilePathInput, void>,
+      ): Operation<void> {
+        yield* next({ intent: "inspect", routing });
+        yield* next({ intent: "answer", routing, answer: Ok(undefined) });
+      },
+    };
+    try {
+      yield* retained(fixture, '<File path="notes.md">the note</File>\n', handlers);
+    } catch {
+      // A lost receiver throws before inspecting; the counter is what says so.
+    }
+    expect(handlers.received).toBe(1);
+  });
+
+  it("FM23: a final request that is not a write reaches no handler", function* () {
+    const fixture = yield* useFixture();
+    const mutations = recording();
+    try {
+      yield* retained(
+        fixture,
+        '<File path="notes.md">the note</File>\n',
+        mutations.handlers,
+        function* () {
+          yield* API.Files.around(
+            {
+              *writeTextFile([input], next) {
+                const changed = { ...input };
+                Reflect.set(changed, "path", 42);
+                return yield* next(changed);
+              },
+            },
+            { at: "max" },
+          );
+        },
+      );
+    } catch {
+      // Invalid final input fails the mutation before any provider work.
+    }
+    expect(mutations.delivered).toEqual([]);
   });
 
   it("FM10: a path the lexical check refuses reaches no handler", function* () {

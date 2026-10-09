@@ -105,21 +105,92 @@ export function captureFileMutations(
         "canonical File mutations through one host.",
     );
   }
-  const set = sets[0];
-  const writeTextFile = set?.writeTextFile;
-  const deleteFile = set?.deleteFile;
+  const [set] = sets;
+  if (set === undefined) {
+    return undefined;
+  }
+  const writeTextFile = set.writeTextFile;
+  const deleteFile = set.deleteFile;
   if (typeof writeTextFile !== "function" || typeof deleteFile !== "function") {
     throw new FileMutationSetupError(
       "a file-mutation handler set supplies both writeTextFile and deleteFile: a host that " +
         "retains writes but not deletions would leave a deletion unrecorded.",
     );
   }
-  return Object.freeze({ writeTextFile, deleteFile });
+  // Read once *and* bound once. A host may write its handlers as methods that
+  // reach their own set, and calling the extracted function would hand them no
+  // receiver — so the receiver is captured here, with the method, rather than
+  // the property being read again when the mutation happens.
+  const bound: FileMutationHandlers = {
+    writeTextFile: (args, next) => writeTextFile.call(set, args, next),
+    deleteFile: (args, next) => deleteFile.call(set, args, next),
+  };
+  return Object.freeze(bound);
 }
 
 /** A file-mutation binding this execution cannot be set up with. */
 export class FileMutationSetupError extends Error {
   override name = "FileMutationSetupError";
+}
+
+/**
+ * The write this request may actually be, or nothing.
+ *
+ * The final request is whatever the public chain handed over, so it is parsed
+ * against the Files input contract rather than trusted: middleware legitimately
+ * narrows these values, and a value that is not one of them describes something
+ * other than a write. Emptiness is left to the provider, whose refusal
+ * vocabulary already has a word for it.
+ */
+function writeRequest(value: unknown): FileWriteInput | undefined {
+  const read = requestMembers(value, ["cwd", "path", "content"]);
+  if (read === undefined) {
+    return undefined;
+  }
+  const { cwd, path, content } = read;
+  if (typeof cwd !== "string" || typeof path !== "string" || typeof content !== "string") {
+    return undefined;
+  }
+  return Object.freeze({ cwd, path, content });
+}
+
+/** The path this request may actually be, on the same terms. */
+function pathRequest(value: unknown): FilePathInput | undefined {
+  const read = requestMembers(value, ["cwd", "path"]);
+  if (read === undefined) {
+    return undefined;
+  }
+  const { cwd, path } = read;
+  if (typeof cwd !== "string" || typeof path !== "string") {
+    return undefined;
+  }
+  return Object.freeze({ cwd, path });
+}
+
+/** The exact members this input declares, read once each, or `undefined`. */
+function requestMembers(
+  value: unknown,
+  expected: readonly string[],
+): Record<string, unknown> | undefined {
+  try {
+    if (typeof value !== "object" || value === null || Array.isArray(value)) {
+      return undefined;
+    }
+    const keys = Object.keys(value);
+    if (keys.length !== expected.length) {
+      return undefined;
+    }
+    if (!expected.every((member) => Object.hasOwn(value, member))) {
+      return undefined;
+    }
+    const read: Record<string, unknown> = Object.create(null);
+    for (const member of expected) {
+      read[member] = Reflect.get(value, member);
+    }
+    return read;
+  } catch {
+    return undefined;
+  }
 }
 
 interface Terminal<Input, Value> {
@@ -214,7 +285,7 @@ function* submitted<Input, Value>(
 ): Operation<Result<Value>> {
   const routing: FileMutationRequest<Input> = Object.freeze({
     intent: "route",
-    input: Object.freeze(input),
+    input,
   });
   const terminal = mutationTerminal(routing, occurrence, parse);
   try {
@@ -289,6 +360,35 @@ function unreachable() {
 }
 
 /**
+ * The one entry an authored mutation's own descriptor has.
+ *
+ * Consumed before the handler is yielded to, not after it answers: a public
+ * continuation called twice concurrently would otherwise reach the default
+ * twice while the first call was still suspended, and open two private
+ * terminals for one occurrence. Closed in the router's own synchronous
+ * `finally`, so a continuation a middleware kept and called after the
+ * invocation unwound finds the entry gone rather than opening a fresh terminal
+ * under a finished occurrence.
+ *
+ * Neither case reauthenticates anything or mints another occurrence; they are
+ * refused before any provider work.
+ */
+function singleEntry(): { consume: () => void; close: () => void } {
+  let state: "open" | "entered" | "closed" = "open";
+  return {
+    consume: () => {
+      if (state !== "open") {
+        throw new FilesInvariantError("protocol");
+      }
+      state = "entered";
+    },
+    close: () => {
+      state = "closed";
+    },
+  };
+}
+
+/**
  * An authored mutation, through the ordinary Files chain and out to the host.
  *
  * Public middleware sees the request data it has always seen and may observe,
@@ -302,21 +402,28 @@ export function* routeAuthoredWrite(
   occurrence: string,
   input: FileWriteInput,
 ): Operation<Result<FileWriteSuccess>> {
+  const entry = singleEntry();
   let settled: Result<FileWriteSuccess> | undefined;
   const descriptor = createApi<FilesHandler>(FILES_API, {
     ...unreachable(),
     *writeTextFile(final: FileWriteInput): Operation<Result<FileWriteSuccess>> {
-      if (settled !== undefined) {
+      entry.consume();
+      const request = writeRequest(final);
+      if (request === undefined) {
         throw new FilesInvariantError("protocol");
       }
-      settled = yield* submitted(handlers.writeTextFile, occurrence, final, writeAnswer);
+      settled = yield* submitted(handlers.writeTextFile, occurrence, request, writeAnswer);
       return settled;
     },
     *deleteFile(_input: FilePathInput): Operation<Result<void>> {
       throw new FilesInvariantError("protocol");
     },
   });
-  yield* descriptor.operations.writeTextFile(input);
+  try {
+    yield* descriptor.operations.writeTextFile(input);
+  } finally {
+    entry.close();
+  }
   if (settled === undefined) {
     throw new FilesInvariantError("protocol");
   }
@@ -329,6 +436,7 @@ export function* routeAuthoredDelete(
   occurrence: string,
   input: FilePathInput,
 ): Operation<Result<void>> {
+  const entry = singleEntry();
   let settled: Result<void> | undefined;
   const descriptor = createApi<FilesHandler>(FILES_API, {
     ...unreachable(),
@@ -336,14 +444,20 @@ export function* routeAuthoredDelete(
       throw new FilesInvariantError("protocol");
     },
     *deleteFile(final: FilePathInput): Operation<Result<void>> {
-      if (settled !== undefined) {
+      entry.consume();
+      const request = pathRequest(final);
+      if (request === undefined) {
         throw new FilesInvariantError("protocol");
       }
-      settled = yield* submitted(handlers.deleteFile, occurrence, final, deleteAnswer);
+      settled = yield* submitted(handlers.deleteFile, occurrence, request, deleteAnswer);
       return settled;
     },
   });
-  yield* descriptor.operations.deleteFile(input);
+  try {
+    yield* descriptor.operations.deleteFile(input);
+  } finally {
+    entry.close();
+  }
   if (settled === undefined) {
     throw new FilesInvariantError("protocol");
   }
