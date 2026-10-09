@@ -2317,19 +2317,44 @@ function saying(what: string): string {
   return `${what}\n`;
 }
 
-/** The transcript lines this view draws, in order. */
+/**
+ * The reading's rows this view draws, in order, as the text in each of them.
+ *
+ * #881 PR 2 replaced the transcript's record rows with the entry's reading, so
+ * these are its rows. Each one opens with its rail, which says which region the
+ * row is in rather than what the row says — so the rail and the gap after it are
+ * dropped here, leaving what a reader reads.
+ */
 function* transcriptOf(view: ReplView): Operation<string[]> {
   return (yield* describedBy(view))
-    .filter((one) => one.key.startsWith("line:") && !one.key.startsWith("line:live:"))
-    .map((one) => one.label.trim())
+    .filter((one) => one.key.startsWith("reading:") && !one.key.startsWith("reading:output:live"))
+    .map((one) => said(one.label))
     .filter((label) => label.length > 0);
 }
 
-/** The live overlay lines this view draws, in order. */
+/**
+ * The Output half of the reading this view draws, caption included.
+ *
+ * For the cases whose claim is about what an entry *produced*, which the
+ * reading states separately from the source that produced it.
+ */
+function* outputOf(view: ReplView): Operation<string[]> {
+  return (yield* describedBy(view))
+    .filter((one) => one.key === "reading:caption:output" || one.key.startsWith("reading:output:"))
+    .map((one) => said(one.label))
+    .filter((label) => label.length > 0);
+}
+
+/** The live overlay rows this view draws, in order. */
 function* overlayOf(view: ReplView): Operation<string[]> {
   return (yield* describedBy(view))
-    .filter((one) => one.key.startsWith("line:live:"))
-    .map((one) => one.label.trim());
+    .filter((one) => one.key.startsWith("reading:output:live"))
+    .map((one) => said(one.label));
+}
+
+/** What one reading row says, without the rail that says where it is. */
+function said(label: string): string {
+  return label.replace(/^[\u2502]\s*/, "").trim();
 }
 
 /** The Sessions rows this view draws, in order, with their labels. */
@@ -2348,11 +2373,15 @@ describe("REPL entries: the transcript belongs to the entry that is selected", (
     expect(model.entries.map((entry) => entry.key)).toEqual(["entry-1", "entry-2"]);
 
     const standing = initialState(EXECUTION);
-    // Nothing selected is the whole execution, which is what a one-entry
-    // execution has always shown and what this must not change.
+    // Re-anchored for #881 PR 2. The transcript used to concatenate every
+    // entry's records when nothing was selected; it now holds one entry's
+    // reading, and with nothing selected that is the last entry this prefix
+    // admitted — which is still what a one-entry execution shows. The claim
+    // this case exists for is unchanged and is the one below it: no reading
+    // shows another entry's.
     const whole = yield* transcriptOf(reading(standing, model, NOTHING_LIVE, WIDE));
-    expect(whole).toContain("ALPHA-ONE");
     expect(whole).toContain("BRAVO-TWO");
+    expect(whole).not.toContain("ALPHA-ONE");
 
     const first = yield* transcriptOf(
       reading(selecting(standing, "entry-1"), model, NOTHING_LIVE, WIDE),
@@ -2391,7 +2420,11 @@ describe("REPL entries: the transcript belongs to the entry that is selected", (
       const standing = initialState(EXECUTION);
       // Reading the entry that is running: the overlay is its own, so it shows.
       const running = reading(selecting(standing, "entry-2"), model, live, WIDE);
-      expect(yield* overlayOf(running)).toContain("… CHARLIE-LIVE");
+      // Re-anchored for #881 PR 2: the Output half says once that its text is
+      // still arriving, so each row no longer repeats an ellipsis. Both claims
+      // are kept — the text is shown, and it is marked as live.
+      expect(yield* overlayOf(running)).toContain("CHARLIE-LIVE");
+      expect(yield* transcriptOf(running)).toContain("Output · live");
 
       // Reading the settled entry before it: the overlay is somebody else's
       // run, and attributing it here would show text this entry never produced.
@@ -2400,9 +2433,9 @@ describe("REPL entries: the transcript belongs to the entry that is selected", (
       expect(yield* transcriptOf(earlier)).toContain("ALPHA-ONE");
       expect(yield* transcriptOf(earlier)).not.toContain("CHARLIE-LIVE");
 
-      // With nothing selected the locus is the execution, which includes
-      // whatever is running in it — unchanged from a one-entry execution.
-      expect(yield* overlayOf(reading(standing, model, live, WIDE))).toContain("… CHARLIE-LIVE");
+      // With nothing selected the locus is the last entry admitted, which is
+      // the one that can still be running — so its live text is what shows.
+      expect(yield* overlayOf(reading(standing, model, live, WIDE))).toContain("CHARLIE-LIVE");
 
       // Sessions is execution-wide and the same reading under every selection,
       // row for row and label for label.
@@ -2692,10 +2725,20 @@ describe("REPL entries: what each prefix of a two-entry history shows", () => {
       const state = frozenAt(drafting(initialState(EXECUTION), "still typing"), marker);
       return yield* transcriptOf(reading(state, projected(events, marker), NOTHING_LIVE, WIDE));
     };
+    // The Output half alone. Re-anchored for #881 PR 2: the reading also shows
+    // the source each prefix admitted, and at the admission checkpoint that
+    // source is the second entry's own — so the claim being made here, that no
+    // prefix shows output it had not retained, is read off the half that
+    // carries output.
+    const outputAt = function* (marker: string): Operation<string[]> {
+      const state = frozenAt(drafting(initialState(EXECUTION), "still typing"), marker);
+      return yield* outputOf(reading(state, projected(events, marker), NOTHING_LIVE, WIDE));
+    };
     expect(yield* linesAt(before)).toContain("ALPHA-ONE");
     expect(yield* linesAt(before)).not.toContain("BRAVO-TWO");
-    expect(yield* linesAt(admission)).not.toContain("BRAVO-TWO");
-    expect(yield* linesAt(terminal)).toContain("BRAVO-TWO");
+    expect(yield* outputAt(admission)).not.toContain("BRAVO-TWO");
+    expect(yield* outputAt(admission)).toContain("No entry output recorded at this checkpoint.");
+    expect(yield* outputAt(terminal)).toContain("BRAVO-TWO");
 
     // The draft is current route state throughout: it is not a thing a prefix
     // retained, so freezing the durable view does not freeze it.
@@ -3214,8 +3257,8 @@ describe("REPL entries: what a failed entry says it failed with", () => {
   /** The transcript rows this model describes, by label. */
   function* transcript(model: ReplModel): Operation<string[]> {
     return (yield* describedBy(reading(initialState(EXECUTION), model, NOTHING_LIVE, WIDE)))
-      .filter((one) => one.key.startsWith("line:"))
-      .map((one) => one.label);
+      .filter((one) => one.key.startsWith("reading:"))
+      .map((one) => said(one.label));
   }
 
   it("UI13: the recorded reason is on the screen, bounded, and a cold reopen says the same", function* () {
@@ -3300,9 +3343,11 @@ describe("REPL entries: what a failed entry says it failed with", () => {
         const frame = yield* drawn(tree, view, size);
 
         const cells = frame.keys
-          .filter((key) => key.startsWith("line:"))
+          .filter((key) => key.startsWith("reading:"))
           .map((key) => ({ key, text: frame.cell(key) ?? "", bounds: frame.bounds(key) }));
-        const failed = cells.find((cell) => cell.text.startsWith("failed: "));
+        // The rail opens every reading row, so the reason is found by what the
+        // row says rather than by what the row begins with.
+        const failed = cells.find((cell) => cell.text.includes("failed: "));
         const region = frame.region("transcript");
 
         if (region === undefined) {
@@ -3326,11 +3371,18 @@ describe("REPL entries: what a failed entry says it failed with", () => {
           ]).toEqual([size.columns, true]);
           // One row, which is what keeps everything below it where it was.
           expect([size.columns, drawn?.height]).toEqual([size.columns, 1]);
-          // And it says so wherever it had to be shortened, rather than ending
-          // mid-word with the mark cut off by the renderer.
-          if ((failed?.text.length ?? 0) === region.width) {
-            expect([size.columns, failed?.text.endsWith("…")]).toEqual([size.columns, true]);
-          }
+          // Re-anchored for #881 PR 2: a reason too long for the pane is now
+          // *wrapped* rather than shortened with a mark, so what used to be the
+          // tail of one clipped row is the next row of the reading. The claim
+          // the ellipsis stood for — no character of the recorded reason is
+          // thrown away — is the stronger one, and is asserted here by
+          // recovering the whole reason from the rows it was cut into.
+          const reason = cells
+            .filter((cell) => cell.key.startsWith("reading:output:reason:"))
+            .map((cell) => cell.text.replace(/^[\u2502]\s*/, "").trimEnd())
+            .join("");
+          expect([size.columns, reason.startsWith("failed: ")]).toEqual([size.columns, true]);
+          expect([size.columns, reason.includes("…")]).toEqual([size.columns, false]);
         }
 
         // The footer is exactly where it always is: the reason did not push a

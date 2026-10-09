@@ -333,7 +333,9 @@ describe("J1 — the Story, from one entry to one README", () => {
       expect(shows(terminal, "generated generated")).toBe(true);
       // And both Plan reviews are retained where they were asked, which is
       // inside that scope rather than in the entry.
-      expect(occurrences(terminal, "answered @executablemd/cli/Plan.md")).toBe(2);
+      expect(
+        yield* answeredUnder(terminal, "component Plan", "answered @executablemd/cli/Plan"),
+      ).toBe(2);
 
       // Two turns in one conversation, and nothing else was asked.
       expect(fake.prompts).toHaveLength(2);
@@ -635,12 +637,19 @@ describe("J3 — durable truth, and a cold process over it", () => {
       // Both turns are recorded rows rather than a live process's readings, and
       // both Plan reviews are retained where they were asked.
       expect(occurrences(second.terminal, "completed, recorded")).toBe(2);
-      expect(occurrences(second.terminal, "answered @executablemd/cli/Plan.md")).toBe(2);
+      expect(
+        yield* answeredUnder(second.terminal, "component Plan", "answered @executablemd/cli/Plan"),
+      ).toBe(2);
       // The program's own two questions are retained with the answers they
       // took. Their positions carry no path — generated source is not a file —
       // so they are shown under the fragment that produced them.
-      expect(occurrences(second.terminal, 'answered 4:1 {"project":"Ledger"')).toBe(1);
-      expect(occurrences(second.terminal, 'answered 12:1 {"decision":"Approv')).toBe(1);
+      yield* click(second.terminal, "generated generated");
+      yield* settled(40);
+      // The answers themselves are read from the reading above, which shows
+      // them in full; what this counts is that each question is retained under
+      // the fragment that asked it, at the position it was written.
+      expect(occurrences(second.terminal, "answered 4:1")).toBe(1);
+      expect(occurrences(second.terminal, "answered 12:1")).toBe(1);
       // And the branch that was not taken is on the screen once, as source.
       expect(occurrences(second.terminal, STOPPED)).toBe(1);
 
@@ -2314,6 +2323,32 @@ function occurrences(terminal: Terminal, text: string): number {
   return screenOf(terminal).filter((line) => line.includes(text)).length;
 }
 
+/**
+ * Select one scope by its catalog row, and count what it says was answered.
+ *
+ * #881 PR 2 gave the Transcript the selected entry's reading, so the records of
+ * every scope no longer appear there at once; the answers a nested scope
+ * retained are read by selecting that scope, which is where the product says
+ * they were asked. Selecting is the claim: a row counted under the wrong scope
+ * would be an answer attributed to somewhere it never happened.
+ */
+function* answeredUnder(terminal: Terminal, scope: string, text: string): Operation<number> {
+  yield* click(terminal, scope);
+  yield* settled(40);
+  const found = occurrences(terminal, text);
+  if (found === 0) {
+    throw new Error(
+      `after selecting ${scope}, no row said ${text}: ${JSON.stringify(
+        screenOf(terminal)
+          .map((line) => line.trimEnd())
+          .filter((line) => line.length > 0)
+          .slice(0, 12),
+      )}`,
+    );
+  }
+  return found;
+}
+
 /** Every row of the screen holding this text, trimmed, in order. */
 function shown(terminal: Terminal, text: string): string[] {
   return screenOf(terminal)
@@ -2471,8 +2506,12 @@ function* showing(terminal: Terminal, expected: string): Operation<void> {
 function coordinateOf(
   terminal: Terminal,
   label: string,
+  from = 0,
 ): { readonly column: number; readonly row: number } | undefined {
   for (const [row, line] of screenOf(terminal).entries()) {
+    if (row < from) {
+      continue;
+    }
     const column = line.indexOf(label);
     if (column !== -1) {
       return { column, row };
@@ -2482,14 +2521,33 @@ function coordinateOf(
 }
 
 /**
+ * Where the open drawer begins, as the row its own top rule is on.
+ *
+ * Needed to tell a control inside the drawer from text that merely reads the
+ * same outside it: #881 PR 2 gave the Transcript the entry's source, and a
+ * question's own schema is written in that source — so `Project name` is on the
+ * screen twice, once as the field to click and once as the `title` the author
+ * typed. A pointer aimed at the second lands behind the modal and does nothing.
+ */
+function drawerTop(terminal: Terminal): number {
+  for (const [row, line] of screenOf(terminal).entries()) {
+    const said = line.trim();
+    if (said.length > 8 && /^\u2500+$/.test(said)) {
+      return row;
+    }
+  }
+  return 0;
+}
+
+/**
  * Click one control, by finding it on the screen and pressing there.
  *
  * The way a person reaches a control without traversing to it: activating by
  * pointer needs no focus, so it can reach a control while an execution is still
  * moving. The protocol counts from one and the screen counts from zero.
  */
-function* click(terminal: Terminal, label: string): Operation<void> {
-  const at = coordinateOf(terminal, label);
+function* click(terminal: Terminal, label: string, from = 0): Operation<void> {
+  const at = coordinateOf(terminal, label, from);
   if (at === undefined) {
     throw new Error(`no control labelled ${label} is on the screen`);
   }
@@ -2651,13 +2709,14 @@ function* focusDraft(terminal: Terminal): Operation<void> {
 
 /** Type a value into the field this label names. */
 function* answer(terminal: Terminal, label: string, value: string): Operation<void> {
-  yield* click(terminal, label);
+  // Inside the drawer that is asking, not wherever the words first appear.
+  yield* click(terminal, label, drawerTop(terminal));
   terminal.bytes(BYTES.encode(value));
   yield* settled(20);
 }
 
 /** Submit the open form. */
 function* submit(terminal: Terminal): Operation<void> {
-  yield* click(terminal, "[submit]");
+  yield* click(terminal, "[submit]", drawerTop(terminal));
   yield* settled(40);
 }

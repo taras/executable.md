@@ -134,6 +134,35 @@ export const NO_READING: ReplReading = Object.freeze({
   }),
 });
 
+/**
+ * One reading as the flat list of logical lines it is drawn as.
+ *
+ * Captions included, because a caption is a row of the reading rather than a
+ * fixed heading above it: the two halves share one vertical window, so
+ * scrolling from a result down into the source that produced it has to carry
+ * the words that say which is which.
+ */
+export function readingLines(reading: ReplReading): readonly ReplReadingLine[] {
+  return Object.freeze([
+    caption("output", reading.output),
+    ...reading.output.lines,
+    caption("source", reading.source),
+    ...reading.source.lines,
+  ]);
+}
+
+function caption(key: string, section: ReplReadingSection): ReplReadingLine {
+  return Object.freeze({
+    key: `caption:${key}`,
+    text: section.caption,
+    runs: tokenRuns([{ text: section.caption, token: section.captionStyle.role }]),
+    rail: "rail-pending",
+    depth: 0,
+    badge: undefined,
+    style: section.captionStyle,
+  });
+}
+
 /** What a reading is being built for. */
 export interface ReplReadingRequest {
   readonly entry: ReplEntry;
@@ -202,10 +231,26 @@ function outputSection(request: ReplReadingRequest): ReplReadingSection {
         ? "failed-outcome"
         : "waiting";
   const said = terminal.status === "cancelled" ? "cancelled" : `closed ${terminal.status}`;
+  // The reason, and only where there is one to give. An `ok`, a cancellation and
+  // an entry that never settled have no reason to show, and inventing text for
+  // them would describe a failure that did not happen. Its own row, so the
+  // outcome and the reason are two rows a window can move rather than one row
+  // this pane has to break in the middle.
+  const reason =
+    terminal.status === "err" && terminal.message !== undefined
+      ? plain(
+          `failed: ${terminal.message}`,
+          "output:reason",
+          styleOf("failed-outcome", { inspected }),
+        )
+      : [];
   return Object.freeze({
     caption: "No rendered output.",
     captionStyle: styleOf("metadata", { inspected }),
-    lines: plain(said, "output:outcome", styleOf(outcome, { inspected })),
+    lines: Object.freeze([
+      ...plain(said, "output:outcome", styleOf(outcome, { inspected })),
+      ...reason,
+    ]),
   });
 }
 

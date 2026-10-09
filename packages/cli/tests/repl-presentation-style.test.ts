@@ -59,7 +59,7 @@ import type {
 import type { ReplDispatched } from "../src/repl/reconcile.ts";
 import type { ReplDrawerRef } from "../src/repl/route.ts";
 import { FOOTER_ROWS, HISTORY_LABEL, HISTORY_ROWS, NARROW } from "../src/repl/layout.ts";
-import { ACTION_ROW, DRAWER_WINDOW } from "../src/repl/application.ts";
+import { ACTION_ROW, DRAWER_WINDOW, READING_WINDOW } from "../src/repl/application.ts";
 import type { ReplBounds } from "../src/repl/layout.ts";
 import { BOLD, REPL_PALETTE } from "../src/repl/presentation-style.ts";
 import {
@@ -175,6 +175,30 @@ const HOST_ENTRY_PATH = fileURLToPath(new URL("./fixtures/repl/entry.md", import
 function* submittedByPath(): Operation<ReplModel> {
   const physical = new InMemoryStream();
   yield* runHostEntry(physical, HOST_ENTRY_PATH, SETTLING);
+  return projected(yield* physical.readAll());
+}
+
+/**
+ * One line of prose longer than any pane this frame has, and one unbroken
+ * token no word boundary can break.
+ *
+ * The case R3 needs: text that would reach the pane beside it if nothing fitted
+ * it. It is a document's own prose rather than a path, because what a reader
+ * came for is exactly the text this screen must not shorten — so the only
+ * honest way to keep it inside its pane is to measure it and wrap it.
+ */
+const LONG_SOURCE = [
+  "One line of ordinary prose, written long enough that no pane this frame has " +
+    "room for could hold it on a single row without reaching into the column " +
+    "beside it, which is the artifact this case exists to catch.",
+  "",
+  `t${"t".repeat(200)}`,
+  "",
+].join("\n");
+
+function* submittedWithLongSource(): Operation<ReplModel> {
+  const physical = new InMemoryStream();
+  yield* runHostEntry(physical, HOST_ENTRY_PATH, LONG_SOURCE);
   return projected(yield* physical.readAll());
 }
 
@@ -339,6 +363,15 @@ function textOf(grid: TerminalGrid, bounds: ReplBounds): string {
   return grid.textIn(bounds)[0] ?? "";
 }
 
+/** The sidebar the catalog is drawn in. */
+function sidebarRegion(observed: Observed): ReplBounds {
+  const bounds = regionBounds(observed, "sidebar");
+  if (bounds === undefined) {
+    throw new Error("this frame published no sidebar region");
+  }
+  return bounds;
+}
+
 /** Whether one rectangle is inside another, so a row can be held to its pane. */
 function within(inner: ReplBounds, outer: ReplBounds): boolean {
   return (
@@ -349,17 +382,20 @@ function within(inner: ReplBounds, outer: ReplBounds): boolean {
   );
 }
 
-/** The first transcript row of one kind, as the key the frame drew it under. */
-function transcriptKey(model: ReplModel, kind: string): string {
-  const at = model.transcript.findIndex((row) => row.kind === kind);
-  if (at < 0) {
-    throw new Error(
-      `this prefix holds no ${kind} row; it holds ${model.transcript
-        .map((row) => row.kind)
-        .join(", ")}`,
-    );
+/**
+ * One subordinate row, as the frame drew it.
+ *
+ * Before #881 PR 2 this was a transcript record row — a fact about the event
+ * that produced the output beside it. The transcript now holds the entry's
+ * reading, so the subordinate reading is taken from a row that still carries
+ * it: what the frame says where it has nothing retained to list.
+ */
+function metadataKey(observed: Observed): string {
+  const key = observed.keys.find((one) => one === "sessions:empty");
+  if (key === undefined) {
+    throw new Error(`this frame drew no subordinate row; it drew ${observed.keys.join(", ")}`);
   }
-  return `line:${at}:0`;
+  return key;
 }
 
 /** Every mounted row whose cells carry the focus foreground. */
@@ -415,7 +451,11 @@ describe("REPL presentation: what one row's cells say it is", () => {
   it("G1: output, metadata and the two outcomes are four different readings", function* () {
     const model = yield* settledAndFailed();
     const presenter = yield* usePresenter(WIDE);
-    const observed = yield* presenter.commit(reading(stateWith({}), model));
+    // The entry whose result is under test, selected: a reading belongs to an
+    // entry, so which entry is being read is part of asking what it says.
+    const observed = yield* presenter.commit(
+      reading(selecting(stateWith({}), model.entries[0].key), model, NOTHING_LIVE, WIDE),
+    );
     const { grid } = presenter;
 
     const transcript = regionBounds(observed, "transcript");
@@ -423,16 +463,23 @@ describe("REPL presentation: what one row's cells say it is", () => {
       throw new Error("this frame published no transcript region");
     }
 
-    // What the run produced, and a fact about the event that produced it. The
-    // same eval block wrote both, so they are adjacent lines in one column and
-    // nothing but the style tells a reader which is which.
-    const output = placed(observed, transcriptKey(model, "output"));
-    const metadata = placed(observed, transcriptKey(model, "binding"));
-    expect(inkOf(grid, output).foreground).toBe(REPL_PALETTE.output);
+    // What the run produced, and a fact about the event that produced it.
+    //
+    // Re-anchored for #881 PR 2. These were adjacent transcript rows written by
+    // one eval block; the transcript now holds the entry's *reading* — its
+    // output and then its source — and the facts about events are the inspection
+    // column's. The claim is unchanged: a result and a fact about the event that
+    // produced it are two readings, and nothing but the style says which is
+    // which.
+    const output = placed(observed, "reading:output:0");
+    const said = model.entries[0].terminal?.output.split("\n")[0] ?? "";
+    expect(said.length).toBeGreaterThan(0);
+    const metadata = placed(observed, metadataKey(observed));
+    expect(inkOfSpan(grid, output, said).foreground).toBe(REPL_PALETTE.output);
     expect(inkOf(grid, metadata).foreground).toBe(REPL_PALETTE.muted);
-    expect(inkOf(grid, output).foreground).not.toBe(inkOf(grid, metadata).foreground);
+    expect(inkOfSpan(grid, output, said).foreground).not.toBe(inkOf(grid, metadata).foreground);
     expect(within(output, transcript)).toBe(true);
-    expect(within(metadata, transcript)).toBe(true);
+    expect(within(metadata, sidebarRegion(observed))).toBe(true);
 
     // The two outcomes the file recorded, in the catalog that promises them.
     const sidebar = regionBounds(observed, "sidebar");
@@ -450,7 +497,7 @@ describe("REPL presentation: what one row's cells say it is", () => {
 
     // Four distinct readings, and the words survive without any of them.
     const colours = [
-      inkOf(grid, output).foreground,
+      inkOfSpan(grid, output, said).foreground,
       inkOf(grid, metadata).foreground,
       inkOf(grid, settled).foreground,
       inkOf(grid, failed).foreground,
@@ -479,10 +526,21 @@ describe("REPL presentation: what one row's cells say it is", () => {
       reading(selecting(stateWith({}), settled.key), model, NOTHING_LIVE, WIDE),
     );
     const { grid } = presenter;
-    const first = placed(observed, `line:${at}:0`);
-    expect(textOf(grid, first)).toContain(record.output.split("\n")[0]);
-    expect(inkOf(grid, first).foreground).toBe(REPL_PALETTE.output);
-    expect(inkOf(grid, first).foreground).not.toBe(REPL_PALETTE.success);
+    // Re-anchored for #881 PR 2: the entry's result is the Output half of its
+    // reading rather than a transcript row keyed by the record's position. The
+    // claim is unchanged — the rendered document reads as output, and not as the
+    // word the root closed with.
+    const first = placed(observed, "reading:output:0");
+    const said = record.output.split("\n")[0];
+    expect(textOf(grid, first)).toContain(said);
+    // The text's own ink, not the row's first cell: every reading row opens
+    // with its rail, which says which region the row is in rather than what the
+    // row is.
+    expect(inkOfSpan(grid, first, said).foreground).toBe(REPL_PALETTE.output);
+    expect(inkOfSpan(grid, first, said).foreground).not.toBe(REPL_PALETTE.success);
+    // And it is labelled as the retained result rather than as live text.
+    expect(textOf(grid, placed(observed, "reading:caption:output"))).toContain("Output");
+    expect(textOf(grid, placed(observed, "reading:caption:output"))).not.toContain("live");
 
     // The outcome keeps its accent where an outcome is what is shown.
     expect(inkOf(grid, placed(observed, `entry:${settled.key}`)).foreground).toBe(
@@ -509,12 +567,18 @@ describe("REPL presentation: what one row's cells say it is", () => {
     const { grid } = presenter;
     // With nothing recorded to show, the outcome itself is the row, and it keeps
     // the outcome accent; the reason recorded beside it is its own row.
-    const closed = placed(observed, `line:${at}:0`);
+    // Re-anchored for #881 PR 2 onto the reading's Output half; both claims and
+    // both accents are unchanged, and the caption now says that the absence of
+    // rendered text is what is being reported.
+    expect(textOf(grid, placed(observed, "reading:caption:output"))).toContain(
+      "No rendered output.",
+    );
+    const closed = placed(observed, "reading:output:outcome:0");
     expect(textOf(grid, closed)).toContain("closed err");
-    expect(inkOf(grid, closed).foreground).toBe(REPL_PALETTE.failure);
-    const reason = placed(observed, `line:${at}:1`);
+    expect(inkOfSpan(grid, closed, "closed err").foreground).toBe(REPL_PALETTE.failure);
+    const reason = placed(observed, "reading:output:reason:0");
     expect(textOf(grid, reason)).toContain("failed:");
-    expect(inkOf(grid, reason).foreground).toBe(REPL_PALETTE.failure);
+    expect(inkOfSpan(grid, reason, "failed:").foreground).toBe(REPL_PALETTE.failure);
   });
 
   it("G1: an entry that never closed reads as waiting, and says so", function* () {
@@ -533,10 +597,12 @@ describe("REPL presentation: what one row's cells say it is", () => {
     );
 
     // The overlay is what this process is producing, so it reads as output
-    // rather than as one more fact about an event.
-    const live = placed(observed, "line:live:0");
+    // rather than as one more fact about an event. Re-anchored for #881 PR 2
+    // onto the reading's Output half, which now also says it is still arriving.
+    const live = placed(observed, "reading:output:live:0");
     expect(textOf(grid, live)).toContain("building the plan");
-    expect(inkOf(grid, live).foreground).toBe(REPL_PALETTE.output);
+    expect(inkOfSpan(grid, live, "building the plan").foreground).toBe(REPL_PALETTE.output);
+    expect(textOf(grid, placed(observed, "reading:caption:output"))).toContain("live");
   });
 
   it("G1: an empty screen's placeholders are subordinate, and the draft is a surface", function* () {
@@ -1149,12 +1215,19 @@ describe("REPL presentation: what a drawer says it is showing", () => {
 describe("REPL presentation: a row stays inside the pane it was measured for", () => {
   beforeAll(() => useTempFileCompiler());
 
-  it("R3: long metadata is fitted, and the row beneath it is its own", function* () {
+  it("R3: a long reading is fitted, and the row beneath it is its own", function* () {
     // An entry submitted by its host path, which in this checkout is longer
     // than any pane the frame has room for. The engine clips nothing, so a row
     // written unbounded wraps over the cells of the row beneath it: that is the
     // artifact the complete gallery caught in the Transcript pane.
-    const model = yield* submittedByPath();
+    //
+    // Re-anchored for #881 PR 2. The rows under test were the transcript's
+    // metadata records, bounded by shortening them; the transcript now holds
+    // the entry's reading, fitted by measuring it. Both claims are kept — what
+    // is drawn in a row is what that row contributed, and no row reaches the
+    // pane beside it — and the case still needs a row that would overflow if
+    // nothing bounded it.
+    const model = yield* submittedWithLongSource();
     let exercised = false;
 
     for (const size of [WIDE, MEDIUM]) {
@@ -1167,8 +1240,7 @@ describe("REPL presentation: a row stays inside the pane it was measured for", (
         throw new Error(`the ${size.columns}x${size.rows} frame published no transcript interior`);
       }
 
-      const lines = observed.keys.filter((key) => key.startsWith("line:"));
-      const recordOf = (key: string) => model.transcript[Number(key.split(":")[1])];
+      const lines = observed.keys.filter((key) => key.startsWith("reading:"));
 
       // Every transcript row holds what its own node contributed and nothing
       // else. This is the whole discrimination: an unbounded row leaves its
@@ -1181,35 +1253,23 @@ describe("REPL presentation: a row stays inside the pane it was measured for", (
         expect([size.columns, key, drawn]).toEqual([size.columns, key, contributed]);
       }
 
-      // The rows that name where something came from: an entry's path, a
-      // scope's name, an agent's identity. What a document or a provider
-      // *said* stays unbounded on purpose — that text is the thing a reader
-      // came for.
-      //
-      // A generated fragment's source is the one member of this class left
-      // unbounded. An accepted journey reads the branch a program did not take
-      // off this screen, which only whole source can show, so bounding it is a
-      // decision about what the screen owes a reader rather than a formatting
-      // one; it is reported with this correction rather than taken.
-      const bounded = new Set(["entry", "scope", "agent"]);
-      const metadata = lines.filter((key) => {
-        const record = recordOf(key);
-        return record !== undefined && bounded.has(record.kind);
-      });
-      expect(metadata.length).toBeGreaterThan(0);
-
-      for (const key of metadata) {
+      // Every row of the reading, held to the pane it was measured for. Each
+      // one is as wide as the interior and ends where the interior ends, so
+      // nothing of it reaches the pane beside it — which is what the engine,
+      // left to itself, does not do.
+      expect(lines.length).toBeGreaterThan(0);
+      for (const key of lines) {
         const bounds = placed(observed, key);
-        // As wide as the inside of its pane, and no wider.
         expect([key, bounds.width]).toEqual([key, inside.width]);
-        // And ending where the interior ends, so nothing of it reaches the
-        // pane beside it.
         expect([size.columns, key, bounds.x + bounds.width]).toEqual([
           size.columns,
           key,
           inside.x + inside.width,
         ]);
-        if ((observed.cells.get(key) ?? "").length >= inside.width) {
+        // A row that is the continuation of a longer line: without the
+        // measurement that cut it, that line is what would have landed on the
+        // cells of the row beneath.
+        if (key.startsWith("reading:src:") && key.includes("+")) {
           exercised = true;
         }
       }
@@ -1260,9 +1320,12 @@ describe("REPL presentation: the one guidance row", () => {
       // What is drawn in the row is what the row contributed, and so is every
       // transcript row beneath it: an overlong sentence lands on the cells of
       // the row below, which is where it was seen.
-      for (const key of ["guidance", ...observed.keys.filter((one) => one.startsWith("line:"))]) {
-        // A narrow frame describes the transcript's rows and places none of
-        // them, so there is nothing of theirs on this screen to read.
+      for (const key of [
+        "guidance",
+        ...observed.keys.filter((one) => one.startsWith("reading:")),
+      ]) {
+        // A narrow frame describes the reading's rows and places none of them,
+        // so there is nothing of theirs on this screen to read.
         const at = key === "guidance" ? bounds : observed.boundsOf(key);
         if (at === undefined) {
           continue;
@@ -1608,9 +1671,17 @@ describe("REPL presentation: the surfaces a reading is drawn on", () => {
         region,
         surface,
       ]);
+      // The bottom of the pane's own moving content, not the bottom of the
+      // pane. Re-anchored for #881 PR 2: the transcript's last row is now the
+      // reading's `[\u2193 later]` control, and a control carries the draft's
+      // surface wherever it is — which is this terminal's existing rule, not a
+      // new one. The claim is unchanged: the area a pane holds that no control
+      // covers is that pane's own surface.
+      const floor =
+        viewportBounds(observed, region === "transcript" ? READING_WINDOW : region) ?? bounds;
       expect([
         region,
-        grid.styleAt(bounds.x + bounds.width - 1, bounds.y + bounds.height - 1).background,
+        grid.styleAt(bounds.x + bounds.width - 1, floor.y + floor.height - 1).background,
       ]).toEqual([region, surface]);
     }
 

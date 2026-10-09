@@ -55,6 +55,7 @@ import {
   permissionWithdrawn,
   presentationFor,
   readinessOf,
+  readingOf,
   reduceRepl,
   refusedView,
   stateFor,
@@ -82,7 +83,9 @@ import type { ReplSession } from "./session.ts";
 import { useReplFrames } from "./frame.ts";
 import type { ReplFrames } from "./frame.ts";
 import { committedOps, flatten, profileFor, skeletonOps } from "./layout.ts";
-import type { ReplBox, ReplLayoutManifest, ReplRegion } from "./layout.ts";
+import { prepareReading } from "./fitting.ts";
+import { readingLines } from "./source-reading.ts";
+import type { ReplBounds, ReplBox, ReplLayoutManifest, ReplRegion } from "./layout.ts";
 import { capacityOf, NOTHING_ADMITTED } from "./layout-admission.ts";
 import type { ReplAdmission } from "./layout-admission.ts";
 import { resolvePointer, useReplRenderer } from "./renderer.ts";
@@ -1363,6 +1366,10 @@ function measuringAt(
     entriesWindowed,
     entriesRows,
     capture: "capture",
+    // The measuring pass describes no width-dependent text, so it has no
+    // fitted reading either: a reading prepared against a width this pass is
+    // still asking for would be a reading fitted to nothing.
+    reading: undefined,
   };
 }
 
@@ -1413,11 +1420,45 @@ export function* prepareFrame(
   if (!third.ok) {
     return third;
   }
+  // Every answer this pass gave, copied out before anything else is measured.
+  // The engine's reported geometry is only valid until the next render, and the
+  // reading below renders probes — so a `boundsOf` read afterwards answers from
+  // a tree the frame never described. Measured: it reported capacities from the
+  // probe pass, which admitted a question drawer short of the one on screen and
+  // took a field's Tab stop away with it.
+  const geometry = new Map<string, ReplBounds>();
+  for (const one of flatten(measured.manifest.root)) {
+    const bounds = third.value.boundsOf(one.id);
+    if (bounds !== undefined) {
+      geometry.set(one.id, bounds);
+    }
+  }
+  // The entry reading, fitted to the transcript's measured inner width. It
+  // happens here — after the widths are known and before anything is admitted —
+  // because the rows it produces are what the window has to admit and what the
+  // descriptions have to say. Preparing it later would admit a count from one
+  // list and describe another.
+  //
+  // Independent probe elements, so nothing about this measurement touches the
+  // tree the frame is about to draw.
+  //
+  // A profile with no pane for it has no reading: a frame refused for being too
+  // small publishes no transcript and no routed outlet, so there is no measured
+  // region to fit one to. That is different from a pane too narrow to hold a
+  // grapheme, which is a refusal and stays one.
+  const reading =
+    widths.surface < 1
+      ? Ok(undefined)
+      : yield* prepareReading(renderer, view.size, readingLines(readingOf(view)), widths.surface);
+  if (!reading.ok) {
+    return reading;
+  }
   const admission = admissionFor({
     view,
     manifest: measured.manifest,
     widths,
-    boundsOf: (id: string) => third.value.boundsOf(id),
+    reading: reading.value,
+    boundsOf: (id: string) => geometry.get(id),
   });
   const context: ReplPresentationContext = {
     widths,
@@ -1426,6 +1467,7 @@ export function* prepareFrame(
     entriesWindowed: windowed,
     entriesRows,
     capture: "capture",
+    reading: reading.value,
   };
   return Ok({ context, admission, presentation: presentationFor(view, context) });
 }

@@ -5745,6 +5745,9 @@ DurableEvents -> frozen ReplModel -> resolved immutable view
 | `description.ts` | opaque immutable descriptions and the closed action boundary |
 | `reconcile.ts` | reconciling descriptions into one mounted Freedom tree |
 | `handoff.ts` | the acknowledged commit boundary |
+| `source-reading.ts` | one entry as output and then source, with what each element is doing |
+| `presentation-text.ts` · `presentation-style.ts` | what the characters of a reading are, and the colours it is drawn in |
+| `fitting.ts` | engine-measured widths, and the rows a reading is cut into |
 | `layout.ts` | deterministic placement at four sizes |
 | `renderer.ts` | drawing the mounted tree, and the frame map |
 | `frame.ts` | the one acknowledged frame stream |

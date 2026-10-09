@@ -82,6 +82,10 @@ import type { ReplAdmission, ReplWindow } from "./layout-admission.ts";
 import { ORDINARY, REPL_PALETTE, styleOf } from "./presentation-style.ts";
 import type { ReplPresentationRole, ReplRowStyle } from "./presentation-style.ts";
 import { jsonRuns, sourceRuns } from "./presentation-text.ts";
+import { entryReading, NO_READING } from "./source-reading.ts";
+import type { ReplReading } from "./source-reading.ts";
+import { readingRuns } from "./fitting.ts";
+import type { ReplPreparedReading, ReplPreparedRow } from "./fitting.ts";
 import type { ReplTerminalSize } from "./terminal.ts";
 import {
   decodeLocation,
@@ -1095,6 +1099,28 @@ export function reduceRepl(
       return settled({
         ...state,
         viewports: Object.freeze({ ...state.viewports, entries: scrolled(window, action.delta) }),
+        refusal: undefined,
+      });
+    }
+    case "scroll-reading": {
+      // The same rule again, over the window the frame measured for the reading
+      // that is showing. Which reading that is decides the offset this moves,
+      // so selecting an earlier entry and scrolling it leaves the live entry's
+      // own position where the reader left it.
+      const window = admission.windows.get(READING_WINDOW);
+      if (window === undefined) {
+        return settled({ ...state, refusal: undefined });
+      }
+      const key = entryReadingKeyOf(state);
+      return settled({
+        ...state,
+        viewports: Object.freeze({
+          ...state.viewports,
+          readings: Object.freeze({
+            ...state.viewports.readings,
+            [key]: scrolled(window, action.delta),
+          }),
+        }),
         refusal: undefined,
       });
     }
@@ -2437,33 +2463,54 @@ function described(view: ReplView, context: ReplPresentationContext): DescribedS
   // the same reading. With nothing selected the whole execution is the locus,
   // which is what a one-entry execution has always shown.
   const inspectable = showEntry;
-  // Not until a width has been measured. A transcript row is bounded to the
-  // region it lands in, and an unbounded one makes that region wider than its
-  // share — which would corrupt the very measurement that is about to answer
-  // how wide it is.
+  // Not until a width has been measured. A reading row is bounded to the region
+  // it lands in, and an unbounded one makes that region wider than its share —
+  // which would corrupt the very measurement that is about to answer how wide
+  // it is.
   const surface = context.widths?.surface;
-  for (const [index, transcript] of inspectable && surface !== undefined
-    ? transcriptOf(model, selection).entries()
-    : []) {
-    // One cell is one row, so a recorded row that holds several lines of output
-    // becomes several cells. A cell given more than one line would show only the
-    // first, which is the whole of what a reader would then believe was there.
-    for (const [offset, part] of transcriptLines(transcript, surface ?? 0).entries()) {
-      items.push(line(`line:${index}:${offset}`, part.text, part.style));
+  // The entry's own reading: what it produced, then the source that produced
+  // it, as the rows the frame fitted to this pane. The controls that move it sit
+  // outside the moving content, which is why they are described before the rows
+  // rather than among them.
+  const prepared = inspectable && surface !== undefined ? context.reading : undefined;
+  // Only where there is a reading to move. An execution that has admitted
+  // nothing has no output and no source, and two controls over an empty pane
+  // would be Tab stops that scroll nothing — read from the model rather than
+  // from the fitted rows, because the pass that reserves these controls is the
+  // pass that has not fitted any.
+  if (inspectable && model.entries.length > 0) {
+    // Both controls, always, exactly as the Sessions reading does it. They
+    // consume their capacity *before* the rows do: the pass that measures how
+    // many rows the window holds has to be the pass that already has them in
+    // it, or the window is measured two rows too tall and the control it then
+    // grows is drawn over the last row of the reading. Measured: it was.
+    items.push(
+      row(
+        "reading:earlier",
+        `  ${EARLIER}`,
+        { select: "scroll-reading", delta: -1 },
+        styleOf("action"),
+        { here: view.focused },
+      ),
+    );
+    if (prepared !== undefined) {
+      // A narrow frame routes one outlet and has no transcript pane, so it has
+      // no window over this reading either. Its rows are described and placed
+      // nowhere, which is what the transcript's rows have always done at this
+      // size: the frame offers the reading, and the profile decides there is
+      // nowhere to put it.
+      const rows = readingRows(prepared);
+      items.push(...(narrow ? rows : shown(rows, context, READING_WINDOW)));
     }
-  }
-  // The live overlay, explicitly below the recorded rows and explicitly labelled.
-  // Once the durable close exists its recorded output is in the transcript and
-  // this is empty, so the two never both claim to be the output.
-  //
-  // It belongs to the entry producing it, which is the last one this prefix
-  // admitted — nothing earlier can still be running. A reader who has selected
-  // an earlier entry is reading a settled transcript, and text from a run that
-  // is not the one they are looking at would be attributed to it.
-  if (inspectable && live.output.length > 0 && livesHere(model, selection)) {
-    for (const [offset, text] of live.output.split("\n").entries()) {
-      items.push(line(`line:live:${offset}`, `… ${text}`, styleOf("output")));
-    }
+    items.push(
+      row(
+        "reading:later",
+        `  ${LATER}`,
+        { select: "scroll-reading", delta: 1 },
+        styleOf("action"),
+        { here: view.focused },
+      ),
+    );
   }
 
   // The inspection controls, and only where there is an inspection region to put
@@ -2708,6 +2755,45 @@ function shown(
     return [];
   }
   return content.slice(held.from, held.from + held.count);
+}
+
+/**
+ * One prepared reading as the rows a description places.
+ *
+ * Each row's runs are the composed ones — rail, indent, text, and the badge
+ * against the pane's right inner edge — so what a description says and what the
+ * frame measured are one list rather than two that have to agree.
+ */
+function readingRows(prepared: ReplPreparedReading): readonly Described[] {
+  return prepared.rows.map((one) => {
+    const runs = readingRuns(prepared, one);
+    return line(`reading:${one.key}`, runText(runs), one.style, runs);
+  });
+}
+
+/**
+ * The reading one view holds, before any width has fitted it.
+ *
+ * The selected entry's own, and nothing when a prefix admitted none. Live text
+ * belongs to the entry producing it — the last one this prefix admitted, since
+ * entries are serial — so a reader looking at an earlier entry is given that
+ * entry's retained reading rather than text from the run that is still going.
+ */
+export function readingOf(view: ReplView): ReplReading {
+  const key = view.selection.entry?.key;
+  const entry =
+    key === undefined
+      ? view.model.entries[view.model.entries.length - 1]
+      : view.model.entries.find((one) => one.key === key);
+  if (entry === undefined) {
+    return NO_READING;
+  }
+  return entryReading({
+    entry,
+    lifecycle: view.live.lifecycle,
+    live: livesHere(view.model, view.selection) ? view.live.output : "",
+    inspected: view.state.route.at !== undefined,
+  });
 }
 
 /**
@@ -3952,6 +4038,8 @@ export const SESSIONS_WINDOW = "sessions";
 export const ENTRIES_WINDOW = "entries";
 /** The open drawer's content window, whichever reading it is showing. */
 export const DRAWER_WINDOW = "drawer";
+/** The entry reading's window: output and source together, in the transcript. */
+export const READING_WINDOW = "reading";
 /** The action row's own structural id, which admission measures against. */
 export const ACTION_ROW = "box:footer:actions";
 
@@ -4021,6 +4109,16 @@ export interface ReplPresentationContext {
    * turning this off must not make a control behind the modal reachable.
    */
   readonly capture: "capture" | "passthrough";
+  /**
+   * The entry reading this frame prepared, or none before it has prepared one.
+   *
+   * One immutable list of fitted rows, built once per frame from engine answers
+   * and shared by everything downstream: the row count, the window's capacity,
+   * the descriptions and the boxes all read it, so a prepared row and a drawn
+   * row cannot disagree about what was prepared. The measuring pass has none,
+   * which is why it describes none.
+   */
+  readonly reading: ReplPreparedReading | undefined;
 }
 
 /** One reading's descriptions, paired with where the engine places them. */
@@ -4038,6 +4136,26 @@ export interface ReplPresentation {
  * at. The live question and a pending permission have their own offsets already,
  * so they have no key here.
  */
+/**
+ * The key the entry reading's own offset is stored under.
+ *
+ * The execution, the prefix being read and which entry's reading it is — so
+ * selecting an earlier entry finds that entry's own position again rather than
+ * wherever the last one was left, and the same entry read at two history
+ * positions is two readings of two different files.
+ *
+ * Process-local, like every other window: nothing durable holds one, so a
+ * location opened in another process starts each reading at its first row.
+ */
+export function entryReadingKeyOf(state: ReplState): string {
+  // `scopes[0]` is the selected entry's key, which is the route's own answer to
+  // which entry this is — read from the route rather than resolved against a
+  // model, because a reducer answering a keystroke has no business reprojecting
+  // a prefix to learn which window it is moving.
+  const entry = state.route.scopes[0] ?? "execution";
+  return `reading:${state.route.execution}:${state.route.at ?? "head"}:${entry}`;
+}
+
 export function readingKeyOf(state: ReplState, open: ReplDrawerRef): string | undefined {
   // The prefix being read is part of the identity: the same binding at two
   // history positions is two readings of two different files.
@@ -4092,6 +4210,8 @@ type ReplSlot =
   | "sessions"
   | "entries-fixed"
   | "entries"
+  | "reading-fixed"
+  | "reading"
   | "transcript"
   | "inspection"
   | "drawer-above"
@@ -4147,6 +4267,14 @@ function slotOf(key: string): ReplSlot | undefined {
   }
   if (key.startsWith("entries:") || key.startsWith("entry:") || key.startsWith("scope:")) {
     return "entries";
+  }
+  // The reading's own window controls stay put around it, so a measured
+  // viewport is the moving part alone.
+  if (key === "reading:earlier" || key === "reading:later") {
+    return "reading-fixed";
+  }
+  if (key.startsWith("reading:")) {
+    return "reading";
   }
   if (key.startsWith("line:")) {
     return "transcript";
@@ -4530,14 +4658,7 @@ export function presentationFor(
       edgedColumn("transcript", undefined, REPL_PALETTE.centreSurface, [
         ...paneTitle("transcript:heading", "transcript"),
         ...located,
-        box({
-          id: "box:transcript:viewport",
-          region: "transcript",
-          props: viewportProps(),
-          children: of("transcript").map((candidate) =>
-            rowBox(candidate, "transcript", context.widths?.surface),
-          ),
-        }),
+        ...listColumn("transcript", "reading-fixed", "reading", READING_WINDOW),
       ]),
       edgedColumn("inspection", inspectionWidth(size), REPL_PALETTE.bindingsSurface, [
         ...paneTitle("inspection:heading", "inspection"),
@@ -4683,9 +4804,11 @@ export function admissionFor(input: {
   readonly view: ReplView;
   readonly manifest: ReplLayoutManifest;
   readonly widths: ReplMeasuredWidths;
+  /** The reading this frame fitted, which is what its window admits rows of. */
+  readonly reading?: ReplPreparedReading | undefined;
   readonly boundsOf: (id: string) => ReplBounds | undefined;
 }): ReplAdmission {
-  const { view, manifest, widths, boundsOf } = input;
+  const { view, manifest, widths, reading, boundsOf } = input;
   const windows = new Map<string, ReplWindow>();
   for (const slot of manifest.viewports) {
     const capacity = capacityOf(boundsOf(slot.id));
@@ -4693,7 +4816,7 @@ export function admissionFor(input: {
       slot.window,
       admitRows({
         offset: offsetFor(view, slot.window, capacity),
-        total: totalOf(view, widths, slot.window),
+        total: totalOf(view, widths, reading, slot.window),
         capacity,
       }),
     );
@@ -4754,6 +4877,9 @@ function offsetOf(view: ReplView, window: string): number {
   if (window === SESSIONS_WINDOW) {
     return view.state.viewports.sessions;
   }
+  if (window === READING_WINDOW) {
+    return view.state.viewports.readings[entryReadingKeyOf(view.state)] ?? 0;
+  }
   if (window === ENTRIES_WINDOW) {
     return view.state.viewports.entries;
   }
@@ -4767,12 +4893,23 @@ function offsetOf(view: ReplView, window: string): number {
  * from: a frozen prefix shows nothing of the present, so counting against the
  * live head would clamp a historical reading against rows it does not have.
  */
-function totalOf(view: ReplView, widths: ReplMeasuredWidths, window: string): number {
+function totalOf(
+  view: ReplView,
+  widths: ReplMeasuredWidths,
+  reading: ReplPreparedReading | undefined,
+  window: string,
+): number {
   if (window === SESSIONS_WINDOW) {
     return sessionContentRows(view.state, view.model, view.live);
   }
   if (window === ENTRIES_WINDOW) {
     return entriesRowCount(view.model);
+  }
+  // The rows the frame actually fitted, not a count of logical lines: a line
+  // that wrapped is several rows, and a window admitting the smaller number
+  // would stop short of text it is showing the top of.
+  if (window === READING_WINDOW) {
+    return reading?.rows.length ?? 0;
   }
   return drawerContent(view, widths?.drawer ?? 0)?.content.length ?? 0;
 }

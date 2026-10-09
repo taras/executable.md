@@ -619,6 +619,71 @@ it, and an entry that finishes takes its own with it. Source that is still on
 the screen and a record the history retained prove only that something was
 written and something was recorded — never that anything is running now.
 
+## One entry, read as output and then source
+
+The transcript pane holds one entry's reading: what it produced, and then the
+source that produced it. The two share one vertical window, so going from an
+answer to the reason for it is one movement rather than two panes to reconcile.
+A reading belongs to an entry; with nothing selected it is the last entry the
+prefix admitted, which is what a one-entry execution has always shown.
+
+Output says which of four things is true, and never two of them. Text still
+arriving is `Output · live`. The retained final result replaces it once and the
+label becomes `Output`. A root that settled having rendered nothing reads `No
+rendered output.` and then the outcome it closed with, and a recorded reason
+beside it. A prefix that retained no output for its entry reads `No entry
+output recorded at this checkpoint.` — never text borrowed from a later
+position or from a run still going.
+
+Which of those is shown is decided by what the record says, not by the words in
+it. A document whose own prose contains `failed` is still output; a root that
+closed `err` is a failure whatever it rendered. Nothing is attributed to an
+`<Elicit>` or a `<File>`, reconstructed by concatenating block results, or
+invented as a receipt for a bound value that emitted nothing.
+
+Source is the exact text the entry admitted. Beside each row is a rail saying
+which region the row is in, and against the pane's right inner edge is the
+reading of the element that owns it — glyph and word together, so the reading
+survives a reader who cannot tell two of these colours apart. Only the first
+row of each delimiter carries one: a tag written across several rows is one
+element, not two phases.
+
+Nesting comes from where the delimiters are, and from nothing else. An element
+whose span lies inside another's is that one's child; one that merely follows it
+is its sibling. Source nothing has been observed in gets the rail that means
+exactly that, and acquires no phase from retained syntax.
+
+An `<Evaluate>` that admitted a generated fragment shows that fragment where its
+producer was written. The enclosure bytes stay exactly as authored and only what
+they enclose is replaced, so the tags a reader sees are the ones in their file; a
+self-closing one keeps its row and the fragment sits underneath it. The fragment
+keeps its own offsets, because those are the only ones its own recorded
+positions were ever counted in. A refused, absent or ambiguous admission keeps
+the producer: nothing is matched by name or by sibling order.
+
+Replacing what is displayed rewrites no submitted source and no record.
+
+## Everything on this screen was measured
+
+No text is clipped and none is estimated. Every width is an answer from the
+engine that will draw it, asked through a probe that draws nothing, and every
+break is at a grapheme boundary — a UTF-16 code unit is not a cell, and a cut
+between a character and its combining mark makes two rows neither of which is a
+character.
+
+A line too long for its region is wrapped at the last word boundary that fits,
+and a word longer than the region is broken at the longest grapheme that fits.
+Whitespace is kept where it was typed, blank lines stay rows, and concatenating
+one line's rows recovers exactly the line. The rail, the gap after it and the
+status column are reserved first, from measurements rather than character
+counts, and the column is wide enough for every reading a badge can hold —
+including a cleanup wait, which says two things at once — so an element
+settling cannot reflow the document beside it.
+
+A region with no room for even one grapheme is the frame refusal that already
+recovers on resize. It is never a clip: shortening somebody's source would be
+this screen editing the content it exists to show.
+
 ## What is retained, and what is not
 
 Each execution is one file of serialized ordinary `DurableEvent`s — the same
