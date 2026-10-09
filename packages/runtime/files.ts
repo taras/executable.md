@@ -834,7 +834,17 @@ export function parseFileWriteSuccess(value: unknown): FileWriteSuccess | undefi
  * indistinguishable from an installed one, and the whole point of the boundary
  * is that a workflow run cannot silently touch the caller's filesystem.
  */
-export const Files: Api<FilesHandler> = createApi<FilesHandler>("executablemd.runtime.files", {
+/**
+ * The stable name the document filesystem Api is addressed by.
+ *
+ * Named rather than written twice: a second descriptor built under this name
+ * shares this one's middleware chain and ends in its own default, which is how
+ * a caller gives one invocation a private terminal without taking the Api
+ * away from everybody else.
+ */
+export const FILES_API = "executablemd.runtime.files";
+
+export const Files: Api<FilesHandler> = createApi<FilesHandler>(FILES_API, {
   // deno-lint-ignore require-yield
   *checkFilePath(_input: FilePathInput): Operation<Result<void>> {
     throw new FilesProviderUnavailableError();

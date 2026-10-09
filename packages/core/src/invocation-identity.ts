@@ -271,6 +271,28 @@ interface ComponentRoutingInstallation extends ComponentRouting {
     origin: string,
   ): FunctionComponent;
   /**
+   * Keep a body here for an implementation canonical core already has.
+   *
+   * The difference from {@link implementation} is which object the body belongs
+   * to. That one builds a fresh implementation, which is what a component whose
+   * *name* canonical core answers for needs. This one adopts the definition core
+   * already registers, so the name stays as open as it was: ordinary resolution
+   * decides what it means, a repository component or a registration shadows it
+   * exactly as before, and the body here is entered only where resolution
+   * selected this very object.
+   *
+   * So the association is to one function in one loaded copy of core, held in a
+   * WeakMap this execution owns. A copied definition, a wrapper built around it
+   * and a same-named answer are other objects and reach nothing.
+   */
+  adopt(
+    fn: FunctionComponent,
+    build: (claim: IdentityClaimant) => ProtectedBody,
+    claim: IdentityClaimant,
+    domain: IdentityDomain,
+    origin: string,
+  ): void;
+  /**
    * End the route, and every route narrowed from it.
    *
    * Called at the execution's teardown. A route or a projection callback kept
@@ -347,6 +369,9 @@ function createComponentRouting(): ComponentRoutingInstallation {
   const base = route(bodies, () => live);
   return {
     ...base,
+    adopt(fn, build, claim, domain, origin): void {
+      bodies.set(fn, { body: build(claim), domain, origin });
+    },
     implementation(name, build, claim, domain, origin): FunctionComponent {
       // deno-lint-ignore require-yield
       function* unreachable(): Operation<never> {
@@ -372,6 +397,22 @@ function createComponentRouting(): ComponentRoutingInstallation {
  * component may be invoked through is the execution's to decide, not the
  * declaration's.
  */
+/**
+ * A definition canonical core already registers, given a body for this
+ * execution.
+ *
+ * It states no props, forms or documentation, because it is not describing a
+ * component — the registry already does that, and this adds only the body one
+ * execution enters when resolution selected that exact definition.
+ */
+export interface AdoptedDeclaration {
+  readonly name: string;
+  readonly origin: string;
+  /** The exact implementation canonical core registers for this name. */
+  readonly fn: FunctionComponent;
+  build(claim: IdentityClaimant): ProtectedBody;
+}
+
 export interface ProtectedDeclaration {
   readonly name: string;
   readonly props: PropsSchema;
@@ -1070,6 +1111,7 @@ export function installIdentities(
   components: readonly IdentityComponent[],
   privateComponents: readonly IdentityComponent[] = [],
   protectedComponents: readonly ProtectedDeclaration[] = [],
+  adoptedComponents: readonly AdoptedDeclaration[] = [],
 ): IdentityInstallation {
   // Before any factory: a set nobody can register is a set nobody may build
   // implementations from either, and a duplicate that reached a factory would
@@ -1078,7 +1120,12 @@ export function installIdentities(
   // private name that shadowed a registered one would take its domain — and a
   // host that declared a protected name reaches this only after admission has
   // already refused it, so a duplicate here is core's own mistake.
-  assertDistinctIdentityNames([...components, ...privateComponents, ...protectedComponents]);
+  assertDistinctIdentityNames([
+    ...components,
+    ...privateComponents,
+    ...protectedComponents,
+    ...adoptedComponents,
+  ]);
 
   const minted = new Map<string, Minted>();
   const registrations: IdentityRegistration[] = [];
@@ -1109,6 +1156,21 @@ export function installIdentities(
       ...documentationOf(component),
       fn: implementation,
     });
+  }
+  for (const component of adoptedComponents) {
+    const domain = mintDomain(component.name);
+    minted.set(component.name, domain);
+    // The definition core already registers, not a new one: the name keeps the
+    // precedence it has, and this domain answers only where resolution selected
+    // that exact object.
+    domain.implementation = component.fn;
+    componentRouting.adopt(
+      component.fn,
+      component.build,
+      domain.claim,
+      domain.domain,
+      component.origin,
+    );
   }
   for (const component of privateComponents) {
     const domain = mintDomain(component.name);

@@ -210,6 +210,13 @@ export type { DurablePreparation } from "./src/document-request.ts";
  */
 export { ComponentInvocationError } from "./src/invocation-identity.ts";
 export type { IdentityClaimant, IdentityComponent } from "./src/invocation-identity.ts";
+export type {
+  FileMutationHandler,
+  FileMutationHandlers,
+  FileMutationNext,
+  FileMutationRequest,
+} from "./src/file-mutations.ts";
+export { FileMutationSetupError } from "./src/file-mutations.ts";
 /**
  * Core's own `<Elicit>` schema, for a host that registers a second one.
  *

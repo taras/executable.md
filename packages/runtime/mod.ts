@@ -86,6 +86,7 @@ export { asDuration, durationError, parseDuration } from "./duration.ts";
 export type { ProcessExecOptions, ProcessOutcome } from "./apis.ts";
 export {
   asFilesFatal,
+  FILES_API,
   FILES_ERROR,
   FILES_ERROR_MESSAGE,
   FILES_FATAL,

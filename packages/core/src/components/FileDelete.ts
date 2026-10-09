@@ -68,6 +68,14 @@ import { parseFilesFailure } from "@executablemd/runtime";
 import type { FilesFailureData } from "@executablemd/runtime";
 import type { FormDeclaration, InvocationForm } from "../invocation-identity.ts";
 import { deleteFile } from "../files.ts";
+import { invocationForm } from "../invocation-identity.ts";
+import type {
+  ComponentInvocation,
+  IdentityClaimant,
+  ProtectedBody,
+} from "../invocation-identity.ts";
+import { routeAuthoredDelete } from "../file-mutations.ts";
+import type { FileMutationHandlers } from "../file-mutations.ts";
 import type { Json } from "../types.ts";
 import { reason } from "./fs-error-phrases.ts";
 
@@ -109,6 +117,47 @@ const remove = printErrors(function* (props: Record<string, Json>): Operation<st
  * raised inside this component's printing declaration, exactly as the paired
  * refusal was when the body decided it.
  */
+/**
+ * The same removal, routed to a host that journals it.
+ *
+ * Entered in place of the dispatcher when a host supplied file-mutation
+ * handlers and canonical resolution selected core's own `<File.Delete>`. The
+ * form is read off the engine's own issuance, so a paired spelling refuses here
+ * exactly as it does through ordinary dispatch — a `<File.Delete>…</File.Delete>`
+ * would otherwise remove the path its children were written beside.
+ */
+export function fileMutationBody(
+  claim: IdentityClaimant,
+  handlers: FileMutationHandlers,
+): ProtectedBody {
+  const body = printErrors(function* (
+    props: Record<string, Json>,
+    invocation: ComponentInvocation,
+  ): Operation<string> {
+    const requested = String(props.path);
+    const directory = yield* cwd();
+    const occurrence = yield* claim(invocation);
+    const removed = yield* routeAuthoredDelete(handlers, occurrence, {
+      cwd: directory,
+      path: requested,
+    });
+    if (!removed.ok) {
+      throw new FileDeleteError(refusal(requested, parseFilesFailure(removed.error)));
+    }
+    return "";
+  });
+
+  return function* (
+    props: Record<string, Json>,
+    invocation: ComponentInvocation,
+  ): Operation<unknown> {
+    if (invocationForm(invocation) !== "self-closing") {
+      throw new FileDeleteError(PAIRED);
+    }
+    return yield* body(props, invocation);
+  };
+}
+
 export const form: FormDeclaration = {
   forms: "self-closing",
   fn: remove,
