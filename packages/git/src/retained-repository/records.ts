@@ -781,6 +781,19 @@ export function retainedRepositoryCompletionJson(completion: RetainedRepositoryC
   };
 }
 
+/**
+ * Whether a completion's result is the one its intent froze as evidence.
+ *
+ * This is what tells a performed operation from a refusal without a second
+ * member to disagree with: an intent freezes the exact result its operation
+ * will produce, so a completion carrying that result is the operation having
+ * produced it, and a completion carrying anything else did not. Which of the
+ * two it is decides which frozen state the completion is allowed to stand at.
+ */
+export function matchesRetainedEvidence(result: Json, evidence: Json): boolean {
+  return canonicalJson(result) === canonicalJson(evidence);
+}
+
 /** Whether two frontiers describe the same saved state. */
 export function sameRetainedFrontier(left: RetainedFrontier, right: RetainedFrontier): boolean {
   return canonicalJson(retainedFrontierJson(left)) === canonicalJson(retainedFrontierJson(right));

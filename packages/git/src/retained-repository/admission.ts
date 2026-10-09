@@ -31,6 +31,7 @@ import {
   RETAINED_REPOSITORY_INTENT,
   RETAINED_REPOSITORY_VERSION,
   establishesCheckout,
+  matchesRetainedEvidence,
   parseRetainedRepositoryCompletion,
   parseRetainedRepositoryIntent,
   retainedRepositoryIntentIdentity,
@@ -59,6 +60,8 @@ export type RetainedRepositoryRefusal =
   | "lane-mismatch"
   /** A completion whose resulting state is neither the one its intent saved nor the one it predicted. */
   | "frontier-substitution"
+  /** A completion whose result and resulting state disagree about whether anything changed. */
+  | "unproven-outcome"
   /** A completion whose site is not the site of the intent it names. */
   | "site-substitution"
   /** A completion whose authored request is not the one its intent froze. */
@@ -309,18 +312,38 @@ export function* admitRetainedRepositoryHistory(
       );
     }
     // The resulting state is one of exactly two the intent froze: the state it
-    // predicted, or — for an operation that proved it changed nothing — the
-    // state it started from. Any other state is somebody's account of a
-    // transition this history never prepared, and folding it would advance the
-    // frontier a later mutation is held to.
-    if (
-      !sameRetainedFrontier(completion.frontier, entry.intent.postState) &&
-      !sameRetainedFrontier(completion.frontier, entry.intent.preState)
-    ) {
+    // predicted, or — for an operation that changed nothing — the state it
+    // started from. Any other state is somebody's account of a transition this
+    // history never prepared, and folding it would advance the frontier a later
+    // mutation is held to.
+    const advanced = sameRetainedFrontier(completion.frontier, entry.intent.postState);
+    const unchanged = sameRetainedFrontier(completion.frontier, entry.intent.preState);
+    if (!advanced && !unchanged) {
       return refuse(
         "frontier-substitution",
         "a retained completion carries a state its intent neither predicted nor started from, " +
           "so nothing in this history prepared the transition it claims.",
+      );
+    }
+    // Which end it may stand at is decided by its own result. An operation that
+    // produced the result its intent froze performed the transition, so it has
+    // to be at the far end of it; the unchanged end belongs to a refusal, and a
+    // success reaches it only where the two ends coincide and there was nothing
+    // to change. Without this an ordinary write success sits at the state the
+    // file had before it, and the entry resumes believing the write is done.
+    const performed = matchesRetainedEvidence(completion.result, entry.intent.evidence);
+    if (performed && !advanced) {
+      return refuse(
+        "unproven-outcome",
+        "a retained completion carries the result its intent predicted but stands at the state " +
+          "the operation started from, so it reports work its own state says never happened.",
+      );
+    }
+    if (!performed && !unchanged) {
+      return refuse(
+        "unproven-outcome",
+        "a retained completion stands at the state its intent predicted while carrying a result " +
+          "that intent did not predict, so nothing here proves the transition it claims.",
       );
     }
     entry.completion = completion;
@@ -410,15 +433,26 @@ function history(
   const attachments: RetainedRepositoryAttachment[] = [];
   for (const [checkout, frontier] of established) {
     const candidates: RetainedFrontier[] = [frontier];
+    const admit = (candidate: RetainedFrontier) => {
+      if (!candidates.some((existing) => sameRetainedFrontier(existing, candidate))) {
+        candidates.push(candidate);
+      }
+    };
     for (const effect of pending) {
-      if (effect.intent.preState.checkout !== checkout) {
+      if (effect.intent.lane.common !== frontier.administration.common) {
         continue;
       }
-      for (const candidate of [effect.intent.preState, effect.intent.postState]) {
-        if (!candidates.some((existing) => sameRetainedFrontier(existing, candidate))) {
-          candidates.push(candidate);
-        }
+      if (effect.intent.preState.checkout === checkout) {
+        admit(effect.intent.preState);
+        admit(effect.intent.postState);
+        continue;
       }
+      // An unresolved mutation in a sibling worktree may already have moved the
+      // refs this checkout shares with it, so both of its ends reach here as
+      // this checkout's own state under each ref list. Its HEAD, index and
+      // worktree belong to that worktree and do not travel.
+      admit(withSharedRefs(frontier, effect.intent.preState.refs));
+      admit(withSharedRefs(frontier, effect.intent.postState.refs));
     }
     attachments.push(Object.freeze({ checkout, frontier, candidates: Object.freeze(candidates) }));
   }

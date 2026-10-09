@@ -138,6 +138,7 @@ interface CompletionFixture {
   readonly intent?: string;
   readonly fingerprint?: string;
   readonly frontier?: RetainedFrontier;
+  readonly result?: Json;
 }
 
 function* completed(
@@ -152,7 +153,7 @@ function* completed(
       site: fixture.site ?? value.site,
       intent: fixture.intent ?? (yield* retainedRepositoryIntentIdentity(value)),
       fingerprint: fixture.fingerprint ?? value.fingerprint,
-      result: value.evidence,
+      result: fixture.result ?? value.evidence,
       frontier: fixture.frontier ?? value.postState,
     }),
   );
@@ -514,7 +515,7 @@ describe("retained repository records", () => {
     expect(reasonOf(result)).toBe("frontier-substitution");
   });
 
-  it("R1: a proven nonmutating refusal keeps the state it started from", function* () {
+  it("R1: a closed refusal keeps the state it started from", function* () {
     const selection = yield* intent();
     const refused = yield* intent({
       operation: "add",
@@ -527,7 +528,12 @@ describe("retained repository records", () => {
           intended(selection),
           yield* completed(selection),
           intended(refused),
-          yield* completed(refused, { frontier: refused.preState }),
+          // Not the result its intent froze: the operation refused, and the
+          // state it stands at is the one it started from.
+          yield* completed(refused, {
+            result: { refusal: "dirty-worktree" },
+            frontier: refused.preState,
+          }),
         ],
         OWNER,
       ),
@@ -538,6 +544,65 @@ describe("retained repository records", () => {
       history.attachments[0]!.frontier.head.kind === "symbolic" &&
         history.attachments[0]!.frontier.head.oid,
     ).toBe(A);
+  });
+
+  it("R1: a successful write cannot stand at the state it was meant to change", function* () {
+    const selection = yield* intent();
+    const write = yield* intent({
+      operation: "file-write",
+      position: 1,
+      postState: {
+        ...frontier(),
+        worktree: [{ kind: "file", path: "notes.md", mode: "100644", bytes: "bmV3IHRleHQ=" }],
+      },
+    });
+    const result = yield* admitRetainedRepositoryHistory(
+      [
+        intended(selection),
+        yield* completed(selection),
+        intended(write),
+        // The result its intent froze, at the state the file had before it.
+        yield* completed(write, { frontier: write.preState }),
+      ],
+      OWNER,
+    );
+    expect(reasonOf(result)).toBe("unproven-outcome");
+  });
+
+  it("R1: a refusal cannot stand at the state its intent predicted", function* () {
+    const selection = yield* intent();
+    const commit = yield* intent({
+      operation: "commit",
+      position: 1,
+      postState: frontier(PRIMARY, A, B),
+    });
+    const result = yield* admitRetainedRepositoryHistory(
+      [
+        intended(selection),
+        yield* completed(selection),
+        intended(commit),
+        yield* completed(commit, { result: { refusal: "no-identity" } }),
+      ],
+      OWNER,
+    );
+    expect(reasonOf(result)).toBe("unproven-outcome");
+  });
+
+  it("R1: an operation whose two ends coincide completes at either result", function* () {
+    const selection = yield* intent();
+    const noop = yield* intent({ operation: "dir-ensure", position: 1 });
+    const history = accepted(
+      yield* admitRetainedRepositoryHistory(
+        [
+          intended(selection),
+          yield* completed(selection),
+          intended(noop),
+          yield* completed(noop, { result: { existing: true } }),
+        ],
+        OWNER,
+      ),
+    );
+    expect(history.completed.length).toBe(2);
   });
 
   it("R1: an intent whose frozen state is in another lane is refused", function* () {
@@ -668,6 +733,67 @@ describe("retained repository records", () => {
       yield* admitRetainedRepositoryHistory([...(yield* linkedHistory()), intended(next)], OWNER),
     );
     expect(history.pending.map((effect) => effect.intent.operation)).toEqual(["file-write"]);
+  });
+
+  it("R1: a pending sibling mutation's shared refs reach the primary's candidates", function* () {
+    const events = yield* linkedHistory();
+    // Everything but the linked commit's completion: that mutation is
+    // unresolved, and it may already have moved the ref both checkouts share.
+    const history = accepted(yield* admitRetainedRepositoryHistory(events.slice(0, -1), OWNER));
+    expect(history.pending.map((effect) => effect.intent.operation)).toEqual(["commit"]);
+
+    const primary = history.attachments.find((value) => value.checkout === PRIMARY)!;
+    // The established state is still the completed one, and the prediction
+    // stands beside it rather than replacing it.
+    expect(topicOf(primary.frontier)).toBe(A);
+    expect(primary.candidates.map(topicOf)).toEqual([A, B]);
+    // Only the refs travel: the primary keeps its own HEAD in every candidate.
+    expect(
+      primary.candidates.every(
+        (candidate) =>
+          candidate.head.kind === "symbolic" && candidate.head.ref === "refs/heads/main",
+      ),
+    ).toBe(true);
+  });
+
+  it("R1: a pending mutation in another common directory reaches no candidate here", function* () {
+    const baseline = yield* intent();
+    const separate: RetainedFrontier = {
+      ...frontier(PRIMARY, A),
+      checkout: "/checkouts/other",
+      administration: { common: "/checkouts/other/.git", worktree: null, role: "primary" },
+    };
+    const other = yield* intent({
+      operation: "repository",
+      position: 0,
+      site: { source: "entry.md", occurrence: "occurrence-other" },
+      lane: { common: "/checkouts/other/.git", position: 0 },
+      preState: separate,
+    });
+    const elsewhere = yield* intent({
+      operation: "commit",
+      position: 1,
+      site: { source: "entry.md", occurrence: "occurrence-elsewhere" },
+      lane: { common: "/checkouts/other/.git", position: 1 },
+      preState: separate,
+      postState: { ...separate, refs: [{ name: "refs/heads/main", oid: B }] },
+    });
+
+    const history = accepted(
+      yield* admitRetainedRepositoryHistory(
+        [
+          intended(baseline),
+          yield* completed(baseline),
+          intended(other),
+          yield* completed(other),
+          intended(elsewhere),
+        ],
+        OWNER,
+      ),
+    );
+    const primary = history.attachments.find((value) => value.checkout === PRIMARY)!;
+    expect(primary.candidates.length).toBe(1);
+    expect(topicOf(primary.candidates[0]!)).toBe(A);
   });
 
   it("R1: shared refs do not travel to a checkout in another common directory", function* () {
