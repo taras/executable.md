@@ -12,10 +12,11 @@
 
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { each, ensure, scoped, sleep, useScope, withResolvers } from "effection";
+import { each, ensure, scoped, sleep, spawn, useScope, withResolvers } from "effection";
 import type { Scope } from "effection";
 import type { Operation } from "effection";
 import { Component } from "../src/component-api.ts";
+import { printErrors } from "../src/component-failures.ts";
 import type { ComponentExpansionPhase, ComponentExpansionRequest } from "../src/component-api.ts";
 import { expandSegments } from "../src/expand.ts";
 import { renderSegments } from "../src/render.ts";
@@ -338,6 +339,189 @@ describe("Tier CX — what surrounds one expansion", () => {
     });
     const observed = yield* watch(source, definitions);
     expect(observed.report).toBe(unobserved);
+  });
+
+  it("CX2: an import that returned is not an element that finished", function* () {
+    // The whole of C2's claim in one shape: the import resolving is not the
+    // element settling. While the body is held the element is entered and has
+    // no terminal phase at all — a reading that completed it here would say
+    // the run was over when its work had not started.
+    const holding = withResolvers<void>();
+    const started = withResolvers<void>();
+    const whileHeld: string[] = [];
+    const observed = yield* watch(
+      "<Held />\n",
+      {
+        Held: component("Held", function* () {
+          started.resolve();
+          yield* holding.operation;
+          return "let go";
+        }),
+      },
+      function* (request, next, read, owner) {
+        read((phase) => whileHeld.push(phase.phase));
+        owner.run(function* () {
+          // The body has begun, so the import has already returned.
+          yield* started.operation;
+          yield* sleep(0);
+          holding.resolve();
+        });
+        yield* next(request);
+      },
+    );
+    expect(observed.rendered.trim()).toBe("let go");
+    // Nothing terminal had been published while the body was held.
+    const held = whileHeld.slice(0, whileHeld.indexOf("exit"));
+    expect(held).toContain("enter");
+    expect(held).not.toContain("complete");
+    expect(held).not.toContain("cancelled");
+    // And the element did finish, once its body did.
+    const phases = observed.watched.seen.get(observed.watched.requests[0].expansion.id) ?? [];
+    expect(phases[phases.length - 1]?.phase).toBe("complete");
+  });
+
+  it("CX2: a printed failure completes the element Ok, and says so in the document", function* () {
+    // Two ways a failure is reported as content rather than raised: a return
+    // the schema refuses, and a body whose component prints its own errors.
+    // Both complete `Ok` — the element did not fail the *run*, it reported a
+    // problem as text — and both put the problem in the document.
+    //
+    // This is the frozen "preserve printed semantic failure", and it is why a
+    // reading takes an outcome from the phase and never from the prose: the
+    // text here says ERROR and the answer is success, which is exactly the
+    // pair a reading that read the words would get backwards.
+    const cases: readonly {
+      readonly source: string;
+      readonly said: string;
+      readonly definitions: Record<string, FunctionComponentDefinition>;
+    }[] = [
+      {
+        source: '<Wrong as="n" />\n',
+        said: "Return validation failed",
+        definitions: {
+          Wrong: {
+            kind: "function" as const,
+            name: "Wrong",
+            props: NO_PROPS,
+            returns: { type: "number" },
+            // deno-lint-ignore require-yield
+            *fn() {
+              return "not a number";
+            },
+          },
+        },
+      },
+      {
+        source: "<Shown />\n",
+        said: "printed, not thrown",
+        definitions: {
+          Shown: {
+            kind: "function" as const,
+            name: "Shown",
+            props: NO_PROPS,
+            fn: printErrors(function* () {
+              throw new Error("printed, not thrown");
+            }),
+          },
+        },
+      },
+    ];
+    for (const one of cases) {
+      const observed = yield* watch(one.source, one.definitions);
+      // Nothing propagated out of the document.
+      expect([one.said, observed.failure]).toEqual([one.said, undefined]);
+      expect(observed.rendered).toContain(one.said);
+      const phases = observed.watched.seen.get(observed.watched.requests[0].expansion.id) ?? [];
+      const terminal = phases[phases.length - 1];
+      expect([one.said, terminal?.phase]).toEqual([one.said, "complete"]);
+      expect([one.said, terminal?.phase === "complete" && terminal.result.ok]).toEqual([
+        one.said,
+        true,
+      ]);
+      // And it did pass through EXIT on the way, having returned.
+      expect([one.said, phases.map((phase) => phase.phase)]).toEqual([
+        one.said,
+        ["enter", "active", "exit", "complete"],
+      ]);
+    }
+  });
+
+  it("CX2: recovering a child's failure does not fail the parent", function* () {
+    const definitions = {
+      Boom: component("Boom", function* () {
+        throw new Error("the child said no");
+      }),
+    };
+    const outcome = (
+      observed: { readonly watched: Watched },
+      name: string,
+    ): boolean | undefined => {
+      const request = observed.watched.requests.find((one) => one.expansion.name === name);
+      const phases = observed.watched.seen.get(request?.expansion.id ?? "") ?? [];
+      const terminal = phases[phases.length - 1];
+      return terminal?.phase === "complete" ? terminal.result.ok : undefined;
+    };
+
+    // Recovered: the region continues past the child's failure, so the parent
+    // that encloses it returned and completes Ok.
+    const recovered = yield* watch(
+      "<If condition={true}>\n<PrintErrors>\n<Boom />\n</PrintErrors>\n</If>\n",
+      definitions,
+    );
+    expect(recovered.failure).toBe(undefined);
+    expect(recovered.rendered).toContain("the child said no");
+    expect(outcome(recovered, "If")).toBe(true);
+
+    // The control, in the same case: with nothing recovering it, the same
+    // child failure does reach the same parent. Without this the assertion
+    // above would pass for a parent that can never fail.
+    const unrecovered = yield* watch("<If condition={true}>\n<Boom />\n</If>\n", definitions);
+    expect(unrecovered.failure).not.toBe(undefined);
+    expect(outcome(unrecovered, "If")).toBe(false);
+  });
+
+  it("CX2: COMPLETE follows the whole dispatch, so a handler cannot be its reader", function* () {
+    // The frozen ordering, stated as the thing it decides. A subscription
+    // spawned on the handler's own frame is torn down when that frame unwinds
+    // — which happens *before* completion is published, because completion
+    // waits for the whole dispatch, this handler's own cleanup included. One
+    // on an owner that outlives the dispatch is told.
+    //
+    // Asserted as the difference between the two readers rather than as a
+    // timestamp: both read the same stream, and only the placement differs.
+    const onFrame: string[] = [];
+    const onOwner: string[] = [];
+    const observed = yield* watch(
+      "<Plain />\n",
+      {
+        Plain: component("Plain", function* () {
+          return "done";
+        }),
+      },
+      function* (request, next, _read, owner) {
+        // This frame's own reader.
+        yield* spawn(function* () {
+          for (const phase of yield* each(request.phases)) {
+            onFrame.push(phase.phase);
+            yield* each.next();
+          }
+        });
+        // A reader that outlives the dispatch.
+        owner.run(function* () {
+          for (const phase of yield* each(request.phases)) {
+            onOwner.push(phase.phase);
+            yield* each.next();
+          }
+        });
+        yield* next(request);
+      },
+    );
+    expect(observed.rendered.trim()).toBe("done");
+    expect(onOwner).toContain("complete");
+    expect(onFrame).not.toContain("complete");
+    // The frame's reader did run — this is a reader that died, not one that
+    // never started.
+    expect(onFrame).toContain("enter");
   });
 
   it("CX3: an observed run writes the same Journal bytes as an unobserved one", function* () {

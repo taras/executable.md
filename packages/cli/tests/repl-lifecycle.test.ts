@@ -12,7 +12,7 @@ import { beforeAll, describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { useTempFileCompiler } from "@executablemd/core";
 import { InMemoryStream } from "@executablemd/durable-streams";
-import { each, scoped, sleep, spawn } from "effection";
+import { each, ensure, scoped, sleep, spawn } from "effection";
 import type { Operation, Result } from "effection";
 
 import { openReplSession } from "../src/repl/session.ts";
@@ -179,6 +179,71 @@ describe("Tier L — the reading one entry leaves behind", () => {
       // work never having happened.
       expect(session.model.entries.length).toBe(1);
       expect(session.model.entries[0]?.terminal?.status).toBe("ok");
+    });
+  });
+
+  it("L3: everything this entry held is released before the session says it is not live", function* () {
+    // The frozen ordering, observed rather than read off the comment that
+    // states it. An installation of this entry's own records, at the moment it
+    // is released, what the session was still saying about itself. If the
+    // liveness finalizer had been registered after the things this entry
+    // acquires, it would run before them and this would read `false` — and a
+    // reader woken then would be told the entry was over while its provider,
+    // its middleware and its Agent attachment were still standing.
+    yield* scoped(function* () {
+      let liveWhenReleased: boolean | undefined;
+      let released = false;
+      const session = opened(
+        yield* openReplSession({
+          execution: execution(),
+          installations: [
+            {
+              *install(): Operation<void> {
+                yield* ensure(() => {
+                  released = true;
+                  liveWhenReleased = session.live;
+                });
+              },
+            },
+          ],
+        }),
+      );
+      const watched = yield* watching(session);
+      accepted(yield* session.submit('<Json value={1} as="a" />\n'));
+      yield* session.join();
+      yield* sleep(0);
+
+      // The installation really was released, so this is an ordering rather
+      // than an assertion about something that never ran.
+      expect(released).toBe(true);
+      expect(liveWhenReleased).toBe(true);
+      // And by now the session says what it is.
+      expect(session.live).toBe(false);
+      // The wake arrived with no input: nothing was typed, nothing activated,
+      // and a reader waiting for the entry to end was still told.
+      expect(watched.readings.length).toBeGreaterThan(0);
+      expect(watched.readings[watched.readings.length - 1].occurrences).toEqual([]);
+      expect(watched.readings[watched.readings.length - 1].entry).toBe(undefined);
+    });
+  });
+
+  it("L3: a late producer update cannot revive a reading the entry took with it", function* () {
+    yield* scoped(function* () {
+      const session = opened(yield* openReplSession({ execution: execution() }));
+      accepted(yield* session.submit('<Json value={1} as="a" />\n'));
+      yield* session.join();
+      yield* sleep(0);
+      expect(session.lifecycle.occurrences).toEqual([]);
+
+      // Whatever is still draining from the entry that closed — a terminal
+      // phase published as its dispatch unwound — arrives after the generation
+      // it belonged to is gone, and is refused by generation rather than
+      // appended to nothing.
+      for (let turn = 0; turn < 5; turn += 1) {
+        yield* sleep(0);
+      }
+      expect(session.lifecycle.occurrences).toEqual([]);
+      expect(session.lifecycle.entry).toBe(undefined);
     });
   });
 

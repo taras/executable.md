@@ -1,0 +1,139 @@
+[
+  {
+    "id": "K1-rails",
+    "says": "remove the rails",
+    "file": "packages/cli/src/repl/source-reading.ts",
+    "suites": [
+      "packages/cli/tests/repl-source-reading.test.ts"
+    ],
+    "outcome": "BROKEN",
+    "exit": 1,
+    "summary": "FAILED | 0 passed (34 steps) | 1 failed (2 steps) (62ms)",
+    "firstFailure": "error: Error: expect(received).toBe(expected) // Object.is equality",
+    "bytesBefore": "c1c4dc763817a6be8aabc049ccec1201f0130de7afee32a712139ac5263f184d",
+    "bytesAfter": "c1c4dc763817a6be8aabc049ccec1201f0130de7afee32a712139ac5263f184d",
+    "restored": true
+  },
+  {
+    "id": "K2-badges",
+    "says": "remove the lifecycle glyphs and words",
+    "file": "packages/cli/src/repl/source-reading.ts",
+    "suites": [
+      "packages/cli/tests/repl-source-reading.test.ts",
+      "packages/cli/tests/repl-presentation-style.test.ts"
+    ],
+    "outcome": "BROKEN",
+    "exit": 1,
+    "summary": "FAILED | 12 passed (65 steps) | 1 failed (9 steps) (1s)",
+    "firstFailure": "error: Error: expect(received).toBe(expected) // Object.is equality",
+    "bytesBefore": "c1c4dc763817a6be8aabc049ccec1201f0130de7afee32a712139ac5263f184d",
+    "bytesAfter": "c1c4dc763817a6be8aabc049ccec1201f0130de7afee32a712139ac5263f184d",
+    "restored": true
+  },
+  {
+    "id": "K3-appended",
+    "says": "append the generated source instead of replacing the producer",
+    "file": "packages/cli/src/repl/source-reading.ts",
+    "suites": [
+      "packages/cli/tests/repl-source-reading.test.ts"
+    ],
+    "outcome": "BROKEN",
+    "exit": 1,
+    "summary": "FAILED | 0 passed (34 steps) | 1 failed (2 steps) (67ms)",
+    "firstFailure": "error: Error: expect(received).not.toContain(expected) // indexOf",
+    "bytesBefore": "c1c4dc763817a6be8aabc049ccec1201f0130de7afee32a712139ac5263f184d",
+    "bytesAfter": "c1c4dc763817a6be8aabc049ccec1201f0130de7afee32a712139ac5263f184d",
+    "restored": true
+  },
+  {
+    "id": "K4-clipped",
+    "says": "clip the last wrapped row instead of keeping it",
+    "file": "packages/cli/src/repl/fitting.ts",
+    "suites": [
+      "packages/cli/tests/repl-source-reading.test.ts",
+      "packages/cli/tests/repl-presentation-style.test.ts"
+    ],
+    "outcome": "BROKEN",
+    "exit": 1,
+    "summary": "FAILED | 11 passed (67 steps) | 2 failed (7 steps) (1s)",
+    "firstFailure": "error: Error: expect(received).toBe(expected) // Object.is equality",
+    "bytesBefore": "1c2e64ac3b2ee281faca23ed8820019a517fde064c17a6e82c0fe57ef7cd8be3",
+    "bytesAfter": "1c2e64ac3b2ee281faca23ed8820019a517fde064c17a6e82c0fe57ef7cd8be3",
+    "restored": true
+  },
+  {
+    "id": "K5-rescued",
+    "says": "rescue a caught canonical failure instead of reporting it",
+    "file": "packages/core/src/component-expansion.ts",
+    "suites": [
+      "packages/core/tests/component-expansion.test.ts"
+    ],
+    "outcome": "BROKEN",
+    "exit": 1,
+    "summary": "FAILED | 0 passed (19 steps) | 1 failed (3 steps) (208ms)",
+    "firstFailure": "error: Error: expect(received).toContain(expected) // indexOf",
+    "bytesBefore": "f230870a067c5fd8cb1565e29f1341f3afe676a79d485125cd88f981016320d1",
+    "bytesAfter": "f230870a067c5fd8cb1565e29f1341f3afe676a79d485125cd88f981016320d1",
+    "restored": true
+  },
+  {
+    "id": "K6-unheld",
+    "says": "let a pending permission request count no wait",
+    "file": "packages/cli/src/repl/agent.ts",
+    "suites": [
+      "packages/cli/tests/repl-agent-execution.test.ts"
+    ],
+    "outcome": "BROKEN",
+    "exit": 1,
+    "summary": "FAILED | 12 passed (42 steps) | 1 failed (2 steps) (1s)",
+    "firstFailure": "error: Error: expect(received).toEqual(expected) // deep equality",
+    "bytesBefore": "1a0102d6abe95a8f722e7e9dd31bc0dd5527992423410ba74af9282ec933ef54",
+    "bytesAfter": "1a0102d6abe95a8f722e7e9dd31bc0dd5527992423410ba74af9282ec933ef54",
+    "restored": true
+  },
+  {
+    "id": "K7-collapsed",
+    "says": "read only the last call of a repeated element",
+    "file": "packages/cli/src/repl/source-reading.ts",
+    "suites": [
+      "packages/cli/tests/repl-source-reading.test.ts"
+    ],
+    "outcome": "BROKEN",
+    "exit": 1,
+    "summary": "FAILED | 0 passed (34 steps) | 1 failed (2 steps) (68ms)",
+    "firstFailure": "error: Error: expect(received).toBe(expected) // Object.is equality",
+    "bytesBefore": "c1c4dc763817a6be8aabc049ccec1201f0130de7afee32a712139ac5263f184d",
+    "bytesAfter": "c1c4dc763817a6be8aabc049ccec1201f0130de7afee32a712139ac5263f184d",
+    "restored": true
+  },
+  {
+    "id": "K8-unindented",
+    "says": "start a continuation at the margin instead of its own column",
+    "file": "packages/cli/src/repl/fitting.ts",
+    "suites": [
+      "packages/cli/tests/repl-source-reading.test.ts"
+    ],
+    "outcome": "BROKEN",
+    "exit": 1,
+    "summary": "FAILED | 0 passed (34 steps) | 1 failed (2 steps) (73ms)",
+    "firstFailure": "error: Error: expect(received).toBe(expected) // Object.is equality",
+    "bytesBefore": "1c2e64ac3b2ee281faca23ed8820019a517fde064c17a6e82c0fe57ef7cd8be3",
+    "bytesAfter": "1c2e64ac3b2ee281faca23ed8820019a517fde064c17a6e82c0fe57ef7cd8be3",
+    "restored": true
+  },
+  {
+    "id": "K9-early-liveness",
+    "says": "say the entry is not live before releasing what it held",
+    "file": "packages/cli/src/repl/session.ts",
+    "suites": [
+      "packages/cli/tests/repl-lifecycle.test.ts"
+    ],
+    "outcome": "BROKEN",
+    "exit": 1,
+    "summary": "FAILED | 0 passed (7 steps) | 1 failed (1 step) (270ms)",
+    "firstFailure": "error: Error: expect(received).toBe(expected) // Object.is equality",
+    "bytesBefore": "59e98dc43ef620ef744da1b7fc04d7ebebe5d5ce9c993497bcb02080db23497d",
+    "bytesAfter": "59e98dc43ef620ef744da1b7fc04d7ebebe5d5ce9c993497bcb02080db23497d",
+    "restored": true
+  }
+]
