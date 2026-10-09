@@ -1,437 +1,65 @@
 /**
  * What a workflow run is a run *of*.
  *
- * The definition descriptor is the run's immutable identity: the object that
- * holds the document and the path to the document within it. It is supplied by
- * the host, stored once, and compared on every compatible reuse of a run id.
+ * The definition descriptor is the run's immutable identity: the exact bytes of
+ * every document in the closure, named by logical path. It is supplied by the
+ * host, stored once, and compared on every compatible reuse of a run id.
  *
- * Retrieval is deliberately not part of it. Where a repository can be fetched
- * from, and where it happens to be checked out on this machine, change without
- * changing which document ran — so a locator is replaceable metadata rather
- * than identity, and a run stays the same run when it moves between hosts.
+ * Retrieval is deliberately not part of it. Where the bytes came from, and
+ * where they happen to sit on this machine, change without changing which
+ * document ran — so a locator is replaceable metadata rather than identity, and
+ * a run stays the same run when it moves between hosts.
  *
- * The descriptor carries its own `version`. A later version is a different
- * identity rather than the same one read loosely, which is why the version
- * takes part in the comparison instead of governing it.
+ * The descriptor carries no version. One shape is the only shape, so there is
+ * no arm to choose between and nothing for a reader to dispatch on; this module
+ * is the storage-facing name for it, and `source-bundle.ts` is its shape,
+ * parser and content addressing.
  */
 
-import { Err, Ok, type Result } from "effection";
-import { isCanonicalDocumentTarget, isComponentName } from "@executablemd/core";
 import type { Json } from "@executablemd/durable-streams";
-import { WorkflowDefinitionError } from "./errors.ts";
 import {
   parseSourceBundleDefinition,
+  sourceBundleComponents,
   sourceBundleDefinitionToJson,
-  type SourceBundleWorkflowDefinitionV2,
 } from "./source-bundle.ts";
-import {
-  describe,
-  type Members,
-  parseMembers,
-  parseStringMember,
-  requireMemberNames,
-} from "./members.ts";
+import type { Result } from "effection";
+import type { SourceBundleComponent, WorkflowDefinition } from "./source-bundle.ts";
 
-/**
- * A document at a path inside one immutable Git object, optionally projected to
- * one of its sections.
- *
- * `targetPath` is the *resolved exact* canonical document target, never the
- * selector a caller wrote: two callers may spell one request differently, and a
- * glob re-resolved against a different checkout would name a different section.
- * Absent, it identifies the whole document — which is what a whole-document
- * workflow is, not a legacy spelling of a targeted one.
- */
-export interface GitWorkflowDefinitionV1 {
-  readonly version: 1;
-  readonly kind: "git";
-  readonly objectFormat: "sha1" | "sha256";
-  readonly objectId: string;
-  readonly rootDocumentPath: string;
-  /** One exact canonical document target, without a leading `#`. */
-  readonly targetPath?: string;
-  /**
-   * The authored components this definition is closed over, when it is closed
-   * over any.
-   *
-   * Absent identifies a run with no bundle. That is what every definition
-   * retained before bundles existed is, and what a root declaring none still
-   * writes — so the member is added to the descriptor rather than the
-   * descriptor being versioned past it. An empty array is not a second
-   * spelling of absence and is refused.
-   */
-  readonly components?: readonly WorkflowComponentEntry[];
-}
-
-/**
- * One authored component the workflow definition is closed over.
- *
- * `path` is the canonical repository-relative POSIX path of the Markdown blob
- * inside the same pinned commit the root came from — never the `./Name.md` a
- * root wrote. `sourceHash` is that blob's own object id under the descriptor's
- * `objectFormat`, so changing what a component says changes the definition
- * rather than changing what a retained definition executes.
- */
-export interface WorkflowComponentEntry {
-  readonly name: string;
-  readonly path: string;
-  readonly sourceHash: string;
-}
-
-/** Every descriptor this build understands. */
-export type WorkflowDefinition = GitWorkflowDefinitionV1 | SourceBundleWorkflowDefinitionV2;
-
-/** Whether this descriptor is the Git one, narrowing to it when it is. */
-export function isGitWorkflowDefinition(
-  definition: WorkflowDefinition,
-): definition is GitWorkflowDefinitionV1 {
-  return definition.kind === "git";
-}
-
-/** Whether this descriptor is a source bundle, narrowing to it when it is. */
-export function isSourceBundleWorkflowDefinition(
-  definition: WorkflowDefinition,
-): definition is SourceBundleWorkflowDefinitionV2 {
-  return definition.kind === "source-bundle";
-}
-
-/** Hexadecimal digits per object id, by the format that names them. */
-const OBJECT_ID_LENGTHS: Readonly<Record<GitWorkflowDefinitionV1["objectFormat"], number>> = {
-  sha1: 40,
-  sha256: 64,
-};
-
-const MEMBER_NAMES = [
-  "version",
-  "kind",
-  "objectFormat",
-  "objectId",
-  "rootDocumentPath",
-  "targetPath",
-  "components",
-];
-
-const COMPONENT_MEMBER_NAMES = ["name", "path", "sourceHash"];
-
-function fail(reason: string, path: string): Error {
-  return new WorkflowDefinitionError(reason, path);
-}
+export type { SourceBundleComponent, WorkflowDefinition };
 
 /**
  * The workflow definition a value describes.
  *
  * Parsed rather than asserted: a descriptor reaches storage from a host, and a
  * host that builds one by hand — or reads one from a file — can build one that
- * type-checks and does not describe a definition.
- *
- * `kind` chooses the parser, not `version`. A kind says what sort of thing a
- * descriptor identifies and a version says which revision of that sort it is,
- * so a Git descriptor carrying some other version is refused by the Git parser
- * — which is where a reader looking at `objectId` and `rootDocumentPath` is
- * told what went wrong. Dispatching on the version instead would answer a
- * mis-numbered Git descriptor with the source bundle's member list.
+ * type-checks and does not describe a definition. The parser is closed, so a
+ * value carrying any member this shape does not declare is refused rather than
+ * read loosely. A record retained under an older format carried a `version`
+ * member, and is therefore refused here rather than guessed at.
  */
 export function parseWorkflowDefinition(value: unknown): Result<WorkflowDefinition> {
-  if (declaredKind(value) === "source-bundle") {
-    return parseSourceBundleDefinition(value);
-  }
-  try {
-    return Ok(parseDefinition(value));
-  } catch (error) {
-    if (error instanceof WorkflowDefinitionError) {
-      return Err(error);
-    }
-    throw error;
-  }
-}
-
-/**
- * The `kind` member a candidate wrote, when it wrote a readable one.
- *
- * Read through one guarded access, and read for dispatch alone: whichever
- * parser this chooses still holds the whole value to its own closed shape, so a
- * value that lies about its kind is refused rather than admitted loosely.
- */
-function declaredKind(value: unknown): string | undefined {
-  if (value === null || typeof value !== "object" || Array.isArray(value)) {
-    return undefined;
-  }
-  try {
-    const kind = Object.entries(value).find(([key]) => key === "kind")?.[1];
-    return typeof kind === "string" ? kind : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-function parseDefinition(value: unknown): WorkflowDefinition {
-  const members = parseMembers(value, "$", fail);
-  requireMemberNames(members, MEMBER_NAMES, "$", fail);
-
-  const version = members.get("version");
-  if (version !== 1) {
-    throw fail("expected version 1", "$.version");
-  }
-
-  const kind = parseStringMember(members, "kind", "$", fail);
-  if (kind !== "git") {
-    throw fail('expected the kind "git"', "$.kind");
-  }
-
-  const objectFormat = parseObjectFormat(members.get("objectFormat"));
-  const targetPath = parseTargetPath(members);
-  const components = parseComponents(members, objectFormat);
-
-  return {
-    version: 1,
-    kind: "git",
-    objectFormat,
-    objectId: parseObjectId(parseStringMember(members, "objectId", "$", fail), objectFormat),
-    rootDocumentPath: parseRootDocumentPath(
-      parseStringMember(members, "rootDocumentPath", "$", fail),
-    ),
-    ...(targetPath === undefined ? {} : { targetPath }),
-    ...(components === undefined ? {} : { components }),
-  };
-}
-
-/**
- * The bundle this descriptor is closed over, or nothing when it is closed over
- * none.
- *
- * Presence is the member being written at all, exactly as it is for the exact
- * target beside it. A descriptor that never wrote `components` identifies a run
- * with no bundle — which is what a definition retained before bundles existed
- * is, and why one still parses. A descriptor that wrote the member asked for a
- * bundle, and every way of failing to name one is a refusal.
- *
- * Canonical rather than merely valid: exactly one entry per name, in
- * lexicographic order by name. A descriptor that lists the same bundle twice
- * over would otherwise be two identities for one run, and compatible reuse
- * compares this array whole.
- */
-function parseComponents(
-  members: Members,
-  format: GitWorkflowDefinitionV1["objectFormat"],
-): readonly WorkflowComponentEntry[] | undefined {
-  if (!members.has("components")) {
-    return undefined;
-  }
-  const value = members.get("components");
-  const path = "$.components";
-  if (!Array.isArray(value)) {
-    throw fail(`expected an array, found ${describe(value)}`, path);
-  }
-  if (value.length === 0) {
-    throw fail("expected at least one component", path);
-  }
-
-  const components: WorkflowComponentEntry[] = [];
-  let previous: string | undefined;
-  for (let index = 0; index < value.length; index++) {
-    const entry = parseComponent(value[index], `${path}[${index}]`, format);
-    if (previous !== undefined && !(previous < entry.name)) {
-      throw fail(
-        previous === entry.name
-          ? "expected each component name once"
-          : "expected components sorted by name",
-        path,
-      );
-    }
-    previous = entry.name;
-    components.push(entry);
-  }
-  return Object.freeze(components);
-}
-
-function parseComponent(
-  value: unknown,
-  path: string,
-  format: GitWorkflowDefinitionV1["objectFormat"],
-): WorkflowComponentEntry {
-  const members = parseMembers(value, path, fail);
-  requireMemberNames(members, COMPONENT_MEMBER_NAMES, path, fail);
-  const name = parseStringMember(members, "name", path, fail);
-  // Deliberately says nothing about the name it read. A declaration key is
-  // authored text, and one that fails the grammar has not earned being printed.
-  if (!isComponentName(name)) {
-    throw fail("expected a component name", `${path}.name`);
-  }
-  return {
-    name,
-    path: parseComponentPath(parseStringMember(members, "path", path, fail), `${path}.path`),
-    sourceHash: parseObjectIdAt(
-      parseStringMember(members, "sourceHash", path, fail),
-      format,
-      `${path}.sourceHash`,
-    ),
-  };
-}
-
-/**
- * A component's path inside the pinned tree.
- *
- * The root document's rules, plus the one extension a bundled component may
- * have: a bundle member is Markdown the engine parses, so a `.ts` module or an
- * extensionless path names something this descriptor cannot describe.
- */
-function parseComponentPath(value: string, path: string): string {
-  const normalized = parsePathAt(value, path);
-  if (!normalized.endsWith(".md")) {
-    throw fail('expected a ".md" path', path);
-  }
-  return normalized;
-}
-
-/**
- * The exact target this descriptor names, if it names one.
- *
- * Presence is the member being written at all, not its value: a descriptor that
- * wrote `targetPath` and gave it `undefined` or `null` asked for a target and
- * failed to say which, which is not the same as asking for the whole document.
- *
- * What counts as canonical is core's own predicate, not a rule restated here.
- * Identity that two packages define separately is identity they can disagree
- * about, and this member is compared against targets the document layer
- * produced.
- */
-function parseTargetPath(members: Members): string | undefined {
-  if (!members.has("targetPath")) {
-    return undefined;
-  }
-  const path = "$.targetPath";
-  const value = members.get("targetPath");
-  if (typeof value !== "string") {
-    throw fail(`expected a string, found ${describe(value)}`, path);
-  }
-  // Deliberately says nothing about the target it read: a canonical target
-  // encodes heading text, and heading text is document content.
-  if (!isCanonicalDocumentTarget(value)) {
-    throw fail("expected one exact canonical document target", path);
-  }
-  return value;
+  return parseSourceBundleDefinition(value);
 }
 
 /**
  * The descriptor as a plain JSON value.
  *
  * An interface has no index signature, so a descriptor is not a `Json` until
- * it is written out member by member. Doing that here is also what keeps the
- * stored shape and the parsed shape one decision.
+ * it is written out member by member. Doing that in one place is also what
+ * keeps the stored shape and the parsed shape one decision.
  */
 export function definitionToJson(definition: WorkflowDefinition): Json {
-  if (isSourceBundleWorkflowDefinition(definition)) {
-    return sourceBundleDefinitionToJson(definition);
-  }
-  return {
-    version: definition.version,
-    kind: definition.kind,
-    objectFormat: definition.objectFormat,
-    objectId: definition.objectId,
-    rootDocumentPath: definition.rootDocumentPath,
-    // Written only when there is one. An untargeted definition that stored an
-    // explicit absence would parse back as a descriptor that asked for a target
-    // and failed to name it.
-    ...(definition.targetPath === undefined ? {} : { targetPath: definition.targetPath }),
-    // Same rule for the bundle: a definition closed over none writes no
-    // `components` member at all, so what a run stored before bundles existed
-    // is byte for byte what it stores now.
-    ...(definition.components === undefined
-      ? {}
-      : {
-          components: definition.components.map((component) => ({
-            name: component.name,
-            path: component.path,
-            sourceHash: component.sourceHash,
-          })),
-        }),
-  };
+  return sourceBundleDefinitionToJson(definition);
 }
 
-/**
- * The Git bundle this definition is closed over, empty when it is closed over
- * none.
- *
- * A Git entry names a blob inside the pinned tree and a source-bundle entry
- * names a retained source, so the two mappings are not one list with a
- * different member. A caller holding the union asks whichever question its
- * version has.
- */
+/** The component mapping this definition declares, empty when it declares none. */
 export function definitionComponents(
-  definition: GitWorkflowDefinitionV1,
-): readonly WorkflowComponentEntry[] {
-  return definition.components ?? [];
+  definition: WorkflowDefinition,
+): readonly SourceBundleComponent[] {
+  return sourceBundleComponents(definition);
 }
 
-/** The exact document target this definition names, whichever version it is. */
+/** The exact document target this definition names, when it names one. */
 export function definitionTargetPath(definition: WorkflowDefinition): string | undefined {
   return definition.targetPath;
-}
-
-function parseObjectFormat(value: unknown): GitWorkflowDefinitionV1["objectFormat"] {
-  if (value === "sha1" || value === "sha256") {
-    return value;
-  }
-  throw fail(`expected "sha1" or "sha256", found ${describe(value)}`, "$.objectFormat");
-}
-
-/**
- * An object id is compared, never re-derived, so its spelling is the identity.
- *
- * Uppercase hexadecimal names the same object and is a different string. One
- * spelling is admitted so two hosts that agree about the commit also agree
- * about the run.
- */
-function parseObjectId(value: string, format: GitWorkflowDefinitionV1["objectFormat"]): string {
-  return parseObjectIdAt(value, format, "$.objectId");
-}
-
-function parseObjectIdAt(
-  value: string,
-  format: GitWorkflowDefinitionV1["objectFormat"],
-  path: string,
-): string {
-  const length = OBJECT_ID_LENGTHS[format];
-  if (value.length !== length) {
-    throw fail(`expected ${length} hexadecimal digits for ${format}`, path);
-  }
-  if (!/^[0-9a-f]+$/.test(value)) {
-    throw fail("expected lowercase hexadecimal digits", path);
-  }
-  return value;
-}
-
-/**
- * A repository-relative POSIX path, already normalized.
- *
- * Storage neither normalizes nor resolves: two spellings of one path would
- * otherwise be two identities, and a path that escapes its repository would be
- * stored as identity and later handed to something that opens it.
- */
-function parseRootDocumentPath(value: string): string {
-  return parsePathAt(value, "$.rootDocumentPath");
-}
-
-function parsePathAt(value: string, path: string): string {
-  if (value === "") {
-    throw fail("expected a path", path);
-  }
-  if (value.includes("\u0000")) {
-    throw fail("expected a path without a NUL", path);
-  }
-  if (value.includes("\\")) {
-    throw fail("expected POSIX separators, found a backslash", path);
-  }
-  if (value.startsWith("/")) {
-    throw fail("expected a repository-relative path, found an absolute one", path);
-  }
-  for (const segment of value.split("/")) {
-    if (segment === "") {
-      throw fail("expected a normalized path, found an empty segment", path);
-    }
-    if (segment === "." || segment === "..") {
-      throw fail(`expected a normalized path, found a ${JSON.stringify(segment)} segment`, path);
-    }
-  }
-  return value;
 }

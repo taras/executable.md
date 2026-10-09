@@ -37,12 +37,7 @@ import type {
   RetainedWorktree,
 } from "../fork-source.ts";
 import type { StoredWorkspaceRoot } from "../workspace/manifest.ts";
-import type {
-  GitDefinitionSourceClosureV1,
-  GitDefinitionSourceComponentV1,
-  GitDefinitionSourceRootV1,
-  RetainedDefinitionSources,
-} from "../../lifecycle/source.ts";
+import type { RetainedDefinitionSources } from "../../lifecycle/source.ts";
 
 /** The boundary the lifecycle chose, as the shape every record here is about. */
 export type { XmdArtifactFrontier };
@@ -80,9 +75,6 @@ export interface XmdArtifactJournalRow {
  * down. These aliases keep the names this directory already used without
  * declaring a second copy of the shapes they name.
  */
-export type XmdArtifactDefinitionRoot = GitDefinitionSourceRootV1;
-export type XmdArtifactDefinitionComponent = GitDefinitionSourceComponentV1;
-export type XmdArtifactDefinitionClosure = GitDefinitionSourceClosureV1;
 
 /**
  * One retained Prompt event, and the provider checkpoint token taken at it.
@@ -249,44 +241,13 @@ export interface XmdArtifactWriteResult {
 /**
  * The closed set of content an artifact may hold.
  *
- * Closed rather than extensible on purpose. An unknown kind inside a container
- * that declares version 1 is a record this build cannot verify, and admitting
- * it for forward compatibility would mean returning a snapshot whose inventory
- * nobody checked. A later version declares its own set.
+ * Closed rather than extensible on purpose. An unknown kind is a record this
+ * build cannot verify, and admitting it for forward compatibility would mean
+ * returning a snapshot whose inventory nobody checked.
  */
-export type XmdArtifactContentKind =
-  | "artifact-frontier"
-  | "workflow-run"
-  | "document-execution"
-  | "fork-lineage"
-  | "journal-event"
-  | "journal-record"
-  | "workspace-root"
-  | "workspace-root-manifest"
-  | "dofs-manifest"
-  | "dofs-manifest-bytes"
-  | "dofs-blob"
-  | "dofs-blob-bytes"
-  | "workspace-repository"
-  | "workspace-worktree"
-  | "suspension-answer"
-  | "agent-session"
-  | "agent-session-portability"
-  | "agent-session-bundle-bytes"
-  | "definition-source-root"
-  | "definition-source-root-content"
-  | "definition-source-component"
-  | "definition-source-component-content";
 
-/**
- * The closed set of content a format-2 artifact may hold.
- *
- * The same records as format 1 up to the definition, and then a source bundle
- * instead of a Git closure. It admits no format-1 definition kind: one version's
- * closure is never read as the other's, and a shared superset would be an
- * inventory neither version's verifier could complete.
- */
-export type XmdArtifactContentKindV2 =
+/** The closed set of content an artifact may hold. */
+export type XmdArtifactContentKind =
   | "artifact-frontier"
   | "workflow-run"
   | "document-execution"
@@ -307,32 +268,6 @@ export type XmdArtifactContentKindV2 =
   | "agent-session-bundle-bytes"
   | "definition-source-entry"
   | "definition-source-content";
-
-/** Every declared kind, for recognition and for exhaustiveness. */
-export const XMD_ARTIFACT_CONTENT_KINDS: readonly XmdArtifactContentKind[] = Object.freeze([
-  "agent-session",
-  "agent-session-bundle-bytes",
-  "agent-session-portability",
-  "artifact-frontier",
-  "definition-source-component",
-  "definition-source-component-content",
-  "definition-source-root",
-  "definition-source-root-content",
-  "document-execution",
-  "dofs-blob",
-  "dofs-blob-bytes",
-  "dofs-manifest",
-  "dofs-manifest-bytes",
-  "fork-lineage",
-  "journal-event",
-  "journal-record",
-  "suspension-answer",
-  "workflow-run",
-  "workspace-repository",
-  "workspace-root",
-  "workspace-root-manifest",
-  "workspace-worktree",
-]);
 
 /**
  * How one entry's bytes are to be read.
@@ -363,7 +298,7 @@ export interface XmdArtifactManifestEntryV1 {
  * mean is the format's question rather than the row's.
  */
 export interface XmdArtifactManifestV1 {
-  readonly version: 1 | 2;
+  readonly version: 1;
   readonly entries: readonly XmdArtifactManifestEntryV1[];
 }
 
@@ -375,8 +310,8 @@ export interface XmdArtifactContentEntry {
   readonly content: Uint8Array;
 }
 
-/** Every kind format 2 declares, for recognition and for exhaustiveness. */
-export const XMD_ARTIFACT_CONTENT_KINDS_V2: readonly XmdArtifactContentKindV2[] = Object.freeze([
+/** Every declared kind, for recognition and for exhaustiveness. */
+export const XMD_ARTIFACT_CONTENT_KINDS: readonly XmdArtifactContentKind[] = Object.freeze([
   "agent-session",
   "agent-session-bundle-bytes",
   "agent-session-portability",

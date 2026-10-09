@@ -9,28 +9,17 @@
  * process can find it by its public id and continue from durable data rather
  * than from whoever happened to be holding the journal.
  *
- * A definition is one of two things. Version 1 is a Git object and the path of
- * the root document inside it, run from one resolved base; its Markdown lives
- * in a repository, and a trusted host supplies the reader that fetches it.
- * Version 2 is a **source bundle**: the exact bytes themselves, addressed by
- * portable logical paths and retained with the run. A source-bundle run needs
- * no repository to start, resume, replay or export — which is what lets a file
- * outside Git, an untracked file, and a file edited since its last commit each
- * be one immutable definition the moment it is retained.
+ * A definition is the exact bytes themselves, addressed by portable logical
+ * paths and retained with the run. That is what lets a file outside Git, an
+ * untracked file, and a file edited since its last commit each be one
+ * immutable definition the moment it is retained — and it is why nothing here
+ * reaches a repository for source. Starting, resuming, forking and exporting
+ * all read the run's own store, so there is no source capability for a host to
+ * supply and no definition whose bytes live anywhere but in the run.
  *
- * Starting a version-1 run means resolving a base, which is a Git capability
- * this package does not own: `workflowInstallation({ base })` is exported by
- * the `@executablemd/git` package instead. No module here names it in an
- * import, which is the boundary rather than an accident of layout.
- *
- * What stays here is the retained half. `retainedWorkflowInstallation()`
- * resolves no base and names no Git feature — but that is a statement about
- * this package's imports, not about what a run needs. A version-1 definition
- * retains no Markdown, so resuming, forking or exporting one still obtains its
- * bytes through the host-supplied legacy source reader, which may well read a
- * repository. Workflow authenticates the closure that reader returns against
- * the retained descriptor, recomputing every blob identity from the bytes
- * themselves. Only a source-bundle run needs no repository at any point.
+ * `retainedWorkflowInstallation()` resolves no base and names no Git feature,
+ * and that is now a statement about what a run needs rather than only about
+ * this package's imports.
  *
  * ```ts
  * import { retainedWorkflowInstallation } from "@executablemd/workflow";
@@ -69,18 +58,15 @@ export { getWorkflowRun, retainedWorkflowInstallation } from "./src/run.ts";
 export { createWorkflowRunInstallation } from "./src/run.ts";
 export type { WorkflowRunPreparation } from "./src/run.ts";
 export { workflowBundleInstallation, WorkflowBundleHistoryError } from "./src/bundle.ts";
-export type { WorkflowRun } from "./src/run.ts";
-export { isGitWorkflowRun, workflowRunValue } from "./src/journal.ts";
+export { workflowRunValue } from "./src/journal.ts";
 /**
- * The version-1 description and the two refusals a Git run is held to.
+ * The retained run value, and the refusal a run that is not it travels in.
  *
- * Published because `@executablemd/git` states what a Git-defined run is, and
- * this package still owns what that statement is compared against. The
- * description names the exact retained identity released builds wrote; the two
- * refusals are the exact words a disagreement travels in.
+ * The description names the exact retained identity a run writes; the refusal
+ * is the exact words a disagreement with it travels in.
  */
-export { baseMismatch, describeGitWorkflowRun, retainedRunMismatch } from "./src/journal.ts";
-export type { GitWorkflowRunV1, SourceBundleWorkflowRunV2 } from "./src/journal.ts";
+export { describeWorkflowRun, retainedRunMismatch } from "./src/journal.ts";
+export type { WorkflowRun } from "./src/journal.ts";
 export { useWorkflowServiceDenial, WorkflowServiceDeniedError } from "./src/service-denial.ts";
 
 export { WorkspaceCoordination, WorkspaceCoordinationProviderError } from "./src/workspace/api.ts";
@@ -96,22 +82,8 @@ export type {
   WorkflowRunTransaction,
 } from "./src/storage/api.ts";
 
-export { isGitWorkflowRunCreation } from "./src/lifecycle/execution.ts";
-export type {
-  GitWorkflowRunCreationV1,
-  SourceBundleWorkflowRunCreationV2,
-  WorkflowRunCreation,
-} from "./src/lifecycle/execution.ts";
-export type {
-  GitDefinitionSourceClosureV1,
-  GitDefinitionSourceComponentV1,
-  GitDefinitionSourceRootV1,
-  GitRetainedDefinitionSourcesV1,
-  LegacyWorkflowSourceReader,
-  RetainedDefinitionSources,
-  SourceBundleRetainedDefinitionSourcesV2,
-  SourceBundleRetainedSourceV2,
-} from "./src/lifecycle/source.ts";
+export type { WorkflowRunCreation } from "./src/lifecycle/execution.ts";
+export type { RetainedDefinitionSources, RetainedSource } from "./src/lifecycle/source.ts";
 
 export { WorkflowLifecycle, WorkflowLifecycleProviderError } from "./src/lifecycle/api.ts";
 export type {
@@ -159,14 +131,7 @@ export {
   definitionComponents,
   definitionTargetPath,
   definitionToJson,
-  isGitWorkflowDefinition,
-  isSourceBundleWorkflowDefinition,
   parseWorkflowDefinition,
-} from "./src/storage/definition.ts";
-export type {
-  GitWorkflowDefinitionV1,
-  WorkflowComponentEntry,
-  WorkflowDefinition,
 } from "./src/storage/definition.ts";
 
 export {
@@ -180,24 +145,19 @@ export {
   verifySourceBundleSnapshot,
 } from "./src/storage/source-bundle.ts";
 export type {
-  SourceBundleComponentV2,
-  SourceBundleEntryV2,
-  SourceBundleIdentityV2,
-  SourceBundleSnapshotEntryV2,
-  SourceBundleWorkflowDefinitionV2,
+  SourceBundleComponent,
+  SourceBundleEntry,
+  SourceBundleIdentity,
+  SourceBundleSnapshotEntry,
+  WorkflowDefinition,
 } from "./src/storage/source-bundle.ts";
 
 export { parseJsonValue } from "./src/storage/members.ts";
 export { conflictingFields } from "./src/storage/compatibility.ts";
-export type {
-  GitWorkflowRunComparisonV1,
-  SourceBundleWorkflowRunComparisonV2,
-  WorkflowRunComparison,
-} from "./src/storage/compatibility.ts";
+export type { WorkflowRunComparison } from "./src/storage/compatibility.ts";
 
 export {
   canonicalJson,
-  isGitWorkflowRunRecord,
   parseStopReasonInput,
   parseWorkflowRunStatus,
   parseWorkflowStopReason,
@@ -205,8 +165,6 @@ export {
 } from "./src/storage/record.ts";
 export type {
   DefinitionRetrieval,
-  GitWorkflowRunRecordV1,
-  SourceBundleWorkflowRunRecordV2,
   DocumentExecutionCompletion,
   DocumentExecutionRecord,
   StoredRunState,
@@ -216,9 +174,6 @@ export type {
 } from "./src/storage/record.ts";
 
 export {
-  LegacyWorkflowSourceMismatchError,
-  LegacyWorkflowSourceReaderUnavailableError,
-  LegacyWorkflowSourceUnavailableError,
   WorkflowDatabaseClosedError,
   WorkflowDatabaseCorruptError,
   WorkflowDatabaseFormatError,
@@ -226,7 +181,6 @@ export {
   WorkflowDefinitionError,
   WorkflowDefinitionSourceMissingError,
   WorkflowDocumentExecutionError,
-  WorkflowIncompleteVersionOneError,
   WorkflowInspectionRecoveryError,
   WorkflowRecordMalformedError,
   WorkflowRequestError,

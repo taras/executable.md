@@ -452,7 +452,7 @@ export function readRunRow(database: DatabaseSync, path: string): WorkflowRunRec
   if (row === undefined) {
     throw new WorkflowDatabaseCorruptError(path, "it holds no workflow run");
   }
-  return readRunRecord(row, liveSchemaVersion(database, path));
+  return readRunRecord(row);
 }
 
 function readRetrievalRow(database: DatabaseSync): DefinitionRetrieval | undefined {

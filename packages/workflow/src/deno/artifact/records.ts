@@ -46,7 +46,6 @@ import {
   definitionToJson,
   parseWorkflowDefinition,
 } from "../../storage/definition.ts";
-import type { WorkflowDefinition } from "../../storage/definition.ts";
 import { XmdArtifactInventoryError, XmdArtifactRecordError } from "../../storage/errors.ts";
 import {
   describe,
@@ -63,7 +62,6 @@ import {
 } from "../../storage/record.ts";
 import type {
   DocumentExecutionRecord,
-  WorkflowRunRecord,
   WorkflowRunStatus,
   WorkflowStopReason,
 } from "../../storage/record.ts";
@@ -95,9 +93,6 @@ import type {
   XmdArtifactAgentPortability,
   XmdArtifactContentEntry,
   XmdArtifactContents,
-  XmdArtifactDefinitionClosure,
-  XmdArtifactDefinitionComponent,
-  XmdArtifactDefinitionRoot,
   XmdArtifactForkLineage,
   XmdArtifactFrontier,
   XmdArtifactJournalRow,
@@ -106,14 +101,10 @@ import type {
 import type { RetainedDefinitionSources } from "../../lifecycle/source.ts";
 import {
   sourceBundleHash,
-  type SourceBundleWorkflowDefinitionV2,
+  type WorkflowDefinition,
   sourceContentHash,
 } from "../../storage/source-bundle.ts";
-import {
-  type GitWorkflowRunRecordV1,
-  isGitWorkflowRunRecord,
-  type SourceBundleWorkflowRunRecordV2,
-} from "../../storage/record.ts";
+import { type WorkflowRunRecord } from "../../storage/record.ts";
 
 const encoder = new TextEncoder();
 const decoder = new TextDecoder("utf-8", { fatal: true });
@@ -232,7 +223,6 @@ export function encodeXmdArtifactInventory(
     json("workflow-run", null, {
       runId: contents.run.runId,
       definition: definitionToJson(contents.run.definition),
-      ...(isGitWorkflowRunRecord(contents.run) ? { base: contents.run.base } : {}),
       props: contents.run.props,
       status: contents.run.status,
       ...(contents.run.stopReason === undefined
@@ -377,32 +367,6 @@ export function encodeXmdArtifactInventory(
     for (const bundle of evidence.bundles) {
       entries.push(raw(AGENT_BUNDLE_BYTES, bundle.sessionKey, bundle.bytes));
     }
-  }
-
-  if (contents.definition.definitionVersion === 1) {
-    const root = contents.definition.closure.root;
-    entries.push(
-      json("definition-source-root", null, {
-        objectFormat: root.objectFormat,
-        pinnedCommit: root.pinnedCommit,
-        rootDocumentPath: root.rootDocumentPath,
-        ...(root.targetPath === undefined ? {} : { targetPath: root.targetPath }),
-        blobId: root.blobId,
-      }),
-    );
-    entries.push(utf8("definition-source-root-content", null, root.content));
-
-    for (const component of contents.definition.closure.components) {
-      entries.push(
-        json("definition-source-component", component.name, {
-          name: component.name,
-          path: component.path,
-          blobId: component.blobId,
-        }),
-      );
-      entries.push(utf8("definition-source-component-content", component.name, component.content));
-    }
-    return entries;
   }
 
   // One entry and one content value per logical source path, both keyed by the
@@ -756,13 +720,13 @@ function decodeRun(inventory: Inventory, path: string): WorkflowRunRecord {
     updatedAt: instant(parsed, "updatedAt", path, kind),
   };
 
-  if (retained.kind === "source-bundle") {
+  {
     // A base here would be a repository state this run never had, so a
     // version-2 entry that carries one does not describe a version-2 run.
     if (parsed.get("base") !== undefined) {
       throw new XmdArtifactRecordError(path, kind, "a source-bundle run retains no base");
     }
-    const record: SourceBundleWorkflowRunRecordV2 = {
+    const record: WorkflowRunRecord = {
       runId: shared.runId,
       definition: retained,
       props: shared.props,
@@ -772,17 +736,6 @@ function decodeRun(inventory: Inventory, path: string): WorkflowRunRecord {
     };
     return Object.freeze(reason === undefined ? record : { ...record, stopReason: reason });
   }
-
-  const record: GitWorkflowRunRecordV1 = {
-    runId: shared.runId,
-    definition: retained,
-    base: required(parsed, "base", path, kind),
-    props: shared.props,
-    status: shared.status,
-    createdAt: shared.createdAt,
-    updatedAt: shared.updatedAt,
-  };
-  return Object.freeze(reason === undefined ? record : { ...record, stopReason: reason });
 }
 
 function decodeExecutions(inventory: Inventory, path: string): readonly DocumentExecutionRecord[] {
@@ -1256,30 +1209,22 @@ function decodeAgentSessions(inventory: Inventory, path: string): readonly Agent
 }
 
 /**
- * The source closure this artifact carries, in the form its run's version has.
+ * The source closure this artifact carries.
  *
  * Driven by the definition already decoded rather than by which entries happen
- * to be present: a format-2 artifact admits no Git closure and a format-1 one
- * admits no source bundle, so the version decides which kinds are claimed and
- * `requireNothingLeftOver` refuses whatever the other version would have used.
+ * to be present, so the descriptor decides which kinds are claimed and
+ * `requireNothingLeftOver` refuses anything else the file carried.
  */
 function decodeDefinitionSources(
   inventory: Inventory,
   path: string,
   run: WorkflowRunRecord,
 ): RetainedDefinitionSources {
-  if (run.definition.kind === "source-bundle") {
-    return decodeSourceBundle(inventory, path, run.definition);
-  }
-  return Object.freeze({
-    definitionVersion: 1,
-    definition: run.definition,
-    closure: decodeDefinitionClosure(inventory, path),
-  });
+  return decodeSourceBundle(inventory, path, run.definition);
 }
 
 /**
- * The retained bytes a format-2 artifact carries, one pair per logical path.
+ * The retained bytes this artifact carries, one pair per logical path.
  *
  * Each pair's natural identity is the canonical JSON string of its path, and
  * both halves are claimed under it: an entry whose own `path` is not the
@@ -1293,7 +1238,7 @@ function decodeDefinitionSources(
 function decodeSourceBundle(
   inventory: Inventory,
   path: string,
-  definition: SourceBundleWorkflowDefinitionV2,
+  definition: WorkflowDefinition,
 ): RetainedDefinitionSources {
   const kind = "definition-source-entry";
   const retained = new Map(definition.sources.map((source) => [source.path, source]));
@@ -1341,57 +1286,7 @@ function decodeSourceBundle(
       bytes: bytesOf(inventory.take("definition-source-content", identity), path),
     });
   });
-  return Object.freeze({ definitionVersion: 2, definition, sources: Object.freeze(sources) });
-}
-
-function decodeDefinitionClosure(inventory: Inventory, path: string): XmdArtifactDefinitionClosure {
-  const kind = "definition-source-root";
-  const parsed = members(
-    structured(inventory.take(kind, null), path),
-    ["objectFormat", "pinnedCommit", "rootDocumentPath", "targetPath", "blobId"],
-    path,
-    kind,
-  );
-  const objectFormat = required(parsed, "objectFormat", path, kind);
-  if (objectFormat !== "sha1" && objectFormat !== "sha256") {
-    throw new XmdArtifactRecordError(path, kind, "its object format names no Git format");
-  }
-  const targetPath = optional(parsed, "targetPath", path, kind);
-  const root: XmdArtifactDefinitionRoot = Object.freeze({
-    objectFormat,
-    pinnedCommit: required(parsed, "pinnedCommit", path, kind),
-    rootDocumentPath: required(parsed, "rootDocumentPath", path, kind),
-    ...(targetPath === undefined ? {} : { targetPath }),
-    blobId: required(parsed, "blobId", path, kind),
-    content: textOf(inventory.take("definition-source-root-content", null), path),
-  });
-
-  const componentKind = "definition-source-component";
-  const components: XmdArtifactDefinitionComponent[] = inventory
-    .identities(componentKind)
-    .map((identity) => {
-      const entry = members(
-        structured(inventory.take(componentKind, identity), path),
-        ["name", "path", "blobId"],
-        path,
-        componentKind,
-      );
-      const name = required(entry, "name", path, componentKind);
-      if (canonicalJsonText(name) !== canonicalJsonText(identity)) {
-        throw new XmdArtifactInventoryError(
-          path,
-          "a definition component is stored under an identity it does not carry",
-        );
-      }
-      return Object.freeze({
-        name,
-        path: required(entry, "path", path, componentKind),
-        blobId: required(entry, "blobId", path, componentKind),
-        content: textOf(inventory.take("definition-source-component-content", identity), path),
-      });
-    });
-
-  return Object.freeze({ root, components: Object.freeze(components) });
+  return Object.freeze({ definition, sources: Object.freeze(sources) });
 }
 
 function inventoryFailure(path: string): Reject {
@@ -1884,31 +1779,6 @@ function verifyAgentSessions(contents: XmdArtifactContents, reject: Reject): voi
 }
 
 /**
- * The closure, held to the definition the run retains and to its own bytes.
- *
- * Two separate claims. The descriptor members must be the ones the workflow
- * definition already pins, or the embedded Markdown belongs to some other
- * commit; and each blob identity must be the Git object id of the bytes stored
- * beside it, or the closure is not the source that definition names.
- */
-/**
- * The source closure, held to the definition the run retains, by its version.
- *
- * Version 1 checks Git identities; version 2 recomputes every source hash from
- * the retained bytes and then the bundle hash from the manifest those hashes
- * make. Neither version's verifier is asked about the other's closure: the two
- * describe different things, and a shared check would be one that could
- * complete without having proved either.
- */
-function* verifyDefinitionSources(contents: XmdArtifactContents, reject: Reject): Operation<void> {
-  if (contents.definition.definitionVersion === 2) {
-    yield* verifySourceBundleClosure(contents, reject);
-    return;
-  }
-  verifyDefinitionClosure(contents, reject);
-}
-
-/**
  * Exactly one entry and content pair per descriptor path, and nothing else.
  *
  * The lengths the manifest and the descriptor declare must both be the bytes'
@@ -1917,19 +1787,8 @@ function* verifyDefinitionSources(contents: XmdArtifactContents, reject: Reject)
  * whose embedded content drifted from its descriptor is refused before any
  * status or history is returned.
  */
-function* verifySourceBundleClosure(
-  contents: XmdArtifactContents,
-  reject: Reject,
-): Operation<void> {
-  if (contents.definition.definitionVersion !== 2) {
-    reject("its definition source closure is not the source bundle the run retains");
-    return;
-  }
+function* verifyDefinitionSources(contents: XmdArtifactContents, reject: Reject): Operation<void> {
   const { definition, sources } = contents.definition;
-  if (contents.run.definition.kind !== "source-bundle") {
-    reject("its definition source closure is not the source bundle the run retains");
-    return;
-  }
   if (contents.run.definition.bundleHash !== definition.bundleHash) {
     reject("its definition source closure describes a bundle other than the run's");
     return;
@@ -1959,45 +1818,6 @@ function* verifySourceBundleClosure(
   }
   if ((yield* sourceBundleHash(definition)) !== definition.bundleHash) {
     reject("its bundle hash is not the one its own manifest produces");
-  }
-}
-
-function verifyDefinitionClosure(contents: XmdArtifactContents, reject: Reject): void {
-  const definition = contents.run.definition;
-  if (definition.kind === "source-bundle" || contents.definition.definitionVersion === 2) {
-    reject("its definition source closure is not the Git closure the run retains");
-    return;
-  }
-  const root = contents.definition.closure.root;
-  if (
-    root.objectFormat !== definition.objectFormat ||
-    root.pinnedCommit !== definition.objectId ||
-    root.rootDocumentPath !== definition.rootDocumentPath ||
-    root.targetPath !== definition.targetPath
-  ) {
-    reject("its definition source closure does not describe the definition the run retains");
-  }
-  if (gitBlobIdentity(root.content, root.objectFormat) !== root.blobId) {
-    reject("the root document bytes do not hash to the identity the closure declares");
-  }
-
-  const declared = definitionComponents(definition);
-  const carried = contents.definition.closure.components;
-  if (declared.length !== carried.length) {
-    reject("its definition source closure does not carry every declared component");
-  }
-  const byName = new Map(carried.map((component) => [component.name, component]));
-  for (const component of declared) {
-    const source = byName.get(component.name);
-    if (source === undefined || source.path !== component.path) {
-      reject("its definition source closure does not carry every declared component");
-    }
-    if (source.blobId !== component.sourceHash) {
-      reject("a carried component names an object other than the one the definition declares");
-    }
-    if (gitBlobIdentity(source.content, root.objectFormat) !== source.blobId) {
-      reject("a component's bytes do not hash to the identity the closure declares");
-    }
   }
 }
 

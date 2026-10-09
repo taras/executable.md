@@ -10,15 +10,17 @@ import { scoped } from "effection";
 import type { Operation } from "effection";
 import { useTempDirectory } from "@executablemd/test-support/temp";
 import {
-  isGitWorkflowDefinition,
   parseWorkflowDefinition,
+  sourceBundleHash,
+  sourceContentHash,
   WorkflowRunStorage,
 } from "@executablemd/workflow";
 import type { CreateWorkflowRunRequest, WorkflowRunDatabase } from "@executablemd/workflow";
 import { useWorkflowRunStorage } from "@executablemd/workflow/deno";
 
-/** A commit id of the right shape; nothing fetches it. */
-const OBJECT_ID = "1".repeat(40);
+/** The logical entrypoint this run retains, and the bytes behind it. */
+const ENTRYPOINT = "observation-loop.md";
+const ENTRYPOINT_SOURCE = "# Observation loop\n";
 
 export function useStorageRoot(): Operation<string> {
   return useTempDirectory("xmd-cli-workflow-runs-");
@@ -31,28 +33,37 @@ export function withStorage<T>(root: string, body: () => Operation<T>): Operatio
   });
 }
 
+/**
+ * One run of one retained document, created the way a host creates one.
+ *
+ * The descriptor is derived from the bytes rather than written beside them, so
+ * the bundle hash this retains is the hash those bytes really produce — which
+ * is what the create request verifies before it writes anything.
+ */
 export function* createRun(
   overrides: Partial<CreateWorkflowRunRequest> = {},
 ): Operation<WorkflowRunDatabase> {
+  const bytes = new TextEncoder().encode(ENTRYPOINT_SOURCE);
+  const sources = [
+    {
+      path: ENTRYPOINT,
+      sourceHash: yield* sourceContentHash(bytes),
+      byteLength: bytes.byteLength,
+    },
+  ];
   const parsed = parseWorkflowDefinition({
-    version: 1,
-    kind: "git",
-    objectFormat: "sha1",
-    objectId: OBJECT_ID,
-    rootDocumentPath: "workflows/observation-loop.md",
+    hashAlgorithm: "sha256",
+    bundleHash: yield* sourceBundleHash({ entrypoint: ENTRYPOINT, sources }),
+    entrypoint: ENTRYPOINT,
+    sources,
   });
   if (!parsed.ok) {
     throw parsed.error;
   }
-  // The literal above is a version-1 definition, so the union the parser returns
-  // narrows back to one here rather than being asserted into one.
-  if (!isGitWorkflowDefinition(parsed.value)) {
-    throw new Error(`expected a Git definition, got ${parsed.value.kind}`);
-  }
   const created = yield* WorkflowRunStorage.operations.create({
     runId: "observation-run",
     definition: parsed.value,
-    base: "main",
+    sourceSnapshot: [{ path: ENTRYPOINT, bytes }],
     props: {},
     ...overrides,
   });

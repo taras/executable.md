@@ -121,12 +121,6 @@ export const props: PropsSchema = {
         "The program to evaluate, for the self-closing form. Written instead of content, " +
         "never beside it.",
     },
-    source: {
-      type: "string",
-      description:
-        "The earlier spelling of `text`, accepted only by a host that admitted it. " +
-        "New documents write `text`.",
-    },
     allow: {
       type: "array",
       minItems: 1,
@@ -143,10 +137,6 @@ export const props: PropsSchema = {
 const UNISSUED_REFUSAL =
   "<Evaluate> is invoked by canonical core; this is not an invocation the engine issued.";
 
-const BOTH_FORMS =
-  "<Evaluate> takes the program either as `text` or as its content, and never as both: an " +
-  "element that states it twice leaves which program ran a question of precedence.";
-
 const NO_PROGRAM =
   "<Evaluate text={…} /> requires the program as a string. An element that states no program " +
   "and renders no content has nothing to evaluate.";
@@ -154,10 +144,6 @@ const NO_PROGRAM =
 const PAIRED_TEXT =
   "<Evaluate> renders its content to produce the program, so a paired element does not also " +
   "carry `text`.";
-
-const NO_ALIAS =
-  "<Evaluate source={…} /> is the earlier spelling, and this host did not admit it. Write the " +
-  "program as `text`.";
 
 const ALLOW_SHAPE = "<Evaluate> takes `allow` as a non-empty array of effect classes.";
 
@@ -219,7 +205,7 @@ function evaluate(claim: IdentityClaimant): ProtectedBody {
       throw new ComponentInvocationError(NO_PROFILE);
     }
     const allow = requestedClasses(elementProps.allow) ?? ["read"];
-    const stated = statedText(elementProps, profile, form);
+    const stated = statedText(elementProps, form);
     const entries = selectedTables(profile, allow);
 
     const id = yield* claim(invocation);
@@ -280,18 +266,9 @@ function evaluate(claim: IdentityClaimant): ProtectedBody {
  */
 function statedText(
   elementProps: Record<string, Json>,
-  profile: EvaluationProfile,
   form: "self-closing" | "paired",
 ): string | undefined {
-  const text = elementProps.text;
-  const alias = elementProps.source;
-  if (alias !== undefined && !profile.deprecatedSourceAlias) {
-    throw new ComponentInvocationError(NO_ALIAS);
-  }
-  if (text !== undefined && alias !== undefined) {
-    throw new ComponentInvocationError(BOTH_FORMS);
-  }
-  const stated = text ?? alias;
+  const stated = elementProps.text;
   if (form === "paired") {
     if (stated !== undefined) {
       throw new ComponentInvocationError(PAIRED_TEXT);

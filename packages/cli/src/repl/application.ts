@@ -685,7 +685,7 @@ export function withoutAbsentEntry(state: ReplState, model: ReplModel): ReplStat
 export function initialRoute(execution: string): ReplRoute {
   return Object.freeze({
     execution,
-    surface: "repl",
+    surface: "entries",
     scopes: Object.freeze([]),
     drawers: Object.freeze([]),
     at: undefined,
@@ -944,7 +944,7 @@ export function reduceRepl(
         model,
         {
           ...state.route,
-          surface: "repl",
+          surface: "entries",
           scopes: Object.freeze([...action.scopes]),
           // A drawer named a thing inside the scope that was open. Selecting a
           // different scope cannot keep it.
@@ -2287,7 +2287,7 @@ function described(view: ReplView, context: ReplPresentationContext): DescribedS
   const narrow = profileFor(view.size) === "narrow";
   const routed = state.route.surface;
   const showSessions = !narrow || routed === "sessions";
-  const showEntry = !narrow || routed === "repl";
+  const showEntry = !narrow || routed === "entries";
 
   const turns = chronology(model, live);
   // Which surface to be on belongs to neither surface. A narrow frame mounts one
@@ -2305,9 +2305,9 @@ function described(view: ReplView, context: ReplPresentationContext): DescribedS
   );
   const toEntries = row(
     "entries:heading",
-    `${selected(routed === "repl")}Entries`,
-    { select: "surface", surface: "repl" },
-    styleOf("pane-heading", { selected: routed === "repl" }),
+    `${selected(routed === "entries")}Entries`,
+    { select: "surface", surface: "entries" },
+    styleOf("pane-heading", { selected: routed === "entries" }),
     { here: view.focused },
   );
   items.push(toSessions);

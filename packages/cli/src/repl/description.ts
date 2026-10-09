@@ -101,9 +101,14 @@ export function runText(runs: readonly ReplTokenRun[]): string {
  * The named keys this composition layer understands.
  *
  * Named because each one means something structural — submit, dismiss, move
- * focus, erase — as opposed to text, which means only itself.
+ * focus, erase, interrupt — as opposed to text, which means only itself.
+ *
+ * `Interrupt` is the one named key no mounted node claims: ending the command is
+ * a lifecycle outcome its owner decides, so the program answers this key where
+ * it answers end of input, rather than a row answering it for the screen that
+ * happens to be up.
  */
-export type ReplKey = "Enter" | "Escape" | "Tab" | "Backtab" | "Backspace";
+export type ReplKey = "Enter" | "Escape" | "Tab" | "Backtab" | "Backspace" | "Interrupt";
 
 /**
  * One normalized event, as a host hands it over.

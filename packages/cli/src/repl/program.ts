@@ -310,8 +310,15 @@ function* refuse(state: ReplState, reason: string): Operation<Result<ReplOutcome
         return;
       }
       // Escape as well, because the one screen with no control placed on it — a
-      // window too small to draw in — offers this and nothing else.
-      if (next.value.event.kind === "key" && next.value.event.key === "Escape") {
+      // window too small to draw in — offers this and nothing else. Control-C
+      // leaves from here for the same reason it leaves anywhere: this is still a
+      // running command, and the key is answered by whoever owns the ending
+      // rather than by a control that may not have been placed. The outcome is
+      // unchanged, so leaving a refusal this way is still a refusal.
+      if (
+        next.value.event.kind === "key" &&
+        (next.value.event.key === "Escape" || next.value.event.key === "Interrupt")
+      ) {
         return;
       }
       // Drawn again, because Tab moved focus and a marker nobody redrew is a
@@ -540,6 +547,16 @@ function* drive(
       /** Whether the person asked to leave, as opposed to input having ended. */
       let departing = false;
       for (const wake of taken) {
+        // Leaving was decided earlier in this batch, and everything after it is
+        // input that arrived before the decision. A wake reader hands over
+        // everything the terminal had, so a submission typed ahead of the
+        // interrupt is in the same batch as it — and acting on one would start an
+        // entry, answer a question or settle a permission on behalf of somebody
+        // who has already asked to stop. The decision is enforced here because
+        // this is the only place that sees the rest of the batch.
+        if (departing) {
+          break;
+        }
         if (wake.kind === "session") {
           model = current.model;
         } else if (wake.event.kind === "eof") {
@@ -560,6 +577,14 @@ function* drive(
         } else if (wake.event.kind === "input") {
           const delivered = wake.event.event;
           if (delivered === undefined) {
+            continue;
+          }
+          // Control-C, from wherever it was pressed. Taken here rather than
+          // through the tree because no node claims it: ending is this owner's
+          // outcome, and a key answered by whichever row happened to have focus
+          // would stop meaning the same thing from one screen to the next.
+          if (delivered.kind === "key" && delivered.key === "Interrupt") {
+            departing = true;
             continue;
           }
           // A window too small to draw in shows a refusal and places no cell, so

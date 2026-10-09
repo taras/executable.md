@@ -1907,7 +1907,7 @@ describe("REPL entries: the draft, the gate and the position", () => {
           // selection, the surface and the position are all untouched.
           expect(historical.state.route.draft).toBe(DRAFT);
           expect(historical.state.route.at).toBe(marker);
-          expect(historical.state.route.surface).toBe("repl");
+          expect(historical.state.route.surface).toBe("entries");
           expect(started(yield* holder.stream.readAll())).toBe(1);
         } finally {
           release.open();
@@ -1990,7 +1990,7 @@ describe("REPL entries: the draft, the gate and the position", () => {
     // Everything else stands.
     expect(cleared.draft).toBe("still typing");
     expect(cleared.route.draft).toBe("still typing");
-    expect(cleared.route.surface).toBe("repl");
+    expect(cleared.route.surface).toBe("entries");
     expect(cleared.route.at).toBe(before);
     expect(cleared.route.inspect).toBe(true);
     expect(cleared.route.session).toBe(standing.route.session);
@@ -2115,7 +2115,7 @@ describe("REPL entries: the catalog a person reads and reaches", () => {
       });
       expect(yield* pointed(tree, frame, "entries:heading")).toEqual({
         kind: "select-surface",
-        surface: "repl",
+        surface: "entries",
       });
     }
   });
@@ -2632,8 +2632,8 @@ describe("REPL entries: going to Sessions keeps the entry you came from", () => 
     expect(onSessions.selection.entry?.key).toBe("entry-2");
 
     // And coming back lands on the entry that was left, rather than on nothing.
-    const back = yield* acted(sessions, { kind: "select-surface", surface: "repl" }, model);
-    expect(back.route.surface).toBe("repl");
+    const back = yield* acted(sessions, { kind: "select-surface", surface: "entries" }, model);
+    expect(back.route.surface).toBe("entries");
     expect(back.route.scopes).toEqual(["entry-2"]);
     expect(reading(back, model, NOTHING_LIVE, WIDE).selection.entry?.key).toBe("entry-2");
     expect(back.draft).toBe("next");

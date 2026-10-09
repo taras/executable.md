@@ -152,7 +152,7 @@ function activation(input: ReplViewData): ReplAction | undefined {
   const select = named["select"];
   if (select === "surface") {
     const surface = named["surface"];
-    return surface === "repl" || surface === "sessions"
+    return surface === "entries" || surface === "sessions"
       ? { kind: "select-surface", surface }
       : undefined;
   }
@@ -372,7 +372,7 @@ export const REFUSAL: ReplComponent<ReplAction> = component<ReplAction>({
       if (event.kind !== "pointer" && event.key !== "Enter") {
         return undefined;
       }
-      return back === "live" ? { kind: "go-live" } : { kind: "select-surface", surface: "repl" };
+      return back === "live" ? { kind: "go-live" } : { kind: "select-surface", surface: "entries" };
     });
   },
 });

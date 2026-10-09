@@ -60,7 +60,7 @@ anything: a paired `<File>` and a lexical `<Dir>`, chosen before this document
 existed. A proposal naming a Git push, an issue, a command or a network read
 refuses whole, and nothing it asked for happens.
 
-<Evaluate source={proposal.source} allow={["write"]} />
+<Evaluate text={proposal.source} allow={["write"]} />
 
 The admitted write went through the ordinary file provider, into the Workspace
 this run owns, so an ordinary read finds it there:

@@ -37,7 +37,7 @@
 import process from "node:process";
 import { collect, execute, inlineSource } from "@executablemd/core";
 import { ensure, main, type Operation, scoped, suspend } from "effection";
-import { isGitWorkflowRunRecord, WorkflowRunStorage } from "@executablemd/workflow";
+import { WorkflowRunStorage } from "@executablemd/workflow";
 import { useWorkflowRunStorage, workflowRunPath } from "@executablemd/workflow/deno";
 import { createWorkflowRunConnections } from "../../../workflow/src/deno/connections.ts";
 import { openWorkflowRunDatabase, readRunRow } from "../../../workflow/src/deno/database.ts";
@@ -235,9 +235,6 @@ function* pushCrash(
   // installation reads a base and a pinned commit. A version-2 record has
   // neither, and a synthetic one would name a repository state no run had.
   const record = database.record;
-  if (!isGitWorkflowRunRecord(record)) {
-    throw new Error(`expected a Git run record, got ${record.definition.kind}`);
-  }
 
   // The bundled Plugin, installed where a command installs it: above the
   // attachment, which owns this run's providers rather than its names.
@@ -251,8 +248,7 @@ function* pushCrash(
           [
             retainedWorkflowInstallation({
               runId: record.runId,
-              base: record.base,
-              pinnedCommit: record.definition.objectId,
+              bundleHash: record.definition.bundleHash,
             }),
           ],
         ),

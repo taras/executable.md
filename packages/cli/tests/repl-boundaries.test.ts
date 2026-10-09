@@ -504,13 +504,13 @@ describe("REPL documentation: what it says is what the code does", () => {
 
   it("D1: the spec's route grammar is the one the codec implements", function* () {
     const spec = yield* read(join(CLI, "..", "..", "specs", "repl-spec.md"));
-    const written = /xmd:\/\/repl\/<execution>\/repl/;
+    const written = /xmd:\/\/repl\/<execution>\/entries/;
     expect(written.test(spec)).toBe(true);
 
     // The same shape, through the real codec.
     const encoded = encodeLocation({
       execution: "kf39sla2",
-      surface: "repl",
+      surface: "entries",
       scopes: [],
       drawers: [],
       at: undefined,
@@ -518,7 +518,7 @@ describe("REPL documentation: what it says is what the code does", () => {
       draft: undefined,
       session: undefined,
     });
-    expect(encoded).toBe("xmd://repl/kf39sla2/repl");
+    expect(encoded).toBe("xmd://repl/kf39sla2/entries");
     const decoded = decodeLocation(encoded);
     expect(decoded.ok).toBe(true);
   });
@@ -539,7 +539,7 @@ describe("REPL documentation: what it says is what the code does", () => {
     // The spec says a location names a selected entry on either surface, and
     // the codec spells exactly that.
     expect(spec).toContain("a location names a selected entry on either surface");
-    const surfaces: readonly ReplSurface[] = ["repl", "sessions"];
+    const surfaces: readonly ReplSurface[] = ["entries", "sessions"];
     for (const surface of surfaces) {
       const location = encodeLocation({
         execution: "kf39sla2",
@@ -576,7 +576,7 @@ describe("REPL documentation: what it says is what the code does", () => {
     expect(
       encodeLocation({
         execution: "kf39sla2",
-        surface: "repl",
+        surface: "entries",
         scopes: [],
         drawers: [],
         at: undefined,
@@ -584,7 +584,7 @@ describe("REPL documentation: what it says is what the code does", () => {
         draft: undefined,
         session: undefined,
       }),
-    ).not.toBe("xmd://repl/kf39sla2/entries");
+    ).not.toBe("xmd://repl/kf39sla2/repl");
   });
 
   it("D1: the spec's Elicit metadata statement matches the real reader", function* () {

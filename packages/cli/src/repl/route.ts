@@ -58,7 +58,7 @@ export class ReplRouteError extends Error {
 }
 
 /** The two surfaces this slice has. */
-export type ReplSurface = "repl" | "sessions";
+export type ReplSurface = "entries" | "sessions";
 
 /** One drawer in the stack, as the grammar spells it. */
 export type ReplDrawerRef =
@@ -195,8 +195,8 @@ export function decodeLocation(location: string): Result<ReplRoute> {
     return refuse("an execution is named by the opaque identifier the REPL created for it");
   }
   const surface = decoded[1];
-  if (surface !== "repl" && surface !== "sessions") {
-    return refuse('a REPL location addresses the "repl" or the "sessions" surface');
+  if (surface !== "entries" && surface !== "sessions") {
+    return refuse('a REPL location addresses the "entries" or the "sessions" surface');
   }
 
   const scopes: string[] = [];
@@ -277,7 +277,7 @@ function misplacedDrawer(
  * spell it.
  */
 export function surfaceForDrawer(drawer: ReplDrawerRef): ReplSurface {
-  return drawer.kind === "live-permission" ? "sessions" : "repl";
+  return drawer.kind === "live-permission" ? "sessions" : "entries";
 }
 
 /**
@@ -530,7 +530,7 @@ function openDrawer(
     return Ok({ kind: "binding", name: reference.name, binding });
   }
   if (reference.kind === "live-elicit") {
-    if (route.surface !== "repl") {
+    if (route.surface !== "entries") {
       return Err(
         new ReplRouteError(
           "a live question belongs to the entry that is asking it, which is read on the Entries " +

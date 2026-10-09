@@ -133,7 +133,7 @@ export interface XmdArtifactManifestBuild {
 export function buildXmdArtifactManifest(
   entries: readonly XmdArtifactContentEntry[],
   duplicate: (kind: string) => never,
-  version: 1 | 2 = XMD_ARTIFACT_MANIFEST_VERSION,
+  version: 1 = XMD_ARTIFACT_MANIFEST_VERSION,
 ): XmdArtifactManifestBuild {
   const seen = new Set<string>();
   const rows: Array<{ row: XmdArtifactManifestEntryV1; entry: XmdArtifactContentEntry }> = [];
@@ -181,12 +181,9 @@ export function manifestToJson(manifest: XmdArtifactManifestV1): Json {
 }
 
 /** The lowercase SHA-256 of the domain prefix followed by the manifest bytes. */
-export function deriveXmdArtifactIdentity(manifestBytes: Uint8Array, version: 1 | 2 = 1): string {
+export function deriveXmdArtifactIdentity(manifestBytes: Uint8Array, version: 1 = 1): string {
   return createHash("sha256")
-    .update(
-      version === 2 ? XMD_ARTIFACT_SOURCE_BUNDLE_IDENTITY_DOMAIN : XMD_ARTIFACT_IDENTITY_DOMAIN,
-      "utf8",
-    )
+    .update(XMD_ARTIFACT_IDENTITY_DOMAIN, "utf8")
     .update(manifestBytes)
     .digest("hex");
 }

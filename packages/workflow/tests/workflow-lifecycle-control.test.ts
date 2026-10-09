@@ -37,15 +37,14 @@ import type { RunConnection, WorkflowRunConnections } from "../src/deno/connecti
 import { SavepointObservation } from "../src/deno/savepoints.ts";
 import { installWorkflowRunStorage } from "../src/deno/provider.ts";
 import { installWorkflowLifecycle } from "../src/deno/lifecycle.ts";
-import { legacySourceReader } from "./support/legacy-source.ts";
 import { parseSourceBundleDefinition } from "../mod.ts";
-import type { LegacyWorkflowSourceReader, WorkflowBeginRequest } from "../deno.ts";
+import type { WorkflowBeginRequest } from "../deno.ts";
 
 const { cancel } = WorkflowLifecycle.operations;
 
 function withLifecycle<T>(root: string, body: () => Operation<T>): Operation<T> {
   return scoped(function* () {
-    yield* useWorkflowLifecycle({ root, legacySource: legacySourceReader() });
+    yield* useWorkflowLifecycle({ root });
     return yield* body();
   });
 }
@@ -416,8 +415,6 @@ describe("Tier WLT — interrupted after the creation transaction committed", ()
       throw parsed.error;
     }
     const definition = parsed.value;
-    expect(definition.version).toBe(2);
-    expect(definition.kind).toBe("source-bundle");
     expect(definition.entrypoint).toBe(BUNDLE_ENTRYPOINT);
     expect(definition.sources).toHaveLength(1);
     expect(after.sources).toHaveLength(1);
@@ -461,9 +458,6 @@ describe("Tier WLT — interrupted after the creation transaction committed", ()
           throw resumed.error;
         }
         const { sources } = resumed.value;
-        if (sources.definitionVersion !== 2) {
-          throw new Error("the resumed run is not a source bundle");
-        }
         expect(sources.sources.map((one) => one.path)).toEqual([BUNDLE_ENTRYPOINT]);
         const retainedBytes = sources.sources[0]?.bytes;
         if (retainedBytes === undefined) {
@@ -526,10 +520,7 @@ describe("Tier WLT — interrupted after the creation transaction committed", ()
         },
       };
       yield* installWorkflowRunStorage({ root }, {}, gated);
-      const transitions = yield* installWorkflowLifecycle(
-        { root, legacySource: legacySourceReader() },
-        gated,
-      );
+      const transitions = yield* installWorkflowLifecycle({ root }, gated);
 
       yield* scoped(function* () {
         const acquisition = yield* WorkflowLifecycle.operations.acquireExecutor(runId);
@@ -599,103 +590,5 @@ describe("Tier WLT — interrupted after the creation transaction committed", ()
     });
 
     yield* settledInterrupted(root, runId);
-  });
-
-  it("WLT3: halted inside pre-commit authentication, nothing is recognized and the id is free", function* () {
-    const root = yield* useStorageRoot();
-    const runId = "never-committed";
-
-    // The source-authentication window, held open from inside it. A version-1
-    // creation is what makes this deterministic: its source lives in a
-    // repository this package does not reach, so `begin` asks the host's
-    // legacy reader for it — before the lifecycle transaction opens, and
-    // therefore before anything at all is written. That reader is a public
-    // seam, and a reader that does not answer is a `begin` provably stopped in
-    // the window this case is about.
-    const arrived = withResolvers<void>();
-    const held = withResolvers<void>();
-    const blockingReader: LegacyWorkflowSourceReader = function* () {
-      arrived.resolve();
-      yield* held.operation;
-      throw new Error("the reader was expected to be halted, not resumed");
-    };
-
-    yield* scoped(function* () {
-      const connections = yield* useWorkflowRunConnections(yield* SavepointObservation.get());
-      yield* installWorkflowRunStorage({ root }, {}, connections);
-      const transitions = yield* installWorkflowLifecycle(
-        { root, legacySource: blockingReader },
-        connections,
-      );
-
-      yield* scoped(function* () {
-        const acquisition = yield* WorkflowLifecycle.operations.acquireExecutor(runId);
-        if (!acquisition.ok) {
-          throw acquisition.error;
-        }
-        if (acquisition.value.kind !== "acquired") {
-          throw new Error(`${runId} already has a live workflow executor`);
-        }
-        const executorLock = acquisition.value.lock;
-        const request: WorkflowBeginRequest = {
-          runId,
-          action: "start",
-          creation: creation(),
-        };
-        let returned = false;
-        const begun = yield* spawn(function* () {
-          const result = yield* transitions.begin(executorLock, request);
-          returned = true;
-          return result;
-        });
-
-        // Stopped in authentication, with the transaction not yet opened.
-        yield* arrived.operation;
-        expect(returned).toBe(false);
-
-        // Halted where it stands, and the acquisition torn down under it.
-        yield* begun.halt();
-        held.resolve();
-      });
-    });
-
-    // No run is recognized, and no document execution was retained. Inspection
-    // is the question a host asks, and the file — if a connection created one
-    // at all — is the question nothing can hide from.
-    yield* withLifecycle(root, function* () {
-      const inspected = yield* WorkflowLifecycle.operations.inspect(runId);
-      expect(inspected.ok).toBe(false);
-    });
-    expect(() => retained(root, runId)).toThrow();
-
-    // The executor lock is released: acquiring it is the only proof that takes.
-    yield* withRunHost(root, function* () {
-      yield* withExecutor(runId, function* () {
-        expect(true).toBe(true);
-      });
-    });
-
-    // And the id is free: the same one starts cleanly, and what it retains is
-    // its own creation rather than anything the halted attempt left. The status
-    // below belongs to that clean start, which this scope then ends — the
-    // checks above are the control, and they hold whether or not a committed
-    // run settles on teardown.
-    yield* withRunHost(root, function* (transitions) {
-      yield* withExecutor(runId, function* (executorLock) {
-        const started = yield* transitions.begin(executorLock, {
-          runId,
-          action: "start",
-          creation: yield* sourceBundleCreation(),
-        });
-        if (!started.ok) {
-          throw started.error;
-        }
-        expect(started.value.record.runId).toBe(runId);
-      });
-    });
-    expect(retained(root, runId).status).toBe("interrupted");
-    expect(new TextDecoder().decode(storedBytes(retained(root, runId).sources[0], "content"))).toBe(
-      BUNDLE_SOURCE,
-    );
   });
 });

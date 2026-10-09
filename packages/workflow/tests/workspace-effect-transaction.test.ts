@@ -270,13 +270,12 @@ function withDirectWorkspaceStorage<T>(
         connection.database
           .prepare(
             `INSERT INTO workflow_run
-              (id, run_id, definition, base, props, status, created_at, updated_at)
-              VALUES (1, ?, ?, ?, ?, 'running', ?, ?)`,
+              (id, run_id, definition, props, status, created_at, updated_at)
+              VALUES (1, ?, ?, ?, 'running', ?, ?)`,
           )
           .run(
             wanted.runId,
             canonicalJson(definitionToJson(wanted.definition)),
-            wanted.base,
             canonicalJson(wanted.props),
             stamp,
             stamp,

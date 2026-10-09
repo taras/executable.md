@@ -22,13 +22,12 @@ import type { Json } from "@executablemd/durable-streams";
 import { DatabaseSync } from "node:sqlite";
 import {
   type CreateWorkflowRunRequest,
-  type GitWorkflowDefinitionV1,
   WORKFLOW_RUN_STATUSES,
   WorkflowDatabaseClosedError,
   WorkflowDatabaseCorruptError,
   WorkflowDatabaseFormatError,
+  type WorkflowDefinition,
   WorkflowDefinitionError,
-  WorkflowIncompleteVersionOneError,
   WorkflowRecordMalformedError,
   WorkflowRequestError,
   WorkflowRunConflictError,
@@ -66,11 +65,7 @@ import {
   withBegunRun,
   withStorage,
 } from "./support/storage.ts";
-import {
-  type GitWorkflowRunRecordV1,
-  isGitWorkflowRunRecord,
-  type WorkflowRunRecord,
-} from "../mod.ts";
+import { type WorkflowRunRecord } from "../mod.ts";
 import {
   BUNDLE_ENTRYPOINT,
   BUNDLE_SOURCE,
@@ -431,7 +426,6 @@ describe("Tier WS — creating and finding a run", () => {
 
     expect(record.runId).toBe("release-1.4");
     expect(record.definition).toEqual(definition());
-    expect(gitRecord(record).base).toBe("main");
     expect(record.props).toEqual({ channel: "stable" });
     expect(record.status).toBe("running");
 
@@ -483,15 +477,10 @@ describe("Tier WS — creating and finding a run", () => {
       yield* createRun();
 
       const attempts = [
-        { field: "base", overrides: { base: "develop" } },
         { field: "props", overrides: { props: { channel: "beta" } } },
         {
           field: "definition",
-          overrides: { definition: definition({ objectId: SHA1.replace("9", "a") }) },
-        },
-        {
-          field: "definition",
-          overrides: { definition: definition({ rootDocumentPath: "workflows/other.md" }) },
+          overrides: { definition: definition({ targetPath: "Release" }) },
         },
       ];
 
@@ -562,20 +551,26 @@ describe("Tier WS — creating and finding a run", () => {
 
     // Each of these type-checks and still describes no run, which is why the
     // adapter parses a request rather than trusting the shape it arrived in.
-    const unparsed: GitWorkflowDefinitionV1 = {
-      version: 1,
-      kind: "git",
-      objectFormat: "sha1",
-      objectId: "not-hexadecimal",
-      rootDocumentPath: "workflows/release.md",
+    // A descriptor whose entrypoint names no source it retains.
+    const unparsed = {
+      hashAlgorithm: "sha256",
+      bundleHash: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+      entrypoint: "workflows/absent.md",
+      sources: [
+        {
+          path: "workflows/release.md",
+          sourceHash: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+          byteLength: 1,
+        },
+      ],
     };
 
     const results = yield* withStorage(root, function* () {
       return [
         yield* create(request({ runId: "" })),
-        yield* create(request({ base: "" })),
+        yield* create(request({ sourceSnapshot: [] })),
         yield* create(request({ props: { retries: Number.POSITIVE_INFINITY } })),
-        yield* create(request({ definition: unparsed })),
+        yield* create(request({ definition: unparsed as unknown as WorkflowDefinition })),
       ];
     });
 
@@ -1089,12 +1084,12 @@ describe("Tier WS — refusing what is not this run's database", () => {
     }
   });
 
-  it("WS22: a recognized database that is not shaped like version 1 is damage", function* () {
+  it("WS22: a recognized database that is not shaped like the schema is damage", function* () {
     const root = yield* useStorageRoot();
 
-    // The header already says this is a version-1 workflow run. Anything
-    // missing or differently shaped is the file disagreeing with itself, not a
-    // version this build has not learned or a file belonging to someone else.
+    // The header already says this is an XMD workflow run. Anything missing or
+    // differently shaped is the file disagreeing with itself, not a version
+    // this build has not learned or a file belonging to someone else.
     const damaged: [string, (database: DatabaseSync) => void][] = [
       ["no-table", (database) => database.exec("DROP TABLE definition_retrieval")],
       ["no-row", (database) => database.exec("DELETE FROM workflow_run")],
@@ -1144,7 +1139,7 @@ describe("Tier WS — refusing what is not this run's database", () => {
     }
   });
 
-  it("WS22b: the exact intermediate metadata-only version 1 is refused unchanged", function* () {
+  it("WS22b: the exact intermediate metadata-only shape is refused unchanged", function* () {
     const root = yield* useStorageRoot();
     const path = runPath(root, "release-1.4");
     tamper(path, initializeIntermediateVersionOne);
@@ -1155,8 +1150,10 @@ describe("Tier WS — refusing what is not this run's database", () => {
     });
 
     expect(result.ok).toBe(false);
-    expect(!result.ok && result.error).toBeInstanceOf(WorkflowIncompleteVersionOneError);
-    expect(!result.ok && result.error.message).toContain("Delete and recreate");
+    expect(!result.ok && result.error).toBeInstanceOf(WorkflowDatabaseCorruptError);
+    // One answer for a shape this build does not declare: there is no earlier
+    // version to recognize it as, so it is damage rather than a migration.
+    expect(!result.ok && result.error.message).toContain("It is left unchanged");
     expect(yield* until(readFile(path))).toEqual(before);
   });
 
@@ -1254,7 +1251,7 @@ describe("Tier WS — refusing what is not this run's database", () => {
       // Valid JSON, and not a definition — which is why the column is parsed
       // rather than believed for having survived `json_valid`.
       tamper(path, (database) => {
-        database.prepare(`UPDATE workflow_run SET definition = '{"kind":"git"}'`).run();
+        database.prepare(`UPDATE workflow_run SET definition = '{"entrypoint":1}'`).run();
       });
       return yield* lookup("release-1.4");
     });
@@ -1272,7 +1269,6 @@ describe("Tier WS — refusing what is not this run's database", () => {
     // record claiming to know when a run started or what it is called.
     const cases = [
       { runId: "empty-id", set: `run_id = ''`, column: "workflow_run.run_id" },
-      { runId: "empty-base", set: `base = ''`, column: "workflow_run.base" },
       { runId: "vague-time", set: `created_at = 'a while ago'`, column: "workflow_run.created_at" },
       { runId: "loose-time", set: `updated_at = '2026-08-07'`, column: "workflow_run.updated_at" },
       {
@@ -1673,7 +1669,7 @@ describe("Tier WS — version 1 amended in place", () => {
     });
 
     expect(result.ok).toBe(false);
-    expect(!result.ok && result.error).toBeInstanceOf(WorkflowIncompleteVersionOneError);
+    expect(!result.ok && result.error).toBeInstanceOf(WorkflowDatabaseCorruptError);
     expect(yield* until(readFile(path))).toEqual(before);
   });
 
@@ -1739,34 +1735,6 @@ describe("Tier WS — version 1 amended in place", () => {
     }
   });
 
-  it("WS23e: a version-1 inventory stamped version 2 is a hybrid, not a migration", function* () {
-    const root = yield* useStorageRoot();
-    yield* withStorage(root, function* () {
-      yield* createRun();
-    });
-
-    const path = runPath(root, "release-1.4");
-    tamper(path, (database) => {
-      database.exec("PRAGMA user_version = 2");
-    });
-    const before = yield* until(readFile(path));
-
-    const result = yield* withStorage(root, function* () {
-      return yield* lookup("release-1.4");
-    });
-
-    // Version 2 is a version this build implements, and this file is not one:
-    // its `workflow_run` still has the base column version 1 declares, and its
-    // two definition-source tables were never created. A header claiming the
-    // other version over version 1's objects is the file disagreeing with
-    // itself, which is damage rather than a version to upgrade from.
-    expect(result.ok).toBe(false);
-    expect(!result.ok && result.error).toBeInstanceOf(WorkflowDatabaseCorruptError);
-    // Described and left exactly as found: nothing upgraded it, and nothing
-    // downgraded it either.
-    expect(yield* until(readFile(path))).toEqual(before);
-  });
-
   it("WS33a: version 1 declares the retained answer table", function* () {
     const root = yield* useStorageRoot();
     yield* withStorage(root, function* () {
@@ -1799,7 +1767,7 @@ describe("Tier WS — version 1 amended in place", () => {
     // An incomplete pre-release rather than arbitrary damage: this is a shape a
     // build really produced, and saying so is what tells its owner the run
     // cannot be continued rather than that the file is broken.
-    expect(!result.ok && result.error).toBeInstanceOf(WorkflowIncompleteVersionOneError);
+    expect(!result.ok && result.error).toBeInstanceOf(WorkflowDatabaseCorruptError);
     expect(yield* until(readFile(path))).toEqual(before);
   });
 
@@ -1834,7 +1802,7 @@ describe("Tier WS — version 1 amended in place", () => {
     });
 
     expect(result.ok).toBe(false);
-    expect(!result.ok && result.error).toBeInstanceOf(WorkflowIncompleteVersionOneError);
+    expect(!result.ok && result.error).toBeInstanceOf(WorkflowDatabaseCorruptError);
     expect(yield* until(readFile(path))).toEqual(before);
   });
 
@@ -1875,10 +1843,7 @@ describe("Tier WS — version 1 amended in place", () => {
  * The retained record is a closed union now, and the base these cases assert
  * about is a member only the Git one has.
  */
-function gitRecord(record: WorkflowRunRecord): GitWorkflowRunRecordV1 {
-  if (!isGitWorkflowRunRecord(record)) {
-    throw new Error("expected a Git workflow run record");
-  }
+function gitRecord(record: WorkflowRunRecord): WorkflowRunRecord {
   return record;
 }
 
@@ -1891,7 +1856,7 @@ function gitRecord(record: WorkflowRunRecord): GitWorkflowRunRecordV1 {
  * when what it holds no longer describes itself.
  */
 describe("Tier WS — a source-bundle run's own schema", () => {
-  it("WS40: a version-2 run declares version 2 and no base column", function* () {
+  it("WS40: a run declares the one schema version and no base column", function* () {
     const root = yield* useStorageRoot();
     const creation = yield* sourceBundleCreation();
 
@@ -1904,14 +1869,13 @@ describe("Tier WS — a source-bundle run's own schema", () => {
           return begun;
         },
       );
-      expect(begun.record.definition.kind).toBe("source-bundle");
     });
 
     tamper(runPath(root, "bundle-1"), (database) => {
-      expect(database.prepare("PRAGMA user_version").get()?.["user_version"]).toBe(2);
+      expect(database.prepare("PRAGMA user_version").get()?.["user_version"]).toBe(1);
 
       // A base column would be a repository state this run never had, and the
-      // two definition-source tables are what version 2 adds instead.
+      // two definition-source tables are where its own bytes live instead.
       const columns = database
         .prepare("SELECT name FROM pragma_table_info('workflow_run')")
         .all()
@@ -1970,7 +1934,6 @@ describe("Tier WS — a source-bundle run's own schema", () => {
           // The descriptor alone, which is exactly what this request cannot
           // retain: its bytes were never supplied here.
           definition: sourceBundleDefinitionToJson(creation.definition),
-          base: "main",
           props: {},
         }),
       );

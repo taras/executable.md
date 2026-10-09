@@ -19,16 +19,13 @@ import { describe, type Fail, type JsonObject, parseJsonValue } from "../storage
 import {
   type DefinitionRetrieval,
   type DocumentExecutionRecord,
-  type GitWorkflowRunRecordV1,
   parseRunId,
   parseWorkflowRunStatus,
   parseWorkflowStopReason,
-  type SourceBundleWorkflowRunRecordV2,
   type WorkflowRunRecord,
   type WorkflowRunStatus,
   type WorkflowStopReason,
 } from "../storage/record.ts";
-import type { WorkflowSchemaVersion } from "./schema.ts";
 
 /** One row as SQLite hands it back. */
 export type Row = Record<string, unknown>;
@@ -204,17 +201,8 @@ function runId(row: Row, table: string): string {
   return parseRunId(row["run_id"], "$", failure(`${table}.run_id`));
 }
 
-/**
- * The run the singleton row describes, read as the version it was recognized
- * at.
- *
- * The version is the one structural recognition just proved rather than one
- * inferred from the descriptor the row happens to hold: a version-1 table
- * carrying a source-bundle descriptor is a file disagreeing with itself, and
- * reading it as a version-2 record would quietly drop the `base` column that
- * table still has.
- */
-export function readRunRecord(row: Row, version: WorkflowSchemaVersion = 1): WorkflowRunRecord {
+/** The run the singleton row describes. */
+export function readRunRecord(row: Row): WorkflowRunRecord {
   const table = "workflow_run";
   const definition = readDefinition(row, table);
   const shared = {
@@ -226,31 +214,9 @@ export function readRunRecord(row: Row, version: WorkflowSchemaVersion = 1): Wor
   };
   const stopReason = readStopReason(row, table);
 
-  if (version === 2) {
-    if (definition.kind !== "source-bundle") {
-      throw new WorkflowRecordMalformedError(
-        `${table}.definition`,
-        "expected a source-bundle definition",
-      );
-    }
-    const record: SourceBundleWorkflowRunRecordV2 = {
-      runId: shared.runId,
-      definition,
-      props: shared.props,
-      status: shared.status,
-      createdAt: shared.createdAt,
-      updatedAt: shared.updatedAt,
-    };
-    return Object.freeze(stopReason === undefined ? record : { ...record, stopReason });
-  }
-
-  if (definition.kind !== "git") {
-    throw new WorkflowRecordMalformedError(`${table}.definition`, "expected a Git definition");
-  }
-  const record: GitWorkflowRunRecordV1 = {
+  const record: WorkflowRunRecord = {
     runId: shared.runId,
     definition,
-    base: nonEmpty(row, "base", table),
     props: shared.props,
     status: shared.status,
     createdAt: shared.createdAt,

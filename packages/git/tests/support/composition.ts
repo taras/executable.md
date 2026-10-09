@@ -54,11 +54,7 @@ import {
 } from "../../src/deno/composition/materialize.ts";
 import { createWorkspaceMetadata, type StoredRepository } from "../../src/deno/repositories.ts";
 import type { WorktreeRecord } from "../../src/composition/records.ts";
-import {
-  isGitWorkflowRunRecord,
-  type WorkflowRun,
-  type WorkflowRunRecord,
-} from "@executablemd/workflow";
+import { type WorkflowRun, type WorkflowRunRecord } from "@executablemd/workflow";
 
 /**
  * The bundled Git Plugin, installed where a command installs it.
@@ -801,16 +797,14 @@ export function* writeCheckoutFile(
  * record installs its bundle hash and exact target and invents neither.
  */
 function retainedRunValue(record: WorkflowRunRecord): WorkflowRun {
-  if (isGitWorkflowRunRecord(record)) {
+  {
     return {
       runId: record.runId,
-      base: record.base,
-      pinnedCommit: record.definition.objectId,
+      bundleHash: record.definition.bundleHash,
     };
   }
   return {
     runId: record.runId,
-    definitionVersion: 2,
     bundleHash: record.definition.bundleHash,
     ...(record.definition.targetPath === undefined
       ? {}
