@@ -69,6 +69,7 @@ import {
   SEMANTIC,
   SURFACE,
   SYNTAX,
+  LIFECYCLE,
 } from "./fixtures/repl/reference-style.ts";
 import type { ReplTerminalSize } from "../src/repl/terminal.ts";
 import {
@@ -123,6 +124,46 @@ const NOTHING_LIVE: ReplLive = Object.freeze({
   agent: NO_AGENT,
   lifecycle: NO_LIFECYCLE,
 });
+
+/**
+ * This process observing one element of the entry it is running.
+ *
+ * The lifecycle reading the session would publish, so a frame can be asked
+ * what an observed element's badge looks like where it actually lands.
+ */
+function observing(
+  entry: string,
+  name: string,
+  offset: number,
+  phase: "active",
+  path: string,
+): ReplLive {
+  return Object.freeze({
+    ...NOTHING_LIVE,
+    running: true,
+    pausable: true,
+    lifecycle: Object.freeze({
+      entry,
+      occurrences: Object.freeze([
+        Object.freeze({
+          key: `${entry}#1`,
+          expansion: "x",
+          name,
+          parent: undefined,
+          position: Object.freeze({
+            path,
+            generatedSource: undefined,
+            offset,
+            line: 1,
+            column: 1,
+          }),
+          phase,
+          waiting: Object.freeze([]),
+        }),
+      ]),
+    }),
+  });
+}
 
 /** This process part-way through an entry: output on the overlay, nothing closed. */
 function streaming(output: string): ReplLive {
@@ -1648,6 +1689,70 @@ describe("REPL presentation: focus marks the row without repainting it", () => {
 
 describe("REPL presentation: the surfaces a reading is drawn on", () => {
   beforeAll(() => useTempFileCompiler());
+
+  it("P1-T3: an observed badge ends at the pane's right inner edge, in its own ink", function* () {
+    // The frozen requirement is that these align at the *measured source
+    // pane's right inner edge*. Everything asserting it so far has read the
+    // composed run strings, which is the model's answer — the same shape of
+    // claim that let a clipped drawer preview pass its own regression. This
+    // reads the cells.
+    // An entry whose source holds an element the scanner reports — a fence is
+    // not one, so observing at its offset would match nothing and prove
+    // nothing.
+    const source = '<Json value={1} as="n" />\n';
+    const model = yield* scoped(function* () {
+      const physical = new InMemoryStream();
+      yield* runEntry(physical, source);
+      return projected(yield* physical.readAll());
+    });
+    const entry = model.entries[0];
+    const at = entry.source.indexOf("<Json");
+    expect(at).toBeGreaterThanOrEqual(0);
+    const presenter = yield* usePresenter(WIDE);
+    const observed = yield* presenter.commit(
+      reading(
+        selecting(stateWith({}), entry.key),
+        model,
+        observing(entry.key, "Json", at, "active", entry.scope.path),
+        WIDE,
+      ),
+    );
+    const { grid } = presenter;
+
+    // The pane the reading is in, and its inside.
+    const inside = observed.regionOf("box:transcript:content");
+    if (inside === undefined) {
+      throw new Error("this frame published no transcript interior");
+    }
+    // Whichever row carries the badge. Found by what it says, because which
+    // row that is depends on where the window happens to be.
+    const badge = `${LIFECYCLE.active.glyph} ${LIFECYCLE.active.word}`;
+    const carrying = observed.keys
+      .filter((key) => key.startsWith("reading:"))
+      .map((key) => ({ key, bounds: observed.boundsOf(key) }))
+      .find((one) => one.bounds !== undefined && textOf(grid, one.bounds).includes(badge));
+    if (carrying?.bounds === undefined) {
+      throw new Error(
+        `no reading row says ${badge}; they say ${observed.keys
+          .filter((key) => key.startsWith("reading:"))
+          .map((key) => textOf(grid, observed.boundsOf(key) ?? inside).trim())
+          .join(" | ")}`,
+      );
+    }
+    const row = textOf(grid, carrying.bounds);
+    const starts = row.indexOf(badge);
+    // Its last cell is the pane interior's last cell: right inner edge, in
+    // cells, not in a string this test composed for itself.
+    expect([carrying.key, carrying.bounds.x + starts + badge.length]).toEqual([
+      carrying.key,
+      inside.x + inside.width,
+    ]);
+    // And it is drawn in the archive's own literal for that phase.
+    expect(inkOfSpan(grid, carrying.bounds, badge).foreground).toBe(LIFECYCLE.active.colour);
+    // The source beside it keeps its own colours, so the badge is not
+    // repainting the row it sits on.
+    expect(inkOfSpan(grid, carrying.bounds, "<").foreground).not.toBe(LIFECYCLE.active.colour);
+  });
 
   it("P1-T3: an empty screen's panes, edges and uncovered area are each their own", function* () {
     const model = yield* settledAndFailed();
