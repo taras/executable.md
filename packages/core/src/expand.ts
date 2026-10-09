@@ -124,14 +124,8 @@ import type { IdentityDomain } from "./invocation-identity.ts";
 import { protectedContentLease } from "./protected-content.ts";
 import type { SyntaxReference } from "./syntax-reference.ts";
 import { withInvocation } from "./invocation.ts";
-import {
-  claimComponentExpansion,
-  issueComponentExpansion,
-  reported,
-} from "./component-expansion.ts";
+import { observeExpansion } from "./component-expansion.ts";
 import type { ObservedExpansion } from "./component-expansion.ts";
-import { expandThroughTerminal } from "./component-api.ts";
-import type { ComponentExpansionPhase } from "./component-api.ts";
 import type { Invocation } from "./invocation.ts";
 import { ActiveProjection } from "./projection.ts";
 import type { ProjectionHandle, ProjectionRequest } from "./projection.ts";
@@ -1805,93 +1799,97 @@ function* expandEach(
   imports: ComponentImportTerminal | undefined,
   returnBody: ReturnBody | undefined,
 ): Operation<Segment[]> {
-  // Decided from source alone, so the catalog is shared with validation. A
-  // literal `in` is checked here too; an expression is a value the document
-  // computes, and its answer is checked below where it arrives.
-  const violations = eachViolations(segment);
-  const refusal = violations[0];
-  if (refusal !== undefined) {
-    return [yield* raise(eachError(refusal.message))];
-  }
-  const name = eachItemBinding(segment)!;
-  const asBinding = eachCaptureBinding(segment);
+  return yield* structural(segment, path, () => work());
 
-  let items: Json | undefined;
-  if ("in" in segment.props) {
-    items = segment.props.in;
-  } else if ("in" in segment.expressions) {
-    try {
-      const resolved = yield* resolveExpressionProps(
-        {},
-        { in: segment.expressions.in },
-        "Each",
-        segment.projectedEnv,
+  function* work(): Operation<Segment[]> {
+    // Decided from source alone, so the catalog is shared with validation. A
+    // literal `in` is checked here too; an expression is a value the document
+    // computes, and its answer is checked below where it arrives.
+    const violations = eachViolations(segment);
+    const refusal = violations[0];
+    if (refusal !== undefined) {
+      return [yield* raise(eachError(refusal.message))];
+    }
+    const name = eachItemBinding(segment)!;
+    const asBinding = eachCaptureBinding(segment);
+
+    let items: Json | undefined;
+    if ("in" in segment.props) {
+      items = segment.props.in;
+    } else if ("in" in segment.expressions) {
+      try {
+        const resolved = yield* resolveExpressionProps(
+          {},
+          { in: segment.expressions.in },
+          "Each",
+          segment.projectedEnv,
+        );
+        items = resolved.in;
+      } catch (error) {
+        return [yield* raise(eachError(error instanceof Error ? error.message : String(error)))];
+      }
+    }
+    if (!Array.isArray(items)) {
+      return [yield* raise(eachError(eachItemsViolation(items)!.message))];
+    }
+
+    // Effective caller env honors projection through <Content />, mirroring
+    // expandComponent, so a projected <Each> resolves both lexical caller
+    // bindings and the current component's bindings.
+    const contextEnv = yield* env;
+    const callerEnv = layerEnvironments(segment.projectedEnv, contextEnv);
+    const parentEvalScope = yield* evalScope;
+
+    const enclosingLoop = yield* ActiveLoop.get();
+    // A rendering iteration writes into the caller's region as it goes, so a
+    // failure partway leaves the items it already produced behind. A captured one
+    // builds a value instead: its buffer is private and never becomes output.
+    const out: Segment[] = asBinding === undefined ? owner : [];
+    for (const [iteration, item] of items.entries()) {
+      yield* expandChildrenScoped(
+        segment.children,
+        callerEnv ?? undefined,
+        { [name]: item },
+        parentEvalScope ?? undefined,
+        parentMeta,
+        parentProps,
+        hideSet,
+        counter,
+        out,
+        extendPath(path, { f: "item", i: iteration }),
+        checkedFailures,
+        environment,
+        imports,
+        returnBody,
       );
-      items = resolved.in;
-    } catch (error) {
-      return [yield* raise(eachError(error instanceof Error ? error.message : String(error)))];
+      // A `<Break>` in the body exits the enclosing `<Loop>`, so the remaining
+      // items are part of the work that iteration no longer does.
+      if (enclosingLoop?.broken) {
+        break;
+      }
     }
-  }
-  if (!Array.isArray(items)) {
-    return [yield* raise(eachError(eachItemsViolation(items)!.message))];
-  }
 
-  // Effective caller env honors projection through <Content />, mirroring
-  // expandComponent, so a projected <Each> resolves both lexical caller
-  // bindings and the current component's bindings.
-  const contextEnv = yield* env;
-  const callerEnv = layerEnvironments(segment.projectedEnv, contextEnv);
-  const parentEvalScope = yield* evalScope;
-
-  const enclosingLoop = yield* ActiveLoop.get();
-  // A rendering iteration writes into the caller's region as it goes, so a
-  // failure partway leaves the items it already produced behind. A captured one
-  // builds a value instead: its buffer is private and never becomes output.
-  const out: Segment[] = asBinding === undefined ? owner : [];
-  for (const [iteration, item] of items.entries()) {
-    yield* expandChildrenScoped(
-      segment.children,
-      callerEnv ?? undefined,
-      { [name]: item },
-      parentEvalScope ?? undefined,
-      parentMeta,
-      parentProps,
-      hideSet,
-      counter,
-      out,
-      extendPath(path, { f: "item", i: iteration }),
-      checkedFailures,
-      environment,
-      imports,
-      returnBody,
-    );
-    // A `<Break>` in the body exits the enclosing `<Loop>`, so the remaining
-    // items are part of the work that iteration no longer does.
-    if (enclosingLoop?.broken) {
-      break;
+    if (asBinding === undefined) {
+      return [];
     }
-  }
 
-  if (asBinding === undefined) {
+    // A capture never swallows an error. The body reported these where they were
+    // created (§6.9), so they are returned as they are: the printed errors reach the
+    // document unchanged and the binding stays unset.
+    const errors = out.filter((outSegment) => outSegment.type === "error");
+    if (errors.length > 0) {
+      return errors;
+    }
+
+    const captureEnv = yield* env;
+    if (!captureEnv) {
+      return [
+        yield* raise(eachError('Prop "as" on <Each /> requires a parent evaluation environment.')),
+      ];
+    }
+    captureEnv.values[asBinding] = renderSegments(out);
     return [];
   }
-
-  // A capture never swallows an error. The body reported these where they were
-  // created (§6.9), so they are returned as they are: the printed errors reach the
-  // document unchanged and the binding stays unset.
-  const errors = out.filter((outSegment) => outSegment.type === "error");
-  if (errors.length > 0) {
-    return errors;
-  }
-
-  const captureEnv = yield* env;
-  if (!captureEnv) {
-    return [
-      yield* raise(eachError('Prop "as" on <Each /> requires a parent evaluation environment.')),
-    ];
-  }
-  captureEnv.values[asBinding] = renderSegments(out);
-  return [];
 }
 
 /**
@@ -1946,6 +1944,37 @@ function ifError(segment: ComponentElement, message: string): ErrorSegment {
  * handed back untouched, so a `<Broken />` inside a selected branch settles
  * once, exactly as it would inline.
  */
+/**
+ * Surround one structural element's own work with its canonical observation.
+ *
+ * Structural syntax has no separate body to enter: the work it consumes starts
+ * where the element does, so ACTIVE is published as the region begins and EXIT
+ * when it ends. Written once here, so a construct that recurses and one that
+ * selects a branch are observed the same way.
+ */
+function structural<T>(
+  segment: { readonly name: string; readonly position?: SourcePosition },
+  path: string,
+  work: () => Operation<T>,
+): Operation<T> {
+  return observeExpansion(snapshot(path, segment.name, segment.position), function* (observed) {
+    observed.active();
+    // Cancellation unless something says otherwise: the `finally` runs on an
+    // unwind the work never returned from as well as on the two it did.
+    let reason: "returned" | "failed" | "cancelled" = "cancelled";
+    try {
+      const value = yield* work();
+      reason = "returned";
+      return value;
+    } catch (error) {
+      reason = "failed";
+      throw error;
+    } finally {
+      observed.settled(reason);
+    }
+  });
+}
+
 function* expandIf(
   segment: ComponentElement,
   parentMeta: Record<string, unknown>,
@@ -1961,78 +1990,91 @@ function* expandIf(
   imports: ComponentImportTerminal | undefined,
   returnBody: ReturnBody | undefined,
 ): Operation<void> {
-  // Decided from source alone and shared with validation: which props were
-  // written, and how the body splits at its `<Else>`.
-  const unknownProp = ifPropsViolation(segment);
-  if (unknownProp !== undefined) {
-    owner.push(yield* raise(ifError(segment, unknownProp.message)));
-    return;
-  }
+  return yield* structural(segment, path, () => work());
 
-  const structure = ifStructure(segment);
-  if (structure.violations.length > 0) {
-    for (const violation of structure.violations) {
-      owner.push(yield* raise(structuralErrorSegment(violation, segment)));
-    }
-    return;
-  }
-
-  let condition: unknown;
-  if ("condition" in segment.props) {
-    condition = segment.props.condition;
-  } else if ("condition" in segment.expressions) {
-    try {
-      // Evaluated directly rather than through resolveExpressionProps: that
-      // helper normalizes its result through JSON, which rejects `undefined`,
-      // rewrites `NaN` as `null`, and throws on a BigInt. A condition is
-      // decided and discarded rather than passed on or recorded, so it takes
-      // any JavaScript value and crosses no serialization boundary.
-      condition = yield* evaluateExpression(
-        segment.expressions.condition,
-        "If",
-        "condition",
-        segment.projectedEnv,
-      );
-    } catch (error) {
-      owner.push(
-        yield* raise(ifError(segment, error instanceof Error ? error.message : String(error))),
-      );
+  function* work(): Operation<void> {
+    // Decided from source alone and shared with validation: which props were
+    // written, and how the body splits at its `<Else>`.
+    const unknownProp = ifPropsViolation(segment);
+    if (unknownProp !== undefined) {
+      owner.push(yield* raise(ifError(segment, unknownProp.message)));
       return;
     }
-  } else {
-    owner.push(yield* raise(ifError(segment, ifConditionViolation(segment)!.message)));
-    return;
-  }
 
-  const selected = !!condition;
+    const structure = ifStructure(segment);
+    if (structure.violations.length > 0) {
+      for (const violation of structure.violations) {
+        owner.push(yield* raise(structuralErrorSegment(violation, segment)));
+      }
+      return;
+    }
 
-  // The false arm belongs to `<Else>`, which is consumed above, so its frame is
-  // added here — otherwise both arms of one `<If>` expand under one path.
-  const branchPath =
-    selected || structure.elseElement === undefined
-      ? path
-      : extendPath(
-          path,
-          elementFrame(
-            structure.elseElement.name,
-            elementSite(structure.elseElement.position, structure.elseIndex ?? 0),
-          ),
+    let condition: unknown;
+    if ("condition" in segment.props) {
+      condition = segment.props.condition;
+    } else if ("condition" in segment.expressions) {
+      try {
+        // Evaluated directly rather than through resolveExpressionProps: that
+        // helper normalizes its result through JSON, which rejects `undefined`,
+        // rewrites `NaN` as `null`, and throws on a BigInt. A condition is
+        // decided and discarded rather than passed on or recorded, so it takes
+        // any JavaScript value and crosses no serialization boundary.
+        condition = yield* evaluateExpression(
+          segment.expressions.condition,
+          "If",
+          "condition",
+          segment.projectedEnv,
         );
+      } catch (error) {
+        owner.push(
+          yield* raise(ifError(segment, error instanceof Error ? error.message : String(error))),
+        );
+        return;
+      }
+    } else {
+      owner.push(yield* raise(ifError(segment, ifConditionViolation(segment)!.message)));
+      return;
+    }
 
-  yield* expandSegmentsWithin(
-    selected ? structure.whenTrue : structure.whenFalse,
-    parentMeta,
-    parentProps,
-    hideSet,
-    counter,
-    owner,
-    branchPath,
-    0,
-    checkedFailures,
-    environment,
-    imports,
-    returnBody,
-  );
+    const selected = !!condition;
+
+    // The false arm belongs to `<Else>`, which is consumed above, so its frame is
+    // added here — otherwise both arms of one `<If>` expand under one path.
+    const branchPath =
+      selected || structure.elseElement === undefined
+        ? path
+        : extendPath(
+            path,
+            elementFrame(
+              structure.elseElement.name,
+              elementSite(structure.elseElement.position, structure.elseIndex ?? 0),
+            ),
+          );
+
+    const branch = function* (): Operation<void> {
+      yield* expandSegmentsWithin(
+        selected ? structure.whenTrue : structure.whenFalse,
+        parentMeta,
+        parentProps,
+        hideSet,
+        counter,
+        owner,
+        branchPath,
+        0,
+        checkedFailures,
+        environment,
+        imports,
+        returnBody,
+      );
+    };
+    // The `<Else>` is an element of its own, and only when it is the arm that
+    // runs: the unselected arm expands nothing, so it is told nothing.
+    if (selected || structure.elseElement === undefined) {
+      yield* branch();
+      return;
+    }
+    yield* structural(structure.elseElement, branchPath, branch);
+  }
 }
 
 function switchError(segment: ComponentElement, message: string): ErrorSegment {
@@ -2103,73 +2145,82 @@ function* expandSwitch(
   imports: ComponentImportTerminal | undefined,
   returnBody: ReturnBody | undefined,
 ): Operation<void> {
-  // Decided from source alone and shared with validation: which props were
-  // written, and how the body divides into branches.
-  const structure = switchStructure(segment);
-  if (structure.violations.length > 0) {
-    for (const violation of structure.violations) {
-      owner.push(yield* raise(structuralErrorSegment(violation, segment)));
+  return yield* structural(segment, path, () => work());
+
+  function* work(): Operation<void> {
+    // Decided from source alone and shared with validation: which props were
+    // written, and how the body divides into branches.
+    const structure = switchStructure(segment);
+    if (structure.violations.length > 0) {
+      for (const violation of structure.violations) {
+        owner.push(yield* raise(structuralErrorSegment(violation, segment)));
+      }
+      return;
     }
-    return;
-  }
 
-  let selector: unknown;
-  try {
-    selector = yield* structuralOperand(segment, "Switch");
-  } catch (error) {
-    owner.push(
-      yield* raise(switchError(segment, error instanceof Error ? error.message : String(error))),
-    );
-    return;
-  }
-
-  let selected: SwitchCase | undefined;
-  for (const candidate of structure.matching) {
-    let matcher: unknown;
+    let selector: unknown;
     try {
-      matcher = yield* structuralOperand(candidate.element, "Case");
+      selector = yield* structuralOperand(segment, "Switch");
     } catch (error) {
       owner.push(
-        yield* raise(
-          caseError(candidate.element, error instanceof Error ? error.message : String(error)),
-        ),
+        yield* raise(switchError(segment, error instanceof Error ? error.message : String(error))),
       );
       return;
     }
-    // The `===` operator, and nothing else: `NaN` matches no case including one
-    // written `NaN`, `0` and `-0` are the same value, and two objects match only
-    // when they are the same object.
-    if (selector === matcher) {
-      selected = candidate;
-      break;
+
+    let selected: SwitchCase | undefined;
+    for (const candidate of structure.matching) {
+      let matcher: unknown;
+      try {
+        matcher = yield* structuralOperand(candidate.element, "Case");
+      } catch (error) {
+        owner.push(
+          yield* raise(
+            caseError(candidate.element, error instanceof Error ? error.message : String(error)),
+          ),
+        );
+        return;
+      }
+      // The `===` operator, and nothing else: `NaN` matches no case including one
+      // written `NaN`, `0` and `-0` are the same value, and two objects match only
+      // when they are the same object.
+      if (selector === matcher) {
+        selected = candidate;
+        break;
+      }
     }
-  }
 
-  const chosen = selected ?? structure.fallback;
-  if (chosen === undefined) {
-    return;
-  }
+    const chosen = selected ?? structure.fallback;
+    if (chosen === undefined) {
+      return;
+    }
 
-  // The selected `<Case>` is consumed above and never reaches dispatch, so its
-  // frame is added here — otherwise corresponding children of two branches
-  // would expand under one path (§5.6).
-  yield* expandSegmentsWithin(
-    chosen.element.children,
-    parentMeta,
-    parentProps,
-    hideSet,
-    counter,
-    owner,
-    extendPath(
+    // The selected `<Case>` is consumed above and never reaches dispatch, so its
+    // frame is added here — otherwise corresponding children of two branches
+    // would expand under one path (§5.6).
+    const casePath = extendPath(
       path,
       elementFrame(chosen.element.name, elementSite(chosen.element.position, chosen.index)),
-    ),
-    0,
-    checkedFailures,
-    environment,
-    imports,
-    returnBody,
-  );
+    );
+    // The chosen `<Case>` is an element of its own; the ones that were not
+    // chosen expand nothing and are told nothing.
+    yield* structural(chosen.element, casePath, () =>
+      expandSegmentsWithin(
+        chosen.element.children,
+        parentMeta,
+        parentProps,
+        hideSet,
+        counter,
+        owner,
+        casePath,
+        0,
+        checkedFailures,
+        environment,
+        imports,
+        returnBody,
+      ),
+    );
+  }
 }
 
 function loopError(segment: ComponentElement, message: string): ErrorSegment {
@@ -2246,103 +2297,107 @@ function* expandLoop(
   imports: ComponentImportTerminal | undefined,
   returnBody: ReturnBody | undefined,
 ): Operation<void> {
-  const unknownProp = loopPropsViolation(segment);
-  if (unknownProp !== undefined) {
-    owner.push(yield* raise(loopError(segment, unknownProp.message)));
-    return;
-  }
+  return yield* structural(segment, path, () => work());
 
-  if ("name" in segment.expressions) {
-    owner.push(
-      yield* raise(loopError(segment, 'Prop "name" on <Loop /> must be a string literal.')),
-    );
-    return;
-  }
-  const name = segment.props.name;
-  if (name !== undefined && (typeof name !== "string" || name.length === 0)) {
-    owner.push(
-      yield* raise(loopError(segment, 'Prop "name" on <Loop /> must be a non-empty string.')),
-    );
-    return;
-  }
-
-  const bound = yield* resolveLoopBound(segment);
-  if (!bound.ok) {
-    owner.push(yield* raise(loopError(segment, bound.error.message)));
-    return;
-  }
-
-  // Taken from the shared block counter, so every `<Loop>` an execution enters
-  // — including each entry into a nested one — has a distinct identity that
-  // lands the same way on replay.
-  const identity: LoopIdentity = {
-    id: counter.next(),
-    ...(name === undefined ? {} : { name }),
-    ...(segment.position === undefined ? {} : { position: segment.position }),
-  };
-
-  const frame: LoopFrame = { broken: false };
-  let started = 0;
-
-  try {
-    yield* scoped(function* () {
-      yield* ActiveLoop.set(frame);
-      for (let iteration = 0; iteration < bound.value; iteration++) {
-        yield* recordIteration(identity, iteration);
-        started = iteration + 1;
-        yield* expandSegmentsWithin(
-          segment.children,
-          parentMeta,
-          parentProps,
-          hideSet,
-          counter,
-          owner,
-          extendPath(path, { f: "iter", i: iteration }),
-          0,
-          checkedFailures,
-          environment,
-          imports,
-          returnBody,
-        );
-        if (frame.broken) {
-          break;
-        }
-      }
-    });
-  } catch (error) {
-    // A durability failure is not an outcome of the loop's work, and recording
-    // one would reach the journal twice over: it appends an entry on top of a
-    // journal already known not to describe this run, and on replay it consumes
-    // a terminal entry an earlier run wrote — which is how a stale journal
-    // would quietly hand this loop a different outcome. The durability failure
-    // stays the primary error.
-    const durability = durabilityFailure(error);
-    if (durability !== undefined) {
-      // The durability failure itself, not whatever wrapped it. A teardown
-      // aggregate or an AggregateError says how the failure travelled, not what
-      // went wrong, and the caller has to see which journal entry stopped
-      // describing this run.
-      throw durability;
+  function* work(): Operation<void> {
+    const unknownProp = loopPropsViolation(segment);
+    if (unknownProp !== undefined) {
+      owner.push(yield* raise(loopError(segment, unknownProp.message)));
+      return;
     }
-    // An ordinary document failure is the loop's own outcome. Recorded from the
-    // catch rather than a destructor: this frame is still live here, so the
-    // entry lands in the journal before the failure leaves the loop.
+
+    if ("name" in segment.expressions) {
+      owner.push(
+        yield* raise(loopError(segment, 'Prop "name" on <Loop /> must be a string literal.')),
+      );
+      return;
+    }
+    const name = segment.props.name;
+    if (name !== undefined && (typeof name !== "string" || name.length === 0)) {
+      owner.push(
+        yield* raise(loopError(segment, 'Prop "name" on <Loop /> must be a non-empty string.')),
+      );
+      return;
+    }
+
+    const bound = yield* resolveLoopBound(segment);
+    if (!bound.ok) {
+      owner.push(yield* raise(loopError(segment, bound.error.message)));
+      return;
+    }
+
+    // Taken from the shared block counter, so every `<Loop>` an execution enters
+    // — including each entry into a nested one — has a distinct identity that
+    // lands the same way on replay.
+    const identity: LoopIdentity = {
+      id: counter.next(),
+      ...(name === undefined ? {} : { name }),
+      ...(segment.position === undefined ? {} : { position: segment.position }),
+    };
+
+    const frame: LoopFrame = { broken: false };
+    let started = 0;
+
     try {
-      yield* recordOutcome(identity, { iterations: started, outcome: "error" });
-    } catch (recording) {
-      // Recording found the journal recording a different outcome. That is the
-      // more fundamental failure and becomes the primary one, but the document
-      // failure that reached it is what the author has to fix.
-      if (recording instanceof Error && recording.cause === undefined) {
-        recording.cause = error;
+      yield* scoped(function* () {
+        yield* ActiveLoop.set(frame);
+        for (let iteration = 0; iteration < bound.value; iteration++) {
+          yield* recordIteration(identity, iteration);
+          started = iteration + 1;
+          yield* expandSegmentsWithin(
+            segment.children,
+            parentMeta,
+            parentProps,
+            hideSet,
+            counter,
+            owner,
+            extendPath(path, { f: "iter", i: iteration }),
+            0,
+            checkedFailures,
+            environment,
+            imports,
+            returnBody,
+          );
+          if (frame.broken) {
+            break;
+          }
+        }
+      });
+    } catch (error) {
+      // A durability failure is not an outcome of the loop's work, and recording
+      // one would reach the journal twice over: it appends an entry on top of a
+      // journal already known not to describe this run, and on replay it consumes
+      // a terminal entry an earlier run wrote — which is how a stale journal
+      // would quietly hand this loop a different outcome. The durability failure
+      // stays the primary error.
+      const durability = durabilityFailure(error);
+      if (durability !== undefined) {
+        // The durability failure itself, not whatever wrapped it. A teardown
+        // aggregate or an AggregateError says how the failure travelled, not what
+        // went wrong, and the caller has to see which journal entry stopped
+        // describing this run.
+        throw durability;
       }
-      throw recording;
+      // An ordinary document failure is the loop's own outcome. Recorded from the
+      // catch rather than a destructor: this frame is still live here, so the
+      // entry lands in the journal before the failure leaves the loop.
+      try {
+        yield* recordOutcome(identity, { iterations: started, outcome: "error" });
+      } catch (recording) {
+        // Recording found the journal recording a different outcome. That is the
+        // more fundamental failure and becomes the primary one, but the document
+        // failure that reached it is what the author has to fix.
+        if (recording instanceof Error && recording.cause === undefined) {
+          recording.cause = error;
+        }
+        throw recording;
+      }
+      throw error;
     }
-    throw error;
-  }
 
-  const outcome: LoopOutcome = frame.broken ? "break" : "exhausted";
-  yield* recordOutcome(identity, { iterations: started, outcome });
+    const outcome: LoopOutcome = frame.broken ? "break" : "exhausted";
+    yield* recordOutcome(identity, { iterations: started, outcome });
+  }
 }
 
 /**
@@ -2442,19 +2497,23 @@ function spawnChild(
     // a checked command failure inside one child fails that child, and a
     // sibling's walk is not stopped by a ledger it does not own.
     const ledger = containedLedger(inherited);
-    yield* expandSegmentsWithin(
-      spawn.element.children,
-      parentMeta,
-      parentProps,
-      new Set(hideSet),
-      createBlockCounter(),
-      segments,
-      childPath,
-      0,
-      ledger,
-      environment,
-      imports,
-      undefined,
+    // Each child the `<All>` actually runs is its own element, observed on its
+    // own: real siblings reach their phases independently of each other.
+    yield* structural(spawn.element, childPath, () =>
+      expandSegmentsWithin(
+        spawn.element.children,
+        parentMeta,
+        parentProps,
+        new Set(hideSet),
+        createBlockCounter(),
+        segments,
+        childPath,
+        0,
+        ledger,
+        environment,
+        imports,
+        undefined,
+      ),
     );
     yield* refuseCheckedFailure(ledger);
     // Runs rather than one joined string. What a child produced is prose, or a
@@ -2500,57 +2559,61 @@ function* expandAll(
   environment: ExecutionEnvironment | undefined,
   imports: ComponentImportTerminal | undefined,
 ): Operation<void> {
-  // Decided from source alone and shared with validation, completely, before a
-  // child is constructed: a malformed `<All>` starts none of them.
-  const structure = allStructure(segment);
-  if (structure.violations.length > 0) {
-    for (const violation of structure.violations) {
-      owner.push(yield* raise(structuralErrorSegment(violation, segment)));
-    }
-    return;
-  }
+  return yield* structural(segment, path, () => work());
 
-  // Read once, here: every child starts from the same incoming snapshot, and
-  // reading it inside a child would let whichever ran first decide what the
-  // others saw.
-  const incoming = yield* env;
-  const children = structure.spawns.map(
-    (spawn) => () =>
-      spawnChild(
-        spawn,
-        incoming,
-        parentMeta,
-        parentProps,
-        hideSet,
-        path,
-        checkedFailures,
-        environment,
-        imports,
-      ),
-  );
-
-  const scope = yield* useScope();
-  const rendered =
-    scope.get(DurableContext) === undefined
-      ? yield* all(children.map((child) => child()))
-      : (yield* durableAll(
-          children.map((child) => (): Workflow<Json> => ephemeral(retained(child()))),
-        )).map(readEmissions);
-
-  for (const runs of rendered) {
-    for (const run of runs) {
-      if (run.text === "") {
-        continue;
+  function* work(): Operation<void> {
+    // Decided from source alone and shared with validation, completely, before a
+    // child is constructed: a malformed `<All>` starts none of them.
+    const structure = allStructure(segment);
+    if (structure.violations.length > 0) {
+      for (const violation of structure.violations) {
+        owner.push(yield* raise(structuralErrorSegment(violation, segment)));
       }
-      // One segment per run, and the exact ones are marked again here: the
-      // record is keyed by segment identity, and these segments are this
-      // region's, not the child's. A child that ran on a previous attempt says
-      // what its runs were through its own durable close, so a replay marks
-      // exactly what the live run marked.
-      const segment: Segment = { type: "text", content: run.text };
-      owner.push(segment);
-      if (run.exact) {
-        markExactSource(environment?.sourceSegments, [segment]);
+      return;
+    }
+
+    // Read once, here: every child starts from the same incoming snapshot, and
+    // reading it inside a child would let whichever ran first decide what the
+    // others saw.
+    const incoming = yield* env;
+    const children = structure.spawns.map(
+      (spawn) => () =>
+        spawnChild(
+          spawn,
+          incoming,
+          parentMeta,
+          parentProps,
+          hideSet,
+          path,
+          checkedFailures,
+          environment,
+          imports,
+        ),
+    );
+
+    const scope = yield* useScope();
+    const rendered =
+      scope.get(DurableContext) === undefined
+        ? yield* all(children.map((child) => child()))
+        : (yield* durableAll(
+            children.map((child) => (): Workflow<Json> => ephemeral(retained(child()))),
+          )).map(readEmissions);
+
+    for (const runs of rendered) {
+      for (const run of runs) {
+        if (run.text === "") {
+          continue;
+        }
+        // One segment per run, and the exact ones are marked again here: the
+        // record is keyed by segment identity, and these segments are this
+        // region's, not the child's. A child that ran on a previous attempt says
+        // what its runs were through its own durable close, so a replay marks
+        // exactly what the live run marked.
+        const segment: Segment = { type: "text", content: run.text };
+        owner.push(segment);
+        if (run.exact) {
+          markExactSource(environment?.sourceSegments, [segment]);
+        }
       }
     }
   }
@@ -2696,75 +2759,12 @@ function* expandComponent(
   imports: ComponentImportTerminal | undefined,
   returnBody: ReturnBody | undefined,
 ): Operation<Segment[]> {
-  // Issued before resolution, props validation or any body: what an observer
-  // is offered is the whole of this element's expansion, including the parts
-  // that decide whether it has one.
-  const issued = issueComponentExpansion(snapshot(path, name, position));
-  let produced: Segment[] = [];
-  let terminated = false;
-  const terminate = (phase: ComponentExpansionPhase): void => {
-    if (!terminated) {
-      terminated = true;
-      issued.finish(phase);
-    }
-  };
-  issued.publish({ phase: "enter" });
-  const observed: ObservedExpansion = {
-    active: () => issued.publish({ phase: "active" }),
-    settled: (reason) => issued.publish({ phase: "exit", reason }),
-  };
-  /**
-   * The body's own work ended, and why — told before this invocation's ordered
-   * teardown runs, which is exactly the stretch a reader watching a destructor
-   * sees the element waiting in.
-   */
-  const settledExit = observed.settled;
-  let chainFailure: unknown;
-  let chainFailed = false;
-  try {
-    try {
-      yield* expandThroughTerminal(issued.request, (delegated) =>
-        claimComponentExpansion(delegated, function* () {
-          produced = yield* work();
-        }),
-      );
-    } catch (error) {
-      chainFailure = error;
-      chainFailed = true;
-    }
-    // Reconciled after the whole dispatch has unwound, middleware cleanup
-    // included, so what completion says accounts for everything this element
-    // owned. A handler may refuse the work or fail a success; what it cannot do
-    // is rescue what canonical expansion raised, which is read back from the
-    // terminal rather than from whether the chain returned normally.
-    const settlement = issued.settlement();
-    if (settlement.status === "raised") {
-      terminate({ phase: "complete", result: Err(reported(settlement.raised)) });
-      throw settlement.raised;
-    }
-    const refusal =
-      settlement.status === "absent"
-        ? chainFailed
-          ? chainFailure
-          : settlement.refusal
-        : undefined;
-    if (refusal !== undefined) {
-      terminate({ phase: "complete", result: Err(reported(refusal)) });
-      throw refusal;
-    }
-    if (chainFailed) {
-      terminate({ phase: "complete", result: Err(reported(chainFailure)) });
-      throw chainFailure;
-    }
-    terminate({ phase: "complete", result: Ok(undefined) });
-    return produced;
-  } finally {
-    // Nothing terminal was published, so this element unwound without
-    // completing: a clean cancellation, told after it has finished unwinding.
-    terminate({ phase: "cancelled" });
-  }
+  // Surrounded before resolution, props validation or any body: what an
+  // observer is offered is the whole of this element's expansion, including
+  // the parts that decide whether it has one.
+  return yield* observeExpansion(snapshot(path, name, position), (observed) => work(observed));
 
-  function* work(): Operation<Segment[]> {
+  function* work(observed: ObservedExpansion): Operation<Segment[]> {
     // Cycle detection — Prosser's algorithm
     if (hideSet.has(name)) {
       return [
@@ -3165,7 +3165,7 @@ function* expandComponent(
             imports,
             returnBody,
           );
-        }, settledExit);
+        }, observed.settled);
       } catch (error) {
         // Body fail-fast propagates unchanged; a return-value failure is the
         // component's own printed error and follows the caller's error mode.
@@ -3214,7 +3214,7 @@ function* expandComponent(
         imports,
         returnBody,
       );
-    }, settledExit);
+    }, observed.settled);
 
     // Exact source is a provenance, and both halves of it are read here from
     // things no answer can write: that canonical execution authorized this import

@@ -14,8 +14,9 @@
  * settlement readable whether or not the chain returned normally.
  */
 
-import { createQueue, ensure } from "effection";
+import { createQueue, ensure, Err, Ok } from "effection";
 import type { Operation, Queue, Stream } from "effection";
+import { expandThroughTerminal } from "./component-api.ts";
 import type { ComponentExpansionPhase, ComponentExpansionRequest } from "./component-api.ts";
 import type { Expansion } from "./expansion.ts";
 
@@ -302,4 +303,79 @@ function explanatory(
         ? raised.errors.map((member) => reported(member, depth + 1))
         : [],
   };
+}
+
+/**
+ * Surround one element's work with its canonical observation.
+ *
+ * Every path that expands something an author wrote goes through here, so the
+ * sequence a reader sees, the authority a handler has and the reconciliation
+ * between the two are decided once rather than per call site.
+ *
+ * What the work produces is returned untouched. The observation says what
+ * happened and nothing more: it cannot read the value, and a handler cannot
+ * replace it, rescue a failure or complete the element early.
+ */
+export function* observeExpansion<T>(
+  expansion: Expansion,
+  work: (observed: ObservedExpansion) => Operation<T>,
+): Operation<T> {
+  const issued = issueComponentExpansion(expansion);
+  let produced: { readonly value: T } | undefined;
+  let terminated = false;
+  const terminate = (phase: ComponentExpansionPhase): void => {
+    if (!terminated) {
+      terminated = true;
+      issued.finish(phase);
+    }
+  };
+  issued.publish({ phase: "enter" });
+  const observed: ObservedExpansion = {
+    active: () => issued.publish({ phase: "active" }),
+    settled: (reason) => issued.publish({ phase: "exit", reason }),
+  };
+
+  let chainFailure: unknown;
+  let chainFailed = false;
+  try {
+    try {
+      yield* expandThroughTerminal(issued.request, (delegated) =>
+        claimComponentExpansion(delegated, function* () {
+          produced = { value: yield* work(observed) };
+        }),
+      );
+    } catch (error) {
+      chainFailure = error;
+      chainFailed = true;
+    }
+    // Reconciled after the whole dispatch has unwound, middleware cleanup
+    // included. A handler may refuse the work or fail a success; what it
+    // cannot do is rescue what canonical expansion raised, which is read back
+    // from the terminal rather than from whether the chain returned normally.
+    const settlement = issued.settlement();
+    if (settlement.status === "raised") {
+      terminate({ phase: "complete", result: Err(reported(settlement.raised)) });
+      throw settlement.raised;
+    }
+    if (settlement.status === "absent") {
+      const refusal = chainFailed ? chainFailure : settlement.refusal;
+      terminate({ phase: "complete", result: Err(reported(refusal)) });
+      throw refusal;
+    }
+    if (chainFailed) {
+      terminate({ phase: "complete", result: Err(reported(chainFailure)) });
+      throw chainFailure;
+    }
+    if (produced === undefined) {
+      const missing = new ComponentExpansionProtocolError("returned before the expansion settled");
+      terminate({ phase: "complete", result: Err(reported(missing)) });
+      throw missing;
+    }
+    terminate({ phase: "complete", result: Ok(undefined) });
+    return produced.value;
+  } finally {
+    // Nothing terminal was published, so this element unwound without
+    // completing: a clean cancellation, told after it has finished unwinding.
+    terminate({ phase: "cancelled" });
+  }
 }

@@ -12,7 +12,7 @@
 
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { each, scoped, sleep, useScope, withResolvers } from "effection";
+import { each, ensure, scoped, sleep, useScope, withResolvers } from "effection";
 import type { Scope } from "effection";
 import type { Operation } from "effection";
 import { Component } from "../src/component-api.ts";
@@ -338,6 +338,125 @@ describe("Tier CX — what surrounds one expansion", () => {
     });
     const observed = yield* watch(source, definitions);
     expect(observed.report).toBe(unobserved);
+  });
+
+  it("CX1: structural work crosses the seam once, and only where it runs", function* () {
+    const source = [
+      '<Switch value={"b"}>',
+      '<Case value={"a"}><Hello /></Case>',
+      '<Case value={"b"}><Hello /></Case>',
+      "</Switch>",
+      "",
+      "<If condition={false}>skipped<Else><Hello /></Else></If>",
+      "",
+      "<All><Spawn><Hello /></Spawn><Spawn><Hello /></Spawn></All>",
+      "",
+    ].join("\n");
+    const { watched, failure } = yield* watch(source, {
+      Hello: component("Hello", function* () {
+        return "hi";
+      }),
+    });
+    expect(failure).toBe(undefined);
+
+    const counted = new Map<string, number>();
+    for (const [, phases] of watched.seen) {
+      const name = watched.requests.find(
+        (request) => watched.seen.get(request.expansion.id) === phases,
+      )?.expansion.name;
+      counted.set(name ?? "?", (counted.get(name ?? "?") ?? 0) + 1);
+    }
+
+    // Every construct that actually consumed a region is surrounded once, and
+    // each real sibling of the `<All>` is its own element.
+    expect(counted.get("Switch")).toBe(1);
+    expect(counted.get("If")).toBe(1);
+    expect(counted.get("All")).toBe(1);
+    expect(counted.get("Spawn")).toBe(2);
+    // One `<Case>` was chosen; the other expanded nothing and is told nothing.
+    expect(counted.get("Case")).toBe(1);
+    // The `<Else>` ran, so it is an element; `skipped` is the arm that did not.
+    expect(counted.get("Else")).toBe(1);
+    // Four `<Hello />` bodies: one per selected region.
+    expect(counted.get("Hello")).toBe(4);
+
+    // Every element that ran reached a terminal observation, exactly one.
+    for (const [, phases] of watched.seen) {
+      const terminals = phases.filter(
+        (one) => one.phase === "complete" || one.phase === "cancelled",
+      );
+      expect(terminals.length).toBe(1);
+    }
+  });
+
+  it("CX1: an unselected branch and passive syntax are told nothing", function* () {
+    const source =
+      '<Switch value={"a"}>\n<Case value={"a"}>taken</Case>\n' +
+      '<Case value={"z"}><Boom /></Case>\n</Switch>\n';
+    const { watched, failure } = yield* watch(source, {
+      Boom: component("Boom", function* () {
+        throw new Error("the branch that was not chosen ran");
+      }),
+    });
+
+    expect(failure).toBe(undefined);
+    const names = watched.requests.map((one) => one.expansion.name).sort();
+    // The chosen Case, and the Switch around it. The unchosen Case never
+    // expanded, so neither it nor the component inside it was ever an element.
+    expect(names).toEqual(["Case", "Switch"]);
+  });
+
+  it("CX2: a body that has returned stays in EXIT while its cleanup runs", function* () {
+    const entered = withResolvers<void>();
+    const release = withResolvers<void>();
+    const observedDuringCleanup: string[] = [];
+    const { rendered } = yield* watch(
+      "<Held />",
+      {
+        Held: component("Held", function* () {
+          // Registered before anything is acquired, and held open after the
+          // body returns: this is the stretch EXIT exists to describe.
+          yield* ensure(function* () {
+            entered.resolve();
+            yield* release.operation;
+          });
+          return "held";
+        }),
+      },
+      function* (request, next, read, owner) {
+        owner.run(function* () {
+          yield* entered.operation;
+          // The body has returned and its destructor is standing.
+          read((phase) => observedDuringCleanup.push(phase.phase));
+          release.resolve();
+        });
+        yield* next(request);
+      },
+    );
+
+    expect(rendered).toBe("held");
+    // Where the element was while its cleanup ran, and only then completed.
+    expect(observedDuringCleanup[0]).toBe("exit");
+    expect(observedDuringCleanup[observedDuringCleanup.length - 1]).toBe("complete");
+  });
+
+  it("CX2: cleanup that fails completes the element with a failure", function* () {
+    const { watched, report } = yield* watch("<Leaky />", {
+      Leaky: component("Leaky", function* () {
+        yield* ensure(function* () {
+          throw new Error("the destructor said no");
+        });
+        return "body was fine";
+      }),
+    });
+
+    const phases = [...watched.seen.values()][0];
+    const exit = phases.find((one) => one.phase === "exit");
+    // The body itself returned; the failure belongs to the teardown after it.
+    expect(exit?.phase === "exit" && exit.reason).toBe("returned");
+    const complete = phases[phases.length - 1];
+    expect(complete.phase === "complete" && complete.result.ok).toBe(false);
+    expect(report).toContain("the destructor said no");
   });
 
   it("CX4: a late subscriber is told where it is, without earlier replay", function* () {
