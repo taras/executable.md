@@ -899,6 +899,27 @@ const EMPTY_MODEL: ReplModel = Object.freeze({
 });
 
 /**
+ * Whether answering this action needs the frame's measured admission.
+ *
+ * The four scrolls, and nothing else: every other branch of `reduceRepl`
+ * decides from the state, the model and this process's overlay alone. It
+ * lives here because the reducer is what reads `admission`, so a fifth
+ * branch that starts reading one is written next to the answer about it.
+ *
+ * The root measures a frame before the action when this is true. For a
+ * keystroke into the draft it is false, and measuring the reading beside that
+ * draft would be work for an answer nothing consults.
+ */
+export function readsGeometry(action: ReplAction): boolean {
+  return (
+    action.kind === "scroll" ||
+    action.kind === "scroll-sessions" ||
+    action.kind === "scroll-entries" ||
+    action.kind === "scroll-reading"
+  );
+}
+
+/**
  * Answer one action.
  *
  * Total over the union, and pure: nothing here appends, opens, pauses or

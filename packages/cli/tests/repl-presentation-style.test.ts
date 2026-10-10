@@ -82,6 +82,10 @@ import {
   viewportBounds,
 } from "./fixtures/repl/presentation.ts";
 import { referenceEvents } from "./fixtures/repl/reference.ts";
+import { useCountingRenderer } from "./fixtures/repl/presentation.ts";
+import { useReplTree } from "../src/repl/reconcile.ts";
+import { createFitStore } from "../src/repl/fitting.ts";
+import { commitReplFrame } from "../src/repl/program.ts";
 import { ordinaryEvaluationProfile } from "../src/evaluation-profile.ts";
 import { submitReplEntry } from "../src/repl/session.ts";
 import type { ReplSession } from "../src/repl/session.ts";
@@ -2363,4 +2367,98 @@ describe("REPL presentation: a row the frame cannot hold whole", () => {
       SYNTAX.tag,
     );
   });
+});
+
+/** An entry whose source is this many lines, for measuring what a frame costs. */
+function sourceOf(lines: number): string {
+  return Array.from({ length: lines }, (_, at) =>
+    at % 4 === 3
+      ? ""
+      : `<Json value={{ ordinal: ${at}, note: "line ${at} of a long entry" }} as="n${at}" />`,
+  ).join("\n");
+}
+
+/**
+ * What one complete frame asks the engine for, with the draft moved.
+ *
+ * The production commit path — measure, admit, reconcile, draw — against one
+ * real tree, one real engine pair and the store a running REPL owns. The
+ * first frame is warmup; the number returned is what the *second* frame costs
+ * when the only thing that changed is the draft beside the reading.
+ */
+function* frameCost(lines: number): Operation<{ warmup: number; typed: number }> {
+  return yield* scoped(function* () {
+    const renderer = yield* useCountingRenderer(WIDE);
+    const tree = yield* useReplTree<ReplAction>();
+    const store = createFitStore();
+    const model = yield* scoped(function* () {
+      const physical = new InMemoryStream();
+      yield* runEntry(physical, `${sourceOf(lines)}\n`);
+      return projected(yield* physical.readAll());
+    });
+    const entry = model.entries[0];
+    if (entry === undefined) {
+      throw new Error("the fixture admitted no entry");
+    }
+    const drafted = (draft: string) =>
+      reading(
+        Object.freeze({ ...selecting(stateWith({}), entry.key), draft }),
+        model,
+        NOTHING_LIVE,
+        WIDE,
+      );
+
+    const first = yield* commitReplFrame(
+      tree,
+      renderer,
+      drafted("a"),
+      0,
+      undefined,
+      undefined,
+      store,
+    );
+    if (!first.ok) {
+      throw first.error;
+    }
+    const warmup = renderer.measures();
+    renderer.reset();
+    const second = yield* commitReplFrame(
+      tree,
+      renderer,
+      drafted("ab"),
+      0,
+      undefined,
+      undefined,
+      store,
+    );
+    if (!second.ok) {
+      throw second.error;
+    }
+    return { warmup, typed: renderer.measures() };
+  });
+}
+
+describe("REPL responsiveness: a complete frame after a keystroke", () => {
+  it("RS2: costs the same whether the selected reading is short or long", () =>
+    scoped(function* () {
+      const short = yield* frameCost(12);
+      const long = yield* frameCost(222);
+
+      // The first frame of each pays for its own reading, and the long one
+      // pays far more — so these two fixtures really do differ in the work
+      // the cache is about.
+      expect(long.warmup).toBeGreaterThan(short.warmup * 4);
+
+      // The second frame changed only the draft. What it costs is the fixed
+      // measurement a complete frame always performs — three structural
+      // passes, the rail and the drawer — and *not* the source fitting, so it
+      // is the same number for twelve lines and for two hundred and
+      // twenty-two.
+      expect(long.typed).toBe(short.typed);
+      // That floor is real work, not zero: this is a whole frame, not the
+      // fitter on its own.
+      expect(short.typed).toBeGreaterThan(0);
+      // And it is a fraction of what the reading cost to fit.
+      expect(long.typed).toBeLessThan(long.warmup / 10);
+    }));
 });

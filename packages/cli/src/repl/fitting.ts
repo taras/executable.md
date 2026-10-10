@@ -113,6 +113,103 @@ export interface ReplPreparedReading {
   readonly rows: readonly ReplPreparedRow[];
 }
 
+/**
+ * Where one logical line was cut, and how wide the piece measured.
+ *
+ * The measured half of a row, and the only half an engine answer decides.
+ * Which text it holds comes from the line it belongs to, so this stays true
+ * for as long as that line's text and depth do.
+ */
+export interface ReplRowCut {
+  /** The offset into the logical line this piece starts at. */
+  readonly from: number;
+  /** How many code units of it this piece holds. */
+  readonly length: number;
+  /** Whether a previous piece already carried the start of this line. */
+  readonly continuation: boolean;
+  /** The column this line was written at, carried onto its continuations. */
+  readonly indent: number;
+  /** What the engine measured this exact piece as. */
+  readonly width: number;
+}
+
+/**
+ * Everything about a reading that measurement decides.
+ *
+ * The reservation and one cut list per logical line, in order. It is a
+ * function of the lines' text and depth, the room they were fitted to, and
+ * the terminal size — and of nothing else. A badge arriving, a phase
+ * settling, a selection moving and a position being inspected all leave it
+ * exactly as it was, which is why it can be kept and reused.
+ */
+export interface ReplFitGeometry {
+  readonly reservation: ReplFitReservation;
+  readonly cuts: readonly (readonly ReplRowCut[])[];
+}
+
+/**
+ * The geometry one running REPL is holding on to.
+ *
+ * Typing moves the draft, not the reading beside it, and a reading is the
+ * expensive thing to fit: a two-hundred-line entry costs an engine render per
+ * line plus a binary search per overflowing row, and a keystroke used to pay
+ * that twice. This keeps the last answer and the exact inputs it was computed
+ * from, so a frame whose reading has not moved reuses it.
+ *
+ * Inputs are compared, not digested. A few hundred short string comparisons
+ * are far below one render, and a digest would trade a guarantee for a
+ * cheaper comparison that is already cheap.
+ */
+export interface ReplFitStore {
+  /** The geometry retained for these exact inputs, or none. */
+  held(
+    lines: readonly ReplReadingLine[],
+    room: number,
+    size: ReplTerminalSize,
+  ): ReplFitGeometry | undefined;
+  /** Retain this geometry as the answer for these inputs. */
+  keep(
+    lines: readonly ReplReadingLine[],
+    room: number,
+    size: ReplTerminalSize,
+    geometry: ReplFitGeometry,
+  ): void;
+}
+
+/** A store holding one reading's geometry, owned by whoever creates it. */
+export function createFitStore(): ReplFitStore {
+  let held:
+    | {
+        readonly shape: readonly { readonly text: string; readonly depth: number }[];
+        readonly room: number;
+        readonly columns: number;
+        readonly rows: number;
+        readonly geometry: ReplFitGeometry;
+      }
+    | undefined;
+  const same = (lines: readonly ReplReadingLine[], room: number, size: ReplTerminalSize) =>
+    held !== undefined &&
+    held.room === room &&
+    held.columns === size.columns &&
+    held.rows === size.rows &&
+    held.shape.length === lines.length &&
+    held.shape.every((one, at) => one.text === lines[at].text && one.depth === lines[at].depth);
+  return {
+    held(lines, room, size) {
+      return same(lines, room, size) ? held?.geometry : undefined;
+    },
+    keep(lines, room, size, geometry) {
+      held = {
+        shape: lines.map((one) => ({ text: one.text, depth: one.depth })),
+        room,
+        columns: size.columns,
+        rows: size.rows,
+        geometry,
+      };
+    },
+  };
+}
+
 /** The rail glyph, and the gap between it and the text beside it. */
 const RAIL = "│";
 const SEPARATOR = "  ";
@@ -216,13 +313,40 @@ export function* prepareReading(
   size: ReplTerminalSize,
   lines: readonly ReplReadingLine[],
   room: number,
+  store?: ReplFitStore,
 ): Operation<Result<ReplPreparedReading>> {
+  const retained = store?.held(lines, room, size);
+  if (retained !== undefined) {
+    return Ok(decorate(lines, retained));
+  }
+  const measured = yield* fitGeometry(renderer, size, lines, room);
+  if (!measured.ok) {
+    return measured;
+  }
+  store?.keep(lines, room, size, measured.value);
+  return Ok(decorate(lines, measured.value));
+}
+
+/**
+ * Everything measurement decides about a reading, and nothing else.
+ *
+ * Every engine render this file performs for a reading happens here. What
+ * comes back says where each line was cut and how wide each piece is; which
+ * rail, badge and roles those pieces are drawn with is decided afterwards,
+ * from the lines as they stand at the time.
+ */
+function* fitGeometry(
+  renderer: ReplRenderer,
+  size: ReplTerminalSize,
+  lines: readonly ReplReadingLine[],
+  room: number,
+): Operation<Result<ReplFitGeometry>> {
   const reserved = yield* reserveFor(renderer, size, room);
   if (!reserved.ok) {
     return reserved;
   }
   const reservation = reserved.value;
-  const cut: ReplPreparedRow[] = [];
+  const cuts: (readonly ReplRowCut[])[] = [];
   // Nesting is drawn inside the content region rather than beside it, so a
   // deeply nested element loses text room rather than pushing the status column
   // off the pane it was measured against.
@@ -232,34 +356,81 @@ export function* prepareReading(
     if (!fitted.ok) {
       return fitted;
     }
-    cut.push(...fitted.value);
+    cuts.push(fitted.value);
   }
   // The finished candidates, measured again as the text they ended up being.
   // The search above narrowed over prefixes; this is the row, and a row that
   // does not fit the region it was cut for is a frame refusal rather than
   // something to clip.
-  const measured = yield* widths(
-    renderer,
-    size,
-    cut.map((one) => one.text),
+  const flat = cuts.flatMap((one, at) =>
+    one.map((cut) => lines[at].text.slice(cut.from, cut.from + cut.length)),
   );
-  if (!measured.ok) {
-    return measured;
+  const widest = yield* widths(renderer, size, flat);
+  if (!widest.ok) {
+    return widest;
   }
+  const sized: (readonly ReplRowCut[])[] = [];
+  let index = 0;
+  for (const [at, one] of cuts.entries()) {
+    const line: ReplRowCut[] = [];
+    for (const cut of one) {
+      const width = widest.value[index];
+      index += 1;
+      const indent = Math.min(
+        lines[at].depth * 2 + cut.indent,
+        Math.max(0, reservation.content - 1),
+      );
+      if (width > reservation.content - indent) {
+        return Err(
+          new ReplFitRefusal(
+            `row ${keyOf(lines[at], cut)} measured ${width} columns in ${
+              reservation.content - indent
+            }`,
+          ),
+        );
+      }
+      line.push(Object.freeze({ ...cut, width }));
+    }
+    sized.push(Object.freeze(line));
+  }
+  return Ok(Object.freeze({ reservation, cuts: Object.freeze(sized) }));
+}
+
+/**
+ * The rows these lines are drawn as, over geometry already measured.
+ *
+ * The live half: rails, badges, roles and token runs come from the lines as
+ * they stand now, so an element settling or a position being inspected shows
+ * immediately over cuts that were measured once.
+ */
+function decorate(
+  lines: readonly ReplReadingLine[],
+  geometry: ReplFitGeometry,
+): ReplPreparedReading {
   const rows: ReplPreparedRow[] = [];
-  for (const [index, one] of cut.entries()) {
-    const width = measured.value[index];
-    const indent = Math.min(one.depth * 2 + one.indent, Math.max(0, reservation.content - 1));
-    if (width > reservation.content - indent) {
-      return Err(
-        new ReplFitRefusal(
-          `row ${one.key} measured ${width} columns in ${reservation.content - indent}`,
-        ),
+  for (const [at, one] of geometry.cuts.entries()) {
+    const line = lines[at];
+    for (const cut of one) {
+      rows.push(
+        Object.freeze({
+          ...row(
+            line,
+            line.text.slice(cut.from, cut.from + cut.length),
+            cut.from,
+            cut.continuation,
+            cut.indent,
+          ),
+          width: cut.width,
+        }),
       );
     }
-    rows.push(Object.freeze({ ...one, width }));
   }
-  return Ok(Object.freeze({ reservation, rows: Object.freeze(rows) }));
+  return Object.freeze({ reservation: geometry.reservation, rows: Object.freeze(rows) });
+}
+
+/** The key a cut of this line is drawn under. */
+function keyOf(line: ReplReadingLine, cut: ReplRowCut): string {
+  return cut.continuation ? `${line.key}+${cut.from}` : line.key;
 }
 
 /** One line of read-only text, fitted to a width. */
@@ -302,31 +473,34 @@ export function* fitPlain(
   const fitted: ReplFittedLine[] = [];
   for (const one of lines) {
     const runs = one.runs ?? tokenRuns([{ text: one.text, token: "source" }]);
-    const rows = yield* fitLine(
-      renderer,
-      size,
-      Object.freeze({
-        key: one.key,
-        text: one.text,
-        runs,
-        rail: "rail-pending" as const,
-        depth: 0,
-        badge: undefined,
-        style: Object.freeze({ role: "source" as const, selected: false, inspected: false }),
-      }),
-      room,
-    );
-    if (!rows.ok) {
-      return rows;
+    const line = Object.freeze({
+      key: one.key,
+      text: one.text,
+      runs,
+      rail: "rail-pending" as const,
+      depth: 0,
+      badge: undefined,
+      style: Object.freeze({ role: "source" as const, selected: false, inspected: false }),
+    });
+    const cuts = yield* fitLine(renderer, size, line, room);
+    if (!cuts.ok) {
+      return cuts;
     }
-    for (const row of rows.value) {
+    for (const cut of cuts.value) {
+      const drawn = row(
+        line,
+        line.text.slice(cut.from, cut.from + cut.length),
+        cut.from,
+        cut.continuation,
+        cut.indent,
+      );
       fitted.push(
         Object.freeze({
-          key: row.key,
-          text: row.text,
-          runs: row.runs,
-          continuation: row.continuation,
-          indent: row.indent,
+          key: drawn.key,
+          text: drawn.text,
+          runs: drawn.runs,
+          continuation: drawn.continuation,
+          indent: drawn.indent,
         }),
       );
     }
@@ -334,24 +508,29 @@ export function* fitPlain(
   return Ok(Object.freeze(fitted));
 }
 
-/** One logical line as its rows. */
+/**
+ * One logical line as the pieces it is cut into.
+ *
+ * Widths are filled in by the pass that measures every finished piece at once;
+ * nothing reads them in between.
+ */
 function* fitLine(
   renderer: ReplRenderer,
   size: ReplTerminalSize,
   line: ReplReadingLine,
   room: number,
-): Operation<Result<readonly ReplPreparedRow[]>> {
+): Operation<Result<readonly ReplRowCut[]>> {
   // A blank line is a row. Measuring it would ask the engine the width of
   // nothing, and dropping it would edit the shape of somebody's document.
   if (line.text.length === 0) {
-    return Ok([row(line, "", 0, false, 0)]);
+    return Ok([piece(0, 0, false, 0)]);
   }
   const whole = yield* widths(renderer, size, [line.text]);
   if (!whole.ok) {
     return whole;
   }
   if (whole.value[0] <= room) {
-    return Ok([row(line, line.text, 0, false, 0)]);
+    return Ok([piece(0, line.text.length, false, 0)]);
   }
   // Where this line begins, so its continuations begin there too. Bounded well
   // inside the region: an indent that left no room for text would make a row
@@ -360,7 +539,7 @@ function* fitLine(
     line.text.length - line.text.trimStart().length,
     Math.max(0, Math.floor(room / 2)),
   );
-  const rows: ReplPreparedRow[] = [];
+  const cuts: ReplRowCut[] = [];
   let at = 0;
   while (at < line.text.length) {
     const rest = line.text.slice(at);
@@ -368,10 +547,15 @@ function* fitLine(
     if (!cut.ok) {
       return cut;
     }
-    rows.push(row(line, rest.slice(0, cut.value), at, at > 0, hanging));
+    cuts.push(piece(at, cut.value, at > 0, at > 0 ? hanging : 0));
     at += cut.value;
   }
-  return Ok(Object.freeze(rows));
+  return Ok(Object.freeze(cuts));
+}
+
+/** One cut, before the pass that measures it. */
+function piece(from: number, length: number, continuation: boolean, indent: number): ReplRowCut {
+  return Object.freeze({ from, length, continuation, indent, width: 0 });
 }
 
 /**

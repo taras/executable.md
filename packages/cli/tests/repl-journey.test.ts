@@ -2552,8 +2552,17 @@ describe("REPL journey: resizing while a frame is being prepared", () => {
       // against this program rather than promised by it — what the row asserts is
       // that the measured frame and the terminal were out of step, and the two
       // controls for it are what keep that honest.
+      //
+      // Three, because that is where the boundary is. One keystroke reads the
+      // size at the too-small check, again to resolve the frame, a third time
+      // for the measurement the frame is built from, and a fourth to
+      // revalidate it. The third is the measurement, so a drag armed there
+      // answers it with the old size and leaves the new one for the
+      // revalidation to find. It was four while every action also measured a
+      // frame before reducing; typing no longer does, and the read that
+      // preparation performed is gone.
       const from = terminal.presented.length;
-      terminal.resizeAfterRead(4, { columns: 72, rows: 20 });
+      terminal.resizeAfterRead(3, { columns: 72, rows: 20 });
       terminal.feed("!");
       yield* drawing();
 
@@ -4738,6 +4747,136 @@ describe("REPL journey: a cold process over a multi-entry journal", () => {
  * evidence about anything. Top level, each of these can be run, and reddened, on
  * its own.
  */
+/** An entry of this many lines, for measuring what an interaction costs beside it. */
+function longEntry(lines: number): string {
+  return `${Array.from({ length: lines }, (_, at) =>
+    at % 4 === 3
+      ? ""
+      : `<Json value={{ ordinal: ${at}, note: "line ${at} of a long entry" }} as="n${at}" />`,
+  ).join("\n")}\n`;
+}
+
+/**
+ * What one interaction costs in terminal size reads, through the real loop.
+ *
+ * The root reads the size at the too-small check, again to resolve the frame,
+ * again for the measurement the frame is built from, and again to revalidate
+ * it. A fifth read appears the moment an action is answered with a freshly
+ * measured frame — which is what the gate exists to avoid for a keystroke.
+ * The recording terminal counts those reads, so this is the production
+ * dispatch, preparation and reconciliation path observed from outside.
+ */
+function* costOf(terminal: Terminal, send: () => void): Operation<number> {
+  const from = terminal.sized;
+  send();
+  yield* settled(40);
+  return terminal.sized - from;
+}
+
+describe("REPL responsiveness: an interaction beside a long reading", () => {
+  for (const lines of [12, 222]) {
+    it(`RS3: typing and traversing beside a ${lines}-line entry read the size a fixed number of times`, function* () {
+      const { terminal, install } = recordingTerminal();
+      yield* scoped(function* (): Operation<void> {
+        yield* install();
+        yield* immediateClock();
+        yield* useTempFileCompiler();
+        yield* useTemporaryHost();
+
+        const running = yield* spawn(function* (): Operation<void> {
+          const ran = yield* runReplProgram({ profile: PROFILE });
+          if (!ran.ok) {
+            throw ran.error;
+          }
+        });
+        yield* untilDrawn(terminal);
+        yield* submitted(terminal, longEntry(lines));
+        yield* settledEntry(terminal, 1, "ok");
+        // The long reading is the selected one, so it is what a frame would
+        // have to fit if anything made it fit again.
+        yield* click(terminal, "1. [ok] entry-1");
+        yield* focusDraft(terminal);
+        yield* settled(40);
+
+        // Warmup: the first keystroke after a selection still measures the
+        // reading once, because this is the first frame that reading is in.
+        yield* costOf(terminal, () => terminal.feed("a"));
+
+        const typed = [
+          yield* costOf(terminal, () => terminal.feed("b")),
+          yield* costOf(terminal, () => terminal.feed("c")),
+        ];
+        const erased = yield* costOf(terminal, () => terminal.feed("\x7f"));
+        const forward = yield* costOf(terminal, () => terminal.feed("\t"));
+        const backward = yield* costOf(terminal, () => terminal.feed("\x1b[Z"));
+
+        // Four reads each: the too-small check, the resolution, the frame's
+        // measurement and its revalidation. A fifth would be an action
+        // answered with a frame measured before it ran — which a keystroke
+        // does not need, and which is what this count is here to catch.
+        expect([lines, typed]).toEqual([lines, [4, 4]]);
+        expect([lines, erased]).toEqual([lines, 4]);
+        // A traversal is answered by the tree, not the reducer, so it reads
+        // the size for its one frame and nothing else.
+        expect([lines, forward]).toEqual([lines, 4]);
+        expect([lines, backward]).toEqual([lines, 4]);
+
+        terminal.end();
+        yield* running;
+      });
+    });
+  }
+});
+
+describe("REPL responsiveness: a focus move is one frame", () => {
+  it("RS1: Tab moves the cue and the focus, and presents once", function* () {
+    const { terminal, install } = recordingTerminal();
+    yield* scoped(function* (): Operation<void> {
+      yield* install();
+      yield* immediateClock();
+      yield* useTempFileCompiler();
+      yield* useTemporaryHost();
+
+      const running = yield* spawn(function* (): Operation<void> {
+        const ran = yield* runReplProgram({ profile: PROFILE });
+        if (!ran.ok) {
+          throw ran.error;
+        }
+      });
+      yield* untilDrawn(terminal);
+      // Something to traverse, and a settled screen to count from.
+      yield* submitted(terminal, COLD_ONE);
+      yield* settledEntry(terminal, 1, "ok");
+      yield* focusDraft(terminal);
+      yield* settled(40);
+
+      // Where focus is now, read off the screen rather than from the program.
+      const before = screenOf(terminal).findIndex((line) => line.includes(">> "));
+      expect(before).toBeGreaterThanOrEqual(0);
+
+      const from = terminal.presented.length;
+      terminal.feed("\t");
+      yield* settled(40);
+
+      // The cue moved, so the traversal happened.
+      expect(screenOf(terminal).findIndex((line) => line.includes(">> "))).not.toBe(before);
+      // And it cost one frame. It used to cost two: the first drew the control
+      // the reader had just left and the second corrected it, so the marker was
+      // always one keystroke behind what the tree already held.
+      expect(terminal.presented.length - from).toBe(1);
+
+      // Back again, the same way and for the same price.
+      const back = terminal.presented.length;
+      terminal.feed("\x1b[Z");
+      yield* settled(40);
+      expect(screenOf(terminal).findIndex((line) => line.includes(">> "))).toBe(before);
+      expect(terminal.presented.length - back).toBe(1);
+
+      terminal.end();
+      yield* running;
+    });
+  });
+});
 describe("REPL first use: UI2", () => {
   it("UI2: Enter on [exit] ends the command without touching the history", function* () {
     const { terminal, install } = recordingTerminal();
