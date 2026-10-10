@@ -31,6 +31,7 @@ import { collect } from "@executablemd/core";
 import { denoRepositoryHost } from "../src/deno/composition/host.ts";
 import { gitSession } from "../src/deno/composition/git.ts";
 import { useBareRemote } from "./support/git-remotes.ts";
+import { fileDeleteEntry, fileWriteEntry } from "@executablemd/core/host";
 import { useRetainedRepositoryEntry } from "../src/deno/retained-repository/provider.ts";
 import {
   RETAINED_REPOSITORY_COMPLETION,
@@ -142,6 +143,7 @@ function run(
   stream: InMemoryStream,
   leaf: FilesHandler,
   entryKey = "0001",
+  evaluating = false,
 ): Operation<Run> {
   return scoped(function* () {
     const path = join(fixture.root, "entry.md");
@@ -156,8 +158,20 @@ function run(
       host: denoRepositoryHost(),
       files: leaf,
     });
+    // The one captured file access this entry's fragments run on, bound from
+    // the same provider that answers its authored work.
+    const installation = evaluating
+      ? {
+          ...entry.installation,
+          evaluation: {
+            read: [],
+            write: [fileWriteEntry(), fileDeleteEntry()],
+            files: entry.files,
+          },
+        }
+      : entry.installation;
     const output = yield* collect(
-      yield* executeInstalled({ path, stream, includes: [fixture.root] }, [entry.installation]),
+      yield* executeInstalled({ path, stream, includes: [fixture.root] }, [installation]),
     );
     return { output: String(output), events: yield* stream.readAll() };
   });
@@ -577,6 +591,62 @@ describe("retained repository: one entry's local work", () => {
     // The file was written in the worktree, not in the repository.
     expect(write?.preState.checkout).toBe(worktree?.preState.checkout);
     expect(write?.preState.checkout).not.toBe(intents[0]?.preState.checkout);
+  });
+
+  it("R6: a generated write inside the checkout is retained on captured terms", function* () {
+    const fixture = yield* useFixture();
+    const leaf = counted();
+    const fragment = '<File path="generated.md">generated\n</File>\n';
+    const { events } = yield* run(
+      fixture,
+      '<File path="authored.md">authored\n</File>\n\n' +
+        `<Evaluate text={${JSON.stringify(fragment)}} allow={["write"]} />\n`,
+      new InMemoryStream(),
+      leaf.handler,
+      "0001",
+      true,
+    );
+
+    expect(yield* readTextFile(join(fixture.checkout, "generated.md"))).toBe("generated\n");
+
+    const intents = recordsOf(events, RETAINED_REPOSITORY_INTENT).map((record) =>
+      parseRetainedRepositoryIntent(record),
+    );
+    expect(intents.map((record) => record?.operation)).toEqual([
+      "ambient",
+      "file-write",
+      "file-write",
+    ]);
+    const authored = intents[1];
+    const generated = intents[2];
+    // One name, two occurrences: the fragment's write is its own effect.
+    expect(generated?.site.occurrence).not.toBe(authored?.site.occurrence);
+    expect(generated?.request).toEqual({
+      cwd: fixture.checkout,
+      path: "generated.md",
+      content: "generated\n",
+    });
+    // It followed the authored write in the same lane rather than racing it.
+    expect(intents.map((record) => record?.lane.position)).toEqual([0, 1, 2]);
+  });
+
+  it("R6: a completed generated write replays with no native mutation", function* () {
+    const fixture = yield* useFixture();
+    const fragment = '<File path="generated.md">generated\n</File>\n';
+    const source = `<Evaluate text={${JSON.stringify(fragment)}} allow={["write"]} />\n`;
+    const { events } = yield* run(
+      fixture,
+      source,
+      new InMemoryStream(),
+      counted().handler,
+      "0001",
+      true,
+    );
+
+    const again = counted();
+    yield* run(fixture, source, new InMemoryStream([...events]), again.handler, "0001", true);
+    expect(again.writes).toEqual([]);
+    expect(yield* readTextFile(join(fixture.checkout, "generated.md"))).toBe("generated\n");
   });
 
   it("R6: a write where there is no repository is ordinary and retains nothing", function* () {

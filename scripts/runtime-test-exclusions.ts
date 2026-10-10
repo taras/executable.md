@@ -653,6 +653,18 @@ const DENO_ONLY_REPOSITORY_PROVIDER: RuntimeExclusion[] = [
     issue: DERIVED_SCOPE,
   },
   {
+    path: "packages/git/tests/retained-repository-local.test.ts",
+    reason:
+      "the subject is the retained REPL entry's own repository provider: it discovers and clones real checkouts, predicts commits in a scratch administration and writes to them through the Deno runtime. The portable half of this protocol — the records, their admission and the sequence rules — is proven across all three runtimes by packages/git/tests/retained-repository-records.test.ts",
+    issue: DERIVED_SCOPE,
+  },
+  {
+    path: "packages/git/tests/retained-repository-lifecycle.test.ts",
+    reason:
+      "the same provider, holding its managed slots under a kernel-released exclusive advisory lock taken through the Deno runtime; Node and Bun expose no equivalent, and the lane and teardown behavior beside it is only meaningful against those leases",
+    issue: DERIVED_SCOPE,
+  },
+  {
     path: "packages/git/tests/run-composition-remote.test.ts",
     reason:
       "the same provider, publishing and reconciling against a modeled Git host; the transport and its evidence are Deno-only for the same reason the rest of the provider is",
