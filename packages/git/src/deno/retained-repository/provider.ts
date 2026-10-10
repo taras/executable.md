@@ -244,7 +244,7 @@ export function* useRetainedRepositoryEntry(
       fileMutations: retainedFileMutations(fileHost),
       // Declared, not registered: each one is minted a domain so its body can
       // authenticate its own invocation before it routes anything.
-      components: retainedGitComponents(fileHost),
+      components: retainedGitComponents(fileHost, request.host),
     },
     files: capturedFiles(request.files, request.cwd),
     history: () => admitted,

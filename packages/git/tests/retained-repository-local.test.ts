@@ -393,6 +393,53 @@ describe("retained repository: one entry's local work", () => {
     expect(yield* readIndexPaths(fixture)).toContain("notes.md");
   });
 
+  it("R3: a commit's object id is predicted before it is written", function* () {
+    const fixture = yield* useFixture();
+    const source = '<File path="notes.md">the note\n</File>\n\n' +
+      '<Git.Add paths="notes.md" />\n\n<Git.Commit message="record the note" as="commit" />\n';
+    const { events } = yield* run(fixture, source, new InMemoryStream(), counted().handler);
+
+    const intents = recordsOf(events, RETAINED_REPOSITORY_INTENT).map((record) =>
+      parseRetainedRepositoryIntent(record)
+    );
+    expect(intents.map((record) => record?.operation)).toEqual([
+      "ambient",
+      "file-write",
+      "add",
+      "commit",
+    ]);
+    const commit = intents[3];
+    const predicted = commit?.postState.head.kind === "symbolic"
+      ? commit.postState.head.oid
+      : undefined;
+    expect(predicted).toBeDefined();
+
+    // The commit Git actually wrote is the one the intent predicted.
+    const git = gitSession(denoRepositoryHost(), fixture.root);
+    expect(yield* git.read(["rev-parse", "HEAD"], fixture.checkout)).toBe(predicted);
+    // And the parent it predicted is the commit the checkout was on.
+    expect(commit?.preState.head.kind === "symbolic" && commit.preState.head.oid).not.toBe(
+      predicted,
+    );
+  });
+
+  it("R4: an interrupted commit adopts the commit it predicted", function* () {
+    const fixture = yield* useFixture();
+    const source = '<File path="notes.md">the note\n</File>\n\n' +
+      '<Git.Add paths="notes.md" />\n\n<Git.Commit message="record the note" as="commit" />\n';
+    const { events } = yield* run(fixture, source, new InMemoryStream(), counted().handler);
+    const git = gitSession(denoRepositoryHost(), fixture.root);
+    const head = yield* git.read(["rev-parse", "HEAD"], fixture.checkout);
+
+    // The commit happened; its completion did not. A resume adopts it rather
+    // than committing a second time.
+    const resumed = yield* run(fixture, source, interrupted(events), counted().handler);
+    expect(recordsOf(resumed.events, RETAINED_REPOSITORY_COMPLETION).length).toBeGreaterThan(0);
+    expect(yield* git.read(["rev-parse", "HEAD"], fixture.checkout)).toBe(head);
+    // One commit, not two.
+    expect(yield* git.read(["rev-list", "--count", "HEAD"], fixture.checkout)).toBe("2");
+  });
+
   it("R6: a write where there is no repository is ordinary and retains nothing", function* () {
     const fixture = yield* useFixture();
     const leaf = counted();

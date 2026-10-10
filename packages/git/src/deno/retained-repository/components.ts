@@ -33,13 +33,18 @@ import { retainedDirectoryEnsure } from "./files.ts";
 import type { RetainedFileHost, SelectedCheckout } from "./files.ts";
 import type { RetainedFrontier } from "../../retained-repository/records.ts";
 import { routeDirectory } from "./terminal.ts";
+import { retainedCommit } from "./commit.ts";
+import type { RepositoryHost } from "../composition/host.ts";
 
 /** Where these components report themselves as coming from. */
 export const RETAINED_ORIGIN = "@executablemd/git/retained";
 
 /** Every Git-owned component this entry retains the work of. */
-export function retainedGitComponents(host: RetainedFileHost): readonly IdentityComponent[] {
-  return Object.freeze([retainedDir(host), retainedAdd(host)]);
+export function retainedGitComponents(
+  host: RetainedFileHost,
+  repository: RepositoryHost,
+): readonly IdentityComponent[] {
+  return Object.freeze([retainedDir(host), retainedAdd(host), retainedCommit(host, repository)]);
 }
 
 /**
