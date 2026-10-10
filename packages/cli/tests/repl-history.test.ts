@@ -171,7 +171,9 @@ describe("H4 — the five rows are allocated by measurement", () => {
       const members = first.value.groups.flatMap((one) => one.ordinals);
       expect(members.length).toBe(40);
       expect(new Set(members).size).toBe(40);
-      expect(members.toSorted((a, b) => a - b)).toEqual(
+      // Sorted through a copy rather than with `toSorted`: the Node
+      // typecheck's `lib` is ES2022, and `toSorted` is ES2023.
+      expect([...members].sort((a, b) => a - b)).toEqual(
         Array.from({ length: 40 }, (_, at) => at + 1),
       );
     }));
@@ -423,7 +425,7 @@ describe("H3 — the head a real session publishes", () => {
     yield* sleep(0);
     expect(JSON.stringify(session.navigation)).not.toContain("shibboleth");
     for (const point of session.navigation.checkpoints) {
-      expect(Object.keys(point).toSorted()).toEqual(["kind", "marker"]);
+      expect(Object.keys(point).sort()).toEqual(["kind", "marker"]);
     }
   });
 });
@@ -590,7 +592,7 @@ describe("H1 — two positions the rail draws as one mark select different conte
         }
         const pairs = rail.value.groups
           .flatMap((group) => {
-            const ordinals = group.ordinals.toSorted((a, b) => a - b);
+            const ordinals = [...group.ordinals].sort((a, b) => a - b);
             return ordinals.flatMap((ordinal, at) =>
               at + 1 < ordinals.length && ordinals[at + 1] === ordinal + 1
                 ? [[ordinal, ordinal + 1] as const]
