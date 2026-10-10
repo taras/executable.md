@@ -1140,7 +1140,10 @@ describe("retained repository records: a destination that is not there yet", () 
     name: "review",
     requestedBranch: "topic",
     requestedBase: null,
-    creationCommit: "a".repeat(40),
+    // The commit the owner's own post-state puts `refs/heads/topic` at: adding
+    // this worktree is what moves that ref, and a creation whose destination
+    // stood somewhere else would be describing a pair that cannot exist.
+    creationCommit: B,
     objectFormat: "sha1",
   };
 
@@ -1280,7 +1283,7 @@ describe("retained repository records: a destination that is not there yet", () 
   it("R1: a worktree creation needs its owner already established, in that state", function* () {
     const made = yield* creation({
       operation: "worktree",
-      postState: frontier(LINKED),
+      postState: frontier(LINKED, B),
     });
     // No owner baseline at all.
     const missing = yield* admitRetainedRepositoryHistory([intended(made)], OWNER);
@@ -1293,7 +1296,7 @@ describe("retained repository records: a destination that is not there yet", () 
         intended(owner),
         yield* completed(owner),
         intended(
-          yield* creation({ operation: "worktree", position: 1, postState: frontier(LINKED) }),
+          yield* creation({ operation: "worktree", position: 1, postState: frontier(LINKED, B) }),
         ),
       ],
       OWNER,
@@ -1312,12 +1315,72 @@ describe("retained repository records: a destination that is not there yet", () 
     expect(reasonOf(result)).toBe("frontier-substitution");
   });
 
+  it("R1: a worktree creation's owner and destination must predict one ref list", function* () {
+    const owner = yield* intent();
+    // Everything about the owner's own checkout is preserved, and only the
+    // shared refs are put back the way they were — an owner that predicts it
+    // gains nothing, beside a destination checked out on a branch somebody has
+    // to have created.
+    const made = yield* creation({
+      operation: "worktree",
+      position: 1,
+      postState: frontier(LINKED, B),
+      prepared: {
+        slot: "/managed/worktrees/review",
+        metadata: WORKTREE_METADATA,
+        owner: {
+          preState: retainedFrontierJson(frontier()),
+          postState: retainedFrontierJson(frontier()),
+        },
+      },
+    });
+    const result = yield* admitRetainedRepositoryHistory(
+      [intended(owner), yield* completed(owner), intended(made)],
+      OWNER,
+    );
+    expect(reasonOf(result)).toBe("malformed-record");
+  });
+
+  it("R1: a worktree creation's two halves must agree on the object format", function* () {
+    const owner = yield* intent();
+    // The shared refs agree and the commit is the destination's own, and the
+    // owner is described as a repository of another object format — which is
+    // not a repository this worktree could be a checkout of.
+    const made = yield* creation({
+      operation: "worktree",
+      position: 1,
+      postState: frontier(LINKED, B),
+      prepared: {
+        slot: "/managed/worktrees/review",
+        metadata: WORKTREE_METADATA,
+        owner: {
+          // Both of the owner's ends, so the transition between them is a ref
+          // advance like any other and what disagrees is the owner against the
+          // destination.
+          preState: {
+            ...(retainedFrontierJson(frontier()) as Record<string, Json>),
+            objectFormat: "sha256",
+          },
+          postState: {
+            ...(retainedFrontierJson(frontier(PRIMARY, B)) as Record<string, Json>),
+            objectFormat: "sha256",
+          },
+        },
+      },
+    });
+    const result = yield* admitRetainedRepositoryHistory(
+      [intended(owner), yield* completed(owner), intended(made)],
+      OWNER,
+    );
+    expect(reasonOf(result)).toBe("malformed-record");
+  });
+
   it("R1: an unresolved worktree creation offers its owner's two ends", function* () {
     const owner = yield* intent();
     const made = yield* creation({
       operation: "worktree",
       position: 1,
-      postState: frontier(LINKED),
+      postState: frontier(LINKED, B),
     });
     const history = accepted(
       yield* admitRetainedRepositoryHistory(

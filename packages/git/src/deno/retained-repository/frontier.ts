@@ -156,7 +156,7 @@ function* readHead(git: GitSession, directory: string): Operation<RetainedHead |
 }
 
 /** Every ref this repository holds, in one canonical order. */
-function* readRefs(
+export function* readRefs(
   git: GitSession,
   directory: string,
 ): Operation<readonly RetainedRef[] | undefined> {

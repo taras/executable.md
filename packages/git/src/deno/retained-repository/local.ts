@@ -21,7 +21,8 @@
  * predict a transition from a state the other was about to leave.
  */
 
-import { Err, Ok, ensure, scoped, withResolvers } from "effection";
+import { Err, Ok, ensure, scoped, until, withResolvers } from "effection";
+import { realpath } from "node:fs/promises";
 import type { Operation, Result } from "effection";
 import type { Json } from "@executablemd/durable-streams";
 import { createDurableOperation, StaleInputError } from "@executablemd/durable-streams";
@@ -36,9 +37,10 @@ import {
   parseRetainedRepositoryIntent,
   retainedRepositoryCompletionJson,
   retainedRepositoryIntentIdentity,
+  retainedRefusalResult,
   retainedRepositoryIntentJson,
+  retainedRepositoryRefusal,
   retainedRepositoryRequestFingerprint,
-  sameRetainedCheckout,
   sameRetainedFrontier,
 } from "../../retained-repository/records.ts";
 import type {
@@ -89,13 +91,31 @@ export function* holdRetainedLanes(
   leases: Leases,
   requests: readonly LeaseRequest[],
 ): Operation<void> {
-  yield* leases.holdAll(
-    requests.map((request) =>
-      request.kind === "common"
-        ? { ...request, refuse: (message: string) => new RetainedLaneError(message) }
-        : request,
-    ),
-  );
+  const named: LeaseRequest[] = [];
+  for (const request of requests) {
+    if (request.kind !== "common") {
+      named.push(request);
+      continue;
+    }
+    named.push({
+      ...request,
+      // The directory's real path, so two spellings of one directory — a link
+      // and its target, `/var` for `/private/var` — take one lock rather than
+      // two. A destination that does not exist yet has only the path it was
+      // given, and nothing can be holding a directory that is not there.
+      slot: yield* canonicalDirectory(request.slot),
+      refuse: (message: string) => new RetainedLaneError(message),
+    });
+  }
+  yield* leases.holdAll(named);
+}
+
+function* canonicalDirectory(directory: string): Operation<string> {
+  try {
+    return yield* until(realpath(directory));
+  } catch {
+    return directory;
+  }
 }
 
 /**
@@ -182,6 +202,23 @@ export interface RetainedOperation {
    * state it started from.
    */
   candidates?(): readonly RetainedFrontier[];
+  /**
+   * What this operation left the checkout in, once it is acknowledged.
+   *
+   * How an entry's own work becomes the state the next operation builds on. A
+   * second mutation of one checkout starts from what the first one left, not
+   * from what the history held when the entry opened — and a sibling sharing
+   * the administration has the refs that moved folded into it.
+   */
+  settled?(frontier: RetainedFrontier): void;
+  /**
+   * Rebuild the refusal this result records, for a replay to answer with.
+   *
+   * Supplied by an operation whose refusals are durably completed. A replay
+   * that answered with the stored data as a value would be reporting a write
+   * that never happened as one that did.
+   */
+  refusal?(result: Json): Error | undefined;
 }
 
 /** What one entry's history already holds for this protocol to resume from. */
@@ -210,6 +247,14 @@ export interface RetainedResume {
 export interface CompletedOperation {
   readonly intent: RetainedRepositoryIntent;
   readonly result: Json;
+  /**
+   * The state its own completion recorded.
+   *
+   * Which of the intent's two ends this is says what happened: the predicted
+   * one for work that was done, the saved one for a refusal that did nothing.
+   * A replay re-emits this rather than assuming the operation went through.
+   */
+  readonly frontier: RetainedFrontier;
 }
 
 /** One shared Git directory's turn, held from inspection to acknowledgement. */
@@ -325,13 +370,23 @@ function* retained(
       operation,
       retainedRepositoryIntentJson(done.intent),
     );
-    return yield* acknowledge(
-      done.intent,
-      fingerprint,
-      operation,
-      done.result,
-      done.intent.postState,
-    );
+    // A completion that recorded a refusal is replayed as one. Answering with
+    // the refusal's own data as a value would report a write that never
+    // happened as a write that did, and performing the operation again would
+    // be performing something this history already says did not happen.
+    if (retainedRepositoryRefusal(operation.operation, done.result)) {
+      const restored = operation.refusal?.(done.result);
+      if (restored === undefined) {
+        return Err(
+          new RetainedOperationError(
+            `"${operation.operation}" recorded a refusal this host cannot report again.`,
+          ),
+        );
+      }
+      yield* acknowledge(done.intent, fingerprint, operation, done.result, done.frontier);
+      return Err(restored);
+    }
+    return yield* acknowledge(done.intent, fingerprint, operation, done.result, done.frontier);
   }
 
   const saved = resume.pending(fingerprint);
@@ -389,7 +444,7 @@ function* retained(
 
   const produced = yield* operation.perform(transition);
   if (!produced.ok) {
-    return yield* refused(operation, intent.preState, produced.error);
+    return yield* refused(operation, intent, fingerprint, produced.error);
   }
   // The result and the state are both proven before anything is written down:
   // a nonzero exit proves neither, and neither does a plausible-looking one.
@@ -447,7 +502,7 @@ function* createFrom(
     return owner;
   }
   if (observed.value.state === "established") {
-    if (owner.value !== undefined && !sameRetainedCheckout(owner.value.live, owner.value.after)) {
+    if (owner.value !== undefined && !sameRetainedFrontier(owner.value.live, owner.value.after)) {
       return Err(
         new FrontierError(
           `"${operation.operation}" found its destination created but its owner in a state the ` +
@@ -455,7 +510,7 @@ function* createFrom(
         ),
       );
     }
-    if (!sameRetainedCheckout(observed.value.frontier, intent.postState)) {
+    if (!sameRetainedFrontier(observed.value.frontier, intent.postState)) {
       return Err(
         new FrontierError(
           `"${operation.operation}" found a destination that is not the one its intent ` +
@@ -474,7 +529,7 @@ function* createFrom(
     );
   }
 
-  if (owner.value !== undefined && !sameRetainedCheckout(owner.value.live, owner.value.before)) {
+  if (owner.value !== undefined && !sameRetainedFrontier(owner.value.live, owner.value.before)) {
     return Err(
       new FrontierError(
         `"${operation.operation}" found its destination absent but its owner in a state the ` +
@@ -485,7 +540,7 @@ function* createFrom(
 
   const produced = yield* operation.perform(transition);
   if (!produced.ok) {
-    return yield* refused(operation, null, produced.error);
+    return yield* refused(operation, intent, fingerprint, produced.error);
   }
   if (!matchesRetainedEvidence(produced.value, intent.evidence)) {
     return Err(
@@ -498,7 +553,7 @@ function* createFrom(
   if (!settled.ok) {
     return settled;
   }
-  if (!sameRetainedCheckout(settled.value, intent.postState)) {
+  if (!sameRetainedFrontier(settled.value, intent.postState)) {
     return Err(
       new FrontierError(
         `"${operation.operation}" created a destination its intent did not predict.`,
@@ -526,16 +581,26 @@ function* createFrom(
  */
 function* refused(
   operation: RetainedOperation,
-  preState: RetainedFrontier | null,
+  intent: RetainedRepositoryIntent,
+  fingerprint: string,
   error: Error,
 ): Operation<Result<Json>> {
-  const nothingChanged = yield* leftUnchanged(operation, preState);
-  if (nothingChanged) {
+  const preState = intent.preState;
+  const written = retainedRefusalResult(operation.operation, error);
+  if (written !== undefined && preState !== null && (yield* leftUnchanged(operation, preState))) {
+    // Acknowledged before the document is shown it. A refusal left pending
+    // would be an unresolved mutation of this lane, and the next thing written
+    // in the same shared directory would be advancing a lane whose previous
+    // operation nobody ever settled — a history that cannot be reopened.
+    const settled = yield* acknowledge(intent, fingerprint, operation, written, preState);
+    if (!settled.ok) {
+      return settled;
+    }
     return Err(error);
   }
   const failure = new RetainedOperationError(
-    `"${operation.operation}" failed after it had begun, and left the checkout in a state its ` +
-      `intent neither started from nor predicted: ${error.message}`,
+    `"${operation.operation}" failed after it had begun, and this history cannot say what it ` +
+      `left behind: ${error.message}`,
   );
   failure.cause = error;
   return Err(failure);
@@ -722,6 +787,9 @@ function* acknowledge(
       frontier,
     }),
   );
+  // Only now, with the completion written down: the state the next operation
+  // is held to is the state this history says this one reached.
+  operation.settled?.(frontier);
   return Ok(result);
 }
 
@@ -763,14 +831,18 @@ export function retainedResume(
   pending: readonly { readonly intent: RetainedRepositoryIntent }[],
   completed: readonly {
     readonly intent: RetainedRepositoryIntent;
-    readonly completion: { readonly result: Json };
+    readonly completion: { readonly result: Json; readonly frontier: RetainedFrontier };
   }[] = [],
 ): RetainedResume {
   const unresolved = new Map(pending.map((effect) => [effect.intent.fingerprint, effect.intent]));
   const finished = new Map(
     completed.map((effect) => [
       effect.intent.fingerprint,
-      { intent: effect.intent, result: effect.completion.result },
+      {
+        intent: effect.intent,
+        result: effect.completion.result,
+        frontier: effect.completion.frontier,
+      },
     ]),
   );
   return {

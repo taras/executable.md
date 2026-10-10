@@ -84,6 +84,7 @@ export function retainedCommit(
             common: selected.common,
             position: host.position(selected.common),
             candidates: () => host.candidates(selected.checkout),
+            settled: (frontier) => host.settled(selected.checkout, frontier),
             selection: { checkout: selected.checkout },
             request: { cwd: directory, message },
             inventory: () =>
@@ -183,7 +184,7 @@ function* predictCommit(
   // an object database and the target's is not the one to write into. The
   // target is only ever read from here: `rev-parse` for the tree HEAD already
   // holds, never `write-tree`.
-  const scratch = yield* useScratchAdministration(repository, preState.administration.common);
+  const scratch = yield* useScratchAdministration(repository, preState.administration);
   const tree = yield* selected.git.read(
     ["--git-dir", scratch.gitDir, "write-tree"],
     selected.directory,

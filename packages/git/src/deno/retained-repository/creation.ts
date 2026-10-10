@@ -45,10 +45,11 @@ import type {
   ManagedWorktreeMetadata,
 } from "../../composition/managed-metadata.ts";
 import { checkoutOf, metadataOf } from "../run-composition/placement.ts";
-import { inventoryFrontier } from "./frontier.ts";
+import { readRefs, inventoryFrontier } from "./frontier.ts";
 import { copyTree } from "./scratch.ts";
 import { retainedFrontierJson } from "../../retained-repository/records.ts";
 import type {
+  RetainedRef,
   RetainedCreationPreparation,
   RetainedFrontier,
 } from "../../retained-repository/records.ts";
@@ -256,6 +257,7 @@ export function* createSavedRepository(
   host: RepositoryHost,
   git: GitSession,
   prepared: RetainedCreationPreparation,
+  refs: readonly RetainedRef[],
 ): Operation<Result<{ readonly checkout: string; readonly commit: string }>> {
   const metadata = prepared.metadata;
   if (metadata.kind !== "repository") {
@@ -279,10 +281,62 @@ export function* createSavedRepository(
       ),
     );
   }
+  // What the remote advertises now is not what this creation decided on. A
+  // clone takes the refs that are there when it runs, so one taken a minute
+  // later carries a branch somebody else has moved — and a completion
+  // describing that is a completion its own intent never predicted. The refs
+  // the intent froze are established before the creation is finished.
+  const established = yield* establishRefs(git, checkout, refs);
+  if (!established.ok) {
+    return established;
+  }
   // Written last, which is what makes a checkout without it recognizably an
   // interrupted creation rather than a finished one.
   yield* writeTextFile(metadataOf(prepared.slot), metadataBytes(metadata));
   return Ok({ checkout, commit: metadata.creationCommit });
+}
+
+/**
+ * Put this repository's refs exactly where the creation said they would be.
+ *
+ * Every predicted ref is set and every ref that is not predicted is removed.
+ * Safe because the repository was made by the call above and nobody else has
+ * had it yet: these are not somebody's branches being rewritten, they are the
+ * refs of a clone being brought to the state its own acknowledged intent
+ * describes.
+ */
+function* establishRefs(
+  git: GitSession,
+  directory: string,
+  expected: readonly RetainedRef[],
+): Operation<Result<void>> {
+  const live = yield* readRefs(git, directory);
+  if (live === undefined) {
+    return Err(new Error("the checkout this creation made does not report its refs."));
+  }
+  for (const ref of expected) {
+    if (live.some((held) => held.name === ref.name && held.oid === ref.oid)) {
+      continue;
+    }
+    const set = yield* git.run(["update-ref", ref.name, ref.oid], directory);
+    if (set.code !== 0) {
+      return Err(
+        new Error(`this creation could not establish ${ref.name} at the commit it predicted.`),
+      );
+    }
+  }
+  for (const held of live) {
+    if (expected.some((ref) => ref.name === held.name)) {
+      continue;
+    }
+    const removed = yield* git.run(["update-ref", "-d", held.name], directory);
+    if (removed.code !== 0) {
+      return Err(
+        new Error(`this creation could not remove ${held.name}, which it did not predict.`),
+      );
+    }
+  }
+  return Ok(undefined);
 }
 
 /** Add the worktree this intent already decided on, at its pinned commit. */
@@ -290,6 +344,7 @@ export function* createSavedWorktree(
   git: GitSession,
   owner: { readonly directory: string },
   prepared: RetainedCreationPreparation,
+  refs: readonly RetainedRef[],
 ): Operation<Result<{ readonly checkout: string; readonly commit: string }>> {
   const metadata = prepared.metadata;
   if (metadata.kind !== "worktree") {
@@ -313,6 +368,10 @@ export function* createSavedWorktree(
           "pinned.",
       ),
     );
+  }
+  const established = yield* establishRefs(git, checkout, refs);
+  if (!established.ok) {
+    return established;
   }
   yield* writeTextFile(metadataOf(prepared.slot), metadataBytes(metadata));
   return Ok({ checkout, commit: metadata.creationCommit });

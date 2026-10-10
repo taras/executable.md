@@ -29,8 +29,15 @@ import type { FragmentFileAccess } from "@executablemd/core/host";
 import type { FilePathInput, FilesHandler, FileWriteInput, GlobInput } from "@executablemd/runtime";
 import { admitRetainedRepositoryHistory } from "../../retained-repository/admission.ts";
 import type { RetainedRepositoryHistory } from "../../retained-repository/admission.ts";
-import { retainedRepositoryOwner } from "../../retained-repository/records.ts";
-import type { RetainedRepositorySite } from "../../retained-repository/records.ts";
+import {
+  retainedRepositoryOwner,
+  sameRetainedFrontier,
+  withSharedRefs,
+} from "../../retained-repository/records.ts";
+import type {
+  RetainedFrontier,
+  RetainedRepositorySite,
+} from "../../retained-repository/records.ts";
 import { gitSession } from "../composition/git.ts";
 import type { GitSession } from "../composition/git.ts";
 import type { RepositoryHost } from "../composition/host.ts";
@@ -42,7 +49,7 @@ import { holdRetainedLanes, retain, retainedLanes, retainedResume } from "./loca
 import { retainedRepository, retainedWorktree } from "./selections.ts";
 import type { RetainedSelectionHost } from "./selections.ts";
 import { useLeases } from "../run-composition/leases.ts";
-import { inventoryFrontier } from "./frontier.ts";
+import { FrontierError, inventoryFrontier } from "./frontier.ts";
 import type { RetainedResume } from "./local.ts";
 
 /** What the command tells this entry about itself. */
@@ -101,6 +108,13 @@ export function* useRetainedRepositoryEntry(
     return next;
   };
   const selected = new Map<string, SelectedCheckout>();
+  // What this entry expects each checkout it has touched to be in: the state
+  // its history authenticated when the checkout was attached, advanced by every
+  // operation this entry has since had acknowledged. A new operation is held to
+  // this rather than to the snapshot the entry opened with, because the entry's
+  // own completed work is part of what its history accounts for.
+  const expected = new Map<string, RetainedFrontier>();
+  const attached = new Set<string>();
   const git = gitSession(request.host, request.cwd);
   // Acquired into this entry's own scope, so every slot it holds is released
   // when the entry ends, however it ends.
@@ -123,6 +137,7 @@ export function* useRetainedRepositoryEntry(
   function* covering(path: string): Operation<SelectedCheckout | undefined> {
     for (const checkout of selected.values()) {
       if (within(checkout.directory, path)) {
+        yield* attach(checkout);
         return checkout;
       }
     }
@@ -178,6 +193,10 @@ export function* useRetainedRepositoryEntry(
         subject: "the Git directory of the checkout this entry started in",
       },
     ]);
+    // Authenticated before its own selection is replayed: a resume that
+    // answered with the root it recorded while the checkout there has been
+    // changed would be selecting a checkout that is no longer the one it chose.
+    yield* attach(checkout);
     const selection = yield* retain(
       {
         owner,
@@ -189,9 +208,11 @@ export function* useRetainedRepositoryEntry(
         checkout: checkout.checkout,
         common: checkout.common,
         position: position(checkout.common),
-        candidates: () =>
-          admitted?.attachments.find((attachment) => attachment.checkout === checkout.checkout)
-            ?.candidates ?? [],
+        candidates: () => {
+          const held = expected.get(checkout.checkout);
+          return held === undefined ? [] : [held];
+        },
+        settled: (frontier) => settledAt(checkout.checkout, frontier),
         selection: { checkout: checkout.checkout },
         request: { ambient: checkout.checkout },
         inventory: () =>
@@ -237,6 +258,66 @@ export function* useRetainedRepositoryEntry(
     return checkout;
   }
 
+  /**
+   * Authenticate a checkout against what this entry's history accounts for.
+   *
+   * Once per checkout, before anything is replayed, performed or expanded in
+   * it. What the history holds is its folded final state and the two ends of
+   * any mutation of it left unresolved; the checkout is in one of those, or it
+   * has been changed by something this entry did not record — and a replay
+   * answering with its saved results anyway would be answering about a
+   * checkout that is no longer there.
+   *
+   * A checkout the history says nothing about is a first selection and needs
+   * no authentication: there is nothing yet for it to disagree with.
+   */
+  function* attach(checkout: SelectedCheckout): Operation<void> {
+    if (attached.has(checkout.checkout)) {
+      return;
+    }
+    attached.add(checkout.checkout);
+    const candidates = admitted?.attachments.find(
+      (attachment) => attachment.checkout === checkout.checkout,
+    )?.candidates;
+    if (candidates === undefined || candidates.length === 0) {
+      return;
+    }
+    const live = yield* inventoryFrontier({
+      git: checkout.git,
+      checkout: checkout.checkout,
+      directory: checkout.directory,
+    });
+    if (!live.ok) {
+      throw live.error;
+    }
+    if (!candidates.some((candidate) => sameRetainedFrontier(candidate, live.value))) {
+      throw new FrontierError(
+        `${checkout.checkout} is not in any state this entry's history accounts for, so what ` +
+          "has happened to it since is not recorded here.",
+      );
+    }
+    expected.set(checkout.checkout, live.value);
+  }
+
+  /**
+   * Hold this checkout to what an acknowledged operation left it in.
+   *
+   * The refs reach every sibling of the same administration too: a commit in
+   * one linked worktree moves a branch every checkout of that repository can
+   * see, and a sibling still expecting the old ref list would refuse the next
+   * thing written in it.
+   */
+  function settledAt(checkout: string, frontier: RetainedFrontier): void {
+    expected.set(checkout, frontier);
+    attached.add(checkout);
+    for (const [other, held] of expected) {
+      if (other === checkout || held.administration.common !== frontier.administration.common) {
+        continue;
+      }
+      expected.set(other, withSharedRefs(held, frontier.refs));
+    }
+  }
+
   /** The checkout this entry started in, when it started in one. */
   function* discoveredCheckout(): Operation<SelectedCheckout | undefined> {
     const found = yield* discoverAmbientRepository(git, request.cwd);
@@ -261,9 +342,17 @@ export function* useRetainedRepositoryEntry(
       completed: (fingerprint) => resume.completed(fingerprint),
     },
     position,
-    candidates: (checkout) =>
-      admitted?.attachments.find((attachment) => attachment.checkout === checkout)?.candidates ??
-      [],
+    candidates: (checkout) => {
+      // What this entry expects, once the checkout has been attached. The
+      // admitted snapshot answers only before that, which is the window in
+      // which attachment itself decides.
+      const held = expected.get(checkout);
+      return held === undefined
+        ? (admitted?.attachments.find((attachment) => attachment.checkout === checkout)
+            ?.candidates ?? [])
+        : [held];
+    },
+    settled: settledAt,
     site: (occurrence): RetainedRepositorySite =>
       Object.freeze({ source: request.source, occurrence }),
   };

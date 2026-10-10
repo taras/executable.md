@@ -15,6 +15,7 @@
 
 import { Err, Ok } from "effection";
 import type { Operation, Result } from "effection";
+import { findDurabilityFailure } from "@executablemd/durable-streams";
 import type { Json } from "@executablemd/durable-streams";
 import { API, cwd } from "@executablemd/runtime";
 import { content } from "@executablemd/core";
@@ -91,6 +92,14 @@ function retainedDir(host: RetainedFileHost): IdentityComponent {
           retainedDirectoryEnsure(host, occurrence, final),
         );
         if (!made.ok) {
+          // A durability failure keeps its own class. Describing it as a
+          // directory this document could not use would be describing it as
+          // something the document may be shown and carry on past, and what it
+          // reports is that this entry's history no longer matches the disk.
+          const fatal = findDurabilityFailure(made.error);
+          if (fatal !== undefined) {
+            throw fatal;
+          }
           const failure = parseFilesFailure(made.error);
           throw new DirInvocationError(
             `<Dir path=${JSON.stringify(path)}> could not be used: ${
@@ -155,6 +164,7 @@ function retainedAdd(host: RetainedFileHost): IdentityComponent {
             common: selected.common,
             position: host.position(selected.common),
             candidates: () => host.candidates(selected.checkout),
+            settled: (frontier) => host.settled(selected.checkout, frontier),
             selection: { checkout: selected.checkout },
             request: { cwd: directory, paths: [...paths] },
             inventory: () => inventory(selected),
@@ -372,6 +382,7 @@ function retainedSwitch(host: RetainedFileHost, repository: RepositoryHost): Ide
             common: selected.common,
             position: host.position(selected.common),
             candidates: () => host.candidates(selected.checkout),
+            settled: (frontier) => host.settled(selected.checkout, frontier),
             selection: { checkout: selected.checkout },
             request:
               base === undefined ? { cwd: directory, branch } : { cwd: directory, branch, base },

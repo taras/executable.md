@@ -94,6 +94,7 @@ function run(
   stream: InMemoryStream,
   entryKey = "0001",
   given?: FilesHandler,
+  managedRoot?: string,
 ): Operation<readonly DurableEvent[]> {
   return scoped(function* () {
     const path = join(fixture.root, "entry.md");
@@ -105,7 +106,7 @@ function run(
       entryKey,
       source: "entry.md",
       cwd: fixture.checkout,
-      managedRoot: join(fixture.root, "managed"),
+      managedRoot: managedRoot ?? join(fixture.root, "managed"),
       host: denoRepositoryHost(),
       files: leaf,
     });
@@ -297,6 +298,63 @@ describe("retained repository: what an entry holds and releases", () => {
     // Two independent providers, one shared Git directory: the second refuses
     // before it writes anything, rather than predicting a transition from a
     // state the first one is in the middle of leaving.
+    expect(refusal).toBeDefined();
+    expect(second.writes).toEqual([]);
+  });
+
+  it("R9: two entries under different host roots still share one Git directory", function* () {
+    const fixture = yield* useFixture();
+    // Two entries that place their managed checkouts in different places, in
+    // the same ambient checkout. Where a host puts what it creates says
+    // nothing about who else is moving the refs of the repository the person
+    // is standing in.
+    const elsewhere = join(fixture.root, "managed-elsewhere");
+    yield* ensureDir(elsewhere);
+    const entered = withResolvers<void>();
+    const release = withResolvers<void>();
+    const host = hostFilesHandler();
+    const holding: FilesHandler = {
+      ...host,
+      *writeTextFile(input) {
+        entered.resolve();
+        yield* release.operation;
+        return yield* host.writeTextFile(input);
+      },
+    };
+    const second = counted();
+    let refusal: string | undefined;
+    yield* scoped(function* () {
+      const first = yield* spawn(function* () {
+        try {
+          yield* run(
+            fixture,
+            '<File path="one.md">one\n</File>\n',
+            new InMemoryStream(),
+            "0001",
+            holding,
+          );
+        } catch {
+          // What this asserts is what the second entry was allowed to do.
+        }
+      });
+      yield* ensure(() => {
+        release.resolve();
+      });
+      yield* ensure(() => first.halt());
+      yield* entered.operation;
+      try {
+        yield* run(
+          fixture,
+          '<File path="two.md">two\n</File>\n',
+          new InMemoryStream(),
+          "0002",
+          second.handler,
+          elsewhere,
+        );
+      } catch (error) {
+        refusal = error instanceof Error ? error.message : String(error);
+      }
+    });
     expect(refusal).toBeDefined();
     expect(second.writes).toEqual([]);
   });

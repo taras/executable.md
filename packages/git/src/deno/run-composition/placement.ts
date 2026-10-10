@@ -23,6 +23,7 @@
  */
 
 import { createHash } from "node:crypto";
+import { tmpdir } from "node:os";
 
 /** The layout, relative to whichever root the entrypoint chose. */
 export const REPOSITORIES = "repositories";
@@ -90,3 +91,25 @@ export function lockOf(root: string, kind: LockKind, slot: string): string {
 
 /** What a lock sidecar can be for. */
 export type LockKind = "repository" | "worktree" | "common";
+
+/**
+ * The lock sidecar for one shared Git directory, wherever it is.
+ *
+ * Not under any host root, because a common directory is not placed by one: an
+ * ambient checkout is wherever the person is standing, and two cooperating
+ * processes may be working under two different managed roots and still be
+ * moving the refs of the same `.git`. Keyed by the directory's own canonical
+ * path, in one place every process on this machine derives identically, so the
+ * identity of the lock is the identity of the directory.
+ *
+ * Not inside that directory either. For a managed checkout the common
+ * directory is inside the slot, and lock infrastructure does not belong in the
+ * thing it protects; for somebody's own repository it is not this host's to
+ * leave a file in.
+ */
+export function commonLockOf(commonDirectory: string): string {
+  return `${tmpdir()}/${LANES}/${digest(commonDirectory)}.lock`;
+}
+
+/** Where the shared-directory locks of every process on this machine meet. */
+export const LANES = "xmd-common-lanes";

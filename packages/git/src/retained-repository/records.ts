@@ -37,7 +37,12 @@
 
 import { until } from "effection";
 import type { Operation } from "effection";
-import { parseFileWriteFailure, parseFilesFailure } from "@executablemd/runtime";
+import {
+  fileWriteFailure,
+  filesFailure,
+  parseFileWriteFailure,
+  parseFilesFailure,
+} from "@executablemd/runtime";
 import type { Json } from "@executablemd/durable-streams";
 import { canonicalJson } from "@executablemd/workflow";
 import { members, text } from "../composition/parse.ts";
@@ -790,7 +795,8 @@ export function parseRetainedRepositoryIntent(
     if (!createsCheckout(parsed.operation)) {
       return undefined;
     }
-    if (parseRetainedCreationPreparation(parsed.prepared, parsed.operation) === undefined) {
+    const creation = parseRetainedCreationPreparation(parsed.prepared, parsed.operation);
+    if (creation === undefined || !agreesWithCreation(creation, parsed.postState)) {
       return undefined;
     }
   }
@@ -970,6 +976,164 @@ function filesOutcome(result: Json): Error {
 }
 
 /**
+ * Whether what this creation saved and what it predicted describe one thing.
+ *
+ * The members parse on their own; what this asks is whether they are about the
+ * same creation. The metadata has to name the destination the post-state
+ * describes, and a Worktree's two halves have to predict the same shared facts
+ * — the refs a worktree add moves are the owner's refs, and an owner left
+ * predicting the ones it already had is an owner that never gained the branch
+ * the destination is checked out on.
+ */
+function agreesWithCreation(
+  creation: RetainedCreationPreparation,
+  postState: RetainedFrontier,
+): boolean {
+  // Which slot a creation may name, and where that slot puts its checkout, is
+  // the trusted placement's to decide and the host's to check against the root
+  // it was given. What is left here is what the record says about itself.
+  const metadata = creation.metadata;
+  if (metadata.objectFormat !== postState.objectFormat) {
+    return false;
+  }
+  // The commit the destination was created at is the commit it is on.
+  if (metadata.creationCommit !== postState.head.oid) {
+    return false;
+  }
+  if (metadata.kind === "repository") {
+    return (
+      creation.owner === null &&
+      metadata.commonDirectory === postState.administration.common &&
+      postState.administration.role === "primary"
+    );
+  }
+  if (creation.owner === null) {
+    return false;
+  }
+  const owner = creation.owner;
+  return (
+    // One repository: the owner's administration is the destination's, and the
+    // destination is a linked checkout of it.
+    metadata.owner === postState.administration.common &&
+    owner.preState.administration.common === postState.administration.common &&
+    owner.postState.administration.common === postState.administration.common &&
+    postState.administration.role === "linked" &&
+    owner.postState.objectFormat === postState.objectFormat &&
+    owner.preState.objectFormat === postState.objectFormat &&
+    // One set of shared refs, predicted the same way by both halves. The
+    // owner's two ends differ by exactly what adding this worktree moves, and
+    // the destination sees the result.
+    canonicalJson(refsJson(owner.postState.refs)) === canonicalJson(refsJson(postState.refs)) &&
+    // And the branch the destination is on is one the owner's own prediction
+    // says it will have, at the commit the destination is created at.
+    owner.postState.refs.some(
+      (ref) => ref.name === headRef(postState) && ref.oid === metadata.creationCommit,
+    )
+  );
+}
+
+/** The ref a checkout is on, when it is on one. */
+function headRef(frontier: RetainedFrontier): string | undefined {
+  return frontier.head.kind === "symbolic" ? frontier.head.ref : undefined;
+}
+
+function refsJson(refs: readonly RetainedRef[]): Json {
+  return refs.map((ref) => ({ name: ref.name, oid: ref.oid }));
+}
+
+/**
+ * This refusal, written down the way a completion carries one.
+ *
+ * The forward direction of the reader below: what an operation reports when it
+ * refuses, reduced to the closed words a history may retain. A Files refusal
+ * keeps the data its own error carries, which is what says whether the file was
+ * replaced; every other operation keeps one word from its own vocabulary, which
+ * is the only part of such a refusal that means the same thing a day later.
+ *
+ * Nothing for a failure these vocabularies do not account for. A failure this
+ * cannot write down is not a refusal this host may stand behind, and the caller
+ * treats it as the uncertainty it is.
+ */
+export function retainedRefusalResult(
+  operation: RetainedRepositoryOperation,
+  error: unknown,
+): Json | undefined {
+  const result = refusalResult(operation, error);
+  if (result === undefined || !retainedRepositoryRefusal(operation, result)) {
+    return undefined;
+  }
+  return result;
+}
+
+/**
+ * The Files error a recorded refusal stands for, rebuilt from what it kept.
+ *
+ * A replay has to answer the way the live run answered. For a Files operation
+ * that means a failure in the closed vocabulary again, built through the same
+ * constructors, so whatever reads it — the `<File>` boundary included — reads
+ * the same sentence it read the first time.
+ */
+export function retainedRefusalFilesError(
+  operation: RetainedRepositoryOperation,
+  result: Json,
+): Error | undefined {
+  if (operation === "file-write") {
+    const failure = parseFileWriteFailure(filesOutcome(result));
+    if (failure === undefined) {
+      return undefined;
+    }
+    return attempt(() =>
+      fileWriteFailure({
+        phase: failure.phase,
+        ...(failure.reason === undefined ? {} : { reason: failure.reason }),
+        ...(failure.cleanup === undefined ? {} : { cleanup: failure.cleanup }),
+      }),
+    );
+  }
+  if (operation !== "file-delete" && operation !== "dir-ensure") {
+    return undefined;
+  }
+  const failure = parseFilesFailure(filesOutcome(result));
+  if (failure === undefined) {
+    return undefined;
+  }
+  return attempt(() =>
+    filesFailure({
+      operation: failure.operation,
+      phase: failure.phase,
+      reason: failure.reason,
+    }),
+  );
+}
+
+/** Nothing rather than a throw: a refusal this cannot rebuild is not one. */
+function attempt(build: () => Error): Error | undefined {
+  try {
+    return build();
+  } catch {
+    return undefined;
+  }
+}
+
+function refusalResult(operation: RetainedRepositoryOperation, error: unknown): Json | undefined {
+  if (operation === "file-write") {
+    const failure = parseFileWriteFailure(error);
+    return failure === undefined ? undefined : { ...failure };
+  }
+  if (operation === "file-delete" || operation === "dir-ensure") {
+    const failure = parseFilesFailure(error);
+    return failure === undefined ? undefined : { ...failure };
+  }
+  const reason = text(reasonOf(error));
+  return reason === undefined ? undefined : { reason };
+}
+
+/** The word a composition error carries for why it refused. */
+function reasonOf(error: unknown): unknown {
+  return typeof error === "object" && error !== null ? Reflect.get(error, "reason") : undefined;
+}
+
+/**
  * Whether this result is a refusal `operation` is allowed to retain unchanged
  * state for.
  *
@@ -1081,28 +1245,6 @@ export function withSharedRefs(
     index: frontier.index,
     worktree: frontier.worktree,
   });
-}
-
-/**
- * Whether two frontiers describe the same checkout, apart from what a remote
- * has since advertised.
- *
- * Remote-tracking refs are a cache of what a remote said, not work the entry
- * did. A creation predicts them from the clone it made in scratch, and if the
- * remote moves between that prediction and the real clone they differ — through
- * nobody's fault and about nothing the entry pinned. So a creation is verified
- * against what it did pin: HEAD, the local refs, the index, the working files
- * and the administration identity.
- *
- * Every other operation is compared whole. A mutation does not re-fetch, so a
- * remote-tracking ref that moved under one is a sign that something else has
- * been in the repository.
- */
-export function sameRetainedCheckout(left: RetainedFrontier, right: RetainedFrontier): boolean {
-  return (
-    canonicalJson(retainedFrontierJson(withoutRemotes(left))) ===
-    canonicalJson(retainedFrontierJson(withoutRemotes(right)))
-  );
 }
 
 function withoutRemotes(frontier: RetainedFrontier): RetainedFrontier {

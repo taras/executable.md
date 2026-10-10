@@ -36,7 +36,7 @@ import { race, suspend, useScope, withResolvers, type Operation, type Scope } fr
 import { useAdvisoryLock } from "@executablemd/workflow/deno";
 import type { AdvisoryLockFile } from "@executablemd/workflow/deno";
 import { ManagedCheckoutError } from "./errors.ts";
-import { lockOf } from "./placement.ts";
+import { commonLockOf, lockOf } from "./placement.ts";
 
 export type SlotKind = "repository" | "worktree";
 
@@ -99,7 +99,9 @@ export function* useLeases(root: string): Operation<Leases> {
   const held = new Set<string>();
 
   function* take({ kind, slot, subject, refuse }: LeaseRequest): Operation<void> {
-    const path = lockOf(root, kind, slot);
+    // A shared Git directory names its own lock. Everything else is placed by
+    // this root, and its lock is placed beside it.
+    const path = kind === "common" ? commonLockOf(slot) : lockOf(root, kind, slot);
     if (held.has(path)) {
       return;
     }
@@ -139,6 +141,9 @@ export function* useLeases(root: string): Operation<Leases> {
     held.add(path);
   }
 
+  const pathFor = ({ kind, slot }: LeaseRequest): string =>
+    kind === "common" ? commonLockOf(slot) : lockOf(root, kind, slot);
+
   return {
     *hold(kind: LeaseKind, slot: string, subject: string): Operation<void> {
       yield* take({ kind, slot, subject });
@@ -147,8 +152,8 @@ export function* useLeases(root: string): Operation<Leases> {
       // Sorted by the path each one locks, so an overlapping pair is always
       // asked for in the same sequence whichever caller is asking.
       const ordered = [...requests].sort((left, right) => {
-        const here = lockOf(root, left.kind, left.slot);
-        const there = lockOf(root, right.kind, right.slot);
+        const here = pathFor(left);
+        const there = pathFor(right);
         return here < there ? -1 : here > there ? 1 : 0;
       });
       for (const request of ordered) {

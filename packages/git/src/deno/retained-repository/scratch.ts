@@ -41,19 +41,32 @@ export interface Scratch {
 }
 
 /**
- * A scratch copy of this repository's administration.
+ * A scratch copy of the administration this checkout works through.
  *
  * The caller holds it for as long as it needs it: the directory belongs to the
  * acquiring scope, and the host removes it when that scope ends.
+ *
+ * The directory Git is pointed at is the selected checkout's own, not the
+ * repository's. A linked worktree has its own HEAD and its own index, both
+ * inside `worktrees/<name>` of the shared administration, and a prediction
+ * pointed at the shared directory would compute a tree from the primary
+ * checkout's index — the staging of a different checkout than the one the
+ * document is working in. The copy carries both, because copying the shared
+ * administration carries every worktree's directory with it.
  */
 export function* useScratchAdministration(
   host: RepositoryHost,
-  administration: string,
+  administration: RetainedAdministration,
 ): Operation<Scratch> {
   const root = yield* host.useDirectory();
-  const gitDir = join(root, "administration");
-  yield* copyTree(administration, gitDir);
-  return { gitDir };
+  const common = join(root, "administration");
+  yield* copyTree(administration.common, common);
+  return {
+    gitDir:
+      administration.worktree === null
+        ? common
+        : join(common, "worktrees", basename(administration.worktree)),
+  };
 }
 
 /**

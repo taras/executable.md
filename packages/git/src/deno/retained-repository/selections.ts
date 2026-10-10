@@ -141,6 +141,7 @@ export function retainedRepository(host: RetainedSelectionHost): IdentityCompone
             common: checkout.common,
             position: host.files.position(checkout.common),
             candidates: () => host.files.candidates(checkout.checkout),
+            settled: (frontier) => host.files.settled(checkout.checkout, frontier),
             selection: { checkout: checkout.checkout },
             request: {
               name,
@@ -177,7 +178,21 @@ export function retainedRepository(host: RetainedSelectionHost): IdentityCompone
               // what the base means a minute later can answer with a different
               // commit, and that is a different creation from the one this
               // history acknowledged.
+              // The slot this request derives, from the root this entry was
+              // trusted with. A record is entitled to say which slot it froze;
+              // whether that is the slot this document is asking for is
+              // decided here, where the trusted root is known.
               const saved = parseRetainedCreationPreparation(transition.prepared, "repository");
+              if (saved !== undefined && saved.slot !== slot) {
+                return Err(
+                  new RepositoryCompositionError(
+                    name,
+                    "unusable-repository",
+                    "<Repository> saved a creation of a different managed placement than the " +
+                      "one this request names.",
+                  ),
+                );
+              }
               if (saved === undefined) {
                 return Err(
                   new RepositoryCompositionError(
@@ -187,7 +202,12 @@ export function retainedRepository(host: RetainedSelectionHost): IdentityCompone
                   ),
                 );
               }
-              const created = yield* createSavedRepository(host.repository, git, saved);
+              const created = yield* createSavedRepository(
+                host.repository,
+                git,
+                saved,
+                transition.postState.refs,
+              );
               if (!created.ok) {
                 return created;
               }
@@ -307,6 +327,7 @@ export function retainedWorktree(host: RetainedSelectionHost): IdentityComponent
             common: owner.common,
             position: host.files.position(owner.common),
             candidates: () => host.files.candidates(checkout.checkout),
+            settled: (frontier) => host.files.settled(checkout.checkout, frontier),
             selection: { checkout: checkout.checkout },
             request: {
               name,
@@ -341,6 +362,16 @@ export function retainedWorktree(host: RetainedSelectionHost): IdentityComponent
             },
             *perform(transition) {
               const saved = parseRetainedCreationPreparation(transition.prepared, "worktree");
+              if (saved !== undefined && saved.slot !== slot) {
+                return Err(
+                  new WorktreeCompositionError(
+                    name,
+                    "unusable-repository",
+                    "<Worktree> saved a creation of a different managed placement than the one " +
+                      "this request names.",
+                  ),
+                );
+              }
               if (saved === undefined) {
                 return Err(
                   new WorktreeCompositionError(
@@ -350,7 +381,12 @@ export function retainedWorktree(host: RetainedSelectionHost): IdentityComponent
                   ),
                 );
               }
-              const created = yield* createSavedWorktree(git, owner, saved);
+              const created = yield* createSavedWorktree(
+                git,
+                owner,
+                saved,
+                transition.postState.refs,
+              );
               if (!created.ok) {
                 return created;
               }

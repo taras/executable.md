@@ -35,6 +35,7 @@ import type {
 import type { Json } from "@executablemd/durable-streams";
 import type { FileMutationHandlers } from "@executablemd/core/host";
 import { inventoryFrontier } from "./frontier.ts";
+import { retainedRefusalFilesError } from "../../retained-repository/records.ts";
 import { retain } from "./local.ts";
 import type {
   PreparedTransition,
@@ -84,6 +85,8 @@ export interface RetainedFileHost {
    * operation so the state it starts from is one the history accounts for.
    */
   candidates(checkout: string): readonly RetainedFrontier[];
+  /** Record what an acknowledged operation left this checkout in. */
+  settled(checkout: string, frontier: RetainedFrontier): void;
 }
 
 /** The default mode a file this host creates is left at. */
@@ -133,6 +136,7 @@ export function* retainedDirectoryEnsure(
       common: selected.common,
       position: host.position(selected.common),
       candidates: () => host.candidates(selected.checkout),
+      settled: (frontier) => host.settled(selected.checkout, frontier),
       selection: { checkout: selected.checkout },
       request: { cwd: input.cwd, path: input.path },
       inventory: () =>
@@ -165,6 +169,7 @@ export function* retainedDirectoryEnsure(
           evidence: { type: "dir-ensure" },
         });
       },
+      refusal: (result) => retainedRefusalFilesError("dir-ensure", result),
       *perform(): Operation<Result<Json>> {
         const made = yield* host.ordinary.ensureDirectory(input);
         if (!made.ok) {
@@ -260,6 +265,7 @@ function fileOperation(
     common: selected.common,
     position: host.position(selected.common),
     candidates: () => host.candidates(selected.checkout),
+    settled: (frontier) => host.settled(selected.checkout, frontier),
     selection: { checkout: selected.checkout },
     request:
       work.content === undefined
@@ -298,6 +304,7 @@ function fileOperation(
         evidence: evidenceFor(operation),
       });
     },
+    refusal: (result) => retainedRefusalFilesError(operation, result),
     *perform(): Operation<Result<Json>> {
       const produced = yield* work.perform();
       if (!produced.ok) {
