@@ -383,10 +383,14 @@ function* retained(
           ),
         );
       }
-      yield* acknowledge(done.intent, fingerprint, operation, done.result, done.frontier);
+      yield* acknowledge(done.intent, fingerprint, operation, done.result, done.frontier, {
+        replayed: true,
+      });
       return Err(restored);
     }
-    return yield* acknowledge(done.intent, fingerprint, operation, done.result, done.frontier);
+    return yield* acknowledge(done.intent, fingerprint, operation, done.result, done.frontier, {
+      replayed: true,
+    });
   }
 
   const saved = resume.pending(fingerprint);
@@ -771,6 +775,15 @@ function* acknowledge(
   operation: RetainedOperation,
   result: Json,
   frontier: RetainedFrontier,
+  /**
+   * Whether these records are being written again rather than decided now.
+   *
+   * A replay re-emits what a finished operation already decided; it reads
+   * nothing and performs nothing, so the state it names is one this run has not
+   * seen. Only a first acknowledgement — which got here by proving the checkout
+   * reached the state it predicted — says anything about what is there now.
+   */
+  { replayed = false }: { readonly replayed?: boolean } = {},
 ): Operation<Result<Json>> {
   const identity = yield* retainedRepositoryIntentIdentity(intent);
   yield* record(
@@ -787,9 +800,14 @@ function* acknowledge(
       frontier,
     }),
   );
-  // Only now, with the completion written down: the state the next operation
-  // is held to is the state this history says this one reached.
-  operation.settled?.(frontier);
+  // Only now, with the completion written down: the state the next operation is
+  // held to is the state this one was proven to reach. A replay has proven
+  // nothing, and an intermediate state out of a finished operation's records is
+  // not what the checkout is in — what it is in is whatever attachment
+  // authenticated.
+  if (!replayed) {
+    operation.settled?.(frontier);
+  }
   return Ok(result);
 }
 

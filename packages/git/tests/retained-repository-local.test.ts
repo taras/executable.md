@@ -1260,6 +1260,179 @@ describe("retained repository: one entry's local work", () => {
     expect(yield* git.read(["rev-parse", "HEAD"], target)).toBe(commits[0]!.postState.head.oid);
   });
 
+  it("R3: a managed checkout is authenticated before its results are replayed", function* () {
+    const fixture = yield* useFixture();
+    const remote = yield* useBareRemote({
+      commits: [{ message: "remote seed", entries: [{ path: "remote.md", content: "remote\n" }] }],
+    });
+    const source =
+      `<Repository name="project" url=${JSON.stringify(remote.locator)}>\n` +
+      '<File path="one.md">one\n</File>\n</Repository>\n';
+    const { events } = yield* run(fixture, source, new InMemoryStream(), counted().handler);
+    const created = recordsOf(events, RETAINED_REPOSITORY_INTENT)
+      .map((record) => parseRetainedRepositoryIntent(record))
+      .find((record) => record?.operation === "repository");
+    expect(created).toBeDefined();
+    const complete = events.findLastIndex(
+      (event) =>
+        event.type === "yield" && event.description.type === RETAINED_REPOSITORY_COMPLETION,
+    );
+    expect(complete).toBeGreaterThan(0);
+
+    // The managed checkout this entry created, changed by something else. Its
+    // own records are complete and would replay without reading a byte — and
+    // a selection replaying its acknowledgement is not a reason to believe the
+    // checkout is still what the history describes.
+    yield* writeTextFile(join(created!.postState.checkout, "one.md"), "external drift\n");
+
+    const leaf = counted();
+    let refusal: string | undefined;
+    try {
+      yield* run(
+        fixture,
+        source,
+        new InMemoryStream([...events.slice(0, complete + 1)]),
+        leaf.handler,
+      );
+    } catch (error) {
+      refusal = error instanceof Error ? error.message : String(error);
+    }
+    expect(refusal).toBeDefined();
+    expect(leaf.writes).toEqual([]);
+    // And what was there is still there: refusing is what preserves it.
+    expect(yield* readTextFile(join(created!.postState.checkout, "one.md"))).toBe(
+      "external drift\n",
+    );
+  });
+
+  it("R3: a managed checkout is authenticated when it is selected, not when it is used", function* () {
+    const fixture = yield* useFixture();
+    const remote = yield* useBareRemote({
+      commits: [{ message: "remote seed", entries: [{ path: "remote.md", content: "remote\n" }] }],
+    });
+    // Nothing in this document writes inside the managed checkout: it selects
+    // the repository and then works in the checkout the entry started in. So
+    // the only thing that ever looks at the managed checkout is its own
+    // selection, which is where this entry has to look.
+    const source =
+      `<Repository name="project" url=${JSON.stringify(remote.locator)}>\n` +
+      "nothing\n</Repository>\n\n" +
+      '<File path="outside.md">outside\n</File>\n';
+    const { events } = yield* run(fixture, source, new InMemoryStream(), counted().handler);
+    const created = recordsOf(events, RETAINED_REPOSITORY_INTENT)
+      .map((record) => parseRetainedRepositoryIntent(record))
+      .find((record) => record?.operation === "repository");
+    expect(created).toBeDefined();
+    // The checkout this entry started in is left exactly as its own history
+    // describes it, so the only thing out of place is in the managed one.
+    expect(yield* readTextFile(join(fixture.checkout, "outside.md"))).toBe("outside\n");
+
+    // The cloned file in the managed checkout, changed by something else.
+    yield* writeTextFile(join(created!.postState.checkout, "remote.md"), "somebody else\n");
+
+    const complete = events.findLastIndex(
+      (event) =>
+        event.type === "yield" && event.description.type === RETAINED_REPOSITORY_COMPLETION,
+    );
+    const leaf = counted();
+    let refusal: string | undefined;
+    try {
+      yield* run(
+        fixture,
+        source,
+        new InMemoryStream([...events.slice(0, complete + 1)]),
+        leaf.handler,
+      );
+    } catch (error) {
+      refusal = error instanceof Error ? error.message : String(error);
+    }
+    expect(refusal).toBeDefined();
+    // And the work that came after the selection never ran: the write replays
+    // from its records, and a replay writes nothing.
+    expect(leaf.writes).toEqual([]);
+  });
+
+  it("R4: a replayed selection's own snapshot is not what the next write is held to", function* () {
+    const fixture = yield* useFixture();
+    const remote = yield* useBareRemote({
+      commits: [{ message: "remote seed", entries: [{ path: "remote.md", content: "remote\n" }] }],
+    });
+    // The commit inside the worktree moves a branch the repository checkout
+    // shares, so the state the repository's own selection recorded is already
+    // out of date by the time the last write happens. That selection is
+    // replayed on a resume, and what it recorded is a state this checkout was
+    // in once — not the state the next write starts from.
+    const source =
+      `<Repository name="project" url=${JSON.stringify(remote.locator)}>\n` +
+      '<Worktree name="review" branch="topic">\n<File path="in-worktree.md">work\n</File>\n' +
+      '<Git.Add paths="in-worktree.md" />\n' +
+      '<Git.Commit message="worktree work" as="commit" />\n</Worktree>\n\n' +
+      '<File path="later.md">later\n</File>\n</Repository>\n';
+    const { events } = yield* run(fixture, source, new InMemoryStream(), counted().handler);
+    const records = recordsOf(events, RETAINED_REPOSITORY_INTENT).map((record) =>
+      parseRetainedRepositoryIntent(record),
+    );
+    const repository = records.find((record) => record?.operation === "repository");
+    expect(repository).toBeDefined();
+    expect(records.some((record) => record?.operation === "commit")).toBe(true);
+    const intents = events.filter(
+      (event) => event.type === "yield" && event.description.type === RETAINED_REPOSITORY_INTENT,
+    );
+    const tail = events.indexOf(intents[intents.length - 1]!);
+    expect(tail).toBeGreaterThan(0);
+    yield* rm(join(repository!.postState.checkout, "later.md"), { force: true });
+
+    const leaf = counted();
+    const resumed = yield* run(
+      fixture,
+      source,
+      new InMemoryStream([...events.slice(0, tail)]),
+      leaf.handler,
+    );
+    expect(leaf.writes).toEqual(["later.md"]);
+    expect(yield* readTextFile(join(repository!.postState.checkout, "later.md"))).toBe("later\n");
+    const admitted = yield* admitRetainedRepositoryHistory(resumed.events, repository!.owner);
+    expect(admitted.ok ? "ok" : admitted.error.message).toBe("ok");
+  });
+
+  it("R4: an undisturbed managed checkout replays its results and goes on", function* () {
+    const fixture = yield* useFixture();
+    const remote = yield* useBareRemote({
+      commits: [{ message: "remote seed", entries: [{ path: "remote.md", content: "remote\n" }] }],
+    });
+    const source =
+      `<Repository name="project" url=${JSON.stringify(remote.locator)}>\n` +
+      '<File path="one.md">one\n</File>\n\n<File path="two.md">two\n</File>\n</Repository>\n';
+    const { events } = yield* run(fixture, source, new InMemoryStream(), counted().handler);
+    const created = recordsOf(events, RETAINED_REPOSITORY_INTENT)
+      .map((record) => parseRetainedRepositoryIntent(record))
+      .find((record) => record?.operation === "repository");
+    expect(created).toBeDefined();
+    const intents = events.filter(
+      (event) => event.type === "yield" && event.description.type === RETAINED_REPOSITORY_INTENT,
+    );
+    // Up to the last write's own intent: the creation and the first write are
+    // resolved, and the second write is still to make.
+    const tail = events.indexOf(intents[intents.length - 1]!);
+    expect(tail).toBeGreaterThan(0);
+    yield* rm(join(created!.postState.checkout, "two.md"), { force: true });
+
+    // Authentication is a check, not an obstacle: a checkout nobody has
+    // touched is in a state this history accounts for, so the completed
+    // selection and write replay and the remaining write is performed.
+    const leaf = counted();
+    const resumed = yield* run(
+      fixture,
+      source,
+      new InMemoryStream([...events.slice(0, tail)]),
+      leaf.handler,
+    );
+    expect(leaf.writes).toEqual(["two.md"]);
+    expect(yield* readTextFile(join(created!.postState.checkout, "two.md"))).toBe("two\n");
+    const admitted = yield* admitRetainedRepositoryHistory(resumed.events, created!.owner);
+    expect(admitted.ok ? "ok" : admitted.error.message).toBe("ok");
+  });
+
   it("R6: a generated write inside the checkout is retained on captured terms", function* () {
     const fixture = yield* useFixture();
     const leaf = counted();

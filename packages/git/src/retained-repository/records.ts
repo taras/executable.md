@@ -796,7 +796,7 @@ export function parseRetainedRepositoryIntent(
       return undefined;
     }
     const creation = parseRetainedCreationPreparation(parsed.prepared, parsed.operation);
-    if (creation === undefined || !agreesWithCreation(creation, parsed.postState)) {
+    if (creation === undefined || !agreesWithCreation(creation, parsed.request, parsed.postState)) {
       return undefined;
     }
   }
@@ -987,6 +987,7 @@ function filesOutcome(result: Json): Error {
  */
 function agreesWithCreation(
   creation: RetainedCreationPreparation,
+  request: Json,
   postState: RetainedFrontier,
 ): boolean {
   // Which slot a creation may name, and where that slot puts its checkout, is
@@ -1028,8 +1029,24 @@ function agreesWithCreation(
     // says it will have, at the commit the destination is created at.
     owner.postState.refs.some(
       (ref) => ref.name === headRef(postState) && ref.oid === metadata.creationCommit,
-    )
+    ) &&
+    // The branch is the one the document asked for, and the one the
+    // destination is predicted to stand on. What performs this creation reads
+    // the branch out of the metadata, so a metadata naming a different one is
+    // a record describing a creation other than the one acknowledged.
+    headRef(postState) === `refs/heads/${metadata.requestedBranch}` &&
+    requestedBranch(request) === metadata.requestedBranch
   );
+}
+
+/** The branch the document itself asked for, as the authored request holds it. */
+function requestedBranch(request: Json): string | undefined {
+  // Read rather than matched: the authored request carries whatever its own
+  // component wrote, and this asks it one question.
+  if (typeof request !== "object" || request === null || Array.isArray(request)) {
+    return undefined;
+  }
+  return text(Reflect.get(request, "branch"));
 }
 
 /** The ref a checkout is on, when it is on one. */

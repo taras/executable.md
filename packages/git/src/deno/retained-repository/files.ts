@@ -70,6 +70,16 @@ export interface RetainedFileHost {
    * repository is what looks for one, and an entry that makes none never does.
    */
   covering(path: string): Operation<SelectedCheckout | undefined>;
+  /**
+   * Authenticate this checkout against what the history accounts for.
+   *
+   * The entry's own trusted boundary, and the same one for every checkout it
+   * works in. A selection calls it before anything is replayed, performed or
+   * expanded in the checkout it selected; `covering` calls it for whatever a
+   * mutation reaches. Once per checkout, and a checkout nothing has recorded
+   * yet needs nothing.
+   */
+  attach(checkout: SelectedCheckout): Operation<void>;
   /** Where a path outside every selection is performed. */
   readonly ordinary: FilesHandler;
   readonly lanes: RetainedLanes;

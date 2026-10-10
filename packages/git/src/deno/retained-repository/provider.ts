@@ -342,6 +342,7 @@ export function* useRetainedRepositoryEntry(
       completed: (fingerprint) => resume.completed(fingerprint),
     },
     position,
+    attach: (checkout) => attach(checkout),
     candidates: (checkout) => {
       // What this entry expects, once the checkout has been attached. The
       // admitted snapshot answers only before that, which is the window in

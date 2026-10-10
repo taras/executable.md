@@ -1154,7 +1154,16 @@ describe("retained repository records: a destination that is not there yet", () 
       readonly prepared?: Json;
     },
   ): Operation<RetainedRepositoryIntent> {
-    const built = yield* intent(fixture);
+    // The request a creation's own component writes, which is part of what the
+    // saved metadata has to agree with: a Worktree's names the branch it is
+    // asking for.
+    const built = yield* intent({
+      request:
+        fixture.operation === "repository"
+          ? { name: "project", url: "https://example.invalid/project.git", base: null }
+          : { name: "review", branch: "topic", base: null, owner: PRIMARY },
+      ...fixture,
+    });
     const prepared = fixture.prepared ?? {
       slot: "/managed/repositories/project",
       metadata: fixture.operation === "repository" ? REPOSITORY_METADATA : WORKTREE_METADATA,
@@ -1373,6 +1382,49 @@ describe("retained repository records: a destination that is not there yet", () 
       OWNER,
     );
     expect(reasonOf(result)).toBe("malformed-record");
+  });
+
+  it("R1: a worktree creation's saved branch is the one its request named", function* () {
+    const owner = yield* intent();
+    // Everything else agrees: the owner's two states, the shared refs, the
+    // commit, the administration. Only the branch the metadata saved is not
+    // the branch the document asked for — and the branch the metadata saved is
+    // the one that would be created.
+    const made = yield* creation({
+      operation: "worktree",
+      position: 1,
+      postState: frontier(LINKED, B),
+      prepared: {
+        slot: "/managed/worktrees/review",
+        metadata: { ...WORKTREE_METADATA, requestedBranch: "another-branch" },
+        owner: {
+          preState: retainedFrontierJson(frontier()),
+          postState: retainedFrontierJson(frontier(PRIMARY, B)),
+        },
+      },
+    });
+    const result = yield* admitRetainedRepositoryHistory(
+      [intended(owner), yield* completed(owner), intended(made)],
+      OWNER,
+    );
+    expect(reasonOf(result)).toBe("malformed-record");
+  });
+
+  it("R1: a worktree creation whose branch agrees everywhere is admitted", function* () {
+    const owner = yield* intent();
+    const made = yield* creation({
+      operation: "worktree",
+      position: 1,
+      postState: frontier(LINKED, B),
+    });
+    const history = accepted(
+      yield* admitRetainedRepositoryHistory(
+        [intended(owner), yield* completed(owner), intended(made)],
+        OWNER,
+      ),
+    );
+    expect(history.pending.length).toBe(1);
+    expect(history.pending[0]!.intent.operation).toBe("worktree");
   });
 
   it("R1: an unresolved worktree creation offers its owner's two ends", function* () {

@@ -131,6 +131,14 @@ export function retainedRepository(host: RetainedSelectionHost): IdentityCompone
           common: established?.commonDirectory ?? common,
           git,
         });
+        // A checkout that is already there is authenticated before anything is
+        // replayed or expanded in it. The ordinary managed selection above
+        // decided whether this slot holds a checkout of the right repository;
+        // what state that checkout is in, against what this history accounts
+        // for, is a different question, and this is where it is asked.
+        if (established !== undefined) {
+          yield* host.files.attach(checkout);
+        }
 
         const retained = yield* retain(
           {
@@ -315,6 +323,9 @@ export function retainedWorktree(host: RetainedSelectionHost): IdentityComponent
           common: owner.common,
           git,
         });
+        if (established !== undefined) {
+          yield* host.files.attach(checkout);
+        }
 
         const retained = yield* retain(
           {
