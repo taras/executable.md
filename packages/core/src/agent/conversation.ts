@@ -98,8 +98,14 @@ import type {
 import { AgentInternal } from "./internal.ts";
 import { runPrompt } from "./function-components.ts";
 import type { Carried } from "./function-components.ts";
-import { AGENT_PROMPT, persistPrompt, promptFailureFromRecord } from "./journal.ts";
+import {
+  AGENT_PROMPT,
+  parsePromptRecord,
+  persistPrompt,
+  promptFailureFromRecord,
+} from "./journal.ts";
 import { sessionPlacement } from "./session-request.ts";
+import { sessionOf } from "./session-use.ts";
 import type { ComponentInvocation, IdentityClaimant } from "../invocation-identity.ts";
 import type { Json } from "../types.ts";
 
@@ -163,6 +169,7 @@ interface PromptJob {
   readonly configuration?: SessionConfiguration;
   readonly answer: Resolvers<Result<string>>;
   readonly cancelled: Resolvers<void>;
+  readonly joined: Resolvers<void>;
 }
 
 interface OptionsJob {
@@ -170,6 +177,7 @@ interface OptionsJob {
   readonly request?: AgentOptionsRequest;
   readonly answer: Resolvers<Result<AgentOptions>>;
   readonly cancelled: Resolvers<void>;
+  readonly joined: Resolvers<void>;
 }
 
 interface Resolvers<T> {
@@ -182,8 +190,28 @@ interface Resolvers<T> {
 interface Live {
   /** False once the resource that owns this conversation has been released. */
   open: boolean;
-  /** True while one turn or inspection is in flight. */
+  /**
+   * True while one turn or inspection is in flight.
+   *
+   * It stays true through a cancelled call's own cleanup, because the
+   * conversation is not free until that turn's work has finished unwinding — a
+   * second turn admitted in between would start while the first was still
+   * inside the provider.
+   */
   busy: boolean;
+  /**
+   * Resolved when the conversation itself is released.
+   *
+   * What stops a caller waiting on a turn that nothing is left to run: the
+   * element is gone, so nobody will report that turn joined, and the wait has
+   * to end on this instead.
+   */
+  readonly closed: Resolvers<void>;
+}
+
+/** The native conversation identity one turn saw the provider name. */
+interface Observed {
+  native?: string;
 }
 
 /** What a history already holds about the conversation it belongs to. */
@@ -192,6 +220,18 @@ interface Retained {
   readonly turns: readonly string[];
   /** The order the next turn takes, which is past every retained one. */
   readonly next: number;
+  /**
+   * The native conversation identity this history has already established, if
+   * any.
+   *
+   * Read from the canonical turn records themselves rather than from a mapping
+   * record of its own. A completed Prompt retains the exact conversation the
+   * provider said that turn ran in, so the journal already holds the
+   * establishment — which is what lets a turn accepted before anything
+   * acknowledged a mapping be reconciled to *that* identity, instead of leaving
+   * the conversation looking unestablished and open to a different one.
+   */
+  readonly native: string | undefined;
 }
 
 /**
@@ -210,12 +250,15 @@ export function useAgentConversation(
   return resource(function* (provide) {
     const jobs = createQueue<Job, never>();
     const ready = withResolvers<Result<void>>();
-    const live: Live = { open: true, busy: false };
+    const live: Live = { open: true, busy: false, closed: withResolvers<void>() };
 
     // Before the execution exists, so a caller halted while this resource is
-    // being acquired closes the handle rather than leaving one that looks open.
+    // being acquired closes the handle rather than leaving one that looks open
+    // — and so a caller waiting for its turn to join stops waiting when there
+    // is no longer anything running it.
     yield* ensure(() => {
       live.open = false;
+      live.closed.resolve();
     });
 
     // Read before anything opens, because what it finds decides whether this
@@ -276,31 +319,44 @@ function handle(
         }
         const answer = withResolvers<Result<string>>();
         const cancelled = withResolvers<void>();
+        const joined = withResolvers<void>();
         // What makes this cancellation rather than an ordinary return: a call
         // that was answered has nothing to cancel, and signalling one anyway
         // would make every finished turn look abandoned.
         let answered = false;
-        try {
-          // Registered before the send, so a caller halted between the two
-          // leaves no turn running that nothing is waiting for.
-          yield* ensure(() => {
+        let sent = false;
+        // Registered before the send, so a caller halted between the two
+        // leaves no turn running that nothing is waiting for.
+        yield* ensure(function* () {
+          try {
+            if (!sent) {
+              return;
+            }
             if (!answered) {
               cancelled.resolve();
             }
-          });
-          jobs.add({
-            kind: "prompt",
-            input,
-            ...(configuration === undefined ? {} : { configuration }),
-            answer,
-            cancelled,
-          });
-          const settled = yield* answer.operation;
-          answered = true;
-          return settled;
-        } finally {
-          live.busy = false;
-        }
+            // Asking is not stopping. This call does not finish until the turn
+            // it started has finished unwinding — the provider's own cleanup
+            // included — so a caller whose halt has returned knows that work is
+            // over. The conversation closing ends the wait too, because then
+            // there is nothing left to do the joining.
+            yield* race([joined.operation, live.closed.operation]);
+          } finally {
+            live.busy = false;
+          }
+        });
+        jobs.add({
+          kind: "prompt",
+          input,
+          ...(configuration === undefined ? {} : { configuration }),
+          answer,
+          cancelled,
+          joined,
+        });
+        sent = true;
+        const settled = yield* answer.operation;
+        answered = true;
+        return settled;
       });
     },
     options(inspection?: AgentOptionsRequest): Operation<Result<AgentOptions>> {
@@ -311,25 +367,33 @@ function handle(
         }
         const answer = withResolvers<Result<AgentOptions>>();
         const cancelled = withResolvers<void>();
+        const joined = withResolvers<void>();
         let answered = false;
-        try {
-          yield* ensure(() => {
+        let sent = false;
+        yield* ensure(function* () {
+          try {
+            if (!sent) {
+              return;
+            }
             if (!answered) {
               cancelled.resolve();
             }
-          });
-          jobs.add({
-            kind: "options",
-            ...(inspection === undefined ? {} : { request: inspection }),
-            answer,
-            cancelled,
-          });
-          const settled = yield* answer.operation;
-          answered = true;
-          return settled;
-        } finally {
-          live.busy = false;
-        }
+            yield* race([joined.operation, live.closed.operation]);
+          } finally {
+            live.busy = false;
+          }
+        });
+        jobs.add({
+          kind: "options",
+          ...(inspection === undefined ? {} : { request: inspection }),
+          answer,
+          cancelled,
+          joined,
+        });
+        sent = true;
+        const settled = yield* answer.operation;
+        answered = true;
+        return settled;
       });
     },
   };
@@ -430,6 +494,9 @@ function* held(
     yield* replayTurn(name);
   }
   let order = retained.next;
+  // What the history already established, carried forward so a turn in this
+  // process is held to it as firmly as one after a reopening is.
+  let established = retained.native;
   announce(Ok(undefined));
   while (true) {
     const next = yield* jobs.next();
@@ -441,7 +508,12 @@ function* held(
       yield* inspect(request, job);
       continue;
     }
-    yield* deliver(request, identity, job, order);
+    const observed: Observed = {};
+    yield* deliver(request, identity, established, observed, job, order);
+    // Established by the first turn the provider reported one for, and never
+    // replaced afterwards: a turn naming a different one was refused before it
+    // could record anything.
+    established ??= observed.native;
     order += 1;
   }
   // Nothing closes this queue, and an element that returned would let the root
@@ -513,6 +585,8 @@ function* replayTurn(name: string): Operation<void> {
 function deliver(
   request: AgentConversationRequest,
   identity: string,
+  established: string | undefined,
+  observed: Observed,
   job: PromptJob,
   order: number,
 ): Operation<void> {
@@ -520,7 +594,17 @@ function deliver(
   // returns: a turn still running would hold its durable operation open, and
   // the next turn would be a second one open on the same sequence.
   return scoped(function* () {
-    const turn = yield* spawn(() => conversationTurn(request, identity, job, order));
+    // Registered *before* the turn is spawned, which is what makes it the last
+    // thing to unwind: cleanups registered later run first, so the turn — and
+    // every cleanup the provider registered inside it — has finished by the
+    // time this reports the turn joined. A caller waiting on this therefore
+    // waits for the work, not for the request to stop being interesting.
+    yield* ensure(() => {
+      job.joined.resolve();
+    });
+    const turn = yield* spawn(() =>
+      conversationTurn(request, identity, established, observed, job, order),
+    );
     const outcome = yield* race([
       (function* (): Operation<"finished"> {
         try {
@@ -545,7 +629,9 @@ function deliver(
     // Giving up on the answer is not cancelling the turn: the task is its own,
     // and halting it is what leaves its append unmade — a fact rather than a
     // suffix for the next turn to resume. Observed, because a halt that nobody
-    // waited for is a turn still unwinding while the next one starts.
+    // waited for is a turn still unwinding while the next one starts, and a
+    // failure while it unwinds is an authoritative teardown failure rather
+    // than this turn's answer.
     yield* turn.halt();
   });
 }
@@ -563,6 +649,8 @@ function deliver(
 function conversationTurn(
   request: AgentConversationRequest,
   identity: string,
+  established: string | undefined,
+  observed: Observed,
   job: PromptJob,
   order: number,
 ): Operation<void> {
@@ -576,6 +664,20 @@ function conversationTurn(
       } finally {
         issuance.close();
       }
+      // Before the turn starts, because this is the one point where refusing
+      // costs nothing: the provider has named the conversation it resolved, and
+      // one that is not the established conversation is not this conversation.
+      // Replacing the identity is never the answer — the history already says
+      // which conversation this is, and a turn sent elsewhere would reach one
+      // this chat has never been in.
+      const resolved = sessionOf(session)?.agentSessionId;
+      if (established !== undefined && resolved !== undefined && resolved !== established) {
+        throw new AgentConversationError(
+          "this provider resolved a different native conversation from the one this history " +
+            "established, so a turn sent to it would reach a conversation this chat has never " +
+            "been in. An established conversation is not reattached to another identity.",
+        );
+      }
       // Resolved before the turn starts, so an unavailable agent fails as
       // itself rather than being journaled as a failed turn.
       const agent = yield* Agent.operations.agent(request.agent);
@@ -588,6 +690,25 @@ function conversationTurn(
         () => carried.association,
         () => carried.begun,
       );
+      // A provider may name the conversation only once the turn has started,
+      // which is the ordinary first-turn case. Read from the record, because
+      // that is the account the journal keeps and the one a later opening
+      // reconciles against.
+      if (record.agentSessionId !== undefined) {
+        if (established !== undefined && record.agentSessionId !== established) {
+          job.answer.resolve(
+            Err(
+              new AgentConversationError(
+                "this turn ran in a different native conversation from the one this history " +
+                  "established. The established identity stands; this turn's outcome is not " +
+                  "this conversation's to continue from.",
+              ),
+            ),
+          );
+          return;
+        }
+        observed.native = record.agentSessionId;
+      }
       const failure = promptFailureFromRecord(record);
       job.answer.resolve(failure === undefined ? Ok(record.text) : Err(failure));
     } catch (error) {
@@ -607,24 +728,29 @@ function conversationTurn(
 }
 
 /** Inspect the selected agent's advertised choices. Journals nothing. */
-function* inspect(request: AgentConversationRequest, job: OptionsJob): Operation<void> {
-  const answered = yield* race([
-    (function* (): Operation<{ readonly done: Result<AgentOptions> }> {
-      try {
-        return { done: Ok(yield* Agent.operations.options(request.agent, job.request)) };
-      } catch (error) {
-        return { done: Err(error instanceof Error ? error : new Error(String(error))) };
-      }
-    })(),
-    (function* (): Operation<{ readonly cancelled: true }> {
-      yield* job.cancelled.operation;
-      return { cancelled: true };
-    })(),
-  ]);
-  if ("cancelled" in answered) {
-    return;
-  }
-  job.answer.resolve(answered.done);
+function inspect(request: AgentConversationRequest, job: OptionsJob): Operation<void> {
+  return scoped(function* () {
+    yield* ensure(() => {
+      job.joined.resolve();
+    });
+    const answered = yield* race([
+      (function* (): Operation<{ readonly done: Result<AgentOptions> }> {
+        try {
+          return { done: Ok(yield* Agent.operations.options(request.agent, job.request)) };
+        } catch (error) {
+          return { done: Err(error instanceof Error ? error : new Error(String(error))) };
+        }
+      })(),
+      (function* (): Operation<{ readonly cancelled: true }> {
+        yield* job.cancelled.operation;
+        return { cancelled: true };
+      })(),
+    ]);
+    if ("cancelled" in answered) {
+      return;
+    }
+    job.answer.resolve(answered.done);
+  });
 }
 
 /**
@@ -646,6 +772,7 @@ function* openable(request: AgentConversationRequest): Operation<Result<Retained
     );
   }
   const turns: string[] = [];
+  const asserted = new Set<string>();
   let highest = 0;
   for (const event of events) {
     if (event.type !== "yield" || event.description.type !== AGENT_PROMPT) {
@@ -663,8 +790,28 @@ function* openable(request: AgentConversationRequest): Operation<Result<Retained
     }
     turns.push(name);
     highest = Math.max(highest, turnOrder(name) ?? 0);
+    // The provider's own account of which conversation that turn ran in. A
+    // record naming none was a turn the provider reported no identity for,
+    // which establishes nothing either way.
+    const record = parsePromptRecord(event.result.value);
+    if (record?.agentSessionId !== undefined) {
+      asserted.add(record.agentSessionId);
+    }
   }
-  return Ok(Object.freeze({ turns: Object.freeze(turns), next: highest + 1 }));
+  if (asserted.size > 1) {
+    // Two different identities among one conversation's own turns. There is no
+    // rule for choosing between them that is not a guess, and guessing would
+    // attach the next turn to whichever happened to be read last.
+    return Err(
+      new AgentConversationError(
+        "this conversation's retained turns name more than one native conversation, so which " +
+          "one it is cannot be established from its own history. Reconcile it against the " +
+          "provider's own account before sending another turn.",
+      ),
+    );
+  }
+  const [native] = asserted;
+  return Ok(Object.freeze({ turns: Object.freeze(turns), next: highest + 1, native }));
 }
 
 /** Whether these events hold the conversation root's own terminal. */

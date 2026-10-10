@@ -19,7 +19,7 @@ import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import type { DurableEvent } from "@executablemd/durable-streams";
-import { Ok, scoped, spawn, suspend, withResolvers } from "effection";
+import { ensure, Ok, race, scoped, sleep, spawn, suspend, withResolvers } from "effection";
 import type { Operation, Result, Stream } from "effection";
 
 import { useAgentConversation } from "../host.ts";
@@ -64,6 +64,18 @@ interface StubOptions {
   readonly started?: (content: string) => void;
   /** What the provider reports it verified, when it is not what was asked. */
   readonly verify?: (asked: SessionConfiguration) => SessionConfiguration;
+  /**
+   * The native conversation identity the provider asserts, per turn.
+   *
+   * A real provider asserts it on the Session it issued, and reports that same
+   * value on the turn's `started` event — which is how the journal comes to
+   * hold the provider's own account of which conversation a turn ran in.
+   * Asked per turn so a case can have the provider resolve a *different*
+   * conversation on reopening.
+   */
+  readonly asserts?: (content: string) => string | undefined;
+  /** Asserted when the session resolves rather than when the turn starts. */
+  readonly assertsAtPlacement?: string;
 }
 
 /**
@@ -100,6 +112,9 @@ function stub(traffic: Traffic, options: StubOptions = {}): ExecutionInstallatio
                   const session: Session = {
                     sessionKey: `stub:${routed.name ?? "default"}`,
                     cwd: "/stub",
+                    ...(options.assertsAtPlacement === undefined
+                      ? {}
+                      : { agentSessionId: options.assertsAtPlacement }),
                   };
                   // Established, so what this turn asks is applied and read
                   // back — the only thing that makes a configuration a fact
@@ -153,13 +168,18 @@ function turn(
       // configured turn that is the authentic use, and it is the only thing
       // that can say what the conversation was put under.
       const routed = promptOptions?.session;
-      const session: Session =
+      const placed: Session =
         typeof routed === "object" && routed !== null
           ? routed
           : { sessionKey: "stub:default", cwd: "/stub" };
+      // Asserting the native identity the way a provider does: on the value it
+      // reports as the conversation this turn ran in.
+      const asserted = options.asserts?.(content);
+      const session: Session =
+        asserted === undefined ? placed : { ...placed, agentSessionId: asserted };
       traffic.prompts.push({
         content,
-        sessionKey: sessionOf(session)?.sessionKey ?? session.sessionKey,
+        sessionKey: sessionOf(placed)?.sessionKey ?? placed.sessionKey,
         agent: promptOptions?.agent ?? AGENT,
       });
       const response = options.respond ? options.respond(content) : {};
@@ -601,5 +621,261 @@ describe("Tier CV — what a turn ran under is the provider's own account", () =
     expect(retained.sessionKey).toBe(traffic.prompts[0]?.sessionKey);
     expect(retained.agent).toBe(AGENT);
     expect(retained.status).toBe("completed");
+  });
+});
+
+describe("Tier CV — cancelling a turn joins the work it started", () => {
+  it("CV18: the caller's halt waits for the provider's own cleanup", function* () {
+    const started = withResolvers<void>();
+    const cleanupStarted = withResolvers<void>();
+    const cleanupRelease = withResolvers<void>();
+
+    const answered = yield* withConversation(
+      new InMemoryStream(),
+      stub(fresh(), {
+        // A turn whose teardown is held open, which is the only shape that can
+        // tell "the caller stopped waiting" apart from "the work stopped".
+        hold: () =>
+          (function* (): Operation<void> {
+            yield* ensure(function* () {
+              cleanupStarted.resolve();
+              yield* cleanupRelease.operation;
+            });
+            started.resolve();
+            yield* suspend();
+          })(),
+      }),
+      function* (chat) {
+        // Registered before the held work exists, so the gate opens however
+        // this case leaves and nothing is left blocked on it.
+        yield* ensure(() => {
+          cleanupRelease.resolve();
+        });
+        const caller = yield* spawn(() => chat.prompt("held"));
+        yield* started.operation;
+        const halted = yield* spawn(function* (): Operation<string> {
+          yield* caller.halt();
+          return "halt returned";
+        });
+        yield* cleanupStarted.operation;
+        const observation = yield* race([
+          (function* (): Operation<string> {
+            return yield* halted;
+          })(),
+          (function* (): Operation<string> {
+            yield* sleep(25);
+            return "halt waits";
+          })(),
+        ]);
+        // Released after the observation, so the case joins its own work
+        // rather than leaving a held cleanup behind.
+        cleanupRelease.resolve();
+        yield* halted;
+        return observation;
+      },
+    );
+
+    if (!answered.ok) {
+      throw answered.error;
+    }
+    // Asking is not stopping: the halt is still unwinding the provider's
+    // cleanup, so a caller that has returned could not claim the work stopped.
+    expect(answered.value).toBe("halt waits");
+  });
+
+  it("CV19: fresh work starts after a cancelled turn whose teardown was held", function* () {
+    const stream = new InMemoryStream();
+    const traffic = fresh();
+    const started = withResolvers<void>();
+    const cleanupRelease = withResolvers<void>();
+
+    const answered = yield* withConversation(
+      stream,
+      stub(traffic, {
+        hold: (content) =>
+          content !== "abandoned"
+            ? undefined
+            : (function* (): Operation<void> {
+                yield* ensure(function* () {
+                  yield* cleanupRelease.operation;
+                });
+                started.resolve();
+                yield* suspend();
+              })(),
+      }),
+      function* (chat) {
+        const caller = yield* spawn(() => chat.prompt("abandoned"));
+        yield* started.operation;
+        const halted = yield* spawn(function* (): Operation<void> {
+          yield* caller.halt();
+        });
+        cleanupRelease.resolve();
+        yield* halted;
+        // The conversation is free again only because the cancelled turn's
+        // work finished unwinding first.
+        return yield* chat.prompt("asked again");
+      },
+    );
+
+    if (!answered.ok) {
+      throw answered.error;
+    }
+    expect(answered.value.ok && answered.value.value).toBe("[asked again]");
+    expect(traffic.prompts.map((call) => call.content)).toEqual(["abandoned", "asked again"]);
+    // The abandoned turn recorded nothing, so nothing resumes it.
+    expect(turnNames(yield* stream.readAll())).toEqual(["turn:2"]);
+  });
+});
+
+describe("Tier CV — the native conversation an established history names", () => {
+  it("CV20: the provider's assertion is retained as the turn's own account", function* () {
+    const stream = new InMemoryStream();
+
+    const answered = yield* withConversation(
+      stream,
+      stub(fresh(), { asserts: () => "native-1" }),
+      function* (chat) {
+        return yield* chat.prompt("first");
+      },
+    );
+
+    expect(answered.ok).toBe(true);
+    expect(record(yield* stream.readAll(), "turn:1").agentSessionId).toBe("native-1");
+  });
+
+  it("CV21: a provider resolving a different native conversation refuses the turn", function* () {
+    const stream = new InMemoryStream();
+    const first = fresh();
+    const opened = yield* withConversation(
+      stream,
+      stub(first, { asserts: () => "native-1" }),
+      function* (chat) {
+        return yield* chat.prompt("first");
+      },
+    );
+    expect(opened.ok).toBe(true);
+
+    // Reopened against a provider that resolves some other conversation.
+    const again = fresh();
+    const continued = yield* withConversation(
+      stream,
+      stub(again, { assertsAtPlacement: "native-other", asserts: () => "native-other" }),
+      function* (chat) {
+        return yield* chat.prompt("second");
+      },
+    );
+
+    if (!continued.ok) {
+      throw new Error(`reopening refused outright: ${continued.error.message}`);
+    }
+    expect(continued.value.ok).toBe(false);
+    expect(!continued.value.ok && continued.value.error.message).toContain(
+      "not reattached to another identity",
+    );
+    // Refused before the turn started: no prompt was sent anywhere, and the
+    // established identity stands in the history unchanged.
+    expect(again.prompts).toHaveLength(0);
+    expect(turnNames(yield* stream.readAll())).toEqual(["turn:1"]);
+    expect(record(yield* stream.readAll(), "turn:1").agentSessionId).toBe("native-1");
+  });
+
+  it("CV22: a turn accepted before anything acknowledged a mapping reconciles to that identity", function* () {
+    const stream = new InMemoryStream();
+    const first = fresh();
+    // The whole history is one accepted turn and nothing after it: there is no
+    // mapping record, only the provider's own account of the turn.
+    const opened = yield* withConversation(
+      stream,
+      stub(first, { asserts: () => "native-1" }),
+      function* (chat) {
+        return yield* chat.prompt("first");
+      },
+    );
+    expect(opened.ok).toBe(true);
+    const events = yield* stream.readAll();
+    expect(turnNames(events)).toEqual(["turn:1"]);
+
+    // Reopened against a provider that resolves that same conversation. It is
+    // reconciled to that identity rather than treated as unestablished, and no
+    // replacement conversation is created.
+    const again = fresh();
+    const continued = yield* withConversation(
+      stream,
+      stub(again, { assertsAtPlacement: "native-1", asserts: () => "native-1" }),
+      function* (chat) {
+        return yield* chat.prompt("second");
+      },
+    );
+
+    if (!continued.ok) {
+      throw new Error(`reopening refused: ${continued.error.message}`);
+    }
+    expect(continued.value.ok && continued.value.value).toBe("[second]");
+    // The accepted turn was not resent, and the second turn joined the same
+    // native conversation.
+    expect(again.prompts.map((call) => call.content)).toEqual(["second"]);
+    expect(record(yield* stream.readAll(), "turn:2").agentSessionId).toBe("native-1");
+  });
+
+  it("CV23: a turn that ran in another native conversation does not replace the established one", function* () {
+    const stream = new InMemoryStream();
+    const first = fresh();
+    const opened = yield* withConversation(
+      stream,
+      stub(first, { asserts: () => "native-1" }),
+      function* (chat) {
+        return yield* chat.prompt("first");
+      },
+    );
+    expect(opened.ok).toBe(true);
+
+    // The placement resolves the established conversation, and the provider
+    // then reports the turn ran somewhere else — an assertion that arrives too
+    // late to be refused before the turn.
+    const again = fresh();
+    const continued = yield* withConversation(
+      stream,
+      stub(again, { assertsAtPlacement: "native-1", asserts: () => "native-late" }),
+      function* (chat) {
+        return yield* chat.prompt("second");
+      },
+    );
+
+    if (!continued.ok) {
+      throw new Error(`reopening refused outright: ${continued.error.message}`);
+    }
+    expect(continued.value.ok).toBe(false);
+    expect(!continued.value.ok && continued.value.error.message).toContain(
+      "established identity stands",
+    );
+  });
+
+  it("CV24: a history naming two native conversations cannot be opened", function* () {
+    const stream = new InMemoryStream();
+    const traffic = fresh();
+    let turn = 0;
+    const opened = yield* withConversation(
+      stream,
+      // Two turns, two different native conversations: nothing in the history
+      // says which one this chat is.
+      stub(traffic, {
+        asserts: () => {
+          turn += 1;
+          return `native-${turn}`;
+        },
+      }),
+      function* (chat) {
+        yield* chat.prompt("first");
+        return yield* chat.prompt("second");
+      },
+    );
+    expect(opened.ok).toBe(true);
+
+    const reopened = yield* withConversation(stream, stub(fresh()), function* () {
+      return "reached";
+    });
+
+    expect(reopened.ok).toBe(false);
+    expect(!reopened.ok && reopened.error.message).toContain("more than one native conversation");
   });
 });
