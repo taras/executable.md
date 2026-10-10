@@ -19,13 +19,20 @@
  * dirty one.
  */
 
-import { until } from "effection";
-import type { Operation } from "effection";
+import { Ok, until } from "effection";
+import type { Operation, Result } from "effection";
 import { lstat, readdir } from "@effectionx/fs";
 import { copyFile, mkdir, readlink, symlink } from "node:fs/promises";
 import type { Stats } from "node:fs";
 import { join } from "node:path";
 import type { RepositoryHost } from "../composition/host.ts";
+import { gitSession } from "../composition/git.ts";
+import type { GitSession } from "../composition/git.ts";
+import { inventoryFrontier } from "./frontier.ts";
+import type {
+  RetainedAdministration,
+  RetainedFrontier,
+} from "../../retained-repository/records.ts";
 
 /** Where a prediction may run without the original knowing. */
 export interface Scratch {
@@ -79,4 +86,55 @@ function* copyTree(from: string, to: string): Operation<void> {
     }
     yield* until(copyFile(source, target));
   }
+}
+
+/**
+ * Work the whole transition out in a copy of the checkout.
+ *
+ * Some transitions change the worktree in ways only Git can compute — a branch
+ * switch replaces tracked content with another tree's — and computing them by
+ * hand would mean reimplementing Git badly. So the checkout is copied, the
+ * operation is performed in the copy, and what the copy ends up in is the
+ * prediction.
+ *
+ * The copy is ordinary files and its own administration, so the original is
+ * untouched. What comes back is reported under the original's identity: the
+ * prediction is about that checkout, and the scratch is about to cease to
+ * exist.
+ */
+export function* predictInScratch(
+  host: RepositoryHost,
+  original: { readonly directory: string; readonly checkout: string },
+  administration: RetainedAdministration,
+  perform: (git: GitSession, directory: string) => Operation<Result<void>>,
+): Operation<Result<RetainedFrontier>> {
+  const root = yield* host.useDirectory();
+  const directory = join(root, "checkout");
+  yield* copyTree(original.directory, directory);
+  const git = gitSession(host, root);
+  const performed = yield* perform(git, directory);
+  if (!performed.ok) {
+    return performed;
+  }
+  const predicted = yield* inventoryFrontier({
+    git,
+    checkout: original.checkout,
+    directory,
+  });
+  if (!predicted.ok) {
+    return predicted;
+  }
+  // The scratch's own administration paths are not the prediction: they belong
+  // to a directory that is about to be removed.
+  return Ok(
+    Object.freeze({
+      checkout: predicted.value.checkout,
+      administration,
+      objectFormat: predicted.value.objectFormat,
+      head: predicted.value.head,
+      refs: predicted.value.refs,
+      index: predicted.value.index,
+      worktree: predicted.value.worktree,
+    }),
+  );
 }

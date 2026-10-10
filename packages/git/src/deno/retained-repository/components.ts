@@ -34,6 +34,15 @@ import type { RetainedFileHost, SelectedCheckout } from "./files.ts";
 import type { RetainedFrontier } from "../../retained-repository/records.ts";
 import { routeDirectory } from "./terminal.ts";
 import { retainedCommit } from "./commit.ts";
+import { predictInScratch } from "./scratch.ts";
+import { props as switchProps } from "../../composition/components/GitSwitch.ts";
+import {
+  branchExists,
+  resolveBaseCommit,
+  resolveCommit,
+  switchBranch,
+} from "../composition/git.ts";
+import type { GitSession } from "../composition/git.ts";
 import type { RepositoryHost } from "../composition/host.ts";
 
 /** Where these components report themselves as coming from. */
@@ -44,7 +53,12 @@ export function retainedGitComponents(
   host: RetainedFileHost,
   repository: RepositoryHost,
 ): readonly IdentityComponent[] {
-  return Object.freeze([retainedDir(host), retainedAdd(host), retainedCommit(host, repository)]);
+  return Object.freeze([
+    retainedDir(host),
+    retainedAdd(host),
+    retainedCommit(host, repository),
+    retainedSwitch(host, repository),
+  ]);
 }
 
 /**
@@ -303,4 +317,158 @@ function inventory(selected: SelectedCheckout) {
     checkout: selected.checkout,
     directory: selected.directory,
   });
+}
+
+/**
+ * `Git.Switch`, with the transition it makes predicted in a copy.
+ *
+ * A switch replaces tracked content with another tree's, and computing that by
+ * hand would mean reimplementing Git. So the checkout is copied, the switch is
+ * performed in the copy, and what the copy ends up in is what the intent
+ * freezes. The refusals a document can act on — a branch another checkout
+ * holds, local changes the switch would overwrite, a base that names no commit
+ * — happen in the copy first, so they refuse before the original is touched and
+ * nothing is forced.
+ */
+function retainedSwitch(host: RetainedFileHost, repository: RepositoryHost): IdentityComponent {
+  return {
+    name: "Git.Switch",
+    origin: RETAINED_ORIGIN,
+    props: switchProps,
+    forms: ["self-closing"],
+    description:
+      "Switch or create a branch. `<Git.Switch branch=\"release/1.4\" base=\"main\" />` starts a " +
+      "missing branch at the specified base.",
+    factory: (claim: IdentityClaimant) =>
+      function* GitSwitch(props, invocation): Operation<string> {
+        const branch = props.branch;
+        if (typeof branch !== "string" || branch === "") {
+          throw new GitOperationError(
+            "Git.Switch",
+            "invalid-branch",
+            "<Git.Switch> needs a non-empty branch.",
+          );
+        }
+        const base = typeof props.base === "string" && props.base !== "" ? props.base : undefined;
+        const directory = yield* cwd();
+        const occurrence = yield* claim(invocation);
+        const selected = yield* host.covering(directory);
+        if (selected === undefined) {
+          throw new GitOperationError(
+            "Git.Switch",
+            "invalid-invocation",
+            "<Git.Switch> is written outside a repository this entry has selected.",
+          );
+        }
+
+        const produced = yield* retain(
+          {
+            owner: host.owner,
+            site: host.site(occurrence),
+            operation: "switch",
+            checkout: selected.checkout,
+            common: selected.common,
+            position: host.position(selected.common),
+            selection: { checkout: selected.checkout },
+            request: base === undefined
+              ? { cwd: directory, branch }
+              : { cwd: directory, branch, base },
+            inventory: () => inventory(selected),
+            *prepare(preState) {
+              const predicted = yield* predictInScratch(
+                repository,
+                { directory: selected.directory, checkout: selected.checkout },
+                preState.administration,
+                (git, at) => switchInto(git, at, branch, base),
+              );
+              if (!predicted.ok) {
+                return predicted;
+              }
+              return Ok({
+                postState: predicted.value,
+                prepared: { branch, base: base ?? null },
+                evidence: { type: "switch", branch },
+              });
+            },
+            *perform() {
+              const switched = yield* switchInto(
+                selected.git,
+                selected.directory,
+                branch,
+                base,
+              );
+              if (!switched.ok) {
+                return switched;
+              }
+              return Ok({ type: "switch", branch });
+            },
+          },
+          host.resume,
+          host.lanes,
+        );
+        if (!produced.ok) {
+          throw produced.error;
+        }
+        return "";
+      },
+  };
+}
+
+/**
+ * Put one checkout on a branch, creating it at a base when it is missing.
+ *
+ * The same sequence in the copy and in the original, so what the prediction
+ * proved is what the performance does. No force: a switch that would overwrite
+ * local changes refuses, in the copy first.
+ */
+function* switchInto(
+  git: GitSession,
+  directory: string,
+  branch: string,
+  base: string | undefined,
+): Operation<Result<void>> {
+  if (branch.startsWith("-")) {
+    return Err(
+      new GitOperationError(
+        "Git.Switch",
+        "invalid-branch",
+        "<Git.Switch> was given a branch name that reads as an option.",
+      ),
+    );
+  }
+  try {
+    if (yield* branchExists(git, directory, branch)) {
+      yield* switchBranch(git, {
+        operation: "Git.Switch",
+        workingDirectory: directory,
+        checkout: directory,
+        branch,
+        start: undefined,
+      });
+      return Ok(undefined);
+    }
+    const start = base === undefined
+      ? yield* resolveCommit(git, directory, "HEAD")
+      : yield* resolveBaseCommit(git, directory, base);
+    if (start === undefined) {
+      return Err(
+        new GitOperationError(
+          "Git.Switch",
+          "unresolved-base",
+          "<Git.Switch> was given a base that names no commit.",
+        ),
+      );
+    }
+    yield* switchBranch(git, {
+      operation: "Git.Switch",
+      workingDirectory: directory,
+      checkout: directory,
+      branch,
+      start,
+    });
+    return Ok(undefined);
+  } catch (error) {
+    // The refusals the native layer already has words for travel as they are.
+    return Err(error instanceof Error ? error : new Error(String(error)));
+  }
 }

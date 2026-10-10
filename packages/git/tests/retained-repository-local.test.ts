@@ -188,6 +188,18 @@ function* readIndexPaths(fixture: Fixture): Operation<readonly string[]> {
     .map((line) => line.slice(line.indexOf("\t") + 1));
 }
 
+/** Run an entry that is expected to refuse, and answer with its journal. */
+function refused(fixture: Fixture, source: string): Operation<Run> {
+  const stream = new InMemoryStream();
+  return scoped(function* () {
+    try {
+      return yield* run(fixture, source, stream, counted().handler);
+    } catch {
+      return { output: "", events: yield* stream.readAll() };
+    }
+  });
+}
+
 describe("retained repository: one entry's local work", () => {
   it("R3: a write inside the ambient checkout retains an intent and a completion", function* () {
     const fixture = yield* useFixture();
@@ -438,6 +450,67 @@ describe("retained repository: one entry's local work", () => {
     expect(yield* git.read(["rev-parse", "HEAD"], fixture.checkout)).toBe(head);
     // One commit, not two.
     expect(yield* git.read(["rev-list", "--count", "HEAD"], fixture.checkout)).toBe("2");
+  });
+
+  it("R3: a switch predicts the branch and the content it will leave", function* () {
+    const fixture = yield* useFixture();
+    const git = gitSession(denoRepositoryHost(), fixture.root);
+    // A second branch whose content differs, so the switch has something to do.
+    yield* git.run(["switch", "--create", "topic"], fixture.checkout);
+    yield* writeTextFile(join(fixture.checkout, "topic.md"), "topic\n");
+    yield* git.run(["add", "topic.md"], fixture.checkout);
+    yield* git.run(["commit", "-m", "topic"], fixture.checkout);
+    yield* git.run(["switch", "main"], fixture.checkout);
+
+    const { events } = yield* run(
+      fixture,
+      '<Git.Switch branch="topic" />\n',
+      new InMemoryStream(),
+      counted().handler,
+    );
+
+    const intents = recordsOf(events, RETAINED_REPOSITORY_INTENT).map((record) =>
+      parseRetainedRepositoryIntent(record)
+    );
+    expect(intents.map((record) => record?.operation)).toEqual(["ambient", "switch"]);
+    const moved = intents[1];
+    expect(moved?.preState.head.kind === "symbolic" && moved.preState.head.ref).toBe(
+      "refs/heads/main",
+    );
+    expect(moved?.postState.head.kind === "symbolic" && moved.postState.head.ref).toBe(
+      "refs/heads/topic",
+    );
+    // The content the other branch carries was predicted, not guessed.
+    expect(moved?.preState.worktree.some((entry) => entry.path === "topic.md")).toBe(false);
+    expect(moved?.postState.worktree.some((entry) => entry.path === "topic.md")).toBe(true);
+
+    // And that is where the checkout actually is.
+    expect(yield* git.read(["symbolic-ref", "HEAD"], fixture.checkout)).toBe("refs/heads/topic");
+    expect(yield* exists(join(fixture.checkout, "topic.md"))).toBe(true);
+  });
+
+  it("R5: a switch that would overwrite local changes refuses before touching it", function* () {
+    const fixture = yield* useFixture();
+    const git = gitSession(denoRepositoryHost(), fixture.root);
+    yield* git.run(["switch", "--create", "topic"], fixture.checkout);
+    yield* writeTextFile(join(fixture.checkout, "seed.md"), "topic version\n");
+    yield* git.run(["add", "seed.md"], fixture.checkout);
+    yield* git.run(["commit", "-m", "topic"], fixture.checkout);
+    yield* git.run(["switch", "main"], fixture.checkout);
+    // A local change to the same file the other branch moved.
+    yield* writeTextFile(join(fixture.checkout, "seed.md"), "mine\n");
+
+    const { events } = yield* refused(fixture, '<Git.Switch branch="topic" />\n');
+
+    // The refusal happened before the checkout moved, and nothing was forced.
+    expect(yield* git.read(["symbolic-ref", "HEAD"], fixture.checkout)).toBe("refs/heads/main");
+    expect(yield* readTextFile(join(fixture.checkout, "seed.md"))).toBe("mine\n");
+    // Nothing was retained for an operation that never started.
+    expect(
+      recordsOf(events, RETAINED_REPOSITORY_INTENT)
+        .map((record) => parseRetainedRepositoryIntent(record)?.operation)
+        .filter((operation) => operation === "switch"),
+    ).toEqual([]);
   });
 
   it("R6: a write where there is no repository is ordinary and retains nothing", function* () {
