@@ -98,6 +98,75 @@ export function retainedFileMutations(host: RetainedFileHost): FileMutationHandl
   };
 }
 
+/**
+ * One authored directory, retained when it is inside a selected checkout.
+ *
+ * `<Dir>` is a Git-owned component with its own claimed occurrence, so it
+ * arrives here already authenticated; what this adds is the same protocol the
+ * file mutations use. An ensure that finds the directory already there changes
+ * nothing, and its two frozen ends are one state.
+ */
+export function* retainedDirectoryEnsure(
+  host: RetainedFileHost,
+  occurrence: string,
+  input: FilePathInput,
+): Operation<Result<void>> {
+  const target = yield* targetOf(input);
+  const selected = yield* host.covering(target);
+  const at = selected === undefined ? undefined : inside(selected, target);
+  if (selected === undefined || at === undefined) {
+    return yield* host.ordinary.ensureDirectory(input);
+  }
+  const produced = yield* retain(
+    {
+      owner: host.owner,
+      site: host.site(occurrence),
+      operation: "dir-ensure",
+      checkout: selected.checkout,
+      common: selected.common,
+      position: host.position(selected.common),
+      selection: { checkout: selected.checkout },
+      request: { cwd: input.cwd, path: input.path },
+      inventory: () =>
+        inventoryFrontier({
+          git: selected.git,
+          checkout: selected.checkout,
+          directory: selected.directory,
+        }),
+      // deno-lint-ignore require-yield
+      *prepare(preState: RetainedFrontier): Operation<Result<PreparedTransition>> {
+        const postState = ensured(preState, at);
+        if (postState === undefined) {
+          return Err(
+            new Error(
+              `"${input.path}" names something other than a directory inside ` +
+                `${selected.checkout}.`,
+            ),
+          );
+        }
+        return Ok({
+          postState,
+          prepared: { target: at },
+          evidence: { type: "dir-ensure" },
+        });
+      },
+      *perform(): Operation<Result<Json>> {
+        const made = yield* host.ordinary.ensureDirectory(input);
+        if (!made.ok) {
+          return made;
+        }
+        return Ok({ type: "dir-ensure" });
+      },
+    },
+    host.resume,
+    host.lanes,
+  );
+  if (!produced.ok) {
+    return produced;
+  }
+  return Ok(undefined);
+}
+
 function* write(
   host: RetainedFileHost,
   occurrence: string,
@@ -299,6 +368,29 @@ function written(
       bytes,
     }),
   );
+  return withWorktree(preState, entries);
+}
+
+/**
+ * The checkout this ensure leaves behind.
+ *
+ * The target and every directory above it, because a recursive ensure makes
+ * all of them and an empty directory is state a resume has to find again. A
+ * directory that is already there is a no-op, so the two ends of that
+ * transition are one state.
+ */
+function ensured(preState: RetainedFrontier, at: string): RetainedFrontier | undefined {
+  const entries = new Map(preState.worktree.map((entry) => [entry.path, entry]));
+  for (const path of [...parentsOf(at), at]) {
+    const held = entries.get(path);
+    if (held === undefined) {
+      entries.set(path, Object.freeze({ kind: "directory", path, mode: "0755" }));
+      continue;
+    }
+    if (held.kind !== "directory") {
+      return undefined;
+    }
+  }
   return withWorktree(preState, entries);
 }
 

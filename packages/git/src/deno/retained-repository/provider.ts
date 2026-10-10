@@ -35,6 +35,7 @@ import { gitSession } from "../composition/git.ts";
 import type { GitSession } from "../composition/git.ts";
 import type { RepositoryHost } from "../composition/host.ts";
 import { discoverAmbientRepository } from "../run-composition/ambient.ts";
+import { retainedGitComponents } from "./components.ts";
 import { retainedFileMutations } from "./files.ts";
 import type { RetainedFileHost, SelectedCheckout } from "./files.ts";
 import { retain, retainedLanes, retainedResume } from "./local.ts";
@@ -241,6 +242,9 @@ export function* useRetainedRepositoryEntry(
     installation: {
       admissions: [admission],
       fileMutations: retainedFileMutations(fileHost),
+      // Declared, not registered: each one is minted a domain so its body can
+      // authenticate its own invocation before it routes anything.
+      components: retainedGitComponents(fileHost),
     },
     files: capturedFiles(request.files, request.cwd),
     history: () => admitted,
@@ -271,10 +275,17 @@ function capturedFiles(files: FilesHandler, cwd: string): FragmentFileAccess {
   };
 }
 
-/** Whether this absolute path is inside that directory. */
+/**
+ * Whether this absolute path is this checkout, or somewhere in it.
+ *
+ * The checkout's own root counts. A `<Git.Add>` written at the top of a
+ * checkout is working in that checkout, and asking whether the root is
+ * *strictly inside* itself is a different question — the one a file target is
+ * held to, where the root is not a file anybody can write.
+ */
 function within(directory: string, path: string): boolean {
   const at = relative(resolve(directory), resolve(path));
-  return at !== "" && !at.startsWith("..") && !isAbsolute(at);
+  return !at.startsWith("..") && !isAbsolute(at);
 }
 
 /** Another entry's checkout is not this one's, whatever the path says. */

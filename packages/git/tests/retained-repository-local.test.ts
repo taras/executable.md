@@ -115,8 +115,10 @@ function* useEntryFiles(fixture: Fixture, leaf: FilesHandler): Operation<void> {
     checkFilePath: ([input]) => leaf.checkFilePath(input),
     readTextFile: ([input]) => leaf.readTextFile(input),
     globFiles: ([input]) => leaf.globFiles(input),
-    ensureDirectory: ([input]) => leaf.ensureDirectory(input),
     temporaryDirectory: () => leaf.temporaryDirectory(),
+    *ensureDirectory([input], next) {
+      return yield* next(input);
+    },
     *writeTextFile([input], next) {
       return yield* next(input);
     },
@@ -174,6 +176,16 @@ function interrupted(events: readonly DurableEvent[]): InMemoryStream {
     (event) => event.type === "yield" && event.description.type === RETAINED_REPOSITORY_COMPLETION,
   );
   return new InMemoryStream([...events.slice(0, last)]);
+}
+
+/** The paths this checkout's index holds right now. */
+function* readIndexPaths(fixture: Fixture): Operation<readonly string[]> {
+  const git = gitSession(denoRepositoryHost(), fixture.root);
+  const listed = yield* git.read(["ls-files", "--stage"], fixture.checkout);
+  return (listed ?? "")
+    .split("\n")
+    .filter((line) => line !== "")
+    .map((line) => line.slice(line.indexOf("\t") + 1));
 }
 
 describe("retained repository: one entry's local work", () => {
@@ -307,6 +319,78 @@ describe("retained repository: one entry's local work", () => {
     expect(drifted.writes).toEqual([]);
     // Nothing was repaired to make the replay succeed.
     expect(yield* readTextFile(join(fixture.checkout, "notes.md"))).toBe("somebody else\n");
+  });
+
+  it("R6: an authored directory is retained, and the file inside it is its own work", function* () {
+    const fixture = yield* useFixture();
+    const leaf = counted();
+    const { events } = yield* run(
+      fixture,
+      '<Dir path="notes">\n<File path="inside.md">nested\n</File>\n</Dir>\n',
+      new InMemoryStream(),
+      leaf.handler,
+    );
+
+    expect(yield* readTextFile(join(fixture.checkout, "notes", "inside.md"))).toBe("nested\n");
+
+    const intents = recordsOf(events, RETAINED_REPOSITORY_INTENT).map((record) =>
+      parseRetainedRepositoryIntent(record)
+    );
+    // The selection, the directory, then the file: three operations, and the
+    // file's is its own rather than the directory's.
+    expect(intents.map((record) => record?.operation)).toEqual([
+      "ambient",
+      "dir-ensure",
+      "file-write",
+    ]);
+    const ensure = intents[1];
+    const write = intents[2];
+    expect(ensure?.site.occurrence).not.toBe(write?.site.occurrence);
+    // The directory is in the state the ensure predicted, and the file is not.
+    expect(ensure?.postState.worktree.some((entry) => entry.path === "notes")).toBe(true);
+    expect(ensure?.postState.worktree.some((entry) => entry.path === "notes/inside.md")).toBe(
+      false,
+    );
+    expect(write?.postState.worktree.some((entry) => entry.path === "notes/inside.md")).toBe(true);
+  });
+
+  it("R3: staging predicts the index it will leave and is checked against it", function* () {
+    const fixture = yield* useFixture();
+    const leaf = counted();
+    const { events } = yield* run(
+      fixture,
+      '<File path="notes.md">the note\n</File>\n\n<Git.Add paths="notes.md" />\n',
+      new InMemoryStream(),
+      leaf.handler,
+    );
+
+    const intents = recordsOf(events, RETAINED_REPOSITORY_INTENT).map((record) =>
+      parseRetainedRepositoryIntent(record)
+    );
+    expect(intents.map((record) => record?.operation)).toEqual([
+      "ambient",
+      "file-write",
+      "add",
+    ]);
+    const add = intents[2];
+    // The file was not in the index before and is in the one it predicted.
+    expect(add?.preState.index.some((entry) => entry.path === "notes.md")).toBe(false);
+    expect(add?.postState.index.some((entry) => entry.path === "notes.md")).toBe(true);
+
+    // And that is the index Git actually produced.
+    const staged = yield* readIndexPaths(fixture);
+    expect(staged).toContain("notes.md");
+  });
+
+  it("R4: a completed stage replays without running git add again", function* () {
+    const fixture = yield* useFixture();
+    const source = '<File path="notes.md">the note\n</File>\n\n<Git.Add paths="notes.md" />\n';
+    const { events } = yield* run(fixture, source, new InMemoryStream(), counted().handler);
+
+    const again = counted();
+    yield* run(fixture, source, new InMemoryStream([...events]), again.handler);
+    expect(again.writes).toEqual([]);
+    expect(yield* readIndexPaths(fixture)).toContain("notes.md");
   });
 
   it("R6: a write where there is no repository is ordinary and retains nothing", function* () {
