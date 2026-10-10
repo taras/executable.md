@@ -108,17 +108,26 @@
 
 import { createDurableOperation } from "@executablemd/durable-streams";
 import type { Json as DurableJson } from "@executablemd/durable-streams";
-import { scoped } from "effection";
-import type { Operation } from "effection";
+import { Err, Ok, scoped } from "effection";
+import type { Operation, Result } from "effection";
 
+import { bodyHasOutput, outputPropsViolation } from "./body-structure.ts";
 import { ExecutionDeclarationCatalog } from "./execution-declarations.ts";
 import { Component } from "./component-api.ts";
-import { ErrorMode } from "./errors.ts";
+import {
+  documentationFailure,
+  durabilityFailure,
+  ErrorMode,
+  filesFatalFailure,
+  firstCause,
+} from "./errors.ts";
+import { InvocationTeardownError } from "./invocation.ts";
+import { SecretDetectedError, SecretScannerError } from "./secrets/findings.ts";
 import { CanonicalImports, retain } from "./components/component-resolution.ts";
 import type { ComponentResolution, ImportedDefinition } from "./components/component-resolution.ts";
 import { isComponentName } from "./components/registration.ts";
 import { CORE_ORIGIN, CORE_REGISTRY } from "./components/registry.ts";
-import { createBlockCounter, expandSegmentsWithin } from "./expand.ts";
+import { createBlockCounter, expandBody, expandSegmentsWithin } from "./expand.ts";
 import { extendPath } from "./expansion.ts";
 import { prepareFetchRequest, requestRecord } from "./fetch-request.ts";
 import { timeoutFetch } from "@executablemd/runtime";
@@ -126,6 +135,7 @@ import type { FetchRequest } from "./fetch-request.ts";
 import { isJsonObject, parseJson } from "./json.ts";
 import { markGeneratedRequestRefusal } from "./generated-request-refusal.ts";
 import { GeneratedDataExpressions, validateDataExpression } from "./generated-expressions.ts";
+import { readsBinding } from "./generated-interpolation.ts";
 import { capturedBinding } from "./invocation-rules.ts";
 import { renderSegments } from "./render.ts";
 import { scanSegments } from "./scanner.ts";
@@ -168,6 +178,53 @@ import type {
 /** A generated fragment this evaluator will not run, or an import it refuses. */
 export class GeneratedXmdError extends Error {
   override name = "GeneratedXmdError";
+}
+
+/**
+ * What the generated source is being admitted *as*.
+ *
+ * A fragment and a root are written in the same language and admitted by the
+ * same walk, and they differ over one construct: a root selects what it renders
+ * with a top-level `<Output>`, and a fragment has no output region at all. That
+ * single difference is a ceiling rather than a detail — a run admitted as one
+ * and resumed as the other would expand source nobody admitted — so it travels
+ * with the policy and is compared like every other term.
+ *
+ * `<Content>` and `<Return>` are unavailable in both: neither has caller content
+ * to claim nor a value body to answer.
+ */
+type GeneratedContext = "fragment" | "root";
+
+/** A root admission's own name for itself, absent from a fragment's record. */
+const ROOT_CONTEXT = "root";
+
+/** What a generated root rendered, and whether it chose what to render. */
+export interface GeneratedXmdRootResult {
+  /** The root's canonical rendered text after evaluation completes. */
+  readonly output: string;
+  /** Whether this root declares an explicit Output region. */
+  readonly hasOutput: boolean;
+}
+
+/**
+ * An ordinary failure of one generated root, and what it had rendered.
+ *
+ * `partial` is present only for a root that began evaluating: an admission
+ * refusal performed nothing, so there is nothing truthful to report about what
+ * it rendered. The rendering is what the root actually produced before the
+ * failure reached it — no further source is evaluated to complete a region or
+ * summarize one.
+ */
+export class GeneratedXmdRootError extends Error {
+  override name = "GeneratedXmdRootError";
+  readonly partial?: GeneratedXmdRootResult;
+
+  constructor(message: string, partial?: GeneratedXmdRootResult) {
+    super(message);
+    if (partial !== undefined) {
+      this.partial = partial;
+    }
+  }
 }
 
 /** The construct classes a fragment can be refused for. */
@@ -857,6 +914,15 @@ interface RetainedInvocation {
 interface Policy {
   readonly allow: readonly GeneratedEffectClass[];
   /**
+   * Whether this source was admitted as a fragment or as a root.
+   *
+   * A ceiling, not a rendering preference: the two admit different constructs,
+   * so a retained admission resumes only in the context it was made in. Written
+   * to the record only for a root, which is what leaves every fragment record
+   * this build and the one before it wrote byte-identical and readable.
+   */
+  readonly context: GeneratedContext;
+  /**
    * The Workspace basis, or nothing for a host that evaluates against none.
    *
    * The distinction is itself a ceiling. A run admitted with no Workspace and
@@ -1237,25 +1303,6 @@ function admitted(entries: readonly Entry[]): Map<string, Entry[]> {
   return table;
 }
 
-/**
- * Whether this text would read anything.
- *
- * The two interpolation passes a text segment goes through are definitive
- * on what a reference is, so this asks them rather than guessing: `\{` is
- * protected exactly as expansion protects it, and what remains is matched by
- * the same shapes `interpolate()` and `interpolateEvalBindings()` consume.
- * Braces that neither pass would read — prose, a JSON sample, a CSS rule — are
- * left alone.
- */
-const ESCAPED_BRACE_PLACEHOLDER = "\uE000";
-const FRONTMATTER_REFERENCE = /\{(meta|props)\.[^}]+\}/;
-const BINDING_REFERENCE = /\{[a-zA-Z_$][a-zA-Z0-9_$]*(?:\.[a-zA-Z_$][a-zA-Z0-9_$]*)*\}/;
-
-function reads(content: string): boolean {
-  const protectedEscapes = content.replaceAll("\\{", ESCAPED_BRACE_PLACEHOLDER);
-  return FRONTMATTER_REFERENCE.test(protectedEscapes) || BINDING_REFERENCE.test(protectedEscapes);
-}
-
 /** Two normalized requests describing the same read. */
 function sameRequest(one: FetchRequest, other: FetchRequest): boolean {
   return JSON.stringify(requestRecord(one)) === JSON.stringify(requestRecord(other));
@@ -1297,6 +1344,7 @@ function currentPolicy(
   allow: readonly GeneratedEffectClass[],
   entries: readonly Entry[],
   ceilings: ReadonlyMap<string, FetchRequest[]>,
+  context: GeneratedContext,
 ): Policy {
   const requests: FetchRequest[] = [];
   const allowed: RetainedEntry[] = [];
@@ -1315,6 +1363,7 @@ function currentPolicy(
   const workspace = workspaceBasis(request);
   return {
     allow: [...allow],
+    context,
     ...(workspace === undefined ? {} : { workspace }),
     allowed,
     requests,
@@ -1375,6 +1424,12 @@ function policyRecord(policy: Policy): JsonObject {
   return {
     version: RECORD_VERSION,
     allow: [...policy.allow],
+    // Written only for a root. A fragment is what every record before this
+    // build described, so stating it would rewrite history that is already
+    // correct — and an older build reading a *root* record finds a member it
+    // does not know the rules of and refuses the continuation, which is the
+    // safe direction.
+    ...(policy.context === ROOT_CONTEXT ? { context: ROOT_CONTEXT } : {}),
     ...(policy.workspace === undefined
       ? {}
       : {
@@ -1465,7 +1520,7 @@ function readPolicy(value: Json): Policy | undefined {
     if (value.version !== RECORD_VERSION) {
       return undefined;
     }
-    if (!exactly(value, ["version", "allow", "allowed", "requests"], ["workspace"])) {
+    if (!exactly(value, ["version", "allow", "allowed", "requests"], ["workspace", "context"])) {
       return undefined;
     }
     const workspace = Object.hasOwn(value, "workspace")
@@ -1474,7 +1529,11 @@ function readPolicy(value: Json): Policy | undefined {
     if (workspace === MALFORMED) {
       return undefined;
     }
-    return readPolicyTerms(value, workspace, 2);
+    const context = readContext(value);
+    if (context === undefined) {
+      return undefined;
+    }
+    return readPolicyTerms(value, workspace, 2, context);
   }
   if (!exactly(value, ["allow", "roots", "selectedRoot", "allowed", "requests"])) {
     return undefined;
@@ -1485,7 +1544,25 @@ function readPolicy(value: Json): Policy | undefined {
   if (workspace === MALFORMED || workspace === undefined) {
     return undefined;
   }
-  return readPolicyTerms(value, workspace, 1);
+  // Version 1 predates generated roots entirely, so it can only have been a
+  // fragment. The absence is the answer rather than a default to fall back on.
+  return readPolicyTerms(value, workspace, 1, "fragment");
+}
+
+/**
+ * Which context a version-2 record was admitted in.
+ *
+ * Absent is a fragment, because that is what every record written before roots
+ * existed described and what this build still writes for one. Present must be
+ * the one spelling a root record carries: a record naming some third context
+ * describes no shape this build has, and reading it as whichever it resembles
+ * would resume a root under a fragment's admission or the reverse.
+ */
+function readContext(value: JsonObject): GeneratedContext | undefined {
+  if (!Object.hasOwn(value, "context")) {
+    return "fragment";
+  }
+  return value.context === ROOT_CONTEXT ? ROOT_CONTEXT : undefined;
 }
 
 /** The terms both versions share, read closed. */
@@ -1493,6 +1570,7 @@ function readPolicyTerms(
   value: JsonObject,
   workspace: { roots: readonly string[]; selectedRoot: string } | undefined,
   version: 1 | 2,
+  context: GeneratedContext,
 ): Policy | undefined {
   const classes = readClasses(value.allow);
   const identities = readAllowed(value.allowed, version);
@@ -1502,6 +1580,7 @@ function readPolicyTerms(
   }
   return {
     allow: classes,
+    context,
     ...(workspace === undefined ? {} : { workspace }),
     allowed: identities,
     requests,
@@ -1724,6 +1803,12 @@ function readNamed(value: Json, version: 1 | 2): RetainedInvocation[] | undefine
  * the *current* policy would wave through.
  */
 function policyHolds(retained: Policy, current: Policy): boolean {
+  // Before anything else, because it decides which constructs the admission was
+  // about. A root resumed as a fragment would expand a top-level `<Output>`
+  // nothing admitted, and a fragment resumed as a root would be granted one.
+  if (retained.context !== current.context) {
+    return false;
+  }
   if (!workspaceHolds(retained.workspace, current.workspace)) {
     return false;
   }
@@ -1802,7 +1887,26 @@ interface Preflight {
 }
 
 /**
- * Walk the complete fragment, admitting it or refusing it whole.
+ * What the whole walk is decided against.
+ *
+ * One value rather than four threaded parameters, because every one of these is
+ * invariant for the walk: the admitted table, the normalized request ceilings,
+ * the context the source is being admitted in, and the list the walk records
+ * what it found into. Bundling them is what lets the *one* thing that differs
+ * between a fragment and a root — which constructs the language supplies
+ * context for — be read from the same place the rest of the decision is,
+ * instead of copying the policy walk once per context.
+ */
+interface Admission {
+  readonly table: ReadonlyMap<string, Entry[]>;
+  readonly ceilings: ReadonlyMap<string, FetchRequest[]>;
+  readonly context: GeneratedContext;
+  /** What the source named, in the order it named it. Accumulated by the walk. */
+  readonly named: Planned[];
+}
+
+/**
+ * Walk the complete source, admitting it or refusing it whole.
  *
  * Nothing here performs an effect. The requests are normalized — the candidate's
  * and the host's alike — because deciding whether two requests are the same one
@@ -1814,6 +1918,7 @@ function* preflight(
   source: string,
   table: ReadonlyMap<string, Entry[]>,
   ceilings: ReadonlyMap<string, FetchRequest[]>,
+  context: GeneratedContext,
 ): Operation<Preflight> {
   // Read once, here, so a contextual default that refuses fails as itself
   // rather than as a statement about the fragment. Every candidate request
@@ -1830,7 +1935,7 @@ function* preflight(
   const segments = scanSegments(source, { generatedSource: id, baseOffset: 0, baseLine: 1 });
   // A generated fragment starts with no bindings: it imports none from the
   // document that admitted it, and exports none back to it.
-  yield* walk(segments, table, ceilings, named, new Set<string>());
+  yield* walk({ table, ceilings, context, named }, segments, new Set<string>(), TOP_LEVEL);
   return { segments, named };
 }
 
@@ -1865,17 +1970,16 @@ function* admitCandidateRequest(props: Record<string, Json>): Operation<FetchReq
  * that is only visible after one.
  */
 function* walk(
+  admission: Admission,
   segments: readonly Segment[],
-  table: ReadonlyMap<string, Entry[]>,
-  ceilings: ReadonlyMap<string, FetchRequest[]>,
-  named: Planned[],
   scope: Set<string>,
   lexical: Lexical = ROOT_LEXICAL,
 ): Operation<void> {
+  const { table, ceilings, named } = admission;
   for (const segment of segments) {
     switch (segment.type) {
       case "text": {
-        if (reads(segment.content)) {
+        if (readsBinding(segment.content)) {
           throw new Refusal("interpolation");
         }
         break;
@@ -1890,7 +1994,7 @@ function* walk(
         // table lookup would be refused as a component the host withheld, which
         // is a different and misleading thing to tell a candidate.
         if (RESERVED_STRUCTURAL.has(segment.name)) {
-          yield* structural(segment, table, ceilings, named, scope, lexical);
+          yield* structural(admission, segment, scope, lexical);
           break;
         }
         const entries = table.get(segment.name);
@@ -1942,7 +2046,7 @@ function* walk(
         // body rather than a transparent region, so the lexical facts reset:
         // a `<Break>` written in a component's own body cannot break a loop
         // that encloses the invocation.
-        yield* walk(segment.children, table, ceilings, named, new Set(scope), ROOT_LEXICAL);
+        yield* walk(admission, segment.children, new Set(scope), ROOT_LEXICAL);
         // After the element, because a component's result does not exist until
         // it has run: `<File as="x" />` beside `<Json value={x} />` is ordered,
         // and `<Json value={x} as="x" />` names nothing.
@@ -1971,17 +2075,37 @@ function* walk(
  */
 interface Lexical {
   readonly insideLoop: boolean;
+  /**
+   * Whether the next segment is written as a direct child of the source's own
+   * top level.
+   *
+   * What decides whether a root's `<Output>` is a declaration or a misplaced
+   * element, and the same lexical question `validateOutputPlacement()` answers
+   * for an authored body: only a direct top-level child declares a region. It
+   * is false everywhere inside anything — a construct's branches, a loop body, a
+   * component's children — because none of those is the top level, whatever runs
+   * there.
+   */
+  readonly topLevel: boolean;
 }
 
 /**
- * What encloses the fragment's own top level.
+ * What encloses a region written inside something.
  *
- * A generated fragment is not a component body and not a value body: there is
- * no caller content for `<Content>` to claim, no output region for `<Output>`
- * to select, and no value body for `<Return>` to answer. It is also not inside
- * a loop.
+ * Neither a component body nor a value body: there is no caller content for
+ * `<Content>` to claim and no value body for `<Return>` to answer. It is not
+ * inside a loop, and it is not the top level, so a `<Output>` written here
+ * declares nothing even in a root.
  */
-const ROOT_LEXICAL: Lexical = Object.freeze({ insideLoop: false });
+const ROOT_LEXICAL: Lexical = Object.freeze({ insideLoop: false, topLevel: false });
+
+/**
+ * What encloses the source's own top level.
+ *
+ * The one place a root may declare an output region. Everything else about it
+ * is what `ROOT_LEXICAL` says.
+ */
+const TOP_LEVEL: Lexical = Object.freeze({ insideLoop: false, topLevel: true });
 
 /** A typed empty table, so an absent one reads as no expressions rather than as `{}`. */
 const NO_EXPRESSIONS: Record<string, string> = {};
@@ -2013,14 +2137,20 @@ function stated(segment: ComponentElement, scope: ReadonlySet<string>): void {
 const CONSUMED_BY_PARENT: ReadonlySet<string> = new Set(["Else", "Case", "Answer", "Spawn"]);
 
 /**
- * The structural names the generated root supplies no context for.
+ * The structural names generated source supplies no context for, in either
+ * context.
  *
- * Each of these is ordinary language wherever its context exists, and a
- * fragment is simply not that place. Refused as a structural mistake rather
- * than as a withheld permission, because nothing about the host's tables would
- * make one of them work.
+ * Each of these is ordinary language wherever its context exists, and generated
+ * source is simply not that place: there is no caller to claim content from and
+ * no value body to answer. Refused as a structural mistake rather than as a
+ * withheld permission, because nothing about the host's tables would make one of
+ * them work.
+ *
+ * `<Output>` is not here. A fragment supplies no context for it either, but a
+ * root does — at its own top level and nowhere else — so which it is depends on
+ * the admission's context rather than on the name alone.
  */
-const NO_GENERATED_CONTEXT: ReadonlySet<string> = new Set(["Content", "Output", "Return"]);
+const NO_GENERATED_CONTEXT: ReadonlySet<string> = new Set(["Content", "Return"]);
 
 /**
  * One structural construct, held to the ordinary source rules.
@@ -2038,10 +2168,8 @@ const NO_GENERATED_CONTEXT: ReadonlySet<string> = new Set(["Content", "Output", 
  * the source and the admission of every possible path without fabricating one.
  */
 function* structural(
+  admission: Admission,
   segment: ComponentElement,
-  table: ReadonlyMap<string, Entry[]>,
-  ceilings: ReadonlyMap<string, FetchRequest[]>,
-  named: Planned[],
   scope: Set<string>,
   lexical: Lexical,
 ): Operation<void> {
@@ -2050,6 +2178,29 @@ function* structural(
   // an element written where that construct is not.
   if (CONSUMED_BY_PARENT.has(name) || NO_GENERATED_CONTEXT.has(name)) {
     throw new Refusal("structure");
+  }
+  // Whatever this construct encloses is not the top level, whichever construct
+  // it is. Settled once here so no branch below has to remember it.
+  const inner: Lexical = lexical.topLevel ? { ...lexical, topLevel: false } : lexical;
+
+  if (name === "Output") {
+    // A root's own output declaration, and only there: a fragment renders what
+    // it renders, and an `<Output>` written anywhere below the top level
+    // declares nothing in an authored body either
+    // (`body-structure.ts`). The props rule is that body's as well, read from
+    // the same function rather than restated, because `<Output>` accepting a
+    // prop here and refusing one there would be two contracts.
+    if (admission.context !== ROOT_CONTEXT || !lexical.topLevel) {
+      throw new Refusal("structure");
+    }
+    if (outputPropsViolation(segment) !== undefined) {
+      throw new Refusal("structure");
+    }
+    // Transparent, because expansion expands the regions and the documentation
+    // around them against one live environment in source order — so a binding a
+    // region produces is visible after it, and preflight says the same.
+    yield* transparent(admission, segment.children, scope, inner);
+    return;
   }
 
   // The construct's own props, over the bindings in effect where it was
@@ -2072,12 +2223,10 @@ function* structural(
     // incoming bindings. A prohibited component in the arm this run never
     // enters still refuses the whole fragment.
     yield* alternatives(
+      admission,
       [{ body: structure.whenTrue }, { body: structure.whenFalse }],
-      table,
-      ceilings,
-      named,
       scope,
-      lexical,
+      inner,
     );
     return;
   }
@@ -2091,12 +2240,10 @@ function* structural(
     // branch's own expression and is validated whether or not the comparison
     // would ever reach it.
     yield* alternatives(
+      admission,
       branches.map((branch) => ({ matcher: branch.element, body: branch.element.children })),
-      table,
-      ceilings,
-      named,
       scope,
-      lexical,
+      inner,
     );
     return;
   }
@@ -2105,8 +2252,8 @@ function* structural(
     refuseStructure(loopViolations(segment));
     // Inside for the body alone: a `<Break>` after the loop is as stray as one
     // written where no loop ever was.
-    yield* transparent(segment.children, table, ceilings, named, scope, {
-      ...lexical,
+    yield* transparent(admission, segment.children, scope, {
+      ...inner,
       insideLoop: true,
     });
     return;
@@ -2123,14 +2270,14 @@ function* structural(
     // above already refused a `<Break>` or `<Return>` that would cross it.
     const incoming: ReadonlySet<string> = new Set(scope);
     for (const spawn of structure.spawns) {
-      yield* walk(spawn.element.children, table, ceilings, named, new Set(incoming), ROOT_LEXICAL);
+      yield* walk(admission, spawn.element.children, new Set(incoming), ROOT_LEXICAL);
     }
     return;
   }
 
   if (name === "PrintErrors") {
     refuseStructure(printErrorsViolations(segment));
-    yield* transparent(segment.children, table, ceilings, named, scope, lexical);
+    yield* transparent(admission, segment.children, scope, inner);
     return;
   }
 
@@ -2145,20 +2292,20 @@ function* structural(
       if (child.type === "component" && child.name === "Answer") {
         refuseStructure(answerViolations(child));
         stated(child, scope);
-        yield* transparent(child.children, table, ceilings, named, scope, lexical);
+        yield* transparent(admission, child.children, scope, inner);
         continue;
       }
       if (!isBlankText(child)) {
         body.push(child);
       }
     }
-    yield* transparent(body, table, ceilings, named, scope, lexical);
+    yield* transparent(admission, body, scope, inner);
     return;
   }
 
   if (name === "Let") {
     refuseStructure(letViolations(segment));
-    yield* transparent(segment.children, table, ceilings, named, scope, lexical);
+    yield* transparent(admission, segment.children, scope, inner);
     // After its own body, like a component's `as`: a `<Let>` cannot name the
     // binding it is producing.
     const bound = letBindingName(segment);
@@ -2182,7 +2329,7 @@ function* structural(
     // caller is the one capture it was asked for.
     const body = new Set(scope);
     body.add(item);
-    yield* walk(segment.children, table, ceilings, named, body, lexical);
+    yield* walk(admission, segment.children, body, inner);
     const capture = eachCaptureBinding(segment);
     if (capture !== undefined) {
       scope.add(capture);
@@ -2220,10 +2367,8 @@ interface Alternative {
  * preflight.
  */
 function* alternatives(
+  admission: Admission,
   branches: readonly Alternative[],
-  table: ReadonlyMap<string, Entry[]>,
-  ceilings: ReadonlyMap<string, FetchRequest[]>,
-  named: Planned[],
   scope: Set<string>,
   lexical: Lexical,
 ): Operation<void> {
@@ -2234,7 +2379,7 @@ function* alternatives(
       stated(branch.matcher, incoming);
     }
     const region = new Set(incoming);
-    yield* walk(branch.body, table, ceilings, named, region, lexical);
+    yield* walk(admission, branch.body, region, lexical);
     for (const bound of region) {
       if (!incoming.has(bound)) {
         outgoing.add(bound);
@@ -2257,15 +2402,13 @@ function* alternatives(
  * would — when the value is needed.
  */
 function* transparent(
+  admission: Admission,
   segments: readonly Segment[],
-  table: ReadonlyMap<string, Entry[]>,
-  ceilings: ReadonlyMap<string, FetchRequest[]>,
-  named: Planned[],
   scope: Set<string>,
   lexical: Lexical,
 ): Operation<void> {
   const region = new Set(scope);
-  yield* walk(segments, table, ceilings, named, region, lexical);
+  yield* walk(admission, segments, region, lexical);
   for (const bound of region) {
     scope.add(bound);
   }
@@ -2312,7 +2455,7 @@ function* admitSource(
   policy: Policy,
 ): Operation<DurableJson> {
   try {
-    const { named } = yield* preflight(id, source, table, ceilings);
+    const { named } = yield* preflight(id, source, table, ceilings, policy.context);
     return parseJson({
       version: RECORD_VERSION,
       decision: "admitted",
@@ -2421,31 +2564,45 @@ function isConstruct(value: string): value is Construct {
 }
 
 /**
- * Expand the admitted fragment through ordinary durable XMD effects.
+ * Expand the admitted source through ordinary durable XMD effects.
  *
  * The import provider installs at `min` on this scope alone, so it answers
- * ahead of the execution's own terminal and is gone when the fragment is. It
+ * ahead of the execution's own terminal and is gone when the source is. It
  * reaches no component search path: what a name resolves to is the pinned
  * identity or nothing.
  *
- * Errors here fail rather than print. A printed error is something an author
- * reads and acts on; a generated fragment has no author, and a refusal that
+ * A fragment's errors fail rather than print. A printed error is something an
+ * author reads and acts on; generated source has no author, and a refusal that
  * rendered as text would leave every element after it still running — which is
- * the partial effect the whole-fragment preflight exists to prevent.
+ * the partial effect the whole-source preflight exists to prevent.
+ *
+ * A root installs the mode every text root installs instead, because it *is*
+ * one: its regions and its documentation both fail the run on an undecided
+ * error, and the failure is what carries the rendering back rather than text in
+ * the middle of it.
  */
 function expand(
   id: string,
   segments: Segment[],
   named: readonly Planned[],
+  context: GeneratedContext,
   componentRouting: ComponentRouting | undefined,
   syntax: SyntaxReference | undefined,
+  /**
+   * Where a root's rendering accumulates.
+   *
+   * Allocated by the caller so a failure partway still leaves it holding what
+   * the root produced before it — the same reason the document root allocates
+   * its own owner outside the expansion.
+   */
+  owner: Segment[] | undefined,
 ): Operation<string> {
   return scoped(function* () {
-    yield* ErrorMode.set("throw");
+    yield* ErrorMode.set(context === ROOT_CONTEXT ? "output" : "throw");
     // Every expression this expansion resolves — an ordinary prop and a
     // declared capture alike — reads the declarative grammar rather than the
     // trusted-document evaluator. Set on this scope, so it ends with the
-    // fragment and reaches nothing the document expands afterwards.
+    // source and reaches nothing the document expands afterwards.
     yield* GeneratedDataExpressions.set(true);
     const resolution = new GeneratedComponentResolution(named, componentRouting);
     yield* Component.around(
@@ -2457,40 +2614,70 @@ function expand(
       },
       { at: "min" },
     );
+    // No enclosing identity table: protected invocation domains travel only
+    // through the narrowed route. Import and form selection belong to this
+    // source, while the reference preserves the admitting site's documentation.
+    const environment = {
+      componentResolution: resolution,
+      forms: resolution.forms,
+      // Generated source writes the admitted composition table and nothing
+      // else, so it declares none. The empty catalog states that explicitly
+      // rather than inheriting the host's: a generated execution environment
+      // admits no installed structural syntax.
+      declarations: new ExecutionDeclarationCatalog([], []),
+      invokeGeneratedComponent: (
+        fn: unknown,
+        invocation: ComponentInvocation,
+        body: Operation<unknown>,
+      ) => resolution.invoke(fn, invocation, body),
+      ...(componentRouting === undefined ? {} : { componentRouting }),
+      ...(syntax === undefined ? {} : { syntax }),
+    };
+    const path = extendPath("", { f: "gen", id });
+    const counter = createBlockCounter();
+    if (context === ROOT_CONTEXT && bodyHasOutput(segments)) {
+      // A root declaring top-level `<Output>` selects what renders, and
+      // selecting needs the whole body: `expandBody` executes the documentation
+      // around the regions and emits the regions, exactly as the document root
+      // does, so one rule decides what a root renders.
+      yield* expandBody(
+        segments,
+        [],
+        {},
+        {},
+        new Set<string>(),
+        counter,
+        undefined,
+        undefined,
+        owner,
+        path,
+        undefined,
+        environment,
+        // No execution terminal: this source's imports are answered by the
+        // narrowed provider installed above, and it inherits nothing of the
+        // document execution that admitted it.
+        undefined,
+        // Generated source is the engine's own text, so it owns no value body
+        // and a <Return> written into it satisfies no declaration.
+        undefined,
+      );
+      return renderSegments(owner ?? []);
+    }
     const expanded = yield* expandSegmentsWithin(
       segments,
       {},
       {},
       new Set<string>(),
-      createBlockCounter(),
-      undefined,
-      extendPath("", { f: "gen", id }),
+      counter,
+      owner,
+      path,
       0,
       undefined,
-      // No enclosing identity table: protected invocation domains travel only
-      // through the narrowed route. Import and form selection belong to this
-      // fragment, while the reference preserves the admitting site's documentation.
-      {
-        componentResolution: resolution,
-        forms: resolution.forms,
-        // A fragment writes the admitted composition table and nothing else, so
-        // it declares none. The empty catalog states that explicitly rather than
-        // inheriting the host's: a generated fragment's execution environment
-        // admits no installed structural syntax.
-        declarations: new ExecutionDeclarationCatalog([], []),
-        invokeGeneratedComponent: (fn, invocation, body) => resolution.invoke(fn, invocation, body),
-        ...(componentRouting === undefined ? {} : { componentRouting }),
-        ...(syntax === undefined ? {} : { syntax }),
-      },
-      // No execution terminal: this fragment's imports are answered by the
-      // narrowed provider installed above, and it inherits nothing of the
-      // document execution that admitted it.
+      environment,
       undefined,
-      // A generated fragment is the engine's own text, so it owns no value body
-      // and a <Return> written into it satisfies no declaration.
       undefined,
     );
-    return renderSegments(expanded);
+    return renderSegments(owner ?? expanded);
   });
 }
 
@@ -2512,16 +2699,137 @@ export function evaluateGeneratedXmd(request: GeneratedXmdRequest): Operation<st
 }
 
 /** Canonical Evaluate's internal handoff; absent from the public host surface. */
-export function* evaluateProtectedGeneratedXmd(
+export function evaluateProtectedGeneratedXmd(
   request: GeneratedXmdRequest,
   componentRouting: ComponentRouting | undefined,
   syntax: SyntaxReference | undefined,
+): Operation<string> {
+  return evaluateGenerated(request, "fragment", componentRouting, syntax, undefined);
+}
+
+/**
+ * Admit one generated root and perform what it asks for.
+ *
+ * The same admission, the same durable record and the same pinned resolution a
+ * fragment gets, in the one context that supplies `<Output>`. What it answers
+ * with is the root's canonical rendering and whether the root chose it, so a
+ * host can tell an empty region from no region at all without reading the
+ * source itself.
+ *
+ * An ordinary failure of the request — source core refused, or work the root's
+ * own elements failed at — comes back as `Err` carrying a
+ * {@link GeneratedXmdRootError}, because deciding what to do about generated
+ * source that did not work is the caller's. A failure of *this run* does not:
+ * a journal that no longer describes the run, a Files provider that is not
+ * there and a teardown that failed each keep the classification they already
+ * have, so a host cannot mistake one for a response worth correcting.
+ */
+export function* evaluateGeneratedXmdRoot(
+  request: GeneratedXmdRequest,
+): Operation<Result<GeneratedXmdRootResult>> {
+  // Allocated out here, so a failure partway leaves this frame holding exactly
+  // what the root rendered before it. The flag is read from the source core
+  // admitted rather than from the caller's copy, and it is the same reading
+  // `expand` selects regions with.
+  const owner: Segment[] = [];
+  let hasOutput = false;
+  try {
+    const output = yield* evaluateGenerated(request, ROOT_CONTEXT, undefined, undefined, {
+      owner,
+      declared: (value) => {
+        hasOutput = value;
+      },
+    });
+    return Ok({ output, hasOutput });
+  } catch (error) {
+    if (!ordinaryGeneratedFailure(error)) {
+      throw error;
+    }
+    // Only for a root that began rendering. An admission refusal performed
+    // nothing, so reporting an empty rendering for it would be reporting
+    // something that never happened.
+    const partial: GeneratedXmdRootResult | undefined =
+      hasOutput || owner.length > 0 ? { output: renderSegments(owner), hasOutput } : undefined;
+    return Err(new GeneratedXmdRootError(safeDiagnostic(error), partial));
+  }
+}
+
+/**
+ * Whether this failure is the request's own rather than this run's.
+ *
+ * Almost everything that leaves the expansion of an admitted root is the
+ * request's: source core refused, an element that failed on its own terms, a
+ * host control that declined what the source asked for. Those are what a
+ * caller decides about, so they come back as a value.
+ *
+ * Four kinds are not, and each keeps the classification it already has. They
+ * are asked about by kind rather than by position, because every one of them
+ * can arrive wrapped around a failure of the root's own, and the wrapper's
+ * shape must not decide which is reported (`errors.ts`):
+ *
+ * - a **durability failure** — the journal no longer describes this run, so
+ *   there is no root whose outcome this could be;
+ * - a **Files infrastructure failure** — a provider is absent or broke its own
+ *   contract, which is not something generated source could have caused;
+ * - a **secret-policy failure** — the one decision that must not become a
+ *   correctable answer, because correcting it is asking again for the
+ *   publication it refused; and
+ * - a **teardown failure** — work the root owned did not finish unwinding, and
+ *   a rendering reported beside that would describe a root still running.
+ */
+function ordinaryGeneratedFailure(error: unknown): boolean {
+  if (error instanceof InvocationTeardownError) {
+    return false;
+  }
+  if (durabilityFailure(error) !== undefined || filesFatalFailure(error) !== undefined) {
+    return false;
+  }
+  return firstCause(error, secretPolicyFailure) === undefined;
+}
+
+/** The secret-policy refusal this failure carries, if any. */
+function secretPolicyFailure(candidate: unknown): Error | undefined {
+  return candidate instanceof SecretDetectedError || candidate instanceof SecretScannerError
+    ? candidate
+    : undefined;
+}
+
+/**
+ * What a host is told about an ordinary failure.
+ *
+ * The canonical sentence and nothing around it. A stack names host paths, a
+ * cause graph carries whatever the elements were holding, and the generated
+ * source is the one thing a diagnostic about generated source must not echo.
+ * A document failure answers with the sentence the error mode already settled,
+ * which is what an operator reading a printed error would have read.
+ */
+function safeDiagnostic(error: unknown): string {
+  const documented = documentationFailure(error);
+  if (documented !== undefined) {
+    return documented.message;
+  }
+  return error instanceof Error ? error.message : String(error);
+}
+
+/** Where a root's rendering goes, and what the admitted source said about it. */
+interface RootRendering {
+  readonly owner: Segment[];
+  /** Called once, with what the admitted source declared. */
+  readonly declared: (hasOutput: boolean) => void;
+}
+
+function* evaluateGenerated(
+  request: GeneratedXmdRequest,
+  context: GeneratedContext,
+  componentRouting: ComponentRouting | undefined,
+  syntax: SyntaxReference | undefined,
+  rendering: RootRendering | undefined,
 ): Operation<string> {
   const allow = selection(request.allow);
   const entries = selectedEntries(request, allow);
   const table = admitted(entries);
   const ceilings = yield* normalizedCeilings(entries);
-  const policy = currentPolicy(request, allow, entries, ceilings);
+  const policy = currentPolicy(request, allow, entries, ceilings, context);
 
   const stored = yield* persistAdmission(
     request.id,
@@ -2565,6 +2873,18 @@ export function* evaluateProtectedGeneratedXmd(
 
   // The retained source is what expands, so a continuation runs exactly the
   // bytes this run admitted rather than a caller's copy of them.
-  const restored = yield* preflight(request.id, decided.source, table, ceilings);
-  return yield* expand(request.id, restored.segments, restored.named, componentRouting, syntax);
+  const restored = yield* preflight(request.id, decided.source, table, ceilings, context);
+  // Read from the admitted segments, which is the same reading `expand` selects
+  // regions with, and reported before the first effect so a failure partway
+  // still describes the root truthfully.
+  rendering?.declared(bodyHasOutput(restored.segments));
+  return yield* expand(
+    request.id,
+    restored.segments,
+    restored.named,
+    context,
+    componentRouting,
+    syntax,
+    rendering?.owner,
+  );
 }

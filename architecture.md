@@ -2469,6 +2469,135 @@ Mutation-proposal admission and workflow-bundled Markdown component admission
 remain unbuilt. Directory registration is not among them: a workflow Agent is
 given no directory to register.
 
+### A generated root, and the context that is a ceiling
+
+A host that shows somebody what an Agent's reply *says* needs the one construct
+a fragment has no context for. `evaluateGeneratedXmdRoot()` admits source as a
+**root**: a top-level `<Output>` selects what the reply renders and everything
+around it is work the reply does. `<Content>` and `<Return>` stay unavailable in
+both contexts — generated source has no caller to claim content from and no
+value body to answer — and an `<Output>` written below the top level declares
+nothing in a root either, which is the same lexical rule an authored body is
+held to.
+
+Nothing else differs. The same whole-source preflight, the same `generated_xmd`
+durable admission, the same pinned identities and the same refusal classes, so
+there is one walk rather than one per context: the context is a term of the
+admission the walk is decided against, beside the table and the request
+ceilings.
+
+**Which context an admission was made in is one of its ceilings.** A retained
+root admission does not resume as a fragment and a fragment admission does not
+resume as a root — either would expand source nobody admitted *this* run for —
+so the context travels in the retained policy and is compared whole, exactly as
+the class selection and the pinned identities are. A fragment record states no
+context, which is what every record written before roots existed says and what
+this build still writes for one, so nothing already retained is rewritten or
+reinterpreted. A root record carries the term; a build that does not know it
+finds a member it has no rules for and refuses the continuation.
+
+Rendering is the document root's own. A root declaring top-level `<Output>`
+selects through the same body partition a text root uses, under the same error
+mode, so documentation around the regions executes and renders nothing and a
+region that fails keeps what it rendered. The result states the canonical
+rendering and whether the root declared a region at all, because an empty region
+and no region are different answers and a host suppressing the ordinary
+whole-body fallback must not have to read the source to tell them apart.
+
+The operation answers with an Effection `Result`, and the split is deliberate.
+Source core refused, and work the root's own elements failed at, are the
+request's own outcome: they come back as a failure carrying the rendering the
+root had produced, which is what a host shows beside the reason. A failure of
+the *run* is not: a journal that stopped describing it, an absent Files
+provider, a secret-policy refusal and a failed teardown each keep the
+classification they already have, so a host cannot mistake one for a reply
+worth correcting.
+
+### Previewing source that is still arriving
+
+A host streaming a reply holds a prefix rather than a document, and showing
+what it already says is a different question from deciding whether it may run.
+`previewGeneratedXmdRoot()` answers the first and nothing else: a pure
+projection over the accumulated prefix, with no `Operation`, because it reads no
+file, resolves no name, invokes no component, evaluates no expression and grants
+no admission. A prefix that projects cleanly has been granted nothing, and the
+provider's own completion and the generated-root admission remain the only
+things that decide a root runs.
+
+It is core's because the alternative is a second reading of one syntax. A host
+recognizing `<Output>` with a regular expression would have to re-decide what a
+fence, a quoted `>`, an inline code span and a tag-like expression are, and the
+two readings would disagree the first time one of them was wrong. So the scan
+reports the constructs it began and could not finish — beside the elements it
+already reports, through the same walk — because only that walk knows how far it
+got and why it stopped. Source still arriving is a success that says so; source
+the language does not allow where it is written is a refusal. The two are
+distinct, and a whole prefix is never a claim that the provider has finished.
+
+Only text whose meaning is already settled projects. An expression, an
+interpolation and a nested component wait for evaluation, and a passive fence is
+the literal example it looks like, so a tag written inside one creates no
+region. One rule decides what reads a binding, shared with admission, because
+text one of them called literal and the other called a read would be two
+readings of one rule.
+
+### A conversation the host holds open
+
+`<Session>` and `<Prompt>` are written where a conversation belongs: inside an
+expansion, with an element to name the placement and a journal already around
+them. A host discussing something with an agent has neither and still needs the
+genuine thing, so `useAgentConversation()` opens the conversation as an
+execution the host keeps alive over the history stream it supplies, under the
+installations it captured through the ordinary `executeInstalled` boundary.
+Three facts shape it, and each is forced rather than chosen.
+
+**It is an element.** A provider and its placement coordinator are installed
+inside `Execution.document`, and a `DurablePreparation` precedes both, so a
+conversation opened there would have no provider to place a session with and no
+coordinator to settle the placement. The conversation is therefore a
+host-declared identity component written into a synthetic root of core's own:
+canonical resolution selects it and hands its implementation this execution's
+claimant, so the session is placed under the engine's own identity for that
+invocation (*Capability-backed invocation identity*) rather than under anything
+the host supplied. The host's conversation id names the history; it names no
+session and grants no claimant.
+
+**Its root is never completed.** A durable root that records its terminal is
+finished — a later run reads that terminal and replays its result without
+entering the body — and reopening a conversation is the ordinary case. So the
+element serves turns and does not return, and the halt that releases the
+resource appends nothing, because a root records a terminal only on its own
+success or failure. What the history keeps is a partial continuation, which is
+what reopening resumes.
+
+**Each turn is its own canonical sequence.** A turn is one journaled Prompt
+under its own durable name, offered in the conversation's sequence exactly as
+`<Prompt>` offers one in a document's, and run in a task of its own so that
+cancelling the call halts the turn: its append never lands, the position it
+would have taken stays free, and the next turn is a new turn rather than that
+one resumed. Reopening re-offers the turns the history retained, in their own
+order, which replays each from its record and reaches no provider.
+
+A turn whose outcome the history does not hold is a fact rather than something
+to finish, and a conversation holding one is refused before it opens — resuming
+it would re-send a prompt the provider may already have accepted, and writing a
+terminal for it would make an unfinished turn look complete. Reconciling it
+belongs to the host, with the provider's own account of that turn. The history
+is bound to its conversation by a durable record written on the first opening,
+so one established for another id or another agent refuses rather than
+reconnecting the wrong chat, and an established conversation never changes agent
+in place.
+
+What a turn ran under is the provider's own account. A placement is made per
+turn, because a placement settles what it asks before it is routed and is good
+for exactly one use: the first is fresh and the provider creates the
+conversation, and a later one is established, configured and read back — so a
+provider that put the conversation under settings nobody asked for refuses that
+turn rather than having them recorded. Inspection of advertised model and effort
+choices sends no model prompt and journals nothing. A refusal before the turn
+started is that call's answer and leaves the conversation usable; only a
+durability failure ends it.
+
 ### Typed candidate recovery around Evaluate
 
 Plan composes ordinary `<Let>` and `<Evaluate>`. There is no deadline, no output
@@ -5441,6 +5570,9 @@ Status is measured against main.
 | history fork | creates a new run from one compatible checkpoint and retained Workspace root, under a new immutable definition and normalized props | built on the #368 stack, Deno provider only |
 | workflow Agent session | a workflow document's `<Agent>` runs under a profile the host attaches only for a live or partial run: an empty host-owned working directory instead of any Workspace, checkout or caller path, no MCP servers, an empty requested native tool set, and `deny-all` with a permission path that denies every native request and fails the turn that asked without reaching the public permission chain. Within a run a session is identified by the Agent/Session expansion identity the engine derived — the authored name is descriptive, so two sibling `<Session name="review">` elements are two sessions — routed inside a placement bound to its element and good for one use, so a kept placement cannot be substituted for the next. The conversation is retained as a row in the run's own database with the provider, resolved agent command and policy fingerprint beside it as compatibility attributes. The order is placement, the backend's acceptance of the session's first turn, the provider's canonical tagged assertion, then the mapping commit — and only then is anything that turn produced exposed. A placement is inert: it creates no provider session and writes no row. Occupancy of a provider key is not an assertion, and a record held for a first turn nobody accepted asserts nothing at all; the pre-commit window reconciles only from exactly one canonical assertion, and a missing, conflicting, replaced or ambiguous assertion is one explicit refusal that starts no replacement. Deleting a run removes the row with the run and the provider-session directory beside it, and reports the categories. The profile selects ACP-only capability explicitly — no native-launch advertisement and no client-native attachment advertisement — rather than inheriting the provider package's ordinary-run sets by omission, and it supplies no machine session coordinator, construction-route store or executable observer: a workflow session belongs to a run, and the machine-wide account describes a different thing entirely | built on the #302 stack, with the explicit ACP-only selection from #561; the portable proof that an adapter honours an empty tool set is tracked by #496 and does not widen the ceiling |
 | generated-XMD admission | admits one Agent-generated fragment through the trusted-host seam: host policy is a `read` table and a `write` table of exact pinned identities, each carrying the authored forms it is admitted for, and an authored `allow` selects a canonical non-empty subset of the closed classes — omitted means `read`. The complete source is preflighted inside one `generated_xmd` durable effect before its first generated effect; only the pinned identity the selected classes hold for that name **and** that form executes; and the admitted source, class selection, selected root, every selected entry with its forms, the identity and form of each element named, and the normalized request policy are retained in that effect's own result — so a continuation restores the decision without reading the current candidate and expands only the retained source. The roots are an as-of-admission retained basis checked by membership — the run's own later root publications and an advanced retained current root pass, while a lost admission root or lost selected root refuses — and every non-root term is checked exactly, refusing a run whose classes, identities, forms or requests have moved. The admission and every nested generated effect are offered inline by the owning expansion in authored order, so a partial continuation restores each completed one without another live execution. Each admitted effect is retained by its own ordinary record, and every component keeps its ordinary binding and output behavior | built on the #369 stack, continuation basis amended by #589; core owns the mechanics and the workflow policy wrapper is internal |
+| generated-root evaluation | admits one Agent-generated **root** through the trusted-host seam, under the same whole-source preflight, `generated_xmd` admission, pinned identities and refusal classes a fragment gets, and differing over one construct: a top-level `<Output>` selects what the root renders, while `<Content>` and `<Return>` stay unavailable in both. The context is a term of the retained policy and is compared whole, so a root admission never resumes as a fragment or the reverse, and a fragment record states none — which leaves every record written before roots existed readable and resumable as what it is. Rendering reuses the document root's own body partition, error mode and partial-rendering path, and the result states the canonical rendering beside whether the root declared a region at all. The outcome crosses as an Effection `Result`: source core refused and work the root's elements failed at come back as a failure carrying what the root had rendered, while durability, Files-infrastructure, secret-policy and teardown failures keep their own classification | built on the #369 stack; core owns the mechanics and the CLI Sidekick is the first consumer |
+| generated-root prefix preview | projects the literal top-level `<Output>` text a response prefix already says, as a pure function over the accumulated source: no `Operation`, no file, no name resolution, no component, no expression and no admission, so a prefix that projects has been granted nothing. Source still arriving is a success that says so and source the language does not allow where it is written is a refusal, told apart by the scan's own report of the constructs it began and could not finish — the same walk that decides what a fence, a quoted `>`, an inline code span and a tag-like expression are, rather than a second reading of one syntax. Only settled meaning projects: an expression, an interpolation and a nested component wait, and a passive fence is the literal example it looks like | built on the #369 and #589 stacks; one interpolation rule is shared with admission |
+| retained host conversation | opens one agent conversation as an execution the host keeps alive over the history stream it supplies, under the installations it captured through `executeInstalled`. It is an element rather than a preparation, because a provider and its placement coordinator are installed inside `Execution.document`, so the session is placed under the engine's own claimant-issued identity and the host's conversation id names the history alone. Its root is never completed — a recorded terminal would replay instead of reopening — so the element serves turns, does not return, and the halt that releases it appends nothing. Each turn is one journaled Prompt under its own durable name, run in a task of its own, so cancelling the call halts the turn and leaves its append unmade; reopening re-offers the retained turns, which replay from their records and reach no provider. A turn whose outcome the history does not hold refuses the conversation before it opens, and a durable binding refuses a history established for another conversation or another agent. A placement per turn is configured and read back, so settings nobody asked for refuse that turn; inspection sends no model prompt and journals nothing | built on the #828 and #456 stacks; `runPrompt` is shared with `<Prompt>` rather than copied |
 | `<Evaluate>` | canonical core's own protected component, written where program text the document did not author should run. Core claims the name ahead of every host and author tier, so no registration, repository file, bundle member, declared Markdown component, import handler answer or second loaded copy replaces it; a handler may observe or refuse the import, and only canonical execution answers one. Protection settles which implementation runs and grants nothing: a host supplies the *ceiling* as one `ExecutionInstallation.evaluation` profile, captured by value before any installation runs, and an execution accepts one and refuses two. Its schema is closed on `text` and an optional `allow` array selecting a non-empty duplicate-free subset of the closed effect classes `read` and `write` — omitted means `read`. The two input forms are disjoint: `text` states the program, paired content renders it, and an element stating both is refused rather than resolved by precedence. A paired producer renders under the narrowed syntax reference through an execution-owned one-shot projection that bypasses the public `content()`/`tryContent()` chain, and keeps its own operational permission while doing so. Evaluate renders the fragment's ordinary output and invents no observation or result envelope. Fragment-local `as` bindings suppress their component's output normally, and language constructs plus pure components such as `<Json>` remain available regardless of effect selection; the fragment explicitly renders any bound values it wants to expose. Every ceiling comes from values the host captured at installation — the run's retained roots and its authoritative current root read from the run's own storage per invocation, as-of-admission provenance a continuation holds by membership so the run's own later publications and an advanced retained current root invalidate nothing, core's self-closing `<File>` read — joined in the ordinary run profile by core's self-closing `<Glob>` and canonical protected `<Syntax />` — the write table of core's paired `<File>`, the bundled Git Plugin's `<Dir>` — supplied by the host that assembles the profile, since this package states no directory entry of its own — and core's self-closing `<File.Delete>`, and `<Fetch>` only when the captured request ceiling is non-empty — and no prop, binding, context or middleware return value supplies or widens one. An entry states what is behind a name in one of exactly two ways, and neither carries a function. A *capability* names an operation core supplies the body for: canonical capture reads the host's own operation off once, binds it behind a revocation the execution owns, and closes core's own body over it, so an admitted element reaches those operations and never `API.Files`, `API.Fetch` or `API.Env`. A capability states what it binds wherever the ordinary component does, so an admitted `<Glob />` is the value component the ordinary one is — sharing its props, return contract, source rules and sanitized failure sentence, refusing a missing `as` and an unusable pattern before the search, and reaching the captured search operation and captured working directory rather than a provider a document arranged. A name admitted for two spellings that would bind different results refuses at capture. A *component answer* names an implementation the ordinary import chain resolves, and states only the identity a provider must have claimed for it; canonical execution resolves that name once — before the root import and before any document code, through the complete ordinary `Component.importComponent` chain and a private terminal that writes no record — and asks the identity owner about the exact final answer in one call. That call answers with the claim *and* core's own copy of what was claimed, taken when the claim was recorded: the check and the thing kept are one result, so nothing downstream reads the chain's object a second time and an answer whose members read differently on each read cannot pass a check with one reading and be sealed with another. The identity is then compared whole, and the copy — not the answer — is sealed behind the same revocation. One name states one identity, however many forms and tables hold it: two entries under one name are the two spellings of one component and share one lookup and one sealed implementation, while a second identity for that name, or a name held as both a capability and a component answer, refuses at capture rather than letting assembly order decide. Provider installation and the right to answer one occurrence are separate: installation receives a registrar that installs import middleware, and every invocation of that middleware receives a fresh request fixed to the exact name, position, provider installation, origin and resolution-window object it was asked under. Only that request may claim, and it states the answer plus key and revision without restating the name. Canonical execution closes the request synchronously when its handler returns, fails or is cancelled; an outer request remains live while it delegates and may claim a replacement after the inner handler returns. Enclosing resolution still closes in its own `finally` on success, fallback, failure or cancellation. A claim therefore requires the execution, request and exact current window to remain active, the request's fixed name to match that window, and that provider installation not to have stated a different answer in the window. Identification takes the expected window explicitly and accepts only a claim recorded for that exact object and name, so a stale request cannot answer a later same-name resolution or retag itself while another name is live. The installation is reusable: one provider may answer several admitted names and repeated resolutions through distinct requests. All of this state is held in ordinary private closures — no Context, shared symbol, public brand or module-global registry — and an unidentified middleware replacement remains a valid ordinary import answer outside fragment evaluation. A capability entry also states the exact version-1 identity strings it succeeds, which is the only thing a released untagged record reconciles against; a component answer states none. A capability-only profile performs no such lookup at all. Resolution happens at capture and never again: a fragment runs the sealed snapshot, a continuation resolves once more in its own capture and reconciles before any effect, and a provider still answering when a fragment resolves its admitted name is answering a generated import, which only canonical execution answers. A trusted layering control may enter one package bootstrap through an inherited layer and an execution-local one — documentation, registrations and the provider together — and the repeat is additive: the outer entry observes and delegates rather than claiming a second identity for an implementation that already states what it is, and a non-identical documentation overlap on one owner and component still refuses at the child collection boundary, before the root import and therefore before the provider is asked at all. `allow` selects among those tables and adds nothing to them; approval, when a workflow needs one, is authored control flow before the element. Its durable operation is named through that claimant, on the exact invocation the engine handed it and in that invocation's own frame — not from a context a document could rebind, a contextual Api answer, a definition, or a registry answer. Generated effects use occurrence-owned identities in the existing ordinary durable sequence: their records persist and replay normally, with no staging or rollback. The generated projection and its structured teardown complete before Evaluate returns and later parent work begins. It is deliberately not wrapped in `printErrors`, so a refused fragment stops the authored loop rather than becoming text the next turn could read as a read that happened | built on the #302 stack, extended by #369 |
 | generated mutation proposals | lets an Agent propose constrained executable changes that a separate admission then performs against the run's own Workspace | built on the #369 and #567 stacks, with directory creation added by #643: the standard Deno profile's write table is core's paired `File:write`, the paired `@executablemd/workflow/composition/dir-v2#Dir` and core's self-closing `File.Delete`, in that retained order and followed by any host extension. `allow={["write"]}` intentionally authorizes Dir's persistent recursive directory creation; its versioned identity makes every continuation retained under the former non-mutating Dir identity refuse before generated execution. Admitted mutations run as the ordinary components they are through the run's effect transactions, and the evaluator adds no mutation API or receipt. Approval is authored control flow before the write-enabled element. Local Git, Git-host, issue, process, execution, credential and external-write effects are outside the class |
 | Deno-local DOFS provider | owns one authoritative SQLite/DOFS connection per run path, captures arbitrary canonical retained roots, privately restores them, and atomically coordinates one Workspace mutation with its filtered Yield | built on the #365 stack; public document filesystem effects and the CLI lifecycle route to it on the #366 stack |
