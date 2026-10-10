@@ -1395,6 +1395,52 @@ describe("retained repository: one entry's local work", () => {
     expect(admitted.ok ? "ok" : admitted.error.message).toBe("ok");
   });
 
+  it("R3: a managed checkout this entry established cannot have gone", function* () {
+    const fixture = yield* useFixture();
+    const remote = yield* useBareRemote({
+      commits: [{ message: "remote seed", entries: [{ path: "remote.md", content: "remote\n" }] }],
+    });
+    const source =
+      `<Repository name="project" url=${JSON.stringify(remote.locator)}>\n` +
+      "nothing\n</Repository>\n\n" +
+      '<File path="outside.md">outside\n</File>\n';
+    const { events } = yield* run(fixture, source, new InMemoryStream(), counted().handler);
+    const created = recordsOf(events, RETAINED_REPOSITORY_INTENT)
+      .map((record) => parseRetainedRepositoryIntent(record))
+      .find((record) => record?.operation === "repository");
+    expect(created).toBeDefined();
+    const prepared = parseRetainedCreationPreparation(created!.prepared, created!.operation);
+    expect(prepared).toBeDefined();
+
+    // The creation completed, so this history established that checkout — and
+    // then it is removed. Absence is the state a creation starts from, not a
+    // state one that finished may be found in, and nothing here clones it
+    // again or decides the destination is eligible because it is missing.
+    const complete = events.findLastIndex(
+      (event) =>
+        event.type === "yield" && event.description.type === RETAINED_REPOSITORY_COMPLETION,
+    );
+    expect(complete).toBeGreaterThan(0);
+    yield* rm(prepared!.slot, { recursive: true, force: true });
+
+    const leaf = counted();
+    let refusal: string | undefined;
+    try {
+      yield* run(
+        fixture,
+        source,
+        new InMemoryStream([...events.slice(0, complete + 1)]),
+        leaf.handler,
+      );
+    } catch (error) {
+      refusal = error instanceof Error ? error.message : String(error);
+    }
+    expect(refusal).toBeDefined();
+    // Nothing later ran, and nothing put the destination back.
+    expect(leaf.writes).toEqual([]);
+    expect(yield* exists(prepared!.slot)).toBe(false);
+  });
+
   it("R4: an undisturbed managed checkout replays its results and goes on", function* () {
     const fixture = yield* useFixture();
     const remote = yield* useBareRemote({

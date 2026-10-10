@@ -288,7 +288,16 @@ export function* useRetainedRepositoryEntry(
       directory: checkout.directory,
     });
     if (!live.ok) {
-      throw live.error;
+      // A checkout this history established, and this host cannot describe.
+      // The commonest way for that to happen is for it not to be there any
+      // more, which is the one state none of the candidates can be: a
+      // destination that has gone is not a state to replay saved results
+      // against, and nothing here puts it back.
+      throw new FrontierError(
+        `${checkout.checkout} is a checkout this entry's history established and this host ` +
+          `cannot read now, so what has happened to it is not recorded here: ` +
+          `${live.error.message}`,
+      );
     }
     if (!candidates.some((candidate) => sameRetainedFrontier(candidate, live.value))) {
       throw new FrontierError(
