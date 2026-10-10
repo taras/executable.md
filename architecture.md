@@ -6065,6 +6065,25 @@ or one whose request it cannot read, before anything is attached. Every other
 external record is named by a digest that includes its identity, so no live
 request here can ask for one somebody else wrote.
 
+**One host per entry, assembled where the runtime is known.** `xmd repl` carries
+a factory, not a host: the public command names it at the entrypoint that can
+answer for the platform — the Deno source entrypoint and the compiled binary pass
+one, Node and Bun pass none — and the REPL session calls it once per submitted
+entry, inside the task that runs that entry. So a command that only draws a
+catalog, a settled entry projected from records, and an entry refused before it
+executed each build nothing, and two entries are two owners by construction
+rather than by discipline. A runtime that passes no factory leaves the
+declarations to reach their own Api defaults, which refuse before a lock, a
+credential, a directory or a subprocess exists.
+
+The entry's own file access is bound into the execution it runs: the host's
+ordinary Files provider is still installed beneath it and still answers for the
+rest of the command, so it delegates each mutation inward first and performs one
+only when nothing further in has claimed it. An outer provider that answered
+mutations itself would make the entry's authored-write seam unreachable in
+production while every injected test passed, which is exactly the shape a
+delivery gate exists to catch.
+
 **Nothing retained is a capability.** Records are data in a file anybody who can
 read the journal can read. Selections, leases, credentials, scratch directories
 and publication evidence live in the entry task's closure and end with it;

@@ -603,6 +603,12 @@ const COMPILED_BINARY: RuntimeExclusion[] = [
     issue: "https://github.com/taras/executable.md/issues/567",
   },
   {
+    path: "scripts/tests/repl-repositories-compiled.test.ts",
+    reason:
+      "drives the compiled `dist/xmd` through `xmd repl` on a pty, operating a real checkout and a real bare remote: the subject is a retained entry host assembled at a compiled entrypoint, which only `deno compile` produces and no test shard builds. The same journey against this checkout's own entrypoints is packages/cli/tests/repl-repositories-pty.test.ts, which every shard runs",
+    issue: "https://github.com/taras/executable.md/issues/567",
+  },
+  {
     path: "scripts/tests/plugin-compiled.test.ts",
     reason:
       "asks the compiled `dist/xmd` to load a Plugin module that is not embedded in it — a binary with no checkout, no node_modules and no module graph to add to, which only `deno compile` produces and no test shard builds; it belongs beside the other compiled-binary evidence the `smoke` job builds for through README.md#Build",
@@ -674,6 +680,12 @@ const DENO_ONLY_REPOSITORY_PROVIDER: RuntimeExclusion[] = [
     path: "packages/git/tests/run-composition-remote.test.ts",
     reason:
       "the same provider, publishing and reconciling against a modeled Git host; the transport and its evidence are Deno-only for the same reason the rest of the provider is",
+    issue: DERIVED_SCOPE,
+  },
+  {
+    path: "packages/cli/tests/repl-repositories.test.ts",
+    reason:
+      "the same provider reached the way `xmd repl` reaches it, through the Deno entry host: every row builds real checkouts and worktrees under the Deno runtime's own locks and temporary directories. That a runtime without the provider refuses repository work in a REPL entry is proven on all three by packages/cli/tests/repl-repositories-pty.test.ts, which runs the actual command",
     issue: DERIVED_SCOPE,
   },
   {

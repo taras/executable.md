@@ -200,6 +200,8 @@ export function* runReplProgram(options: ReplProgramOptions): Operation<Result<R
     includes: options.profile.includes,
     installations: options.profile.installations,
     permissionMode: options.profile.permissionMode,
+    // Carried, not called: the session hands it to each entry's own task.
+    ...(options.profile.entryHost === undefined ? {} : { entryHost: options.profile.entryHost }),
     ...(state.route.at === undefined ? {} : { selection: state.route.at }),
   });
 

@@ -26,6 +26,7 @@ import { isAbsolute, relative, resolve } from "node:path";
 import type { DurableEvent, Json } from "@executablemd/durable-streams";
 import type { ExecutionInstallation, JournalAdmission } from "@executablemd/core/host";
 import type { FragmentFileAccess } from "@executablemd/core/host";
+import { API } from "@executablemd/runtime";
 import type { FilePathInput, FilesHandler, FileWriteInput, GlobInput } from "@executablemd/runtime";
 import { PullRequestAPI } from "../../composition/pull-request-api.ts";
 import { PullRequestOperations } from "../../composition/pull-request-operations.ts";
@@ -509,6 +510,34 @@ export function* useRetainedRepositoryEntry(
       }),
     enclosing: (path) => selectedCheckoutFor([...selected.values()], path),
   };
+
+  // The mutations this entry retains have to reach their own terminals, and a
+  // host that answers them is what stops them. `useHostFiles()` — which every
+  // entrypoint installs, because `API.Files` has no host default — answers a
+  // write, a deletion and a directory ensure outright, and the canonical
+  // terminal core builds for an authored mutation sits *inside* that. So this
+  // entry installs a layer of its own, nearer the terminal, that delegates
+  // exactly those three: the request still passes every middleware a document
+  // or a package installed, and what settles it is the terminal rather than the
+  // host handler. Everything else — reading, globbing, checking a path, a
+  // temporary directory — is not handled here at all and falls through to the
+  // host as it always did.
+  //
+  // The ordinary behavior is not lost: it is what this entry's own handlers
+  // perform directly, through the `files` handler they were given, for every
+  // path outside a selected checkout. Performing it through the public chain
+  // instead would be this layer delegating into itself.
+  yield* API.Files.around({
+    *writeTextFile([input], next) {
+      return yield* next(input);
+    },
+    *deleteFile([input], next) {
+      return yield* next(input);
+    },
+    *ensureDirectory([input], next) {
+      return yield* next(input);
+    },
+  });
 
   // The transport middlewares, installed into this entry's own scope. Each one
   // matches a request against its own target first, so absent configuration

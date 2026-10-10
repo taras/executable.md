@@ -19,7 +19,7 @@ import { importPluginModule } from "./host-plugin-modules.ts";
 import type { UpgradeAssembly } from "./upgrade.ts";
 import { useMachineSessions } from "./session-coordinator.ts";
 import { useDenoWorkflowHost } from "./deno-workflow.ts";
-import { denoRunRepositories } from "./deno-repositories.ts";
+import { denoReplEntryHost, denoRunRepositories } from "./deno-repositories.ts";
 import { isCredentialHelperMode, runCredentialHelper } from "@executablemd/git/credential-helper";
 import type { HelperAssembly } from "@executablemd/git/credential-helper";
 import { useDenoService } from "./deno-service.ts";
@@ -113,6 +113,11 @@ if (isCredentialHelperMode(process.argv.slice(2))) {
       () => useDenoWorkflowHost(HELPER),
       useMachineSessions(),
       useDenoRepl,
+      // One retained repository host per REPL entry, under the same managed
+      // root and the same credential-helper assembly the ordinary provider
+      // uses. A factory, so nothing is built until an entry is actually
+      // executing.
+      denoReplEntryHost(HELPER),
     );
   });
 }

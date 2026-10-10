@@ -90,6 +90,8 @@ import {
 } from "@executablemd/durable-streams";
 import type { DurableEvent } from "@executablemd/durable-streams";
 
+import type { ReplEntryHostFactory } from "../repl-repositories.ts";
+import { withEntryFileAccess } from "../evaluation-profile.ts";
 import { useReplAgent } from "./agent.ts";
 import { filter } from "@effectionx/stream-helpers";
 import { consumeAdmissions } from "./admission.ts";
@@ -306,6 +308,15 @@ export interface ReplSessionOptions {
    * is what an execution with no configured mode already does.
    */
   readonly permissionMode?: PermissionMode;
+  /**
+   * How each entry obtains repository operations, when this host offers them.
+   *
+   * Held and handed to the entry task, never called here: opening a session
+   * must reach no repository, and a cold view must reach none either. Absent
+   * leaves every repository operation refusing at its own Api's default,
+   * before a lock, a credential, a subprocess or a request exists.
+   */
+  readonly entryHost?: ReplEntryHostFactory;
 }
 
 /**
@@ -344,7 +355,7 @@ function* start(
   options: ReplSessionOptions,
   submitted: string | undefined,
 ): Operation<Result<ReplSession>> {
-  const { execution, includes, installations = [], selection, permissionMode } = options;
+  const { execution, includes, installations = [], selection, permissionMode, entryHost } = options;
   const stream = execution.stream;
 
   const events = yield* stream.readAll();
@@ -697,6 +708,27 @@ function* start(
         // provider work come down first, then this attachment discards whatever it
         // never transferred, and only then is the session's entry slot freed.
         const installation = yield* agent.owning(key);
+        // This entry's repository host, built here for the same reasons and on
+        // the same terms. Its owner is this execution and this admitted key, so
+        // two entries of one session are two owners and neither inherits the
+        // other's selections, leases or publication permission; everything it
+        // acquires belongs to this task and is released with it, before the
+        // session can admit the entry after it. A host built at assembly would
+        // have one owner for the whole session, and a cold view would acquire a
+        // checkout to show somebody a history they are only reading.
+        const repositories =
+          entryHost === undefined
+            ? undefined
+            : yield* entryHost({
+                executionId: execution.id,
+                entryKey: key,
+                // The canonical identity of what this entry runs. Every entry
+                // of every execution runs an inline document, so this is the
+                // same for all of them — which is the point: what separates
+                // two entries is their owner, and what separates two elements
+                // inside one is the occurrence core authenticates.
+                source: INLINE_SOURCE_PATH,
+              });
         const started = yield* executeInstalled(
           {
             ...inlineSource(source),
@@ -710,7 +742,17 @@ function* start(
           // Installed into this exact execution, and nowhere else: the live
           // observer and the permission policy are this session's, not the
           // process's, and the attachment carries the entry whose turns they are.
-          [...installations, installation],
+          //
+          // The ceiling is the command's, with this entry's own captured file
+          // access bound into it — the tables are untouched, and what changes
+          // is only which instance an admitted fragment's write reaches.
+          [
+            ...(repositories === undefined
+              ? installations
+              : withEntryFileAccess(installations, repositories.files)),
+            installation,
+            ...(repositories === undefined ? [] : [repositories.installation]),
+          ],
           { initialBindings },
         );
         // Consumed as it arrives, inside this session's scope. Collecting until
