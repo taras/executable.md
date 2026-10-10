@@ -56,6 +56,7 @@ import {
   presentationFor,
   readinessOf,
   readingOf,
+  readsGeometry,
   reduceRepl,
   refusedView,
   stateFor,
@@ -83,7 +84,8 @@ import type { ReplReading, ReplSession } from "./session.ts";
 import { useReplFrames } from "./frame.ts";
 import type { ReplFrames } from "./frame.ts";
 import { committedOps, flatten, profileFor, skeletonOps } from "./layout.ts";
-import { fitPlain, prepareReading } from "./fitting.ts";
+import { createFitStore, fitPlain, prepareReading } from "./fitting.ts";
+import type { ReplFitStore } from "./fitting.ts";
 import { prepareRail } from "./history-rail.ts";
 import { readingLines } from "./source-reading.ts";
 import { sourceRuns } from "./presentation-text.ts";
@@ -420,6 +422,10 @@ function* drive(
   // separately. Everything below assigns both halves together or neither.
   let reading: ReplReading = { model: session.model, navigation: session.navigation };
   let rendered: ReplRendered | undefined;
+  // The reading geometry this command has already measured. Owned here, so it
+  // lives exactly as long as the command does and no frame outside it can
+  // reach one process's cuts.
+  const fits = createFitStore();
 
   const outcome = yield* scoped(function* (): Operation<Result<ReplOutcome>> {
     const screen = yield* useReplScreen();
@@ -474,6 +480,13 @@ function* drive(
     function* act(event: ReplInputEvent): Operation<boolean> {
       const dispatched = yield* tree.dispatch(event);
       if (!dispatched.ok || dispatched.value.outcome !== "action") {
+        // A traversal has already moved focus in the tree. Taking it now means
+        // the frame below is composed with the focus that is actually held —
+        // the alternative is a frame marking the control the reader has just
+        // left, followed by a second whole frame correcting it.
+        if (dispatched.ok && dispatched.value.outcome === "focus") {
+          focused = keyOfFocus(tree);
+        }
         return false;
       }
       // Measured for the size and the reading this action is being answered at,
@@ -481,19 +494,28 @@ function* drive(
       // showing, so the capacity it moves within has to be this frame's and not
       // the one a resize or a filter left behind. This preparation subscribes to
       // no frame and acknowledges nothing — it is a question about geometry.
-      const ready = yield* prepareFrame(
-        renderer,
-        yield* build(state, reading, current, yield* screen.size(), focused),
-      );
-      if (!ready.ok) {
-        throw ready.error;
+      //
+      // Only the actions that ask the question pay for the answer. Typing into
+      // the draft moves no window, and measuring the reading beside it was the
+      // single most expensive thing a keystroke did.
+      let geometry = NOTHING_ADMITTED;
+      if (readsGeometry(dispatched.value.action)) {
+        const ready = yield* prepareFrame(
+          renderer,
+          yield* build(state, reading, current, yield* screen.size(), focused),
+          fits,
+        );
+        if (!ready.ok) {
+          throw ready.error;
+        }
+        geometry = ready.value.admission;
       }
       const transition = reduceRepl(
         state,
         dispatched.value.action,
         reading.model,
         liveOf(current),
-        ready.value.admission,
+        geometry,
       );
       state = transition.state;
       const performed = yield* perform(transition.intent, current, execution, options, wakes);
@@ -545,10 +567,14 @@ function* drive(
         ? yield* build(state, reading, current, at, focused)
         : refusedView(state, broken, at, focused);
     };
-    rendered = (yield* paint(frames, tree, renderer, screen, compose)).rendered;
-    focused = keyOfFocus(tree);
-    // The first frame has the same obligation as every other one.
-    rendered = (yield* paint(frames, tree, renderer, screen, compose)).rendered;
+    rendered = (yield* paint(frames, tree, renderer, screen, compose, fits)).rendered;
+    // The first frame has the same obligation as every other one: draw again
+    // only if the tree settled focus somewhere the frame did not mark.
+    const settled = keyOfFocus(tree);
+    if (settled !== focused) {
+      focused = settled;
+      rendered = (yield* paint(frames, tree, renderer, screen, compose, fits)).rendered;
+    }
 
     while (true) {
       const taken = yield* wakes.take();
@@ -736,7 +762,7 @@ function* drive(
           reading = back.reading;
         }
       }
-      const painted = yield* paint(frames, tree, renderer, screen, compose);
+      const painted = yield* paint(frames, tree, renderer, screen, compose, fits);
       rendered = painted.rendered;
       // Focus is read against the view that was committed, which a resize may
       // have rebuilt from the one resolved above.
@@ -753,7 +779,7 @@ function* drive(
       state = focusSettled(view, settledFocus, painted.admission);
       if (settledFocus !== focused) {
         focused = settledFocus;
-        const again = yield* paint(frames, tree, renderer, screen, compose);
+        const again = yield* paint(frames, tree, renderer, screen, compose, fits);
         rendered = again.rendered;
         settledFocus = keyOfFocus(tree);
         state = focusSettled(again.view, settledFocus, again.admission);
@@ -1127,9 +1153,10 @@ function* paint(
   renderer: ReplRenderer,
   screen: ReplScreen,
   compose: ReplCompose,
+  store?: ReplFitStore,
 ): Operation<ReplPainted> {
   while (true) {
-    const painted = yield* prepared(frames, tree, renderer, screen, compose);
+    const painted = yield* prepared(frames, tree, renderer, screen, compose, store);
     if (painted !== undefined) {
       return painted;
     }
@@ -1152,6 +1179,7 @@ function* prepared(
   renderer: ReplRenderer,
   screen: ReplScreen,
   compose: ReplCompose,
+  store?: ReplFitStore,
 ): Operation<ReplPainted | undefined> {
   return yield* scoped(function* (): Operation<ReplPainted | undefined> {
     const held = yield* frames.subscribe({ owner: "repl", participants: [["repl"]] });
@@ -1173,8 +1201,14 @@ function* prepared(
       // that skips it: a frame drawn from a measurement the terminal has
       // already invalidated publishes targets naming rows nobody can see, and
       // presenting it would put that on the screen as though it were current.
-      const committed = yield* commitReplFrame(tree, renderer, view, tick.delta, undefined, () =>
-        screen.size(),
+      const committed = yield* commitReplFrame(
+        tree,
+        renderer,
+        view,
+        tick.delta,
+        undefined,
+        () => screen.size(),
+        store,
       );
       if (committed.ok) {
         // 5. Present the copied bytes. 6. The caller retains the returned map.
@@ -1296,11 +1330,12 @@ export function* commitReplFrame(
    * one exact size — leaves it out.
    */
   sizeNow?: () => Operation<ReplTerminalSize>,
+  store?: ReplFitStore,
 ): Operation<Result<ReplCommitted>> {
   // Measure before anything is mounted: this asks the engine how much room each
   // region has, so what a window shows is the frame's answer rather than this
   // boundary's guess. It mounts nothing and publishes nothing.
-  const prepared = yield* prepareFrame(renderer, view);
+  const prepared = yield* prepareFrame(renderer, view, store);
   if (!prepared.ok) {
     return prepared;
   }
@@ -1438,6 +1473,13 @@ function measuringAt(
 export function* prepareFrame(
   renderer: ReplRenderer,
   view: ReplView,
+  /**
+   * Where this process keeps the reading geometry it has already measured.
+   *
+   * Absent for a caller holding one frame — a test, or a measurement taken
+   * for its own sake — which measures everything every time.
+   */
+  store?: ReplFitStore,
 ): Operation<Result<ReplPrepared>> {
   // No widths at all for the pass that answers what the widths are. Every row
   // whose text has to fit a region is left out of it, because a growing column
@@ -1483,7 +1525,13 @@ export function* prepareFrame(
   const reading =
     widths.surface < 1
       ? Ok(undefined)
-      : yield* prepareReading(renderer, view.size, readingLines(readingOf(view)), widths.surface);
+      : yield* prepareReading(
+          renderer,
+          view.size,
+          readingLines(readingOf(view)),
+          widths.surface,
+          store,
+        );
   if (!reading.ok) {
     return reading;
   }

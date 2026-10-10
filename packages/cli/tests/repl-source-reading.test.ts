@@ -29,8 +29,10 @@ import type { Operation } from "effection";
 
 import { entryReading, NO_READING, READING_STATUSES } from "../src/repl/source-reading.ts";
 import type { ReplReadingLine } from "../src/repl/source-reading.ts";
-import { prepareReading, readingRuns, reserveFor } from "../src/repl/fitting.ts";
+import { createFitStore, prepareReading, readingRuns, reserveFor } from "../src/repl/fitting.ts";
 import type { ReplPreparedReading } from "../src/repl/fitting.ts";
+import { useCountingRenderer } from "./fixtures/repl/presentation.ts";
+import type { ReplCountingRenderer } from "./fixtures/repl/presentation.ts";
 import { useReplRenderer } from "../src/repl/renderer.ts";
 import type { ReplRenderer } from "../src/repl/renderer.ts";
 import { runText } from "../src/repl/description.ts";
@@ -42,6 +44,7 @@ import { LIFECYCLE, RAIL } from "./fixtures/repl/reference-style.ts";
 import { REPL_PALETTE, runStyleOf } from "../src/repl/presentation-style.ts";
 
 const WIDE: ReplTerminalSize = { columns: 160, rows: 36 };
+const NARROW_SIZE: ReplTerminalSize = { columns: 72, rows: 20 };
 
 function withRenderer<T>(body: (renderer: ReplRenderer) => Operation<T>): Operation<T> {
   return scoped(function* () {
@@ -887,4 +890,132 @@ describe("the reading one entry is shown as", () => {
         expect(new Set(composed).size).toBe(1);
       }));
   });
+});
+
+/**
+ * A reading of this many lines, long enough that measuring it is the
+ * expensive thing a frame does.
+ */
+function longSource(lines: number): string {
+  return Array.from({ length: lines }, (_, at) =>
+    at % 4 === 3
+      ? ""
+      : `<Json value={{ ordinal: ${at}, note: "line ${at} of a long entry" }} as="n${at}" />`,
+  ).join("\n");
+}
+
+/** The lines a reading of this source is drawn from, at one lifecycle. */
+function linesOf(source: string, lifecycle = NO_LIFECYCLE, inspected = false) {
+  return entryReading({ entry: entryOf(source), lifecycle, live: "", inspected }).source.lines;
+}
+
+function withCounting<T>(body: (renderer: ReplCountingRenderer) => Operation<T>): Operation<T> {
+  return scoped(function* () {
+    return yield* body(yield* useCountingRenderer(WIDE));
+  });
+}
+
+describe("S5 a reading is measured once for the inputs it was measured for", () => {
+  it("measures nothing again when only the draft beside it moved", () =>
+    withCounting(function* (renderer) {
+      const store = createFitStore();
+      const lines = linesOf(longSource(222));
+      const first = yield* prepareReading(renderer, WIDE, lines, 100, store);
+      expect(first.ok).toBe(true);
+      // The reading really is the expensive thing: this is the work a
+      // keystroke used to repeat.
+      expect(renderer.measures()).toBeGreaterThan(100);
+
+      // Three more frames, as three keystrokes into the draft would ask for.
+      // The reading is rebuilt from the model every frame, so these are fresh
+      // line objects carrying the same text — a store keyed on identity would
+      // miss every time and prove nothing.
+      renderer.reset();
+      for (let press = 0; press < 3; press += 1) {
+        const again = yield* prepareReading(renderer, WIDE, linesOf(longSource(222)), 100, store);
+        expect(again.ok).toBe(true);
+        if (!again.ok || !first.ok) {
+          return;
+        }
+        expect(again.value.rows.map((one) => one.text)).toEqual(
+          first.value.rows.map((one) => one.text),
+        );
+        expect(again.value.rows.map((one) => one.width)).toEqual(
+          first.value.rows.map((one) => one.width),
+        );
+      }
+      expect(renderer.measures()).toBe(0);
+    }));
+
+  it("measures again when the source, the depth or the room actually changed", () =>
+    withCounting(function* (renderer) {
+      const store = createFitStore();
+      const lines = linesOf(longSource(40));
+      expect((yield* prepareReading(renderer, WIDE, lines, 100, store)).ok).toBe(true);
+
+      // A different room is a different fit, and says so.
+      renderer.reset();
+      const narrower = yield* prepareReading(renderer, WIDE, lines, 60, store);
+      expect(renderer.measures()).toBeGreaterThan(0);
+      expect(narrower.ok).toBe(true);
+
+      // Back to the first room: the store holds one answer, so this is a miss
+      // too, and it is still the right answer.
+      renderer.reset();
+      const back = yield* prepareReading(renderer, WIDE, lines, 100, store);
+      expect(renderer.measures()).toBeGreaterThan(0);
+      if (!back.ok) {
+        throw back.error;
+      }
+
+      // One character of one line, and the whole reading is measured again.
+      renderer.reset();
+      const edited = yield* prepareReading(
+        renderer,
+        WIDE,
+        linesOf(longSource(40).replace("line 0 of", "line 0 OF")),
+        100,
+        store,
+      );
+      expect(renderer.measures()).toBeGreaterThan(0);
+      if (!edited.ok) {
+        throw edited.error;
+      }
+      expect(edited.value.rows.some((one) => one.text.includes("line 0 OF"))).toBe(true);
+
+      // A different terminal size, at the same room.
+      renderer.reset();
+      expect((yield* prepareReading(renderer, NARROW_SIZE, lines, 100, store)).ok).toBe(true);
+      expect(renderer.measures()).toBeGreaterThan(0);
+    }));
+
+  it("draws a phase that arrived without measuring the source again", () =>
+    withCounting(function* (renderer) {
+      const store = createFitStore();
+      const source = longSource(40);
+      const settled = yield* prepareReading(renderer, WIDE, linesOf(source), 100, store);
+      expect(settled.ok).toBe(true);
+
+      // The same text, observed differently: one element is now waiting. The
+      // badge, the rail and the role are live, and none of them is a cut.
+      renderer.reset();
+      const observed = linesOf(
+        source,
+        observing([
+          { phase: "active", position: at(0), waiting: Object.freeze(["question" as const]) },
+        ]),
+      );
+      const held = yield* prepareReading(renderer, WIDE, observed, 100, store);
+      expect(renderer.measures()).toBe(0);
+      if (!held.ok || !settled.ok) {
+        throw held.ok ? new Error("the settled reading refused") : held.error;
+      }
+      // Same cuts.
+      expect(held.value.rows.map((one) => one.text)).toEqual(
+        settled.value.rows.map((one) => one.text),
+      );
+      // And the new reading is on the row, immediately.
+      expect(held.value.rows.some((one) => one.badge !== undefined)).toBe(true);
+      expect(settled.value.rows.every((one) => one.badge === undefined)).toBe(true);
+    }));
 });

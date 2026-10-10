@@ -63,6 +63,7 @@ import {
   focusSettled,
   initialState,
   NO_AGENT,
+  readsGeometry,
   reduceRepl,
   presentationFor,
   viewFor,
@@ -3410,4 +3411,84 @@ describe("REPL entries: what a failed entry says it failed with", () => {
       }
     });
   });
+});
+
+/**
+ * One representative action of every kind the vocabulary offers.
+ *
+ * The referents are arbitrary on purpose: what is compared below is two
+ * reductions of the *same* action, so whether a marker exists or a field is
+ * mounted changes both answers identically.
+ */
+const EVERY_ACTION: readonly ReplAction[] = Object.freeze([
+  { kind: "type", text: "x" },
+  { kind: "type", text: "x", field: "project" },
+  { kind: "erase" },
+  { kind: "erase", field: "project" },
+  { kind: "submit" },
+  { kind: "select-surface", surface: "entries" },
+  { kind: "select-scope", scopes: ["entry-1"] },
+  { kind: "open-drawer", drawer: { kind: "history" } },
+  { kind: "close-drawer" },
+  { kind: "select-marker", marker: "yield:root:0" },
+  { kind: "go-live" },
+  { kind: "pause" },
+  { kind: "continue" },
+  { kind: "answer" },
+  { kind: "select-field", field: "project" },
+  { kind: "choose", field: "project", option: "Approve" },
+  { kind: "select-session", session: "xmd:v1:one" },
+  { kind: "all-sessions" },
+  { kind: "select-permission", request: "permission-1" },
+  { kind: "choose-permission", request: "permission-1", option: "once" },
+  { kind: "dismiss-permission", request: "permission-1" },
+  { kind: "exit" },
+  { kind: "scroll", delta: 1 },
+  { kind: "scroll-sessions", delta: 1 },
+  { kind: "scroll-entries", delta: 1 },
+  { kind: "scroll-reading", delta: 1 },
+]);
+
+describe("EU2 only the actions that move a window are answered with measured geometry", () => {
+  it("answers every other action identically with and without an admission", () =>
+    scoped(function* () {
+      const engine = yield* useReplRenderer(NARROW);
+      const model = projected(yield* manyEntries(6));
+      const state = selecting(initialState(EXECUTION), "entry-1");
+      const view = reading(state, model, NOTHING_LIVE, NARROW);
+      const admission = (yield* contextOf(view, engine)).admission;
+      // The frame really did admit something, or every comparison below would
+      // be two reductions against nothing.
+      expect(admission.windows.size).toBeGreaterThan(0);
+
+      const covered = new Set<string>();
+      const moved: string[] = [];
+      for (const action of EVERY_ACTION) {
+        covered.add(action.kind);
+        const measured = reduceRepl(state, action, model, NOTHING_LIVE, admission);
+        const blind = reduceRepl(state, action, model, NOTHING_LIVE);
+        if (JSON.stringify(measured) === JSON.stringify(blind)) {
+          continue;
+        }
+        // Whatever the measurement changed the answer to is an action the root
+        // has to measure before. If a kind outside the predicate ever appears
+        // here, the root is skipping a measurement that action needed — which
+        // is the defect this guard exists for.
+        moved.push(action.kind);
+        expect([action.kind, readsGeometry(action)]).toEqual([action.kind, true]);
+      }
+      // And the predicate is tight where it has to be. The whole reason the
+      // root may skip a measurement is that these two never need one, and a
+      // predicate answering yes for them would be correct while giving back
+      // every millisecond this costs to save.
+      expect(readsGeometry({ kind: "type", text: "x" })).toBe(false);
+      expect(readsGeometry({ kind: "erase" })).toBe(false);
+      // And the admission really did change an answer, so the agreement above
+      // is a fact about the other kinds rather than about a measurement
+      // nothing consulted.
+      expect(moved.length).toBeGreaterThan(0);
+      // Every kind the union offers is represented, so a kind added later
+      // without a row here is a kind this guard never looked at.
+      expect(covered.size).toBe(24);
+    }));
 });

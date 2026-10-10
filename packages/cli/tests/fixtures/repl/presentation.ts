@@ -682,6 +682,58 @@ export function useMeasuringRenderer(size: ReplTerminalSize): Operation<ReplRend
   return useReplRenderer(size);
 }
 
+/** A renderer that answers exactly as the real one does, and says what it was asked. */
+export interface ReplCountingRenderer extends ReplRenderer {
+  /** How many measurement renders have been asked for since the last reset. */
+  measures(): number;
+  /** How many texts those renders carried, which is the work inside them. */
+  texts(): number;
+  /** How many frames have been committed since the last reset. */
+  draws(): number;
+  /** Start counting again from here, after whatever warmup a case needs. */
+  reset(): void;
+}
+
+/**
+ * Count what a frame actually asks the engine for.
+ *
+ * The oracle for work, rather than a flag saying work was skipped: a cache
+ * that reports a hit while measuring anyway is a cache that proves nothing,
+ * and a count cannot be satisfied by an intention. Every member delegates, so
+ * what is measured, drawn and reported is the product's own answer.
+ */
+export function* useCountingRenderer(size: ReplTerminalSize): Operation<ReplCountingRenderer> {
+  const renderer = yield* useReplRenderer(size);
+  let measures = 0;
+  let texts = 0;
+  let draws = 0;
+  return {
+    *measure(ops, measured) {
+      measures += 1;
+      // Each `text` op is one string the engine has to lay out. It is the unit
+      // the expensive paths differ in: a binary search over one long line and a
+      // batch over fifty short ones are both one render.
+      texts += ops.filter((op) => "content" in op && typeof op.content === "string").length;
+      return yield* renderer.measure(ops, measured);
+    },
+    *draw(input) {
+      draws += 1;
+      return yield* renderer.draw(input);
+    },
+    resize: (next) => renderer.resize(next),
+    last: () => renderer.last(),
+    engines: () => renderer.engines(),
+    measures: () => measures,
+    texts: () => texts,
+    draws: () => draws,
+    reset() {
+      measures = 0;
+      texts = 0;
+      draws = 0;
+    },
+  };
+}
+
 /**
  * A measuring context, for a test asking what a view *offers* rather than what
  * one frame admitted.
