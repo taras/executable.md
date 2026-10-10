@@ -30,6 +30,7 @@ import {
   RETAINED_REPOSITORY_INTENT,
   parseRetainedRepositoryCompletion,
   parseRetainedRepositoryIntent,
+  retainedFrontierJson,
   retainedRepositoryCompletionJson,
   retainedRepositoryIntentIdentity,
   retainedRepositoryIntentJson,
@@ -1102,5 +1103,234 @@ describe("retained repository records", () => {
     expect(
       topicOf(history.attachments.find((value) => value.checkout === "/checkouts/other")!.frontier),
     ).toBe(A);
+  });
+});
+
+/**
+ * R1 — a creation records the destination it does not have yet.
+ *
+ * Everything else in this protocol freezes the state it expects to find. A
+ * creation cannot: the checkout it is about to establish is not there. So its
+ * pre-state is absence, and what makes that recoverable is the rest of what it
+ * freezes — the trusted slot, the metadata that will identify the destination,
+ * and, for a worktree, what adding one does to the refs its owner shares.
+ *
+ * Absence is one thing and not a spare value. These hold it to that: only a
+ * creation may record it, only with the closed preparation beside it, and it
+ * establishes nothing until a completion says the destination is there.
+ */
+describe("retained repository records: a destination that is not there yet", () => {
+  const REPOSITORY_METADATA: Json = {
+    kind: "repository",
+    version: 1,
+    name: "project",
+    locator: "https://example.invalid/project.git",
+    locatorFingerprint: "f".repeat(64),
+    requestedBase: null,
+    creationCommit: "a".repeat(40),
+    primaryBranch: "refs/heads/main",
+    objectFormat: "sha1",
+    commonDirectory: `${PRIMARY}/.git`,
+  };
+
+  const WORKTREE_METADATA: Json = {
+    kind: "worktree",
+    version: 1,
+    owner: COMMON,
+    name: "review",
+    requestedBranch: "topic",
+    requestedBase: null,
+    creationCommit: "a".repeat(40),
+    objectFormat: "sha1",
+  };
+
+  /** A creation of a checkout that is not there, with its own preparation. */
+  function* creation(
+    fixture: IntentFixture & {
+      readonly operation: "repository" | "worktree";
+      readonly prepared?: Json;
+    },
+  ): Operation<RetainedRepositoryIntent> {
+    const built = yield* intent(fixture);
+    const prepared = fixture.prepared ?? {
+      slot: "/managed/repositories/project",
+      metadata: fixture.operation === "repository" ? REPOSITORY_METADATA : WORKTREE_METADATA,
+      owner:
+        fixture.operation === "repository"
+          ? null
+          : {
+              preState: retainedFrontierJson(frontier()),
+              postState: retainedFrontierJson(frontier(PRIMARY, B)),
+            },
+    };
+    return { ...built, preState: null, prepared };
+  }
+
+  it("R1: a creation's absent destination is admitted and establishes nothing yet", function* () {
+    const made = yield* creation({ operation: "repository", postState: frontier() });
+    const history = accepted(yield* admitRetainedRepositoryHistory([intended(made)], OWNER));
+
+    expect(history.pending.length).toBe(1);
+    expect(history.pending[0]!.intent.preState).toBe(null);
+    // Nothing is attached: a destination that is not there is not a checkout
+    // to attach to, and an unresolved creation offers it no candidate either.
+    expect(history.attachments).toEqual([]);
+  });
+
+  it("R1: a completed creation is what establishes the checkout", function* () {
+    const made = yield* creation({ operation: "repository", postState: frontier() });
+    const history = accepted(
+      yield* admitRetainedRepositoryHistory([intended(made), yield* completed(made)], OWNER),
+    );
+
+    expect(history.completed.length).toBe(1);
+    expect(history.attachments.map((value) => value.checkout)).toEqual([PRIMARY]);
+    expect(history.attachments[0]!.frontier.checkout).toBe(PRIMARY);
+  });
+
+  it("R1: later mutations advance a created checkout and replay folds to the end", function* () {
+    const made = yield* creation({ operation: "repository", postState: frontier() });
+    const write = yield* intent({
+      operation: "file-write",
+      position: 1,
+      preState: frontier(),
+      postState: frontier(PRIMARY, A, B),
+    });
+    const history = accepted(
+      yield* admitRetainedRepositoryHistory(
+        [intended(made), yield* completed(made), intended(write), yield* completed(write)],
+        OWNER,
+      ),
+    );
+
+    // The creation supplied the baseline and the mutation advanced it, so what
+    // attachment offers is the end of that sequence rather than the initial
+    // snapshot.
+    expect(history.attachments.length).toBe(1);
+    const head = history.attachments[0]!.frontier.head;
+    expect(head.kind === "symbolic" && head.oid).toBe(B);
+  });
+
+  it("R1: only a creation may record an absent destination", function* () {
+    const write = yield* intent({ operation: "file-write", postState: frontier(PRIMARY, A, B) });
+    const payload = fields(retainedRepositoryIntentJson(write));
+    payload["preState"] = null;
+    const result = yield* admitRetainedRepositoryHistory(
+      [event(RETAINED_REPOSITORY_INTENT, payload)],
+      OWNER,
+    );
+    expect(reasonOf(result)).toBe("malformed-record");
+  });
+
+  it("R1: an absent destination without readable creation data is refused", function* () {
+    const unreadable: readonly Json[] = [
+      // Not the closed shape at all.
+      { target: "notes.md" },
+      // A repository cannot carry an owner, and a worktree must.
+      {
+        slot: "/managed/repositories/project",
+        metadata: REPOSITORY_METADATA,
+        owner: {
+          preState: retainedFrontierJson(frontier()),
+          postState: retainedFrontierJson(frontier()),
+        },
+      },
+      // Metadata this version cannot read.
+      { slot: "/managed/repositories/project", metadata: { kind: "repository" }, owner: null },
+    ];
+    for (const prepared of unreadable) {
+      const made = yield* creation({
+        operation: "repository",
+        postState: frontier(),
+        prepared,
+      });
+      const result = yield* admitRetainedRepositoryHistory([intended(made)], OWNER);
+      expect(reasonOf(result)).toBe("malformed-record");
+    }
+  });
+
+  it("R1: a worktree creation without its owner's two states is refused", function* () {
+    const made = yield* creation({
+      operation: "worktree",
+      postState: frontier(LINKED),
+      prepared: {
+        slot: "/managed/worktrees/review",
+        metadata: WORKTREE_METADATA,
+        owner: null,
+      },
+    });
+    const result = yield* admitRetainedRepositoryHistory([intended(made)], OWNER);
+    expect(reasonOf(result)).toBe("malformed-record");
+  });
+
+  it("R1: creating a destination this history already established is refused", function* () {
+    const selection = yield* intent();
+    const again = yield* creation({
+      operation: "repository",
+      position: 1,
+      postState: frontier(),
+    });
+    const result = yield* admitRetainedRepositoryHistory(
+      [intended(selection), yield* completed(selection), intended(again)],
+      OWNER,
+    );
+    expect(reasonOf(result)).toBe("broken-frontier-chain");
+  });
+
+  it("R1: a worktree creation needs its owner already established, in that state", function* () {
+    const made = yield* creation({
+      operation: "worktree",
+      postState: frontier(LINKED),
+    });
+    // No owner baseline at all.
+    const missing = yield* admitRetainedRepositoryHistory([intended(made)], OWNER);
+    expect(reasonOf(missing)).toBe("missing-baseline");
+
+    // An owner this history established in a different state.
+    const owner = yield* intent({ preState: frontier(PRIMARY, A, B) });
+    const drifted = yield* admitRetainedRepositoryHistory(
+      [
+        intended(owner),
+        yield* completed(owner),
+        intended(
+          yield* creation({ operation: "worktree", position: 1, postState: frontier(LINKED) }),
+        ),
+      ],
+      OWNER,
+    );
+    expect(reasonOf(drifted)).toBe("broken-frontier-chain");
+  });
+
+  it("R1: a creation's completion may stand only where it predicted", function* () {
+    const made = yield* creation({ operation: "repository", postState: frontier() });
+    // There is no unchanged end to a creation: a completion anywhere but the
+    // predicted destination is not this creation's.
+    const result = yield* admitRetainedRepositoryHistory(
+      [intended(made), yield* completed(made, { frontier: frontier(PRIMARY, A, B) })],
+      OWNER,
+    );
+    expect(reasonOf(result)).toBe("frontier-substitution");
+  });
+
+  it("R1: an unresolved worktree creation offers its owner's two ends", function* () {
+    const owner = yield* intent();
+    const made = yield* creation({
+      operation: "worktree",
+      position: 1,
+      postState: frontier(LINKED),
+    });
+    const history = accepted(
+      yield* admitRetainedRepositoryHistory(
+        [intended(owner), yield* completed(owner), intended(made)],
+        OWNER,
+      ),
+    );
+
+    const attachment = history.attachments.find((value) => value.checkout === PRIMARY)!;
+    // The owner's established state, and the state the pending creation says it
+    // will leave the shared refs in.
+    expect(attachment.candidates.map(topicOf)).toEqual([A, B]);
+    // The destination itself is offered nothing, because it is not there.
+    expect(history.attachments.some((value) => value.checkout === LINKED)).toBe(false);
   });
 });

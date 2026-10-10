@@ -133,8 +133,15 @@ export function* retainedDirectoryEnsure(
           checkout: selected.checkout,
           directory: selected.directory,
         }),
-      // deno-lint-ignore require-yield
-      *prepare(preState: RetainedFrontier): Operation<Result<PreparedTransition>> {
+      *prepare(preState: RetainedFrontier | null): Operation<Result<PreparedTransition>> {
+        if (preState === null) {
+          return Err(
+            new Error(
+              "a file operation has no absent state: the checkout it writes in was selected, " +
+                "not created.",
+            ),
+          );
+        }
         const postState = ensured(preState, at);
         if (postState === undefined) {
           return Err(
@@ -255,8 +262,15 @@ function fileOperation(
         checkout: selected.checkout,
         directory: selected.directory,
       }),
-    // deno-lint-ignore require-yield
-    *prepare(preState: RetainedFrontier): Operation<Result<PreparedTransition>> {
+    *prepare(preState: RetainedFrontier | null): Operation<Result<PreparedTransition>> {
+      if (preState === null) {
+        return Err(
+          new Error(
+            "a file operation has no absent state: the checkout it writes in was selected, " +
+              "not created.",
+          ),
+        );
+      }
       const postState =
         work.content === undefined
           ? removed(preState, work.at)

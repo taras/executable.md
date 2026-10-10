@@ -158,6 +158,15 @@ function retainedAdd(host: RetainedFileHost): IdentityComponent {
             request: { cwd: directory, paths: [...paths] },
             inventory: () => inventory(selected),
             *prepare(preState) {
+              if (preState === null) {
+                return Err(
+                  new GitOperationError(
+                    "Git.Add",
+                    "invalid-invocation",
+                    "<Git.Add> has no absent state: it stages in a checkout that exists.",
+                  ),
+                );
+              }
               const staged = yield* stagedBy(selected, directory, paths);
               if (!staged.ok) {
                 return staged;
@@ -366,6 +375,15 @@ function retainedSwitch(host: RetainedFileHost, repository: RepositoryHost): Ide
               base === undefined ? { cwd: directory, branch } : { cwd: directory, branch, base },
             inventory: () => inventory(selected),
             *prepare(preState) {
+              if (preState === null) {
+                return Err(
+                  new GitOperationError(
+                    "Git.Switch",
+                    "invalid-invocation",
+                    "<Git.Switch> has no absent state: it switches a checkout that exists.",
+                  ),
+                );
+              }
               const predicted = yield* predictInScratch(
                 repository,
                 { directory: selected.directory, checkout: selected.checkout },

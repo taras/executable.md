@@ -20,7 +20,7 @@
  * so by being empty.
  */
 
-import { Ok } from "effection";
+import { Err, Ok } from "effection";
 import type { Operation } from "effection";
 import { isAbsolute, relative, resolve } from "node:path";
 import type { DurableEvent } from "@executablemd/durable-streams";
@@ -189,6 +189,19 @@ export function* useRetainedRepositoryEntry(
         *prepare(preState) {
           // Selecting changes nothing: the two ends of this transition are one
           // state, and what the record is for is saying which checkout.
+          //
+          // Ambient selection never creates anything — it found a checkout that
+          // was already there — so it has a state to start from by
+          // construction, and an absent one here would mean this host had
+          // discovered a repository that does not exist.
+          if (preState === null) {
+            return Err(
+              new Error(
+                "ambient selection has no absent state: the checkout it selected was found, " +
+                  "not created.",
+              ),
+            );
+          }
           return Ok({
             postState: preState,
             prepared: { root: checkout.checkout },

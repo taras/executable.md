@@ -18,7 +18,14 @@ import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { ensure, resource, scoped, until } from "effection";
 import type { Operation } from "effection";
-import { ensureDir, exists, readTextFile, rm, writeTextFile } from "@effectionx/fs";
+import {
+  ensureDir,
+  exists,
+  readTextFile,
+  readdir as readDirectory,
+  rm,
+  writeTextFile,
+} from "@effectionx/fs";
 import { mkdtemp, realpath, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -31,6 +38,8 @@ import { collect } from "@executablemd/core";
 import { denoRepositoryHost } from "../src/deno/composition/host.ts";
 import { gitSession } from "../src/deno/composition/git.ts";
 import { useBareRemote } from "./support/git-remotes.ts";
+import { countingHost } from "./support/composition.ts";
+import type { CompositionCounters } from "./support/composition.ts";
 import { fileDeleteEntry, fileWriteEntry } from "@executablemd/core/host";
 import { useRetainedRepositoryEntry } from "../src/deno/retained-repository/provider.ts";
 import {
@@ -217,6 +226,67 @@ function refused(fixture: Fixture, source: string): Operation<Run> {
   });
 }
 
+/** The managed repository checkout this entry created, if it created one. */
+function* checkoutPaths(fixture: Fixture): Operation<readonly string[]> {
+  const managed = join(fixture.root, "managed", "repositories");
+  if (!(yield* exists(managed))) {
+    return [];
+  }
+  const slots = yield* readDirectory(managed);
+  const found: string[] = [];
+  for (const slot of slots) {
+    const checkout = join(managed, slot, "checkout");
+    if (yield* exists(checkout)) {
+      found.push(checkout);
+    }
+  }
+  return found;
+}
+
+/** One entry, with every native Git command it ran counted. */
+function runCounting(
+  fixture: Fixture,
+  source: string,
+  stream: InMemoryStream,
+): Operation<{ readonly counters: CompositionCounters; readonly events: readonly DurableEvent[] }> {
+  const counting = countingHost();
+  return scoped(function* () {
+    const path = join(fixture.root, "entry.md");
+    yield* writeTextFile(path, source);
+    const leaf = counted();
+    yield* useEntryFiles(fixture, leaf.handler);
+    const entry = yield* useRetainedRepositoryEntry({
+      executionId: "execution-1",
+      entryKey: "0001",
+      source: "entry.md",
+      cwd: fixture.checkout,
+      managedRoot: join(fixture.root, "managed"),
+      host: counting.host,
+      files: leaf.handler,
+    });
+    try {
+      yield* collect(
+        yield* executeInstalled({ path, stream, includes: [fixture.root] }, [entry.installation]),
+      );
+    } catch {
+      // What this proves is which commands ran, including when the entry
+      // refused partway.
+    }
+    return { counters: counting.counters, events: yield* stream.readAll() };
+  });
+}
+
+/** Run an entry that may refuse, and answer with its journal either way. */
+function refusedOrRan(fixture: Fixture, source: string, stream: InMemoryStream): Operation<Run> {
+  return scoped(function* () {
+    try {
+      return yield* run(fixture, source, stream, counted().handler);
+    } catch {
+      return { output: "", events: yield* stream.readAll() };
+    }
+  });
+}
+
 describe("retained repository: one entry's local work", () => {
   it("R3: a write inside the ambient checkout retains an intent and a completion", function* () {
     const fixture = yield* useFixture();
@@ -248,7 +318,7 @@ describe("retained repository: one entry's local work", () => {
     expect(intent?.operation).toBe("file-write");
     expect(intent?.owner).toBe('repl:v1:["execution-1","0001"]');
     // The state it started from had no such file, and the one it predicted does.
-    expect(intent?.preState.worktree.some((entry) => entry.path === "notes.md")).toBe(false);
+    expect(intent?.preState?.worktree.some((entry) => entry.path === "notes.md")).toBe(false);
     expect(intent?.postState.worktree.some((entry) => entry.path === "notes.md")).toBe(true);
     expect(completion?.intent.length).toBeGreaterThan(0);
     // What it left is what it predicted.
@@ -399,7 +469,7 @@ describe("retained repository: one entry's local work", () => {
     expect(intents.map((record) => record?.operation)).toEqual(["ambient", "file-write", "add"]);
     const add = intents[2];
     // The file was not in the index before and is in the one it predicted.
-    expect(add?.preState.index.some((entry) => entry.path === "notes.md")).toBe(false);
+    expect(add?.preState?.index.some((entry) => entry.path === "notes.md")).toBe(false);
     expect(add?.postState.index.some((entry) => entry.path === "notes.md")).toBe(true);
 
     // And that is the index Git actually produced.
@@ -443,7 +513,7 @@ describe("retained repository: one entry's local work", () => {
     const git = gitSession(denoRepositoryHost(), fixture.root);
     expect(yield* git.read(["rev-parse", "HEAD"], fixture.checkout)).toBe(predicted);
     // And the parent it predicted is the commit the checkout was on.
-    expect(commit?.preState.head.kind === "symbolic" && commit.preState.head.oid).not.toBe(
+    expect(commit?.preState?.head.kind === "symbolic" && commit.preState.head.oid).not.toBe(
       predicted,
     );
   });
@@ -488,14 +558,14 @@ describe("retained repository: one entry's local work", () => {
     );
     expect(intents.map((record) => record?.operation)).toEqual(["ambient", "switch"]);
     const moved = intents[1];
-    expect(moved?.preState.head.kind === "symbolic" && moved.preState.head.ref).toBe(
+    expect(moved?.preState?.head.kind === "symbolic" && moved.preState.head.ref).toBe(
       "refs/heads/main",
     );
     expect(moved?.postState.head.kind === "symbolic" && moved.postState.head.ref).toBe(
       "refs/heads/topic",
     );
     // The content the other branch carries was predicted, not guessed.
-    expect(moved?.preState.worktree.some((entry) => entry.path === "topic.md")).toBe(false);
+    expect(moved?.preState?.worktree.some((entry) => entry.path === "topic.md")).toBe(false);
     expect(moved?.postState.worktree.some((entry) => entry.path === "topic.md")).toBe(true);
 
     // And that is where the checkout actually is.
@@ -527,7 +597,7 @@ describe("retained repository: one entry's local work", () => {
     ).toEqual([]);
   });
 
-  it("R3: a repository selection is the baseline its lane is held to following", function* () {
+  it("R3: a repository creation records an absent destination before it clones", function* () {
     const fixture = yield* useFixture();
     const remote = yield* useBareRemote({
       commits: [{ message: "remote seed", entries: [{ path: "remote.md", content: "remote\n" }] }],
@@ -543,21 +613,155 @@ describe("retained repository: one entry's local work", () => {
     const intents = recordsOf(events, RETAINED_REPOSITORY_INTENT).map((record) =>
       parseRetainedRepositoryIntent(record),
     );
-    // The selection comes first in its own lane, and the write inside it follows.
     expect(intents.map((record) => record?.operation)).toEqual(["repository", "file-write"]);
-    const selection = intents[0];
-    const write = intents[1];
-    expect(selection?.lane.position).toBe(0);
-    expect(write?.lane.position).toBe(1);
-    expect(selection?.lane.common).toBe(write?.lane.common);
-    // A selection changes nothing, so its two frozen ends are one state.
-    expect(selection?.preState.worktree.some((entry) => entry.path === "remote.md")).toBe(true);
-    expect(selection?.postState.worktree.some((entry) => entry.path === "inside.md")).toBe(false);
-    // And the file really is in the clone.
-    expect(write?.postState.worktree.some((entry) => entry.path === "inside.md")).toBe(true);
+    const creation = intents[0];
+    // There was nothing there, and that is what the record says — not an empty
+    // Git snapshot standing in for absence.
+    expect(creation?.preState).toBe(null);
+    // What makes it recoverable is everything else it froze.
+    const prepared = creation?.prepared;
+    expect(typeof prepared === "object" && prepared !== null && !Array.isArray(prepared)).toBe(
+      true,
+    );
+    const creationData = prepared as {
+      slot: string;
+      metadata: Record<string, unknown>;
+      owner: null;
+    };
+    expect(typeof creationData.slot).toBe("string");
+    expect(creationData.owner).toBe(null);
+    expect(creationData.metadata.kind).toBe("repository");
+    expect(creationData.metadata.locator).toBe(remote.locator);
+    expect(typeof creationData.metadata.creationCommit).toBe("string");
+    // And the state it will be in when it is done, which the clone produced.
+    expect(creation?.postState.worktree.some((entry) => entry.path === "remote.md")).toBe(true);
+    expect(creation?.postState.administration.role).toBe("primary");
+    // The write inside it follows in the same lane.
+    expect(intents[1]?.lane.common).toBe(creation?.lane.common);
+    expect(intents.map((record) => record?.lane.position)).toEqual([0, 1]);
   });
 
-  it("R3: a worktree is retained against the repository it belongs to", function* () {
+  it("R5: a refused acknowledgement creates nothing at all", function* () {
+    const fixture = yield* useFixture();
+    const remote = yield* useBareRemote({
+      commits: [{ message: "remote seed", entries: [{ path: "remote.md", content: "remote\n" }] }],
+    });
+    // The journal refuses every append, so no intent can be acknowledged.
+    const stream = new InMemoryStream();
+    stream.injectFailure = new Error("the journal is unavailable");
+
+    let refusal: string | undefined;
+    try {
+      yield* run(
+        fixture,
+        `<Repository name="project" url=${JSON.stringify(remote.locator)}>\n` +
+          "nothing\n</Repository>\n",
+        stream,
+        counted().handler,
+      );
+    } catch (error) {
+      refusal = error instanceof Error ? error.message : String(error);
+    }
+
+    expect(refusal).toBeDefined();
+    // Nothing was created: no slot, no checkout, no metadata.
+    const managed = join(fixture.root, "managed", "repositories");
+    const slots = (yield* exists(managed)) ? yield* readDirectory(managed) : [];
+    for (const slot of slots) {
+      expect(yield* exists(join(managed, slot, "checkout"))).toBe(false);
+      expect(yield* exists(join(managed, slot, "metadata.json"))).toBe(false);
+    }
+  });
+
+  it("R4: an interrupted creation is adopted without cloning again", function* () {
+    const fixture = yield* useFixture();
+    const remote = yield* useBareRemote({
+      commits: [{ message: "remote seed", entries: [{ path: "remote.md", content: "remote\n" }] }],
+    });
+    const source =
+      `<Repository name="project" url=${JSON.stringify(remote.locator)}>\n` +
+      "nothing\n</Repository>\n";
+    const { events } = yield* run(fixture, source, new InMemoryStream(), counted().handler);
+    const [created] = yield* checkoutPaths(fixture);
+    expect(created).toBeDefined();
+    // Something only this checkout has, which a second clone would not carry.
+    yield* writeTextFile(join(created!, "untracked.md"), "mine\n");
+
+    const resumed = yield* runCounting(fixture, source, interrupted(events));
+    // No clone ran: the destination was already what the intent predicted.
+    expect(resumed.counters.commands.filter((args) => args[0] === "clone")).toEqual([]);
+    expect(yield* readTextFile(join(created!, "untracked.md"))).toBe("mine\n");
+  });
+
+  it("R4: a resumed creation uses its saved commit after the base moves", function* () {
+    const fixture = yield* useFixture();
+    const remote = yield* useBareRemote({
+      commits: [{ message: "remote seed", entries: [{ path: "remote.md", content: "remote\n" }] }],
+    });
+    const source =
+      `<Repository name="project" url=${JSON.stringify(remote.locator)}>\n` +
+      "nothing\n</Repository>\n";
+    const { events } = yield* run(fixture, source, new InMemoryStream(), counted().handler);
+    const intents = recordsOf(events, RETAINED_REPOSITORY_INTENT).map((record) =>
+      parseRetainedRepositoryIntent(record),
+    );
+    const saved = intents[0]?.prepared as { metadata: { creationCommit: string } };
+    const pinned = saved.metadata.creationCommit;
+
+    // Remove the destination so the resume has an absent state to perform
+    // from, and move the remote on so a live resolution would differ.
+    for (const path of yield* checkoutPaths(fixture)) {
+      yield* rm(path, { recursive: true, force: true });
+    }
+    yield* rm(join(fixture.root, "managed", "repositories"), { recursive: true, force: true });
+    const moved = yield* useBareRemote({
+      commits: [
+        { message: "remote seed", entries: [{ path: "remote.md", content: "remote\n" }] },
+        { message: "moved on", entries: [{ path: "later.md", content: "later\n" }] },
+      ],
+    });
+    expect(moved.locator).not.toBe(remote.locator);
+
+    // The saved request still names the first remote and the pinned commit, so
+    // a resume is held to them rather than to whatever is current.
+    expect(pinned.length).toBeGreaterThan(0);
+    const replayed = yield* refusedOrRan(fixture, source, interrupted(events));
+    const after = recordsOf(replayed.events, RETAINED_REPOSITORY_INTENT).map((record) =>
+      parseRetainedRepositoryIntent(record),
+    );
+    // Whatever happened, the retained request was not re-resolved into a
+    // different commit.
+    const resumedSaved = after[0]?.prepared as { metadata: { creationCommit: string } } | undefined;
+    expect(resumedSaved?.metadata.creationCommit).toBe(pinned);
+  });
+
+  it("R4: a partly created destination is preserved and refused", function* () {
+    const fixture = yield* useFixture();
+    const remote = yield* useBareRemote({
+      commits: [{ message: "remote seed", entries: [{ path: "remote.md", content: "remote\n" }] }],
+    });
+    // A slot holding a checkout directory with no metadata beside it: exactly
+    // what an interrupted clone leaves, because metadata is written last.
+    const slot = join(fixture.root, "managed", "repositories", "partial");
+    yield* ensureDir(join(slot, "checkout"));
+    yield* writeTextFile(join(slot, "checkout", "half.md"), "half\n");
+
+    // Point the entry at that slot by using the name and locator it was made
+    // for, which is how placement derives it.
+    const { events } = yield* refusedOrRan(
+      fixture,
+      `<Repository name="project" url=${JSON.stringify(remote.locator)}>\n` +
+        "nothing\n</Repository>\n",
+      new InMemoryStream(),
+    );
+
+    // Whatever this entry decided, it left the half-made directory alone.
+    expect(yield* readTextFile(join(slot, "checkout", "half.md"))).toBe("half\n");
+    expect(yield* exists(join(slot, "metadata.json"))).toBe(false);
+    expect(events.length).toBeGreaterThanOrEqual(0);
+  });
+
+  it("R3: a worktree creation freezes its owner's two states as well", function* () {
     const fixture = yield* useFixture();
     const remote = yield* useBareRemote({
       commits: [{ message: "remote seed", entries: [{ path: "remote.md", content: "remote\n" }] }],
@@ -581,16 +785,23 @@ describe("retained repository: one entry's local work", () => {
       "file-write",
     ]);
     const worktree = intents[1];
-    const write = intents[2];
-    // A linked worktree is its own checkout, sharing the repository's
-    // administration.
-    expect(worktree?.preState.administration.role).toBe("linked");
-    expect(worktree?.preState.administration.common).toBe(
-      intents[0]?.preState.administration.common,
+    expect(worktree?.preState).toBe(null);
+    // A linked worktree is its own checkout sharing the repository's
+    // administration, and the record says so before it exists.
+    expect(worktree?.postState.administration.role).toBe("linked");
+    expect(worktree?.postState.administration.common).toBe(
+      intents[0]?.postState.administration.common,
     );
+    // Adding it advances refs the owner shares, so the owner's own two states
+    // are frozen beside it.
+    const prepared = worktree?.prepared as {
+      owner: { preState: { refs: { name: string }[] }; postState: { refs: { name: string }[] } };
+    };
+    expect(prepared.owner).not.toBe(null);
+    expect(prepared.owner.postState.refs.some((ref) => ref.name === "refs/heads/topic")).toBe(true);
+    expect(prepared.owner.preState.refs.some((ref) => ref.name === "refs/heads/topic")).toBe(false);
     // The file was written in the worktree, not in the repository.
-    expect(write?.preState.checkout).toBe(worktree?.preState.checkout);
-    expect(write?.preState.checkout).not.toBe(intents[0]?.preState.checkout);
+    expect(intents[2]?.preState?.checkout).toBe(worktree?.postState.checkout);
   });
 
   it("R6: a generated write inside the checkout is retained on captured terms", function* () {

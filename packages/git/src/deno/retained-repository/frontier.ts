@@ -89,7 +89,12 @@ export function* inventoryFrontier(source: FrontierSource): Operation<Result<Ret
     return refuse(`"${directory}" has an index this host cannot read.`);
   }
 
-  const worktree = yield* readWorktree(directory, [common, own]);
+  // The administration pointer goes with the administration. In a linked
+  // worktree `.git` is a *file* holding an absolute path to the directory
+  // beneath `worktrees/`, so inventorying it as content would put a host path
+  // in the state — and two checkouts that are the same work would then never
+  // compare equal across two places on disk.
+  const worktree = yield* readWorktree(directory, [common, own, join(directory, ".git")]);
   if (!worktree.ok) {
     return worktree;
   }

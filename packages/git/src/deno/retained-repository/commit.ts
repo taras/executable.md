@@ -92,6 +92,15 @@ export function retainedCommit(
                 directory: selected.directory,
               }),
             *prepare(preState) {
+              if (preState === null) {
+                return Err(
+                  new GitOperationError(
+                    COMMIT,
+                    "invalid-invocation",
+                    "<Git.Commit> has no absent state: it commits in a checkout that exists.",
+                  ),
+                );
+              }
               return yield* predictCommit(repository, selected, preState, message);
             },
             *perform(transition) {

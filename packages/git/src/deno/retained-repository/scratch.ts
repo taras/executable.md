@@ -64,7 +64,7 @@ export function* useScratchAdministration(
  * somewhere outside itself still points there instead of quietly absorbing
  * whatever it found.
  */
-function* copyTree(from: string, to: string): Operation<void> {
+export function* copyTree(from: string, to: string): Operation<void> {
   yield* until(mkdir(to, { recursive: true }));
   const names = yield* readdir(from);
   for (const name of names) {

@@ -30,11 +30,19 @@ import { props as worktreeProps } from "../../composition/components/Worktree.ts
 import { RepositoryCompositionError, WorktreeCompositionError } from "../../composition/errors.ts";
 import { gitSession } from "../composition/git.ts";
 import type { RepositoryHost } from "../composition/host.ts";
-import { selectManagedRepository, selectManagedWorktree } from "../run-composition/checkouts.ts";
-import { repositorySlot, worktreeSlot } from "../run-composition/placement.ts";
+import {
+  observeManagedSlot,
+  selectManagedRepository,
+  selectManagedWorktree,
+} from "../run-composition/checkouts.ts";
+import { ManagedCheckoutError } from "../run-composition/errors.ts";
+import { checkoutOf, repositorySlot, worktreeSlot } from "../run-composition/placement.ts";
+import { join } from "node:path";
+import { predictRepositoryCreation, predictWorktreeCreation } from "./creation.ts";
 import type { Leases } from "../run-composition/leases.ts";
 import { inventoryFrontier } from "./frontier.ts";
 import { retain } from "./local.ts";
+import type { CreationObservation } from "./local.ts";
 import type { RetainedFileHost, SelectedCheckout } from "./files.ts";
 
 const RETAINED_ORIGIN = "@executablemd/git/retained";
@@ -77,32 +85,96 @@ export function retainedRepository(host: RetainedSelectionHost): IdentityCompone
         const occurrence = yield* claim(invocation);
 
         const slot = repositorySlot(host.managedRoot, locator, name);
-        // Leased before anything is created, and held for the rest of the
-        // entry: a slot another process is working in refuses here rather than
-        // being discovered halfway through a clone.
+        // Leased before the slot is even looked at, and held for the rest of
+        // the entry: a slot another process is working in refuses here rather
+        // than being discovered halfway through a clone.
         yield* host.leases.hold("repository", slot, `repository ${JSON.stringify(name)}`);
         const git = gitSession(host.repository, host.managedRoot);
-        const selected = yield* selectManagedRepository(git, host.repository, slot, {
-          name,
-          locator,
-          base,
-        });
+        const destination = checkoutOf(slot);
+        const common = join(destination, ".git");
+
+        const observed = yield* observeManagedSlot(slot);
+        if (observed.state === "partial") {
+          throw new ManagedCheckoutError(
+            "partial-creation",
+            `the managed checkout for repository ${JSON.stringify(name)} holds an interrupted ` +
+              `creation: ${observed.reason}. Every byte was left where it was.`,
+          );
+        }
+        // An existing compatible checkout is verified by the ordinary managed
+        // selection, which changes nothing when it is reusing one. Creation is
+        // the only branch that mutates, and it happens inside `perform`.
+        const established =
+          observed.state === "established"
+            ? yield* selectManagedRepository(git, host.repository, slot, { name, locator, base })
+            : undefined;
+
         const checkout: SelectedCheckout = Object.freeze({
-          checkout: selected.checkout,
-          directory: selected.checkout,
-          common: selected.commonDirectory,
+          checkout: destination,
+          directory: destination,
+          common: established?.commonDirectory ?? common,
           git,
         });
-        host.select(checkout);
 
-        const retained = yield* retainSelection(host, checkout, occurrence, "repository", {
-          name,
-          locator,
-          base: base ?? null,
-        });
+        const retained = yield* retain(
+          {
+            owner: host.files.owner,
+            site: host.files.site(occurrence),
+            operation: "repository",
+            checkout: checkout.checkout,
+            common: checkout.common,
+            position: host.files.position(checkout.common),
+            selection: { checkout: checkout.checkout },
+            request: {
+              name,
+              url: locator,
+              base: base ?? null,
+            },
+            inventory: () => inventoryOf(checkout),
+            *observe() {
+              return yield* observeDestination(checkout, slot);
+            },
+            *prepare(preState) {
+              if (preState !== null) {
+                // Already there: selecting it changes nothing.
+                return Ok({
+                  postState: preState,
+                  prepared: { checkout: checkout.checkout, common: checkout.common },
+                  evidence: {
+                    type: "repository",
+                    checkout: checkout.checkout,
+                    commit: established?.creationCommit ?? null,
+                  },
+                });
+              }
+              return yield* predictRepositoryCreation(host.repository, slot, {
+                name,
+                locator,
+                base,
+              });
+            },
+            *perform() {
+              // The first mutation of this slot, and it happens only after the
+              // intent above was acknowledged.
+              const created = yield* selectManagedRepository(git, host.repository, slot, {
+                name,
+                locator,
+                base,
+              });
+              return Ok({
+                type: "repository",
+                checkout: created.checkout,
+                commit: created.creationCommit,
+              });
+            },
+          },
+          host.files.resume,
+          host.files.lanes,
+        );
         if (!retained.ok) {
           throw retained.error;
         }
+        host.select(checkout);
 
         yield* API.Env.around(
           {
@@ -153,32 +225,100 @@ export function retainedWorktree(host: RetainedSelectionHost): IdentityComponent
         }
 
         const slot = worktreeSlot(host.managedRoot, owner.common, name);
+        // Both leases before anything is inspected: the destination's slot and
+        // the owner's shared directory, because adding a worktree moves refs
+        // the owner shares.
         yield* host.leases.hold("worktree", slot, `worktree ${JSON.stringify(name)}`);
         const git = gitSession(host.repository, host.managedRoot);
-        const selected = yield* selectManagedWorktree(git, slot, {
-          name,
-          branch,
-          base,
-          owner: owner.common,
-          ownerCheckout: owner.directory,
-        });
+        const destination = checkoutOf(slot);
+
+        const observed = yield* observeManagedSlot(slot);
+        if (observed.state === "partial") {
+          throw new ManagedCheckoutError(
+            "partial-creation",
+            `the managed checkout for worktree ${JSON.stringify(name)} holds an interrupted ` +
+              `creation: ${observed.reason}. Every byte was left where it was.`,
+          );
+        }
+        const established =
+          observed.state === "established"
+            ? yield* selectManagedWorktree(git, slot, {
+                name,
+                branch,
+                base,
+                owner: owner.common,
+                ownerCheckout: owner.directory,
+              })
+            : undefined;
+
         const checkout: SelectedCheckout = Object.freeze({
-          checkout: selected.checkout,
-          directory: selected.checkout,
-          common: selected.commonDirectory,
+          checkout: destination,
+          directory: destination,
+          common: owner.common,
           git,
         });
-        host.select(checkout);
 
-        const retained = yield* retainSelection(host, checkout, occurrence, "worktree", {
-          name,
-          branch,
-          base: base ?? null,
-          owner: owner.checkout,
-        });
+        const retained = yield* retain(
+          {
+            owner: host.files.owner,
+            site: host.files.site(occurrence),
+            operation: "worktree",
+            checkout: checkout.checkout,
+            // The owner's shared directory, which is the lane this creation
+            // advances: its refs are what moves.
+            common: owner.common,
+            position: host.files.position(owner.common),
+            selection: { checkout: checkout.checkout },
+            request: {
+              name,
+              branch,
+              base: base ?? null,
+              owner: owner.checkout,
+            },
+            inventory: () => inventoryOf(checkout),
+            *observe() {
+              return yield* observeDestination(checkout, slot);
+            },
+            *prepare(preState) {
+              if (preState !== null) {
+                return Ok({
+                  postState: preState,
+                  prepared: { checkout: checkout.checkout, common: checkout.common },
+                  evidence: {
+                    type: "worktree",
+                    checkout: checkout.checkout,
+                    commit: established?.creationCommit ?? null,
+                  },
+                });
+              }
+              return yield* predictWorktreeCreation(host.repository, slot, owner, {
+                name,
+                branch,
+                base,
+              });
+            },
+            *perform() {
+              const created = yield* selectManagedWorktree(git, slot, {
+                name,
+                branch,
+                base,
+                owner: owner.common,
+                ownerCheckout: owner.directory,
+              });
+              return Ok({
+                type: "worktree",
+                checkout: created.checkout,
+                commit: created.creationCommit,
+              });
+            },
+          },
+          host.files.resume,
+          host.files.lanes,
+        );
         if (!retained.ok) {
           throw retained.error;
         }
+        host.select(checkout);
 
         yield* API.Env.around(
           {
@@ -194,60 +334,43 @@ export function retainedWorktree(host: RetainedSelectionHost): IdentityComponent
   };
 }
 
-/**
- * Retain one selection as its lane's baseline.
- *
- * Its two ends are one state, so a resume adopts it: a selection that has
- * already happened is a checkout that is simply there, and holding it to the
- * snapshot it recorded would refuse every entry that went on to do anything in
- * it.
- */
-function* retainSelection(
-  host: RetainedSelectionHost,
-  checkout: SelectedCheckout,
-  occurrence: string,
-  operation: "repository" | "worktree",
-  request: Record<string, string | null>,
-): Operation<Result<unknown>> {
-  return yield* retain(
-    {
-      owner: host.files.owner,
-      site: host.files.site(occurrence),
-      operation,
-      checkout: checkout.checkout,
-      common: checkout.common,
-      position: host.files.position(checkout.common),
-      selection: { checkout: checkout.checkout },
-      request,
-      inventory: () =>
-        inventoryFrontier({
-          git: checkout.git,
-          checkout: checkout.checkout,
-          directory: checkout.directory,
-        }),
-      // deno-lint-ignore require-yield
-      *prepare(preState) {
-        return Ok({
-          postState: preState,
-          prepared: { checkout: checkout.checkout, common: checkout.common },
-          evidence: { type: operation, checkout: checkout.checkout },
-        });
-      },
-      // deno-lint-ignore require-yield
-      *perform() {
-        return Ok({ type: operation, checkout: checkout.checkout });
-      },
-    },
-    host.files.resume,
-    host.files.lanes,
-  );
-}
-
 function text(value: unknown): string | undefined {
   return typeof value === "string" && value !== "" ? value : undefined;
 }
 
-/** A selection this entry could not make. */
-export function selectionRefused(sentence: string): Result<never> {
-  return Err(new Error(sentence));
+/** This checkout's state right now. */
+function inventoryOf(checkout: SelectedCheckout) {
+  return inventoryFrontier({
+    git: checkout.git,
+    checkout: checkout.checkout,
+    directory: checkout.directory,
+  });
+}
+
+/**
+ * What is where this destination will be, for a resume to decide from.
+ *
+ * The slot is asked first, because it is the slot that says whether a creation
+ * finished: the metadata is written last, so a checkout without it is an
+ * interrupted creation however complete the directory looks.
+ */
+function* observeDestination(
+  checkout: SelectedCheckout,
+  slot: string,
+): Operation<Result<CreationObservation>> {
+  const observed = yield* observeManagedSlot(slot);
+  if (observed.state === "absent") {
+    return Ok({ state: "absent" });
+  }
+  if (observed.state === "partial") {
+    return Ok({ state: "partial", reason: observed.reason });
+  }
+  const frontier = yield* inventoryOf(checkout);
+  if (!frontier.ok) {
+    return Ok({
+      state: "partial",
+      reason: "the slot holds a checkout this host cannot describe",
+    });
+  }
+  return Ok({ state: "established", frontier: frontier.value });
 }
