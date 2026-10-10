@@ -51,6 +51,7 @@ import type { ReplDescription } from "../src/repl/description.ts";
 import { ENTRY_SCOPE, projectRepl } from "../src/repl/model.ts";
 import type { ReplElicitation, ReplModel, ReplScope } from "../src/repl/model.ts";
 import { useReplTree } from "../src/repl/reconcile.ts";
+import { navigationOf } from "../src/repl/navigation.ts";
 import { presentationFor } from "../src/repl/application.ts";
 import type { ReplPresentationContext } from "../src/repl/application.ts";
 import { commitReplFrame, isStaleFrame } from "../src/repl/program.ts";
@@ -678,7 +679,17 @@ function reading(
   size = NARROW,
   focused?: string,
 ): ReplView {
-  const resolved = viewFor(state, model, live, size, focused);
+  // The navigation a session would publish for this reading. The History
+  // drawer is fed from it rather than from the model's prefix, so a view
+  // built here has to carry one or the drawer lists nothing.
+  const resolved = viewFor(
+    state,
+    model,
+    live,
+    size,
+    focused,
+    navigationOf(model.checkpoints, model.settled ? "settled" : "unfinished"),
+  );
   if (!resolved.ok) {
     throw resolved.error;
   }

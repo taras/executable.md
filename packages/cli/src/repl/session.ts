@@ -103,6 +103,8 @@ import { useExpansionController } from "./expansion.ts";
 import type { ExpansionController, ExpansionState } from "./expansion.ts";
 import type { ReplExecution } from "./journal.ts";
 import { entryInitialBindings, projectRepl } from "./model.ts";
+import { headOf, navigationOf, NO_NAVIGATION } from "./navigation.ts";
+import type { ReplHeadState, ReplHistoryNavigation, ReplNavigationPoint } from "./navigation.ts";
 import type { ReplEntry, ReplModel } from "./model.ts";
 
 /** A submitted entry this environment cannot run, refused before it is admitted. */
@@ -225,12 +227,81 @@ export interface ExpansionView {
   readonly states: Stream<ExpansionState, never>;
 }
 
+/**
+ * One coherent reading of this history at one position.
+ *
+ * Both halves from the same acknowledged array: the content the position
+ * asks for, and the whole file's positions beside it. Handed over together
+ * so a caller cannot pair one of them with a snapshot the other never saw —
+ * which is what happens when a frame reads the content, suspends to measure
+ * the terminal, and then reads the navigation again.
+ */
+export interface ReplReading {
+  /** The model of the requested prefix. */
+  readonly model: ReplModel;
+  /** Every position the whole file retained, and what the head is doing. */
+  readonly navigation: ReplHistoryNavigation;
+}
+
+/**
+ * The two projections one position needs, from one array.
+ *
+ * Held together as a single `Result` rather than as optional fields beside an
+ * optional error: the pair either exists or the file could not be read, and a
+ * shape that can hold neither asks every reader to assert that it does.
+ */
+interface ReplProjections {
+  /** The whole validated file, which answers navigation and the head. */
+  readonly whole: ReplModel;
+  /** The requested position, which answers everything else. */
+  readonly prefix: ReplModel;
+}
+
+/**
+ * Project both readings of one acknowledged array.
+ *
+ * The prefix is the whole file when no position is asked for, so the common
+ * case projects once.
+ */
+function project(
+  snapshot: readonly DurableEvent[],
+  at: string | undefined,
+): Result<ReplProjections> {
+  const whole = projectRepl(snapshot);
+  if (!whole.ok) {
+    return whole;
+  }
+  if (at === undefined) {
+    return Ok({ whole: whole.value, prefix: whole.value });
+  }
+  const prefix = projectRepl(snapshot, at);
+  return prefix.ok ? Ok({ whole: whole.value, prefix: prefix.value }) : prefix;
+}
+
 /** One execution as the application reads it. */
 export interface ReplSession {
   /** The opaque identifier this execution's history is named by. */
   readonly execution: string;
   /** The frozen model of the projected prefix, as it stands. */
   readonly model: ReplModel;
+  /**
+   * Every position the whole history retained, and what the head is doing.
+   *
+   * The one reading not taken at the selected prefix. A reader standing at an
+   * earlier position is owed the whole rail — the positions after theirs are
+   * where they can go next — and nothing of what those positions hold. It
+   * carries a marker and a kind, and no payload of any sort.
+   */
+  readonly navigation: ReplHistoryNavigation;
+  /**
+   * Both readings at one position, from one acknowledged array.
+   *
+   * What the root asks for every time it builds a frame. A later record this
+   * process can no longer read refuses the whole reading — including for a
+   * position earlier than the record — because stale navigation standing
+   * beside a prefix that still looks plausible is the worst of both.
+   */
+  reading(at: string | undefined): Result<ReplReading>;
   /** Everything about this process that the model deliberately does not hold. */
   readonly overlay: ReplOverlay;
   /** What expansion is doing. Always readable, never actionable. */
@@ -471,24 +542,154 @@ function* start(
     let admitting = true;
     /** How the last entry to finish finished. */
     let finished: Result<unknown> | undefined;
+    /**
+     * Every retained position, taken at the whole file rather than at the
+     * selected prefix. Rebuilt with the model, so a wake that moves one moves
+     * both.
+     */
+    let points: readonly ReplNavigationPoint[] = NO_NAVIGATION.checkpoints;
+    /** Whether the latest entry of the *whole* file has a retained outcome. */
+    let outcome = false;
+    /** How many entries the whole file holds. */
+    let admitted = 0;
+    /**
+     * The last pair of projections, and the array they were taken from.
+     *
+     * Keyed by the length of the acknowledged array and the position asked
+     * for, which together are the only things that can change what either
+     * projection says. A failure is memoized too: a file this process cannot
+     * read does not become readable by being asked again.
+     */
+    let memo:
+      | {
+          readonly length: number;
+          readonly at: string | undefined;
+          readonly projected: Result<ReplProjections>;
+        }
+      | undefined;
 
+    /**
+     * Rebuild both readings from one acknowledged array.
+     *
+     * The full file answers navigation and the head; the requested prefix
+     * answers every other pane. Two projections of one immutable input, so
+     * the rail and the content cannot disagree about what the file holds —
+     * and the full model is dropped here rather than kept, because nothing
+     * downstream may reach a later entry through it.
+     *
+     * A later malformed segment refuses the whole reading, including for an
+     * earlier marker: the alternative is stale navigation standing beside a
+     * prefix that still looks plausible.
+     */
+    function readingAt(at: string | undefined): Result<ReplReading> {
+      // One acknowledged array answers both halves. The stream is the one
+      // writer, so `retained` is what the file holds; projecting the whole of
+      // it and the requested prefix from the same slice is what makes the
+      // rail and the content incapable of describing different files.
+      //
+      // Memoized on the length of that array and the position asked for,
+      // because the root asks for this reading on every wake and a wake is
+      // usually an overlay moving rather than a record arriving. The head is
+      // *not* memoized: pausing, resuming and the last of an entry's
+      // resources being released all change it while the file stands still.
+      if (memo === undefined || memo.length !== retained.length || memo.at !== at) {
+        memo = { length: retained.length, at, projected: project(retained.slice(), at) };
+      }
+      if (!memo.projected.ok) {
+        return memo.projected;
+      }
+      const { whole, prefix } = memo.projected.value;
+      const latest = whole.entries[whole.entries.length - 1];
+      return Ok({
+        model: prefix,
+        navigation: Object.freeze({
+          checkpoints: navigationOf(whole.checkpoints, "empty").checkpoints,
+          head: headNow(whole.entries.length, latest?.terminal !== undefined),
+        }),
+      });
+    }
+
+    /**
+     * Adopt the reading at the opening selection, and announce it.
+     *
+     * The session's own published model, for everything that reads
+     * `session.model` rather than asking for a position. The root does ask,
+     * which is why this is no longer the only way a reading is built.
+     */
     function reproject(): void {
-      const next = projectRepl(retained, selection);
-      if (!next.ok) {
+      const read = readingAt(selection);
+      if (!read.ok) {
         // A history this process wrote and can no longer read is a refusal,
         // not a stale view: the alternative is a screen that keeps describing
-        // a prefix while the file has moved past it.
-        refuse(next.error);
+        // a prefix while the file has moved past it. Before admission that is
+        // the opening's answer; after it, the root reads the same failure for
+        // itself through `reading()` and shows the refused view.
+        refuse(read.error);
+        changes.send(model);
         return;
       }
-      model = next.value;
+      model = read.value.model;
+      points = read.value.navigation.checkpoints;
+      // The whole file's own facts, from the same projection the reading above
+      // came from. Reaching for them separately would be the second snapshot
+      // this whole change exists to remove.
+      if (memo !== undefined && memo.projected.ok) {
+        const { whole } = memo.projected.value;
+        admitted = whole.entries.length;
+        outcome = whole.entries[whole.entries.length - 1]?.terminal !== undefined;
+      }
       changes.send(model);
+    }
+
+    /**
+     * The whole file's positions, and what the head is doing *now*.
+     *
+     * The positions come from the last reprojection, because only an append
+     * moves them. The head does not: pausing, resuming and the last of an
+     * entry's resources being released all change it while the file stands
+     * still. So it is derived on read, from the facts as they are, and the
+     * wake that publishes it is the one the session and the controller
+     * already send.
+     *
+     * Liveness is `live` — the entry-wide signal that stays true until every
+     * resource that entry acquired has been released. A body that returned
+     * and a root Close that was recorded are both earlier than that, which is
+     * why neither of them is consulted here.
+     */
+    function navigation(): ReplHistoryNavigation {
+      return Object.freeze({ checkpoints: points, head: headNow(admitted, outcome) });
+    }
+
+    /**
+     * What the head is doing, from the facts as they stand.
+     *
+     * The one place the head is derived. Both readings ask here rather than
+     * each assembling the same five facts: two derivations of one head are
+     * two things to keep in step, and the owned-work fact — the entry-wide
+     * signal that stays true until every resource that entry acquired has
+     * been released — is exactly the one a second copy would be written
+     * without.
+     */
+    function headNow(entries: number, settled: boolean): ReplHeadState {
+      return headOf({
+        entries,
+        outcome: settled,
+        working: live,
+        paused: expansion.state === "paused",
+        pausing: expansion.state === "pausing",
+      });
     }
 
     const session: ReplSession = {
       execution: execution.id,
       get model() {
         return model;
+      },
+      get navigation(): ReplHistoryNavigation {
+        return navigation();
+      },
+      reading(at: string | undefined): Result<ReplReading> {
+        return readingAt(at);
       },
       get overlay(): ReplOverlay {
         return {
@@ -787,6 +988,10 @@ function* start(
     // holds. Reprojection reads that acknowledged array rather than
     // accumulating a second copy of the history beside it.
     const retained = yield* stream.readAll();
+    // The positions this history already holds, before anything is appended.
+    // `start` validated the same bytes; this derives the thin summary from
+    // them so a session that never appends still shows its rail.
+    reproject();
     const observe = (event: DurableEvent): void => {
       retained.push(event);
       // One transition, and nothing suspends inside it: the record joins the

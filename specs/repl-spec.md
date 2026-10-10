@@ -432,9 +432,48 @@ outside `[A-Za-z0-9-._~:@]` is percent-encoded, so a location can never contain
 the quote that would close it. Source text, provider output and
 an event's own origin are content and are shown as written, URLs included.
 
-The History band is five rows at every size and says which band it is on the
-first of them; when the labels of several positions cannot all fit, they share a
-label and every position keeps its own identity.
+The History band is five rows at every size: its own name and the head on the
+first, entry captions and which position is being read on the second, the tall
+marks of entries on the third, the rule itself on the fourth, and the short
+stems of everything else — with the head's own marker — on the fifth.
+
+It is a map of the whole recorded order, which is the one thing on this screen
+not read at the selected prefix. The positions after the selected one are
+where a reader can go next, so a rail that stopped at the selection would be a
+map of the part of the file they had already reached. What crosses is a marker
+and a kind per position, and nothing of what any of them holds.
+
+The map and the content are one reading, taken from one acknowledged array and
+carried together through the frame. Nothing on this screen pairs a prefix with
+a rail the file no longer has: a record retained while the terminal is being
+measured changes the next reading, not half of this one. Where that reading
+cannot be built at all, because the file holds a record this process can no
+longer read, the whole screen is the refusal — not a rail standing beside a
+prefix that still looks plausible.
+
+Where a mark goes is a proportion of the rail's measured columns: the first at
+the start, the last at the end, the rest evenly between, and a lone position
+where the head is. It says where something is in the order and nothing about
+when it happened. Two positions that land on one column are one *visual* group
+and stay two positions — the drawer offers each its own row, so a compact band
+never costs a reader an exact position. An entry keeps its tall mark and a
+minor position its stem even when they share a column.
+
+Everything the band reserves is measured. The right-hand caption is as wide as
+the widest head label and the selection caption together, identically for every
+head state, so a head changing from LIVE to SETTLING moves no mark and re-cuts
+no caption; only the count, the selection or the size can do that. Entry
+captions start one per entry, centred on its mark, and where two would touch
+the leftmost pair becomes the span it actually covers — `Entry 4–7`, never a
+number that is not there. A band that cannot fit its title and its head is the
+frame refusal that already recovers on resize, never a clip.
+
+The selection is amber above the rule and at its junction, with its place in
+the full order beside it; a live reading says `SELECTED · HEAD` instead and has
+no diamond. The head keeps its own colour below the rail's end, so a selection
+on that same column keeps its diamond above and the head its marker below. The
+rail is read, not operated: nothing on it is a control, and every position is
+reached through the drawer.
 
 The footer is seven rows at every size, in one order: the contextual status and
 action row, then the five History rows, then the draft. The draft owns the last of
@@ -718,6 +757,34 @@ beside a drawer stack, a conversation filter and a frozen position, so going to
 Sessions to follow a conversation and coming back returns you to the entry you
 left. It never carries focus, pause state, how far a window is scrolled, form
 internals, rendered cells or this process's overlay.
+
+## What the head says the execution is doing
+
+Seven states and no eighth, in one precedence, each a fact about retained
+records and about work this process actually owns:
+
+| | Reading | When |
+| --- | --- | --- |
+| 1 | `HEAD · SETTLING` | an outcome is retained and the entry's work is still coming down |
+| 2 | `HEAD · EXPANSION PAUSED` | no outcome, and the controller is paused |
+| 3 | `HEAD · PAUSING EXPANSION` | no outcome, and it is pausing |
+| 4 | `HEAD · LIVE` | work this process owns, and none of the above |
+| 5 | `HEAD · EMPTY` | nothing retained and nothing owned |
+| 6 | `HEAD · SETTLED` | no owned work, and the latest entry has an outcome |
+| 7 | `HEAD · UNFINISHED` | no owned work, and it has none |
+
+Owned work means every resource the entry acquired is still standing — its
+outer Agent attachment and its consumers included. A body that returned and a
+root Close that was recorded are both earlier than that, so neither of them
+says an entry has finished; `SETTLING` is the window between them, and it is
+the one a reader watching a run end is actually in. A retained success, a
+failure and a cancellation all become a neutral `SETTLED`: which of them it
+was belongs to the reading, not to the head. An entry with no outcome and
+nothing holding it is `UNFINISHED` — stopped, never an inferred pause.
+
+Pausing stops expansion, not work that has already started elsewhere. A head
+that changes while nothing is appended publishes through the wake the session
+and the controller already send; History has no clock of its own.
 
 ## History is immutable; the present is explicit
 

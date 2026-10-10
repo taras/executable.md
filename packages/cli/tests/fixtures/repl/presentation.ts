@@ -709,6 +709,7 @@ export function measuringContext(size: ReplTerminalSize): ReplPresentationContex
     // it the pass that asks how wide the panes holding them are.
     reading: undefined,
     preview: undefined,
+    rail: undefined,
   };
 }
 

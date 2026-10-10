@@ -5745,6 +5745,8 @@ DurableEvents -> frozen ReplModel -> resolved immutable view
 | `description.ts` | opaque immutable descriptions and the closed action boundary |
 | `reconcile.ts` | reconciling descriptions into one mounted Freedom tree |
 | `handoff.ts` | the acknowledged commit boundary |
+| `navigation.ts` | every retained position and the head, as the one reading taken at the whole file |
+| `history-rail.ts` | the five-row History band, placed from engine measurements |
 | `source-reading.ts` | one entry as output and then source, with what each element is doing |
 | `presentation-text.ts` · `presentation-style.ts` | what the characters of a reading are, and the colours it is drawn in |
 | `fitting.ts` | engine-measured widths, and the rows a reading is cut into |
@@ -5755,6 +5757,46 @@ DurableEvents -> frozen ReplModel -> resolved immutable view
 | `terminal.ts` · `terminal-host.ts` · `screen.ts` | the terminal Api, its portable half, and the one owner of its modes |
 | `components/` · `application.ts` | the screens, and the one state transition boundary |
 | `storage.ts` · `program.ts` | where histories live, and the command as one scope |
+
+### Navigation is the whole file; content is one prefix
+
+Every pane reads the selected prefix. The History band and its drawer are the
+explicit exception, and the only one: they read a thin summary of the *whole*
+validated file — a marker and a kind per retained position, plus the head —
+because the positions after the selected one are where a reader can go next.
+No label, source, name, value, outcome detail or observation is in it, so
+nothing a later position holds reaches a reading of an earlier one.
+
+Both halves come from one acknowledged event array per wake: the full file for
+the summary, the requested marker for everything else, through the projector's
+existing whole-file validation. The full model is discarded from child
+reachability rather than kept, so nothing downstream can walk to a later entry
+through it, and navigation is never assembled by appending to a selected
+model. A later malformed segment refuses the whole reading even for an earlier
+marker — the alternative is stale navigation standing beside a prefix that
+still looks plausible.
+
+The session hands both halves over together, as one reading, and the root
+carries that one value through resolution, paint and resize rather than asking
+again for either half. It has to: the root reads the terminal's size between
+resolving a frame and composing it, that read suspends, and a record can be
+retained while it does. Content taken before it and navigation taken after it
+would describe two different files on one screen. A resize recomposes the
+reading that was resolved at a new size, never at a new snapshot.
+
+When that reading cannot be built at all — a record this process wrote and can
+no longer read — the root draws the refused view, the same screen a cold open
+of the same file shows. That is a different outcome from a route that does not
+resolve at its position: there, a reading still stands and the reason is said
+beside it. A refusal has nothing to stand beside, so nothing is left on the
+screen pretending to be current.
+
+The head is derived on read from retained facts and from work this session
+owns, never from a body's return, a recorded root Close, a component badge or
+the selected content. It changes while the file stands still, so it publishes
+through the wake the session and the controller already send; History adds no
+stream, timer or clock. The inspected action row keeps its historical
+restrictions: navigation is the exception for the band, not for capabilities.
 
 ### Sequential entries over one physical journal
 

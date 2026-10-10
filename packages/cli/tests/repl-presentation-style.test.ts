@@ -58,8 +58,10 @@ import type {
 } from "../src/repl/application.ts";
 import type { ReplDispatched } from "../src/repl/reconcile.ts";
 import type { ReplDrawerRef } from "../src/repl/route.ts";
-import { FOOTER_ROWS, HISTORY_LABEL, HISTORY_ROWS, NARROW } from "../src/repl/layout.ts";
+import { FOOTER_ROWS, HISTORY_ROWS, NARROW } from "../src/repl/layout.ts";
+import { HISTORY_TITLE } from "../src/repl/history-rail.ts";
 import { ACTION_ROW, DRAWER_WINDOW, READING_WINDOW } from "../src/repl/application.ts";
+import { navigationOf } from "../src/repl/navigation.ts";
 import type { ReplBounds } from "../src/repl/layout.ts";
 import { BOLD, REPL_PALETTE } from "../src/repl/presentation-style.ts";
 import {
@@ -80,6 +82,9 @@ import {
   viewportBounds,
 } from "./fixtures/repl/presentation.ts";
 import { referenceEvents } from "./fixtures/repl/reference.ts";
+import { ordinaryEvaluationProfile } from "../src/evaluation-profile.ts";
+import { submitReplEntry } from "../src/repl/session.ts";
+import type { ReplSession } from "../src/repl/session.ts";
 import type { CellStyle, Observed, Presenter, TerminalGrid } from "./fixtures/repl/presentation.ts";
 
 const WIDE: ReplTerminalSize = { columns: 160, rows: 36 };
@@ -368,7 +373,18 @@ function reading(
   size: ReplTerminalSize = WIDE,
   focused?: string,
 ): ReplView {
-  const resolved = viewFor(state, model, live, size, focused);
+  // The navigation a session would publish for this reading: every position
+  // the file retained, with the head it is standing at. Derived from the
+  // model here because these cases build the model directly rather than
+  // running a session.
+  const resolved = viewFor(
+    state,
+    model,
+    live,
+    size,
+    focused,
+    navigationOf(model.checkpoints, model.settled ? "settled" : "unfinished"),
+  );
   if (!resolved.ok) {
     throw resolved.error;
   }
@@ -687,10 +703,28 @@ describe("REPL presentation: what one row's cells say it is", () => {
         expect(band.height).toBe(5);
         const row = placed(observed, "footer:input").y - band.height;
         expect(band.y).toBe(row);
+        // Re-anchored for #881 PR 3: the band was one accent and is now a
+        // rail whose cells say what each of them is — the title, the rule,
+        // an entry mark, a minor mark, the selection, the head. The claim is
+        // the same and is why either exists: every cell in this band is the
+        // band's own, and nothing foreign is painted here.
+        const own = new Set<number>([
+          REPL_PALETTE.historyTitle,
+          REPL_PALETTE.historyRail,
+          REPL_PALETTE.historyEntryEarlier,
+          REPL_PALETTE.historyTickEarlier,
+          REPL_PALETTE.historyMinorEarlier,
+          REPL_PALETTE.historyEntryLater,
+          REPL_PALETTE.historyMinorLater,
+          REPL_PALETTE.historySelected,
+          REPL_PALETTE.historyHeadLive,
+          REPL_PALETTE.historyHead,
+        ]);
         for (const written of presenter.grid.nonblank(band)) {
           const [at] = written.split("=");
           const [x, y] = at.split(",").map(Number);
-          expect(presenter.grid.styleAt(x, y).foreground).toBe(REPL_PALETTE.historical);
+          const ink = presenter.grid.styleAt(x, y).foreground;
+          expect([at, ink !== undefined && own.has(ink)]).toEqual([at, true]);
         }
         for (let x = band.x; x < band.x + band.width; x += 1) {
           expect(presenter.grid.styleAt(x, band.y).background).toBe(REPL_PALETTE.historySurface);
@@ -1038,7 +1072,7 @@ describe("REPL presentation: the panes a reading is laid out in", () => {
         throw new Error("this frame published no History band");
       }
       expect(band.height).toBe(HISTORY_ROWS);
-      expect(textOf(grid, band).startsWith(HISTORY_LABEL)).toBe(true);
+      expect(textOf(grid, band).startsWith(HISTORY_TITLE)).toBe(true);
     }
   });
 
@@ -1686,6 +1720,116 @@ describe("REPL presentation: focus marks the row without repainting it", () => {
     expect(inkOf(grid, selected).foreground).toBe(SEMANTIC.tick);
     expect(focusedRows(observed, grid)).toEqual(["footer:input"]);
   });
+});
+
+/**
+ * A real session, held at a question it is actually waiting on.
+ *
+ * Everything else in this file hands the frame an observation it composed.
+ * This one does not: the entry is submitted into a live session, the `<Elicit>`
+ * inside it suspends for real, and the phase the badge is drawn from is the
+ * one this process's own observer recorded while that invocation waited.
+ */
+const HELD_SOURCE = [
+  "```js eval",
+  `const decide = ${JSON.stringify({
+    type: "object",
+    properties: { decision: { type: "string", enum: ["Approve", "Stop"] } },
+    required: ["decision"],
+    additionalProperties: false,
+  })};`,
+  "```",
+  "",
+  '<Elicit schema={decide} as="answer">Hold here?</Elicit>',
+  "",
+].join("\n");
+
+/** Wait until this session is asking something. */
+function* held(session: ReplSession): Operation<void> {
+  for (let turn = 0; turn < 500; turn += 1) {
+    if (session.overlay.question !== undefined) {
+      return;
+    }
+    yield* sleep(0);
+  }
+  // The entry's own outcome, because the usual reason a question never
+  // arrives is that the entry failed before asking it.
+  throw new Error(
+    "this session never reached a question it had to wait at: " +
+      (session.model.entries[0]?.terminal?.message ?? "it is still running"),
+  );
+}
+
+describe("REPL presentation: a frame of a real held invocation", () => {
+  beforeAll(() => useTempFileCompiler());
+
+  it("P1-T4: the waiting invocation says so on its own row, in the archive's literal", () =>
+    scoped(function* () {
+      const opened = yield* submitReplEntry({
+        execution: { id: "held", stream: new InMemoryStream([]) },
+        installations: [{ evaluation: ordinaryEvaluationProfile() }],
+        source: HELD_SOURCE,
+      });
+      if (!opened.ok) {
+        throw opened.error;
+      }
+      const session = opened.value;
+      yield* held(session);
+
+      const entry = session.model.entries[0];
+      if (entry === undefined) {
+        throw new Error("a held session admitted no entry");
+      }
+      // The overlay the program reads, with this process's actual lifecycle
+      // in it. Nothing here names a phase: what the badge says comes from the
+      // invocation that is waiting as this frame is composed.
+      const live: ReplLive = {
+        output: session.overlay.output,
+        question: session.overlay.question,
+        expansion: session.expansion.state,
+        pausable: session.controller !== undefined,
+        running: session.live,
+        agent: session.agent,
+        lifecycle: session.lifecycle,
+      };
+      const resolved = viewFor(
+        selecting(stateWith({}), entry.key),
+        session.model,
+        live,
+        WIDE,
+        undefined,
+        session.navigation,
+      );
+      if (!resolved.ok) {
+        throw resolved.error;
+      }
+      const presenter = yield* usePresenter(WIDE);
+      const observed = yield* presenter.commit(resolved.value);
+      const { grid } = presenter;
+
+      const badge = `${LIFECYCLE.hold.glyph} ${LIFECYCLE.hold.word}`;
+      const rows = observed.keys
+        .filter((key) => key.startsWith("reading:"))
+        .map((key) => ({ key, bounds: observed.boundsOf(key) }));
+      const carrying = rows.find(
+        (one) => one.bounds !== undefined && textOf(grid, one.bounds).includes(badge),
+      );
+      if (carrying?.bounds === undefined) {
+        throw new Error(
+          `no reading row says ${badge}; they say ${rows
+            .map((one) => (one.bounds === undefined ? "" : textOf(grid, one.bounds).trim()))
+            .join(" | ")}`,
+        );
+      }
+      // The row it is on is the invocation that is waiting, not some other
+      // element of the same entry.
+      expect(textOf(grid, carrying.bounds)).toContain("<Elicit");
+      // And it is drawn in the archive's own literal for a held call.
+      expect(inkOfSpan(grid, carrying.bounds, badge).foreground).toBe(LIFECYCLE.hold.colour);
+      // The source beside it keeps its own colours, so the badge is not
+      // repainting the row it sits on.
+      expect(inkOfSpan(grid, carrying.bounds, "<").foreground).not.toBe(LIFECYCLE.hold.colour);
+    }));
 });
 
 describe("REPL presentation: the surfaces a reading is drawn on", () => {
