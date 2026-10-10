@@ -21,10 +21,10 @@
 
 import { Ok, until } from "effection";
 import type { Operation, Result } from "effection";
-import { lstat, readdir } from "@effectionx/fs";
+import { lstat, readdir, writeTextFile } from "@effectionx/fs";
 import { copyFile, mkdir, readlink, symlink } from "node:fs/promises";
 import type { Stats } from "node:fs";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import type { RepositoryHost } from "../composition/host.ts";
 import { gitSession } from "../composition/git.ts";
 import type { GitSession } from "../composition/git.ts";
@@ -111,6 +111,19 @@ export function* predictInScratch(
   const root = yield* host.useDirectory();
   const directory = join(root, "checkout");
   yield* copyTree(original.directory, directory);
+  // A linked worktree's `.git` is a file holding an absolute path to its
+  // administrative directory, and copying it verbatim would leave the copy
+  // pointing at the original — so Git run in the copy would write refs, HEAD
+  // and objects into the very checkout the prediction must not touch. The
+  // administration is copied too and the two pointers are rewritten at each
+  // other, which makes the copy a repository of its own.
+  if (administration.worktree !== null) {
+    const common = join(root, "common");
+    yield* copyTree(administration.common, common);
+    const admin = join(common, "worktrees", basename(administration.worktree));
+    yield* writeTextFile(join(directory, ".git"), `gitdir: ${admin}\n`);
+    yield* writeTextFile(join(admin, "gitdir"), `${join(directory, ".git")}\n`);
+  }
   const git = gitSession(host, root);
   const performed = yield* perform(git, directory);
   if (!performed.ok) {

@@ -16,7 +16,7 @@
 
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { all, ensure, resource, scoped, sleep, spawn, until } from "effection";
+import { all, ensure, resource, scoped, sleep, spawn, until, withResolvers } from "effection";
 import type { Operation } from "effection";
 import { ensureDir, rm, writeTextFile } from "@effectionx/fs";
 import { mkdtemp, realpath, writeFile } from "node:fs/promises";
@@ -93,11 +93,12 @@ function run(
   source: string,
   stream: InMemoryStream,
   entryKey = "0001",
+  given?: FilesHandler,
 ): Operation<readonly DurableEvent[]> {
   return scoped(function* () {
     const path = join(fixture.root, "entry.md");
     yield* writeTextFile(path, source);
-    const leaf = hostFilesHandler();
+    const leaf = given ?? hostFilesHandler();
     yield* useEntryFiles(fixture, leaf);
     const entry = yield* useRetainedRepositoryEntry({
       executionId: "execution-1",
@@ -113,6 +114,22 @@ function run(
     );
     return yield* stream.readAll();
   });
+}
+
+/** A Files provider that records the mutations it is actually asked to make. */
+function counted(): { readonly handler: FilesHandler; readonly writes: string[] } {
+  const host = hostFilesHandler();
+  const writes: string[] = [];
+  return {
+    writes,
+    handler: {
+      ...host,
+      *writeTextFile(input) {
+        writes.push(input.path);
+        return yield* host.writeTextFile(input);
+      },
+    },
+  };
 }
 
 describe("retained repository: what an entry holds and releases", () => {
@@ -223,6 +240,85 @@ describe("retained repository: what an entry holds and releases", () => {
       }
     });
     expect(refusal).toBeUndefined();
+  });
+
+  it("R9: a second entry cannot work in the shared directory the first one holds", function* () {
+    const fixture = yield* useFixture();
+    // The first entry is stopped inside its own native write, so it is still
+    // holding everything a running entry holds when the second one starts.
+    const entered = withResolvers<void>();
+    const release = withResolvers<void>();
+    const host = hostFilesHandler();
+    const holding: FilesHandler = {
+      ...host,
+      *writeTextFile(input) {
+        entered.resolve();
+        yield* release.operation;
+        return yield* host.writeTextFile(input);
+      },
+    };
+    const second = counted();
+    let refusal: string | undefined;
+    yield* scoped(function* () {
+      const first = yield* spawn(function* () {
+        try {
+          yield* run(
+            fixture,
+            '<File path="one.md">one\n</File>\n',
+            new InMemoryStream(),
+            "0001",
+            holding,
+          );
+        } catch {
+          // What this asserts is what the second entry was allowed to do.
+        }
+      });
+      // Registered before the waiting starts, so the first entry is let go of
+      // however this scope ends: halting a holder that is still suspended on a
+      // release nobody resolved would leave the scope waiting on it.
+      yield* ensure(() => {
+        release.resolve();
+      });
+      yield* ensure(() => first.halt());
+      yield* entered.operation;
+      try {
+        yield* run(
+          fixture,
+          '<File path="two.md">two\n</File>\n',
+          new InMemoryStream(),
+          "0002",
+          second.handler,
+        );
+      } catch (error) {
+        refusal = error instanceof Error ? error.message : String(error);
+      }
+    });
+
+    // Two independent providers, one shared Git directory: the second refuses
+    // before it writes anything, rather than predicting a transition from a
+    // state the first one is in the middle of leaving.
+    expect(refusal).toBeDefined();
+    expect(second.writes).toEqual([]);
+  });
+
+  it("R9: the shared directory an entry held is free for the next entry", function* () {
+    const fixture = yield* useFixture();
+    // A whole entry, run and ended, through the real provider.
+    yield* run(fixture, '<File path="one.md">one\n</File>\n', new InMemoryStream(), "0001");
+
+    // The next entry works in the same checkout: what the first provider held
+    // went with it, including the lease on the common directory, which is not
+    // released by anything the document did.
+    const next = counted();
+    const events = yield* run(
+      fixture,
+      '<File path="two.md">two\n</File>\n',
+      new InMemoryStream(),
+      "0002",
+      next.handler,
+    );
+    expect(next.writes).toEqual(["two.md"]);
+    expect(recordsOf(events).length).toBeGreaterThan(0);
   });
 
   it("R9: a cancelled entry leaves no lane or lease behind for the next one", function* () {

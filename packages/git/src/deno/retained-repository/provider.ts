@@ -38,7 +38,7 @@ import { discoverAmbientRepository } from "../run-composition/ambient.ts";
 import { retainedGitComponents } from "./components.ts";
 import { retainedFileMutations } from "./files.ts";
 import type { RetainedFileHost, SelectedCheckout } from "./files.ts";
-import { retain, retainedLanes, retainedResume } from "./local.ts";
+import { holdRetainedLanes, retain, retainedLanes, retainedResume } from "./local.ts";
 import { retainedRepository, retainedWorktree } from "./selections.ts";
 import type { RetainedSelectionHost } from "./selections.ts";
 import { useLeases } from "../run-composition/leases.ts";
@@ -166,6 +166,18 @@ export function* useRetainedRepositoryEntry(
     if (checkout === undefined) {
       return undefined;
     }
+    // The shared Git directory is leased before this entry reads a byte of it.
+    // Selecting is where that happens, because selecting is what makes this
+    // entry the one doing repository work here — and a second process holding
+    // the same directory has to refuse before anything is inventoried, not
+    // after an operation has already frozen a state the other one is moving.
+    yield* holdRetainedLanes(leases, [
+      {
+        kind: "common",
+        slot: checkout.common,
+        subject: "the Git directory of the checkout this entry started in",
+      },
+    ]);
     const selection = yield* retain(
       {
         owner,
@@ -177,6 +189,9 @@ export function* useRetainedRepositoryEntry(
         checkout: checkout.checkout,
         common: checkout.common,
         position: position(checkout.common),
+        candidates: () =>
+          admitted?.attachments.find((attachment) => attachment.checkout === checkout.checkout)
+            ?.candidates ?? [],
         selection: { checkout: checkout.checkout },
         request: { ambient: checkout.checkout },
         inventory: () =>
@@ -246,6 +261,9 @@ export function* useRetainedRepositoryEntry(
       completed: (fingerprint) => resume.completed(fingerprint),
     },
     position,
+    candidates: (checkout) =>
+      admitted?.attachments.find((attachment) => attachment.checkout === checkout)?.candidates ??
+      [],
     site: (occurrence): RetainedRepositorySite =>
       Object.freeze({ source: request.source, occurrence }),
   };

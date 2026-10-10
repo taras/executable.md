@@ -154,6 +154,7 @@ function retainedAdd(host: RetainedFileHost): IdentityComponent {
             checkout: selected.checkout,
             common: selected.common,
             position: host.position(selected.common),
+            candidates: () => host.candidates(selected.checkout),
             selection: { checkout: selected.checkout },
             request: { cwd: directory, paths: [...paths] },
             inventory: () => inventory(selected),
@@ -370,6 +371,7 @@ function retainedSwitch(host: RetainedFileHost, repository: RepositoryHost): Ide
             checkout: selected.checkout,
             common: selected.common,
             position: host.position(selected.common),
+            candidates: () => host.candidates(selected.checkout),
             selection: { checkout: selected.checkout },
             request:
               base === undefined ? { cwd: directory, branch } : { cwd: directory, branch, base },

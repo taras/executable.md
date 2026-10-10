@@ -77,7 +77,16 @@ export function metadataOf(slot: string): string {
  * Outside the slot, because a lock file inside a directory this provider may be
  * about to create would be part of the thing it is protecting. Different slots
  * never share one: the digest is of the whole slot identity, kind included.
+ *
+ * A `common` lease names a shared Git directory rather than a managed slot, and
+ * that directory may be anywhere — an ambient checkout is not under this root.
+ * The sidecar is still placed here, under the host root every cooperating
+ * process on this machine shares, because a lock file written inside somebody's
+ * own `.git` is not this host's to leave behind.
  */
-export function lockOf(root: string, kind: "repository" | "worktree", slot: string): string {
+export function lockOf(root: string, kind: LockKind, slot: string): string {
   return `${root}/${LOCKS}/${kind}/${digest(slot)}.lock`;
 }
+
+/** What a lock sidecar can be for. */
+export type LockKind = "repository" | "worktree" | "common";

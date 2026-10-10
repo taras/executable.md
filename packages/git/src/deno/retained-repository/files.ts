@@ -77,6 +77,13 @@ export interface RetainedFileHost {
   position(common: string): number;
   /** The occurrence's site, derived by the caller from the claimed id. */
   site(occurrence: string): RetainedRepositorySite;
+  /**
+   * What this entry's accepted history says this checkout may be in.
+   *
+   * Empty for a checkout nothing has recorded yet. Carried into every
+   * operation so the state it starts from is one the history accounts for.
+   */
+  candidates(checkout: string): readonly RetainedFrontier[];
 }
 
 /** The default mode a file this host creates is left at. */
@@ -125,6 +132,7 @@ export function* retainedDirectoryEnsure(
       checkout: selected.checkout,
       common: selected.common,
       position: host.position(selected.common),
+      candidates: () => host.candidates(selected.checkout),
       selection: { checkout: selected.checkout },
       request: { cwd: input.cwd, path: input.path },
       inventory: () =>
@@ -251,6 +259,7 @@ function fileOperation(
     checkout: selected.checkout,
     common: selected.common,
     position: host.position(selected.common),
+    candidates: () => host.candidates(selected.checkout),
     selection: { checkout: selected.checkout },
     request:
       work.content === undefined

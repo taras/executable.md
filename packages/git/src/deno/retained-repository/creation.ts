@@ -25,9 +25,11 @@ import type { Operation, Result } from "effection";
 import { basename, join } from "node:path";
 import { realpath } from "node:fs/promises";
 import type { Json } from "@executablemd/durable-streams";
+import { ensureDir, writeTextFile } from "@effectionx/fs";
 import {
   checkoutPrimary,
   clone,
+  resolveCommit,
   gitSession,
   resolveRepositoryStart,
   addWorktree,
@@ -37,16 +39,19 @@ import type { GitSession } from "../composition/git.ts";
 import { useGitAuthentication } from "../composition/host.ts";
 import type { RepositoryHost } from "../composition/host.ts";
 import { admitLocator, locatorFingerprint } from "../composition/locator.ts";
-import { METADATA_VERSION } from "../../composition/managed-metadata.ts";
+import { METADATA_VERSION, metadataBytes } from "../../composition/managed-metadata.ts";
 import type {
   ManagedRepositoryMetadata,
   ManagedWorktreeMetadata,
 } from "../../composition/managed-metadata.ts";
-import { checkoutOf } from "../run-composition/placement.ts";
+import { checkoutOf, metadataOf } from "../run-composition/placement.ts";
 import { inventoryFrontier } from "./frontier.ts";
 import { copyTree } from "./scratch.ts";
 import { retainedFrontierJson } from "../../retained-repository/records.ts";
-import type { RetainedFrontier } from "../../retained-repository/records.ts";
+import type {
+  RetainedCreationPreparation,
+  RetainedFrontier,
+} from "../../retained-repository/records.ts";
 
 /** What one creation freezes: where it goes, what it will be, and its state. */
 export interface PredictedCreation {
@@ -236,4 +241,79 @@ function metadataJson(metadata: ManagedRepositoryMetadata | ManagedWorktreeMetad
 
 function frontierJsonOf(frontier: RetainedFrontier): Json {
   return retainedFrontierJson(frontier);
+}
+
+/**
+ * Create the repository this intent already decided on.
+ *
+ * Everything comes out of the saved preparation: the admitted locator, the
+ * pinned commit and the branch it is checked out on. Nothing is resolved again
+ * — asking the remote what `main` means a minute later can get a different
+ * commit, and that would be a different creation from the one this history
+ * acknowledged.
+ */
+export function* createSavedRepository(
+  host: RepositoryHost,
+  git: GitSession,
+  prepared: RetainedCreationPreparation,
+): Operation<Result<{ readonly checkout: string; readonly commit: string }>> {
+  const metadata = prepared.metadata;
+  if (metadata.kind !== "repository") {
+    return Err(new Error("this intent did not save a repository creation."));
+  }
+  const checkout = checkoutOf(prepared.slot);
+  yield* ensureDir(prepared.slot);
+  const session = yield* useGitAuthentication(host, metadata.locator);
+  yield* clone(git, metadata.locator, checkout, prepared.slot, session);
+  // The saved commit and the saved branch, not whatever the remote says now.
+  yield* checkoutPrimary(git, checkout, {
+    commit: metadata.creationCommit,
+    primaryBranch: metadata.primaryBranch,
+  });
+  const reached = yield* resolveCommit(git, checkout, "HEAD");
+  if (reached !== metadata.creationCommit) {
+    return Err(
+      new Error(
+        "the clone this creation saved could not be put on the commit it pinned, so nothing " +
+          "here is the destination that was acknowledged.",
+      ),
+    );
+  }
+  // Written last, which is what makes a checkout without it recognizably an
+  // interrupted creation rather than a finished one.
+  yield* writeTextFile(metadataOf(prepared.slot), metadataBytes(metadata));
+  return Ok({ checkout, commit: metadata.creationCommit });
+}
+
+/** Add the worktree this intent already decided on, at its pinned commit. */
+export function* createSavedWorktree(
+  git: GitSession,
+  owner: { readonly directory: string },
+  prepared: RetainedCreationPreparation,
+): Operation<Result<{ readonly checkout: string; readonly commit: string }>> {
+  const metadata = prepared.metadata;
+  if (metadata.kind !== "worktree") {
+    return Err(new Error("this intent did not save a worktree creation."));
+  }
+  const checkout = checkoutOf(prepared.slot);
+  yield* ensureDir(prepared.slot);
+  // The branch starts at the saved commit rather than at whatever the base
+  // resolves to now.
+  const added = yield* addWorktree(
+    git,
+    owner.directory,
+    checkout,
+    metadata.requestedBranch,
+    metadata.creationCommit,
+  );
+  if (added.commit !== metadata.creationCommit) {
+    return Err(
+      new Error(
+        "the worktree this creation saved was added at a different commit than the one it " +
+          "pinned.",
+      ),
+    );
+  }
+  yield* writeTextFile(metadataOf(prepared.slot), metadataBytes(metadata));
+  return Ok({ checkout, commit: metadata.creationCommit });
 }

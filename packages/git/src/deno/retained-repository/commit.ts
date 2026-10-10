@@ -28,7 +28,7 @@ import {
   returns as commitReturns,
 } from "../../composition/components/GitCommit.ts";
 import { GitOperationError } from "../../composition/errors.ts";
-import { commitIndex, headTree, indexTree, resolveCommit } from "../composition/git.ts";
+import { commitIndex, headTree, resolveCommit } from "../composition/git.ts";
 import { captureCommitIdentity, denoIdentityReader } from "../run-composition/identity.ts";
 import type { GitCommitIdentity } from "../run-composition/identity.ts";
 import type { RepositoryHost } from "../composition/host.ts";
@@ -83,6 +83,7 @@ export function retainedCommit(
             checkout: selected.checkout,
             common: selected.common,
             position: host.position(selected.common),
+            candidates: () => host.candidates(selected.checkout),
             selection: { checkout: selected.checkout },
             request: { cwd: directory, message },
             inventory: () =>
@@ -172,42 +173,36 @@ function* predictCommit(
   preState: RetainedFrontier,
   message: string,
 ): Operation<Result<{ postState: RetainedFrontier; prepared: Json; evidence: Json }>> {
-  // The one condition a document can act on, decided from the checkout's own
-  // state before anything is predicted or recorded.
-  const staged = yield* indexTree(selected.git, selected.directory);
-  const committed = yield* headTree(selected.git, selected.directory);
-  if (staged === undefined) {
-    return Err(
-      new GitOperationError(COMMIT, "invalid-invocation", "<Git.Commit> could not read the index."),
-    );
-  }
-  if (staged === committed) {
-    return Err(
-      new GitOperationError(
-        COMMIT,
-        "empty-index",
-        "<Git.Commit> has nothing staged to commit: the index holds what HEAD already does.",
-      ),
-    );
-  }
-
   const identity = yield* captureCommitIdentity(denoIdentityReader(selected.directory));
   // Captured once and frozen. A retry reads this out of the intent rather than
   // asking the clock again, because a different second is a different object.
   const committedAt = Math.floor(Date.now() / 1000);
   const parents = preState.head.oid === null ? [] : [preState.head.oid];
 
+  // The scratch administration comes first, because the tree is written into
+  // an object database and the target's is not the one to write into. The
+  // target is only ever read from here: `rev-parse` for the tree HEAD already
+  // holds, never `write-tree`.
   const scratch = yield* useScratchAdministration(repository, preState.administration.common);
   const tree = yield* selected.git.read(
     ["--git-dir", scratch.gitDir, "write-tree"],
     selected.directory,
   );
+  const committed = yield* headTree(selected.git, selected.directory);
   if (tree === undefined) {
+    return Err(
+      new GitOperationError(COMMIT, "invalid-invocation", "<Git.Commit> could not read the index."),
+    );
+  }
+  // The one condition a document can act on. Decided from the staged tree the
+  // scratch computed and the tree HEAD already has, so asking it writes
+  // nothing to the checkout the document is working in.
+  if (tree === committed) {
     return Err(
       new GitOperationError(
         COMMIT,
-        "invalid-invocation",
-        "<Git.Commit> could not predict the tree it would commit.",
+        "empty-index",
+        "<Git.Commit> has nothing staged to commit: the index holds what HEAD already does.",
       ),
     );
   }

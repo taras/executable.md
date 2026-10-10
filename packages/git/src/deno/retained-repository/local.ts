@@ -24,18 +24,21 @@
 import { Err, Ok, ensure, scoped, withResolvers } from "effection";
 import type { Operation, Result } from "effection";
 import type { Json } from "@executablemd/durable-streams";
-import { createDurableOperation } from "@executablemd/durable-streams";
+import { createDurableOperation, StaleInputError } from "@executablemd/durable-streams";
+import type { LeaseRequest, Leases } from "../run-composition/leases.ts";
 import { canonicalJson } from "@executablemd/workflow";
 import {
   RETAINED_REPOSITORY_COMPLETION,
   RETAINED_REPOSITORY_INTENT,
   RETAINED_REPOSITORY_VERSION,
   matchesRetainedEvidence,
+  parseRetainedCreationPreparation,
   parseRetainedRepositoryIntent,
   retainedRepositoryCompletionJson,
   retainedRepositoryIntentIdentity,
   retainedRepositoryIntentJson,
   retainedRepositoryRequestFingerprint,
+  sameRetainedCheckout,
   sameRetainedFrontier,
 } from "../../retained-repository/records.ts";
 import type {
@@ -46,9 +49,53 @@ import type {
 } from "../../retained-repository/records.ts";
 import { FrontierError } from "./frontier.ts";
 
-/** What a retained operation could not do, having changed nothing. */
-export class RetainedOperationError extends Error {
+/**
+ * A retained operation whose outcome this history cannot account for.
+ *
+ * A `StaleInputError`, which makes it one of the failures that end the
+ * execution rather than becoming a printed error. Every path that raises it has
+ * already passed the point where native work may have happened, and what it
+ * reports is that the result or the state does not match what was written down
+ * — so the journal no longer describes this run. A document that went on past
+ * it would be writing more files against a history that already disagrees with
+ * the disk, which is exactly what `<PrintErrors>` must not be able to arrange.
+ */
+export class RetainedOperationError extends StaleInputError {
   override name = "RetainedOperationError";
+}
+
+/**
+ * A shared Git directory this entry must own, and cannot.
+ *
+ * Fatal for the same reason: an entry that does not hold the lane it records
+ * its work in cannot order that work against anybody else's, so nothing it
+ * went on to do would be resumable. Unlike the operation failure above this
+ * one is raised *before* anything is read or written, which is what makes
+ * refusing here worth doing — the checkout is left exactly as the other holder
+ * has it.
+ */
+export class RetainedLaneError extends StaleInputError {
+  override name = "RetainedLaneError";
+}
+
+/**
+ * The lane leases one entry holds, taken together.
+ *
+ * Every shared Git directory this entry works in is leased this way, so a
+ * refusal is this entry's own rather than something a document element can be
+ * shown and carry on past.
+ */
+export function* holdRetainedLanes(
+  leases: Leases,
+  requests: readonly LeaseRequest[],
+): Operation<void> {
+  yield* leases.holdAll(
+    requests.map((request) =>
+      request.kind === "common"
+        ? { ...request, refuse: (message: string) => new RetainedLaneError(message) }
+        : request,
+    ),
+  );
 }
 
 /**
@@ -117,6 +164,24 @@ export interface RetainedOperation {
    * report that means "finish what somebody started".
    */
   observe?(): Operation<Result<CreationObservation>>;
+  /**
+   * For a Worktree creation: the owner's state right now.
+   *
+   * Adding a worktree advances refs the owner shares, so a resume has to look
+   * at both ends of that pair. Finding the destination absent is not enough on
+   * its own — the owner has to be in the state the creation said it found.
+   */
+  observeOwner?(): Operation<Result<RetainedFrontier>>;
+  /**
+   * What this entry's accepted history says this checkout may be in.
+   *
+   * The folded final state, plus the two ends of any unresolved mutation of it.
+   * Empty where the history says nothing about this checkout yet, which is
+   * what a first selection finds. A live state that is none of them is drift
+   * nothing recorded, and a new operation must not quietly adopt it as the
+   * state it started from.
+   */
+  candidates?(): readonly RetainedFrontier[];
 }
 
 /** What one entry's history already holds for this protocol to resume from. */
@@ -160,30 +225,53 @@ export interface RetainedLanes {
  * leases are for.
  */
 export function retainedLanes(): RetainedLanes {
-  const tails = new Map<string, Turn>();
+  const lanes = new Map<string, Lane>();
   return {
     *enter(common: string): Operation<void> {
-      const turn = withResolvers<void>();
-      // Registered before this turn is published, not after: a caller halted
-      // while registering has taken nobody's place, where one halted after
-      // publishing without a release would hold the lane shut for good.
+      const lane = lanes.get(common) ?? { holding: false, waiting: [] };
+      lanes.set(common, lane);
+      const woken = withResolvers<void>();
+      let holder = false;
+      const wake = () => {
+        holder = true;
+        woken.resolve();
+      };
+      // Registered before a place is taken. Only a holder releases: a waiter
+      // cancelled before its turn came takes itself out of the queue and
+      // leaves the holder's exclusion exactly as it was — resolving its own
+      // turn there would let whoever is behind it past somebody still working.
       yield* ensure(() => {
-        turn.resolve();
-        if (tails.get(common) === turn) {
-          tails.delete(common);
+        if (holder) {
+          const next = lane.waiting.shift();
+          if (next === undefined) {
+            lane.holding = false;
+            lanes.delete(common);
+            return;
+          }
+          next();
+          return;
+        }
+        const at = lane.waiting.indexOf(wake);
+        if (at >= 0) {
+          lane.waiting.splice(at, 1);
         }
       });
-      const ahead = tails.get(common);
-      tails.set(common, turn);
-      if (ahead !== undefined) {
-        yield* ahead.operation;
+      if (!lane.holding) {
+        lane.holding = true;
+        holder = true;
+        return;
       }
+      lane.waiting.push(wake);
+      yield* woken.operation;
     },
   };
 }
 
-/** One caller's turn in a lane: what the next one waits on, and its release. */
-type Turn = ReturnType<typeof withResolvers<void>>;
+/** One shared directory's turn-taking: who holds it, and who is behind them. */
+interface Lane {
+  holding: boolean;
+  readonly waiting: (() => void)[];
+}
 
 /**
  * Run one operation under the retained protocol, and answer with its result.
@@ -301,7 +389,7 @@ function* retained(
 
   const produced = yield* operation.perform(transition);
   if (!produced.ok) {
-    return produced;
+    return yield* refused(operation, intent.preState, produced.error);
   }
   // The result and the state are both proven before anything is written down:
   // a nonzero exit proves neither, and neither does a plausible-looking one.
@@ -351,8 +439,23 @@ function* createFrom(
   if (!observed.ok) {
     return observed;
   }
+  // The destination and its owner are one pair. Matching one end while the
+  // other has moved is not this creation's state, and neither half decides on
+  // its own.
+  const owner = yield* ownerState(operation, intent);
+  if (!owner.ok) {
+    return owner;
+  }
   if (observed.value.state === "established") {
-    if (!sameRetainedFrontier(observed.value.frontier, intent.postState)) {
+    if (owner.value !== undefined && !sameRetainedCheckout(owner.value.live, owner.value.after)) {
+      return Err(
+        new FrontierError(
+          `"${operation.operation}" found its destination created but its owner in a state the ` +
+            "creation did not predict, so the pair this history recorded is not what is there.",
+        ),
+      );
+    }
+    if (!sameRetainedCheckout(observed.value.frontier, intent.postState)) {
       return Err(
         new FrontierError(
           `"${operation.operation}" found a destination that is not the one its intent ` +
@@ -371,9 +474,18 @@ function* createFrom(
     );
   }
 
+  if (owner.value !== undefined && !sameRetainedCheckout(owner.value.live, owner.value.before)) {
+    return Err(
+      new FrontierError(
+        `"${operation.operation}" found its destination absent but its owner in a state the ` +
+          "creation did not start from, so what has happened to the owner is not recorded here.",
+      ),
+    );
+  }
+
   const produced = yield* operation.perform(transition);
   if (!produced.ok) {
-    return produced;
+    return yield* refused(operation, null, produced.error);
   }
   if (!matchesRetainedEvidence(produced.value, intent.evidence)) {
     return Err(
@@ -386,7 +498,7 @@ function* createFrom(
   if (!settled.ok) {
     return settled;
   }
-  if (!sameRetainedFrontier(settled.value, intent.postState)) {
+  if (!sameRetainedCheckout(settled.value, intent.postState)) {
     return Err(
       new FrontierError(
         `"${operation.operation}" created a destination its intent did not predict.`,
@@ -394,6 +506,84 @@ function* createFrom(
     );
   }
   return yield* acknowledge(intent, fingerprint, operation, produced.value, settled.value);
+}
+
+/**
+ * A failure the document may be shown, or one that ends the entry.
+ *
+ * The operation was attempted, so what this decides is whether the attempt
+ * left anything behind. A refusal its own vocabulary accounts for — a path the
+ * provider would not write, a directory that is something else — changes
+ * nothing, and the checkout is still in the state the intent started from; the
+ * document is shown that and goes on, and the pending intent stands for an
+ * operation that did not happen.
+ *
+ * Anything else is work whose outcome this history cannot describe. The
+ * attempt reported a failure and the checkout is not where it started, so what
+ * is on the disk is neither of the two states the intent froze — and the entry
+ * ends here rather than letting `<PrintErrors>` turn that into a printed line
+ * and a document that keeps writing.
+ */
+function* refused(
+  operation: RetainedOperation,
+  preState: RetainedFrontier | null,
+  error: Error,
+): Operation<Result<Json>> {
+  const nothingChanged = yield* leftUnchanged(operation, preState);
+  if (nothingChanged) {
+    return Err(error);
+  }
+  const failure = new RetainedOperationError(
+    `"${operation.operation}" failed after it had begun, and left the checkout in a state its ` +
+      `intent neither started from nor predicted: ${error.message}`,
+  );
+  failure.cause = error;
+  return Err(failure);
+}
+
+/** Whether the attempt left things exactly as its intent found them. */
+function* leftUnchanged(
+  operation: RetainedOperation,
+  preState: RetainedFrontier | null,
+): Operation<boolean> {
+  // A creation started from no checkout at all, so the only state that proves
+  // it changed nothing is the absence it recorded. A destination it got part of
+  // the way through is preserved, and refusing is what preserves it.
+  if (preState === null) {
+    if (operation.observe === undefined) {
+      return false;
+    }
+    const observed = yield* operation.observe();
+    return observed.ok && observed.value.state === "absent";
+  }
+  const after = yield* operation.inventory();
+  return after.ok && sameRetainedFrontier(after.value, preState);
+}
+
+/**
+ * The owner's live state beside the two this creation froze, when it has one.
+ *
+ * Nothing for a Repository, which has no owner to advance.
+ */
+function* ownerState(
+  operation: RetainedOperation,
+  intent: RetainedRepositoryIntent,
+): Operation<
+  Result<{ live: RetainedFrontier; before: RetainedFrontier; after: RetainedFrontier } | undefined>
+> {
+  const creation = parseRetainedCreationPreparation(intent.prepared, intent.operation);
+  if (creation?.owner == null || operation.observeOwner === undefined) {
+    return Ok(undefined);
+  }
+  const live = yield* operation.observeOwner();
+  if (!live.ok) {
+    return live;
+  }
+  return Ok({
+    live: live.value,
+    before: creation.owner.preState,
+    after: creation.owner.postState,
+  });
 }
 
 /**
@@ -409,6 +599,23 @@ function* prepared(operation: RetainedOperation): Operation<Result<Json>> {
     return start;
   }
   const before = start.value;
+  // Authenticated before it becomes anything's pre-state. What this history
+  // accepted is the only state a new operation may build on: a checkout that
+  // has moved since, through something this entry did not record, is not a
+  // state to freeze and carry on from.
+  const admitted = operation.candidates?.() ?? [];
+  if (
+    before !== null &&
+    admitted.length > 0 &&
+    !admitted.some((candidate) => sameRetainedFrontier(candidate, before))
+  ) {
+    return Err(
+      new FrontierError(
+        `"${operation.operation}" found its checkout in a state this entry's history does not ` +
+          "account for, so nothing here describes what has happened to it.",
+      ),
+    );
+  }
   const transition = yield* operation.prepare(before);
   if (!transition.ok) {
     return transition;

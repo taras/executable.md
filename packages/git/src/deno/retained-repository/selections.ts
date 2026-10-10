@@ -38,10 +38,16 @@ import {
 import { ManagedCheckoutError } from "../run-composition/errors.ts";
 import { checkoutOf, repositorySlot, worktreeSlot } from "../run-composition/placement.ts";
 import { join } from "node:path";
-import { predictRepositoryCreation, predictWorktreeCreation } from "./creation.ts";
+import {
+  createSavedRepository,
+  createSavedWorktree,
+  predictRepositoryCreation,
+  predictWorktreeCreation,
+} from "./creation.ts";
+import { parseRetainedCreationPreparation } from "../../retained-repository/records.ts";
 import type { Leases } from "../run-composition/leases.ts";
 import { inventoryFrontier } from "./frontier.ts";
-import { retain } from "./local.ts";
+import { holdRetainedLanes, retain } from "./local.ts";
 import type { CreationObservation } from "./local.ts";
 import type { RetainedFileHost, SelectedCheckout } from "./files.ts";
 
@@ -85,13 +91,23 @@ export function retainedRepository(host: RetainedSelectionHost): IdentityCompone
         const occurrence = yield* claim(invocation);
 
         const slot = repositorySlot(host.managedRoot, locator, name);
-        // Leased before the slot is even looked at, and held for the rest of
-        // the entry: a slot another process is working in refuses here rather
-        // than being discovered halfway through a clone.
-        yield* host.leases.hold("repository", slot, `repository ${JSON.stringify(name)}`);
-        const git = gitSession(host.repository, host.managedRoot);
         const destination = checkoutOf(slot);
         const common = join(destination, ".git");
+        // Both leased before the slot is even looked at, and held for the rest
+        // of the entry: a slot or a shared Git directory another process is
+        // working in refuses here rather than being discovered halfway through
+        // a clone. A managed repository's own `.git` is its own, but it is
+        // leased all the same — a `<Worktree>` of it later shares exactly this
+        // directory, and the lane that serializes them is named by it.
+        yield* holdRetainedLanes(host.leases, [
+          { kind: "repository", slot, subject: `repository ${JSON.stringify(name)}` },
+          {
+            kind: "common",
+            slot: common,
+            subject: `the Git directory of repository ${JSON.stringify(name)}`,
+          },
+        ]);
+        const git = gitSession(host.repository, host.managedRoot);
 
         const observed = yield* observeManagedSlot(slot);
         if (observed.state === "partial") {
@@ -124,6 +140,7 @@ export function retainedRepository(host: RetainedSelectionHost): IdentityCompone
             checkout: checkout.checkout,
             common: checkout.common,
             position: host.files.position(checkout.common),
+            candidates: () => host.files.candidates(checkout.checkout),
             selection: { checkout: checkout.checkout },
             request: {
               name,
@@ -153,18 +170,31 @@ export function retainedRepository(host: RetainedSelectionHost): IdentityCompone
                 base,
               });
             },
-            *perform() {
+            *perform(transition) {
               // The first mutation of this slot, and it happens only after the
-              // intent above was acknowledged.
-              const created = yield* selectManagedRepository(git, host.repository, slot, {
-                name,
-                locator,
-                base,
-              });
+              // intent above was acknowledged — from what that intent saved,
+              // never from the authored base resolved again. Asking the remote
+              // what the base means a minute later can answer with a different
+              // commit, and that is a different creation from the one this
+              // history acknowledged.
+              const saved = parseRetainedCreationPreparation(transition.prepared, "repository");
+              if (saved === undefined) {
+                return Err(
+                  new RepositoryCompositionError(
+                    name,
+                    "unusable-repository",
+                    "<Repository> cannot be created from what its intent saved.",
+                  ),
+                );
+              }
+              const created = yield* createSavedRepository(host.repository, git, saved);
+              if (!created.ok) {
+                return created;
+              }
               return Ok({
                 type: "repository",
-                checkout: created.checkout,
-                commit: created.creationCommit,
+                checkout: created.value.checkout,
+                commit: created.value.commit,
               });
             },
           },
@@ -227,8 +257,16 @@ export function retainedWorktree(host: RetainedSelectionHost): IdentityComponent
         const slot = worktreeSlot(host.managedRoot, owner.common, name);
         // Both leases before anything is inspected: the destination's slot and
         // the owner's shared directory, because adding a worktree moves refs
-        // the owner shares.
-        yield* host.leases.hold("worktree", slot, `worktree ${JSON.stringify(name)}`);
+        // the owner shares. The owner's lease is normally already held — this
+        // entry selected it — and asking again for one it holds costs nothing.
+        yield* holdRetainedLanes(host.leases, [
+          { kind: "worktree", slot, subject: `worktree ${JSON.stringify(name)}` },
+          {
+            kind: "common",
+            slot: owner.common,
+            subject: `the Git directory worktree ${JSON.stringify(name)} is added to`,
+          },
+        ]);
         const git = gitSession(host.repository, host.managedRoot);
         const destination = checkoutOf(slot);
 
@@ -268,6 +306,7 @@ export function retainedWorktree(host: RetainedSelectionHost): IdentityComponent
             // advances: its refs are what moves.
             common: owner.common,
             position: host.files.position(owner.common),
+            candidates: () => host.files.candidates(checkout.checkout),
             selection: { checkout: checkout.checkout },
             request: {
               name,
@@ -279,6 +318,9 @@ export function retainedWorktree(host: RetainedSelectionHost): IdentityComponent
             *observe() {
               return yield* observeDestination(checkout, slot);
             },
+            // Adding a worktree moves refs the owner shares, so the owner is
+            // half of what this creation is about. A resume looks at both.
+            observeOwner: () => inventoryOf(owner),
             *prepare(preState) {
               if (preState !== null) {
                 return Ok({
@@ -297,18 +339,25 @@ export function retainedWorktree(host: RetainedSelectionHost): IdentityComponent
                 base,
               });
             },
-            *perform() {
-              const created = yield* selectManagedWorktree(git, slot, {
-                name,
-                branch,
-                base,
-                owner: owner.common,
-                ownerCheckout: owner.directory,
-              });
+            *perform(transition) {
+              const saved = parseRetainedCreationPreparation(transition.prepared, "worktree");
+              if (saved === undefined) {
+                return Err(
+                  new WorktreeCompositionError(
+                    name,
+                    "unusable-repository",
+                    "<Worktree> cannot be created from what its intent saved.",
+                  ),
+                );
+              }
+              const created = yield* createSavedWorktree(git, owner, saved);
+              if (!created.ok) {
+                return created;
+              }
               return Ok({
                 type: "worktree",
-                checkout: created.checkout,
-                commit: created.creationCommit,
+                checkout: created.value.checkout,
+                commit: created.value.commit,
               });
             },
           },

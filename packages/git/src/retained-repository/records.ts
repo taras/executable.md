@@ -310,11 +310,42 @@ export function parseRetainedCreationPreparation(
   if (before === undefined || after === undefined) {
     return undefined;
   }
+  // Adding a worktree advances refs its owner shares and changes nothing else
+  // about the owner. So the owner's two frozen states are one checkout, with
+  // the same HEAD, index, working files and administration, and only its refs
+  // moved — an owner post-state that invented a file or moved HEAD would be
+  // authorizing drift in a checkout this creation is not even touching.
+  if (!advancesOnlyRefs(before, after)) {
+    return undefined;
+  }
   return Object.freeze({
     slot,
     metadata,
     owner: Object.freeze({ preState: before, postState: after }),
   });
+}
+
+/**
+ * Whether these two states are one checkout with only its refs moved.
+ *
+ * Everything but the ref list is compared exactly. The refs are allowed to
+ * differ because that is what adding a worktree does; nothing else about the
+ * owner is.
+ */
+function advancesOnlyRefs(before: RetainedFrontier, after: RetainedFrontier): boolean {
+  const steady = (frontier: RetainedFrontier): Json =>
+    retainedFrontierJson(
+      Object.freeze({
+        checkout: frontier.checkout,
+        administration: frontier.administration,
+        objectFormat: frontier.objectFormat,
+        head: frontier.head,
+        refs: Object.freeze([]),
+        index: frontier.index,
+        worktree: frontier.worktree,
+      }),
+    );
+  return canonicalJson(steady(before)) === canonicalJson(steady(after));
 }
 
 /**
@@ -1047,6 +1078,40 @@ export function withSharedRefs(
     objectFormat: frontier.objectFormat,
     head: frontier.head,
     refs: Object.freeze([...refs]),
+    index: frontier.index,
+    worktree: frontier.worktree,
+  });
+}
+
+/**
+ * Whether two frontiers describe the same checkout, apart from what a remote
+ * has since advertised.
+ *
+ * Remote-tracking refs are a cache of what a remote said, not work the entry
+ * did. A creation predicts them from the clone it made in scratch, and if the
+ * remote moves between that prediction and the real clone they differ — through
+ * nobody's fault and about nothing the entry pinned. So a creation is verified
+ * against what it did pin: HEAD, the local refs, the index, the working files
+ * and the administration identity.
+ *
+ * Every other operation is compared whole. A mutation does not re-fetch, so a
+ * remote-tracking ref that moved under one is a sign that something else has
+ * been in the repository.
+ */
+export function sameRetainedCheckout(left: RetainedFrontier, right: RetainedFrontier): boolean {
+  return (
+    canonicalJson(retainedFrontierJson(withoutRemotes(left))) ===
+    canonicalJson(retainedFrontierJson(withoutRemotes(right)))
+  );
+}
+
+function withoutRemotes(frontier: RetainedFrontier): RetainedFrontier {
+  return Object.freeze({
+    checkout: frontier.checkout,
+    administration: frontier.administration,
+    objectFormat: frontier.objectFormat,
+    head: frontier.head,
+    refs: Object.freeze(frontier.refs.filter((ref) => !ref.name.startsWith("refs/remotes/"))),
     index: frontier.index,
     worktree: frontier.worktree,
   });
