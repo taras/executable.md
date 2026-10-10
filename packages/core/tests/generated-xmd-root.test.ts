@@ -37,6 +37,7 @@ import type { FetchInit, RuntimeFetchResponse } from "@executablemd/runtime";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import type { DurableEvent } from "@executablemd/durable-streams";
 
+import { content } from "../src/component-api.ts";
 import { pinnedJson } from "../src/generated-xmd.ts";
 import { retainedSource } from "../src/root-source.ts";
 import { useTempFileCompiler } from "../src/temp-file-compiler.ts";
@@ -461,12 +462,6 @@ describe("Tier GR — the root context admits one construct more, and no others"
       "declarative data",
       { observations: [countedProbe([])] },
     ],
-    [
-      "interpolation of a binding that does not exist",
-      "<Output>\nHello, {who}!\n</Output>\n",
-      "reads a binding",
-      {},
-    ],
     ["<Content />", "<Output>\n<Content />\n</Output>\n", "structural construct", {}],
     ["<Return />", '<Output>\nok\n</Output>\n\n<Return value="x" />\n', "structural construct", {}],
     [
@@ -665,13 +660,161 @@ describe("Tier GR — the trusted composition table reaches a root too", () => {
     expect(COMPOSITION_NAME).toBe("Json");
   });
 
-  it("GR17: a root still may not read a binding through text interpolation", function* () {
+  it("GR17: a root reads a binding it bound itself", function* () {
     const attempt = yield* evaluateRoot(
-      request('<Json value="Ada" as="who" />\n\n<Output>\n{who}\n</Output>\n'),
+      request('<Json value="Ada" as="who" />\n\n<Output>\nHello, {who}!\n</Output>\n'),
     );
 
-    // The ceiling a fragment is held to, unchanged: the root context supplies
-    // `<Output>` and widens nothing else.
-    expect(failed(attempt).message).toContain("reads a binding");
+    // A fragment may not read a binding through interpolation, because it
+    // expands against the environment of the document that admitted it. A root
+    // has an environment of its own, so the only thing it can reach by naming
+    // is what it bound — and that is the whole of why this differs.
+    // Quoted because `<Json>` binds the JSON value, which is what the same
+    // source renders to in an ordinary document.
+    expect(rendered(attempt).output).toContain('Hello, "Ada"!');
+  });
+});
+
+/**
+ * Tier GR — writing the entry draft from captured passive source.
+ *
+ * This is the one program the following CLI consumer is built around, and it is
+ * the reason a root's interpolation rule cannot be the fragment's. A response
+ * captures entry source with `<Let select="code">`, which renders its body and
+ * selects the code node out of it, then hands that literal string to the
+ * paired control that fills the shared draft.
+ *
+ * Everything load-bearing about it is a *literal*: the captured text is entry
+ * source, not response syntax, so the entry's own braces and fences have to
+ * arrive at the receiver exactly as the Agent wrote them, nothing inside the
+ * fence may be executed, and the receiver must be handed that string once.
+ */
+describe("Tier GR — a root fills an entry draft with literal captured source", () => {
+  beforeAll(() => useTempFileCompiler());
+
+  /** The paired receiver, recording exactly what each invocation was handed. */
+  function receiver(fills: string[]): GeneratedMutation {
+    return pinnedMutation(
+      "REPL.EntryInput",
+      hostIdentity("test://sidekick", "EntryInput"),
+      {
+        kind: "function",
+        name: "REPL.EntryInput",
+        props: NO_PROPS,
+        *fn(): Operation<Json> {
+          fills.push(String(yield* content()));
+          return "Entry input updated.";
+        },
+      },
+      "paired",
+    );
+  }
+
+  function fill(source: string): Operation<{ attempt: Attempt; fills: string[] }> {
+    return scoped(function* () {
+      const fills: string[] = [];
+      const attempt = yield* evaluateRoot(
+        request(source, { allow: ["read", "write"], mutations: [receiver(fills)] }),
+      );
+      return { attempt, fills };
+    });
+  }
+
+  it("GR18: a literal body reaches the receiver exactly once", function* () {
+    const { attempt, fills } = yield* fill("<REPL.EntryInput>Hello</REPL.EntryInput>\n");
+
+    expect(answered(attempt).ok).toBe(true);
+    expect(fills).toEqual(["Hello"]);
+  });
+
+  it("GR19: a captured passive fence fills the draft with its own text", function* () {
+    const { attempt, fills } = yield* fill(
+      '<Let as="code" select="code">\n```xmd\nHello\n```\n</Let>\n' +
+        "<REPL.EntryInput>{code}</REPL.EntryInput>\n",
+    );
+
+    expect(answered(attempt).ok).toBe(true);
+    expect(fills).toEqual(["Hello"]);
+  });
+
+  it("GR20: the entry's own braces survive the capture, and none of it runs", function* () {
+    const entry = '<Each in={names} let="name">\nHello, {name}!\n</Each>';
+    const { attempt, fills } = yield* fill(
+      '<Let as="code" select="code">\n```xmd\n' +
+        entry +
+        "\n```\n</Let>\n<REPL.EntryInput>{code}</REPL.EntryInput>\n",
+    );
+
+    expect(answered(attempt).ok).toBe(true);
+    // `names` and `name` belong to the entry this draft will run as. They are
+    // not response bindings and do not need to be: a root resolves only what it
+    // bound, so an entry-only reference arrives as the text it is. An `<Each>`
+    // the response had actually expanded would have rendered its body instead
+    // of handing the element over.
+    expect(fills).toEqual([entry]);
+  });
+
+  /**
+   * What the root's own environment is *for*.
+   *
+   * A root that resolved the admitting document's bindings would let a response
+   * read one by naming it, and would let a captured draft carry one out — so
+   * the rule that a root may interpolate at all depends on this being true.
+   * Driven through a host component rather than a preparation, because a
+   * preparation has no document bindings to be isolated from.
+   */
+  it("GR22: a root does not read the bindings of the document that evaluated it", function* () {
+    const fills: string[] = [];
+    let answer: Result<GeneratedXmdRootResult> | undefined;
+    const execution = yield* executeInstalled(
+      {
+        ...retainedSource("repl/host.md", '<Let as="secret" value="LEAKED" />\n<SidekickHost />\n'),
+        stream: new InMemoryStream(),
+      },
+      [
+        {
+          components: [
+            {
+              name: "SidekickHost",
+              origin: "test://sidekick-host",
+              props: NO_PROPS,
+              factory: () =>
+                function* (): Operation<Json> {
+                  answer = yield* evaluateGeneratedXmdRoot(
+                    request(
+                      "<Output>[{secret}]</Output>\n" +
+                        "<REPL.EntryInput>[{secret}]</REPL.EntryInput>\n",
+                      { allow: ["read", "write"], mutations: [receiver(fills)] },
+                    ),
+                  );
+                  return "";
+                },
+            },
+          ],
+        },
+      ],
+    );
+    const result = yield* execution;
+
+    expect(result.ok).toBe(true);
+    expect(answer?.ok).toBe(true);
+    // Literal in both places: what renders as chat, and what a draft would
+    // carry into an entry.
+    expect(answer?.ok === true && answer.value.output).toContain("[{secret}]");
+    expect(fills).toEqual(["[{secret}]"]);
+  });
+
+  it("GR21: a nested passive fence survives the capture", function* () {
+    // The outer fence has to be longer than the one it contains, which is the
+    // ordinary Markdown rule and the one the accepted instructions state.
+    const entry = "Run this:\n\n```sh\nxmd run greeting.md\n```";
+    const { attempt, fills } = yield* fill(
+      '<Let as="code" select="code">\n````xmd\n' +
+        entry +
+        "\n````\n</Let>\n<REPL.EntryInput>{code}</REPL.EntryInput>\n",
+    );
+
+    expect(answered(attempt).ok).toBe(true);
+    expect(fills).toEqual([entry]);
   });
 });

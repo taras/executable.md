@@ -2480,11 +2480,29 @@ value body to answer — and an `<Output>` written below the top level declares
 nothing in a root either, which is the same lexical rule an authored body is
 held to.
 
-Nothing else differs. The same whole-source preflight, the same `generated_xmd`
-durable admission, the same pinned identities and the same refusal classes, so
-there is one walk rather than one per context: the context is a term of the
-admission the walk is decided against, beside the table and the request
-ceilings.
+One other thing differs, and it is the reason the root context exists at all.
+A fragment is admitted *into* a document and expands against that document's
+binding environment, so a brace it writes could name a binding the document
+holds — which is why a fragment may not read a binding through interpolation,
+and why that refusal is about disclosure rather than about syntax. A root is a
+whole source of its own and is given an environment of its own: empty bindings,
+empty meta, empty props. The only names it resolves are the ones it bound
+itself, and every other brace renders exactly as written.
+
+That is what makes a root able to write an entry draft. The accepted way a
+reply prepares one is to capture entry source with `<Let select="code">` and
+hand the captured string to a paired control, and entry source legitimately
+carries braces and fences of its own — `<Each in={names} let="name">` names
+nothing the reply has, and must arrive at the control as the text it is. A
+blanket refusal would have refused the reply its own capture; an inherited
+environment would have let the draft carry the admitting document's bindings
+out. Both are refused by the same arrangement rather than by two rules.
+
+Otherwise nothing differs. The same whole-source preflight, the same
+`generated_xmd` durable admission, the same pinned identities and the same
+refusal classes, so there is one walk rather than one per context: the context
+is a term of the admission the walk is decided against, beside the table and
+the request ceilings.
 
 **Which context an admission was made in is one of its ceilings.** A retained
 root admission does not resume as a fragment and a fragment admission does not

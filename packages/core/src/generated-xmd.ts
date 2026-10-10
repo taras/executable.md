@@ -17,9 +17,11 @@
  * does.
  *
  * What is refused is a construct *class*: executable code blocks, expression
- * props, interpolation that reads a binding, a result binding, a component the
- * host did not admit, and a request that is malformed or outside the admitted
- * set. The record and the diagnostic name the class and nothing else. Generated
+ * props, a result binding, a component the host did not admit, and a request
+ * that is malformed or outside the admitted set. A *fragment* additionally
+ * refuses interpolation that reads a binding, because it expands against the
+ * environment of the document that admitted it; a root has an environment of
+ * its own and reads only what it bound. The record and the diagnostic name the class and nothing else. Generated
  * source is exactly the text a refusal must not echo — which is why a candidate
  * request is normalized behind a converting boundary rather than allowed to
  * report itself, and why a refusal is *returned* by the admission rather than
@@ -136,6 +138,8 @@ import { isJsonObject, parseJson } from "./json.ts";
 import { markGeneratedRequestRefusal } from "./generated-request-refusal.ts";
 import { GeneratedDataExpressions, validateDataExpression } from "./generated-expressions.ts";
 import { readsBinding } from "./generated-interpolation.ts";
+import { propsEnvironment } from "./eval-env.ts";
+import { liveEnvironment } from "./live-env.ts";
 import { capturedBinding } from "./invocation-rules.ts";
 import { renderSegments } from "./render.ts";
 import { scanSegments } from "./scanner.ts";
@@ -1979,7 +1983,20 @@ function* walk(
   for (const segment of segments) {
     switch (segment.type) {
       case "text": {
-        if (readsBinding(segment.content)) {
+        // A fragment is admitted *into* a document and expands against that
+        // document's environment, so a brace it writes could name a binding
+        // the document holds — which is why a fragment may not read one at
+        // all, and why that refusal is about disclosure rather than about
+        // syntax.
+        //
+        // A root inherits no environment. It begins with empty bindings, empty
+        // meta and empty props, so the only names it can resolve are the ones
+        // it bound itself and text naming anything else stays exactly as
+        // written. Refusing interpolation here would refuse the response its
+        // own `<Let>` capture — and with it the one way a response has of
+        // writing an entry draft, whose source is entry text that legitimately
+        // carries braces of its own.
+        if (admission.context !== ROOT_CONTEXT && readsBinding(segment.content)) {
           throw new Refusal("interpolation");
         }
         break;
@@ -2599,6 +2616,25 @@ function expand(
 ): Operation<string> {
   return scoped(function* () {
     yield* ErrorMode.set(context === ROOT_CONTEXT ? "output" : "throw");
+    if (context === ROOT_CONTEXT) {
+      // A root begins with an empty binding environment, and this is what makes
+      // that true rather than assumed. Interpolation reads whatever environment
+      // it finds through the component Api, so a root evaluated inside a host
+      // component's invocation would otherwise resolve *that* document's
+      // bindings: a response could read one by naming it, and a captured entry
+      // draft could carry one out. With an environment of its own the only
+      // names a root resolves are the ones it bound itself, and every other
+      // brace renders exactly as written — which is also what lets a captured
+      // passive fence keep the entry's own braces.
+      //
+      // A fragment is deliberately left as it was. It is admitted *into* a
+      // document and expands against that document's environment, which is why
+      // its own rule is that it may not read a binding through interpolation at
+      // all; changing what it sees would change released fragment behavior.
+      const isolated = propsEnvironment({});
+      liveEnvironment(isolated);
+      yield* Component.around({ env: () => isolated }, { at: "min" });
+    }
     // Every expression this expansion resolves — an ordinary prop and a
     // declared capture alike — reads the declarative grammar rather than the
     // trusted-document evaluator. Set on this scope, so it ends with the
