@@ -65,6 +65,7 @@ import {
   presentationFor,
   viewFor,
 } from "../src/repl/application.ts";
+import { NO_LIFECYCLE } from "../src/repl/lifecycle.ts";
 import type {
   ReplAction,
   ReplIntent,
@@ -462,6 +463,7 @@ function liveReading(session: ReplSession): ReplLive {
     pausable: session.controller !== undefined,
     running: session.live,
     agent: session.agent,
+    lifecycle: NO_LIFECYCLE,
   };
 }
 
@@ -1115,10 +1117,10 @@ describe("U1 — one chronology, filtered, undisturbed by the background", () =>
     expect((yield* turnRows(filtered)).map((one) => one.label.includes(later))).toEqual([true]);
     expect(
       (yield* keysOf(filtered)).filter(
-        (key) => key.startsWith("entry:") || key.startsWith("line:"),
+        (key) => key.startsWith("entry:") || key.startsWith("reading:"),
       ),
     ).toEqual(
-      (yield* keysOf(view)).filter((key) => key.startsWith("entry:") || key.startsWith("line:")),
+      (yield* keysOf(view)).filter((key) => key.startsWith("entry:") || key.startsWith("reading:")),
     );
 
     // And All puts every turn back, removing only the filter.
@@ -1752,7 +1754,7 @@ describe("U3 — what each accepted frame mounts, and nothing else", () => {
     // column are not mounted, so they are in no frame, no target map and no
     // pointer's way.
     const mounted = tree.mounted().map((id) => tree.keyOf(id) ?? "");
-    for (const prefix of ["entry:", "scope:", "line:", "binding:", "elicit:"]) {
+    for (const prefix of ["entry:", "scope:", "reading:", "binding:", "elicit:"]) {
       expect(mounted.filter((key) => key.startsWith(prefix))).toEqual([]);
       expect((yield* keysOf(view)).filter((key) => key.startsWith(prefix))).toEqual([]);
     }
@@ -1763,7 +1765,9 @@ describe("U3 — what each accepted frame mounts, and nothing else", () => {
     const placed = frame.keys;
     expect(placed.some((key) => key.startsWith("sessions:turn:"))).toBe(true);
     expect(placed).toContain("entries:heading");
-    expect(placed.filter((key) => key.startsWith("entry:") || key.startsWith("line:"))).toEqual([]);
+    expect(placed.filter((key) => key.startsWith("entry:") || key.startsWith("reading:"))).toEqual(
+      [],
+    );
     // Every target this frame offers is a control, and every one of them is
     // mounted: nothing offers itself to a pointer and then does nothing.
     for (const key of placed.filter((one) => frame.targetable(one))) {
@@ -3368,10 +3372,14 @@ describe("U9 — two entries whose Prompts share one durable name", () => {
 
 /** The transcript lines one view draws, in order, excluding the live overlay. */
 function* transcriptLines(view: ReplView): Operation<string[]> {
-  return (yield* describedBy(view))
-    .filter((one) => one.key.startsWith("line:") && !one.key.startsWith("line:live:"))
-    .map((one) => one.label.trim())
-    .filter((label) => label.length > 0);
+  return (
+    (yield* describedBy(view))
+      .filter((one) => one.key.startsWith("reading:") && !one.key.includes(":live"))
+      // Every reading row opens with its rail, which says which region the row is
+      // in rather than what the row says.
+      .map((one) => one.label.replace(/^[\u2502]\s*/, "").trim())
+      .filter((label) => label.length > 0)
+  );
 }
 
 /** The catalog rows one view describes, in the order it describes them. */

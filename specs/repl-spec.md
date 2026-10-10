@@ -140,8 +140,11 @@ that is still running appears under that entry, never under the settled one you
 are reading.
 
 The list is windowed rather than clipped: it moves through as many rows as the
-frame can place, with its earlier and later controls staying put while the rows
-move beneath them. What the window is not showing is not drawn, not focusable
+frame can place, with `[\u2191 earlier]` and `[\u2193 later]` staying put while the
+rows move beneath them. Those two controls are spelled the same way wherever a
+reading has a window — this list, the catalog, Sessions and every drawer — and
+they are controls you activate, not keys you press: no arrow shortcut and no
+horizontal scrolling exist. What the window is not showing is not drawn, not focusable
 and reaches no pointer, and every row can be scrolled to, activated by Enter and
 activated by a pointer.
 
@@ -594,6 +597,111 @@ execution is unsupported.
 
 The Sessions surface presents the Agent work every entry did, as one chronology,
 and an execution with no Agent work has one that says so.
+
+## What this process is doing, element by element
+
+While an entry runs, the screen can say where each element of it has reached:
+entered, active, waiting, exited, and then settled, failed or cancelled. An
+element that has returned stays in exit while its own cleanup runs, because
+that is where it is — a component with a destructor has not finished until the
+destructor has.
+
+Waiting is counted, not guessed. An element waits when something it is actually
+waiting on says so: a question nobody has answered, a permission request the
+turn that asked for it owns, a hold the expansion controller is keeping. A
+request nobody answers releases its wait when its scope goes, and decides
+nothing on the way out. Each of those removes itself when it resolves, opening and closing a
+drawer changes none of them, and ordinary suspension is not waiting at all. Two
+questions at once are two waiting elements rather than one screen that is busy.
+
+All of it is this process's, and none of it is written down. A cold process
+reconstructs none of it, a reading frozen at an earlier position shows none of
+it, and an entry that finishes takes its own with it. Source that is still on
+the screen and a record the history retained prove only that something was
+written and something was recorded — never that anything is running now.
+
+## One entry, read as output and then source
+
+The transcript pane holds one entry's reading: what it produced, and then the
+source that produced it. A narrow frame has no transcript pane; its one routed
+Entries outlet holds the catalog and the reading of the entry the catalog has
+selected — the same two things the sidebar and the transcript are at a wider
+size, stacked because there is one column for them. The catalog takes its own
+height while it fits and its share when it does not, and the reading takes what
+is left. The two share one vertical window, so going from an
+answer to the reason for it is one movement rather than two panes to reconcile.
+A reading belongs to an entry; with nothing selected it is the last entry the
+prefix admitted, which is what a one-entry execution has always shown.
+
+Output says which of four things is true, and never two of them. Text still
+arriving is `Output · live`. The retained final result replaces it once and the
+label becomes `Output`. A root that settled having rendered nothing reads `No
+rendered output.` and then the outcome it closed with, and a recorded reason
+beside it. A prefix that retained no output for its entry reads `No entry
+output recorded at this checkpoint.` — never text borrowed from a later
+position or from a run still going.
+
+Which of those is shown is decided by what the record says, not by the words in
+it. A document whose own prose contains `failed` is still output; a root that
+closed `err` is a failure whatever it rendered. Nothing is attributed to an
+`<Elicit>` or a `<File>`, reconstructed by concatenating block results, or
+invented as a receipt for a bound value that emitted nothing.
+
+Source is the exact text the entry admitted. Beside each row is a rail saying
+which region the row is in, and against the pane's right inner edge is the
+reading of the element that owns it — glyph and word together, so the reading
+survives a reader who cannot tell two of these colours apart. Only the first
+row of each delimiter carries one: a tag written across several rows is one
+element, not two phases.
+
+Nesting comes from where the delimiters are, and from nothing else. An element
+whose span lies inside another's is that one's child; one that merely follows it
+is its sibling.
+
+A document that writes one element inside a `<Loop>`, or writes the same element
+twice, makes several *calls* of it at one position. Each is its own reading, in
+its own group, in the order they were observed: showing only the last would say
+the earlier ones never happened, and one badge for all of them would say several
+calls were one. An element nothing was observed of is read once, unobserved. Source nothing has been observed in gets the rail that means
+exactly that, and acquires no phase from retained syntax.
+
+An `<Evaluate>` that admitted a generated fragment shows that fragment where its
+producer was written. The enclosure bytes stay exactly as authored and only what
+they enclose is replaced, so the tags a reader sees are the ones in their file; a
+self-closing one keeps its row and the fragment sits underneath it. The fragment
+keeps its own offsets, because those are the only ones its own recorded
+positions were ever counted in. A refused, absent or ambiguous admission keeps
+the producer: nothing is matched by name or by sibling order.
+
+Replacing what is displayed rewrites no submitted source and no record.
+
+## Everything on this screen was measured
+
+No text is clipped and none is estimated. Every width is an answer from the
+engine that will draw it, asked through a probe that draws nothing, and every
+break is at a grapheme boundary — a UTF-16 code unit is not a cell, and a cut
+between a character and its combining mark makes two rows neither of which is a
+character.
+
+A line too long for its region is wrapped at the last word boundary that fits,
+and a word longer than the region is broken at the longest grapheme that fits.
+Whitespace is kept where it was typed, blank lines stay rows, and concatenating
+one line's rows recovers exactly the line. A continuation is set in to the
+column its own line was written at, so a wrapped line is still read at its own
+depth; that indent is display, and no source byte or offset moves with it. The rail, the gap after it and the
+status column are reserved first, from measurements rather than character
+counts, and the column is wide enough for every reading a badge can hold —
+including a cleanup wait, which says two things at once — so an element
+settling cannot reflow the document beside it.
+
+A question's own read-only preview is measured the same way, at the width its
+drawer was given. A drawer row is one row, so a line left unwrapped has nowhere
+to put its tail and the window has no second row to scroll to — reaching the
+decisions below it is not the same as having read what they decide.
+
+A region with no room for even one grapheme is the frame refusal that already
+recovers on resize. It is never a clip: shortening somebody's source would be
+this screen editing the content it exists to show.
 
 ## What is retained, and what is not
 

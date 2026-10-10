@@ -27,3 +27,10 @@ packages/web/generated/
 # that walked one would report on a file nobody wrote.
 site/*.timestamp-*.mjs
 .bench/
+
+# Session scratch: a test log and the break-control record are evidence, and
+# evidence belongs under .reviewer/ rather than in the product commit.
+.cliall.log
+.cli.log
+.controls.json
+.controls.py

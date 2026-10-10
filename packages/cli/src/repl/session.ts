@@ -95,6 +95,8 @@ import { filter } from "@effectionx/stream-helpers";
 import { consumeAdmissions } from "./admission.ts";
 import type { ReplAgentAuthority, ReplAgentReading } from "./agent.ts";
 import { useReplElicitation } from "./elicitation.ts";
+import { useReplLifecycle } from "./lifecycle.ts";
+import type { ReplLifecycleReading } from "./lifecycle.ts";
 import type { ReplElicitations, ReplQuestion } from "./elicitation.ts";
 import { EntrySegmentStream, entryKey, partitionEntrySegments } from "./entries.ts";
 import { useExpansionController } from "./expansion.ts";
@@ -263,6 +265,17 @@ export interface ReplSession {
   readonly permissions: ReplAgentAuthority;
   /** Whether an entry's execution is still running in this process. */
   readonly live: boolean;
+  /**
+   * What this process is doing element by element, for the entry that is open.
+   *
+   * Ephemeral and detached, like the Agent reading beside it: a cold process
+   * reconstructs none of it, and an entry that closes takes its observations
+   * with it. Static syntax and a retained admission prove nothing about it —
+   * what is here is what this process actually watched happen.
+   */
+  readonly lifecycle: ReplLifecycleReading;
+  /** Every change to that reading, as it changes. */
+  readonly lifecycleChanges: Stream<ReplLifecycleReading, never>;
   /** Each reprojection, as the history grows under it. */
   readonly changes: Stream<ReplModel, never>;
   /**
@@ -432,13 +445,17 @@ function* start(
   }
 
   provisional.run(function* () {
-    const expansion = yield* useExpansionController();
-    const elicitation = yield* useReplElicitation();
+    // Created before anything can start an entry, and owned by this session:
+    // its consumers outlive every element's dispatch, which is the only place
+    // a terminal observation can reach them.
+    const lifecycle = yield* useReplLifecycle();
+    const expansion = yield* useExpansionController(lifecycle);
+    const elicitation = yield* useReplElicitation(lifecycle);
     // Created here and installed into each entry's execution below, so the
     // middleware it owns belongs to this session's scope and dies with it. An
     // execution elsewhere would otherwise inherit an observer watching for a
     // session that is gone.
-    const agent = yield* useReplAgent(permissionMode ?? "deny-all");
+    const agent = yield* useReplAgent(permissionMode ?? "deny-all", lifecycle);
     // The scope every entry task is started in. One session, one owner: a task
     // started anywhere else would outlive the observer and the kernels it
     // reports through.
@@ -500,6 +517,10 @@ function* start(
       get live() {
         return live;
       },
+      get lifecycle() {
+        return lifecycle.reading();
+      },
+      lifecycleChanges: lifecycle.changes,
       changes,
       outputs,
       join(): Operation<Result<unknown>> {
@@ -644,6 +665,7 @@ function* start(
       // not what this one has printed, and the Journal holds that one's anyway.
       output = "";
       live = true;
+      lifecycle.open(key);
       const task = owner.run(function* () {
         // Registered before anything this task acquires, and therefore released
         // after all of it: destructors run in reverse order of registration. By
@@ -662,6 +684,19 @@ function* start(
           if (running?.task === task && settled) {
             running = undefined;
           }
+        });
+        // Registered here, so it runs after everything this entry acquired has
+        // been released: the execution and its providers, the output consumer
+        // and the Agent attachment all come down first, and only then does the
+        // session say it is no longer live. The two readings that describe
+        // work in flight go with it, because by now there is none.
+        yield* ensure(() => {
+          live = false;
+          lifecycle.close(key);
+          // Said on the ordinary path, because nothing else will: an entry
+          // that appended no record and took no input still stopped running,
+          // and a reader waiting for that is waiting for this.
+          changes.send(model);
         });
         const outcome = yield* runEntry(key, source, view, initialBindings);
         settle(outcome);
@@ -710,7 +745,7 @@ function* start(
           // Installed into this exact execution, and nowhere else: the live
           // observer and the permission policy are this session's, not the
           // process's, and the attachment carries the entry whose turns they are.
-          [...installations, installation],
+          [...installations, lifecycle.installation, installation],
           { initialBindings },
         );
         // Consumed as it arrives, inside this session's scope. Collecting until
@@ -731,7 +766,6 @@ function* start(
           }
         });
         const outcome = yield* started;
-        live = false;
         if (!outcome.ok && isReconstructionFailure(outcome.error)) {
           refuse(outcome.error);
           return outcome;
@@ -739,7 +773,6 @@ function* start(
         open();
         return outcome;
       } catch (error) {
-        live = false;
         const raised = error instanceof Error ? error : new Error(String(error));
         if (isReconstructionFailure(raised)) {
           refuse(raised);

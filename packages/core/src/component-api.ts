@@ -14,10 +14,12 @@
  */
 
 import { type Api, createApi, type Operations } from "@effectionx/context-api";
-import type { Operation } from "effection";
+import type { Operation, Result, Stream } from "effection";
 import type { EvalScope } from "@effectionx/scope-eval";
 import { settle } from "./errors.ts";
+import { ComponentExpansionProtocolError } from "./component-expansion.ts";
 import type { BoundExecRequest } from "./bound-exec.ts";
+import type { Expansion } from "./expansion.ts";
 import type {
   CodeBlockContext,
   CodeBlockResult,
@@ -32,7 +34,64 @@ import type {
   SourcePosition,
 } from "./types.ts";
 
+/**
+ * Where one executable element has reached, as its observers are told.
+ *
+ * `enter` before anything is resolved, `active` where accepted work starts,
+ * `exit` where that work ends and its owned cleanup begins, and exactly one
+ * terminal observation — `complete` once canonical acceptance has reconciled
+ * the outcome, or `cancelled` where the element unwound cleanly instead.
+ *
+ * `complete` carries `Result<void>` and nothing else: what the element
+ * produced, what it bound and which error identity canonical execution is
+ * holding stay private, so an observation says what happened and decides
+ * nothing about it.
+ */
+export type ComponentExpansionPhase =
+  | { readonly phase: "enter" }
+  | { readonly phase: "active" }
+  | { readonly phase: "exit"; readonly reason: "returned" | "failed" | "cancelled" }
+  | { readonly phase: "complete"; readonly result: Result<void> }
+  | { readonly phase: "cancelled" };
+
+/**
+ * One executable element's complete expansion, offered to whoever is watching.
+ *
+ * Issued by canonical execution before resolution, props validation or any
+ * body runs. It is an offer to surround the work, not a way to do it: the
+ * request is branded, it delegates once, and nothing on it reaches what the
+ * element produced.
+ */
+export interface ComponentExpansionRequest {
+  /**
+   * Core's detached description of the element this surrounds.
+   *
+   * Presentation information only. It names a logical source element, not a
+   * process call or a capability, and grants nothing.
+   */
+  readonly expansion: Expansion;
+  /**
+   * The latest phase, then each change in order, per subscription.
+   *
+   * Independent and scope-owned: every subscriber gets its own, ending after
+   * the one terminal observation. Reading or cancelling a subscription neither
+   * starts nor cancels the element, and a reader that is slow or absent delays
+   * nothing.
+   */
+  readonly phases: Stream<ComponentExpansionPhase, void>;
+}
+
 export interface ComponentApi {
+  /**
+   * Surround one executable element's complete expansion (spec §5.7).
+   *
+   * Core issues the request before resolution or validation; delegate the
+   * exact request once with `next(request)`. Whatever a handler returns is
+   * ignored, catching a canonical failure does not rescue it, and completion
+   * includes owned teardown and final result acceptance. A handler may refuse
+   * the work by throwing or by returning without delegating.
+   */
+  expand(request: ComponentExpansionRequest): Operation<void>;
   /**
    * `"__root__"` imports the root document.
    *
@@ -255,6 +314,21 @@ export function isMissingImportProvider(error: unknown, asked: string): boolean 
  * process, and the lint rule that says so is right.
  */
 const COMPONENT_DEFAULTS: Omit<ComponentApi, "registry"> = {
+  /**
+   * Nothing issued this, so there is nothing to surround.
+   *
+   * The public descriptor's own terminal is reached only by a caller that
+   * built a request itself or kept one from an expansion that has gone. Either
+   * way no canonical work is behind it, and running a body for it is the one
+   * thing this seam must never do.
+   */
+  // deno-lint-ignore require-yield
+  *expand(_request: ComponentExpansionRequest): Operation<void> {
+    throw new Error(
+      "Component.expand() has no canonical expansion to surround: only core issues a request, " +
+        "and only the expansion that issued one can run it.",
+    );
+  },
   // deno-lint-ignore require-yield
   *importComponent(
     name: string,
@@ -381,6 +455,43 @@ export function importThroughTerminal(
   return owned.operations.importComponent(name, position);
 }
 
+/**
+ * Surround one expansion through a descriptor whose terminal belongs to it.
+ *
+ * The same correlation `importThroughTerminal` makes, for the same reason: the
+ * name shares every installed handler, and the default each `createApi()`
+ * instance owns is this one element's continuation. Two elements expanding at
+ * once have two descriptors and two terminals, and a counterfeit descriptor
+ * built with the same name changes only the calls made through it.
+ */
+export function expandThroughTerminal(
+  request: ComponentExpansionRequest,
+  terminal: (delegated: ComponentExpansionRequest) => Operation<void>,
+): Operation<void> {
+  const owned = createApi<ComponentApi>("Component", {
+    ...COMPONENT_DEFAULTS,
+    registry: new Map(),
+    *expand(delegated: ComponentExpansionRequest): Operation<void> {
+      // This terminal is one element's continuation, so the only request it
+      // may carry is the one that element issued. An authentic request from
+      // *another* live invocation would otherwise reach the claim below and
+      // consume somebody else's work while running this body — refusing after
+      // the body has run is too late, because the effect has happened.
+      //
+      // Identity, not shape: a request that merely looks like this one was
+      // issued for different work.
+      if (delegated !== request) {
+        throw new ComponentExpansionProtocolError(
+          "delegated an expansion this invocation did not issue",
+        );
+      }
+      yield* terminal(delegated);
+    },
+  });
+  return owned.operations.expand(request);
+}
+
+export const expand: Operations<ComponentApi>["expand"] = Component.operations.expand;
 export const importComponent: Operations<ComponentApi>["importComponent"] =
   Component.operations.importComponent;
 export const applyModifiers: Operations<ComponentApi>["applyModifiers"] =

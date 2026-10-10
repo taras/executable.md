@@ -48,6 +48,7 @@ import {
   reduceRepl,
   refusedView,
 } from "../src/repl/application.ts";
+import { NO_LIFECYCLE } from "../src/repl/lifecycle.ts";
 import { readDescription } from "../src/repl/description.ts";
 import { runReplProgram } from "../src/repl/program.ts";
 import type { ReplExecutionProfile } from "../src/repl-profile.ts";
@@ -1028,10 +1029,10 @@ function drawerMarkers(terminal: Terminal): string[] {
       title = true;
       continue;
     }
-    if (label === "[close]" || label === "[v later]") {
+    if (label === "[close]" || label === "[↓ later]") {
       break;
     }
-    if (label === "[^ earlier]") {
+    if (label === "[↑ earlier]") {
       // How the window moves, not a position in it. Both window controls stay
       // outside the content they scroll, so neither is one of these.
       continue;
@@ -1044,7 +1045,7 @@ function drawerMarkers(terminal: Terminal): string[] {
 /**
  * Every content row the open drawer can show, gathered by scrolling it.
  *
- * Through `[v later]`, the way a person reaches the rest of a long record:
+ * Through `[↓ later]`, the way a person reaches the rest of a long record:
  * pressing it moves the window by a row, and what the window holds is what is
  * mounted. Stops when a press adds nothing new, which is the end of the reading.
  */
@@ -1064,7 +1065,7 @@ function* drawerContent(
   // What one frame holds, before anything has been scrolled.
   const first = drawerMarkers(terminal);
   take();
-  yield* focusOn(terminal, "[v later]");
+  yield* focusOn(terminal, "[↓ later]");
   // Stopped when the window itself stops moving, not when a press reveals no
   // label this walk had not already collected. A serialized value repeats rows —
   // `}` closes every object — so a press that only brought a duplicate into view
@@ -1094,6 +1095,36 @@ function* activate(terminal: Terminal, marker: string): Operation<void> {
 function* histories(root: string): Operation<string[]> {
   const entries = yield* until(readdir(join(root, "xmd", "repl")));
   return entries.filter((name) => name.endsWith(".jsonl")).sort();
+}
+
+/**
+ * The Transcript column's own rows, as the columns of the screen they occupy.
+ *
+ * Sliced between the two headings that name the columns either side of it, so
+ * what comes back is this pane's text and not the sidebar's or the Bindings
+ * column's. Never trimmed: the padding between one row's text and the next is
+ * what a wrapped line's break became, and dropping it would join two words the
+ * reading kept apart.
+ */
+function transcriptColumn(terminal: Terminal): string[] {
+  const rows = screenOf(terminal);
+  const header = rows.findIndex((line) => line.includes("Transcript"));
+  if (header < 0) {
+    throw new Error(`this screen has no Transcript column; it has ${JSON.stringify(rows)}`);
+  }
+  const left = rows[header].indexOf("Transcript");
+  const right = rows[header].indexOf("Bindings");
+  // The pane's edge and the reading's rail become spaces: they are the frame
+  // saying where a row is, not part of what the row says, and a wrapped line's
+  // break is the whitespace either side of them.
+  return rows.map((line) =>
+    line.slice(left, right < 0 ? undefined : right).replace(/[\u2502\u2500]/g, " "),
+  );
+}
+
+/** One string with every run of whitespace as one space, for comparing two. */
+function flattened(text: string): string {
+  return text.replace(/\s+/g, " ").trim();
 }
 
 /** The last row of the screen that contains this text, or none. */
@@ -2202,23 +2233,28 @@ describe("REPL journey: the whole of it, from raw bytes", () => {
       yield* until_(terminal, "the answer's output", (t) => shows(t, "Decision: approve"));
       expect(shows(terminal, "[ok]")).toBe(true);
 
-      // The generated fragment's source is on screen above the row that admits it.
-      // Which two rows those are comes from the model rather than from a guess at
-      // their wording; which order they are in comes from the screen.
+      // The generated fragment's source is on screen, inside the enclosure its
+      // author wrote. Which text that is comes from the model rather than from a
+      // guess at its wording; where it sits comes from the screen.
+      //
+      // Re-anchored for #881 PR 2. This used to assert that the fragment's
+      // source row came above the effect row admitting it, both of which were
+      // transcript records. The reading replaces that with the stronger claim:
+      // the fragment is shown *where its producer was written*, between the
+      // opening and closing tags the author typed.
       const settledModel = yield* projectionOf(root, files[0]);
       const at = settledModel.transcript.findIndex((row) => row.kind === "generated");
       expect(at).toBeGreaterThanOrEqual(0);
       const sourceRow = settledModel.transcript[at];
-      const admission = settledModel.transcript.slice(at + 1).find((row) => row.kind === "effect");
-      if (sourceRow?.kind !== "generated" || admission?.kind !== "effect") {
-        throw new Error("the settled history holds a generated fragment and its admission");
+      if (sourceRow?.kind !== "generated" || sourceRow.source === undefined) {
+        throw new Error("the settled history holds an admitted generated fragment");
       }
-      const rows = screenOf(terminal).map((line) => line.trim());
-      const sourceAt = rows.findIndex((line) => line.includes(sourceRow.source ?? "«none»"));
-      const admittedAt = lastRowContaining(rows, `${admission.type} ${admission.status}`);
-      expect(sourceAt).toBeGreaterThanOrEqual(0);
-      expect(admittedAt).toBeGreaterThanOrEqual(0);
-      expect(sourceAt).toBeLessThan(admittedAt);
+      // Recovered from the rows it was wrapped into, because the reading wraps
+      // rather than clips: the whole of it is on the screen, across as many rows
+      // as the pane needed, and concatenating the pane's own rows is what gets
+      // it back.
+      const column = transcriptColumn(terminal).join("");
+      expect(flattened(column)).toContain(flattened(sourceRow.source));
 
       // 7. The complete binding value, from the drawer that holds it.
       yield* activate(terminal, "1. [ok] entry-1");
@@ -2354,7 +2390,12 @@ describe("REPL journey: the whole of it, from raw bytes", () => {
       second.terminal.feed("\x1b");
       yield* settled(30);
       expect(shows(second.terminal, "component Checklist")).toBe(true);
-      expect(shows(second.terminal, "generated admitted:")).toBe(true);
+      // Re-anchored for #881 PR 2: the transcript's `generated admitted:`
+      // record row became the entry's reading, and the fragment this cold
+      // process reconstructed is the catalog row that names it. The claim is
+      // unchanged — a reopened process shows the generated region the first one
+      // admitted.
+      expect(shows(second.terminal, "generated generated")).toBe(true);
       expect(shows(second.terminal, "Decision: approve")).toBe(true);
 
       // The same complete binding value.
@@ -2665,13 +2706,18 @@ describe("REPL journey: the same product at every size", () => {
         yield* settled(60);
         terminal.feed("\r");
         yield* dismissQuestion(terminal);
-        yield* until_(terminal, "the transcript", (t) => shows(t, "component Checklist"));
+        yield* until_(terminal, "the transcript", (t) => shows(t, "About to evaluate:"));
 
         // A transcript with something in it — recorded before anything covers it,
         // so what follows is a claim about coverage rather than about absence.
         // Texts that belong to the transcript and to nothing the drawer lists, so
         // finding one inside the drawer means it showed through.
-        const underneath = ["import_component ok", "About to evaluate:"];
+        // Re-anchored for #881 PR 2: the transcript's record rows became the
+        // entry's reading, so these are two lines of what that reading shows.
+        // Both belong to it and to nothing this drawer lists — the retained
+        // positions name `summarySource` and `<Checklist /> admitted`, so
+        // neither `Source` nor `Checklist` would discriminate anything.
+        const underneath = ["### Ship the REPL", "2 steps remain."];
         for (const text of underneath) {
           expect(shows(terminal, text)).toBe(true);
         }
@@ -3135,6 +3181,7 @@ describe("REPL journey: what it settles before it acts", () => {
       pausable: true,
       running: true,
       agent: NO_AGENT,
+      lifecycle: NO_LIFECYCLE,
     });
     expect(pausing.intent.kind).toBe("none");
     expect(pausing.state.refusal).toContain("not paused");
@@ -3146,6 +3193,7 @@ describe("REPL journey: what it settles before it acts", () => {
       pausable: true,
       running: true,
       agent: NO_AGENT,
+      lifecycle: NO_LIFECYCLE,
     });
     expect(held.intent.kind).toBe("continue");
     expect(held.state.refusal).toBe(undefined);
@@ -3227,7 +3275,13 @@ describe("REPL journey: output nothing records still reaches the screen", () => 
       }
 
       // No question is pending, so nothing but output has woken this screen.
-      expect(shows(terminal, "Decide?")).toBe(false);
+      //
+      // Re-anchored for #881 PR 2: the Transcript now shows the entry's own
+      // source, and `Decide?` is written in it — so the absence of a question
+      // is asserted as the absence of a question rather than as the absence of
+      // its words. That is the stronger claim and the one the reading makes:
+      // source on the screen never proves anything is waiting.
+      expect(askedRow(terminal)).toBeUndefined();
       // The text after the last record this document writes. Nothing recorded
       // it, nothing reprojected because of it, and it is on the screen.
       expect(shows(terminal, PRINTED)).toBe(true);
@@ -3845,8 +3899,15 @@ describe("REPL journey: what an open drawer covers, through the terminal", () =>
         // And none of the lines it covered is anywhere inside it. Read as cells
         // rather than as descriptions: the blank interior of a short modal line
         // is exactly where a drawer without a background lets text through.
+        // A window control the drawer offers *itself* cannot discriminate: both
+        // panes spell `[^ earlier]` and `[v later]` the same way, so finding one
+        // inside the rectangle says the drawer has its own, not that something
+        // behind it showed through. Narrow routes one outlet holding the catalog
+        // and the entry's reading, each with its own pair, so a fragment of one
+        // of those labels is now among the covered lines.
+        const shared = ["[\u2191 earlier]", "[\u2193 later]", "[close]"];
         for (const line of covered.split("\n").map((one) => one.trim())) {
-          if (line.length < 4) {
+          if (line.length < 4 || shared.some((control) => control.includes(line))) {
             continue;
           }
           expect([label, line, inside.includes(line)]).toEqual([label, line, false]);
@@ -4784,7 +4845,7 @@ describe("REPL first use: UI10 narrow drawer guidance", () => {
       // And a control in the same drawer that does something else entirely. It
       // moves the window over a message too long to draw at once, so the row says
       // that instead of promising an answer to somebody who is still reading.
-      yield* focusOn(terminal, "[v later]");
+      yield* focusOn(terminal, "[↓ later]");
       const onScroll = guidanceRow(terminal);
       expect(onScroll).toBe("Entry 1 question · Enter scrolls · Esc closes · Tab/Shift+Tab move");
 

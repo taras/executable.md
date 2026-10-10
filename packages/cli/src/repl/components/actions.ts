@@ -72,6 +72,15 @@ export type ReplAction =
    */
   | { readonly kind: "scroll-entries"; readonly delta: number }
   /**
+   * Move the entry reading by whole rows.
+   *
+   * Its own member for the same reason the other two are: the transcript's
+   * reading, the catalog and a drawer's question can all be open at once, and
+   * one action meaning whichever the reducer guessed would move a region the
+   * reader was not pointing at.
+   */
+  | { readonly kind: "scroll-reading"; readonly delta: number }
+  /**
    * Show only the conversation this provider session key names.
    *
    * The key and nothing else: which turns that is, and whether the key still

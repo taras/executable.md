@@ -235,6 +235,10 @@ function activation(input: ReplViewData): ReplAction | undefined {
     const delta = named["delta"];
     return typeof delta === "number" ? { kind: "scroll-entries", delta } : undefined;
   }
+  if (select === "scroll-reading") {
+    const delta = named["delta"];
+    return typeof delta === "number" ? { kind: "scroll-reading", delta } : undefined;
+  }
   if (select === "session") {
     const session = named["session"];
     return typeof session === "string" && session.length > 0

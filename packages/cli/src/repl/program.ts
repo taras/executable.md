@@ -55,6 +55,7 @@ import {
   permissionWithdrawn,
   presentationFor,
   readinessOf,
+  readingOf,
   reduceRepl,
   refusedView,
   stateFor,
@@ -82,6 +83,9 @@ import type { ReplSession } from "./session.ts";
 import { useReplFrames } from "./frame.ts";
 import type { ReplFrames } from "./frame.ts";
 import { committedOps, flatten, profileFor, skeletonOps } from "./layout.ts";
+import { fitPlain, prepareReading } from "./fitting.ts";
+import { readingLines } from "./source-reading.ts";
+import { sourceRuns } from "./presentation-text.ts";
 import type { ReplBox, ReplLayoutManifest, ReplRegion } from "./layout.ts";
 import { capacityOf, NOTHING_ADMITTED } from "./layout-admission.ts";
 import type { ReplAdmission } from "./layout-admission.ts";
@@ -772,7 +776,13 @@ function keyOfFocus(tree: ReplTree<ReplAction>): string | undefined {
   return node === undefined ? undefined : tree.keyOf(node);
 }
 
-/** This process's overlay, as the application reads it. */
+/**
+ * This process's overlay, as the application reads it.
+ *
+ * Everything this process knows and no record holds. What a reading frozen at
+ * a recorded position leaves out of it is stated once, in `viewFor`, rather
+ * than decided again here.
+ */
 function liveOf(session: ReplSession): ReplLive {
   return {
     output: session.overlay.output,
@@ -781,6 +791,7 @@ function liveOf(session: ReplSession): ReplLive {
     pausable: session.controller !== undefined,
     running: session.live,
     agent: session.agent,
+    lifecycle: session.lifecycle,
   };
 }
 
@@ -1356,6 +1367,11 @@ function measuringAt(
     entriesWindowed,
     entriesRows,
     capture: "capture",
+    // The measuring pass describes no width-dependent text, so it has no
+    // fitted reading or preview either: text prepared against a width this
+    // pass is still asking for would be text fitted to nothing.
+    reading: undefined,
+    preview: undefined,
   };
 }
 
@@ -1406,10 +1422,53 @@ export function* prepareFrame(
   if (!third.ok) {
     return third;
   }
+  // The entry reading, fitted to the transcript's measured inner width. It
+  // happens here — after the widths are known and before anything is admitted —
+  // because the rows it produces are what the window has to admit and what the
+  // descriptions have to say. Preparing it later would admit a count from one
+  // list and describe another.
+  //
+  // Independent probe elements, so nothing about this measurement touches the
+  // tree the frame is about to draw.
+  //
+  // A profile with no pane for it has no reading: a frame refused for being too
+  // small publishes no transcript and no routed outlet, so there is no measured
+  // region to fit one to. That is different from a pane too narrow to hold a
+  // grapheme, which is a refusal and stays one.
+  const reading =
+    widths.surface < 1
+      ? Ok(undefined)
+      : yield* prepareReading(renderer, view.size, readingLines(readingOf(view)), widths.surface);
+  if (!reading.ok) {
+    return reading;
+  }
+  // The open question's message, fitted to the drawer's own width. Prepared
+  // here for the same reason the reading is: a drawer row is one row, so a
+  // long preview line is only reachable if it was cut into rows before the
+  // window counted them.
+  const asked = view.live.question;
+  const preview =
+    asked === undefined || widths.drawer < 1
+      ? Ok(undefined)
+      : yield* fitPlain(
+          renderer,
+          view.size,
+          asked.message.split("\n").map((text, offset) => ({
+            key: `message:${offset}`,
+            text,
+            runs: sourceRuns(text),
+          })),
+          widths.drawer,
+        );
+  if (!preview.ok) {
+    return preview;
+  }
   const admission = admissionFor({
     view,
     manifest: measured.manifest,
     widths,
+    reading: reading.value,
+    preview: preview.value,
     boundsOf: (id: string) => third.value.boundsOf(id),
   });
   const context: ReplPresentationContext = {
@@ -1419,6 +1478,8 @@ export function* prepareFrame(
     entriesWindowed: windowed,
     entriesRows,
     capture: "capture",
+    reading: reading.value,
+    preview: preview.value,
   };
   return Ok({ context, admission, presentation: presentationFor(view, context) });
 }

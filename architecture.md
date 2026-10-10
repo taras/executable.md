@@ -2821,6 +2821,53 @@ actions is closed so every one is journalable.
 </RefreshLogin>
 ```
 
+### 1a. One element's expansion can be surrounded
+
+`Component.expand` offers an observer the whole of one executable element's
+expansion: before resolution and props validation, through the accepted body
+and its owned cleanup, to the acceptance of what it produced. Core issues a
+request and the public chain composes around it; a handler delegates that exact
+request once with `next(request)`.
+
+The authority is the shape bound execution already uses. The request is branded
+with a private field, so a copy carrying the same members is not it; the claim
+is spent once, so a repeated delegation runs nothing; and the settlement is
+readable whether or not the chain returned normally, so a handler that catches
+what canonical expansion raised has not rescued it. A handler that returns
+without delegating refuses the work, and what a handler returns is ignored.
+
+Observation reaches no outcome. Phases carry `Result<void>` and nothing else —
+what the element produced, what it bound and which error identity core is
+holding stay private — and a failure is reported as a detached, frozen `Error`
+preserving the selected name, message and explanatory causes. Completion is
+published only after the whole dispatch, middleware cleanup included, has
+unwound and canonical acceptance is reconciled.
+
+Each subscription is registered with the element's latest phase and then told
+each change in order, ending after exactly one terminal observation. A reader
+that is slow, absent or cancelled delays nothing and cancels nothing: execution
+never waits for an observer, and a consumer that must see the terminal phase
+belongs to an owner outliving the dispatch rather than to the handler's frame.
+
+Every path that expands something an author wrote crosses this once: the
+component paths, and the structural constructs `<If>`, `<Each>`, `<Loop>`,
+`<All>` and `<Switch>`, plus the selected `<Case>`, the `<Else>` that runs and
+each `<Spawn>` an `<All>` starts. An unselected branch expands nothing and is
+told nothing.
+
+### 1b. Where a text's elements are, without running it
+
+`inspectSource(text, kind)` answers where each recognized element's delimiters
+are and what it is called. It is the scanner's own reading, collected by the
+same walk that decides what a fence, an inline code span, a quoted `>` and a
+tag-like expression are, so there is no second grammar to disagree with the
+first — and a nested collector is committed only with the parse that found it.
+
+A document's body boundary is read lexically, matching the installed
+extractor's envelope rule without calling its value parser, so inspecting a
+document interprets neither its header nor its body. Definition parsing asserts
+the two boundaries agree.
+
 ### 2. Decide once
 
 An error no middleware handles is decided exactly once, where it is raised,
@@ -5336,6 +5383,8 @@ Status is measured against main.
 | `<Output>` region `output` mode | an undecided error fails the document execution | built on main |
 | `<Output>` rendering selection | chooses which regions of a body render, and buffers a root that declares one; it decides nothing about failure | built on main |
 | `Expansion` / `getExpansion()` | describes the current logical element expansion | built on main |
+| `Component.expand` | surrounds one element's complete expansion — before resolution, through the accepted body and its owned cleanup, to the acceptance of what it produced. Core issues a branded request the public chain composes around; a handler delegates it once, may refuse the work by throwing or by not delegating, and decides nothing about the outcome. Phases carry `Result<void>` and a detached, frozen report, so no canonical identity, binding or resource crosses. Completion follows the whole dispatch, middleware cleanup included. Each subscription is registered with the latest phase and then told each change in order, ending after one terminal observation; a slow, absent or cancelled reader delays and cancels nothing | built on this stack |
+| `inspectSource()` | answers where a text's executable elements are written and what they are called, without resolving, compiling, evaluating or running any of it. The scanner's own reading, so fences, inline code, quoted delimiters and tag-like expressions are decided once; a document's body boundary is read lexically, without the frontmatter value parser, and definition parsing asserts the two agree | built on this stack |
 | document targets | catalogs a root document's addressable static headings, resolves one selector to one exact target, and projects the document to it before expansion | built on the #412 stack |
 | document-aware `xmd run … --help` | describes what one document declares and every target it addresses, each as a full document reference with the description its section states, by inspection alone | built on the #463 stack |
 | standard-input root documents | `xmd run -` and `xmd run -- -` read the whole root document from standard input, once, to end of file, and run it through the ordinary run profile. Fixed grammar selects it — the explicit `run` command form plus a document argument that is exactly `-`, read from the parser's own unconsumed remainder so a `-` another option took as its value is not one — and every other spelling keeps the meaning it had: the shorthand `xmd -` executes the file named `-`, `xmd run -#Section` executes that file's `Section`, another command's `-` is that command's, and `--eval -` keeps its refusal. `-` is the one filename the option grammar leaves unwritable, so the reference grammar reaches it and nothing else beginning with `-` is read as a document. The parsed path and every recovered reference stay separate facts until the grammar is settled, so a command line naming two roots refuses in either order, before the read and before either candidate is inspected. The reader is a value each runtime-named entrypoint supplies and the shared CLI never reaches a stdin global; what comes back is `retainedSource("<stdin>", source)`, adding no root-source variant, constructor, digest member or public API. The complete input is acquired before inspection, provider setup, the secret-detection announcement, journal creation, root admission and execution, inside the run's existing deadline; a failed read is one fixed sentence carrying no host error, input or path, and cancellation tears the reader down without becoming one | built on this stack |
@@ -5696,6 +5745,9 @@ DurableEvents -> frozen ReplModel -> resolved immutable view
 | `description.ts` | opaque immutable descriptions and the closed action boundary |
 | `reconcile.ts` | reconciling descriptions into one mounted Freedom tree |
 | `handoff.ts` | the acknowledged commit boundary |
+| `source-reading.ts` | one entry as output and then source, with what each element is doing |
+| `presentation-text.ts` · `presentation-style.ts` | what the characters of a reading are, and the colours it is drawn in |
+| `fitting.ts` | engine-measured widths, and the rows a reading is cut into |
 | `layout.ts` | deterministic placement at four sizes |
 | `renderer.ts` | drawing the mounted tree, and the frame map |
 | `frame.ts` | the one acknowledged frame stream |

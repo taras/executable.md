@@ -451,11 +451,11 @@ export function fixturePairs(
       ): readonly ReplBox[] => {
         const id = `box:${window}:viewport`;
         viewports.push(Object.freeze({ id, region, window }));
-        const less = paired(CONTROL, `${window}:earlier`, "[^ earlier]", region, {
+        const less = paired(CONTROL, `${window}:earlier`, "[↑ earlier]", region, {
           control: true,
           extra: { window, delta: -1 },
         });
-        const more = paired(CONTROL, `${window}:later`, "[v later]", region, {
+        const more = paired(CONTROL, `${window}:later`, "[↓ later]", region, {
           control: true,
           extra: { window, delta: 1 },
         });
@@ -601,11 +601,11 @@ export function fixturePairs(
         const id = `box:${DRAWER}:viewport`;
         viewports.push(Object.freeze({ id, region: "drawer", window: DRAWER }));
         regions.push({ region: "drawer", id: "box:drawer:layer" });
-        const less = paired(CONTROL, "drawer:earlier", "[^ earlier]", "drawer", {
+        const less = paired(CONTROL, "drawer:earlier", "[↑ earlier]", "drawer", {
           control: true,
           extra: { window: DRAWER, delta: -1 },
         });
-        const more = paired(CONTROL, "drawer:later", "[v later]", "drawer", {
+        const more = paired(CONTROL, "drawer:later", "[↓ later]", "drawer", {
           control: true,
           extra: { window: DRAWER, delta: 1 },
         });

@@ -62,6 +62,8 @@ export type ExpansionState = "playing" | "pausing" | "paused";
  * the inventory test says so rather than leaving an expansion path nothing
  * controls. Pause is sound only while every path crosses something here.
  */
+import type { ReplWaits } from "./lifecycle.ts";
+
 export interface BoundaryPartition {
   /** Operations that bracket one expansion walk. */
   readonly walks: readonly string[];
@@ -79,10 +81,18 @@ export interface BoundaryPartition {
  * `hasBinding` answer a question about an invocation the walk has already
  * reached; holding one would stop the same walk the gate before it already
  * stops, one question later.
+ *
+ * `expand` surrounds an element's whole expansion, which makes it a step in
+ * the walk that reached it and not a walk of its own. Treating it as one would
+ * count every element as a separate expansion to pause and release, and a
+ * structural element crossing this seam would release the hold its enclosing
+ * walk is still standing in. It inherits the walk it was reached through, and
+ * holding it stops that walk before the element resolves.
  */
 export const COMPONENT_BOUNDARIES: BoundaryPartition = {
   walks: ["content", "tryContent"],
   gates: [
+    "expand",
     "importComponent",
     "applyModifiers",
     "applyBoundModifiers",
@@ -184,7 +194,16 @@ export interface ExpansionController {
  * where the install runs: a controller installed inside a resource body would
  * be invisible to the execution the caller is about to start.
  */
-export function* useExpansionController(): Operation<ExpansionController> {
+export function* useExpansionController(
+  /**
+   * Where a held walk says the element it stopped is waiting, or none.
+   *
+   * A hold is the one wait this controller owns: the element has reached a
+   * boundary and is standing there until Continue releases it, which is a
+   * different thing from the work being slow.
+   */
+  waits?: ReplWaits,
+): Operation<ExpansionController> {
   const walks = new Set<Walk>();
   const states = createSignal<ExpansionState, never>();
   const crossings = new Map<string, number>();
@@ -258,7 +277,12 @@ export function* useExpansionController(): Operation<ExpansionController> {
     if (walk === undefined) {
       return;
     }
-    yield* hold(walk);
+    const release = yield* waits?.hold("expansion") ?? noExpansionWait();
+    try {
+      yield* hold(walk);
+    } finally {
+      release();
+    }
   }
 
   function* bracket<T>(boundary: string, body: () => Operation<T>): Operation<T> {
@@ -362,4 +386,10 @@ export function* useExpansionController(): Operation<ExpansionController> {
       return bracket(HOST_WALK, body);
     },
   };
+}
+
+/** No reading is counting waits, so nothing is held and nothing is released. */
+// deno-lint-ignore require-yield
+function* noExpansionWait(): Operation<() => void> {
+  return () => {};
 }
