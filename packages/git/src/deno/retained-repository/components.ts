@@ -20,11 +20,7 @@ import { API, cwd } from "@executablemd/runtime";
 import { content } from "@executablemd/core";
 import type { IdentityClaimant, IdentityComponent } from "@executablemd/core/host";
 import { parseFilesFailure } from "@executablemd/runtime";
-import {
-  DirInvocationError,
-  props as dirProps,
-  reason,
-} from "../../composition/components/Dir.ts";
+import { DirInvocationError, props as dirProps, reason } from "../../composition/components/Dir.ts";
 import { canonicalPaths, props as addProps } from "../../composition/components/GitAdd.ts";
 import { GitOperationError } from "../../composition/errors.ts";
 import { inventoryFrontier } from "./frontier.ts";
@@ -135,8 +131,7 @@ function retainedAdd(host: RetainedFileHost): IdentityComponent {
     origin: RETAINED_ORIGIN,
     props: addProps,
     forms: ["self-closing"],
-    description:
-      "Stage changes. `<Git.Add paths=\"notes.md\" />` stages what the pathspec matches.",
+    description: 'Stage changes. `<Git.Add paths="notes.md" />` stages what the pathspec matches.',
     factory: (claim: IdentityClaimant) =>
       function* GitAdd(props, invocation): Operation<string> {
         const paths = canonicalPaths(props.paths);
@@ -239,10 +234,7 @@ function* stagedBy(
       continue;
     }
     const oid = yield* selected.git.read(["hash-object", at], selected.directory);
-    const mode = yield* selected.git.read(
-      ["ls-files", "--stage", "--", at],
-      selected.directory,
-    );
+    const mode = yield* selected.git.read(["ls-files", "--stage", "--", at], selected.directory);
     if (oid === undefined) {
       return Err(
         new GitOperationError(
@@ -298,7 +290,7 @@ function withIndex(preState: RetainedFrontier, staged: readonly StagedEntry[]): 
     });
   }
   const index = [...entries.values()].sort((left, right) =>
-    left.path === right.path ? left.stage - right.stage : left.path < right.path ? -1 : 1
+    left.path === right.path ? left.stage - right.stage : left.path < right.path ? -1 : 1,
   );
   return Object.freeze({
     checkout: preState.checkout,
@@ -337,7 +329,7 @@ function retainedSwitch(host: RetainedFileHost, repository: RepositoryHost): Ide
     props: switchProps,
     forms: ["self-closing"],
     description:
-      "Switch or create a branch. `<Git.Switch branch=\"release/1.4\" base=\"main\" />` starts a " +
+      'Switch or create a branch. `<Git.Switch branch="release/1.4" base="main" />` starts a ' +
       "missing branch at the specified base.",
     factory: (claim: IdentityClaimant) =>
       function* GitSwitch(props, invocation): Operation<string> {
@@ -370,9 +362,8 @@ function retainedSwitch(host: RetainedFileHost, repository: RepositoryHost): Ide
             common: selected.common,
             position: host.position(selected.common),
             selection: { checkout: selected.checkout },
-            request: base === undefined
-              ? { cwd: directory, branch }
-              : { cwd: directory, branch, base },
+            request:
+              base === undefined ? { cwd: directory, branch } : { cwd: directory, branch, base },
             inventory: () => inventory(selected),
             *prepare(preState) {
               const predicted = yield* predictInScratch(
@@ -391,12 +382,7 @@ function retainedSwitch(host: RetainedFileHost, repository: RepositoryHost): Ide
               });
             },
             *perform() {
-              const switched = yield* switchInto(
-                selected.git,
-                selected.directory,
-                branch,
-                base,
-              );
+              const switched = yield* switchInto(selected.git, selected.directory, branch, base);
               if (!switched.ok) {
                 return switched;
               }
@@ -447,9 +433,10 @@ function* switchInto(
       });
       return Ok(undefined);
     }
-    const start = base === undefined
-      ? yield* resolveCommit(git, directory, "HEAD")
-      : yield* resolveBaseCommit(git, directory, base);
+    const start =
+      base === undefined
+        ? yield* resolveCommit(git, directory, "HEAD")
+        : yield* resolveBaseCommit(git, directory, base);
     if (start === undefined) {
       return Err(
         new GitOperationError(

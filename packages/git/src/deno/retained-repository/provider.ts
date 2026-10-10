@@ -39,6 +39,9 @@ import { retainedGitComponents } from "./components.ts";
 import { retainedFileMutations } from "./files.ts";
 import type { RetainedFileHost, SelectedCheckout } from "./files.ts";
 import { retain, retainedLanes, retainedResume } from "./local.ts";
+import { retainedRepository, retainedWorktree } from "./selections.ts";
+import type { RetainedSelectionHost } from "./selections.ts";
+import { useLeases } from "../run-composition/leases.ts";
 import { inventoryFrontier } from "./frontier.ts";
 import type { RetainedResume } from "./local.ts";
 
@@ -52,6 +55,8 @@ export interface RetainedEntryRequest {
   readonly source: string;
   /** Where the entry started, which is where an ambient checkout is looked for. */
   readonly cwd: string;
+  /** The trusted root this entry's managed checkouts are placed under. */
+  readonly managedRoot: string;
   readonly host: RepositoryHost;
   /** Ordinary file behavior, for everything outside a selected checkout. */
   readonly files: FilesHandler;
@@ -97,6 +102,12 @@ export function* useRetainedRepositoryEntry(
   };
   const selected = new Map<string, SelectedCheckout>();
   const git = gitSession(request.host, request.cwd);
+  // Acquired into this entry's own scope, so every slot it holds is released
+  // when the entry ends, however it ends.
+  const leases = yield* useLeases(request.managedRoot);
+  // The checkout a `<Worktree>` is a worktree of: the last one selected, which
+  // is the one its content is written inside.
+  let enclosing: SelectedCheckout | undefined;
   let admitted: RetainedRepositoryHistory | undefined;
   let resume: RetainedResume = retainedResume([]);
   let ambient: SelectedCheckout | undefined;
@@ -226,6 +237,18 @@ export function* useRetainedRepositoryEntry(
       Object.freeze({ source: request.source, occurrence }),
   };
 
+  const selectionHost: RetainedSelectionHost = {
+    files: fileHost,
+    repository: request.host,
+    managedRoot: request.managedRoot,
+    leases,
+    select: (checkout) => {
+      selected.set(checkout.checkout, checkout);
+      enclosing = checkout;
+    },
+    owner: () => enclosing,
+  };
+
   const admission: JournalAdmission = function* (retained: readonly DurableEvent[]) {
     const read = yield* admitRetainedRepositoryHistory(retained, owner);
     if (!read.ok) {
@@ -244,7 +267,11 @@ export function* useRetainedRepositoryEntry(
       fileMutations: retainedFileMutations(fileHost),
       // Declared, not registered: each one is minted a domain so its body can
       // authenticate its own invocation before it routes anything.
-      components: retainedGitComponents(fileHost, request.host),
+      components: [
+        ...retainedGitComponents(fileHost, request.host),
+        retainedRepository(selectionHost),
+        retainedWorktree(selectionHost),
+      ],
     },
     files: capturedFiles(request.files, request.cwd),
     history: () => admitted,

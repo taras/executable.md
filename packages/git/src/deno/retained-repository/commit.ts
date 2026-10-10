@@ -219,9 +219,8 @@ function* predictCommit(
       ...(identity === undefined ? {} : { identity }),
     },
   );
-  const predicted = written.code === 0 && written.stdout.trim() !== ""
-    ? written.stdout.trim()
-    : undefined;
+  const predicted =
+    written.code === 0 && written.stdout.trim() !== "" ? written.stdout.trim() : undefined;
   if (predicted === undefined) {
     return Err(
       new GitOperationError(
@@ -250,11 +249,12 @@ function* predictCommit(
 /** The checkout with HEAD, and the branch it is on, at the new commit. */
 function advanced(preState: RetainedFrontier, commit: string): RetainedFrontier {
   const on = preState.head.kind === "symbolic" ? preState.head.ref : undefined;
-  const head = on === undefined
-    ? { kind: "detached" as const, oid: commit }
-    : { kind: "symbolic" as const, ref: on, oid: commit };
+  const head =
+    on === undefined
+      ? { kind: "detached" as const, oid: commit }
+      : { kind: "symbolic" as const, ref: on, oid: commit };
   const refs: RetainedRef[] = preState.refs.map((ref) =>
-    ref.name === on ? { name: ref.name, oid: commit } : ref
+    ref.name === on ? { name: ref.name, oid: commit } : ref,
   );
   if (on !== undefined && !refs.some((ref) => ref.name === on)) {
     // The first commit on an unborn branch creates the ref it is on.
@@ -276,12 +276,15 @@ function frozenJson(frozen: FrozenCommit): Json {
   return {
     message: frozen.message,
     committedAt: frozen.committedAt,
-    identity: frozen.identity === undefined ? null : {
-      authorName: frozen.identity.authorName,
-      authorEmail: frozen.identity.authorEmail,
-      committerName: frozen.identity.committerName,
-      committerEmail: frozen.identity.committerEmail,
-    },
+    identity:
+      frozen.identity === undefined
+        ? null
+        : {
+            authorName: frozen.identity.authorName,
+            authorEmail: frozen.identity.authorEmail,
+            committerName: frozen.identity.committerName,
+            committerEmail: frozen.identity.committerEmail,
+          },
     tree: frozen.tree,
     parents: [...frozen.parents],
     commit: frozen.commit,

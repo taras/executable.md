@@ -30,6 +30,7 @@ import { executeInstalled } from "@executablemd/core/host";
 import { collect } from "@executablemd/core";
 import { denoRepositoryHost } from "../src/deno/composition/host.ts";
 import { gitSession } from "../src/deno/composition/git.ts";
+import { useBareRemote } from "./support/git-remotes.ts";
 import { useRetainedRepositoryEntry } from "../src/deno/retained-repository/provider.ts";
 import {
   RETAINED_REPOSITORY_COMPLETION,
@@ -49,6 +50,7 @@ function useFixture(): Operation<Fixture> {
     yield* ensure(() => rm(root, { recursive: true, force: true }));
     const checkout = join(root, "checkout");
     yield* ensureDir(join(root, "plain"));
+    yield* ensureDir(join(root, "managed"));
     const git = gitSession(denoRepositoryHost(), root);
     yield* git.run(["init", "-b", "main", checkout], root);
     yield* git.run(["config", "user.name", "Retained"], checkout);
@@ -150,6 +152,7 @@ function run(
       entryKey,
       source: "entry.md",
       cwd: fixture.checkout,
+      managedRoot: join(fixture.root, "managed"),
       host: denoRepositoryHost(),
       files: leaf,
     });
@@ -346,7 +349,7 @@ describe("retained repository: one entry's local work", () => {
     expect(yield* readTextFile(join(fixture.checkout, "notes", "inside.md"))).toBe("nested\n");
 
     const intents = recordsOf(events, RETAINED_REPOSITORY_INTENT).map((record) =>
-      parseRetainedRepositoryIntent(record)
+      parseRetainedRepositoryIntent(record),
     );
     // The selection, the directory, then the file: three operations, and the
     // file's is its own rather than the directory's.
@@ -377,13 +380,9 @@ describe("retained repository: one entry's local work", () => {
     );
 
     const intents = recordsOf(events, RETAINED_REPOSITORY_INTENT).map((record) =>
-      parseRetainedRepositoryIntent(record)
+      parseRetainedRepositoryIntent(record),
     );
-    expect(intents.map((record) => record?.operation)).toEqual([
-      "ambient",
-      "file-write",
-      "add",
-    ]);
+    expect(intents.map((record) => record?.operation)).toEqual(["ambient", "file-write", "add"]);
     const add = intents[2];
     // The file was not in the index before and is in the one it predicted.
     expect(add?.preState.index.some((entry) => entry.path === "notes.md")).toBe(false);
@@ -407,12 +406,13 @@ describe("retained repository: one entry's local work", () => {
 
   it("R3: a commit's object id is predicted before it is written", function* () {
     const fixture = yield* useFixture();
-    const source = '<File path="notes.md">the note\n</File>\n\n' +
+    const source =
+      '<File path="notes.md">the note\n</File>\n\n' +
       '<Git.Add paths="notes.md" />\n\n<Git.Commit message="record the note" as="commit" />\n';
     const { events } = yield* run(fixture, source, new InMemoryStream(), counted().handler);
 
     const intents = recordsOf(events, RETAINED_REPOSITORY_INTENT).map((record) =>
-      parseRetainedRepositoryIntent(record)
+      parseRetainedRepositoryIntent(record),
     );
     expect(intents.map((record) => record?.operation)).toEqual([
       "ambient",
@@ -421,9 +421,8 @@ describe("retained repository: one entry's local work", () => {
       "commit",
     ]);
     const commit = intents[3];
-    const predicted = commit?.postState.head.kind === "symbolic"
-      ? commit.postState.head.oid
-      : undefined;
+    const predicted =
+      commit?.postState.head.kind === "symbolic" ? commit.postState.head.oid : undefined;
     expect(predicted).toBeDefined();
 
     // The commit Git actually wrote is the one the intent predicted.
@@ -437,7 +436,8 @@ describe("retained repository: one entry's local work", () => {
 
   it("R4: an interrupted commit adopts the commit it predicted", function* () {
     const fixture = yield* useFixture();
-    const source = '<File path="notes.md">the note\n</File>\n\n' +
+    const source =
+      '<File path="notes.md">the note\n</File>\n\n' +
       '<Git.Add paths="notes.md" />\n\n<Git.Commit message="record the note" as="commit" />\n';
     const { events } = yield* run(fixture, source, new InMemoryStream(), counted().handler);
     const git = gitSession(denoRepositoryHost(), fixture.root);
@@ -470,7 +470,7 @@ describe("retained repository: one entry's local work", () => {
     );
 
     const intents = recordsOf(events, RETAINED_REPOSITORY_INTENT).map((record) =>
-      parseRetainedRepositoryIntent(record)
+      parseRetainedRepositoryIntent(record),
     );
     expect(intents.map((record) => record?.operation)).toEqual(["ambient", "switch"]);
     const moved = intents[1];
@@ -511,6 +511,72 @@ describe("retained repository: one entry's local work", () => {
         .map((record) => parseRetainedRepositoryIntent(record)?.operation)
         .filter((operation) => operation === "switch"),
     ).toEqual([]);
+  });
+
+  it("R3: a repository selection is the baseline its lane is held to following", function* () {
+    const fixture = yield* useFixture();
+    const remote = yield* useBareRemote({
+      commits: [{ message: "remote seed", entries: [{ path: "remote.md", content: "remote\n" }] }],
+    });
+    const { events } = yield* run(
+      fixture,
+      `<Repository name="project" url=${JSON.stringify(remote.locator)}>\n` +
+        '<File path="inside.md">inside\n</File>\n</Repository>\n',
+      new InMemoryStream(),
+      counted().handler,
+    );
+
+    const intents = recordsOf(events, RETAINED_REPOSITORY_INTENT).map((record) =>
+      parseRetainedRepositoryIntent(record),
+    );
+    // The selection comes first in its own lane, and the write inside it follows.
+    expect(intents.map((record) => record?.operation)).toEqual(["repository", "file-write"]);
+    const selection = intents[0];
+    const write = intents[1];
+    expect(selection?.lane.position).toBe(0);
+    expect(write?.lane.position).toBe(1);
+    expect(selection?.lane.common).toBe(write?.lane.common);
+    // A selection changes nothing, so its two frozen ends are one state.
+    expect(selection?.preState.worktree.some((entry) => entry.path === "remote.md")).toBe(true);
+    expect(selection?.postState.worktree.some((entry) => entry.path === "inside.md")).toBe(false);
+    // And the file really is in the clone.
+    expect(write?.postState.worktree.some((entry) => entry.path === "inside.md")).toBe(true);
+  });
+
+  it("R3: a worktree is retained against the repository it belongs to", function* () {
+    const fixture = yield* useFixture();
+    const remote = yield* useBareRemote({
+      commits: [{ message: "remote seed", entries: [{ path: "remote.md", content: "remote\n" }] }],
+    });
+    const { events } = yield* run(
+      fixture,
+      `<Repository name="project" url=${JSON.stringify(remote.locator)}>\n` +
+        '<Worktree name="review" branch="topic">\n' +
+        '<File path="in-worktree.md">worktree\n</File>\n' +
+        "</Worktree>\n</Repository>\n",
+      new InMemoryStream(),
+      counted().handler,
+    );
+
+    const intents = recordsOf(events, RETAINED_REPOSITORY_INTENT).map((record) =>
+      parseRetainedRepositoryIntent(record),
+    );
+    expect(intents.map((record) => record?.operation)).toEqual([
+      "repository",
+      "worktree",
+      "file-write",
+    ]);
+    const worktree = intents[1];
+    const write = intents[2];
+    // A linked worktree is its own checkout, sharing the repository's
+    // administration.
+    expect(worktree?.preState.administration.role).toBe("linked");
+    expect(worktree?.preState.administration.common).toBe(
+      intents[0]?.preState.administration.common,
+    );
+    // The file was written in the worktree, not in the repository.
+    expect(write?.preState.checkout).toBe(worktree?.preState.checkout);
+    expect(write?.preState.checkout).not.toBe(intents[0]?.preState.checkout);
   });
 
   it("R6: a write where there is no repository is ordinary and retains nothing", function* () {
