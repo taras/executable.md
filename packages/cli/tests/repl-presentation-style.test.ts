@@ -82,6 +82,9 @@ import {
   viewportBounds,
 } from "./fixtures/repl/presentation.ts";
 import { referenceEvents } from "./fixtures/repl/reference.ts";
+import { ordinaryEvaluationProfile } from "../src/evaluation-profile.ts";
+import { submitReplEntry } from "../src/repl/session.ts";
+import type { ReplSession } from "../src/repl/session.ts";
 import type { CellStyle, Observed, Presenter, TerminalGrid } from "./fixtures/repl/presentation.ts";
 
 const WIDE: ReplTerminalSize = { columns: 160, rows: 36 };
@@ -1717,6 +1720,116 @@ describe("REPL presentation: focus marks the row without repainting it", () => {
     expect(inkOf(grid, selected).foreground).toBe(SEMANTIC.tick);
     expect(focusedRows(observed, grid)).toEqual(["footer:input"]);
   });
+});
+
+/**
+ * A real session, held at a question it is actually waiting on.
+ *
+ * Everything else in this file hands the frame an observation it composed.
+ * This one does not: the entry is submitted into a live session, the `<Elicit>`
+ * inside it suspends for real, and the phase the badge is drawn from is the
+ * one this process's own observer recorded while that invocation waited.
+ */
+const HELD_SOURCE = [
+  "```js eval",
+  `const decide = ${JSON.stringify({
+    type: "object",
+    properties: { decision: { type: "string", enum: ["Approve", "Stop"] } },
+    required: ["decision"],
+    additionalProperties: false,
+  })};`,
+  "```",
+  "",
+  '<Elicit schema={decide} as="answer">Hold here?</Elicit>',
+  "",
+].join("\n");
+
+/** Wait until this session is asking something. */
+function* held(session: ReplSession): Operation<void> {
+  for (let turn = 0; turn < 500; turn += 1) {
+    if (session.overlay.question !== undefined) {
+      return;
+    }
+    yield* sleep(0);
+  }
+  // The entry's own outcome, because the usual reason a question never
+  // arrives is that the entry failed before asking it.
+  throw new Error(
+    "this session never reached a question it had to wait at: " +
+      (session.model.entries[0]?.terminal?.message ?? "it is still running"),
+  );
+}
+
+describe("REPL presentation: a frame of a real held invocation", () => {
+  beforeAll(() => useTempFileCompiler());
+
+  it("P1-T4: the waiting invocation says so on its own row, in the archive's literal", () =>
+    scoped(function* () {
+      const opened = yield* submitReplEntry({
+        execution: { id: "held", stream: new InMemoryStream([]) },
+        installations: [{ evaluation: ordinaryEvaluationProfile() }],
+        source: HELD_SOURCE,
+      });
+      if (!opened.ok) {
+        throw opened.error;
+      }
+      const session = opened.value;
+      yield* held(session);
+
+      const entry = session.model.entries[0];
+      if (entry === undefined) {
+        throw new Error("a held session admitted no entry");
+      }
+      // The overlay the program reads, with this process's actual lifecycle
+      // in it. Nothing here names a phase: what the badge says comes from the
+      // invocation that is waiting as this frame is composed.
+      const live: ReplLive = {
+        output: session.overlay.output,
+        question: session.overlay.question,
+        expansion: session.expansion.state,
+        pausable: session.controller !== undefined,
+        running: session.live,
+        agent: session.agent,
+        lifecycle: session.lifecycle,
+      };
+      const resolved = viewFor(
+        selecting(stateWith({}), entry.key),
+        session.model,
+        live,
+        WIDE,
+        undefined,
+        session.navigation,
+      );
+      if (!resolved.ok) {
+        throw resolved.error;
+      }
+      const presenter = yield* usePresenter(WIDE);
+      const observed = yield* presenter.commit(resolved.value);
+      const { grid } = presenter;
+
+      const badge = `${LIFECYCLE.hold.glyph} ${LIFECYCLE.hold.word}`;
+      const rows = observed.keys
+        .filter((key) => key.startsWith("reading:"))
+        .map((key) => ({ key, bounds: observed.boundsOf(key) }));
+      const carrying = rows.find(
+        (one) => one.bounds !== undefined && textOf(grid, one.bounds).includes(badge),
+      );
+      if (carrying?.bounds === undefined) {
+        throw new Error(
+          `no reading row says ${badge}; they say ${rows
+            .map((one) => (one.bounds === undefined ? "" : textOf(grid, one.bounds).trim()))
+            .join(" | ")}`,
+        );
+      }
+      // The row it is on is the invocation that is waiting, not some other
+      // element of the same entry.
+      expect(textOf(grid, carrying.bounds)).toContain("<Elicit");
+      // And it is drawn in the archive's own literal for a held call.
+      expect(inkOfSpan(grid, carrying.bounds, badge).foreground).toBe(LIFECYCLE.hold.colour);
+      // The source beside it keeps its own colours, so the badge is not
+      // repainting the row it sits on.
+      expect(inkOfSpan(grid, carrying.bounds, "<").foreground).not.toBe(LIFECYCLE.hold.colour);
+    }));
 });
 
 describe("REPL presentation: the surfaces a reading is drawn on", () => {

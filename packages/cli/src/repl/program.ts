@@ -79,7 +79,7 @@ import { decodeLocation, encodeLocation, resolveLocation } from "./route.ts";
 import { replRepository } from "./journal.ts";
 import type { ReplExecution } from "./journal.ts";
 import { lifecycleRefusal, openReplSession } from "./session.ts";
-import type { ReplSession } from "./session.ts";
+import type { ReplReading, ReplSession } from "./session.ts";
 import { useReplFrames } from "./frame.ts";
 import type { ReplFrames } from "./frame.ts";
 import { committedOps, flatten, profileFor, skeletonOps } from "./layout.ts";
@@ -416,7 +416,9 @@ function* drive(
   // One session for the whole command: it owns the file, the observer and each
   // entry task in turn, so submitting an entry does not replace it.
   const current: ReplSession = session;
-  let model: ReplModel = session.model;
+  // One prepared reading, never a model beside a navigation that arrived
+  // separately. Everything below assigns both halves together or neither.
+  let reading: ReplReading = { model: session.model, navigation: session.navigation };
   let rendered: ReplRendered | undefined;
 
   const outcome = yield* scoped(function* (): Operation<Result<ReplOutcome>> {
@@ -481,7 +483,7 @@ function* drive(
       // no frame and acknowledges nothing — it is a question about geometry.
       const ready = yield* prepareFrame(
         renderer,
-        yield* build(state, model, current, yield* screen.size(), focused),
+        yield* build(state, reading, current, yield* screen.size(), focused),
       );
       if (!ready.ok) {
         throw ready.error;
@@ -489,14 +491,14 @@ function* drive(
       const transition = reduceRepl(
         state,
         dispatched.value.action,
-        model,
+        reading.model,
         liveOf(current),
         ready.value.admission,
       );
       state = transition.state;
       const performed = yield* perform(transition.intent, current, execution, options, wakes);
       if (performed.submitted === true) {
-        model = current.model;
+        reading = { model: current.model, navigation: current.navigation };
         // The entry exists now, so the draft that became it is finished.
         state = admitted(state);
       }
@@ -504,7 +506,7 @@ function* drive(
         // The question took it, so the drawer that was asking is over. The model
         // here is the history without this answer in it yet, which is what makes
         // the record it adds recognisable.
-        state = answered(state, model, performed.answered);
+        state = answered(state, reading.model, performed.answered);
       }
       if (performed.settled !== undefined) {
         // The authority answered it, so the request is gone and the drawer over it
@@ -531,10 +533,18 @@ function* drive(
     }
 
     let focused: string | undefined;
-    // Composed per frame: every branch below leaves `state` and `model` such
+    // Composed per frame: every branch below leaves `state` and `reading` such
     // that this reproduces the view it resolved, at whatever size the terminal
-    // turns out to be when the frame is drawn.
-    const compose: ReplCompose = (at) => build(state, model, current, at, focused);
+    // turns out to be when the frame is drawn. It recomposes from the reading
+    // that was resolved, never from the session again: a resize between
+    // resolution and commit would otherwise pair this content with navigation
+    // taken from a later snapshot.
+    let broken: string | undefined;
+    const compose: ReplCompose = function* (at): Operation<ReplView> {
+      return broken === undefined
+        ? yield* build(state, reading, current, at, focused)
+        : refusedView(state, broken, at, focused);
+    };
     rendered = (yield* paint(frames, tree, renderer, screen, compose)).rendered;
     focused = keyOfFocus(tree);
     // The first frame has the same obligation as every other one.
@@ -563,7 +573,7 @@ function* drive(
           break;
         }
         if (wake.kind === "session") {
-          model = current.model;
+          reading = { model: current.model, navigation: current.navigation };
         } else if (wake.event.kind === "eof") {
           ended = true;
         } else if (wake.event.kind === "resize") {
@@ -653,33 +663,44 @@ function* drive(
       // filter over the head. Reprojected, then verified — and a route that does
       // not resolve there leaves the standing one exactly as it was.
       //
-      // Resolution settles `state` and `model`; the view itself is composed per
-      // frame, because a resize between here and the commit rebuilds it.
-      const attempted = yield* reproject(state, model, execution);
+      // One reading answers both halves, taken before the size read below it.
+      // The size read suspends, and a record can arrive while it does: content
+      // taken before it and navigation taken after it would describe two
+      // different files on one screen.
+      const attempted = reproject(state, reading, current);
       const drawnAt = yield* screen.size();
+      // The whole file, including the part before the position asked for, is
+      // unreadable. There is no prefix for a notice to stand beside, so what
+      // this draws is the refused view itself — the same screen a cold open
+      // of the same file shows — and the standing reading is not adopted.
+      broken = attempted.broken?.message;
       let adopting = attempted.state;
-      let built = viewFor(
-        adopting,
-        attempted.model,
-        liveOf(current),
-        drawnAt,
-        focused,
-        current.navigation,
-      );
-      if (!built.ok) {
+      let candidate = attempted.reading;
+      let built =
+        broken !== undefined
+          ? undefined
+          : viewFor(
+              adopting,
+              candidate.model,
+              liveOf(current),
+              drawnAt,
+              focused,
+              candidate.navigation,
+            );
+      if (built !== undefined && !built.ok) {
         // A position earlier than the selected entry's admission has no such
         // entry in it. The position is what was asked for, so the invalid entry
         // and scope suffix goes and nothing guesses a replacement — the draft,
         // the surface, the conversation filter and the marker all stand.
-        const cleared = withoutAbsentEntry(adopting, attempted.model);
+        const cleared = withoutAbsentEntry(adopting, candidate.model);
         if (cleared !== undefined) {
           const without = viewFor(
             cleared,
-            attempted.model,
+            candidate.model,
             liveOf(current),
             drawnAt,
             focused,
-            current.navigation,
+            candidate.navigation,
           );
           if (without.ok) {
             adopting = cleared;
@@ -687,9 +708,11 @@ function* drive(
           }
         }
       }
-      if (built.ok) {
+      if (broken !== undefined) {
+        state = Object.freeze({ ...standing, refusal: broken });
+      } else if (built !== undefined && built.ok) {
         state = adopting;
-        model = attempted.model;
+        reading = candidate;
         // The readiness may have moved while that refusal was on the screen: the
         // entry it named has finished, or the teardown it named has completed.
         // A refusal that is no longer true is worse than no refusal, because it
@@ -703,16 +726,15 @@ function* drive(
           state = Object.freeze({ ...state, refusal: undefined });
           refusedByReadiness = false;
         }
-      } else {
-        // The reason the *reprojection* refused, when there was one: it is the
-        // first thing that went wrong, and the resolution failure below it is a
-        // consequence of still holding the older reading.
-        state = Object.freeze({
-          ...standing,
-          refusal: attempted.state.refusal ?? built.error.message,
-        });
-        const back = yield* reproject(state, model, execution);
-        model = back.model;
+      } else if (built !== undefined) {
+        // The route did not resolve at that position. The standing reading is
+        // kept and the reason is said beside it: unlike the refusal above,
+        // there *is* a reading to stand beside.
+        state = Object.freeze({ ...standing, refusal: built.error.message });
+        const back = reproject(state, reading, current);
+        if (back.broken === undefined) {
+          reading = back.reading;
+        }
       }
       const painted = yield* paint(frames, tree, renderer, screen, compose);
       rendered = painted.rendered;
@@ -771,18 +793,23 @@ function exitLocation(state: ReplState): string {
  * the reason, so a caller can decide between adopting and restoring rather than
  * being handed a half-applied navigation.
  */
-function* reproject(
+function reproject(
   state: ReplState,
-  model: ReplModel,
-  execution: ReplExecution,
-): Operation<{ readonly state: ReplState; readonly model: ReplModel }> {
-  if (state.route.at === model.selection) {
-    return { state, model };
-  }
-  const projected = projectRepl(yield* execution.stream.readAll(), state.route.at);
-  return projected.ok
-    ? { state, model: projected.value }
-    : { state: Object.freeze({ ...state, refusal: projected.error.message }), model };
+  reading: ReplReading,
+  session: ReplSession,
+): {
+  readonly state: ReplState;
+  readonly reading: ReplReading;
+  readonly broken: Error | undefined;
+} {
+  const read = session.reading(state.route.at);
+  // A file this process can no longer read is not a position to carry on at.
+  // It is returned rather than folded into a route notice, because the two
+  // are different screens: a notice stands beside a reading, and this has
+  // none to stand beside.
+  return read.ok
+    ? { state, reading: read.value, broken: undefined }
+    : { state, reading, broken: read.error };
 }
 
 /** The key of whatever holds focus now, or none. */
@@ -813,12 +840,14 @@ function liveOf(session: ReplSession): ReplLive {
 /** The view for the state that stands, or a refusal naming why there is none. */
 function* build(
   state: ReplState,
-  model: ReplModel,
+  reading: ReplReading,
   session: ReplSession,
   size: ReplTerminalSize,
   focused: string | undefined,
 ): Operation<ReplView> {
-  const view = viewFor(state, model, liveOf(session), size, focused, session.navigation);
+  // Both halves from the reading that was resolved, never from the session
+  // again. A resize recomposes at a new size, not at a new snapshot.
+  const view = viewFor(state, reading.model, liveOf(session), size, focused, reading.navigation);
   return view.ok ? view.value : refusedView(state, view.error.message, size);
 }
 

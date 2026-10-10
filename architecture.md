@@ -5776,6 +5776,21 @@ model. A later malformed segment refuses the whole reading even for an earlier
 marker — the alternative is stale navigation standing beside a prefix that
 still looks plausible.
 
+The session hands both halves over together, as one reading, and the root
+carries that one value through resolution, paint and resize rather than asking
+again for either half. It has to: the root reads the terminal's size between
+resolving a frame and composing it, that read suspends, and a record can be
+retained while it does. Content taken before it and navigation taken after it
+would describe two different files on one screen. A resize recomposes the
+reading that was resolved at a new size, never at a new snapshot.
+
+When that reading cannot be built at all — a record this process wrote and can
+no longer read — the root draws the refused view, the same screen a cold open
+of the same file shows. That is a different outcome from a route that does not
+resolve at its position: there, a reading still stands and the reason is said
+beside it. A refusal has nothing to stand beside, so nothing is left on the
+screen pretending to be current.
+
 The head is derived on read from retained facts and from work this session
 owns, never from a body's return, a recorded root Close, a component badge or
 the selected content. It changes while the file stands still, so it publishes

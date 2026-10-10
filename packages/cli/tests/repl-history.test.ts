@@ -40,13 +40,40 @@ import {
 } from "../src/repl/history-rail.ts";
 import { HEAD_LABELS, headOf, navigationOf, numbered, pointLabel } from "../src/repl/navigation.ts";
 import type { ReplHistoryNavigation, ReplHeadState } from "../src/repl/navigation.ts";
-import type { ReplCheckpoint } from "../src/repl/model.ts";
+import type { ReplCheckpoint, ReplModel } from "../src/repl/model.ts";
 import { useReplRenderer } from "../src/repl/renderer.ts";
 import type { ReplRenderer } from "../src/repl/renderer.ts";
 import { runText } from "../src/repl/description.ts";
 import type { ReplTerminalSize } from "../src/repl/terminal.ts";
+import { fileURLToPath } from "node:url";
 
 const WIDE: ReplTerminalSize = { columns: 160, rows: 36 };
+const MEDIUM: ReplTerminalSize = { columns: 120, rows: 30 };
+
+/** Where the crowded-order fixture's component is looked for. */
+const CROWD = fileURLToPath(new URL("./fixtures/repl/issue-881/", import.meta.url));
+
+/**
+ * One entry that admits this many component scopes, in recorded order.
+ *
+ * Each invocation admits a scope and each admitted scope is one retained
+ * position, so this is how many positions the rail has to place. Built here
+ * rather than read from `history-crowd.md` so a case can say how many it
+ * needs; the fixture file is the same shape at two hundred.
+ */
+function crowded(count: number): string {
+  return (
+    Array.from(
+      { length: count },
+      (_, at) => `<HistoryRecord ordinal={${at + 1}} secret="future-secret-${at + 1}" />`,
+    ).join("\n") + "\n"
+  );
+}
+
+/** How many component scopes one reading's transcript actually admits. */
+function admits(model: ReplModel): number {
+  return model.transcript.filter((row: { readonly kind: string }) => row.kind === "scope").length;
+}
 
 function execution(): ReplExecution {
   return { id: "history", stream: new InMemoryStream([]) };
@@ -433,6 +460,72 @@ describe("H1/H2 — the whole order, and nothing of what it holds", () => {
     expect(order).not.toContain("late");
   });
 
+  it("refuses the whole reading once an admitted session can no longer read its file", function* () {
+    const holder = execution();
+    const session = opened(yield* openReplSession({ execution: holder }));
+    accepted(yield* session.submit('<Json value={1} as="a" />\n'));
+    yield* session.join();
+    yield* sleep(0);
+    const early = session.navigation.checkpoints[0].marker;
+    const before = session.model;
+    expect(session.reading(early).ok).toBe(true);
+    expect(session.reading(undefined).ok).toBe(true);
+
+    // A duplicate of this entry's own last record: real event data this
+    // process wrote, in a sequence nothing can read. This is the case a cold
+    // reopen cannot reach — the session is already admitted, and the question
+    // is what an admitted session does when its own file stops being readable.
+    const events = yield* holder.stream.readAll();
+    yield* holder.stream.append(events[events.length - 1]);
+    yield* sleep(0);
+
+    // Both readings refuse, including the one for a position recorded long
+    // before the record that broke it: a prefix that still looks plausible
+    // beside navigation nothing can build is the worst of both.
+    expect(session.reading(early).ok).toBe(false);
+    expect(session.reading(undefined).ok).toBe(false);
+    // And nothing was published in the meantime. The old model is still the
+    // old model — it was not quietly refreshed from a file this session can
+    // no longer read.
+    expect(session.model).toBe(before);
+  });
+
+  it("answers both halves of one position from one acknowledged array", function* () {
+    const holder = execution();
+    const session = opened(yield* openReplSession({ execution: holder }));
+    accepted(yield* session.submit('<Json value={{ first: 1 }} as="a" />\n'));
+    yield* session.join();
+    yield* sleep(0);
+    const early = session.navigation.checkpoints[0].marker;
+
+    const before = session.reading(early);
+    if (!before.ok) {
+      throw before.error;
+    }
+    accepted(yield* session.submit('<Json value={{ second: 2 }} as="b" />\n'));
+    yield* session.join();
+    yield* sleep(0);
+    const after = session.reading(early);
+    if (!after.ok) {
+      throw after.error;
+    }
+
+    // The same position, read either side of an append. Content is the
+    // prefix's both times and does not move; navigation is the whole file's
+    // both times and does. What makes this one reading rather than two is
+    // that the second pair agrees with itself: the positions it offers are
+    // the file as it stands now, and the content is that same file read at
+    // the earlier marker.
+    expect(after.value.model.entries.length).toBe(before.value.model.entries.length);
+    expect(after.value.navigation.checkpoints.length).toBeGreaterThan(
+      before.value.navigation.checkpoints.length,
+    );
+    expect(JSON.stringify(after.value.model)).not.toContain("second");
+    expect(after.value.navigation.checkpoints.at(-1)?.marker).toBe(
+      session.navigation.checkpoints.at(-1)?.marker,
+    );
+  });
+
   it("refuses the whole reading when a later segment is malformed", function* () {
     const holder = execution();
     const first = opened(yield* openReplSession({ execution: holder }));
@@ -460,6 +553,93 @@ describe("H1/H2 — the whole order, and nothing of what it holds", () => {
     const reopened = yield* openReplSession({ execution: corrupted, selection: early });
     expect(reopened.ok).toBe(false);
   });
+});
+
+describe("H1 — two positions the rail draws as one mark select different content", () => {
+  beforeAll(() => useTempFileCompiler());
+
+  it("gives each member of a shared column its own exact prefix", () =>
+    withRenderer(function* (renderer) {
+      // Enough component admissions that the rail has fewer columns than it
+      // has positions at every measured width, so sharing a column is forced
+      // rather than arranged.
+      const session = opened(yield* openReplSession({ execution: execution(), includes: [CROWD] }));
+      accepted(yield* session.submit(crowded(200)));
+      yield* session.join();
+      yield* sleep(0);
+      const navigation = session.navigation;
+      expect(navigation.checkpoints.length).toBeGreaterThan(200);
+
+      // A group holding two *consecutive* positions of the same category, at
+      // all three measured widths. Found rather than assumed: which pairs
+      // round onto one column is the layout's answer, not this test's.
+      const sizes: readonly (readonly [ReplTerminalSize, number])[] = [
+        [WIDE, 160],
+        [MEDIUM, 120],
+        [NARROW, 72],
+      ];
+      // The pairs that share a column at *every* width, intersected rather
+      // than carried over from the first: which adjacent positions round onto
+      // one column is a function of that width, and a pair that shares at one
+      // is not guaranteed to share at another.
+      let shared: readonly (readonly [number, number])[] | undefined;
+      for (const [size, width] of sizes) {
+        const rail = yield* prepareRail(renderer, size, navigation, undefined, width);
+        if (!rail.ok) {
+          throw rail.error;
+        }
+        const pairs = rail.value.groups
+          .flatMap((group) => {
+            const ordinals = group.ordinals.toSorted((a, b) => a - b);
+            return ordinals.flatMap((ordinal, at) =>
+              at + 1 < ordinals.length && ordinals[at + 1] === ordinal + 1
+                ? [[ordinal, ordinal + 1] as const]
+                : [],
+            );
+          })
+          .filter(
+            ([first, second]) =>
+              navigation.checkpoints[first - 1]?.kind === "scope" &&
+              navigation.checkpoints[second - 1]?.kind === "scope",
+          );
+        const standing = shared;
+        shared =
+          standing === undefined
+            ? pairs
+            : pairs.filter(([first, second]) =>
+                standing.some(([one, two]) => one === first && two === second),
+              );
+        if (shared.length === 0) {
+          throw new Error(
+            `no consecutive component pair shares a column at every width up to ${width}`,
+          );
+        }
+      }
+      // One mark on the screen, two positions behind it — and each is its own
+      // reading. The discriminator is the component admitted *between* them:
+      // the later prefix admits exactly one more scope than the earlier.
+      const [first, second] = (shared ?? [])[0] ?? [0, 0];
+      expect(first).toBeGreaterThan(0);
+      const earlier = session.reading(navigation.checkpoints[first - 1].marker);
+      const later = session.reading(navigation.checkpoints[second - 1].marker);
+      if (!earlier.ok) {
+        throw earlier.error;
+      }
+      if (!later.ok) {
+        throw later.error;
+      }
+      expect(navigation.checkpoints[first - 1].marker).not.toBe(
+        navigation.checkpoints[second - 1].marker,
+      );
+      expect(admits(later.value.model) - admits(earlier.value.model)).toBe(1);
+      // The content really is there to differ about: this is not two readings
+      // of nothing agreeing that nothing changed.
+      expect(admits(earlier.value.model)).toBeGreaterThan(0);
+      // And both keep the whole later order, which is what a group member is
+      // owed: the positions after it are where its reader can still go.
+      expect(earlier.value.navigation.checkpoints.length).toBe(navigation.checkpoints.length);
+      expect(later.value.navigation.checkpoints.length).toBe(navigation.checkpoints.length);
+    }));
 });
 
 describe("H1/H5 — every retained position keeps its own identity", () => {

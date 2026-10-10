@@ -443,6 +443,14 @@ where a reader can go next, so a rail that stopped at the selection would be a
 map of the part of the file they had already reached. What crosses is a marker
 and a kind per position, and nothing of what any of them holds.
 
+The map and the content are one reading, taken from one acknowledged array and
+carried together through the frame. Nothing on this screen pairs a prefix with
+a rail the file no longer has: a record retained while the terminal is being
+measured changes the next reading, not half of this one. Where that reading
+cannot be built at all, because the file holds a record this process can no
+longer read, the whole screen is the refusal — not a rail standing beside a
+prefix that still looks plausible.
+
 Where a mark goes is a proportion of the rail's measured columns: the first at
 the start, the last at the end, the rest evenly between, and a lone position
 where the head is. It says where something is in the order and nothing about
