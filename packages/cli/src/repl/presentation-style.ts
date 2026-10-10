@@ -18,10 +18,16 @@
  * A row carries one immutable **role**, and separately whether it is
  * **selected** and whether it is being read as **history**. Those are facts
  * about the reading. Keyboard **focus** is not: it belongs to the mounted tree
- * and is known only after reconciliation, so it arrives at draw time and may
- * change nothing but the foreground and its attributes. That division is what
- * keeps selection visible while focus is somewhere else — the two are drawn by
- * different properties of the same cell, so neither can erase the other.
+ * and is known only after reconciliation, so it arrives at draw time and adds
+ * weight to whatever the row already was. That division is what keeps selection
+ * visible while focus is somewhere else — the two are drawn by different
+ * properties of the same cell, so neither can erase the other.
+ *
+ * Focus takes no colour of its own away from a row. A row's foregrounds say
+ * what its characters *are* — a delimiter, a tag, a quoted value, a failure —
+ * and a focus that repainted them all one colour would cost a reader the
+ * reading in exchange for a fact the marker in front of the row already
+ * carries. The marker is the one cyan thing, and it is a run of its own.
  *
  * No geometry is decided here. Width, height, padding and borders are the
  * layout's, and a focused row occupies exactly the cells an unfocused one does.
@@ -50,6 +56,27 @@ export type ReplPresentationRole =
   | "pane-heading"
   /** Document text and ordinary prose, and whatever has no stronger reading. */
   | "source"
+  /** A heading written in the source being shown. */
+  | "source-heading"
+  /** The characters that open and close a tag: `<`, `</`, `>`, `/>`. */
+  | "xmd-delimiter"
+  /** What a tag is called. */
+  | "xmd-tag"
+  /** What an attribute is called, and what a JSON key is. */
+  | "xmd-attribute"
+  /** A quoted attribute value, its quotes included. */
+  | "xmd-value"
+  /** The braces around a reference, and a JSON boolean. */
+  | "reference-brace"
+  /** What a reference names. */
+  | "reference-content"
+  | "json-number"
+  | "json-string"
+  | "json-null"
+  /** Characters that join a reading rather than say anything themselves. */
+  | "punctuation"
+  /** The cue in front of the row a keystroke reaches. */
+  | "focus-marker"
   /** What a run produced: the thing a reader came for. */
   | "output"
   /** Facts about an event rather than its result. */
@@ -66,6 +93,8 @@ export type ReplPresentationRole =
   | "action"
   /** The name of the reading a drawer is showing. */
   | "drawer-title"
+  /** The name of a drawer holding something nobody has answered yet. */
+  | "question-title"
   /** What a field is called. */
   | "field-label"
   /** What a field means, or where a record came from. */
@@ -118,10 +147,28 @@ export const REPL_PALETTE = Object.freeze({
   source: 0xc8d2d9,
   /** A result, which outranks the metadata around it. */
   output: 0xe6ecf1,
-  /** A heading, a field's name, a drawer's title. */
+  /** A heading, a drawer's title, something you activate. */
   heading: 0xcfe0ea,
   /** Subordinate facts: metadata, a hint, where a record came from. */
   muted: 0x7b858d,
+  /** What a field is called, and the one JSON value that is an absence. */
+  label: 0x8b959c,
+  /** A heading written in the source being shown. */
+  sourceHeading: 0xc7c4e6,
+  /** What opens and closes a tag. */
+  delimiter: 0x4e8b9c,
+  /** What an attribute is called, and what a JSON key is. */
+  attribute: 0x8fa7b8,
+  /** A quoted attribute value. */
+  quoted: 0xd6b477,
+  /** The braces around a reference, and a JSON boolean. */
+  brace: 0x9b8ed0,
+  /** What a reference names. */
+  reference: 0xb7aee0,
+  number: 0xd69a6a,
+  string: 0x9ec49a,
+  /** Characters that join a reading rather than say anything themselves. */
+  punctuation: 0x7c868d,
   success: 0x5aa87c,
   failure: 0xc2766e,
   waiting: 0xc99a3f,
@@ -134,6 +181,8 @@ export const REPL_PALETTE = Object.freeze({
   historySurface: 0x08090b,
   draftSurface: 0x0a0d0f,
   fieldSurface: 0x090c0e,
+  /** Whatever no pane, drawer or footer row of its own covers. */
+  applicationSurface: 0x0b0d0f,
   /** The rectangle a drawer covers the body with. */
   drawerSurface: 0x0e1316,
   /** The transcript's own surface. */
@@ -164,15 +213,31 @@ export interface ReplTextStyle {
 /**
  * The foreground one row's text takes, focus included.
  *
- * Focus wins the foreground and adds weight, because the row a keystroke reaches
- * is the one fact a reader needs before any other. It leaves the surface alone,
- * so a selected row that loses focus is still visibly the selected row.
+ * Focus adds weight and nothing else. It leaves the surface alone, so a selected
+ * row that loses focus is still visibly the selected row; and it leaves the
+ * foreground alone, so the row a keystroke reaches is still readable as the
+ * thing it is. Which row that is, is said by the marker in front of it.
  */
 export function textStyleOf(style: ReplRowStyle, focused: boolean): ReplTextStyle {
-  if (focused) {
-    return Object.freeze({ colour: REPL_PALETTE.focus, attrs: BOLD });
-  }
-  return Object.freeze({ colour: colourOf(style), attrs: attrsOf(style.role) });
+  return runStyleOf(style.role, style, focused);
+}
+
+/**
+ * The foreground one run of a row's text takes.
+ *
+ * The run's own role decides the colour and the weight; the row it belongs to
+ * decides whether a retained reading is being marked, which is a fact about the
+ * row rather than about any of its characters.
+ */
+export function runStyleOf(
+  role: ReplPresentationRole,
+  row: ReplRowStyle,
+  focused: boolean,
+): ReplTextStyle {
+  return Object.freeze({
+    colour: colourOf(role, row.inspected),
+    attrs: attrsOf(role) | (focused ? BOLD : 0),
+  });
 }
 
 /**
@@ -212,22 +277,47 @@ export function terminalColour(colour: number): number {
   return rgba((colour >> 16) & 0xff, (colour >> 8) & 0xff, colour & 0xff);
 }
 
-function colourOf(style: ReplRowStyle): number {
+function colourOf(role: ReplPresentationRole, inspected: boolean): number {
   // A retained reading is marked on the two rows that say which reading it is,
   // and nowhere else: accenting every source line of a historical prefix would
   // say the document had changed rather than that the position had.
-  if (style.inspected && (style.role === "status" || style.role === "history")) {
+  if (inspected && (role === "status" || role === "history")) {
     return REPL_PALETTE.historical;
   }
-  switch (style.role) {
+  switch (role) {
     case "output":
     case "field-value":
       return REPL_PALETTE.output;
     case "pane-heading":
     case "drawer-title":
-    case "field-label":
     case "action":
       return REPL_PALETTE.heading;
+    case "field-label":
+    case "json-null":
+      return REPL_PALETTE.label;
+    case "source-heading":
+      return REPL_PALETTE.sourceHeading;
+    case "xmd-delimiter":
+      return REPL_PALETTE.delimiter;
+    case "xmd-tag":
+    case "focus-marker":
+      return REPL_PALETTE.focus;
+    case "xmd-attribute":
+      return REPL_PALETTE.attribute;
+    case "xmd-value":
+      return REPL_PALETTE.quoted;
+    case "reference-brace":
+      return REPL_PALETTE.brace;
+    case "reference-content":
+      return REPL_PALETTE.reference;
+    case "json-number":
+      return REPL_PALETTE.number;
+    case "json-string":
+      return REPL_PALETTE.string;
+    case "punctuation":
+      return REPL_PALETTE.punctuation;
+    case "question-title":
+      return REPL_PALETTE.waiting;
     case "metadata":
     case "field-hint":
       return REPL_PALETTE.muted;
@@ -247,8 +337,14 @@ function colourOf(style: ReplRowStyle): number {
 }
 
 function attrsOf(role: ReplPresentationRole): number {
-  if (role === "pane-heading" || role === "drawer-title" || role === "field-label") {
-    return BOLD;
+  switch (role) {
+    case "pane-heading":
+    case "drawer-title":
+    case "question-title":
+    case "field-label":
+    case "source-heading":
+      return BOLD;
+    default:
+      return 0;
   }
-  return 0;
 }

@@ -1004,7 +1004,16 @@ function drawerMarkers(terminal: Terminal): string[] {
   const box = drawerBox(terminal.size);
   let title = false;
   for (let row = box.top; row < box.bottom; row += 1) {
-    const text = (rows[row] ?? "").slice(box.left, box.right).trimEnd();
+    // Trimmed both ends, because a drawer's rows start one column in from its
+    // rectangle: a focus marker read from the rectangle's own left edge has a
+    // space in front of it, and the strip below would leave it on the label.
+    const text = (rows[row] ?? "").slice(box.left, box.right).trim();
+    // The drawer's own top rule, which is decoration rather than a reading: it
+    // is the first row of the rectangle, so a walk that took it for the title
+    // would read the title as a position and every position as the one after it.
+    if (text.length > 0 && /^\u2500+$/.test(text)) {
+      continue;
+    }
     const label = text.replace(/^>\s*/, "").trim();
     if (label.length === 0) {
       // Before the drawer's first row there is nothing of it to read; after its
@@ -1056,13 +1065,20 @@ function* drawerContent(
   const first = drawerMarkers(terminal);
   take();
   yield* focusOn(terminal, "[v later]");
+  // Stopped when the window itself stops moving, not when a press reveals no
+  // label this walk had not already collected. A serialized value repeats rows —
+  // `}` closes every object — so a press that only brought a duplicate into view
+  // would end the walk with the rows after it never read.
+  let previous = first.join("\n");
   for (let press = 0; press < limit; press += 1) {
-    const before = seen.length;
     terminal.feed("\r");
     yield* settled(20);
-    if (take() === before) {
+    const shown = drawerMarkers(terminal).join("\n");
+    take();
+    if (shown === previous) {
       return { first, reached: seen };
     }
+    previous = shown;
   }
   return { first, reached: seen };
 }
@@ -2686,8 +2702,9 @@ describe("REPL journey: the same product at every size", () => {
           // And positionally: no label this drawer lists is anywhere near this
           // long, so every column past it belongs to the drawer and must have
           // been painted by it. A drawer that stopped short would leave whatever
-          // the transcript has out there exactly where it was.
-          expect((inside.slice(LABEL_ROOM) ?? "").trim()).toBe("");
+          // the transcript has out there exactly where it was. The drawer's own
+          // top rule reaches that edge too, and is the drawer painting it.
+          expect((inside.slice(LABEL_ROOM) ?? "").replace(/\u2500/g, "").trim()).toBe("");
         }
 
         terminal.end();

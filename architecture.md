@@ -5842,19 +5842,43 @@ surface. It is pure: no operation, no contextual Api, no Journal access, no
 mutable state and no export beyond this feature, so a role owns nothing that can
 outlive the frame that computed it. The palette lives there and nowhere else.
 
+**A row whose characters mean different things carries runs.** A run is plain
+immutable view data — a string and the name of a role — issued by the composition
+module and concatenating to exactly the text the row draws. The ops builder emits
+one text operation per run *inside the one element the row was measured as*, so a
+row reading as several things is still one node, one bound and one pointer target:
+a child per token would publish a hit box for every delimiter on the screen. Runs
+apply only when they spell the text being drawn; a row whose mounted node
+contributed something else is drawn as one stretch under the row's own role.
+
+A second private module says what the characters of the two readings this screen
+shows verbatim are: executable Markdown source, and a serialized JSON value. It
+classifies one line at a time, because a cell is a row and a classifier carrying
+state across rows would be answering about a document. It is pure and
+presentation-only — it validates nothing, evaluates nothing and rewrites nothing,
+and every run it returns concatenates back to the line it was given. JSON is
+classified from a value this product had already parsed or from a reading a caller
+knows is JSON, never from a guess that arbitrary provider or document text looks
+like JSON.
+
 **Keyboard focus is not a fact about the reading**, so it arrives later. After
 reconciliation the commit boundary passes the actual focused mounted node's id to
 the ops builder for that frame alone, matched by exact mounted identity and
-discarded with the ops it decorated. Focus changes a foreground and its attributes
-and never geometry; selection keeps an independent surface. Neither repairs,
-stores or grants focus.
+discarded with the ops it decorated. Focus adds weight and never geometry, and it
+takes no foreground away: a row's own roles say what its characters are, and the
+focus colour belongs to the marker in front of the row, which is a run of its own.
+Selection keeps an independent surface. Neither repairs, stores or grants focus.
 
 **One builder decorates both passes.** The measurement pass and the committed
 pass run through the same op builder, so pane edges, surfaces and headings
 participate in measurement and a measured region cannot disagree with the region
 drawn into it. A pane's own edges are not part of the room inside it: a bordered
 pane carries a border-free content box, and rows are built to the width the engine
-reports for that box rather than to the pane's outer bound. The renderer stays
+reports for that box rather than to the pane's outer bound. A drawer's own
+decoration is held to the same rule: the rule along the top of its rectangle and
+the one-cell inset on each side are elements of that rectangle, so the content
+window is measured at what they leave and admission answers from that measurement
+rather than from the undecorated rectangle. The renderer stays
 model-blind — it receives ops and geometry, classifies no row text, and no
 production string carries an escape sequence.
 

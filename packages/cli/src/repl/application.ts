@@ -28,8 +28,14 @@
 import { Ok, type Result } from "effection";
 import type { Json } from "@executablemd/durable-streams";
 
-import { describe as describeNode, fields, readDescription } from "./description.ts";
-import type { ReplComponent, ReplDescription, ReplViewData } from "./description.ts";
+import {
+  describe as describeNode,
+  fields,
+  readDescription,
+  runText,
+  tokenRuns,
+} from "./description.ts";
+import type { ReplComponent, ReplDescription, ReplTokenRun, ReplViewData } from "./description.ts";
 import {
   actionRowProps,
   bandProps,
@@ -74,7 +80,8 @@ import {
 } from "./layout-admission.ts";
 import type { ReplAdmission, ReplWindow } from "./layout-admission.ts";
 import { ORDINARY, REPL_PALETTE, styleOf } from "./presentation-style.ts";
-import type { ReplRowStyle } from "./presentation-style.ts";
+import type { ReplPresentationRole, ReplRowStyle } from "./presentation-style.ts";
+import { jsonRuns, sourceRuns } from "./presentation-text.ts";
 import type { ReplTerminalSize } from "./terminal.ts";
 import {
   decodeLocation,
@@ -112,6 +119,7 @@ import type { ReplTree } from "./reconcile.ts";
 import {
   DRAWER,
   FIELD,
+  fieldParts,
   fieldText,
   focusPrefixed,
   LINE,
@@ -1534,6 +1542,34 @@ interface Described {
   readonly key: string;
   readonly description: ReplDescription<ReplAction>;
   readonly style: ReplRowStyle;
+  /**
+   * The stretches this row's text is made of, where its characters mean
+   * different things.
+   *
+   * Built here, with the text, from the same pieces — so the runs spell exactly
+   * what the row draws. A row whose characters all mean one thing carries none.
+   */
+  readonly runs?: readonly ReplTokenRun[];
+}
+
+/**
+ * One row's label as runs, padded to the room it has, the padding reading as the
+ * row does.
+ *
+ * The same arithmetic `pad` does, in runs: a row is padded so that what it draws
+ * is exactly as wide as the box it was measured in, and the cells it pads with
+ * belong to the row rather than to whatever its last stretch happened to be.
+ */
+function padded(
+  parts: readonly ReplTokenRun[],
+  room: number,
+  token: ReplPresentationRole,
+): readonly ReplTokenRun[] {
+  const text = runText(parts);
+  if (room < 1 || text.length >= room) {
+    return parts;
+  }
+  return tokenRuns([...parts, { text: "".padEnd(room - text.length, " "), token }]);
 }
 
 function row(
@@ -1546,12 +1582,22 @@ function row(
     readonly here?: string | undefined;
     /** The key this frame restores focus to, for the row that turns out to be it. */
     readonly claim?: string | undefined;
+    /** What this row's label is made of, where it is made of more than one thing. */
+    readonly runs?: readonly ReplTokenRun[];
   } = {},
 ): Described {
   const claims = options.focus === true || options.claim === key;
+  // The marker is its own stretch, which is how a focused row keeps every
+  // foreground it had and still says where the next keystroke lands.
+  const here = options.here === key;
+  const runs = tokenRuns([
+    { text: focusPrefixed("", here), token: here ? "focus-marker" : style.role },
+    ...(options.runs ?? [{ text: label, token: style.role }]),
+  ]);
   return {
     key,
     style,
+    runs,
     description: describeNode<ReplAction>({
       key,
       component: SELECT_ROW,
@@ -1701,10 +1747,16 @@ function selected(on: boolean): string {
   return on ? "* " : "  ";
 }
 
-function line(key: string, label: string, style: ReplRowStyle): Described {
+function line(
+  key: string,
+  label: string,
+  style: ReplRowStyle,
+  runs?: readonly ReplTokenRun[],
+): Described {
   return {
     key,
     style,
+    ...(runs === undefined ? {} : { runs }),
     description: describeNode<ReplAction>({ key, component: LINE, input: { label } }),
   };
 }
@@ -2081,8 +2133,19 @@ function guidanceParts(
  * whatever was underneath it visible from where its text ends — and a modal you
  * can read the transcript through is not a modal.
  */
-function drawerLine(key: string, label: string, width: number, style: ReplRowStyle): Described {
-  return line(key, width < 1 ? label : label.padEnd(width, " "), style);
+function drawerLine(
+  key: string,
+  label: string,
+  width: number,
+  style: ReplRowStyle,
+  /** What the label is made of, where it is made of more than one thing. */
+  runs?: readonly ReplTokenRun[],
+): Described {
+  const text = width < 1 ? label : label.padEnd(width, " ");
+  if (runs === undefined) {
+    return line(key, text, style);
+  }
+  return line(key, text, style, padded(runs, text.length, style.role));
 }
 
 function field(
@@ -2096,11 +2159,24 @@ function field(
     readonly here?: string | undefined;
     /** The form field this line edits, for a line that edits one. */
     readonly field?: string;
+    /** What the value on this line is, for a line showing something classified. */
+    readonly classify?: (value: string) => readonly ReplTokenRun[];
   } = {},
 ): Described {
+  const here = options.here === key;
+  const parts = fieldParts(prompt, text, here);
+  const runs = tokenRuns([
+    { text: parts.marker, token: here ? "focus-marker" : style.role },
+    { text: parts.prompt, token: style.role },
+    { text: parts.earlier, token: style.role },
+    ...(options.classify === undefined
+      ? [{ text: parts.value, token: style.role }]
+      : options.classify(parts.value)),
+  ]);
   return {
     key,
     style,
+    runs,
     description: describeNode<ReplAction>({
       key,
       component: FIELD,
@@ -2577,7 +2653,9 @@ function described(view: ReplView, context: ReplPresentationContext): DescribedS
       state.draft,
       "draft",
       styleOf("draft"),
-      claiming ? { focus: true, here: view.focused } : { here: view.focused },
+      claiming
+        ? { focus: true, here: view.focused, classify: sourceRuns }
+        : { here: view.focused, classify: sourceRuns },
     ),
   );
 
@@ -3000,7 +3078,7 @@ function drawerFor(
   if (held === undefined) {
     return undefined;
   }
-  const { title, dismissing, entering, content } = held;
+  const { title, titleStyle, dismissing, entering, content } = held;
   const width = context.widths?.drawer ?? 0;
   const rows: Described[] = [];
   rows.push(
@@ -3052,7 +3130,7 @@ function drawerFor(
   );
   const drawer: Described = {
     key: "drawer:open",
-    style: styleOf("drawer-title"),
+    style: titleStyle,
     description: describeNode<ReplAction>({
       key: "drawer:open",
       component: DRAWER,
@@ -3067,6 +3145,14 @@ function drawerFor(
 /** What one drawer reading holds, before any window decides what is shown. */
 interface DrawerContent {
   readonly title: string;
+  /**
+   * What the title is, which is not the same for every drawer.
+   *
+   * A drawer holding something nobody has answered yet is named in the accent
+   * this screen already uses for waiting, so the one drawer a reader has to act
+   * on is the one that says so before they have read a word of it.
+   */
+  readonly titleStyle: ReplRowStyle;
   readonly dismissing: string | undefined;
   readonly entering: boolean;
   readonly content: readonly DrawerRow[];
@@ -3089,6 +3175,8 @@ function drawerContent(view: ReplView, width: number): DrawerContent | undefined
   // text stopped, because a renderer writes what changed and nothing else.
   const content: DrawerRow[] = [];
   let title: string;
+  /** What the title reads as. Ordinary unless this drawer is a question. */
+  let titleStyle: ReplRowStyle = styleOf("drawer-title");
   /**
    * The request this drawer's close control denies, when it is one.
    *
@@ -3104,7 +3192,13 @@ function drawerContent(view: ReplView, width: number): DrawerContent | undefined
     title = drawerTitle("Binding", open.name, width);
     for (const [offset, text] of detail(open.binding.value).entries()) {
       content.push({
-        described: drawerLine(`drawer:value:${offset}`, text, width, styleOf("field-value")),
+        described: drawerLine(
+          `drawer:value:${offset}`,
+          text,
+          width,
+          styleOf("field-value"),
+          jsonRuns(text),
+        ),
       });
     }
   } else if (open.kind === "recorded-elicit") {
@@ -3117,6 +3211,10 @@ function drawerContent(view: ReplView, width: number): DrawerContent | undefined
     });
     for (const [offset, text] of detail(open.elicitation.schema).entries()) {
       content.push({
+        // The schema stays the subordinate reading it already is. What was
+        // asked for is the shape of the question, not the value this drawer
+        // exists to show, and colouring it as a value would put the two
+        // readings on the same footing.
         described: drawerLine(`drawer:schema:${offset}`, text, width, styleOf("field-hint")),
       });
     }
@@ -3125,7 +3223,13 @@ function drawerContent(view: ReplView, width: number): DrawerContent | undefined
     });
     for (const [offset, text] of detail(open.elicitation.answer).entries()) {
       content.push({
-        described: drawerLine(`drawer:answer:${offset}`, text, width, styleOf("field-value")),
+        described: drawerLine(
+          `drawer:answer:${offset}`,
+          text,
+          width,
+          styleOf("field-value"),
+          jsonRuns(text),
+        ),
       });
     }
   } else if (open.kind === "live-permission") {
@@ -3140,6 +3244,7 @@ function drawerContent(view: ReplView, width: number): DrawerContent | undefined
       return undefined;
     }
     title = drawerTitle("Permission", request.title, width);
+    titleStyle = styleOf("question-title");
     // One window over the whole of it. `options` is the provider's, and nothing
     // bounds how many it offers: a drawer that described every choice would have
     // layout clip the last ones, which are exactly the ones a person scrolled
@@ -3175,6 +3280,7 @@ function drawerContent(view: ReplView, width: number): DrawerContent | undefined
     }
     const form = question.form;
     title = form.title ?? "Answer";
+    titleStyle = styleOf("question-title");
     // One viewport over the whole ordered content. Everything a person has to
     // read or reach — the complete message, the form's description, every field
     // with its annotation, options, editable value, every validation message and
@@ -3183,7 +3289,13 @@ function drawerContent(view: ReplView, width: number): DrawerContent | undefined
     // placed in.
     for (const [offset, text] of question.message.split("\n").entries()) {
       content.push({
-        described: drawerLine(`drawer:message:${offset}`, text, width, styleOf("source")),
+        described: drawerLine(
+          `drawer:message:${offset}`,
+          text,
+          width,
+          styleOf("source"),
+          sourceRuns(text),
+        ),
       });
     }
     if (form.description !== undefined) {
@@ -3198,13 +3310,26 @@ function drawerContent(view: ReplView, width: number): DrawerContent | undefined
       const value = view.state.form.values[one.name] ?? "";
       const marked = requiredNow(form, view.state.form.values, one) ? "*" : " ";
       const label = one.title ?? one.name;
+      // What the field is called and what is in it, on one row and told apart:
+      // a reader scanning a form reads down the labels, and a label that looked
+      // like its own value would make them read every row to find the one they
+      // have not filled in yet.
+      const named = padded(
+        tokenRuns([
+          { text: `${marked}${label}:`, token: "field-label" },
+          { text: " ", token: "field-label" },
+          { text: value, token: "field-value" },
+        ]),
+        width - FOCUS_MARKER,
+        "field-label",
+      );
       content.push({
         described: row(
           `drawer:field:${one.name}`,
-          padControl(`${marked}${label}: ${value}`, width),
+          runText(named),
           { select: "form-field", field: one.name },
           styleOf("field-label"),
-          { here: view.focused },
+          { here: view.focused, runs: named },
         ),
       });
       if (one.description !== undefined) {
@@ -3283,7 +3408,7 @@ function drawerContent(view: ReplView, width: number): DrawerContent | undefined
     });
   }
 
-  return { title, dismissing, entering, content };
+  return { title, titleStyle, dismissing, entering, content };
 }
 
 /**
@@ -4018,6 +4143,7 @@ interface ReplCandidate {
   readonly text: string;
   readonly control: boolean;
   readonly style: ReplRowStyle;
+  readonly runs: readonly ReplTokenRun[] | undefined;
 }
 
 /**
@@ -4038,6 +4164,14 @@ function candidatesOf(
    * ordinary prose.
    */
   styles: ReadonlyMap<string, ReplRowStyle>,
+  /**
+   * What each described row's characters are, by the key it was described under.
+   *
+   * Carried for the same reason the style is: the finished descriptions no
+   * longer hold the pieces a row was built from, and a pass that recovered them
+   * from the string would be classifying text it had already lost the facts for.
+   */
+  runs: ReadonlyMap<string, readonly ReplTokenRun[]>,
 ): readonly ReplCandidate[] {
   const found: ReplCandidate[] = [];
   const walk = (description: ReplDescription<ReplAction>): void => {
@@ -4050,6 +4184,7 @@ function candidatesOf(
         text: measurementTextOf(read.component, read.input),
         control: isControl(read.component, read.input),
         style: styles.get(read.key) ?? ORDINARY,
+        runs: runs.get(read.key),
       });
     }
     for (const child of read.children) {
@@ -4124,6 +4259,7 @@ function rowBox(candidate: ReplCandidate, region: ReplRegion, width: number | un
     text: candidate.text,
     control: candidate.control,
     style: candidate.style,
+    runs: candidate.runs,
   });
 }
 
@@ -4142,8 +4278,12 @@ export function presentationFor(
   const screen = described(view, context);
   const descriptions = screen.items.map((item) => item.description);
   const styles = new Map<string, ReplRowStyle>();
+  const runs = new Map<string, readonly ReplTokenRun[]>();
   for (const one of screen.rows) {
     styles.set(one.key, one.style);
+    if (one.runs !== undefined) {
+      runs.set(one.key, one.runs);
+    }
   }
   const size = view.size;
   const profile = profileFor(size);
@@ -4188,7 +4328,7 @@ export function presentationFor(
     };
   }
 
-  const candidates = candidatesOf(descriptions, styles);
+  const candidates = candidatesOf(descriptions, styles, runs);
   const viewports: ReplViewportSlot[] = [];
   const regions: { region: ReplRegion; id: string }[] = [];
   /** The border-free inside of each pane that has edges. */
@@ -4457,6 +4597,7 @@ export function presentationFor(
                     text: candidate.text,
                     control: candidate.control,
                     style: candidate.style,
+                    runs: candidate.runs,
                   }),
                 ),
               }),

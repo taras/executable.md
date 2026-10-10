@@ -1488,7 +1488,20 @@ describe("F3 — every placed modal control is in the ring", () => {
     // A real one-entry history under it, so the row names the entry the question
     // belongs to rather than a readiness with no entry in it.
     const recorded = yield* retained();
-    const state = opened(live);
+    // One window action first. The drawer's top rule and side inset are part of
+    // its measured rectangle, so at 72x20 the content window is one row shorter
+    // than this form's rows and `[submit]` is in the next one. Advanced through
+    // the control a person presses, against the admission the frame measured,
+    // rather than by setting an offset: what the ring must hold is what a frame
+    // really placed.
+    const atTop = opened(live);
+    const state = reduceRepl(
+      atTop,
+      { kind: "scroll", delta: 1 },
+      recorded.model,
+      live,
+      yield* admissionOf(atTop, live, recorded.model, NARROW),
+    ).state;
     const view = reading(state, live, recorded.model, NARROW, undefined);
     yield* applied(tree, view);
 
@@ -1585,7 +1598,7 @@ describe("F2 — an invalid answer is not a lifecycle refusal", () => {
 
   it("UI17: the field keeps its own explanation, and the state row still says the state", function* () {
     // A short question, so the whole form — the message under its field included
-    // — is inside the drawer's window rather than scrolled out of it.
+    // — is reachable inside the drawer's window rather than past the end of it.
     const asked = yield* askingFor(CONFIRM_SCHEMA);
     const live = asking(asked.question);
     const recorded = yield* retained();
@@ -1598,7 +1611,19 @@ describe("F2 — an invalid answer is not a lifecycle refusal", () => {
         messages: Object.freeze([{ field: "decision", message: "decision is required" }]),
       }),
     });
-    const rows = rowsOf(yield* seenView(reading(invalid, live, recorded.model, NARROW, undefined)));
+    // One window action, for the row the drawer's top rule and side inset take
+    // out of its measured content window at 72x20. The validation row is the
+    // last of this form's rows, so it is in the window after the first one.
+    const advanced = reduceRepl(
+      invalid,
+      { kind: "scroll", delta: 1 },
+      recorded.model,
+      live,
+      yield* admissionOf(invalid, live, recorded.model, NARROW),
+    ).state;
+    const rows = rowsOf(
+      yield* seenView(reading(advanced, live, recorded.model, NARROW, undefined)),
+    );
 
     // Under the form, about the field, in its own row.
     const under = rows.find((one) => one.key.startsWith("drawer:invalid:"));

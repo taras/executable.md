@@ -285,6 +285,16 @@ moves the window and changes nothing else. It selects no position, answers no
 question, writes nothing to the file and does not touch the location, so moving
 through a long record cannot change what you are reading.
 
+A drawer is bounded. A rule along the top of its rectangle says where the reading
+behind it stops, and its title and its rows start one cell in from each side, so a
+title cannot be read as one more line of what the drawer is covering. Both belong
+to the rectangle and both are measured: the window is measured at what is left
+after them, so a reading one row longer than that window is reached with one more
+`later` rather than drawn over the rule. A drawer holding a question nobody has
+answered yet — the question itself, or a pending permission request — is named in
+the accent this screen uses for waiting, so the drawer you have to act on says so
+before you have read a word of it.
+
 The title, both window controls and `[close]` stay outside the thing they move,
 and the footer keeps its own seven rows — `[history]` and `[exit]` stay reachable
 from inside an open drawer, where they belong to that drawer.
@@ -549,10 +559,24 @@ the same surface wherever it is, in a drawer or in the footer, so you can tell
 what you can press from what you can only read.
 
 Two of these are independent and stay that way. The row you have **selected**
-keeps its own surface for its whole measured width, and keyboard **focus** changes
-only the colour and weight of the row your next keystroke reaches — so moving
-focus never takes the selection off what you were reading, and both are visible at
-once.
+keeps its own surface for its whole measured width, and keyboard **focus** marks
+the row your next keystroke reaches and adds weight to it — so moving focus never
+takes the selection off what you were reading, and both are visible at once.
+Focus takes no colour off a row: what a row's characters are stays readable while
+you are standing on it, and the marker in front of the row is the one thing the
+focus colour belongs to.
+
+Source and JSON are read character by character. In a draft, in a read-only
+source row and in the source a question shows you, a heading, the characters that
+open and close a tag, a tag's name, an attribute's name, a quoted value, the
+braces around a reference and what the reference names are each drawn as the
+thing they are; and a binding's or a recorded answer's complete value shows its
+keys, its strings, its numbers, its booleans, its nulls and its punctuation
+apart. Reading is all it is. Nothing is validated, evaluated, rejected or
+rewritten, every character you typed is still there — a half-written `as="ans`
+included — and anything the screen cannot classify reads as ordinary source. Nor
+is anything guessed at: a value is read as JSON because this product serialized
+one, not because some text happens to begin with a brace.
 
 A reading of this screen with the colour thrown away loses nothing it needs. An
 outcome is spelled `[ok]` or `[err]`, a selected row keeps its `*`, a focused
