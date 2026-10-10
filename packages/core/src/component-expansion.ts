@@ -19,6 +19,7 @@ import type { Operation, Queue, Stream } from "effection";
 import { expandThroughTerminal } from "./component-api.ts";
 import type { ComponentExpansionPhase, ComponentExpansionRequest } from "./component-api.ts";
 import type { Expansion } from "./expansion.ts";
+import { durabilityFailure, filesFatalFailure } from "./errors.ts";
 
 /** What an observer did that canonical expansion cannot act on. */
 export class ComponentExpansionProtocolError extends Error {
@@ -319,6 +320,33 @@ function explanatory(
 }
 
 /**
+ * Which failure a competing canonical and middleware outcome settles on.
+ *
+ * The same order expansion already reconciles bound failures in: durability
+ * first, then a Files fatal, then the canonical failure over a later ordinary
+ * one. Stated here rather than shared with `expand.ts`, because the two reach
+ * it with different shapes and a helper common to both would be a third
+ * boundary to keep in step.
+ *
+ * Within each fatal kind the canonical failure is preferred, so the earlier
+ * one wins. Middleware still cannot rescue a canonical failure: an ordinary
+ * middleware failure never displaces it.
+ */
+function selectedFailure(canonical: unknown, laterFailed: boolean, later: unknown): unknown {
+  const durable =
+    durabilityFailure(canonical) ?? (laterFailed ? durabilityFailure(later) : undefined);
+  if (durable !== undefined) {
+    return durable;
+  }
+  const files =
+    filesFatalFailure(canonical) ?? (laterFailed ? filesFatalFailure(later) : undefined);
+  if (files !== undefined) {
+    return files;
+  }
+  return canonical;
+}
+
+/**
  * Surround one element's work with its canonical observation.
  *
  * Every path that expands something an author wrote goes through here, so the
@@ -329,6 +357,7 @@ function explanatory(
  * happened and nothing more: it cannot read the value, and a handler cannot
  * replace it, rescue a failure or complete the element early.
  */
+
 export function* observeExpansion<T>(
   expansion: Expansion,
   work: (observed: ObservedExpansion) => Operation<T>,
@@ -376,8 +405,14 @@ export function* observeExpansion<T>(
     // from the terminal rather than from whether the chain returned normally.
     const settlement = issued.settlement();
     if (settlement.status === "raised") {
-      terminate({ phase: "complete", result: Err(reported(settlement.raised)) });
-      throw settlement.raised;
+      // Both halves can have failed: the body raised, and middleware's own
+      // unwind raised something else on the way out. A fatal failure is fatal
+      // whichever half it came from — an ordinary body error that hid a
+      // Journal failure would leave enclosing reconciliation believing the
+      // run is merely incorrect rather than unable to persist.
+      const selected = selectedFailure(settlement.raised, chainFailed, chainFailure);
+      terminate({ phase: "complete", result: Err(reported(selected)) });
+      throw selected;
     }
     if (settlement.status === "absent") {
       const refusal = chainFailed ? chainFailure : settlement.refusal;

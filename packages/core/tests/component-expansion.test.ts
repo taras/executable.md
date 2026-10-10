@@ -15,8 +15,11 @@ import { expect } from "@executablemd/test-support/expect";
 import { each, ensure, scoped, sleep, spawn, useScope, withResolvers } from "effection";
 import type { Scope } from "effection";
 import type { Operation } from "effection";
+import { DurablePersistenceError } from "@executablemd/durable-streams";
+import { FilesProviderUnavailableError } from "@executablemd/runtime";
 import { Component } from "../src/component-api.ts";
 import { printErrors } from "../src/component-failures.ts";
+import { durabilityFailure, filesFatalFailure } from "../src/errors.ts";
 import type { ComponentExpansionPhase, ComponentExpansionRequest } from "../src/component-api.ts";
 import { expandSegments } from "../src/expand.ts";
 import { renderSegments } from "../src/render.ts";
@@ -129,6 +132,21 @@ function watch(
       report: failure === undefined ? rendered : String(failure),
     };
   });
+}
+
+/**
+ * The detached report the one element under test completed with.
+ *
+ * Throws rather than returning undefined: a case that reaches here expects a
+ * failed terminal, and a missing one is the case not having happened.
+ */
+function reportedBy(watched: Watched): Error {
+  const phases = [...watched.seen.values()][0] ?? [];
+  const terminal = phases[phases.length - 1];
+  if (terminal?.phase !== "complete" || terminal.result.ok) {
+    throw new Error("the element did not complete with a failure");
+  }
+  return terminal.result.error;
 }
 
 describe("Tier CX — what surrounds one expansion", () => {
@@ -423,6 +441,127 @@ describe("Tier CX — what surrounds one expansion", () => {
     const phases = [...watched.seen.values()][0];
     const complete = phases[phases.length - 1];
     expect(complete.phase === "complete" && complete.result.ok).toBe(false);
+  });
+
+  it("CX3: durability raised while middleware unwinds outranks the body's failure", function* () {
+    const persistence = new DurablePersistenceError("yield", new Error("journal unavailable"));
+    const { failure, watched } = yield* watch(
+      "<Boom />",
+      {
+        Boom: component("Boom", function* () {
+          throw new Error("the body said no");
+        }),
+      },
+      function* (request, next) {
+        try {
+          yield* next(request);
+        } finally {
+          // Raised on the way out, after the body has already failed: both
+          // halves of this expansion failed, and only one can be the outcome.
+          throw persistence;
+        }
+      },
+    );
+
+    // The durability failure, by identity, so a fail-stop records the object
+    // that was thrown. An ordinary body error standing in for it would tell
+    // enclosing reconciliation the run is merely incorrect rather than unable
+    // to persist.
+    expect(durabilityFailure(failure)).toBe(persistence);
+    const report = reportedBy(watched);
+    expect([report.name, report.message]).toEqual([
+      "DurablePersistenceError",
+      "Failed to persist durable yield event",
+    ]);
+    // The selected diagnostic and its explanation, and no part of the failure
+    // itself: nothing a reader catches here is the durability failure.
+    expect(report.cause instanceof Error && report.cause.message).toBe("journal unavailable");
+    expect(report).not.toBe(persistence);
+    expect(durabilityFailure(report)).toBe(undefined);
+    expect(Object.isFrozen(report)).toBe(true);
+  });
+
+  it("CX3: a Files fatal raised while middleware unwinds outranks the body's failure", function* () {
+    const unavailable = new FilesProviderUnavailableError();
+    const { failure, watched } = yield* watch(
+      "<Boom />",
+      {
+        Boom: component("Boom", function* () {
+          throw new Error("the body said no");
+        }),
+      },
+      function* (request, next) {
+        try {
+          yield* next(request);
+        } finally {
+          throw unavailable;
+        }
+      },
+    );
+
+    expect(filesFatalFailure(failure)).toBe(unavailable);
+    const report = reportedBy(watched);
+    expect([report.name, report.message]).toEqual([
+      "FilesProviderUnavailableError",
+      "Files provider is not installed",
+    ]);
+    // Detached of the fatal branding too: the report carries the diagnostic,
+    // not the structural data that makes an infrastructure failure one.
+    expect(report).not.toBe(unavailable);
+    expect(filesFatalFailure(report)).toBe(undefined);
+    expect(Object.isFrozen(report)).toBe(true);
+  });
+
+  it("CX3: a later ordinary middleware failure does not displace the body's", function* () {
+    const { report, failure, watched } = yield* watch(
+      "<Boom />",
+      {
+        Boom: component("Boom", function* () {
+          throw new Error("the body said no");
+        }),
+      },
+      function* (request, next) {
+        try {
+          yield* next(request);
+        } finally {
+          throw new Error("the unwind said no");
+        }
+      },
+    );
+
+    // Neither failure is fatal, so the earlier one stays authoritative:
+    // middleware cannot rescue a canonical failure, and it cannot replace one
+    // either.
+    expect(failure instanceof Error && failure.message).toBe("the body said no");
+    expect(report).toContain("the body said no");
+    expect(report).not.toContain("the unwind said no");
+    expect(reportedBy(watched).message).toBe("the body said no");
+  });
+
+  it("CX3: a body that succeeded still fails when middleware's unwind raises", function* () {
+    const persistence = new DurablePersistenceError("close", new Error("journal unavailable"));
+    const { failure, rendered, watched } = yield* watch(
+      "<Hello />",
+      {
+        Hello: component("Hello", function* () {
+          return "hi";
+        }),
+      },
+      function* (request, next) {
+        try {
+          yield* next(request);
+        } finally {
+          throw persistence;
+        }
+      },
+    );
+
+    // The control for the two cases above: there is no competition here, and
+    // the same failure is the outcome. A body that returned is not an
+    // expansion that persisted.
+    expect(durabilityFailure(failure)).toBe(persistence);
+    expect(rendered).toBe("");
+    expect(reportedBy(watched).name).toBe("DurablePersistenceError");
   });
 
   it("CX3: observing changes neither what rendered nor how it failed", function* () {
