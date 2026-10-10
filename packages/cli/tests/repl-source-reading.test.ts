@@ -35,7 +35,7 @@ import { useCountingRenderer } from "./fixtures/repl/presentation.ts";
 import type { ReplCountingRenderer } from "./fixtures/repl/presentation.ts";
 import { useReplRenderer } from "../src/repl/renderer.ts";
 import type { ReplRenderer } from "../src/repl/renderer.ts";
-import { runText } from "../src/repl/description.ts";
+import { runText, tokenRuns } from "../src/repl/description.ts";
 import { NO_LIFECYCLE } from "../src/repl/lifecycle.ts";
 import type { ReplLifecycleReading, ReplOccurrence } from "../src/repl/lifecycle.ts";
 import type { ReplEntry, ReplScope, ReplTerminal } from "../src/repl/model.ts";
@@ -947,46 +947,146 @@ describe("S5 a reading is measured once for the inputs it was measured for", () 
       expect(renderer.measures()).toBe(0);
     }));
 
-  it("measures again when the source, the depth or the room actually changed", () =>
+  /**
+   * One logical line, built here so a single input can move on its own.
+   *
+   * A reading built from source carries its depth from the nesting its text
+   * has, so changing depth alone means stating the line rather than deriving
+   * it. The text wraps at the rooms below, which is what makes a change of
+   * depth or room visible in the cuts.
+   */
+  function line(key: string, text: string, depth: number): ReplReadingLine {
+    return Object.freeze({
+      key,
+      text,
+      runs: tokenRuns([{ text, token: "source" }]),
+      rail: "rail-pending" as const,
+      depth,
+      badge: undefined,
+      style: Object.freeze({ role: "source" as const, selected: false, inspected: false }),
+    });
+  }
+
+  const WRAPPING = [
+    line(
+      "l1",
+      '<Json value={{ note: "a sentence long enough to be cut more than once" }} as="a" />',
+      0,
+    ),
+    line(
+      "l2",
+      "  a second line, indented, also long enough that the room decides where it ends",
+      0,
+    ),
+  ];
+
+  const deeper = (lines: readonly ReplReadingLine[]) =>
+    lines.map((one) => line(one.key, one.text, one.depth + 3));
+
+  /** The cuts, widths and recovered text one prepared reading produced. */
+  function shapeOf(prepared: ReplPreparedReading) {
+    return {
+      rows: prepared.rows.map((one) => ({ key: one.key, text: one.text, width: one.width })),
+      recovered: [...recovered(prepared).entries()],
+    };
+  }
+
+  /**
+   * The same inputs fitted with no store at all, which is the answer the
+   * cached path has to agree with.
+   */
+  function* fresh(
+    renderer: ReplCountingRenderer,
+    size: ReplTerminalSize,
+    lines: readonly ReplReadingLine[],
+    room: number,
+  ): Operation<ReplPreparedReading> {
+    const measured = yield* prepareReading(renderer, size, lines, room);
+    if (!measured.ok) {
+      throw measured.error;
+    }
+    return measured.value;
+  }
+
+  it("measures again when only the depth changed, and cuts for the new depth", () =>
     withCounting(function* (renderer) {
       const store = createFitStore();
-      const lines = linesOf(longSource(40));
-      expect((yield* prepareReading(renderer, WIDE, lines, 100, store)).ok).toBe(true);
-
-      // A different room is a different fit, and says so.
-      renderer.reset();
-      const narrower = yield* prepareReading(renderer, WIDE, lines, 60, store);
-      expect(renderer.measures()).toBeGreaterThan(0);
-      expect(narrower.ok).toBe(true);
-
-      // Back to the first room: the store holds one answer, so this is a miss
-      // too, and it is still the right answer.
-      renderer.reset();
-      const back = yield* prepareReading(renderer, WIDE, lines, 100, store);
-      expect(renderer.measures()).toBeGreaterThan(0);
-      if (!back.ok) {
-        throw back.error;
+      // Warmed on the exact inputs this pair is about, immediately before.
+      const warm = yield* prepareReading(renderer, WIDE, WRAPPING, 60, store);
+      if (!warm.ok) {
+        throw warm.error;
       }
-
-      // One character of one line, and the whole reading is measured again.
       renderer.reset();
-      const edited = yield* prepareReading(
-        renderer,
-        WIDE,
-        linesOf(longSource(40).replace("line 0 of", "line 0 OF")),
-        100,
-        store,
+
+      // Only the depth moves: same text, same room, same size.
+      const nested = deeper(WRAPPING);
+      const cached = yield* prepareReading(renderer, WIDE, nested, 60, store);
+      expect(renderer.measures()).toBeGreaterThan(0);
+      if (!cached.ok) {
+        throw cached.error;
+      }
+      // It is the fit this depth deserves, not the one the store was holding.
+      expect(shapeOf(cached.value)).toEqual(shapeOf(yield* fresh(renderer, WIDE, nested, 60)));
+      // And a deeper reading really is cut differently, or the comparison
+      // above would hold for a store that ignored depth entirely.
+      expect(shapeOf(cached.value)).not.toEqual(shapeOf(warm.value));
+    }));
+
+  it("measures again when only the room changed, and cuts for the new room", () =>
+    withCounting(function* (renderer) {
+      const store = createFitStore();
+      const warm = yield* prepareReading(renderer, WIDE, WRAPPING, 60, store);
+      if (!warm.ok) {
+        throw warm.error;
+      }
+      renderer.reset();
+
+      const cached = yield* prepareReading(renderer, WIDE, WRAPPING, 40, store);
+      expect(renderer.measures()).toBeGreaterThan(0);
+      if (!cached.ok) {
+        throw cached.error;
+      }
+      expect(shapeOf(cached.value)).toEqual(shapeOf(yield* fresh(renderer, WIDE, WRAPPING, 40)));
+      expect(shapeOf(cached.value)).not.toEqual(shapeOf(warm.value));
+    }));
+
+  it("measures again when only the terminal size changed", () =>
+    withCounting(function* (renderer) {
+      const store = createFitStore();
+      const warm = yield* prepareReading(renderer, WIDE, WRAPPING, 60, store);
+      if (!warm.ok) {
+        throw warm.error;
+      }
+      renderer.reset();
+
+      // Only the size moves: same lines, same room.
+      const cached = yield* prepareReading(renderer, NARROW_SIZE, WRAPPING, 60, store);
+      expect(renderer.measures()).toBeGreaterThan(0);
+      if (!cached.ok) {
+        throw cached.error;
+      }
+      expect(shapeOf(cached.value)).toEqual(
+        shapeOf(yield* fresh(renderer, NARROW_SIZE, WRAPPING, 60)),
       );
-      expect(renderer.measures()).toBeGreaterThan(0);
-      if (!edited.ok) {
-        throw edited.error;
-      }
-      expect(edited.value.rows.some((one) => one.text.includes("line 0 OF"))).toBe(true);
+    }));
 
-      // A different terminal size, at the same room.
+  it("measures again when only one line's text changed", () =>
+    withCounting(function* (renderer) {
+      const store = createFitStore();
+      const warm = yield* prepareReading(renderer, WIDE, WRAPPING, 60, store);
+      if (!warm.ok) {
+        throw warm.error;
+      }
       renderer.reset();
-      expect((yield* prepareReading(renderer, NARROW_SIZE, lines, 100, store)).ok).toBe(true);
+
+      const edited = [line("l1", `${WRAPPING[0].text} and one more clause`, 0), WRAPPING[1]];
+      const cached = yield* prepareReading(renderer, WIDE, edited, 60, store);
       expect(renderer.measures()).toBeGreaterThan(0);
+      if (!cached.ok) {
+        throw cached.error;
+      }
+      expect(shapeOf(cached.value)).toEqual(shapeOf(yield* fresh(renderer, WIDE, edited, 60)));
+      expect(shapeOf(cached.value)).not.toEqual(shapeOf(warm.value));
     }));
 
   it("draws a phase that arrived without measuring the source again", () =>
