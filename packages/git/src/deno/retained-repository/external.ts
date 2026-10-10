@@ -288,7 +288,15 @@ function retainedPush(host: RetainedExternalHost): IdentityComponent {
         // what this entry's history accounts for is a separate question, and
         // the answer decides whether anything after this is resumable.
         yield* unmoved(host, selected, PUSH);
-        host.published(request);
+        // Remembered with the identity it was performed under, which is what a
+        // later pull request holds a receipt to.
+        host.published({
+          owner: host.files.owner,
+          site: occurrence,
+          checkout: request.checkout,
+          origin: request.origin,
+          inputs: request.inputs,
+        });
         return "";
       },
   };

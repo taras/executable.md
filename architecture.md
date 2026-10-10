@@ -6035,7 +6035,11 @@ admitted against publications rebuilt privately from accepted records — each o
 a retained push request, which says which checkout was published from, paired
 with an accepted successful Git-host record, which says it happened. Neither is
 evidence alone: the retained record is written before the remote is contacted,
-and the Git-host record carries no checkout. A record this version cannot read
+and the Git-host record carries no checkout. The pair has to agree about whose
+publication it is as well as about the branch and the commit: the identity the
+receipt was performed under is the owner and the occurrence the request was
+frozen under, so a receipt that matches the Git inputs while naming another
+entry or another site pairs with nothing. A record this version cannot read
 refuses the admission rather than being skipped. The exact repository, checkout,
 origin, destination, branch and commit must match, so a commit made after the
 push needs its own publication, and a replayed pull-request result, a copied
@@ -6050,6 +6054,16 @@ read sits beneath the adapter that admits it, so a target this host never
 authorized leaves no record of a question it was not permitted to ask; the
 claimed occurrence reaches that layer through the entry's own closure rather
 than through a context, and a read nothing claimed is refused.
+
+An evidence read is also the one retained effect whose durable name leaves the
+owner out — a workflow fork reaching the same position with the same question
+has to consume the record its source wrote — so the name alone would let a
+segment answer with an observation another owner made, and answer it with no
+forge request at all. The entry therefore reads each retained read's own request
+where it reads its whole history, and refuses one retained under another owner,
+or one whose request it cannot read, before anything is attached. Every other
+external record is named by a digest that includes its identity, so no live
+request here can ask for one somebody else wrote.
 
 **Nothing retained is a capability.** Records are data in a file anybody who can
 read the journal can read. Selections, leases, credentials, scratch directories

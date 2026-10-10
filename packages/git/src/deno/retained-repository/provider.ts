@@ -68,6 +68,7 @@ import type { RetainedExternalHost } from "./external.ts";
 import { retainedFileMutations } from "./files.ts";
 import type { CheckoutPublication, RetainedFileHost, SelectedCheckout } from "./files.ts";
 import { FrontierError, inventoryFrontier } from "./frontier.ts";
+import { admitOwnedObservations } from "./observations.ts";
 import { holdRetainedLanes, retain, retainedLanes, retainedResume } from "./local.ts";
 import type { RetainedResume } from "./local.ts";
 import { admittedPublications, ambientPublication, ambientSelection } from "./publication.ts";
@@ -458,6 +459,12 @@ export function* useRetainedRepositoryEntry(
       // Fails the continuation where it is read, with nothing attached and
       // nothing touched.
       throw read.error;
+    }
+    // The observations beside them, which are held to this owner here because
+    // their own durable names deliberately are not.
+    const observed = admitOwnedObservations(retained, owner);
+    if (!observed.ok) {
+      throw observed.error;
     }
     admitted = read.value;
     resume = retainedResume(read.value.pending, read.value.completed);

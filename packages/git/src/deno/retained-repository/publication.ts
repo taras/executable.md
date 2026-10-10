@@ -59,14 +59,25 @@ import { METADATA, metadataOf } from "../run-composition/placement.ts";
 import type { CheckoutPublication } from "./files.ts";
 
 /**
- * One publication this entry holds: the checkout it pushed from, and what it
- * pushed.
+ * One publication this entry holds: whose request it was, the checkout it
+ * pushed from, and what it pushed.
  *
- * The frozen request itself, which is the whole of what a publication is: the
- * record that says it was asked for, paired below with the record that says it
- * happened.
+ * The owner and the occurrence are part of it because they are what the
+ * receipt has to agree with. A Git-host record carries the identity it was
+ * performed under, and a retained request carries the identity it was frozen
+ * under; pairing them on the Git inputs alone would let a receipt somebody else
+ * performed — another entry, another site in this one — stand for this
+ * request's publication, which is exactly the substitution R2 refuses.
  */
-export type RetainedPublication = RetainedPushRequest;
+export interface RetainedPublication {
+  /** The effect owner the request was frozen under. */
+  readonly owner: string;
+  /** The canonical occurrence that froze it. */
+  readonly site: string;
+  readonly checkout: string;
+  readonly origin: string;
+  readonly inputs: RetainedPushRequest["inputs"];
+}
 
 /** What a pull request has to find among them. */
 export interface PublicationQuestion {
@@ -111,7 +122,12 @@ function refuse(reason: "missing" | "conflicting" | "unreadable"): never {
  *
  * Every accepted Git-host record is read completely rather than searched for a
  * match, so an unreadable one earlier in the sequence refuses here instead of
- * going unnoticed behind a later exact one.
+ * going unnoticed behind a later exact one. A readable one then has to be
+ * *this* request's receipt: the identity it was performed under has to be the
+ * owner and the occurrence the request was frozen under, and its Git inputs
+ * have to be the ones that request froze. A receipt that agrees about the
+ * branch and the commit while naming another owner or another site is a
+ * publication somebody else performed, and it pairs with nothing here.
  */
 export function admittedPublications(
   events: readonly DurableEvent[],
@@ -153,11 +169,15 @@ export function admittedPublications(
     ) {
       refuse("unreadable");
     }
-    // Which checkout this entry pushed from is the retained record's to say.
-    // A successful Git-host push this entry never froze a request for is not
-    // this entry's publication, whatever its inputs look like.
+    // Which checkout this entry pushed from is the retained record's to say,
+    // and whose publication this is, is the pair's. A successful Git-host push
+    // this entry never froze a request for — or froze at another site, or
+    // under another owner — is not this request's publication, whatever its
+    // inputs look like.
     const pushed = frozen.find(
       (candidate) =>
+        candidate.owner === record.request.identity.runId &&
+        candidate.site === record.request.identity.expansionId &&
         sameRepositoryIdentity(candidate.inputs.repository, inputs.repository) &&
         candidate.inputs.remote === inputs.remote &&
         candidate.inputs.branch === inputs.branch &&
@@ -173,12 +193,13 @@ export function admittedPublications(
 }
 
 /**
- * The push requests this entry's retained records froze, with their checkouts.
+ * The push requests this entry's retained records froze, with their checkouts
+ * and the identity each one was frozen under.
  *
  * Read from the admitted intents rather than from the events again: admission
  * has already held every one of them to its owner, its site, its request
- * fingerprint and its lane, so what is left to read is the frozen request
- * itself.
+ * fingerprint and its lane — so the owner here is this entry's by
+ * construction, and carrying it is what lets a receipt be held to it.
  */
 function retainedPushRequests(history: RetainedRepositoryHistory): readonly RetainedPublication[] {
   const frozen: RetainedPublication[] = [];
@@ -193,7 +214,15 @@ function retainedPushRequests(history: RetainedRepositoryHistory): readonly Reta
       // decided against a shorter history than the one that exists.
       refuse("unreadable");
     }
-    frozen.push(request);
+    frozen.push(
+      Object.freeze({
+        owner: effect.intent.owner,
+        site: effect.intent.site.occurrence,
+        checkout: request.checkout,
+        origin: request.origin,
+        inputs: request.inputs,
+      }),
+    );
   }
   return Object.freeze(frozen);
 }
@@ -206,6 +235,11 @@ function retainedPushRequests(history: RetainedRepositoryHistory): readonly Reta
  * or branch is irrelevant rather than disagreement; the same destination at
  * another commit is this entry having published past the head the pull request
  * would name.
+ *
+ * Whose each publication is was settled when it was paired, so this compares
+ * what a pull request is *about* rather than who asked for it: a push and the
+ * pull request that names it are two sites of one entry, and requiring one
+ * occurrence would refuse every document that writes them as two elements.
  */
 export function admitRetainedPublication(
   held: readonly RetainedPublication[],

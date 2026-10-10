@@ -177,6 +177,7 @@ const DENO_ADAPTER: readonly string[] = [
   "src/deno/retained-repository/files.ts",
   "src/deno/retained-repository/frontier.ts",
   "src/deno/retained-repository/local.ts",
+  "src/deno/retained-repository/observations.ts",
   "src/deno/retained-repository/provider.ts",
   "src/deno/retained-repository/publication.ts",
   "src/deno/retained-repository/scratch.ts",

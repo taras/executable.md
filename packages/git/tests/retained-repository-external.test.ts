@@ -45,7 +45,10 @@ import {
   parseRetainedPushRequest,
 } from "../src/retained-repository/requests.ts";
 import { GIT_HOST_EFFECT } from "../src/git-host/effect-type.ts";
-import { parseGitHostReconciliationRecord } from "../src/git-host/records.ts";
+import {
+  gitHostRequestFingerprint,
+  parseGitHostReconciliationRecord,
+} from "../src/git-host/records.ts";
 import { ISSUE_EFFECT } from "../src/issue/effect-type.ts";
 import { PULL_REQUEST_READ } from "../src/deno/composition/pull-request-operations.ts";
 import { git, remoteRefs, useBareRemote } from "./support/git-remotes.ts";
@@ -384,6 +387,50 @@ function intentsOf(events: readonly DurableEvent[], operation: string) {
  */
 function unfinished(events: readonly DurableEvent[]): DurableEvent[] {
   return events.filter((event) => event.type !== "close");
+}
+
+/**
+ * The same history with one receipt performed under another identity.
+ *
+ * Only the Git-host record changes, and it stays a readable, correctly named
+ * one: the substituted identity is carried into the durable name with the
+ * production encoder, so what is being tested is the pairing rather than a
+ * record that no longer parses or no longer belongs where it stands.
+ */
+function* withSubstitutedReceipt(
+  events: readonly DurableEvent[],
+  member: "runId" | "expansionId",
+): Operation<DurableEvent[]> {
+  const changed: DurableEvent[] = [];
+  for (const event of events) {
+    if (
+      event.type !== "yield" ||
+      event.description.type !== GIT_HOST_EFFECT ||
+      event.result.status !== "ok"
+    ) {
+      changed.push(event);
+      continue;
+    }
+    const record = parseGitHostReconciliationRecord(event.result.value);
+    if (record === undefined) {
+      throw new Error("the positive control retained no readable receipt");
+    }
+    const value = {
+      ...record,
+      request: {
+        ...record.request,
+        identity: { ...record.request.identity, [member]: "another-owner-or-site" },
+      },
+    };
+    // Still a receipt, and still named for the request it carries.
+    expect(parseGitHostReconciliationRecord(value)).toBeDefined();
+    changed.push({
+      ...event,
+      description: { ...event.description, name: yield* gitHostRequestFingerprint(value.request) },
+      result: { status: "ok", value },
+    });
+  }
+  return changed;
 }
 
 /** The branch this bare remote holds, or `undefined`. */
@@ -1071,6 +1118,133 @@ describe("retained repository: one entry's external work", () => {
     if (theirs.ok) {
       expect(admittedPublications(publishing.events, theirs.value)).toHaveLength(0);
     }
+  });
+
+  for (const member of ["runId", "expansionId"] as const) {
+    it(`R2/R8: a receipt performed under another ${member} authorizes nothing`, function* () {
+      const fixture = yield* useFixture();
+      const first = yield* run(fixture, PUBLISH.join("\n"), new InMemoryStream(), {
+        entryKey: "0001",
+      });
+      expect(first.refusal).toBeUndefined();
+      const admitted = yield* admitRetainedRepositoryHistory(
+        first.events,
+        retainedRepositoryOwner({ executionId: "execution-1", entryKey: "0001" }),
+      );
+      expect(admitted.ok).toBe(true);
+      if (admitted.ok) {
+        // Its own receipt pairs with the request it froze: one publication.
+        expect(admittedPublications(first.events, admitted.value)).toHaveLength(1);
+        // The same Git inputs, the same successful outcome, the same
+        // destination and commit — performed under an identity this request was
+        // not frozen under. The pair is what a publication is, so there is
+        // none.
+        const substituted = yield* withSubstitutedReceipt(first.events, member);
+        expect(admittedPublications(substituted, admitted.value)).toHaveLength(0);
+      }
+    });
+  }
+
+  it("R2: an evidence read retained under another owner is not this entry's", function* () {
+    const fixture = yield* useFixture();
+    const evidence = serving({ ...evidenceRoutes(ENDPOINT) });
+    const options = {
+      pullRequests: {
+        access: gitHubSource(evidence.access),
+        configuration: { allowed: [LOCATOR] },
+      },
+    };
+    const source = [
+      `<PullRequest.Reviews url="${LOCATOR}/pull/4" as="reviews" />`,
+      "",
+      "held {reviews.length}",
+    ].join("\n");
+    const first = yield* run(fixture, source, new InMemoryStream(), options);
+    expect(first.refusal).toBeUndefined();
+    expect(first.output).toContain("held 1");
+    const at = positionsOf(first.events, PULL_REQUEST_READ)[0];
+    expect(at).toBeDefined();
+
+    // The prefix through that read, with the observation retained under another
+    // entry's owner. Its durable name is unchanged, because the name a read is
+    // matched by deliberately leaves the owner out — which is the whole reason
+    // the record's own request has to be read.
+    const changed = first.events.slice(0, (at ?? 0) + 1).map((event): DurableEvent => {
+      if (event.type !== "yield" || event.description.type !== PULL_REQUEST_READ) {
+        return event;
+      }
+      const input = event.description.input;
+      if (input === undefined || input === null || typeof input !== "object") {
+        throw new Error("the positive control retained no readable request");
+      }
+      return {
+        ...event,
+        description: {
+          ...event.description,
+          input: {
+            ...input,
+            runId: retainedRepositoryOwner({ executionId: "execution-1", entryKey: "0002" }),
+          },
+        },
+      };
+    });
+    const asked = evidence.requests.length;
+    const resumed = yield* run(fixture, source, new InMemoryStream(changed), options);
+    // Refused where the history is read: nothing was answered with somebody
+    // else's observation, and the forge was not asked for a fresh one either.
+    expect(resumed.refusal).toContain("retained under another owner");
+    expect(evidence.requests).toHaveLength(asked);
+  });
+
+  it("R7: a pull request refused before the forge created it is performed once", function* () {
+    const fixture = yield* useFixture();
+    // The forge refuses the creation, so this attempt reaches it and leaves
+    // nothing behind.
+    fixture.store.fault = { on: "create" };
+    const source = [
+      ...PUBLISH,
+      `<PullRequest title="Prepare 1.4" as="pullRequest">body</PullRequest>`,
+      "",
+      "opened {pullRequest.number}",
+    ].join("\n");
+    const first = yield* run(fixture, source, new InMemoryStream());
+    expect(first.refusal).toBeDefined();
+    expect(fixture.store.pullRequests).toHaveLength(0);
+    const attempted = creations(fixture.store);
+    expect(intentsOf(first.events, "pull-request")).toHaveLength(1);
+
+    // Reopened from the prefix that holds its frozen request and not its
+    // answer, against a forge that works: the saved request is performed once.
+    fixture.store.fault = undefined;
+    const gap = positionsOf(first.events, GIT_HOST_EFFECT).at(-1) ?? 0;
+    const second = yield* run(fixture, source, new InMemoryStream(first.events.slice(0, gap)));
+    expect(second.refusal).toBeUndefined();
+    expect(second.output).toContain("opened 1");
+    expect(fixture.store.pullRequests).toHaveLength(1);
+    expect(creations(fixture.store) - attempted).toBe(1);
+    expect(patches(fixture.store)).toBe(0);
+  });
+
+  it("R7: an issue refused before the tracker filed it is performed once", function* () {
+    const fixture = yield* useFixture();
+    fixture.store.fault = { on: "issue-create" };
+    const first = yield* run(fixture, FILE_ISSUE.join("\n"), new InMemoryStream());
+    expect(first.refusal).toBeDefined();
+    expect(fixture.store.issues).toHaveLength(0);
+    const attempted = issueCreations(fixture.store);
+    expect(intentsOf(first.events, "issue")).toHaveLength(1);
+
+    fixture.store.fault = undefined;
+    const gap = positionsOf(first.events, ISSUE_EFFECT).at(-1) ?? 0;
+    const second = yield* run(
+      fixture,
+      FILE_ISSUE.join("\n"),
+      new InMemoryStream(first.events.slice(0, gap)),
+    );
+    expect(second.refusal).toBeUndefined();
+    expect(second.output).toContain(`filed ${FILED}`);
+    expect(fixture.store.issues).toHaveLength(1);
+    expect(issueCreations(fixture.store) - attempted).toBe(1);
   });
 
   it("R7: a remote that could not answer is a failure and never absence", function* () {
