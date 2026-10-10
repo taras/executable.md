@@ -391,12 +391,22 @@ interface ConsumedTurn {
  * What this turn hands the publication beside the record: the association a
  * host may retain, and the handle that host recognised this exact live turn by.
  */
-interface Carried {
+export interface Carried {
   association?: AgentPromptAssociation;
   begun?: AgentPromptHandle;
 }
 
-function* runPrompt(
+/**
+ * Consume one provider turn into the record the journal holds.
+ *
+ * Exported for the trusted host conversation in `conversation.ts`, which is a
+ * canonical turn by the same definition this is: the same publication, the same
+ * audit, the same account of what the provider said the turn ran in. A second
+ * implementation of it is how a programmatic caller and `<Prompt>` came to
+ * disagree about what a turn *is* — so there is one, and the component and the
+ * host operation both reach it.
+ */
+export function* runPrompt(
   text: string,
   options: PromptOptions,
   sequence: number,

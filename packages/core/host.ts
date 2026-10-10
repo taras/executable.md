@@ -327,9 +327,35 @@ export type {
  * author.
  */
 export { installInvocationAgentProvider } from "./src/agent/launch-install.ts";
+/**
+ * Evaluating generated source as a **root** rather than as a fragment — see
+ * `src/generated-xmd.ts`.
+ *
+ * The same admission, the same durable record and the same pinned resolution,
+ * in the one context that supplies `<Output>`: a root selects what it renders,
+ * and the host is told whether it selected anything so an empty region and no
+ * region at all are different answers. `<Content>` and `<Return>` stay
+ * unavailable in both — neither has a caller to claim content from nor a value
+ * body to answer.
+ *
+ * Which context an admission was made in is one of its ceilings, so a retained
+ * root admission does not resume as a fragment or the reverse. Existing
+ * `evaluateGeneratedXmd()` callers and every fragment record already written
+ * keep exactly the behavior they had.
+ *
+ * It answers with a `Result` because the two kinds of failure are different
+ * things for a host to be holding. An ordinary one — source core refused, or
+ * work the root's own elements failed at — is the request's, and comes back as
+ * `Err` carrying what the root had rendered when it failed. A failure of the
+ * *run* does not: a journal that stopped describing it, a Files provider that
+ * is not there, a teardown that failed, each keep the classification they
+ * already have and leave this operation as themselves.
+ */
 export {
   evaluateGeneratedXmd,
+  evaluateGeneratedXmdRoot,
   GeneratedXmdError,
+  GeneratedXmdRootError,
   pinnedComponent,
   pinnedFetch,
   pinnedFileDelete,
@@ -344,8 +370,63 @@ export type {
   GeneratedObservation,
   GeneratedRequest,
   GeneratedXmdRequest,
+  GeneratedXmdRootResult,
   RetainedFragmentIdentity,
 } from "./src/generated-xmd.ts";
+
+/**
+ * What an arriving generated root already says — see
+ * `src/generated-xmd-preview.ts`.
+ *
+ * A host streaming a reply holds a prefix rather than a document, and showing
+ * the person what it says is a different question from deciding whether it may
+ * run. This answers the first and nothing else: a pure projection over the
+ * accumulated prefix, with no `Operation`, because it reads no file, resolves
+ * no name, invokes no component, evaluates no expression and grants no
+ * admission. A prefix that projects cleanly has been granted nothing, and the
+ * provider's own completion and `evaluateGeneratedXmdRoot()` remain the only
+ * things that decide a root runs.
+ *
+ * It is core's because the alternative is a second reading of one syntax. A
+ * host recognizing `<Output>` with a regular expression would have to re-decide
+ * what a fence, a quoted `>`, an inline code span and a tag-like expression
+ * are, and the two readings would disagree the first time one of them was
+ * wrong.
+ *
+ * `incomplete` says the prefix ends in syntax still arriving, which is a
+ * success rather than a refusal; invalid source — a region the language does
+ * not allow where it is written — answers `Err`. The two are deliberately
+ * distinct, and `incomplete: false` says only that this prefix is whole, never
+ * that the provider has finished or that anything may execute.
+ */
+export { GeneratedXmdPreviewError, previewGeneratedXmdRoot } from "./src/generated-xmd-preview.ts";
+export type { GeneratedXmdRootPreview } from "./src/generated-xmd-preview.ts";
+
+/**
+ * One retained agent conversation a trusted host holds open — see
+ * `src/agent/conversation.ts`.
+ *
+ * The eighth act of infrastructure, and the longest-lived. A document's
+ * `<Session>` and `<Prompt>` are written where the conversation belongs: inside
+ * an expansion, with an element to name the placement and a journal already
+ * around them. A host discussing something with an agent has neither, and still
+ * needs the genuine thing — canonical placement, journaled turns, verified
+ * configuration, and an identity the provider reattaches to tomorrow. So the
+ * conversation is an execution the host keeps open, over the history stream it
+ * supplies, under the installations it captured through `executeInstalled`.
+ *
+ * Kept here for the reason the rest of this module is: a conversation decides
+ * what a journal holds and which provider it reaches, and nothing a document, a
+ * component or a middleware package reaches by importing `@executablemd/core`
+ * can open one.
+ *
+ * The handle is provided by a resource owned by the caller's scope. Holding it
+ * past that scope reaches nothing, because the conversation it addressed was
+ * cancelled — which is also why it can be reopened: a root that recorded its
+ * terminal would replay instead.
+ */
+export { AgentConversationError, useAgentConversation } from "./src/agent/conversation.ts";
+export type { AgentConversation, AgentConversationRequest } from "./src/agent/conversation.ts";
 
 /**
  * Where a completed Prompt publishes, for a host that retains something beside

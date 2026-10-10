@@ -400,6 +400,99 @@ access modes here; until then native launch cannot claim or widen any additional
 root. Filesystem accessibility and rendered agent instructions remain separate:
 the cwd is not injected as text, and rendered instructions grant no directory.
 
+## A conversation a trusted host holds open
+
+`<Session>` and `<Prompt>` are written inside an expansion, with an element to
+name the placement and a journal already around them. A host that discusses
+something with an agent has neither: a person is typing into a chat, the
+history outlives the process, and there is no document. `useAgentConversation()`
+on `@executablemd/core/host` is that conversation, and it is the genuine one —
+canonical Session placement, journaled turns, verified configuration, and an
+identity the provider reattaches to.
+
+```ts
+const opened = yield* useAgentConversation({
+  history,        // the DurableStream holding this conversation's canonical history
+  id,             // the stable host-owned identity that history belongs to
+  agent,          // the resolved agent name, already selected by the host
+  installations,  // the trusted assembly that selects the provider and its policy
+});
+```
+
+The handle is provided by a resource owned by the caller's scope and offers two
+members: `prompt(input, configuration?)`, which sends one journaled turn and
+answers with its completed reply, and `options(request?)`, which inspects the
+selected agent's advertised choices. Stop is scope cancellation rather than a
+third member.
+
+**It is an element inside its own execution.** A provider and its placement
+coordinator are installed inside `Execution.document`, and a durable preparation
+precedes both, so a conversation opened there could reach neither. The
+conversation is a host-declared identity component in a synthetic root core
+owns: canonical resolution selects it, hands its implementation the execution's
+claimant, and the session is placed under the engine's own identity for that
+invocation. The `id` names the history and nothing else — it carries no
+claimant, establishes no native identity and overrides none.
+
+**Its root is never completed.** A durable root that records its terminal
+replays instead of reopening, and reopening a conversation is the ordinary case.
+The element therefore serves turns and does not return; the halt that releases
+the resource appends nothing, because a root records a terminal only on its own
+success or failure. What the history keeps is a partial continuation.
+
+**Each turn is its own canonical sequence.** A turn is one journaled Prompt
+under its own durable name, offered in the conversation's sequence exactly as
+`<Prompt>` offers one in a document's, through the same `runPrompt` the
+component uses rather than a copy of it. It runs in a task of its own, so
+cancelling the call halts the turn: its append never lands, the position stays
+free, and the next turn is a new turn rather than that one resumed. Reopening
+re-offers the retained turns in their own order, which replays each from its
+record and reaches no provider.
+
+A turn whose outcome the history does not hold refuses the conversation before
+anything opens. Resuming it would re-send a prompt the provider may already have
+accepted, and writing a terminal for it would make an unfinished turn look
+complete; reconciling it belongs to the host, with the provider's own account of
+that turn. Because the refusal happens before the execution exists, it appends
+nothing to the history it refused.
+
+The history is bound to its conversation by a durable record written on the
+first opening and replayed afterwards. A history established for another `id`
+refuses rather than reconnecting the wrong chat, and one established with
+another agent refuses rather than changing agent in place — an explicit agent
+change is a new conversation with a new `id`.
+
+**What a turn ran under is the provider's own account.** A placement is made per
+turn, because a placement settles what it asks before it is routed and is good
+for one use: the first is fresh and the provider creates the conversation, and a
+later one is established, so what the turn asks is applied and read back through
+§Session configuration's own machinery. A provider that reports it put the
+conversation under something else refuses that turn rather than having those
+settings recorded. `options()` sends no model prompt and journals nothing, and
+is called on explicit interaction rather than to restore a pane.
+
+**The native conversation an established history names.** A completed turn
+retains the exact conversation the provider said it ran in, so the retained
+records are what establish a chat's native identity; there is no mapping record
+beside them. A provider that resolves a different conversation refuses the next
+turn before it is sent, a provider that names a different one only after the
+turn ran has that turn's outcome refused with the established identity standing,
+and a history whose own turns name two conversations cannot be opened at all.
+The window before any turn has retained one belongs to the provider: ACPX's own
+record asserts an identity before the host's mapping is acknowledged, and the
+next attachment reconciles and commits that same assertion rather than creating
+a replacement (§ACPX provider).
+
+One turn runs at a time; an overlapping call refuses rather than queuing, and a
+handle kept past the scope that opened it refuses because the conversation it
+addressed has been cancelled. Cancelling a call joins the turn it started: the
+call finishes once that turn and the provider's cleanup inside it have finished
+unwinding, and the conversation stays unavailable to another turn until then, so
+a completed cancellation is proof that the provider's work has stopped. A refusal before a turn starts — an unavailable
+agent, an identity the provider will not reattach, settings it would not
+honour — is that call's answer and leaves the conversation usable. Only a
+durability failure ends it.
+
 ## Components
 
 `installAgentComponents()` registers six components for the installing scope

@@ -222,6 +222,18 @@ export function scanSegments(
    * two readings would disagree the first time one of them was wrong.
    */
   elements?: SourceElement[],
+  /**
+   * Every construct this scan began and could not finish because the text ran
+   * out, collected as the scan gives each one up.
+   *
+   * The same walk again, and for the same reason. Reading text this scan left
+   * as prose and looking for an unclosed tag would be a second grammar, and it
+   * would have to re-decide every question this one already answered — whether
+   * a `>` was quoted, whether a backtick opened a code span, whether a `{` was
+   * an expression. Only this walk knows the difference between a tag it refused
+   * and a tag it ran out of text in the middle of.
+   */
+  unfinished?: UnfinishedConstruct[],
 ): Segment[] {
   const index: PositionIndex = { origin, lineStarts: computeLineStarts(text) };
   const segments: Segment[] = [];
@@ -243,6 +255,9 @@ export function scanSegments(
         fenceMatch.fenceChar,
         fenceMatch.fenceLen,
       );
+      if (!fenceEnd.closed) {
+        unfinished?.push({ start: pos });
+      }
       const content = text.slice(fenceMatch.contentStart, fenceEnd.contentEnd);
       const fullFence = text.slice(pos, fenceEnd.fenceEnd);
 
@@ -275,12 +290,15 @@ export function scanSegments(
         pos = codeEnd;
         continue;
       }
+      // A span that never closes is a span this text has not finished
+      // delivering, not prose that happens to contain a backtick.
+      unfinished?.push({ start: pos });
     }
 
     // Check for component invocation: `<` followed by uppercase letter
     if (text[pos] === "<" && pos + 1 < text.length && /[A-Z]/.test(text[pos + 1]!)) {
       // Make sure we're not inside a fenced code block (handled above)
-      const component = parseComponentTag(text, pos, index, elements);
+      const component = parseComponentTag(text, pos, index, elements, unfinished);
       if (component) {
         // Flush text before component
         if (pos > textStart) {
@@ -321,6 +339,35 @@ export interface SourceElement {
   readonly closing?: SourceRange;
 }
 
+/**
+ * One construct this scan began and could not finish, because the text ended.
+ *
+ * Told apart from a construct the scan *refused*: `<Probe x=!>` is not a tag
+ * and no amount of further text makes it one, while `<Probe` and
+ * `<Output>Hello` are the beginning of tags whose rest has not arrived. Only
+ * the walk can say which, because only the walk knows how far it got and why it
+ * stopped — so a reader that needs to know asks for this rather than looking at
+ * the prose the scan left behind.
+ *
+ * Offsets index the exact text that was scanned.
+ */
+export interface UnfinishedConstruct {
+  /** Where the construct begins. */
+  readonly start: number;
+  /** The authored spelling, for a component tag whose name the scan read. */
+  readonly name?: string;
+  /**
+   * Where this element's own content begins.
+   *
+   * Present only for an element whose opening tag completed and whose closing
+   * tag never arrived, which is the one case where the text already delivered
+   * contains content belonging to a known element.
+   */
+  readonly contentStart?: number;
+  /** Whether that opening tag carried any attribute at all. */
+  readonly attributed?: boolean;
+}
+
 /** The source spans of the top-level component invocations in `text`. */
 export function scanComponentSpans(text: string): ComponentSpan[] {
   const spans: ComponentSpan[] = [];
@@ -338,6 +385,8 @@ interface FenceOpen {
 interface FenceClose {
   contentEnd: number;
   fenceEnd: number;
+  /** Whether a closing fence was actually found, rather than the text ending. */
+  closed: boolean;
 }
 
 /**
@@ -432,7 +481,7 @@ function findFenceClose(
         }
         if (pos >= text.length || text[pos] === "\n") {
           const fenceEnd = pos < text.length ? pos + 1 : pos;
-          return { contentEnd: lineStart, fenceEnd };
+          return { contentEnd: lineStart, fenceEnd, closed: true };
         }
       }
     }
@@ -441,12 +490,12 @@ function findFenceClose(
     const nextNewline = text.indexOf("\n", pos);
     if (nextNewline === -1) {
       // No closing fence found — content goes to end
-      return { contentEnd: text.length, fenceEnd: text.length };
+      return { contentEnd: text.length, fenceEnd: text.length, closed: false };
     }
     pos = nextNewline + 1;
   }
 
-  return { contentEnd: text.length, fenceEnd: text.length };
+  return { contentEnd: text.length, fenceEnd: text.length, closed: false };
 }
 
 interface ParsedComponent {
@@ -464,6 +513,7 @@ function parseComponentTag(
   start: number,
   index: PositionIndex,
   elements?: SourceElement[],
+  unfinished?: UnfinishedConstruct[],
 ): ParsedComponent | null {
   let pos = start + 1; // Skip '<'
 
@@ -480,6 +530,12 @@ function parseComponentTag(
   if (!name) {
     return null;
   }
+  // A name that reached the end of the text is a tag still arriving: there is
+  // no `/>` or `>` yet because there is no more text yet.
+  if (pos >= text.length) {
+    unfinished?.push({ start, name });
+    return null;
+  }
 
   // Parse attributes
   const {
@@ -487,11 +543,19 @@ function parseComponentTag(
     expressions,
     authoredExpressions,
     end: attrEnd,
+    exhausted,
   } = parseAttributes(text, pos, name);
   if (attrEnd === -1) {
+    if (exhausted) {
+      unfinished?.push({ start, name });
+    }
     return null;
   }
   pos = attrEnd;
+  const attributed =
+    Object.keys(props).length > 0 ||
+    Object.keys(expressions).length > 0 ||
+    Object.keys(authoredExpressions).length > 0;
 
   // Skip whitespace
   pos = skipWhitespace(text, pos);
@@ -499,7 +563,11 @@ function parseComponentTag(
   // Self-closing tag?
   if (pos < text.length && text[pos] === "/") {
     pos++; // Skip '/'
-    if (pos >= text.length || text[pos] !== ">") {
+    if (pos >= text.length) {
+      unfinished?.push({ start, name, attributed });
+      return null;
+    }
+    if (text[pos] !== ">") {
       return null;
     }
     pos++; // Skip '>'
@@ -521,7 +589,11 @@ function parseComponentTag(
   }
 
   // Opening tag: must end with '>'
-  if (pos >= text.length || text[pos] !== ">") {
+  if (pos >= text.length) {
+    unfinished?.push({ start, name, attributed });
+    return null;
+  }
+  if (text[pos] !== ">") {
     return null;
   }
   pos++; // Skip '>'
@@ -531,8 +603,13 @@ function parseComponentTag(
   // committed only with this parse: an incomplete passive tag has no children
   // the scanner recognized, so it must leave none behind.
   const nested: SourceElement[] | undefined = elements === undefined ? undefined : [];
-  const { children, end: childEnd } = parseChildren(text, pos, name, index, nested);
+  const { children, end: childEnd } = parseChildren(text, pos, name, index, nested, unfinished);
   if (childEnd === -1) {
+    // The opening tag completed and the closing one never arrived, so the text
+    // already delivered holds content belonging to a known element. Reported
+    // with where that content starts, because a reader projecting a region it
+    // has not finished receiving needs exactly that.
+    unfinished?.push({ start, name, attributed, contentStart: openingEnd });
     return null;
   }
 
@@ -569,6 +646,16 @@ interface ParsedAttributes {
   /** Authored text of the `{…}` props resolved into `props` above. */
   authoredExpressions: Record<string, string>;
   end: number; // position after last attribute, before /> or >
+  /**
+   * Whether `end: -1` means the text ran out rather than that an attribute was
+   * written wrongly.
+   *
+   * Both end the tag, and they are different facts about the same `-1`: a
+   * quote, a brace or a value that never arrived is a tag still being
+   * delivered, while a character that cannot begin an attribute name or a value
+   * is one no further text repairs.
+   */
+  exhausted: boolean;
 }
 
 function parseAttributes(
@@ -584,12 +671,12 @@ function parseAttributes(
   while (pos < text.length) {
     pos = skipWhitespace(text, pos);
     if (pos >= text.length) {
-      return { props, expressions, authoredExpressions, end: -1 };
+      return { props, expressions, authoredExpressions, end: -1, exhausted: true };
     }
 
     // End of attributes?
     if (text[pos] === "/" || text[pos] === ">") {
-      return { props, expressions, authoredExpressions, end: pos };
+      return { props, expressions, authoredExpressions, end: pos, exhausted: false };
     }
 
     // Spread props: {...expr}
@@ -602,7 +689,7 @@ function parseAttributes(
       // Skip spread — consume the expression
       const exprEnd = findMatchingBrace(text, pos);
       if (exprEnd === -1) {
-        return { props, expressions, authoredExpressions, end: -1 };
+        return { props, expressions, authoredExpressions, end: -1, exhausted: true };
       }
       // We don't evaluate spread props — just skip them
       pos = exprEnd + 1;
@@ -616,7 +703,7 @@ function parseAttributes(
     }
     const attrName = text.slice(attrNameStart, pos);
     if (!attrName) {
-      return { props, expressions, authoredExpressions, end: -1 };
+      return { props, expressions, authoredExpressions, end: -1, exhausted: false };
     }
 
     pos = skipWhitespace(text, pos);
@@ -646,14 +733,14 @@ function parseAttributes(
 
     // Attribute value
     if (pos >= text.length) {
-      return { props, expressions, authoredExpressions, end: -1 };
+      return { props, expressions, authoredExpressions, end: -1, exhausted: true };
     }
 
     if (text[pos] === '"') {
       // String attribute: "value"
       const strEnd = findClosingQuote(text, pos + 1, '"');
       if (strEnd === -1) {
-        return { props, expressions, authoredExpressions, end: -1 };
+        return { props, expressions, authoredExpressions, end: -1, exhausted: true };
       }
       props[attrName] = text.slice(pos + 1, strEnd);
       pos = strEnd + 1;
@@ -661,7 +748,7 @@ function parseAttributes(
       // String attribute: 'value'
       const strEnd = findClosingQuote(text, pos + 1, "'");
       if (strEnd === -1) {
-        return { props, expressions, authoredExpressions, end: -1 };
+        return { props, expressions, authoredExpressions, end: -1, exhausted: true };
       }
       props[attrName] = text.slice(pos + 1, strEnd);
       pos = strEnd + 1;
@@ -669,7 +756,7 @@ function parseAttributes(
       // Expression attribute: {expr}
       const exprEnd = findMatchingBrace(text, pos);
       if (exprEnd === -1) {
-        return { props, expressions, authoredExpressions, end: -1 };
+        return { props, expressions, authoredExpressions, end: -1, exhausted: true };
       }
       const exprText = text.slice(pos + 1, exprEnd).trim();
       if (bindsByReference(componentName, attrName)) {
@@ -696,11 +783,13 @@ function parseAttributes(
       }
       pos = exprEnd + 1;
     } else {
-      return { props, expressions, authoredExpressions, end: -1 };
+      // A value that begins with something no attribute value begins with.
+      // Further text does not make this a tag.
+      return { props, expressions, authoredExpressions, end: -1, exhausted: false };
     }
   }
 
-  return { props, expressions, authoredExpressions, end: -1 };
+  return { props, expressions, authoredExpressions, end: -1, exhausted: true };
 }
 
 /**
@@ -865,6 +954,7 @@ function parseChildren(
   tagName: string,
   index: PositionIndex,
   elements?: SourceElement[],
+  unfinished?: UnfinishedConstruct[],
 ): ParsedChildren {
   let pos = start;
   let textStart = pos;
@@ -896,6 +986,9 @@ function parseChildren(
         fenceMatch.fenceChar,
         fenceMatch.fenceLen,
       );
+      if (!fenceEnd.closed) {
+        unfinished?.push({ start: pos });
+      }
       const content = text.slice(fenceMatch.contentStart, fenceEnd.contentEnd);
       const fullFence = text.slice(pos, fenceEnd.fenceEnd);
       const parsed = parseInfoString(fenceMatch.infoString);
@@ -926,11 +1019,12 @@ function parseChildren(
         pos = codeEnd;
         continue;
       }
+      unfinished?.push({ start: pos });
     }
 
     // Check for nested component
     if (text[pos] === "<" && pos + 1 < text.length && /[A-Z]/.test(text[pos + 1]!)) {
-      const nested = parseComponentTag(text, pos, index, elements);
+      const nested = parseComponentTag(text, pos, index, elements, unfinished);
       if (nested) {
         if (pos > textStart) {
           pushText(children, text.slice(textStart, pos));
